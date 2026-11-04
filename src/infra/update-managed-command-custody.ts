@@ -6,6 +6,7 @@ import type {
   CommandProcessCustody,
   CommandProcessIdentity,
 } from "../process/command-process-custody.types.js";
+import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { managedCommandCustody } from "./update-managed-service-handoff-children.js";
 import {
   prepareManagedHandoffLeaseDatabaseIdentity,
@@ -25,6 +26,16 @@ export type ManagedCommandProcessAuthority = {
   parents: readonly ManagedHandoffParent[];
   databaseIdentity: ManagedUpdateLeaseDatabaseIdentity;
 };
+
+function commandBirthIdentity(identity: CommandProcessIdentity): string | undefined {
+  return identity.startedAt === null
+    ? undefined
+    : String(
+        process.platform === "darwin"
+          ? Math.floor(identity.startedAt / 1_000_000)
+          : identity.startedAt,
+      );
+}
 
 /** Adapt command-process settlement to the existing durable update lease owner. */
 export async function createManagedCommandProcessCustody(options: {
@@ -68,6 +79,8 @@ export async function createManagedCommandProcessCustody(options: {
   });
   options.assertCurrent?.();
   const anchorOwner = options.anchorOwner ?? `doctor:${randomUUID()}`;
+  // Legacy updaters supply Doctor custody without a run ID; retain its invocation identity.
+  const commandOwner = options.runId === "" ? anchorOwner : options.runId;
   const parents = new Map(options.parents?.map((parent) => [parent.key, parent]));
   const anchors = new Map<string, ManagedHandoffLease>();
   function releaseAnchors(leases = [...anchors.values()]) {
@@ -100,7 +113,7 @@ export async function createManagedCommandProcessCustody(options: {
           }
           const acquired = store.acquire(
             `${root}/${child}`,
-            options.runId,
+            commandOwner,
             { kind: "update", custody: "reserved" },
             false,
             parent.version === 1 ? parent : undefined,
@@ -120,9 +133,23 @@ export async function createManagedCommandProcessCustody(options: {
       }
       let bound = false;
       return {
-        spawned({ pid }) {
+        spawned(identity) {
           options.assertCurrent?.();
-          const next = store.bindUpdateChildren(leases, pid, argv);
+          // The original spawner still joins this child's close and group extinction.
+          // A terminal root needs no binding; its reservation stays held until that join.
+          if (
+            process.platform !== "win32" &&
+            identity.startedAt === null &&
+            isPidDefinitelyDead(identity.pid)
+          ) {
+            return;
+          }
+          const startIdentity = commandBirthIdentity(identity);
+          const executor =
+            startIdentity === undefined
+              ? store.processIdentity(identity.pid, argv)
+              : { pid: identity.pid, startIdentity };
+          const next = store.bindUpdateChildren(leases, executor);
           if (!next) {
             throw new Error("Managed command custody binding was not retained");
           }
@@ -187,7 +214,7 @@ export async function createManagedCommandProcessCustody(options: {
           );
           continue;
         }
-        if (lease.owner !== options.runId || lease.helper.pid !== helperPid) {
+        if (lease.owner !== commandOwner || lease.helper.pid !== helperPid) {
           throw new Error(
             `Native command custody for PID ${lease.executor.pid} belongs to another Doctor`,
           );
@@ -203,14 +230,7 @@ export async function createManagedCommandProcessCustody(options: {
           throw new Error(`Unmatched native command reservation for PID ${lease.executor.pid}`);
         }
         // Published Darwin lease identities retain epoch seconds; physical custody uses microseconds.
-        const birth =
-          identity.startedAt === null
-            ? undefined
-            : String(
-                process.platform === "darwin"
-                  ? Math.floor(identity.startedAt / 1_000_000)
-                  : identity.startedAt,
-              );
+        const birth = commandBirthIdentity(identity);
         if (birth !== undefined && lease.executor.startIdentity !== birth) {
           throw new Error(`Native command birth identity changed for PID ${identity.pid}`);
         }

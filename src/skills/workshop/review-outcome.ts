@@ -1,41 +1,21 @@
-import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
-import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import { extractDeliveryInfo } from "../../config/sessions/delivery-info.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import type { MessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { postSessionNotice, type SessionGeneration } from "../../sessions/session-notice.js";
 import {
-  isDeliverableMessageChannel,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
+  SKILL_WORKSHOP_CHANGE_NOTICE_TYPE,
+  SKILL_WORKSHOP_PLUGIN_ID,
+  type SkillWorkshopChangeNotice,
+  type SkillWorkshopChangeNoticeSkill,
+  type SkillWorkshopNoticeAction,
+} from "../../shared/skill-workshop-change-notice.js";
 import type { WorkshopChange } from "./changes.kernel.js";
+import { resolveSkillWorkshopConfig } from "./config.js";
+import { workshopReviewIdOf } from "./review-undo.js";
 
 const log = createSubsystemLogger("skills/workshop");
 
-/**
- * A background Workshop run fails only when the model or runtime failed. Tool errors — a refused
- * write, a gated tool, a patch that did not match — are the model's to handle, not run failures.
- */
-export function assertSkillReviewRunSucceeded(
-  result: Pick<EmbeddedAgentRunResult, "meta" | "payloads">,
-): void {
-  const runtimeErrorPayload = result.payloads?.find(
-    (payload) => payload.isError && !getReplyPayloadMetadata(payload)?.toolErrorWarning,
-  );
-  const message =
-    result.meta.error?.message.trim() ||
-    (result.meta.aborted ? "Skill review model run aborted." : undefined) ||
-    runtimeErrorPayload?.text?.trim();
-  if (message || runtimeErrorPayload) {
-    throw new Error(message || "Skill review model run failed.");
-  }
-}
-
-const ACTION_VERB: Record<WorkshopChange["action"], string> = {
+const ACTION_VERB: Record<WorkshopChange["action"], SkillWorkshopNoticeAction> = {
   create: "created",
   patch: "updated",
   write_file: "updated",
@@ -44,140 +24,101 @@ const ACTION_VERB: Record<WorkshopChange["action"], string> = {
   restore: "restored",
 };
 
-/** One short line naming what a background review changed and how to revert it. */
-function formatWorkshopChangeNotice(changes: readonly WorkshopChange[]): string {
-  // Several edits to one skill read as one learned change: a skill created in this run reads
-  // as "created" with its creation summary; otherwise the latest change wins.
-  const bySkill = new Map<string, WorkshopChange>();
+/** The notice keeps a creation or latest edit; undo keeps the version before the first edit. */
+function formatWorkshopChangeNotice(
+  agentId: string,
+  runId: string,
+  changes: readonly WorkshopChange[],
+) {
+  const bySkill = new Map<string, { first: WorkshopChange; notice: WorkshopChange }>();
   for (const change of changes.toSorted((a, b) => a.createdAtMs - b.createdAtMs)) {
-    if (bySkill.get(change.skillName)?.action !== "create") {
-      bySkill.set(change.skillName, change);
+    const group = bySkill.get(change.skillName);
+    if (!group) {
+      bySkill.set(change.skillName, { first: change, notice: change });
+    } else if (group.notice.action !== "create") {
+      group.notice = change;
     }
   }
-  const parts = [...bySkill.values()].map((change) => {
+  const skills = [...bySkill.values()].map(({ notice: change }) => {
+    const skill: SkillWorkshopChangeNoticeSkill = {
+      name: change.skillName,
+      action: ACTION_VERB[change.action],
+    };
     const summary = change.summary.trim();
-    return `${ACTION_VERB[change.action]} \`${change.skillName}\`${summary ? ` (${summary})` : ""}`;
-  });
-  return `💾 Learned: ${parts.join("; ")}. Say "undo" to revert this skill change.`;
-}
-
-/**
- * Model-facing context for the next turn: exactly how to revert each change. A skill that
- * existed before the review restores the version saved before the review first changed it;
- * a skill with no such version (created by the review) is archived.
- */
-function formatWorkshopUndoContext(changes: readonly WorkshopChange[]): string {
-  const firstBySkill = new Map<string, WorkshopChange>();
-  for (const change of changes.toSorted((a, b) => a.createdAtMs - b.createdAtMs)) {
-    if (!firstBySkill.has(change.skillName)) {
-      firstBySkill.set(change.skillName, change);
+    if (summary) {
+      skill.summary = summary;
     }
-  }
-  const reverts = [...firstBySkill.values()].map(({ skillName, versionId }) =>
+    return skill;
+  });
+  const parts = skills.map(
+    ({ name, action, summary }) => `${action} \`${name}\`${summary ? ` (${summary})` : ""}`,
+  );
+  const text = `💾 Learned: ${parts.join("; ")}. Say "undo" to revert this skill change.`;
+  // No prior version means the review created the skill, so undo archives it.
+  const reverts = [...bySkill.values()].map(({ first: { skillName, versionId } }) =>
     versionId
       ? `skill_workshop action=restore name=${skillName} version=${versionId}`
       : `skill_workshop action=archive name=${skillName} reason="undo"`,
   );
-  return `A background skill review just changed your learned skills and told the user: ${formatWorkshopChangeNotice(changes)} If the user asks to undo or revert it, call ${reverts.join("; then ")}.`;
+  const reviewId = workshopReviewIdOf(runId);
+  const presentation: MessagePresentation | undefined = reviewId
+    ? {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Undo", action: { type: "command", command: `/learn undo ${reviewId}` } },
+            ],
+          },
+        ],
+      }
+    : undefined;
+  const data: SkillWorkshopChangeNotice = { agentId, runId, skills };
+  return {
+    text,
+    presentation,
+    data,
+    undoContext: `A background skill review just changed your learned skills: ${text} If the user asks to undo or revert it, call ${reverts.join("; then ")}.`,
+  };
 }
 
 /**
- * Posts the notice into the originating conversation: external channels get a durable send
- * mirrored into the session transcript; channel-less sessions (Control UI) get a transcript
- * entry. The next foreground turn also gets a system event naming the exact revert call,
+ * Opted-in, supported channels except Slack also get a durable send; every session gets the
+ * Learned row. The next foreground turn also gets a system event naming the exact revert call,
  * because an assistant line the model did not write is weak evidence that "undo" means it.
  * A conversation reset or replaced since the review started gets none of it.
  */
 export async function postWorkshopChangeNotice(params: {
   config: OpenClawConfig;
   /** The reviewed session generation; the notice belongs to it, not to a later reset. */
-  generation: SessionDeliveryGeneration;
+  generation: SessionGeneration;
   runId: string;
   changes: readonly WorkshopChange[];
 }): Promise<void> {
   if (params.changes.length === 0) {
     return;
   }
-  const { generation } = params;
-  const { agentId, sessionKey } = generation;
-  const isReviewedGeneration = () => {
-    const current = loadSessionEntryReadOnly({
-      agentId,
-      sessionKey,
-      storePath: generation.storePath,
-      hydrateSkillPromptRefs: false,
-      readConsistency: "latest",
-    });
-    return (
-      current?.sessionId === generation.sessionId &&
-      (current.lifecycleRevision ?? null) === generation.lifecycleRevision
-    );
-  };
-  if (!isReviewedGeneration()) {
-    log.debug(`skill workshop notice skipped: session ${sessionKey} was reset`);
-    return;
-  }
-  enqueueSystemEvent(formatWorkshopUndoContext(params.changes), {
-    sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
+  const { text, presentation, data, undoContext } = formatWorkshopChangeNotice(
+    params.generation.agentId,
+    params.runId,
+    params.changes,
+  );
+  const result = await postSessionNotice({
+    config: params.config,
+    pluginId: SKILL_WORKSHOP_PLUGIN_ID,
+    generation: params.generation,
+    notice: { type: SKILL_WORKSHOP_CHANGE_NOTICE_TYPE, text, data, presentation },
+    idempotencyKey: `skill-workshop-notice:${params.runId}`,
+    systemEvent: undoContext,
+    // Slack never gets a channel message (owner decision).
+    ...(resolveSkillWorkshopConfig(params.config).autonomous.channelNotices
+      ? { deliver: { skipChannels: ["slack"] } }
+      : {}),
   });
-  const text = formatWorkshopChangeNotice(params.changes);
-  const idempotencyKey = `skill-workshop-notice:${params.runId}`;
-  try {
-    const { deliveryContext: target, threadId } = extractDeliveryInfo(sessionKey, {
-      cfg: params.config,
-    });
-    const channel = target?.channel ? normalizeMessageChannel(target.channel) : undefined;
-    if (channel && isDeliverableMessageChannel(channel) && target?.to) {
-      // Delivery and transcript runtimes stay lazy: most reviews change nothing.
-      const { sendDurableMessageBatchCore } = await import("../../channels/message/runtime.js");
-      const send = await sendDurableMessageBatchCore(
-        {
-          cfg: params.config,
-          channel,
-          to: target.to,
-          accountId: target.accountId,
-          // The session key's thread is canonical; stored context may name a stale thread.
-          threadId: threadId ?? target.threadId,
-          payloads: [{ text }],
-          session: buildOutboundSessionContext({ cfg: params.config, sessionKey, agentId }),
-          mirror: {
-            sessionKey,
-            agentId,
-            idempotencyKey,
-            expectedSessionId: generation.sessionId,
-          },
-          bestEffort: true,
-        },
-        undefined,
-        undefined,
-        generation,
-      );
-      if (send.status === "failed" || send.status === "partial_failed") {
-        throw send.error;
-      }
-      return;
-    }
-    const { appendAssistantMessageToSessionTranscript } =
-      await import("../../config/sessions/transcript.runtime.js");
-    const appended = await appendAssistantMessageToSessionTranscript({
-      agentId,
-      sessionKey,
-      storePath: generation.storePath,
-      expectedSessionId: generation.sessionId,
-      expectedLifecycleRevision: generation.lifecycleRevision,
-      text,
-      idempotencyKey,
-      config: params.config,
-    });
-    if (!appended.ok) {
-      throw new Error(appended.reason);
-    }
-  } catch (error) {
-    if (!isReviewedGeneration()) {
-      log.debug(`skill workshop notice skipped: session ${sessionKey} was reset`);
-      return;
-    }
-    // The system event above still carries the change to the next turn.
-    log.warn(`skill workshop notice delivery failed: ${String(error)}`);
+  if (result.status === "skipped") {
+    log.debug(`skill workshop notice skipped: session ${params.generation.sessionKey} was reset`);
+  } else if (result.status === "failed") {
+    // The system event still carries the change to the next turn.
+    log.warn(`skill workshop notice ${result.stage} failed: ${result.error}`);
   }
 }

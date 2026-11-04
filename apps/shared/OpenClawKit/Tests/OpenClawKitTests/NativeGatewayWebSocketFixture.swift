@@ -57,9 +57,14 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.queue.sync { self.receivedRoles }
     }
 
+    var connectRoles: AsyncStream<String> {
+        self.connectRoleEvents.stream
+    }
+
     private var httpResponseHandler: HTTPResponseHandler?
     private var receivedRequests: [Request] = []
     private var receivedRoles: [String] = []
+    private let connectRoleEvents = AsyncStream<String>.makeStream()
     private var pendingHTTP: [Int: (Request, HTTPResponse)] = [:]
 
     private struct Client {
@@ -73,6 +78,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         let connection: NWConnection
         var buffer = Data()
         var phase = Phase.handshake
+        var isStalled = false
     }
 
     private static let websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -200,10 +206,15 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.queue.sync { self.close(index) }
     }
 
+    func stallConnection(at index: Int) {
+        self.queue.sync { self.clients[index]?.isStalled = true }
+    }
+
     func stop() {
         self.queue.sync {
             guard !self.stopped else { return }
             self.stopped = true
+            self.connectRoleEvents.continuation.finish()
             self.listener.cancel()
             for index in Array(self.clients.keys) {
                 self.close(index)
@@ -237,12 +248,13 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     }
 
     private func receive(_ index: Int) {
-        guard let client = self.clients[index] else { return }
+        guard let client = self.clients[index], !client.isStalled else { return }
         client.connection.receive(
             minimumIncompleteLength: 1,
             maximumLength: 65536)
         { [weak self] data, _, complete, error in
-            guard let self, var client = self.clients[index] else { return }
+            // A receive already in flight must not answer pings after the test stalls this socket.
+            guard let self, var client = self.clients[index], !client.isStalled else { return }
             if let data {
                 client.buffer.append(data)
                 self.clients[index] = client
@@ -382,6 +394,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
 
     private func processFrames(_ index: Int) {
         while var client = self.clients[index],
+              !client.isStalled,
               let frame = Self.takeFrame(from: &client.buffer)
         {
             self.clients[index] = client
@@ -409,13 +422,15 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
 
         let params = request["params"] as? [String: Any]
         let auth = params?["auth"] as? [String: Any]
-        self.receivedRoles.append(params?["role"] as? String ?? "")
+        let role = params?["role"] as? String ?? ""
+        self.receivedRoles.append(role)
         self.connectAuth.append(ConnectAuth(
             token: auth?["token"] as? String,
             bootstrapToken: auth?["bootstrapToken"] as? String,
             deviceToken: auth?["deviceToken"] as? String))
         client.phase = .open
         self.clients[index] = client
+        self.connectRoleEvents.continuation.yield(role)
         if let failure = self.connectFailures[index] {
             self.sendConnectFailure(id: id, failure: failure, index: index)
         } else {

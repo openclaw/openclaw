@@ -1,14 +1,19 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { once } from "node:events";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Socket } from "node:net";
 import process from "node:process";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { keepHttpServerTaskAlive, waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { sendJsonNoStore as sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
-import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
+import {
+  killProcessTree,
+  spawnOomScoreAdjusted as spawn,
+} from "openclaw/plugin-sdk/process-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -47,8 +52,6 @@ const WAKE_EVENT_ID_FIELDS = [
   "id",
 ] as const;
 
-type RaftWakeReplayEvent = { accountId: string; key: string };
-
 class WakeRequestError extends Error {
   constructor(
     readonly statusCode: number,
@@ -58,37 +61,6 @@ class WakeRequestError extends Error {
   ) {
     super(message);
   }
-}
-
-function spawnRaftBridge(params: {
-  profile: string;
-  endpoint: string;
-  token: string;
-}): ChildProcess {
-  // Raft owns the fixed bridge command. OpenClaw passes profile/loopback
-  // endpoint/token as separate argv/env fields; wake payloads never reach argv.
-  return spawn(
-    "raft",
-    [
-      "--profile",
-      params.profile,
-      "agent",
-      "bridge",
-      "--wake-adapter",
-      "wake-channel",
-      "--wake-channel-endpoint",
-      params.endpoint,
-    ],
-    {
-      env: {
-        ...process.env,
-        RAFT_CHANNEL_TOKEN: params.token,
-      },
-      detached: process.platform !== "win32",
-      stdio: "ignore",
-      windowsHide: true,
-    },
-  );
 }
 
 function hasMatchingToken(request: IncomingMessage, expected: string): boolean {
@@ -154,14 +126,6 @@ function resolveWakeDedupeKey(payload: Record<string, unknown>): string | undefi
   return eventId ? createHash("sha256").update(`id:${eventId}`).digest("hex") : undefined;
 }
 
-function sendJson(response: ServerResponse, statusCode: number, body: Record<string, unknown>) {
-  response.writeHead(statusCode, {
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store",
-  });
-  response.end(JSON.stringify(body));
-}
-
 function closeServer(server: Server, sockets: Set<Socket>) {
   for (const socket of sockets) {
     socket.destroy();
@@ -182,13 +146,7 @@ function stopBridge(child: ChildProcess) {
 }
 
 async function listenLoopback(server: Server): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, BRIDGE_HOST, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  await once(server.listen(0, BRIDGE_HOST), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Raft wake server did not bind a TCP port.");
@@ -212,7 +170,7 @@ export async function startRaftGatewayAccount(
   }
 
   const wakeQueue = new KeyedAsyncQueue();
-  const wakeDedupe = createChannelReplayGuard<RaftWakeReplayEvent>({
+  const wakeDedupe = createChannelReplayGuard<{ accountId: string; key: string }>({
     dedupe: {
       ttlMs: WAKE_DEDUPE_TTL_MS,
       memoryMaxSize: WAKE_DEDUPE_MEMORY_MAX_SIZE,
@@ -295,16 +253,8 @@ export async function startRaftGatewayAccount(
             await dispatchRaftWake(ctx);
           },
         );
-        if (result.kind === "duplicate") {
-          return false;
-        }
-        if (result.kind === "inflight") {
-          if (await result.pending) {
-            return false;
-          }
-          throw new WakeRequestError(503, "Raft wake delivery is retrying.");
-        }
-        return true;
+        // The account FIFO settles each replay claim before admitting the next.
+        return result.kind === "processed";
       });
       sendJson(response, 202, {
         ok: true,
@@ -351,7 +301,30 @@ export async function startRaftGatewayAccount(
   try {
     const port = await listenLoopback(server);
     const endpoint = `http://${BRIDGE_HOST}:${port}${WAKE_PATH}`;
-    bridge = spawnRaftBridge({ profile, endpoint, token });
+    // Raft owns the fixed bridge command. OpenClaw passes profile/loopback
+    // endpoint/token as separate argv/env fields; wake payloads never reach argv.
+    bridge = spawn(
+      "raft",
+      [
+        "--profile",
+        profile,
+        "agent",
+        "bridge",
+        "--wake-adapter",
+        "wake-channel",
+        "--wake-channel-endpoint",
+        endpoint,
+      ],
+      {
+        env: {
+          ...process.env,
+          RAFT_CHANNEL_TOKEN: token,
+        },
+        detached: process.platform !== "win32",
+        stdio: "ignore",
+        windowsHide: true,
+      },
+    );
     bridge.once("error", (error) => {
       if (!stopped) {
         bridgeExited = new Error(`Raft bridge failed to start: ${String(error)}`);

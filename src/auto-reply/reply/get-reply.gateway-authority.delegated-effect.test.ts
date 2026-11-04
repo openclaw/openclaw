@@ -9,6 +9,10 @@ import { buildChannelInboundEventContext } from "../../channels/inbound-event/co
 import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { createHostChannelIngressRuntime } from "../../channels/message-access/runtime.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { prepareDelegatedSystemAgentApproval } from "../../gateway/server-methods/system-agent-approval.js";
 import type { SystemAgentChatSession } from "../../gateway/server-methods/system-agent.js";
@@ -41,6 +45,7 @@ type ChannelLifecycle = "live" | "unbound" | "retired" | "replaced";
 
 let state: OpenClawTestState | undefined;
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   await state?.cleanup();
   state = undefined;
   resetAgentRunRegistryForTest();
@@ -84,6 +89,7 @@ async function createTestState(label: string) {
     session: { dmScope: "per-channel-peer" },
   });
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   return { cfg, workspaceDir: state.workspaceDir };
 }
 

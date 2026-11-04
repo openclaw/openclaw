@@ -1,6 +1,10 @@
 /** Capture and revalidate the native owner across a stopped-service repair. */
 import os from "node:os";
 import {
+  withServiceInspectionBudget,
+  runServiceInspectionGuard,
+} from "./service-inspection-budget.js";
+import {
   findServiceOwnershipRefusal,
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
@@ -11,7 +15,12 @@ import type {
   SystemdServiceReadTarget,
 } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
-import { readSystemdBusCall, readSystemdUnitObjectPath } from "./systemd-bus-query.js";
+import {
+  isSystemdManagerUid,
+  readSystemdBusCall,
+  readSystemdUnitObjectPath,
+  systemdUnitCallArgs,
+} from "./systemd-bus-query.js";
 import { openSystemdBroker, openSystemdMachineBroker } from "./systemd-peer-native.js";
 import { SYSTEMD_DEFAULT_STOP_TIMEOUT_MS } from "./systemd-time-span.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
@@ -68,12 +77,7 @@ async function inspectIdentity(
     throw unavailable();
   }
   const managerUid = await call("GetConnectionUnixUser", ["s", managerOwner], "u");
-  if (
-    typeof managerUid !== "number" ||
-    !Number.isInteger(managerUid) ||
-    managerUid < 0 ||
-    managerUid >= 0xffffffff
-  ) {
+  if (!isSystemdManagerUid(managerUid)) {
     throw unavailable();
   }
   if (
@@ -86,15 +90,7 @@ async function inspectIdentity(
     throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   const unit = await broker.query(
-    [
-      "call",
-      managerOwner,
-      MANAGER_PATH,
-      `${MANAGER}.Manager`,
-      expected ? "LoadUnit" : "GetUnit",
-      "s",
-      target.unitName,
-    ],
+    systemdUnitCallArgs(managerOwner, target.unitName, expected ? "LoadUnit" : "GetUnit"),
     ["o"],
     deadline,
   );
@@ -162,40 +158,42 @@ export async function captureSystemdServiceIdentity(params: {
   rootServiceAccount?: string;
   timeoutMs?: number;
 }): Promise<SystemdServiceIdentity> {
-  const deadline = performance.now() + (params.timeoutMs ?? SYSTEMD_DEFAULT_STOP_TIMEOUT_MS);
-  const transport =
-    params.target.scope === "user"
-      ? await resolveSystemdUserTransport(params.env, deadline, undefined, "admission")
-      : undefined;
-  if (params.target.scope === "user" && (!transport || transport.kind === "private")) {
-    throw new ServiceInspectionError("systemd-user-bus-unavailable");
-  }
-  const bus: SystemdServiceIdentity["bus"] =
-    transport?.kind === "machine"
-      ? { machine: `${transport.user}@` }
-      : {
-          address:
-            transport?.address ??
-            process.env.DBUS_SYSTEM_BUS_ADDRESS ??
-            "unix:path=/run/dbus/system_bus_socket",
-        };
-  const broker = await openBroker(bus, deadline);
-  try {
-    const identity = await inspectIdentity(
-      broker,
-      params.target,
-      bus,
-      deadline,
-      undefined,
-      params.rootServiceAccount,
-    );
-    if (params.managerUid !== undefined && identity.managerUid !== params.managerUid) {
-      throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+  return await withServiceInspectionBudget(async (budget) => {
+    const deadline = budget.now() + (params.timeoutMs ?? SYSTEMD_DEFAULT_STOP_TIMEOUT_MS);
+    const transport =
+      params.target.scope === "user"
+        ? await resolveSystemdUserTransport(params.env, deadline, undefined, "admission")
+        : undefined;
+    if (params.target.scope === "user" && (!transport || transport.kind === "private")) {
+      throw new ServiceInspectionError("systemd-user-bus-unavailable");
     }
-    return identity;
-  } finally {
-    await broker.close();
-  }
+    const bus: SystemdServiceIdentity["bus"] =
+      transport?.kind === "machine"
+        ? { machine: `${transport.user}@` }
+        : {
+            address:
+              transport?.address ??
+              process.env.DBUS_SYSTEM_BUS_ADDRESS ??
+              "unix:path=/run/dbus/system_bus_socket",
+          };
+    const broker = await openBroker(bus, deadline);
+    try {
+      const identity = await inspectIdentity(
+        broker,
+        params.target,
+        bus,
+        deadline,
+        undefined,
+        params.rootServiceAccount,
+      );
+      if (params.managerUid !== undefined && identity.managerUid !== params.managerUid) {
+        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+      }
+      return identity;
+    } finally {
+      await broker.close();
+    }
+  });
 }
 
 export async function activateSystemdServiceIdentity(params: {
@@ -207,76 +205,79 @@ export async function activateSystemdServiceIdentity(params: {
   prepareEffect?: () => Promise<void>;
   warn: (message: string) => void;
 }): Promise<void> {
-  let authorityFailure: { error: unknown } | undefined;
-  const assertCurrent = () => {
-    try {
-      assertGatewayServiceUpdateCurrent();
-      params.assertCurrent?.();
-    } catch (error) {
-      authorityFailure = { error };
-      throw error;
-    }
-  };
-  assertCurrent();
-  const { identity } = params;
-  const deadline = performance.now() + SYSTEMD_DEFAULT_STOP_TIMEOUT_MS;
-  const broker = await openBroker(identity.bus, deadline);
-  try {
-    const methods =
-      params.action === "stop"
-        ? ["StopUnit"]
-        : ["ResetFailedUnit", params.action === "start" ? "StartUnit" : "RestartUnit"];
-    for (const method of methods) {
-      await params.beforeMutation?.();
-      assertCurrent();
-      await inspectIdentity(broker, identity, identity.bus, deadline, identity);
-      assertCurrent();
-      await params.prepareEffect?.();
-      assertCurrent();
-      const reset = method === "ResetFailedUnit";
-      let effectFailure: { error: unknown } | undefined;
+  return await withServiceInspectionBudget(async (budget) => {
+    let authorityFailure: { error: unknown } | undefined;
+    const assertCurrent = () => {
       try {
-        await broker.query(
-          [
-            "call",
-            identity.managerOwner,
-            MANAGER_PATH,
-            `${MANAGER}.Manager`,
-            method,
-            reset ? "s" : "ss",
-            identity.unitName,
-            ...(reset ? [] : ["replace"]),
-          ],
-          reset ? [] : ["o"],
-          deadline,
-          assertCurrent,
-          () => {
-            try {
-              params.beforeEffect?.();
-            } catch (error) {
-              effectFailure = { error };
-              throw error;
-            }
-          },
-        );
+        assertGatewayServiceUpdateCurrent();
+        runServiceInspectionGuard(params.assertCurrent);
       } catch (error) {
-        if (authorityFailure) {
-          throw authorityFailure.error;
-        }
-        if (effectFailure) {
-          throw effectFailure.error;
-        }
-        assertCurrent();
-        const refusal = findServiceOwnershipRefusal(error);
-        if (refusal || !reset) {
-          throw refusal ?? error;
-        }
-        params.warn(
-          "systemd reset-failed did not complete; revalidating ownership and continuing with activation.",
-        );
+        authorityFailure = { error };
+        throw error;
       }
+    };
+    assertCurrent();
+    const { identity } = params;
+    const deadline = budget.now() + SYSTEMD_DEFAULT_STOP_TIMEOUT_MS;
+    const broker = await openBroker(identity.bus, deadline);
+    try {
+      const methods =
+        params.action === "stop"
+          ? ["StopUnit"]
+          : ["ResetFailedUnit", params.action === "start" ? "StartUnit" : "RestartUnit"];
+      for (const method of methods) {
+        await params.beforeMutation?.();
+        assertCurrent();
+        await inspectIdentity(broker, identity, identity.bus, deadline, identity);
+        assertCurrent();
+        await params.prepareEffect?.();
+        assertCurrent();
+        const reset = method === "ResetFailedUnit";
+        let effectFailure: { error: unknown } | undefined;
+        try {
+          await broker.query(
+            [
+              "call",
+              identity.managerOwner,
+              MANAGER_PATH,
+              `${MANAGER}.Manager`,
+              method,
+              reset ? "s" : "ss",
+              identity.unitName,
+              ...(reset ? [] : ["replace"]),
+            ],
+            reset ? [] : ["o"],
+            deadline,
+            assertCurrent,
+            () => {
+              try {
+                params.beforeEffect?.();
+              } catch (error) {
+                effectFailure = { error };
+                throw error;
+              }
+            },
+            SYSTEMD_DEFAULT_STOP_TIMEOUT_MS,
+          );
+        } catch (error) {
+          if (authorityFailure) {
+            throw authorityFailure.error;
+          }
+          if (effectFailure) {
+            throw effectFailure.error;
+          }
+          assertCurrent();
+          const refusal = findServiceOwnershipRefusal(error);
+          if (refusal || !reset) {
+            throw refusal ?? error;
+          }
+          params.warn(
+            "systemd reset-failed did not complete; revalidating ownership and continuing with activation.",
+          );
+        }
+      }
+    } finally {
+      await broker.close();
     }
-  } finally {
-    await broker.close();
-  }
+  });
 }

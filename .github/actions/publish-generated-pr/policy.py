@@ -89,9 +89,30 @@ def fetch_base():
     git("fetch", "--no-tags", "origin", f"+refs/heads/{base_branch}:{base_ref}", timeout=120)
 
 
-def entry_at(commit, path):
-    entry = git("ls-tree", commit, "--", path, capture=True).split("\t", 1)[0].rstrip("\n")
-    return entry or "__missing__"
+def entries_at(commit, paths):
+    entries, batch, size = {}, [], 0
+
+    def read():
+        if batch:
+            # Keep ancestor tree entries for directory/file replacements. NUL
+            # records preserve filenames; git() exposes them only after settlement.
+            output = git("ls-tree", "-t", "-z", "--full-tree", commit, "--", *batch, capture=True)
+            for record in output.split("\0")[:-1]:
+                metadata, path = record.split("\t", 1)
+                entries[path] = metadata
+
+    for path in paths:
+        path_size = len(os.fsencode(path)) + 1
+        # Bound argv growth on macOS too; an individually oversized path still
+        # reaches Git under the same command/error authority as a single read.
+        if batch and size + path_size > 65536:
+            read()
+            batch.clear()
+            size = 0
+        batch.append(path)
+        size += path_size
+    read()
+    return entries
 
 
 def find_owned_path_overlap():
@@ -99,20 +120,23 @@ def find_owned_path_overlap():
     for tree in (desired_commit, base_ref):
         candidates.update(git("diff", "--name-only", "-z", "--no-renames", source_commit,
                               tree, "--", *generated_paths, capture=True).split("\0")[:-1])
-    for path in sorted(candidates, key=os.fsencode):
-        source_entry = entry_at(source_commit, path)
-        desired_entry = entry_at(desired_commit, path)
-        base_entry = entry_at(base_ref, path)
+    candidates = sorted(candidates, key=os.fsencode)
+    source_entries = entries_at(source_commit, candidates)
+    desired_entries = entries_at(desired_commit, candidates)
+    base_entries = entries_at(base_ref, candidates)
+    for path in candidates:
+        source_entry = source_entries.get(path)
+        desired_entry = desired_entries.get(path)
+        base_entry = base_entries.get(path)
         if source_entry != base_entry and desired_entry != base_entry:
             return path
     return ""
 
 
 def desired_matches_tree(treeish):
-    for path in changed_paths:
-        if entry_at(desired_commit, path) != entry_at(treeish, path):
-            return False
-    return True
+    desired_entries = entries_at(desired_commit, changed_paths)
+    actual_entries = entries_at(treeish, changed_paths)
+    return all(desired_entries.get(path) == actual_entries.get(path) for path in changed_paths)
 
 
 def stale_reason():
@@ -232,8 +256,9 @@ def prepare_branch():
         print(f"::notice::Stale generated output detected because {overlap} changed on {base_branch}.", flush=True)
         return reason
     git("switch", "-C", head_branch, base_ref)
+    desired_entries = entries_at(desired_commit, changed_paths)
     for path in changed_paths:
-        if entry_at(desired_commit, path) == "__missing__":
+        if path not in desired_entries:
             git("rm", "-f", "--ignore-unmatch", "--", path)
         else:
             git("restore", f"--source={desired_commit}", "--staged", "--worktree", "--", path)

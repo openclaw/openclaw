@@ -4,6 +4,10 @@ import { buildChannelInboundEventContext } from "../../channels/inbound-event/co
 import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { createHostChannelIngressRuntime } from "../../channels/message-access/runtime.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createOpenClawTestState,
@@ -20,6 +24,7 @@ vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
 
 let state: OpenClawTestState | undefined;
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   await state?.cleanup();
   vi.clearAllMocks();
 });
@@ -44,7 +49,8 @@ it.each(["live", "retired", "replaced", "unbound"])(
       session: { dmScope: "per-channel-peer" },
     });
     await state.writeConfig(cfg);
-    const gatewayContext = { owner: "gateway-a" } as never;
+    setRuntimeConfigSnapshot(cfg);
+    const gatewayContext = { owner: "gateway-a", getRuntimeConfig: () => ({}) } as never;
     let live = true;
     const owner = {
       channelId: "discord",

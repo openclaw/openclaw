@@ -52,10 +52,7 @@ export function canContinueFromMessage(message: AgentMessage | undefined): boole
 // are not safe continuation points because replay could resume after an
 // incomplete action instead of a user, tool-result, or summary boundary.
 export function trimToContinuableTail(messages: AgentMessage[]): AgentMessage[] | null {
-  let end = messages.length;
-  while (end > 0 && !canContinueFromMessage(messages[end - 1])) {
-    end -= 1;
-  }
+  const end = messages.findLastIndex(canContinueFromMessage) + 1;
   return end > 0 ? messages.slice(0, end) : null;
 }
 

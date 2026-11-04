@@ -4,6 +4,15 @@ type OwnedValueState<TInstance extends object> = {
   original?: object;
 };
 
+export interface PluginValueInstances<TInstance extends object> {
+  get(value: object): TInstance | undefined;
+  set(value: object, instance: TInstance): this;
+  adopt<T>(value: T, instance: TInstance): T;
+  setHost(value: object, instance: TInstance): this;
+  getOriginal(value: object, instance: TInstance): object | undefined;
+  setOriginal(value: object, original: object, instance: TInstance): void;
+}
+
 // oxlint-disable-next-line typescript/no-extraneous-class -- Derived classes need a returning base constructor to stamp private fields on an existing object.
 export class PluginHostObject {
   constructor(value: object) {
@@ -25,21 +34,10 @@ export class PluginFactoryBinding extends PluginHostObject {
   }
 }
 
-export class PluginCallToken extends PluginHostObject {
-  #hostCleanup: boolean;
-
-  constructor(value: object, hostCleanup: boolean) {
-    super(value);
-    this.#hostCleanup = hostCleanup;
-  }
-
-  static isHostCleanup(token: object): boolean {
-    return #hostCleanup in token && token.#hostCleanup;
-  }
-}
-
 /** Installed once in the shared instance singleton, including its private-field brand. */
-export function createPluginValueInstances<TInstance extends object>() {
+export function createPluginValueInstances<
+  TInstance extends object,
+>(): PluginValueInstances<TInstance> {
   // Private fields are installed on the returned object without invoking Proxy traps.
   // They cannot be discovered through reflection or forwarded by a foreign Proxy.
   class OwnedValue extends PluginHostObject {
@@ -83,6 +81,27 @@ export function createPluginValueInstances<TInstance extends object>() {
         foreign.set(value, instance);
       }
       return this;
+    },
+    adopt<T>(value: T, instance: TInstance): T {
+      const seen = new Set<object>();
+      const visit = (candidate: unknown) => {
+        if (
+          !candidate ||
+          (typeof candidate !== "object" && typeof candidate !== "function") ||
+          seen.has(candidate)
+        ) {
+          return;
+        }
+        seen.add(candidate);
+        this.set(candidate, instance);
+        for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(candidate))) {
+          if ("value" in descriptor) {
+            visit(descriptor.value);
+          }
+        }
+      };
+      visit(value);
+      return value;
     },
     setHost(value: object, instance: TInstance) {
       install(value).instance = instance;

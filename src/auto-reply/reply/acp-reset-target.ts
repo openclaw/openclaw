@@ -13,20 +13,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, isAcpSessionKey } from "../../routing/session-key.js";
 
-function resolveResetTargetAccountId(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  accountId?: string | null;
-}): string {
-  const explicit = normalizeOptionalString(params.accountId) ?? "";
-  if (explicit) {
-    return explicit;
-  }
-
-  const configuredDefault: unknown = params.cfg.channels?.[params.channel]?.defaultAccount;
-  return normalizeOptionalString(configuredDefault) ?? DEFAULT_ACCOUNT_ID;
-}
-
 function resolveRawConfiguredAcpSessionKey(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -101,11 +87,10 @@ export async function resolveEffectiveResetTargetSessionKey(params: {
   if (!channel || !conversationId) {
     return activeAcpSessionKey;
   }
-  const accountId = resolveResetTargetAccountId({
-    cfg: params.cfg,
-    channel,
-    accountId: params.accountId,
-  });
+  const accountId =
+    normalizeOptionalString(params.accountId) ??
+    normalizeOptionalString(params.cfg.channels?.[channel]?.defaultAccount) ??
+    DEFAULT_ACCOUNT_ID;
   const parentConversationId = normalizeOptionalString(params.parentConversationId);
   const conversation = { channel, accountId, conversationId, parentConversationId };
   const serviceBinding = await getSessionBindingService().resolveByConversationAsync(conversation);

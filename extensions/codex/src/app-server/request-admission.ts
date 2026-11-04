@@ -9,13 +9,10 @@ export function dispatchCodexRequestAttempt(
   assertTransportCurrent: () => void,
   writeMessage: () => void,
 ): void {
-  if (!attempt.pending) {
-    return;
-  }
   let consumed = false;
   const write = () => {
     if (consumed) {
-      throw new Error("Codex request wire admission was already consumed");
+      return;
     }
     consumed = true;
     if (!attempt.pending) {
@@ -29,9 +26,7 @@ export function dispatchCodexRequestAttempt(
         ? cause
         : new CodexAppServerScopedRequestRejectedError(coerceErrorMessage(cause), { cause });
     }
-    if (attempt.pending) {
-      writeMessage();
-    }
+    writeMessage();
   };
   const rejectAdmission = (cause: unknown) => {
     // Only a failure before entering the wire callback proves an authority
@@ -49,7 +44,7 @@ export function dispatchCodexRequestAttempt(
       void options
         .withCurrent(write)
         .then(() => {
-          if (!consumed && attempt.pending) {
+          if (!consumed) {
             throw new Error("Codex request authority did not admit the wire write");
           }
         })

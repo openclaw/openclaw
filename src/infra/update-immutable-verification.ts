@@ -1,12 +1,15 @@
+import { Type } from "typebox";
+import { Value } from "typebox/value";
+import { SessionRowSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import {
   createGatewayRestartDeadline,
   GatewayRestartDeadlineError,
 } from "../cli/daemon-cli/restart-health-deadline.js";
+import { getGatewayChannelWarnings } from "../cli/daemon-cli/restart-health-diagnostics.js";
 import {
   resolveGatewayRestartProbeContext,
   waitForGatewayHttpReadiness,
 } from "../cli/daemon-cli/restart-health-probe.js";
-import { INTERRUPTED_UPDATE_SETTLE_PROBES } from "../cli/daemon-cli/restart-health.constants.js";
 import {
   inspectGatewayRestart,
   isSameGatewayRestartGeneration,
@@ -16,6 +19,10 @@ import {
 import { resolveUpdatedGatewayRestartPort } from "../cli/update-cli/update-command-service-plan.js";
 import type { GatewayService } from "../daemon/service-types.js";
 import { readSystemdServiceRuntime } from "../daemon/systemd-runtime.js";
+import { resolveReadOnlyLocalGatewayAuth } from "../gateway/call-device-auth.js";
+import { callGateway } from "../gateway/call.js";
+import { createConfiguredGatewayLocalProbe } from "../gateway/local-http-probe.js";
+import { READ_SCOPE } from "../gateway/method-scopes.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { readPackageVersion } from "./package-json.js";
 import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
@@ -28,6 +35,18 @@ import {
   inspectImmutableActivationService,
   type ImmutableServiceObservation,
 } from "./update-immutable-service.js";
+
+const sessionProbeResultSchema = Type.Object({
+  ts: Type.Number(),
+  path: Type.String(),
+  count: Type.Integer({ minimum: 0, maximum: 1 }),
+  defaults: Type.Object({
+    modelProvider: Type.Union([Type.String(), Type.Null()]),
+    model: Type.Union([Type.String(), Type.Null()]),
+    contextTokens: Type.Union([Type.Number(), Type.Null()]),
+  }),
+  sessions: Type.Array(SessionRowSchema, { maxItems: 1 }),
+});
 
 export type ImmutableGatewayVerification = {
   pid: number;
@@ -142,28 +161,77 @@ export async function waitForImmutableGateway(params: {
         expectedVersion: version,
         expectedBuildId: buildId,
         requirePluginHealth: true,
+        requireChannelHealth: false,
       };
       waited = await waitForGatewayHealthyRestart({
         ...probe,
         phase: "readiness:health",
         deadlineOutcome: "snapshot",
         requireRunningService: true,
-        settle: { probes: INTERRUPTED_UPDATE_SETTLE_PROBES },
       });
       if (!waited.healthy) {
         return inconclusive();
       }
       const http = await deadline.read("readiness:http", () =>
         waitForGatewayHttpReadiness({
+          requireChannelHealth: false,
           config: context.config,
           port,
           attempts: 1,
-          deadlineAt: Date.now() + deadline.remainingMs(),
+          deadlineAt: deadline.deadlineMs,
           probeTimeoutMs: deadline.remainingMs(),
           delayMs: 0,
           signal: deadline.signal,
         }),
       );
+      const target = await deadline.read("readiness:sessions-target", () =>
+        createConfiguredGatewayLocalProbe(context.config).resolveWebSocketTarget(
+          port,
+          deadline.signal,
+        ),
+      );
+      const auth = await deadline.read("readiness:sessions-auth", () =>
+        resolveReadOnlyLocalGatewayAuth({
+          auth: context.auth,
+          authNone: context.config.gateway?.auth?.mode === "none",
+          env,
+        }),
+      );
+      assertCurrent();
+      if (!target || !waited.gatewayBootId) {
+        return result("unverified");
+      }
+      let sameBoot = false;
+      const assertSessionBoot = () => {
+        assertCurrent();
+        if (!sameBoot) {
+          throw new Error("Gateway boot changed before session verification");
+        }
+      };
+      const sessions = await deadline.read("readiness:sessions", () =>
+        callGateway<unknown>({
+          config: context.config,
+          localPortOverride: port,
+          ...auth,
+          tlsFingerprint: target.tlsFingerprint,
+          method: "sessions.list",
+          params: { limit: 1, rowMode: "compact" },
+          scopes: [READ_SCOPE],
+          timeoutMs: deadline.remainingMs(),
+          signal: deadline.signal,
+          onHelloOk: (hello) => {
+            sameBoot = hello.server.bootId === waited?.gatewayBootId;
+          },
+          assertDispatchCurrent: assertSessionBoot,
+        }),
+      );
+      assertSessionBoot();
+      if (
+        !Value.Check(sessionProbeResultSchema, sessions) ||
+        sessions.count !== sessions.sessions.length
+      ) {
+        return result("unverified");
+      }
       const after = await inspectGatewayRestart({ ...probe, phase: "readiness:reconcile" });
       assertCurrent();
       const current = await deadline.read("readiness:service-reconcile", inspectService);
@@ -183,14 +251,16 @@ export async function waitForImmutableGateway(params: {
         !isSameGatewayRestartGeneration(waited, after) ||
         after.gatewayVersion !== version ||
         after.gatewayBuildId !== buildId ||
-        http.healthz !== 200 ||
-        http.readyz !== 200
+        !(http.coreReady ?? (http.healthz === 200 && http.readyz === 200))
       ) {
         return result("unverified");
       }
       assertImmutableServiceProcessCurrent(current);
       assertCurrent();
       observed = current;
+      for (const { id } of getGatewayChannelWarnings(after, http)) {
+        params.onReceipt?.(`Channel health warning (${id}); run openclaw channels status --probe.`);
+      }
       return {
         ...result("verified"),
         verification: {

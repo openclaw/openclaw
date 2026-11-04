@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { collectRootPackageExcludedExtensionDirs } from "./lib/bundled-plugin-build-entries.mjs";
 import { parsePackageRootArg } from "./lib/package-root-args.mts";
 // Keep this prepack smoke independent of workspace package links.
@@ -11,6 +12,11 @@ import { isRecord } from "./lib/record-shared.mjs";
 import { installProcessWarningFilter } from "./process-warning-filter.mts";
 
 installProcessWarningFilter();
+
+const stateTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-state-"));
+const smokeEnv = createBuildSmokeEnv(stateTempRoot);
+Object.assign(process.env, smokeEnv);
+process.once("exit", () => fs.rmSync(stateTempRoot, { recursive: true, force: true }));
 
 process.env.OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK ??= "1";
 
@@ -84,7 +90,7 @@ function smokeInstalledPackageOnPlainNode(installedPackageRoot: string) {
   const result = spawnSync(
     process.execPath,
     [fileURLToPath(import.meta.url), "--package-root", installedPackageRoot],
-    { env: { ...process.env, [installedLayoutEnv]: "1" }, stdio: "inherit" },
+    { env: { ...smokeEnv, [installedLayoutEnv]: "1" }, stdio: "inherit" },
   );
   return result.status ?? 1;
 }

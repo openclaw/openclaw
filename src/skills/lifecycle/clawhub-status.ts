@@ -124,33 +124,33 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     );
   }
 
+  const invalid = (reason: string, registry = originDetails.registry) =>
+    invalidLink(reason, {
+      ...originDetails,
+      registry,
+      slug: trackedSlug,
+      ...(lockRead.kind === "missing" ? {} : { lockPath: lockRead.path }),
+    });
   if (lockRead.kind === "missing") {
-    return invalidLink(
+    return invalid(
       `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the ${lockfileLabel}.`,
-      { ...originDetails, slug: trackedSlug },
     );
   }
   if (lockRead.kind === "malformed") {
-    return invalidLink(`Malformed ${lockfileLabel} at ${lockRead.path}: ${lockRead.error}`, {
-      ...originDetails,
-      slug: trackedSlug,
-      lockPath: lockRead.path,
-    });
+    return invalid(`Malformed ${lockfileLabel} at ${lockRead.path}: ${lockRead.error}`);
   }
   const locked = lockRead.lock.skills[trackedSlug];
   if (!locked) {
-    return invalidLink(
+    return invalid(
       `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the ${lockfileLabel}.`,
-      { ...originDetails, slug: trackedSlug, lockPath: lockRead.path },
     );
   }
   const expectedSkillDir = readRealPathSync(
     resolveWorkspaceSkillInstallDir(params.workspaceDir, trackedSlug),
   );
   if (!expectedSkillDir || readRealPathSync(params.skillDir) !== expectedSkillDir) {
-    return invalidLink(
+    return invalid(
       `Skill "${trackedSlug}" ClawHub origin metadata is not in the expected ClawHub install directory.`,
-      { ...originDetails, slug: trackedSlug, lockPath: lockRead.path },
     );
   }
   const originRegistry = originRead.origin.registry;
@@ -183,14 +183,9 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     lockedRegistry !== originRegistry ||
     !provenanceMatches
   ) {
-    return invalidLink(
+    return invalid(
       `Skill "${trackedSlug}" ClawHub origin metadata does not match the ${lockfileLabel}.`,
-      {
-        ...originDetails,
-        registry: lockedRegistry,
-        slug: trackedSlug,
-        lockPath: lockRead.path,
-      },
+      lockedRegistry,
     );
   }
   const { version: _version, ...origin } = originRead.origin;
@@ -205,7 +200,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
   };
 }
 
-function readLocalSkillCardSync(
+export function readLocalSkillCardSync(
   skillDir: string,
   includeContent = false,
 ): LocalSkillCardRead | undefined {
@@ -247,12 +242,6 @@ function readLocalSkillCardSync(
   }
 }
 
-export function resolveLocalSkillCardStatusSync(
-  skillDir: string,
-): LocalSkillCardStatus | undefined {
-  return readLocalSkillCardSync(skillDir);
-}
-
 export function readLocalSkillCardContentSync(skillDir: string): string | undefined {
   return readLocalSkillCardSync(skillDir, true)?.content;
 }
@@ -260,12 +249,12 @@ export function readLocalSkillCardContentSync(skillDir: string): string | undefi
 export async function searchSkillsFromClawHub(params: {
   query?: string;
   limit?: number;
-  baseUrl?: string;
+  signal?: AbortSignal;
 }): Promise<ClawHubSkillSearchResult[]> {
   return await searchClawHubSkills({
     query: params.query?.trim() ?? "",
     limit: params.limit,
-    baseUrl: params.baseUrl,
+    signal: params.signal,
   });
 }
 

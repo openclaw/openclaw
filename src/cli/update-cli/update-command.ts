@@ -1,13 +1,13 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
-import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { withSystemPackageOwnershipRun } from "../../infra/update-system-package-ownership.js";
 import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -18,9 +18,14 @@ import {
   resolveGitInstallDir,
   type UpdateCommandOptions,
 } from "./shared.js";
+import {
+  reportPreMutationUpdateResult,
+  withUpdateAdmissionReporting,
+} from "./update-command-admission-report.js";
 import { runAdmittedUpdate } from "./update-command-admitted.js";
 import { withUpdateCandidateAdmission } from "./update-command-candidate-admission.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
 import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -30,11 +35,7 @@ import type { InitializedUpdate } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
-import {
-  UpdateCommandFailure,
-  UpdateCommandPendingRecoveryFailure,
-  withUpdateAdmissionReporting,
-} from "./update-command-result.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import {
   createUpdateRunProgress,
   prepareUpdateCommand,
@@ -43,14 +44,9 @@ import {
   resolveUpdateCommandAdmissionRoot,
 } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
-import {
-  resolveServiceRefreshEnv,
-  withOwnedManagedUpdateEnv,
-  withUpdateInProgressEnv,
-} from "./update-command-service-env.js";
+import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
-import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 
 type PreparedUpdate = NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>;
 
@@ -58,16 +54,20 @@ export async function updateCommand(
   inputOpts: UpdateCommandOptions,
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
-  return await withDeferredDebugProxyCapture(async () => {
-    const { tryRunImmutableUpdateCommand } = await import("./update-command-immutable.js");
-    if (await tryRunImmutableUpdateCommand(inputOpts)) {
-      return;
-    }
-    const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
-    return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
-      updateCommandWithRuntime(inputOpts, retainRuntime, executorOptions),
-    );
-  });
+  return await withSystemPackageOwnershipRun(() =>
+    withDeferredDebugProxyCapture(async () => {
+      const { tryRunImmutableUpdateCommand } = await import("./update-command-immutable.js");
+      if (await tryRunImmutableUpdateCommand(inputOpts)) {
+        return;
+      }
+      const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
+      await preparePostgresPoolForUpdate("openclaw update repair");
+      const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
+      return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
+        updateCommandWithRuntime(inputOpts, retainRuntime, executorOptions),
+      );
+    }),
+  );
 }
 
 async function updateCommandWithRuntime(
@@ -85,74 +85,102 @@ async function updateCommandWithRuntime(
   );
   // Post-core children report phase results; the outer updater owns the run ledger.
   if (prepared.postCoreUpdateResume) {
-    return await withUpdateInProgressEnv(invocationCwd, async () =>
-      (await import("./update-execution.runtime.js")).resumePostCoreUpdate({
-        root: prepared.discoveredRoot,
-        channel: prepared.postCoreUpdateChannel,
-        opts: inputOpts,
-        timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-      }),
+    return await withUpdateAdmissionReporting(inputOpts, () =>
+      withUpdateDatabaseEngine(recoveryState.triageTarget.env, () =>
+        withUpdateInProgressEnv(invocationCwd, async () =>
+          (await import("./update-execution.runtime.js")).resumePostCoreUpdate({
+            root: prepared.discoveredRoot,
+            channel: prepared.postCoreUpdateChannel,
+            opts: inputOpts,
+            timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+          }),
+        ),
+      ),
     );
   }
-  return await withUpdateAdmissionReporting(inputOpts, async () => {
-    const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
-    const serviceRoot = prepared.servicePlan?.serviceRoot;
-    const env = await resolveUpdateCommandAdmissionEnv({
-      opts: inputOpts,
-      root: resolveUpdateCommandAdmissionRoot(prepared),
-      invocationCwd,
-      pkgOwnership: prepared.pkgOwnership,
-      expectedForeground:
-        prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
-    });
-    if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
-      defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
-    }
-    const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
-    assertUpdatePackageActivationAdmission(root, { serviceRoot });
-    const needsInitialization = await updateStateNeedsInitialization(env);
-    const captureOriginal =
-      !inputOpts.dryRun &&
-      !inputOpts.run &&
-      !inputOpts.recovery &&
-      !executorOptions &&
-      !env[UPDATE_RUN_ID_ENV]?.trim() &&
-      env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
-    const execute = (initialization?: InitializedUpdate) =>
-      runAdmittedUpdate(
-        inputOpts,
-        prepared,
-        recoveryState,
+  const reportHints: NonNullable<Parameters<typeof withUpdateAdmissionReporting>[3]> = {};
+  return await withUpdateAdmissionReporting(
+    inputOpts,
+    async () => {
+      const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
+      const serviceRoot = prepared.servicePlan?.serviceRoot;
+      const env = await resolveUpdateCommandAdmissionEnv({
+        opts: inputOpts,
+        root: resolveUpdateCommandAdmissionRoot(prepared),
         invocationCwd,
-        (opts, presentation, executor) =>
-          updateCommandInternal(
-            opts,
-            recoveryState,
-            invocationCwd,
-            prepared,
-            presentation,
-            executor,
-            retainRuntime,
-            initialization,
-          ),
-        initialization,
-        executorOptions,
-      );
-    if (needsInitialization || captureOriginal) {
-      const { initializeAndRunUpdate } = await import("./update-command-initialization-run.js");
-      return await initializeAndRunUpdate(
-        inputOpts,
-        prepared,
-        recoveryState,
-        invocationCwd,
+        pkgOwnership: prepared.pkgOwnership,
+        expectedForeground:
+          prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" ||
+          undefined,
+      });
+      return await withUpdateDatabaseEngine(
         env,
-        execute,
-        { needsInitialization, captureOriginal },
-        executorOptions,
+        async (configReadable, malformedConfig) => {
+          // Late admission refusals retain the captured malformed-source report decision.
+          reportHints.writeArtifacts = !malformedConfig;
+          if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
+            defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
+          }
+          const { updateStateNeedsInitialization } =
+            await import("./update-command-initialization.js");
+          assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
+          // Unreadable previews reach diagnostics before any writable state inspection.
+          const needsInitialization =
+            !configReadable || (await updateStateNeedsInitialization(env));
+          const captureOriginal =
+            !inputOpts.dryRun &&
+            !inputOpts.run &&
+            !inputOpts.recovery &&
+            !executorOptions &&
+            !env[UPDATE_RUN_ID_ENV]?.trim() &&
+            env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
+          const execute = (initialization?: InitializedUpdate) =>
+            runAdmittedUpdate(
+              inputOpts,
+              prepared,
+              recoveryState,
+              invocationCwd,
+              env,
+              (opts, presentation, executor) =>
+                updateCommandInternal(
+                  opts,
+                  recoveryState,
+                  invocationCwd,
+                  prepared,
+                  presentation,
+                  executor,
+                  retainRuntime,
+                  initialization,
+                ),
+              initialization,
+              executorOptions,
+            );
+          if (needsInitialization || captureOriginal) {
+            const { initializeAndRunUpdate } =
+              await import("./update-command-initialization-run.js");
+            return await initializeAndRunUpdate(
+              inputOpts,
+              prepared,
+              recoveryState,
+              invocationCwd,
+              env,
+              execute,
+              {
+                needsInitialization,
+                captureOriginal,
+                malformedConfig,
+              },
+              executorOptions,
+            );
+          }
+          return await execute();
+        },
+        inputOpts,
       );
-    }
-    return await execute();
-  });
+    },
+    "unknown",
+    reportHints,
+  );
 }
 
 async function updateCommandInternal(
@@ -169,58 +197,21 @@ async function updateCommandInternal(
   const admissionStepTimeoutMs =
     prepared.timeoutMs ?? admittedRun.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
-  let target = initialization?.target;
-  let reselected = false;
-  if (target && initialization && !opts.channel && !opts.sourceUpdate) {
-    const config =
-      target.legacyConfigPlan?.config ??
-      (target.configSnapshot.valid
-        ? target.configSnapshot.config
-        : target.configSnapshot.sourceConfig);
-    if (normalizeUpdateChannel(config.update?.channel) !== target.storedChannel) {
-      defaultRuntime.error(
-        "Warning: Stored update channel changed during admission; selecting the current channel's target.",
-      );
-      admittedRun.executorFence?.assertCurrent();
-      await initialization.stagedPackage?.close();
-      admittedRun.executorFence?.assertCurrent();
-      // Candidate verdicts and downgrade confirmation belong to the old target.
-      initialization.stagedPackage = undefined;
-      initialization.candidateAdmission = undefined;
-      initialization.downgradeConfirmed = undefined;
-      admittedRun.candidateAdmissionChecks = undefined;
-      target = undefined;
-      reselected = true;
-    }
-  }
-  const selectTarget = () =>
-    resolveUpdateCommandTarget(
+  const target =
+    initialization?.target ??
+    (await resolveUpdateCommandTarget(
       opts,
       recoveryState,
       invocationCwd,
       prepared,
       executor,
       admissionStepTimeoutMs,
-    );
-  if (!target) {
-    target = initialization
-      ? await withOwnedManagedUpdateEnv(initialization.env, selectTarget)
-      : await selectTarget();
-  }
+    ));
   if (!target) {
     return;
   }
-  if (reselected && initialization) {
-    admittedRun.executorFence = await executor.enter(target.root, {
-      preflight: true,
-      serviceRoot: target.managedServiceRoot,
-    });
-    admittedRun.executorFence.assertCurrent();
-    assertUpdatePackageActivationAdmission(target.root, {
-      serviceRoot: target.managedServiceRoot,
-    });
-    initialization.target = target;
-  }
+  const { createUpdateCommandExecutionGuards } = await import("./update-execution.runtime.js");
+  const executionGuards = createUpdateCommandExecutionGuards(opts, target.root);
   const runResolvedUpdate = async (stagedPackage?: StagedPackageInstallUpdate): Promise<void> => {
     const {
       startedAt,
@@ -289,7 +280,7 @@ async function updateCommandInternal(
         },
         before: { version: currentVersion ?? VERSION },
       },
-      { env: run.env },
+      run,
     );
     if (
       opts.channel &&
@@ -297,7 +288,7 @@ async function updateCommandInternal(
       !legacyConfigPlan &&
       !run.candidateAdmissionChecks?.includes("config")
     ) {
-      const failure = createUpdateConfigFailure(configSnapshot);
+      const failure = createUpdateConfigFailure(configSnapshot, target.configReadFailure);
       return await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
     }
     const schemaPreflight = await preflightUpdateCommandSchemas({
@@ -315,7 +306,7 @@ async function updateCommandInternal(
     }
 
     if (opts.dryRun) {
-      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, { env: run.env });
+      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, run);
       return await previewUpdateCommand({
         target,
         prepared,
@@ -351,18 +342,12 @@ async function updateCommandInternal(
       stop: presentation.stop,
       refuseUpdate,
     };
-    const pluginCount = Object.keys(configSnapshot.config.plugins?.entries ?? {}).length;
     const activateCurrentCore = async () => {
+      executionGuards.assertCurrent();
       run.executorFence = await executor.enter(root, {
         preflight: true,
         serviceRoot: managedServiceRoot,
-        activationTimeoutMs: (run.activationTimeoutMs ??=
-          timeoutMs === undefined
-            ? undefined
-            : await resolveUpdateFinalizationTimeoutMs(updateStepTimeoutMs, {
-                env: run.env,
-                pluginCount,
-              })),
+        activationTimeoutMs: run.deadline?.remainingMs() ?? run.activationTimeoutMs,
       });
       run.executorFence.assertCurrent();
       assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
@@ -403,6 +388,8 @@ async function updateCommandInternal(
     if (updateInstallKind === "package") {
       const runtimePreflight = await preparePackageUpdateRuntime({
         ...target,
+        assertCurrent: executionGuards.assertCurrent,
+        assertBoundChildCurrent: executionGuards.assertBoundChildCurrent,
         managedService: schemaPreflight.service,
         shouldRestart,
         opts,
@@ -431,10 +418,8 @@ async function updateCommandInternal(
       inspectActivatedUpdateState,
       restoreFailedUpdateDatabases,
       createUpdateCommandFinalizationFence,
-      createUpdateCommandExecutionGuards,
     } = await import("./update-execution.runtime.js");
 
-    const executionGuards = createUpdateCommandExecutionGuards(opts, root);
     const progress = createUpdateRunProgress(
       run,
       presentation.progress,
@@ -442,6 +427,7 @@ async function updateCommandInternal(
     );
     let preUpdatePluginInstallRecords: Awaited<ReturnType<typeof prepareMutableUpdateRuntime>> = {};
     let mutableUpdatePrepared = false;
+    let retainedRuntimeStep: UpdateStepResult | undefined;
     const prepareMutableUpdate: Parameters<
       typeof executeMutableUpdate
     >[0]["prepareMutableUpdate"] = async (
@@ -455,6 +441,8 @@ async function updateCommandInternal(
       }
       const fence = await executor.enter(root, {
         serviceRoot: managedServiceRoot,
+        // Preparation can time out without revoking the owner that must record
+        // its joined failure. Only the activation caller starts this clock.
         activationTimeoutMs,
       });
       admitExecutor(fence);
@@ -484,19 +472,26 @@ async function updateCommandInternal(
         installTarget,
         env,
         timeoutMs: updateStepTimeoutMs,
-        assertCurrent: () => fence.assertCurrent(),
+        signal: run.deadline?.signal,
+        assertCurrent: executionGuards.assertCurrent,
       });
-      await reportUpdateStepCompletion(progress, {
-        ...retentionStep,
+      retainedRuntimeStep = {
+        name: retentionStep.name,
+        command: retentionStep.command,
+        cwd: root,
         durationMs: Date.now() - retentionStartedAt,
         exitCode: 0,
         diagnostics: retention ? [JSON.stringify(retention)] : undefined,
-      });
+      };
+      await reportUpdateStepCompletion(progress, { ...retentionStep, ...retainedRuntimeStep });
       mutableUpdatePrepared = true;
     };
 
     const execution = await executeMutableUpdate({
       ...target,
+      ...(packageInstallTarget
+        ? { updateInstallKind: "package" as const, packageInstallTarget }
+        : { updateInstallKind: "git" as const }),
       callerLegacyConfigPlan: initialization?.callerLegacyConfigPlan,
       installKind,
       timeoutMs,
@@ -528,6 +523,9 @@ async function updateCommandInternal(
     }
     const { ownedManagedUpdateContext, recoveryEnv, ...executionState } = execution;
     const { result } = executionState;
+    if (retainedRuntimeStep) {
+      result.steps.unshift(retainedRuntimeStep);
+    }
     result.runId = run.runId;
     if (result.status === "skipped" && result.reason === "already-current") {
       await activateCurrentCore();
@@ -557,18 +555,25 @@ async function updateCommandInternal(
         ownedManagedUpdateContext?.pluginInstallRecords ?? preUpdatePluginInstallRecords,
       packageUpdateNodeRunner,
     };
-    const rollbackBlockedReason = opts.recovery
-      ? undefined
-      : await inspectActivatedUpdateState({
-          result,
-          root,
-          packageUpdateNodeRunner,
-          schemaVersions: execution.schemaVersions,
-          candidateSchemaVersions: execution.candidateSchemaVersions,
-          config: finalization.configSnapshot.config,
-          env: ownedManagedUpdateContext?.env ?? run.env,
-          timeoutMs: updateStepTimeoutMs,
-        });
+    // Before update mutation, the restored predecessor may already be writing state again.
+    // A post-activation scan would replace the original failure without a mutation to inspect.
+    const failedBeforeMutation =
+      result.status === "error" &&
+      !execution.mutationStarted &&
+      !(result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk);
+    const rollbackBlockedReason =
+      opts.recovery || failedBeforeMutation
+        ? undefined
+        : await inspectActivatedUpdateState({
+            result,
+            root,
+            packageUpdateNodeRunner,
+            schemaVersions: execution.schemaVersions,
+            candidateSchemaVersions: execution.candidateSchemaVersions,
+            config: finalization.configSnapshot.config,
+            env: ownedManagedUpdateContext?.env ?? run.env,
+            timeoutMs: updateStepTimeoutMs,
+          });
     run.executorFence?.assertCurrent();
     if (opts.recovery || rollbackBlockedReason) {
       // Only candidate code may reopen migrated state, including during reporting and cleanup.
@@ -606,11 +611,8 @@ async function updateCommandInternal(
         return;
       }
       recoveryState.ledgerHandoffCompleted = true;
-      opts.onResult?.(continued.result);
-      if (continued.exitCode !== 0) {
-        throw new UpdateCommandFailure(continued.result, continued.exitCode, undefined, {
-          automaticTriage: continued.automaticTriage,
-        });
+      if (continued.preparedFailure) {
+        throw continued.preparedFailure;
       }
       return;
     }
@@ -632,6 +634,7 @@ async function updateCommandInternal(
       presentation,
       stagedPackage: initialization?.stagedPackage,
       candidateAdmission: initialization?.candidateAdmission,
+      assertCurrent: executionGuards.assertCurrent,
     },
     runResolvedUpdate,
   );

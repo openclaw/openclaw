@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -7,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
-import { createSlackReadClient, createSlackWebClient } from "./client.js";
+import { createSlackReadClient, createSlackTokenCacheKey, createSlackWebClient } from "./client.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { readLruMapEntry } from "./monitor/lru-map-cache.js";
 
@@ -27,10 +26,6 @@ function setCachedSlackConversationInfo(
   SLACK_CONVERSATION_INFO_CACHE.delete(cacheKey);
   SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, conversationInfo);
   pruneMapToMaxSize(SLACK_CONVERSATION_INFO_CACHE, SLACK_CONVERSATION_INFO_CACHE_MAX_ENTRIES);
-}
-
-function fingerprintSlackCredential(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
 }
 
 function resolveConfiguredSlackConversationInfo(params: {
@@ -81,7 +76,7 @@ export async function resolveSlackConversationInfo(params: {
   const token = resolveSlackOperationToken(account, operation);
   const userToken = normalizeOptionalString(account.userToken);
   const credentialRole = token ? (token === userToken ? "user" : "bot") : "none";
-  const credentialFingerprint = token ? fingerprintSlackCredential(token) : "none";
+  const credentialFingerprint = token ? createSlackTokenCacheKey(token) : "none";
   const teamId = normalizeLowercaseStringOrEmpty(params.teamId) || "no-team-id";
   const cacheKey = `${account.accountId}:${teamId}:${operation}:${credentialRole}:${credentialFingerprint}:${channelId}`;
   if (!params.requireFreshName) {

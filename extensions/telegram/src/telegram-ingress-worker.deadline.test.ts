@@ -1,5 +1,6 @@
 // Telegram tests cover the isolated ingress request deadline boundary.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as telegramTransport from "./fetch.js";
 import type {
   TelegramIngressWorkerCommand,
   TelegramIngressWorkerMessage,
@@ -9,6 +10,7 @@ import { runTelegramIngressWorkerRuntime } from "./telegram-ingress-worker.runti
 type RuntimePort = Parameters<typeof runTelegramIngressWorkerRuntime>[0]["port"];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -49,6 +51,11 @@ describe("telegram ingress worker request deadline", () => {
         { status: 200 },
       );
     };
+    vi.spyOn(telegramTransport, "resolveTelegramTransport").mockReturnValue({
+      fetch: fetchImpl,
+      sourceFetch: fetchImpl,
+      close: async () => {},
+    });
     const done = runTelegramIngressWorkerRuntime({
       options: {
         token: "test-auth-token",
@@ -57,10 +64,6 @@ describe("telegram ingress worker request deadline", () => {
         apiRoot: "https://api.telegram.test",
       },
       port,
-      deps: {
-        fetch: fetchImpl,
-        closeTransport: async () => {},
-      },
     });
 
     await vi.advanceTimersByTimeAsync(44_999);

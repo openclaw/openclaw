@@ -78,9 +78,15 @@ async function restoreManifestContexts(
       skippedFiles: manifestRestoreReport.skippedFiles,
       status: resolveRestoreStatus(manifestRestoreReport),
     };
-    restoreReport.conflicts.push(...manifestRestoreReport.conflicts);
-    restoreReport.restoredFiles.push(...manifestRestoreReport.restoredFiles);
-    restoreReport.skippedFiles.push(...manifestRestoreReport.skippedFiles);
+    for (const conflict of manifestRestoreReport.conflicts) {
+      restoreReport.conflicts.push(conflict);
+    }
+    for (const file of manifestRestoreReport.restoredFiles) {
+      restoreReport.restoredFiles.push(file);
+    }
+    for (const file of manifestRestoreReport.skippedFiles) {
+      restoreReport.skippedFiles.push(file);
+    }
     writeSessionSqliteMigrationManifest({ manifest, manifestPath });
   }
   return restoreReport;
@@ -122,18 +128,16 @@ async function reconcileRestorePublications(
         }
         const source = statMigrationPath(move.sourcePath);
         const archive = statMigrationPath(move.archivePath);
-        if (!source || !archive) {
-          continue;
-        }
         if (
+          !source ||
+          !archive ||
           !source.isFile() ||
           !archive.isFile() ||
           source.dev !== archive.dev ||
-          source.ino !== archive.ino
+          source.ino !== archive.ino ||
+          source.nlink !== 2 ||
+          archive.nlink !== 2
         ) {
-          continue;
-        }
-        if (source.nlink !== 2 || archive.nlink !== 2) {
           continue;
         }
         if (
@@ -370,17 +374,12 @@ function selectRestoreCandidate<
   if (candidates[0]?.move.kind !== "legacy-store") {
     return undefined;
   }
-  const nonemptyDigests = new Set(
-    candidates
-      .filter((candidate) => (candidate.snapshot.legacyEntryCount ?? 0) > 0)
-      .map((candidate) => candidate.snapshot.digest),
-  );
+  const nonempty = candidates.filter((candidate) => (candidate.snapshot.legacyEntryCount ?? 0) > 0);
+  const nonemptyDigests = new Set(nonempty.map((candidate) => candidate.snapshot.digest));
   if (nonemptyDigests.size === 0) {
     return candidates[0];
   }
-  return nonemptyDigests.size === 1
-    ? candidates.find((candidate) => (candidate.snapshot.legacyEntryCount ?? 0) > 0)
-    : undefined;
+  return nonemptyDigests.size === 1 ? nonempty[0] : undefined;
 }
 
 function setRestoreCandidateConflicts(

@@ -40,7 +40,7 @@ async function runRetentionProbe(body: string) {
 describe("channel Gateway slot history retention", () => {
   it("releases failed replacement generations", async () => {
     const result = await runRetentionProbe(`
-      const gatewayContext = {};
+      const gatewayContext = { getRuntimeConfig: () => ({}) };
       const gatewayContextResolver = () => gatewayContext;
       const first = createRuntimeBuilder({
         origin: "bundled",
@@ -89,7 +89,7 @@ describe("channel Gateway slot history retention", () => {
 
   it("releases committed generations held only by a stale binding's chain", async () => {
     const result = await runRetentionProbe(`
-      const gatewayContext = {};
+      const gatewayContext = { getRuntimeConfig: () => ({}) };
       const gatewayContextResolver = () => gatewayContext;
       let live = createRuntimeBuilder({
         origin: "bundled",

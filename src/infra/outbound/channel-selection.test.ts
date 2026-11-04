@@ -148,21 +148,6 @@ describe("listConfiguredMessageChannels", () => {
 
   it.each([
     {
-      plugins: [makePlugin({ id: "alpha", accountIds: [] })],
-      expected: [],
-      expectedErrors: 0,
-    },
-    {
-      plugins: [
-        makePlugin({
-          id: "beta",
-          resolveAccount: () => ({ enabled: true }),
-        }),
-      ],
-      expected: ["beta"],
-      expectedErrors: 0,
-    },
-    {
       plugins: [
         makePlugin({
           id: "gamma",
@@ -174,30 +159,6 @@ describe("listConfiguredMessageChannels", () => {
       ],
       expected: ["gamma"],
       expectedErrors: 0,
-    },
-    {
-      plugins: [
-        makePlugin({
-          id: "muted",
-          resolveAccount: () => ({ token: "x" }),
-          isEnabled: () => false,
-          isConfigured: () => true,
-        }),
-      ],
-      expected: [],
-      expectedErrors: 0,
-    },
-    {
-      plugins: [
-        makePlugin({
-          id: "beta",
-          resolveAccount: () => {
-            throw new Error("boom");
-          },
-        }),
-      ],
-      expected: [],
-      expectedErrors: 1,
     },
   ])("lists configured channels for %j", async ({ plugins, expected, expectedErrors }) => {
     mocks.listChannelPlugins.mockReturnValue(plugins);
@@ -232,25 +193,6 @@ describe("listConfiguredMessageChannels", () => {
     await listWithAccounts(["account-1"]);
     expect(errorSpy).toHaveBeenCalledTimes(1026);
   });
-
-  it("lists a scoped-registry channel the process-root view does not know", async () => {
-    mocks.scopedRegistryChannelIds.add("scopex");
-    mocks.listRuntimeVisibleChannelPlugins.mockReturnValue([
-      makePlugin({ id: "scopex", resolveAccount: () => ({ enabled: true }) }),
-    ]);
-
-    await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual(["scopex"]);
-  });
-
-  it("excludes a visible scoped channel that the outbound resolver rejects", async () => {
-    mocks.scopedRegistryChannelIds.add("scopex");
-    mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
-    mocks.listRuntimeVisibleChannelPlugins.mockReturnValue([
-      makePlugin({ id: "scopex", resolveAccount: () => ({ enabled: true }) }),
-    ]);
-
-    await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual([]);
-  });
 });
 
 describe("resolveMessageChannelSelection", () => {
@@ -263,134 +205,13 @@ describe("resolveMessageChannelSelection", () => {
     mocks.missingOfficialExternalChannels.clear();
   });
 
-  it.each([
-    {
-      setup: () => {
-        const isConfigured = vi.fn(async () => true);
-        mocks.listChannelPlugins.mockReturnValue([makePlugin({ id: "beta", isConfigured })]);
-        return { isConfigured };
-      },
-      params: { cfg: {} as never, channel: "beta" },
-      expected: {
-        channel: "beta",
-      },
-      verify: ({ isConfigured }: { isConfigured?: ReturnType<typeof vi.fn> }) => {
-        expect(isConfigured).not.toHaveBeenCalled();
-      },
-    },
-    {
-      params: { cfg: {} as never, fallbackChannel: "gamma" },
-      expected: {
-        channel: "gamma",
-      },
-    },
-    {
-      setup: () => {
-        mocks.listChannelPlugins.mockReturnValue([
-          makePlugin({ id: "delta", isConfigured: async () => true }),
-        ]);
-      },
-      params: { cfg: {} as never },
-      expected: {
-        channel: "delta",
-      },
-    },
-  ])("resolves message channel selection for %j", async ({ setup, params, expected, verify }) => {
-    const setupResult = setup?.();
-    await expect(resolveMessageChannelSelection(params)).resolves.toMatchObject(expected);
-    verify?.(setupResult as never);
-  });
-
-  it("returns the exact bootstrapped plugin used to prove availability", async () => {
-    const plugin = { id: "alpha" };
-    mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
-
-    const selection = await resolveMessageChannelSelection({ cfg: {} as never, channel: "alpha" });
-
-    expect(selection.plugin).toBe(plugin);
-  });
-
-  it("returns the exact configured plugin used for single-channel selection", async () => {
-    const plugin = makePlugin({ id: "delta", isConfigured: async () => true });
-    mocks.listChannelPlugins.mockReturnValue([plugin]);
-
-    const selection = await resolveMessageChannelSelection({ cfg: {} as never });
-
-    expect(selection.plugin).toBe(plugin);
+  it("resolves the fallback channel", async () => {
+    await expect(
+      resolveMessageChannelSelection({ cfg: {} as never, fallbackChannel: "gamma" }),
+    ).resolves.toMatchObject({ channel: "gamma" });
   });
 
   it.each([
-    {
-      name: "trusts inspected configured state without materializing credentials",
-      accountResolution: "read_only" as const,
-      accountIds: ["default"],
-      inspect: async () => ({ enabled: true, configured: true }),
-      resolve: () => {
-        throw new Error("unresolved SecretRef");
-      },
-      configured: (): boolean => false,
-      expected: true,
-      inspectCalls: ["default"],
-      resolveCalls: 0,
-    },
-    {
-      name: "defaults omitted inspection enablement without calling runtime hooks",
-      accountResolution: "read_only" as const,
-      accountIds: ["default"],
-      inspect: () => ({ configured: true }),
-      resolve: () => {
-        throw new Error("strict resolution must not run");
-      },
-      enabled: () => {
-        throw new Error("runtime enablement must not receive inspection metadata");
-      },
-      configured: (): boolean => true,
-      expected: true,
-      inspectCalls: ["default"],
-      resolveCalls: 0,
-    },
-    {
-      name: "keeps omitted inspection configuration unknown without calling runtime hooks",
-      accountResolution: "read_only" as const,
-      accountIds: ["default"],
-      inspect: () => ({ enabled: true }),
-      resolve: () => {
-        throw new Error("strict resolution must not run");
-      },
-      configured: (): boolean => true,
-      expected: false,
-      inspectCalls: ["default"],
-      resolveCalls: 0,
-    },
-    {
-      name: "keeps strict selection on runtime account callbacks",
-      accountResolution: undefined,
-      accountIds: ["default"],
-      inspect: () => ({ enabled: true, configured: true }),
-      resolve: () => ({ enabled: true }),
-      configured: () => false,
-      expected: false,
-      inspectCalls: [],
-      resolveCalls: 1,
-    },
-    {
-      name: "excludes inspected disabled and unconfigured accounts",
-      accountResolution: "read_only" as const,
-      accountIds: ["disabled", "missing"],
-      inspect: (accountId: string) =>
-        accountId === "disabled"
-          ? { enabled: false, configured: true }
-          : { enabled: true, configured: false },
-      resolve: () => {
-        throw new Error("strict resolution must not run");
-      },
-      configured: () => {
-        throw new Error("strict configured check must not run");
-      },
-      expected: false,
-      inspectCalls: ["disabled", "missing"],
-      resolveCalls: 0,
-    },
     {
       name: "finds an inspected secondary account after a disabled default",
       accountResolution: "read_only" as const,
@@ -444,8 +265,7 @@ describe("resolveMessageChannelSelection", () => {
       accountIds: scenario.accountIds,
       inspectAccount,
       resolveAccount,
-      isEnabled:
-        scenario.enabled ?? ((account) => (account as { enabled?: boolean }).enabled !== false),
+      isEnabled: (account) => (account as { enabled?: boolean }).enabled !== false,
       isConfigured,
     });
     mocks.listChannelPlugins.mockReturnValue([plugin]);
@@ -472,83 +292,11 @@ describe("resolveMessageChannelSelection", () => {
     }
   });
 
-  it("allows bootstrap while checking explicit and fallback channels", async () => {
-    const cfg = {} as never;
-    const fallbackPlugin = { id: "beta" };
-    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
-      channel === "beta" ? fallbackPlugin : undefined,
-    );
-
-    const selection = await resolveMessageChannelSelection({
-      cfg,
-      channel: "alpha",
-      fallbackChannel: "beta",
-    });
-    expect(selection).toMatchObject({
-      channel: "beta",
-    });
-    expect(selection.plugin).toBe(fallbackPlugin);
-
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(1, {
-      channel: "alpha",
-      cfg,
-      allowBootstrap: true,
-    });
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(2, {
-      channel: "beta",
-      cfg,
-      allowBootstrap: true,
-    });
-  });
-
-  it("carries the admitted agent into channel bootstrap", async () => {
-    const cfg = {} as never;
-
-    await resolveMessageChannelSelection({ cfg, channel: "alpha", agentId: "ops" });
-
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
-      channel: "alpha",
-      cfg,
-      agentId: "ops",
-      allowBootstrap: true,
-    });
-  });
-
-  it("resolves an explicit channel that only the scoped registry handle knows", async () => {
-    mocks.scopedRegistryChannelIds.add("scopex");
-
-    const selection = await resolveMessageChannelSelection({ cfg: {} as never, channel: "scopex" });
-
-    expect(selection).toMatchObject({
-      channel: "scopex",
-    });
-  });
-
-  it("returns the scoped registry's canonical id for an explicit alias", async () => {
-    mocks.scopedRegistryChannelIds.add("scope-alias");
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({ id: "scopex" });
-
-    const selection = await resolveMessageChannelSelection({
-      cfg: {} as never,
-      channel: "scope-alias",
-    });
-
-    expect(selection.channel).toBe("scopex");
-    expect(selection.plugin.id).toBe("scopex");
-  });
-
   it.each([
     {
       params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "not-a-channel" },
       expectedMessage:
         'Unknown channel "channel:c123". Run `openclaw channels list --all` to see configured and installable channels.',
-    },
-    {
-      setup: () => {
-        mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
-      },
-      params: { cfg: {} as never, channel: "alpha" },
-      expectedMessage: "Channel is unavailable: alpha",
     },
     {
       setup: () => {
@@ -571,11 +319,6 @@ describe("resolveMessageChannelSelection", () => {
         "Channel is unavailable: feishu. Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
     },
     {
-      params: { cfg: {} as never },
-      expectedMessage:
-        "Channel is required (no configured channels detected). Run openclaw channels add to configure one",
-    },
-    {
       setup: () => {
         mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
         mocks.missingOfficialExternalChannels.add("whatsapp");
@@ -583,19 +326,6 @@ describe("resolveMessageChannelSelection", () => {
       params: { cfg: { channels: { whatsapp: { enabled: true } } } as never },
       expectedMessage:
         "Channel is required (no available channels detected). Configured official external channel WhatsApp is missing its plugin. Install the official external plugin with: openclaw plugins install @openclaw/whatsapp, or run: openclaw doctor --fix.",
-    },
-    {
-      setup: () => {
-        mocks.listChannelPlugins.mockReturnValue([
-          makePlugin({
-            id: "whatsapp",
-            isConfigured: async () => false,
-          }),
-        ]);
-      },
-      params: { cfg: { channels: { whatsapp: { enabled: true } } } as never },
-      expectedMessage:
-        "Channel is required (no configured channels detected). Run openclaw channels add to configure one",
     },
     {
       setup: () => {

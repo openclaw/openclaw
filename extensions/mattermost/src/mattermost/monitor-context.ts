@@ -1,12 +1,9 @@
 import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-outbound";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { countOutboundMedia } from "openclaw/plugin-sdk/reply-payload";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
-import type { MattermostEventPayload } from "./monitor-websocket.js";
 import type { MattermostReplyDeliveryOutcome } from "./reply-delivery.js";
 import type { ChatType, ReplyPayload } from "./runtime-api.js";
 
@@ -21,16 +18,6 @@ export function shouldUpdateMattermostDraftToolProgress(
       account.streamingMode,
     )
   );
-}
-
-export function buildMattermostModelPickerSelectMessageSid(params: {
-  postId: string;
-  provider: string;
-  model: string;
-}): string {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const model = normalizeLowercaseStringOrEmpty(params.model);
-  return `interaction:${params.postId}:select:${provider}/${model}`;
 }
 
 export function buildMattermostButtonInteractionMessageSid(params: {
@@ -104,7 +91,7 @@ export function formatMattermostFinalDeliveryOutcomeLog(params: {
   }
   if (params.outcome === "empty") {
     // Detect dropped substantive payloads even when the agent run succeeded (#80501).
-    const finalText = typeof params.payload.text === "string" ? params.payload.text.trim() : "";
+    const finalText = params.payload.text?.trim() ?? "";
     const mediaUrlCount = countOutboundMedia(params.payload);
     if (finalText.length > 0 || mediaUrlCount > 0) {
       return (
@@ -125,7 +112,7 @@ export function resolveMattermostThreadSessionContext(params: {
   baseSessionKey: string;
   kind: ChatType;
   postId?: string | null;
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   threadRootId?: string | null;
 }): { effectiveReplyToId?: string; sessionKey: string; parentSessionKey?: string } {
   // Flat DMs never thread; rooms retain existing roots even when new replies are off.
@@ -147,23 +134,4 @@ export function resolveMattermostThreadSessionContext(params: {
     sessionKey: threadKeys.sessionKey,
     parentSessionKey: threadKeys.parentSessionKey,
   };
-}
-
-export function resolveMattermostPendingHistoryKey(params: {
-  kind: ChatType;
-  sessionKey: string;
-  threadRootId?: string;
-}): string | null {
-  // Flat DMs dispatch immediately. Opted-in threads have an independent session
-  // and need a recoverable context window just like room threads.
-  return params.kind === "direct" && !params.threadRootId ? null : params.sessionKey;
-}
-
-export function resolveMattermostReactionChannelId(
-  payload: Pick<MattermostEventPayload, "broadcast" | "data">,
-): string | undefined {
-  return (
-    normalizeOptionalString(payload.broadcast?.channel_id) ??
-    normalizeOptionalString(payload.data?.channel_id)
-  );
 }

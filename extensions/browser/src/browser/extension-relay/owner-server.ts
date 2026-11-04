@@ -9,7 +9,6 @@ import {
   relayOwnerRequest,
 } from "./owner-protocol.js";
 import type { ExtensionRelayBridge } from "./relay-bridge.js";
-import { parseExtensionMessage } from "./relay-protocol.js";
 
 /** All references and streams belong to this authenticated connection, never to a token holder. */
 export function attachRelayOwner(params: {
@@ -192,20 +191,10 @@ export function attachRelayOwner(params: {
               ref: req.ref,
             });
           } else {
-            const handlers = bridge.attachExtensionSocket(socket);
-            const timer = setTimeout(() => socket.close(), 10_000);
-            timer.unref?.();
+            const handlers = bridge.attachExtensionSocket(socket, () => socket.close());
             streams.set(id, {
-              onMessage: (frame) => {
-                if (parseExtensionMessage(frame)?.type === "hello") {
-                  clearTimeout(timer);
-                }
-                handlers.onMessage(frame);
-              },
-              close: async () => {
-                clearTimeout(timer);
-                handlers.onClose();
-              },
+              onMessage: handlers.onMessage,
+              close: async () => handlers.onClose(),
             });
           }
           return id;

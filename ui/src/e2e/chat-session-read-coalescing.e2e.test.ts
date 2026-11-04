@@ -3,7 +3,6 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
-  startControlUiE2eServer,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -16,7 +15,6 @@ declare global {
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat session read coalescing",
-  startServer: () => startControlUiE2eServer(),
 });
 
 suite.define(() => {
@@ -43,9 +41,7 @@ suite.define(() => {
           },
           "controlUi.sessionPullRequests.subscribe": { ok: true },
         },
-        sessionKey: "agent:main:main",
         sessions: [],
-        historyMessages: [],
         agentModel: "fixture/echo",
         models: [{ id: "echo", name: "Echo", provider: "fixture", contextWindow: 128_000 }],
       });
@@ -164,12 +160,7 @@ suite.define(() => {
       const emit = async (event: string, extra: Record<string, unknown>) => {
         const now = await page.evaluate(() => Date.now());
         row = { ...row, snapshotAt: now, updatedAt: now };
-        await gateway.setSessionsListResponse({
-          sessions: [row],
-          count: 1,
-          totalCount: 1,
-          ts: now,
-        });
+        await gateway.setSessionsListResponse({ sessions: [row], totalCount: 1, ts: now });
         await gateway.setHistoryMessages(messages);
         await gateway.emitGatewayEvent(event, {
           sessionKey: key,

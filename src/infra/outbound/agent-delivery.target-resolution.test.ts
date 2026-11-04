@@ -38,8 +38,6 @@ vi.mock("../../utils/message-channel.js", () => ({
   normalizeMessageChannel: (value: string) => value.trim().toLowerCase(),
 }));
 
-import type { OpenClawConfig } from "../../config/config.js";
-
 let resolveAgentDeliveryPlanWithSessionRoute: typeof import("./agent-delivery.js").resolveAgentDeliveryPlanWithSessionRoute;
 let resolveAgentOutboundTarget: typeof import("./agent-delivery.js").resolveAgentOutboundTarget;
 
@@ -68,6 +66,35 @@ function resolvePlan(explicitTo?: string, currentSessionKey?: string) {
   });
 }
 
+function resolvedTarget(to: string, kind = "channel", source = "directory") {
+  mocks.resolveChannelTarget.mockResolvedValue({
+    ok: true,
+    target: { to, kind, source, resolutionSource: source },
+  });
+}
+
+function expectDirectoryLookup(input: string, plugin: unknown) {
+  expect(mocks.resolveChannelTarget).toHaveBeenCalledWith({
+    cfg: {},
+    channel: "workspace",
+    input,
+    accountId: undefined,
+    unknownTargetMode: "error",
+    plugin,
+  });
+}
+
+function expectOutboundLookup(to: string | undefined, plugin: unknown) {
+  expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith({
+    channel: "workspace",
+    plugin,
+    to,
+    cfg: {},
+    accountId: undefined,
+    mode: "implicit",
+  });
+}
+
 describe("agent delivery target resolution", () => {
   it("does not session-route targets when outbound validation fails", async () => {
     const targetError = new Error("ambiguous target");
@@ -75,15 +102,7 @@ describe("agent delivery target resolution", () => {
       messaging: { resolveOutboundSessionRoute: vi.fn() },
     });
     mocks.resolveOutboundTarget.mockReturnValue({ ok: false, error: targetError });
-    mocks.resolveChannelTarget.mockResolvedValue({
-      ok: true,
-      target: {
-        to: "1470130713209602050",
-        kind: "group",
-        source: "normalized",
-        resolutionSource: "normalized",
-      },
-    });
+    resolvedTarget("1470130713209602050", "group", "normalized");
 
     const plan = await resolvePlan("1470130713209602050");
 
@@ -101,26 +120,11 @@ describe("agent delivery target resolution", () => {
     };
     mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "channel:general" });
-    mocks.resolveChannelTarget.mockResolvedValue({
-      ok: true,
-      target: {
-        to: "channel:1524410080953634829",
-        kind: "channel",
-        source: "directory",
-        resolutionSource: "directory",
-      },
-    });
+    resolvedTarget("channel:1524410080953634829");
 
     const plan = await resolvePlan("channel:general", "agent:main");
 
-    expect(mocks.resolveChannelTarget).toHaveBeenCalledWith({
-      cfg: {},
-      channel: "workspace",
-      input: "channel:general",
-      accountId: undefined,
-      unknownTargetMode: "error",
-      plugin,
-    });
+    expectDirectoryLookup("channel:general", plugin);
     expect(plan.resolvedTo).toBe("channel:1524410080953634829");
     expect(plan.targetResolutionError).toBeUndefined();
   });
@@ -129,52 +133,23 @@ describe("agent delivery target resolution", () => {
     const plugin = { messaging: { targetResolver: { resolveTarget: vi.fn() } } };
     mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "channel:default-room" });
-    mocks.resolveChannelTarget.mockResolvedValue({
-      ok: true,
-      target: {
-        to: "channel:1524410080953634830",
-        kind: "channel",
-        source: "directory",
-        resolutionSource: "directory",
-      },
-    });
+    resolvedTarget("channel:1524410080953634830");
 
     const plan = await resolvePlan();
 
-    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith({
-      channel: "workspace",
-      plugin,
-      to: undefined,
-      cfg: {},
-      accountId: undefined,
-      mode: "implicit",
-    });
-    expect(mocks.resolveChannelTarget).toHaveBeenCalledWith({
-      cfg: {},
-      channel: "workspace",
-      input: "channel:default-room",
-      accountId: undefined,
-      unknownTargetMode: "error",
-      plugin,
-    });
+    expectOutboundLookup(undefined, plugin);
+    expectDirectoryLookup("channel:default-room", plugin);
     expect(plan.resolvedTo).toBe("channel:1524410080953634830");
     expect(plan.plugin).toBe(plugin);
 
     mocks.resolveOutboundTarget.mockClear();
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "channel:final" });
-    resolveAgentOutboundTarget({
-      cfg: {} as OpenClawConfig,
+    await resolveAgentOutboundTarget({
+      cfg: {},
       plan,
       targetMode: "implicit",
       validateExplicitTarget: true,
     });
-    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith({
-      channel: "workspace",
-      plugin,
-      to: "channel:1524410080953634830",
-      cfg: {},
-      accountId: undefined,
-      mode: "implicit",
-    });
+    expectOutboundLookup("channel:1524410080953634830", plugin);
   });
 });

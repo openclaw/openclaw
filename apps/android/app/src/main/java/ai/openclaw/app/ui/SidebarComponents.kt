@@ -9,10 +9,7 @@ import ai.openclaw.app.ui.design.sessionColor
 import ai.openclaw.app.ui.design.sessionColorStripe
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
-import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,7 +44,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -55,16 +51,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.PointerInputChange
-import androidx.compose.ui.input.pointer.PointerInputScope
-import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -80,7 +71,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import kotlinx.coroutines.CancellationException
 import kotlin.math.abs
 
 @Composable
@@ -220,7 +210,6 @@ internal fun SidebarActionRow(
 @Composable
 internal fun SidebarNavigationRow(
   destination: SidebarDestination,
-  rowHost: SidebarRowHost,
   selected: Boolean,
   pinned: Boolean? = null,
   palette: SidebarPalette,
@@ -238,7 +227,6 @@ internal fun SidebarNavigationRow(
 
   SidebarRowDrag(
     dragKey = destination,
-    rowHost = rowHost,
     onDragCommit = { onMove(it) },
     onDragActiveChange = onDragActiveChange,
     commitOnRelease = false,
@@ -369,7 +357,6 @@ internal fun SidebarSessionActivityIndicator(
 @Composable
 internal fun SidebarSessionRow(
   session: ChatSessionEntry,
-  rowHost: SidebarRowHost,
   selected: Boolean,
   palette: SidebarPalette,
   onClick: () -> Unit,
@@ -394,7 +381,6 @@ internal fun SidebarSessionRow(
     }
   SidebarRowSurface(
     selected = selected,
-    rowHost = rowHost,
     stateDescription = sessionStateDescription,
     palette = palette,
     stripeColor = ClawTheme.colors.sessionColor(session.color),
@@ -446,13 +432,11 @@ internal fun SidebarRowSurface(
   dragKey: Any? = null,
   onDragCommit: ((Int) -> Unit)? = null,
   onDragActiveChange: (Boolean) -> Unit = {},
-  rowHost: SidebarRowHost? = null,
   contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
   content: @Composable RowScope.() -> Unit,
 ) {
   SidebarRowDrag(
     dragKey = dragKey,
-    rowHost = rowHost,
     enabled = enabled,
     onDragCommit = onDragCommit,
     onDragActiveChange = onDragActiveChange,
@@ -496,7 +480,6 @@ internal fun SidebarRowSurface(
 @Composable
 private fun SidebarRowDrag(
   dragKey: Any?,
-  rowHost: SidebarRowHost?,
   enabled: Boolean = true,
   onDragCommit: ((Int) -> Unit)?,
   onDragActiveChange: (Boolean) -> Unit,
@@ -509,7 +492,6 @@ private fun SidebarRowDrag(
   val currentOnDragActiveChange by rememberUpdatedState(onDragActiveChange)
   var dragOffset by remember(dragKey) { mutableFloatStateOf(0f) }
   var dragging by remember(dragKey) { mutableStateOf(false) }
-  var dragGeneration by remember(dragKey) { mutableLongStateOf(0L) }
   val cancelDrag = {
     dragOffset = 0f
     if (dragging) {
@@ -529,11 +511,10 @@ private fun SidebarRowDrag(
       Modifier
     } else {
       Modifier.pointerInput(dragKey, dragThresholdPx) {
-        detectSidebarRowDrag(
-          rowHost = rowHost,
-          onDragStart = { generation ->
+        // Compose owns pointer cancellation; a fold during a held drag is best effort.
+        detectDragGesturesAfterLongPress(
+          onDragStart = {
             dragOffset = 0f
-            dragGeneration = generation
             dragging = true
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             currentOnDragActiveChange(true)
@@ -552,7 +533,7 @@ private fun SidebarRowDrag(
       }
     }
 
-  val visualDragging = dragging && dragGeneration == (rowHost?.generation ?: 0L)
+  val visualDragging = dragging
   Box(
     modifier =
       Modifier
@@ -572,43 +553,6 @@ private fun SidebarRowDrag(
         thickness = 2.dp,
         modifier = Modifier.align(if (dragOffset < 0f) Alignment.TopCenter else Alignment.BottomCenter),
       )
-    }
-  }
-}
-
-private suspend fun PointerInputScope.detectSidebarRowDrag(
-  rowHost: SidebarRowHost?,
-  onDragStart: (Long) -> Unit,
-  onDragEnd: () -> Unit,
-  onDragCancel: () -> Unit,
-  onDrag: (PointerInputChange, Offset) -> Unit,
-) {
-  awaitEachGesture {
-    var claimed = false
-    try {
-      val down = awaitFirstDown(requireUnconsumed = false)
-      val generation = rowHost?.generation ?: 0L
-      val longPress = awaitLongPressOrCancellation(down.id)
-      if (longPress != null) {
-        claimed = generation == (rowHost?.generation ?: 0L)
-        if (claimed) onDragStart(generation)
-        // Retain consumption through release, even after the row loses mutation authority.
-        val ended =
-          drag(longPress.id) { change ->
-            if (claimed && generation == (rowHost?.generation ?: 0L)) {
-              onDrag(change, change.positionChange())
-            }
-            change.consume()
-          }
-        if (ended) currentEvent.changes.forEach { if (it.changedToUp()) it.consume() }
-        if (claimed) {
-          claimed = false
-          if (ended && generation == (rowHost?.generation ?: 0L)) onDragEnd() else onDragCancel()
-        }
-      }
-    } catch (cancel: CancellationException) {
-      if (claimed) onDragCancel()
-      throw cancel
     }
   }
 }

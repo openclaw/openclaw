@@ -76,7 +76,7 @@ Most failures here are not exotic exploits - they are "someone messaged the bot 
 
 1. **Identity first** - decide who can talk to the bot (DM pairing / allowlists / explicit "open").
 2. **Scope next** - decide where the bot can act (group allowlists + mention gating, tools, sandboxing, device permissions).
-3. **Model last** - assume the model can be manipulated; design so manipulation has limited blast radius.
+3. **Model last** - assume the model can be manipulated; design so manipulation can cause only limited damage.
 
 ## Reporting security issues
 

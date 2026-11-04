@@ -2,6 +2,7 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parseLaneSelection } from "./lib/docker-e2e-plan.mts";
 import { allReleasePathLanes } from "./lib/docker-e2e-scenarios.mts";
 import { createPluginPrereleaseTestPlan } from "./lib/plugin-prerelease-test-plan.mts";
+import { parseUpgradeSurvivorBaselineSpecs } from "./lib/upgrade-survivor-policy.mjs";
 import { planTargetedDockerLaneGroups } from "./plan-targeted-docker-lane-groups.mjs";
 
 export const RELEASE_PACKAGE_ACCEPTANCE_LANES =
@@ -23,7 +24,8 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-restart-auth",
     label: "package/update restart auth",
-    timeout_minutes: 55,
+    // 62-minute lane plus runner setup and artifact upload, matching targeted jobs.
+    timeout_minutes: 75,
     profiles: "beta minimum stable full",
   },
   {
@@ -92,8 +94,8 @@ const LIVE_MODEL_PROVIDERS = [
     // The release workspace does not enable Global regions, so the default high-signal
     // selection includes DeepSeek routes that reject every request. Keep this list aligned
     // with models proven reachable from the release workspace.
-    models: "opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3",
-    max_models: "3",
+    models: "opencode-go/glm-5.2,opencode-go/glm-5.3",
+    max_models: "2",
     profiles: "full",
   },
   {
@@ -297,7 +299,7 @@ export function createReleaseCheckSelection(options = {}) {
   const group = options.rerunGroup ?? "all";
   let groups;
   if (group === "all") {
-    groups = ["install-smoke", "cross-os", "package", "qa-parity"];
+    groups = ["install-smoke", "cross-os", "windows-node", "package", "qa-parity"];
     if (isEnabled(options.runReleaseSoak)) {
       groups.push("live-e2e");
     }
@@ -307,7 +309,15 @@ export function createReleaseCheckSelection(options = {}) {
   } else if (group === "qa") {
     groups = ["qa-parity", "qa-live"];
   } else if (
-    ["install-smoke", "cross-os", "live-e2e", "package", "qa-parity", "qa-live"].includes(group)
+    [
+      "install-smoke",
+      "cross-os",
+      "windows-node",
+      "live-e2e",
+      "package",
+      "qa-parity",
+      "qa-live",
+    ].includes(group)
   ) {
     groups = [group];
   } else {
@@ -320,6 +330,7 @@ export function createReleaseCheckSelection(options = {}) {
     release_check_groups_json: JSON.stringify(groups),
     install_smoke_scheduled: independent && selected("install-smoke"),
     cross_os_scheduled: candidate && selected("cross-os"),
+    windows_node_scheduled: candidate && selected("windows-node"),
     live_e2e_scheduled: independent && selected("live-e2e"),
     package_acceptance_scheduled: candidate && selected("package"),
     qa_parity_scheduled: independent && selected("qa-parity"),
@@ -330,7 +341,10 @@ export function createReleaseCheckSelection(options = {}) {
     ...result,
     package_acceptance_lanes: RELEASE_PACKAGE_ACCEPTANCE_LANES,
     package_required:
-      result.cross_os_scheduled || result.package_acceptance_scheduled || result.docker_required,
+      result.cross_os_scheduled ||
+      result.windows_node_scheduled ||
+      result.package_acceptance_scheduled ||
+      result.docker_required,
   };
 }
 
@@ -421,8 +435,9 @@ export function createReleaseSourceSelection(options = {}) {
         profile: "release-path",
         releaseProfile,
         chunk: row.chunk_id,
+        ...(row.docker_lanes ? { lanes: parseLaneSelection(row.docker_lanes) } : {}),
         includeOpenWebUI,
-        baselines,
+        baselines: row.published_upgrade_survivor_baselines ?? baselines,
         scenarios,
       });
     }
@@ -507,11 +522,38 @@ export function createReleaseWorkflowMatrixPlan(options = {}) {
         options.liveSuiteFilter === entry.suite_id ||
         options.liveSuiteFilter === entry.suite_group),
   );
+  const baselines = parseUpgradeSurvivorBaselineSpecs(options.upgradeSurvivorBaselines);
+  // Keep the npm-weighted host envelope intact: baseline upgrades get separate
+  // runners instead of raising the resource limits on one migration runner.
+  const dockerChunks = DOCKER_E2E_CHUNKS.flatMap((entry) => {
+    if (entry.chunk_id !== "package-update-migrations" || baselines.length < 2) {
+      return [entry];
+    }
+    const shards = [
+      Object.assign({}, entry, {
+        label: "package/update channel switching",
+        shard_id: `${entry.chunk_id}-channel-switch`,
+        docker_lanes: "update-channel-switch",
+        published_upgrade_survivor_baselines: "",
+      }),
+    ];
+    for (const [index, baseline] of baselines.entries()) {
+      shards.push(
+        Object.assign({}, entry, {
+          label: `package/update migration ${baseline}`,
+          shard_id: `${entry.chunk_id}-baseline-${index + 1}`,
+          docker_lanes: "published-upgrade-survivor",
+          published_upgrade_survivor_baselines: baseline,
+        }),
+      );
+    }
+    return shards;
+  });
 
   return {
     liveDocker: { count: liveDocker.length, matrix: { include: liveDocker } },
     dockerE2e: planProfileMatrix(
-      DOCKER_E2E_CHUNKS,
+      dockerChunks,
       releaseProfile,
       dockerE2eEnabled,
       "release-path Docker E2E chunks disabled by input selection",
@@ -581,6 +623,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     liveModelsOnly: process.env.LIVE_MODELS_ONLY,
     prepareOnly: process.env.PREPARE_ONLY,
     releaseProfile: process.env.RELEASE_TEST_PROFILE || undefined,
+    upgradeSurvivorBaselines: process.env.PUBLISHED_UPGRADE_SURVIVOR_BASELINES,
   });
 
   writeOutputs(plan);

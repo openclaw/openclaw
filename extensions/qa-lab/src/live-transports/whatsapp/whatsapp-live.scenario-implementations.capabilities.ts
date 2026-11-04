@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
 import {
@@ -10,6 +9,7 @@ import {
 } from "./whatsapp-live.gateway.js";
 import {
   sendWhatsAppQaMediaAndObserve,
+  runWhatsAppOutboundMediaChecks,
   WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
   WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_MARKER,
   WHATSAPP_QA_ONE_PIXEL_PNG,
@@ -29,7 +29,6 @@ function createWhatsAppOutboundPollScenario(
 ): WhatsAppQaScenarioImplementation {
   const group = target === "group";
   return createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     ...(group ? { requiresGroupJid: true } : {}),
     marker: `WHATSAPP_QA_${group ? "GROUP_" : ""}OUTBOUND_POLL`,
     buildRun: (token) => {
@@ -61,7 +60,6 @@ function createWhatsAppOutboundPollScenario(
 
 export const whatsappCapabilityScenarios = {
   whatsappQaOutboundDocumentPreservesFilenameScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     marker: "WHATSAPP_QA_DOCUMENT_FILE",
     buildRun: (token) => ({
       afterReply: async (_reply, context) => {
@@ -91,7 +89,6 @@ export const whatsappCapabilityScenarios = {
   }),
 
   whatsappQaOutboundSendSerializationScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     marker: "WHATSAPP_QA_SERIAL_SEND",
     buildRun: (token) => {
       const markers = Array.from({ length: 5 }, (_, index) => `${token}_${index + 1}`);
@@ -123,43 +120,17 @@ export const whatsappCapabilityScenarios = {
   whatsappQaOutboundPollScenario: createWhatsAppOutboundPollScenario("dm"),
 
   whatsappQaGroupOutboundMediaScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     requiresGroupJid: true,
     marker: "WHATSAPP_QA_GROUP_OUTBOUND_MEDIA",
     buildRun: (token) => ({
-      afterReply: async (_reply, context) => {
-        const mediaRootToken = randomUUID().slice(0, 8);
-        const imagePath = await writeWhatsAppQaWorkspaceFixture(context, {
-          buffer: WHATSAPP_QA_ONE_PIXEL_PNG,
-          fileName: `whatsapp-qa-group-${mediaRootToken}.png`,
-        });
-        const documentPath = await writeWhatsAppQaWorkspaceFixture(context, {
-          buffer: createWhatsAppQaPdfBuffer(),
-          fileName: `whatsapp-qa-group-${mediaRootToken}.pdf`,
-        });
-
-        await sendWhatsAppQaMediaAndObserve(context, {
-          kind: "image",
-          label: "group-image",
-          mediaUrl: imagePath,
-          message: `${token}_IMAGE`,
-        });
-
-        await sendWhatsAppQaMediaAndObserve(context, {
-          kind: "document",
-          label: "group-document",
-          mediaUrl: documentPath,
-          message: `${token}_DOCUMENT`,
-        });
-        return "gateway send delivered image and document media to the group";
-      },
+      afterReply: async (_reply, context) =>
+        await runWhatsAppOutboundMediaChecks(context, token, "group"),
       input: `openclawqa reply with only this exact marker before group outbound media checks: ${token}`,
       target: "group",
     }),
   }),
 
   whatsappQaGroupOutboundAudioScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     requiresGroupJid: true,
     marker: "WHATSAPP_QA_GROUP_OUTBOUND_AUDIO",
     buildRun: (token) => ({
@@ -184,7 +155,6 @@ export const whatsappCapabilityScenarios = {
   whatsappQaGroupOutboundPollScenario: createWhatsAppOutboundPollScenario("group"),
 
   whatsappQaMessageActionsScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     configOverrides: {
       actions: true,
     },
@@ -231,7 +201,6 @@ export const whatsappCapabilityScenarios = {
   }),
 
   whatsappQaInboundStructuredMessagesScenario: createWhatsAppMessageScenario({
-    posture: "user-path",
     marker: "WHATSAPP_QA_STRUCTURED",
     buildRun: (token) => {
       const locationToken = `${token}_LOCATION`;
@@ -290,7 +259,6 @@ export const whatsappCapabilityScenarios = {
   }),
 
   whatsappQaGroupAudioGatingScenario: {
-    posture: "user-path",
     configOverrides: {
       audioPreflight: true,
     },

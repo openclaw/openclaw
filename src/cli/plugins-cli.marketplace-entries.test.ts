@@ -13,6 +13,14 @@ import {
 import { createHostedMarketplaceFeedFixture as feed } from "./plugins-marketplace-feed.test-support.js";
 import { runPluginMarketplaceListCommand as list } from "./plugins-marketplace-list-command.js";
 
+// mock-isolation: Feed formatting tests use synthetic storage; ownership is covered at the command boundary.
+vi.mock("./plugins-local-state.js", () => ({
+  runWithLocalPluginState: async (
+    _command: string,
+    run: (assertCurrent: () => void) => Promise<unknown>,
+  ) => run(() => {}),
+}));
+
 const mocks = vi.hoisted(() => ({
   defaultRuntime: {
     error: vi.fn(),
@@ -29,9 +37,12 @@ const mocks = vi.hoisted(() => ({
   pluginLifecycleGateway: vi.fn(),
   resolvePluginLifecycleGateway: vi.fn(),
 }));
+// mock-isolation: Marketplace fixtures isolate config reads and writes from operator state.
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: vi.fn(),
   getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.getRuntimeConfig,
+  captureRuntimeConfigAsyncReader: () => async () => mocks.getRuntimeConfig(),
   readConfigFileSnapshot: vi.fn(),
   replaceConfigFile: vi.fn(),
 }));
@@ -55,7 +66,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtime = mocks.defaultRuntime;
 const loadFeed = mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries;
 const output = () => runtime.log.mock.calls.map(([value]) => String(value)).join("\n");
-const warning = "Previous plugin service could not stop.";
 const privateUrl = "https://user:secret@packages.acme.example/openclaw/feed?token=leak#frag";
 const calendar = {
   name: "@acme/calendar",
@@ -189,11 +199,7 @@ describe("plugins marketplace entries", () => {
     const filename = timeline();
     vi.stubEnv("OPENCLAW_DIAGNOSTICS", "1");
     loadFeed.mockResolvedValue(
-      feed({
-        source: "hosted-snapshot",
-        url: privateUrl,
-        entries: [calendar],
-      }),
+      feed({ source: "hosted-snapshot", url: privateUrl, entries: [calendar] }),
     );
     await entries({ feedProfile: "acme", offline: true });
     expect(output()).toContain("signed by acme-root-2026 (1/1)");
@@ -213,15 +219,11 @@ describe("plugins marketplace entries", () => {
 describe("plugins marketplace refresh", () => {
   const checksum = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789";
   it.each([checksum, `sha256:${checksum}`])(
-    "normalizes pin %s and keeps warnings off JSON stdout",
+    "normalizes pin %s and keeps next-start notices off JSON stdout",
     async (expectedSha256) => {
       loadFeed.mockResolvedValue(
         feed({ entries: [calendar], checksum: "sha256:abcdef", includeTrust: false }),
       );
-      mocks.pluginLifecycleGateway.mockResolvedValue({
-        runtime: { generation: 4 },
-        ...(expectedSha256 === checksum ? {} : { warnings: [warning] }),
-      });
       await marketplaceCommand([
         "refresh",
         "--feed-profile",
@@ -235,7 +237,7 @@ describe("plugins marketplace refresh", () => {
         expectedSha256: `sha256:${checksum.toLowerCase()}`,
         requireSnapshotWrite: true,
       });
-      expect(mocks.pluginLifecycleGateway).toHaveBeenCalledWith("plugins.refresh", {});
+      expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
       expect(runtime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({
           source: "hosted",
@@ -244,31 +246,24 @@ describe("plugins marketplace refresh", () => {
         }),
       );
       expect(runtime.log).not.toHaveBeenCalled();
-      if (expectedSha256 === checksum) {
-        expect(runtime.error).not.toHaveBeenCalled();
-      } else {
-        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(warning));
-      }
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Marketplace catalog saved for the next Gateway start.",
+      );
     },
   );
 
-  it("reports signed runtime application with bounded diagnostics", async () => {
+  it("reports signed offline refresh with bounded diagnostics", async () => {
     const filename = timeline();
     mocks.getRuntimeConfig.mockReturnValue({ diagnostics: { flags: ["timeline"] } });
     loadFeed.mockResolvedValue(
       feed({ entries: [{ name: "@acme/calendar" }], url: privateUrl, etag: '"abc"' }),
     );
-    mocks.pluginLifecycleGateway.mockResolvedValue({
-      runtime: { generation: 4 },
-      warnings: [warning],
-    });
     await refresh({
       expectedSha256: "feed-sha",
       feedProfile: "acme",
       feedUrl: "https://override.example/openclaw/feed?token=override-leak",
     });
-    expect(output()).toContain(warning);
-    expect(output()).toContain("Marketplace catalog applied in Gateway generation 4.");
+    expect(output()).toContain("Marketplace catalog saved for the next Gateway start.");
     expect(output()).toContain("signed by acme-root-2026 (1/1)");
     expect(output()).toContain("2026-06-23T00:01:02.000Z");
     expect(output()).not.toMatch(/publicKey|signature:/);
@@ -306,37 +301,20 @@ describe("plugins marketplace refresh", () => {
     expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
   });
 
-  it.each(["snapshot", "receipt"])(
-    "reports a failed %s application without corrupting JSON",
-    async (failure) => {
-      const snapshot = failure === "snapshot";
-      loadFeed.mockResolvedValue(feed({ source: snapshot ? "hosted-snapshot" : "hosted" }));
-      if (snapshot) {
-        mocks.pluginLifecycleGateway.mockRejectedValue(new Error("runtime unavailable"));
-      } else {
-        mocks.pluginLifecycleGateway.mockResolvedValue({ ok: true });
-      }
-      await expect(
-        refresh({ json: true, ...(snapshot ? { expectedSha256: "sha256:expected" } : {}) }),
-      ).rejects.toThrow("exit 1");
-      expect(mocks.pluginLifecycleGateway).toHaveBeenCalledExactlyOnceWith("plugins.refresh", {});
-      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ source: snapshot ? "hosted-snapshot" : "hosted" }),
-      );
-      expect(runtime.log).not.toHaveBeenCalled();
-      if (snapshot) {
-        expect(runtime.error.mock.calls.map(([message]) => message)).toEqual([
-          expect.stringContaining("Gateway runtime application failed: runtime unavailable"),
-          "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: hosted-snapshot).",
-        ]);
-      } else {
-        expect(runtime.error).toHaveBeenCalledWith(
-          expect.stringContaining("Gateway runtime application failed"),
-        );
-      }
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-    },
-  );
+  it("rejects a pinned snapshot without corrupting JSON", async () => {
+    loadFeed.mockResolvedValue(feed({ source: "hosted-snapshot" }));
+    await expect(refresh({ json: true, expectedSha256: "sha256:expected" })).rejects.toThrow(
+      "exit 1",
+    );
+    expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ source: "hosted-snapshot" }),
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: hosted-snapshot).",
+    );
+  });
 
   it("keeps offline refresh successful and next-start notices off JSON stdout", async () => {
     loadFeed.mockResolvedValue(feed());
@@ -395,6 +373,45 @@ describe("plugins marketplace list", () => {
       expect(runtime.error).not.toHaveBeenCalled();
     },
   );
+
+  it("sanitizes terminal control characters in human output but not JSON", async () => {
+    const injected = {
+      name: "Market\u001b]0;marketplace-title-pwned\u0007place",
+      version: "1.0.0",
+      plugins: [
+        {
+          name: "\u001b[31mred-plugin\u001b[0m",
+          version: "\u001b[32m1.2.3\u001b[0m",
+          description: "drops \r\n\u0007bell and \u001b[2J clear",
+          source: { kind: "path", path: "./plugins/demo" },
+        },
+      ],
+    };
+    mocks.listMarketplacePlugins.mockImplementationOnce(async () => ({
+      ok: true,
+      sourceLabel: source,
+      manifest: injected,
+    }));
+
+    await list(source, { json: true });
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ source, ...injected });
+    expect(runtime.log).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    mocks.listMarketplacePlugins.mockImplementationOnce(async () => ({
+      ok: true,
+      sourceLabel: source,
+      manifest: injected,
+    }));
+    await list(source, { json: false });
+    const human = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(human).not.toContain("\u001b");
+    expect(human).not.toContain("\u0007");
+    expect(human).toContain("Marketplace");
+    expect(human).toContain("red-plugin");
+    expect(human).toContain("v1.2.3");
+    expect(human).toContain("drops \\r\\nbell and  clear");
+  });
 
   it("hands quiet failures to the canonical JSON error renderer", async () => {
     const message = "mock git remote unavailable";

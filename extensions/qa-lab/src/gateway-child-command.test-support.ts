@@ -1,8 +1,46 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { createQaGatewayChild } from "./gateway-child.js";
 import type { createTempDirHarness } from "./temp-dir.test-helper.js";
+
+export function buildGatewayEnvironmentCaptureScript(observedEnvPath: string): string {
+  return [
+    'const fs = require("node:fs");',
+    'if (process.env.OPENCLAW_CLI === "1") process.stdin.resume();',
+    "const env = {",
+    "SAFE_VALUE: process.env.SAFE_VALUE,",
+    "OPENCLAW_LIVE_SETUP_TOKEN_VALUE: process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE,",
+    "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: process.env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN,",
+    "OPENCLAW_QA_CONVEX_SECRET_CI: process.env.OPENCLAW_QA_CONVEX_SECRET_CI,",
+    "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: process.env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER,",
+    '"BASH_FUNC_sudo%%": process.env["BASH_FUNC_sudo%%"],',
+    "OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: process.env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL,",
+    "OPENCLAW_QA_TELEGRAM_GROUP_ID: process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID,",
+    "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN,",
+    "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN,",
+    "OPENCLAW_DEV_SOURCE_ROOT: process.env.OPENCLAW_DEV_SOURCE_ROOT,",
+    "};",
+    `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify(env));`,
+  ].join("\n");
+}
+
+export async function writeRepoCliSourceRootCaptureFixture(
+  repoRoot: string,
+  observedEnvPath: string,
+): Promise<void> {
+  const runnerPath = path.join(repoRoot, "scripts", "run-node.mjs");
+  await mkdir(path.dirname(runnerPath), { recursive: true });
+  await writeFile(
+    runnerPath,
+    [
+      'import fs from "node:fs";',
+      'if (process.env.OPENCLAW_CLI === "1") process.stdin.resume();',
+      `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
+    ].join("\n"),
+    "utf8",
+  );
+}
 
 export async function writePackagedGatewayFixture(root: string): Promise<string> {
   const fixturePath = path.join(root, "packaged-gateway-fixture.mjs");
@@ -35,6 +73,17 @@ if (fixtureVersion) {
   }
 }
 const authDbPath = path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite");
+if (args[0] === "models" || (args[0] === "update" && !args.includes("--help"))) {
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const portProbe = net.createServer();
+  await new Promise((resolve, reject) => {
+    portProbe.once("error", reject);
+    portProbe.listen(config.gateway.port, "127.0.0.1", resolve);
+  });
+  await new Promise((resolve, reject) => {
+    portProbe.close((error) => error ? reject(error) : resolve());
+  });
+}
 if (args[0] === "models") {
   let stdin = "";
   process.stdin.setEncoding("utf8");
@@ -97,14 +146,6 @@ if (args[0] === "update") {
     process.exit(2);
   }
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  const portProbe = net.createServer();
-  await new Promise((resolve, reject) => {
-    portProbe.once("error", reject);
-    portProbe.listen(config.gateway.port, "127.0.0.1", resolve);
-  });
-  await new Promise((resolve, reject) => {
-    portProbe.close((error) => error ? reject(error) : resolve());
-  });
   record({ kind: "plugins", args, authDbPath, configPath, stateDir, configPort: config.gateway.port });
   if (fixtureVersion) config.meta = { lastTouchedVersion: fixtureVersion };
   delete config.plugins.entries["qa-lab"];
@@ -129,10 +170,8 @@ record({
 });
 const gatewayAttempts = fs.readFileSync(recordPath, "utf8").trim().split("\\n")
   .map((line) => JSON.parse(line)).filter((entry) => entry.kind === "gateway").length;
-if (gatewayAttempts === 1 && process.env.QA_STARTUP_RETRY) {
-  process.stderr.write(process.env.QA_STARTUP_RETRY === "migration"
-    ? "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness."
-    : "listen EADDRINUSE: address already in use");
+if (gatewayAttempts === 1 && process.env.QA_STARTUP_RETRY === "migration") {
+  process.stderr.write("OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.");
   process.exit(18);
 }
 process.stderr.write("fixture gateway exit");
@@ -144,8 +183,7 @@ process.exit(17);
 }
 
 export async function readJsonLines(filePath: string): Promise<Array<Record<string, unknown>>> {
-  const contents = await readFile(filePath, "utf8");
-  return contents
+  return (await readFile(filePath, "utf8"))
     .trim()
     .split("\n")
     .filter(Boolean)

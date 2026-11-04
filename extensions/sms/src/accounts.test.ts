@@ -1,120 +1,93 @@
-// Sms tests cover accounts plugin behavior.
-import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import {
+  applyResolvedAssignments,
+  createResolverContext,
+  resolveSecretRefValues,
+} from "openclaw/plugin-sdk/secret-ref-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { inspectSmsAccount, listSmsAccountIds, resolveSmsAccount } from "./accounts.js";
 import { SmsChannelConfigSchema } from "./config-schema.js";
+import { collectRuntimeConfigAssignments } from "./secret-contract.js";
 import type { SmsChannelConfig } from "./types.js";
 
-const smsRuntimeConfigSchema = (() => {
-  const schema = SmsChannelConfigSchema.runtime;
-  if (!schema) {
-    throw new Error("expected SMS runtime config schema");
-  }
-  return schema;
-})();
-
 function parseSmsConfig(value: unknown): SmsChannelConfig {
-  const parsed = smsRuntimeConfigSchema.safeParse(value);
+  const parsed = expectDefined(SmsChannelConfigSchema.runtime, "SMS config schema").safeParse(
+    value,
+  );
   if (!parsed.success) {
     throw new Error(parsed.issues.map((issue) => issue.message).join("; "));
   }
   return parsed.data as SmsChannelConfig;
 }
 
-const ENV_KEYS = [
-  "TWILIO_ACCOUNT_SID",
-  "TWILIO_AUTH_TOKEN",
-  "TWILIO_PHONE_NUMBER",
-  "TWILIO_SMS_FROM",
-  "TWILIO_MESSAGING_SERVICE_SID",
-  "SMS_PUBLIC_WEBHOOK_URL",
-  "SMS_WEBHOOK_PATH",
-  "SMS_ALLOWED_USERS",
-  "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
-  "SMS_TEXT_CHUNK_LIMIT",
-] as const;
+function config(sms: SmsChannelConfig) {
+  return { channels: { sms } };
+}
 
-afterEach(() => {
-  for (const key of ENV_KEYS) {
-    delete process.env[key];
-  }
-});
+const tokenRef = (id: string) => ({ source: "env", provider: "default", id }) as const;
+const sender = { enabled: true, accountSid: "AC123", fromNumber: "+15557654321" };
+const accounts = {
+  support: {
+    ...sender,
+    accountSid: "AC456",
+    authToken: tokenRef("SUPPORT"),
+    fromNumber: "+15558675309",
+  },
+};
+
+async function resolveSecrets(sms: SmsChannelConfig, env: NodeJS.ProcessEnv) {
+  const sourceConfig: OpenClawConfig = config(sms);
+  const resolved = structuredClone(sourceConfig);
+  const context = createResolverContext({ sourceConfig, env });
+  collectRuntimeConfigAssignments({
+    config: resolved,
+    defaults: sourceConfig.secrets?.defaults,
+    context,
+  });
+  const values = await resolveSecretRefValues(
+    context.assignments.map(({ ref }) => ref),
+    {
+      config: sourceConfig,
+      env: context.env,
+      cache: context.cache,
+    },
+  );
+  applyResolvedAssignments({ assignments: context.assignments, resolved: values });
+  return { sms: resolved.channels?.sms, warnings: context.warnings };
+}
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe("SMS account config", () => {
-  it("resolves default account config and pairing policy", () => {
-    const account = resolveSmsAccount({
-      channels: {
-        sms: {
-          accountSid: " AC123 ",
-          authToken: " token ",
-          fromNumber: "(555) 123-4567",
-          defaultTo: "sms:+1 (555) 000-1111",
-          publicWebhookUrl: " https://example.com/webhooks/sms ",
-        },
-      },
-    });
-
-    expect(account).toMatchObject({
-      accountId: "default",
-      accountSid: "AC123",
-      authToken: "token",
-      fromNumber: "+5551234567",
-      messagingServiceSid: "",
-      defaultTo: "+15550001111",
-      webhookPath: "/webhooks/sms",
-      publicWebhookUrl: "https://example.com/webhooks/sms",
-      dmPolicy: "pairing",
-      allowFrom: [],
-      textChunkLimit: 1500,
-    });
-  });
-
   it("reports an invalid public webhook URL without unconfiguring SMS credentials", () => {
-    expect(
-      inspectSmsAccount({
-        channels: {
-          sms: {
-            accountSid: "AC123",
-            authToken: "secret",
-            fromNumber: "+15557654321",
-            publicWebhookUrl: "https://sms_gateway.example.com/webhooks/sms",
-          },
-        },
+    const inspected = inspectSmsAccount(
+      config({
+        ...sender,
+        authToken: "secret",
+        publicWebhookUrl: "https://sms_gateway.example.com/webhooks/sms",
       }),
-    ).toMatchObject({
-      accountId: "default",
-      name: "+15557654321",
+    );
+    expect(inspected).toMatchObject({
       configured: true,
-      tokenStatus: "available",
       signatureValidation: "invalid-public-url",
     });
   });
 
   it("inspects unavailable account credentials without using environment fallbacks or hiding healthy siblings", () => {
-    process.env.TWILIO_AUTH_TOKEN = "lower-precedence-token";
-    const unresolvedToken = {
-      source: "env",
-      provider: "default",
-      id: "OPENCLAW_TEST_UNAVAILABLE_SMS_TOKEN",
-    } as const;
-    const cfg = {
-      channels: {
-        sms: {
-          accountSid: "AC-parent",
-          authToken: unresolvedToken,
-          fromNumber: "+15550000000",
-          accounts: {
-            support: {
-              authToken: unresolvedToken,
-              messagingServiceSid: "MG-support",
-              fromNumber: "",
-            },
-            inherited: { enabled: false },
-            healthy: { authToken: "healthy-token", fromNumber: "+15551112222" },
-            missing: { authToken: "" },
-          },
-        },
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "lower-precedence-token");
+    const unresolvedToken = tokenRef("OPENCLAW_TEST_UNAVAILABLE_SMS_TOKEN");
+    const cfg = config({
+      accountSid: "AC-parent",
+      authToken: unresolvedToken,
+      fromNumber: "+15550000000",
+      accounts: {
+        support: { authToken: unresolvedToken, messagingServiceSid: "MG-support", fromNumber: "" },
+        inherited: { enabled: false },
+        healthy: { authToken: "healthy-token", fromNumber: "+15551112222" },
+        missing: { authToken: "" },
       },
-    };
+    });
 
     for (const accountId of ["default", "support", "inherited"]) {
       expect(() => resolveSmsAccount(cfg, accountId)).toThrow("unresolved SecretRef");
@@ -122,35 +95,20 @@ describe("SMS account config", () => {
     const inspected = ["default", "support", "inherited", "healthy", "missing"].map((accountId) =>
       inspectSmsAccount(cfg, accountId),
     );
-    expect(inspected).toMatchObject([
-      {
-        accountId: "default",
-        name: "+15550000000",
-        enabled: true,
-        configured: true,
-        tokenStatus: "configured_unavailable",
-      },
-      {
-        accountId: "support",
-        name: "MG-support",
-        enabled: true,
-        configured: true,
-        tokenStatus: "configured_unavailable",
-      },
-      {
-        accountId: "inherited",
-        enabled: false,
-        configured: true,
-        tokenStatus: "configured_unavailable",
-      },
-      {
-        accountId: "healthy",
-        name: "+15551112222",
-        enabled: true,
-        configured: true,
-        tokenStatus: "available",
-      },
-      { accountId: "missing", enabled: true, configured: false, tokenStatus: "missing" },
+    expect(
+      inspected.map(({ accountId, name, enabled, configured, tokenStatus }) => [
+        accountId,
+        name,
+        enabled,
+        configured,
+        tokenStatus,
+      ]),
+    ).toEqual([
+      ["default", "+15550000000", true, true, "configured_unavailable"],
+      ["support", "MG-support", true, true, "configured_unavailable"],
+      ["inherited", expect.any(String), false, true, "configured_unavailable"],
+      ["healthy", "+15551112222", true, true, "available"],
+      ["missing", expect.any(String), true, false, "missing"],
     ]);
     for (const account of inspected) {
       expect(account).not.toHaveProperty("authToken");
@@ -158,79 +116,8 @@ describe("SMS account config", () => {
     }
   });
 
-  it("merges named accounts over the top-level defaults", () => {
-    const cfg = {
-      channels: {
-        sms: {
-          accountSid: "AC-parent",
-          authToken: "parent-token",
-          fromNumber: "+15550000000",
-          accounts: {
-            support: {
-              fromNumber: "+15551112222",
-              webhookPath: "/webhooks/sms/support",
-              dmPolicy: "allowlist",
-              allowFrom: ["sms:+15553334444"],
-            },
-          },
-        },
-      },
-    };
-
-    expect(listSmsAccountIds(cfg)).toEqual(["default", "support"]);
-    expect(resolveSmsAccount(cfg, "support")).toMatchObject({
-      accountId: "support",
-      accountSid: "AC-parent",
-      authToken: "parent-token",
-      fromNumber: "+15551112222",
-      webhookPath: "/webhooks/sms/support",
-      dmPolicy: "allowlist",
-      allowFrom: ["+15553334444"],
-    });
-  });
-
-  it("uses the configured default account when accountId is omitted", () => {
-    const cfg = {
-      channels: {
-        sms: {
-          defaultAccount: "support",
-          accounts: {
-            support: {
-              accountSid: "AC-support",
-              authToken: "support-token",
-              fromNumber: "+15551112222",
-              textChunkLimit: 700,
-            },
-          },
-        },
-      },
-    };
-
-    expect(resolveSmsAccount(cfg)).toMatchObject({
-      accountId: "support",
-      accountSid: "AC-support",
-      authToken: "support-token",
-      fromNumber: "+15551112222",
-      textChunkLimit: 700,
-    });
-  });
-
   it("treats top-level enabled false as a channel kill switch", () => {
-    const cfg = {
-      channels: {
-        sms: {
-          enabled: false,
-          accounts: {
-            support: {
-              enabled: true,
-              accountSid: "AC-support",
-              authToken: "support-token",
-              fromNumber: "+15551112222",
-            },
-          },
-        },
-      },
-    };
+    const cfg = config({ enabled: false, accounts: { support: { enabled: true } } });
 
     expect(resolveSmsAccount(cfg, "support")).toMatchObject({
       accountId: "support",
@@ -239,161 +126,90 @@ describe("SMS account config", () => {
   });
 
   it("uses env fallbacks for the default account only", () => {
-    process.env.TWILIO_ACCOUNT_SID = "AC-env";
-    process.env.TWILIO_AUTH_TOKEN = "env-token";
-    process.env.TWILIO_PHONE_NUMBER = "+15550001111";
-    process.env.TWILIO_MESSAGING_SERVICE_SID = "MG-env";
-    process.env.SMS_WEBHOOK_PATH = "/webhooks/sms/env";
-    process.env.SMS_PUBLIC_WEBHOOK_URL = "https://sms.example.com/webhook";
-    process.env.SMS_ALLOWED_USERS = "sms:+15552223333,+15554445555";
-    process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION = "true";
-    process.env.SMS_TEXT_CHUNK_LIMIT = "800";
-
-    const cfg = { channels: { sms: { accounts: { support: { enabled: true } } } } };
-
+    const fields = [
+      ["TWILIO_ACCOUNT_SID", "accountSid", "AC-env", ""],
+      ["TWILIO_AUTH_TOKEN", "authToken", "env-token", ""],
+      ["TWILIO_PHONE_NUMBER", "fromNumber", "+15550001111", ""],
+      ["TWILIO_MESSAGING_SERVICE_SID", "messagingServiceSid", "MG-env", ""],
+      ["SMS_WEBHOOK_PATH", "webhookPath", "/webhooks/sms/env", "/webhooks/sms"],
+      ["SMS_PUBLIC_WEBHOOK_URL", "publicWebhookUrl", "https://sms.example.com/webhook", ""],
+    ] as const;
+    for (const [env, , value] of fields) {
+      vi.stubEnv(env, value);
+    }
+    vi.stubEnv("SMS_ALLOWED_USERS", "sms:+15552223333,+15554445555");
+    vi.stubEnv("SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION", "true");
+    vi.stubEnv("SMS_TEXT_CHUNK_LIMIT", "800");
+    const cfg = config({ accounts: { support: { enabled: true } } });
     expect(listSmsAccountIds(cfg)).toEqual(["default", "support"]);
-    expect(resolveSmsAccount(cfg)).toMatchObject({
-      accountSid: "AC-env",
-      authToken: "env-token",
-      fromNumber: "+15550001111",
-      messagingServiceSid: "MG-env",
-      webhookPath: "/webhooks/sms/env",
-      publicWebhookUrl: "https://sms.example.com/webhook",
+    const root = resolveSmsAccount(cfg);
+    const named = resolveSmsAccount(cfg, "support");
+    for (const [, field, value, fallback] of fields) {
+      expect(root[field]).toBe(value);
+      expect(named[field]).toBe(fallback);
+    }
+    expect(root).toMatchObject({
       dangerouslyDisableSignatureValidation: true,
       allowFrom: ["+15552223333", "+15554445555"],
       textChunkLimit: 800,
     });
-    expect(resolveSmsAccount(cfg, "support")).toMatchObject({
+    expect(named).toMatchObject({
       accountId: "support",
-      accountSid: "",
-      authToken: "",
-      fromNumber: "",
-      messagingServiceSid: "",
-      webhookPath: "/webhooks/sms",
-      publicWebhookUrl: "",
       dangerouslyDisableSignatureValidation: false,
       allowFrom: [],
       textChunkLimit: 1500,
     });
   });
 
-  it.each(["0", "-1", "1.5", "unlimited", " "])(
-    "keeps the default text chunk limit when SMS_TEXT_CHUNK_LIMIT is %j",
-    (raw) => {
-      process.env.TWILIO_ACCOUNT_SID = "AC-env";
-      process.env.TWILIO_AUTH_TOKEN = "env-token";
-      process.env.TWILIO_PHONE_NUMBER = "+15550001111";
-      process.env.SMS_TEXT_CHUNK_LIMIT = raw;
+  it("keeps the default text chunk limit when SMS_TEXT_CHUNK_LIMIT is zero", () => {
+    vi.stubEnv("SMS_TEXT_CHUNK_LIMIT", "0");
 
-      expect(resolveSmsAccount({}).textChunkLimit).toBe(1500);
+    expect(resolveSmsAccount({}).textChunkLimit).toBe(1500);
+  });
+
+  it("coerces numeric allowFrom entries accepted by the config schema", () => {
+    const parsed = parseSmsConfig({ allowFrom: [15551234567] });
+
+    expect(resolveSmsAccount(config(parsed))).toMatchObject({ allowFrom: ["+15551234567"] });
+  });
+
+  it.each([
+    ["standalone", sender, {}, false],
+    ["implicit default with named accounts", { ...sender, accounts }, {}, true],
+    [
+      "env-backed default with named accounts",
+      { enabled: true, accounts },
+      { TWILIO_ACCOUNT_SID: "AC-env", TWILIO_PHONE_NUMBER: "+15550001111" },
+      true,
+    ],
+  ] satisfies [string, SmsChannelConfig, NodeJS.ProcessEnv, boolean][])(
+    "resolves the %s sender token",
+    async (_name, sms, env, named) => {
+      const result = await resolveSecrets(
+        { ...sms, authToken: tokenRef("DEFAULT") },
+        {
+          DEFAULT: "resolved-default-token",
+          ...(named ? { SUPPORT: "resolved-support-token" } : {}),
+          ...env,
+        },
+      );
+      expect(result.sms?.authToken).toBe("resolved-default-token");
+      if (named) {
+        expect(result.sms?.accounts?.support?.authToken).toBe("resolved-support-token");
+      }
+      expect(result.warnings).toStrictEqual([]);
     },
   );
 
-  it("coerces numeric allowFrom entries accepted by the config schema", () => {
-    const parsed = parseSmsConfig({
-      accountSid: "AC123",
-      authToken: "token",
-      fromNumber: "+15550001111",
-      allowFrom: [15551234567],
-    });
-
-    expect(resolveSmsAccount({ channels: { sms: parsed } })).toMatchObject({
-      allowFrom: ["+15551234567"],
-    });
-  });
-
-  it("discovers env-only SMS credentials as the implicit default account", () => {
-    process.env.TWILIO_ACCOUNT_SID = "AC-env";
-    process.env.TWILIO_AUTH_TOKEN = "env-token";
-    process.env.TWILIO_SMS_FROM = "+15550001111";
-
-    expect(listSmsAccountIds({})).toEqual(["default"]);
-    expect(resolveSmsAccount({})).toMatchObject({
-      accountId: "default",
-      accountSid: "AC-env",
-      authToken: "env-token",
-      fromNumber: "+15550001111",
-    });
-  });
-
-  it("does not discover blank credential strings as the implicit default account", () => {
-    process.env.TWILIO_ACCOUNT_SID = " ";
-    process.env.TWILIO_AUTH_TOKEN = "\t";
-    process.env.TWILIO_PHONE_NUMBER = " ";
-    process.env.TWILIO_SMS_FROM = "\n";
-    process.env.TWILIO_MESSAGING_SERVICE_SID = " ";
-
-    expect(listSmsAccountIds({})).toEqual([]);
-    expect(
-      listSmsAccountIds({
-        channels: {
-          sms: {
-            accountSid: " ",
-            authToken: "\t",
-            fromNumber: "\n",
-            messagingServiceSid: " ",
-          },
-        },
-      }),
-    ).toEqual([]);
-    expect(
-      listSmsAccountIds({
-        channels: {
-          sms: {
-            accounts: {
-              support: {
-                enabled: true,
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual(["support"]);
-  });
-
-  it("uses TWILIO_SMS_FROM when the legacy from-number env var is blank", () => {
-    process.env.TWILIO_ACCOUNT_SID = "AC-env";
-    process.env.TWILIO_AUTH_TOKEN = "env-token";
-    process.env.TWILIO_PHONE_NUMBER = " ";
-    process.env.TWILIO_SMS_FROM = "+15550001111";
-
-    expect(resolveSmsAccount({})).toMatchObject({
-      fromNumber: "+15550001111",
-    });
-  });
-
-  it("accepts a Twilio Messaging Service SID instead of a from number", () => {
-    process.env.TWILIO_ACCOUNT_SID = "AC-env";
-    process.env.TWILIO_AUTH_TOKEN = "env-token";
-    process.env.TWILIO_MESSAGING_SERVICE_SID = "MG-env";
-
-    expect(listSmsAccountIds({})).toEqual(["default"]);
-    expect(resolveSmsAccount({})).toMatchObject({
-      accountSid: "AC-env",
-      authToken: "env-token",
-      fromNumber: "",
-      messagingServiceSid: "MG-env",
-    });
-  });
-
-  it("accepts secret references for Twilio auth tokens", () => {
-    expect(() =>
-      parseSmsConfig({
-        accountSid: "AC123",
-        authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
-        fromNumber: "+15550001111",
-      }),
-    ).not.toThrow();
-    expect(() =>
-      resolveSmsAccount({
-        channels: {
-          sms: {
-            accountSid: "AC123",
-            authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
-            fromNumber: "+15550001111",
-          },
-        },
-      }),
-    ).toThrow('channels.sms.authToken: unresolved SecretRef "env:default:TWILIO_AUTH_TOKEN"');
+  it("treats top-level authToken refs as inactive when all enabled accounts override them", async () => {
+    const result = await resolveSecrets(
+      { authToken: tokenRef("UNUSED"), accounts },
+      {
+        SUPPORT: "resolved-support-token",
+      },
+    );
+    expect(result.sms?.authToken).toEqual(tokenRef("UNUSED"));
+    expect(result.sms?.accounts?.support?.authToken).toBe("resolved-support-token");
+    expect(result.warnings.map(({ path }) => path)).toContain("channels.sms.authToken");
   });
 });

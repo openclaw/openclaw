@@ -5,16 +5,20 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
-import { registerCapturedPluginModuleResolver } from "./native-module-require.js";
+import {
+  registerCapturedPluginModuleResolver,
+  type BunPluginRuntime,
+} from "./native-module-require.js";
 import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
-import { withPluginCache, type getPluginCache } from "./plugin-cache.js";
-import type { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { withPluginCache, type PluginCache } from "./plugin-cache.js";
+import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import type { PluginModuleLoaderOwner } from "./plugin-instance.types.js";
 import { getPluginBunConditions } from "./plugin-native-resolution.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePluginNativeAliasForParent } from "./plugin-sdk-native-resolver.js";
 import { resolvePluginPackageMapTarget } from "./plugin-source-references.js";
 import { isPluginSdkAliasSpecifier } from "./sdk-alias.js";
+import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
 /** Native adapters acquire source through the instance's artifact without replacing evaluation. */
 export function bindNativePluginInstanceModuleLoader(
@@ -23,17 +27,15 @@ export function bindNativePluginInstanceModuleLoader(
     rootDir: string;
     origin: PluginOrigin;
     bindModuleLoader: PluginModuleLoaderOwner["bindModuleLoader"];
+    ownsResolution?: () => boolean;
   },
-  cache: ReturnType<typeof getPluginCache>,
-  artifact: ReturnType<typeof capturePluginGenerationArtifact>,
+  cache: PluginCache,
+  artifact: PluginGenerationArtifact,
   loader: PluginModuleLoader,
   sdkRoots: readonly string[],
   prepareEntryNativeScopes: boolean,
 ): void {
-  const bun: import("./native-module-require.js").BunPluginRuntime | undefined = Reflect.get(
-    globalThis,
-    "Bun",
-  );
+  const bun: BunPluginRuntime | undefined = Reflect.get(globalThis, "Bun");
   const jitiJsx = process.env.JITI_JSX;
   const jsxEnabled = jitiJsx === "1" || jitiJsx === "true";
   const jsxTranspilers = new Map<"jsx" | "tsx", { transformSync(source: string): string }>();
@@ -52,6 +54,9 @@ export function bindNativePluginInstanceModuleLoader(
       ...(jsxEnabled && bun
         ? {
             load(request: string) {
+              if (params.ownsResolution && !params.ownsResolution()) {
+                return undefined;
+              }
               if (!artifact.sourceForCaptured(request)) {
                 return undefined;
               }
@@ -79,9 +84,21 @@ export function bindNativePluginInstanceModuleLoader(
           }
         : {}),
       prepare(request, parent, kind) {
+        if (params.ownsResolution && !params.ownsResolution()) {
+          return undefined;
+        }
+        // Host imports do not belong to this capture and must not enter its worker.
+        const requestedPath = request.startsWith("file:") ? fileURLToPath(request) : request;
+        if (
+          !isPathInside(artifact.boundaryRoot, parent) &&
+          (!path.isAbsolute(requestedPath) || !isPathInside(artifact.boundaryRoot, requestedPath))
+        ) {
+          return undefined;
+        }
         // Resolved URLs and built relative imports retain the selected host SDK's identity.
         const original = artifact.sourceForCaptured(parent);
-        const sdkTarget = hostSdkTarget(request, original);
+        const sdkTarget =
+          artifact.sharedModule?.(parent, request) ?? hostSdkTarget(request, original);
         if (sdkTarget) {
           return sdkTarget === request ? undefined : sdkTarget;
         }
@@ -102,7 +119,11 @@ export function bindNativePluginInstanceModuleLoader(
           }
           // Deferred SDK imports retain their generation's host selection after cache replacement.
           if (source === parent && isPluginSdkAliasSpecifier(request)) {
-            return resolvePluginNativeAliasForParent(request, parent);
+            const target = resolvePluginNativeAliasForParent(request, parent);
+            if (target) {
+              recordPluginSdkDeprecatedImport(params.instance.pluginId, request);
+            }
+            return target;
           }
           let target: string | undefined;
           const requireMode = kind === "require-call" || kind === "require-resolve";
@@ -167,11 +188,20 @@ export function bindNativePluginInstanceModuleLoader(
         });
       },
       resolve(request, parent, resolve) {
-        const original = artifact.sourceForCaptured(parent);
-        if (!original || isPluginSdkAliasSpecifier(request) || isBuiltin(request)) {
+        if (params.ownsResolution && !params.ownsResolution()) {
           return undefined;
         }
-        const sdkTarget = hostSdkTarget(request, original);
+        const original = artifact.sourceForCaptured(parent);
+        if (!original || isBuiltin(request)) {
+          return undefined;
+        }
+        if (isPluginSdkAliasSpecifier(request)) {
+          const target = resolve();
+          recordPluginSdkDeprecatedImport(params.instance.pluginId, request);
+          return target;
+        }
+        const sdkTarget =
+          artifact.sharedModule?.(parent, request) ?? hostSdkTarget(request, original);
         if (sdkTarget) {
           return sdkTarget;
         }

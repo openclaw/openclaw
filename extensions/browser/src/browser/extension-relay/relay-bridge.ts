@@ -21,6 +21,7 @@ const log = createSubsystemLogger("browser").child("extension-relay");
 
 /** App-level keepalive interval; message traffic keeps the MV3 worker alive. */
 const EXTENSION_PING_INTERVAL_MS = 20_000;
+const EXTENSION_HELLO_TIMEOUT_MS = 10_000;
 
 const BROWSER_TARGET_ID = "openclaw-extension-relay";
 /** Playwright requires every attached page target to identify its browser context. */
@@ -104,16 +105,7 @@ export class ExtensionRelayBridge {
   private latestPromotedCandidateOrdinal = 0;
   private pingTimer: NodeJS.Timeout | null = null;
   private missedPongs = 0;
-  private readonly onStateChange?: () => void;
   private readonly connectionEvents = new EventTarget();
-
-  constructor(
-    opts: {
-      onStateChange?: () => void;
-    } = {},
-  ) {
-    this.onStateChange = opts.onStateChange;
-  }
 
   /** True once an extension socket completed its hello handshake. */
   get extensionConnected(): boolean {
@@ -125,21 +117,18 @@ export class ExtensionRelayBridge {
     if (this.extensionConnected) {
       return true;
     }
-    const timeout = new AbortController();
-    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    const timeout = AbortSignal.timeout(timeoutMs);
     try {
       await once(this.connectionEvents, "ready", {
-        signal: AbortSignal.any([signal, timeout.signal]),
+        signal: AbortSignal.any([signal, timeout]),
       });
       return this.extensionConnected;
     } catch (error) {
       signal.throwIfAborted();
-      if (timeout.signal.aborted) {
+      if (timeout.aborted) {
         return false;
       }
       throw error;
-    } finally {
-      clearTimeout(timer);
     }
   }
 
@@ -193,23 +182,31 @@ export class ExtensionRelayBridge {
     return this.clients.size;
   }
 
-  attachExtensionSocket(socket: BridgeSocket): {
+  attachExtensionSocket(
+    socket: BridgeSocket,
+    onHelloTimeout?: () => void,
+  ): {
     onMessage: (raw: string) => void;
     onClose: () => void;
   } {
     const candidateOrdinal = this.nextExtensionCandidateOrdinal++;
     let candidateState: "awaiting-hello" | "active" | "rejected" = "awaiting-hello";
     this.extensionCandidates.add(socket);
+    const helloTimer = onHelloTimeout && setTimeout(onHelloTimeout, EXTENSION_HELLO_TIMEOUT_MS);
+    helloTimer?.unref?.();
     const rejectCandidate = (code: number, reason: string) => {
       candidateState = "rejected";
       this.extensionCandidates.delete(socket);
       socket.close(code, reason);
     };
     const onMessage = (raw: string) => {
+      const msg = parseExtensionMessage(raw);
+      if (msg?.type === "hello") {
+        clearTimeout(helloTimer);
+      }
       if (candidateState === "rejected") {
         return;
       }
-      const msg = parseExtensionMessage(raw);
       if (candidateState === "awaiting-hello") {
         if (msg?.type !== "hello") {
           rejectCandidate(4001, "expected valid hello");
@@ -244,7 +241,6 @@ export class ExtensionRelayBridge {
         this.syncTabs(msg.tabs);
         this.startPing();
         this.connectionEvents.dispatchEvent(new Event("ready"));
-        this.onStateChange?.();
         return;
       }
       if (this.extension?.socket !== socket) {
@@ -257,11 +253,11 @@ export class ExtensionRelayBridge {
       this.handleExtensionMessage(msg);
     };
     const onClose = () => {
+      clearTimeout(helloTimer);
       candidateState = "rejected";
       this.extensionCandidates.delete(socket);
       if (this.extension?.socket === socket) {
         this.handleExtensionGone();
-        this.onStateChange?.();
       }
     };
     return { onMessage, onClose };
@@ -318,14 +314,18 @@ export class ExtensionRelayBridge {
     }
   }
 
+  private rejectExtensionCommands(message: string): void {
+    for (const pending of this.pendingExtension.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(message));
+    }
+    this.pendingExtension.clear();
+  }
+
   private handleExtensionGone(): void {
     this.extension = null;
     this.stopPing();
-    for (const pending of this.pendingExtension.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("extension disconnected"));
-    }
-    this.pendingExtension.clear();
+    this.rejectExtensionCommands("extension disconnected");
     this.sessions.dispose();
     // Retire attach work synchronously so a replacement snapshot cannot reuse
     // a rejected promise. Keep the tab list so the same ids can be re-exposed.
@@ -349,7 +349,6 @@ export class ExtensionRelayBridge {
         owner.socket.close(4000, "extension heartbeat timeout");
         if (this.extension === owner) {
           this.handleExtensionGone();
-          this.onStateChange?.();
         }
         return;
       }
@@ -598,15 +597,11 @@ export class ExtensionRelayBridge {
     );
   }
 
-  private async enumerateTargetInfos(client: CdpClientState): Promise<
-    | { status: "available"; targetInfos: Record<string, unknown>[] }
-    | {
-        status: "unavailable";
-        reason: "extension-disconnected" | "target-identity-unresolved";
-      }
-  > {
+  private async enumerateTargetInfos(
+    client: CdpClientState,
+  ): Promise<{ targetInfos: Record<string, unknown>[] } | { error: string }> {
     if (!this.extensionConnected) {
-      return { status: "unavailable", reason: "extension-disconnected" };
+      return { error: "Extension is disconnected" };
     }
     // Tabs can arrive while Chrome attaches the previous batch. Visit each tab
     // generation once; only Chrome's permanent page refusal permits an omission.
@@ -646,7 +641,7 @@ export class ExtensionRelayBridge {
       );
     }
     if (!this.extensionConnected) {
-      return { status: "unavailable", reason: "extension-disconnected" };
+      return { error: "Extension is disconnected" };
     }
     const targetInfos: Record<string, unknown>[] = [];
     for (const [tabId, tab] of this.tabs) {
@@ -660,11 +655,11 @@ export class ExtensionRelayBridge {
       }
       const targetId = identities.get(tab);
       if (!targetId || (!tab.target?.sessionId && this.autoAttachRecipients(tabId).length > 0)) {
-        return { status: "unavailable", reason: "target-identity-unresolved" };
+        return { error: "Target identities are unavailable" };
       }
       targetInfos.push(this.targetInfoForTab(tab, targetId));
     }
-    return { status: "available", targetInfos };
+    return { targetInfos };
   }
 
   private announceAttachedTab(
@@ -982,46 +977,41 @@ export class ExtensionRelayBridge {
     const { runtime, fetch } = session.physical;
     const emit = (method: string, params: unknown) =>
       this.sessions.emit(session, { method, params });
-    const fetchResult = fetch.command(session, emit, request.method, request.params);
-    if (fetchResult) {
-      const result = await fetchResult;
-      if (client.sessions.get(sessionId) !== session) {
-        throw new Error(`Session detached: ${sessionId}`);
+    let operation = fetch.command(session, emit, request.method, request.params);
+    if (!operation) {
+      if (request.method === "Runtime.disable") {
+        session.runtimeGeneration++;
+        runtime.disable(session);
+        this.respond(client, request, {});
+        return;
       }
-      this.respond(client, request, result);
-      return;
-    }
-    if (request.method === "Runtime.disable") {
-      session.runtimeGeneration++;
-      runtime.disable(session);
-      this.respond(client, request, {});
-      return;
-    }
-    if (request.method === "Runtime.enable" && session.frameTreeRead) {
-      // Disable can retire this pending enable while a peer keeps the physical Runtime alive.
-      const generation = session.runtimeGeneration;
-      await session.frameTreeRead;
-      if (
-        !this.clients.has(client) ||
-        client.sessions.get(sessionId) !== session ||
-        session.runtimeGeneration !== generation
-      ) {
-        throw new Error("Runtime session detached or disabled");
+      if (request.method === "Runtime.enable" && session.frameTreeRead) {
+        // Disable can retire this pending enable while a peer keeps the physical Runtime alive.
+        const generation = session.runtimeGeneration;
+        await session.frameTreeRead;
+        if (
+          !this.clients.has(client) ||
+          client.sessions.get(sessionId) !== session ||
+          session.runtimeGeneration !== generation
+        ) {
+          throw new Error("Runtime session detached or disabled");
+        }
       }
+      const send = () =>
+        this.sessions.send(
+          session.physical,
+          request.method,
+          request.params,
+          request.method === "Runtime.runIfWaitingForDebugger" ? "target" : undefined,
+        );
+      operation =
+        request.method === "Runtime.enable"
+          ? runtime.enable(session, emit, send)
+          : request.method === "Runtime.addBinding" || request.method === "Runtime.removeBinding"
+            ? runtime.binding(session, emit, request.method, request.params)
+            : send();
     }
-    const send = () =>
-      this.sessions.send(
-        session.physical,
-        request.method,
-        request.params,
-        request.method === "Runtime.runIfWaitingForDebugger" ? "target" : undefined,
-      );
-    const result =
-      request.method === "Runtime.enable"
-        ? await runtime.enable(session, emit, send)
-        : request.method === "Runtime.addBinding" || request.method === "Runtime.removeBinding"
-          ? await runtime.binding(session, emit, request.method, request.params)
-          : await send();
+    const result = await operation;
     if (client.sessions.get(sessionId) !== session) {
       throw new Error(`Session detached: ${sessionId}`);
     }
@@ -1084,15 +1074,11 @@ export class ExtensionRelayBridge {
       }
       case "Target.getTargets": {
         const enumeration = await this.enumerateTargetInfos(client);
-        if (enumeration.status === "unavailable") {
-          const message =
-            enumeration.reason === "extension-disconnected"
-              ? "Extension is disconnected"
-              : "Target identities are unavailable";
-          this.respondError(client, request, message, -32002);
+        if ("error" in enumeration) {
+          this.respondError(client, request, enumeration.error, -32002);
           return;
         }
-        this.respond(client, request, { targetInfos: enumeration.targetInfos });
+        this.respond(client, request, enumeration);
         return;
       }
       case "Target.attachToBrowserTarget": {
@@ -1228,11 +1214,7 @@ export class ExtensionRelayBridge {
   /** Close all sockets and reject pending work (relay shutdown). */
   dispose(): void {
     this.stopPing();
-    for (const pending of this.pendingExtension.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("extension relay stopped"));
-    }
-    this.pendingExtension.clear();
+    this.rejectExtensionCommands("extension relay stopped");
     for (const candidate of this.extensionCandidates) {
       candidate.close(1001, "relay stopped");
     }

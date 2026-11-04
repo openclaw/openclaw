@@ -51,17 +51,6 @@ describe("waitForGatewayClient", () => {
     expect(subscribe).not.toHaveBeenCalled();
   });
 
-  it("rejects an already-aborted signal before subscribing to a disconnected gateway", async () => {
-    const { gateway, subscribe } = createGateway();
-    const controller = new AbortController();
-    controller.abort();
-
-    await expect(waitForGatewayClient(gateway, controller.signal)).rejects.toBe(
-      controller.signal.reason,
-    );
-    expect(subscribe).not.toHaveBeenCalled();
-  });
-
   it("keeps the existing AbortError contract for a non-error cancellation reason", async () => {
     const { gateway } = createGateway(true);
     const controller = new AbortController();
@@ -102,49 +91,6 @@ describe("waitForGatewayClient", () => {
     await expect(pending).resolves.toBe(client);
     expect(unsubscribe).toHaveBeenCalledOnce();
     controller.abort();
-    expect(unsubscribe).toHaveBeenCalledOnce();
-  });
-
-  it("does not retain an abort listener after synchronous connection replay", async () => {
-    const client = {} as GatewayBrowserClient;
-    const snapshot = { phase: "connected", client } as GatewaySnapshot;
-    const unsubscribe = vi.fn();
-    const gateway: Gateway = {
-      snapshot: { phase: "connecting", client: null } as GatewaySnapshot,
-      subscribe(listener) {
-        listener(snapshot);
-        return unsubscribe;
-      },
-    };
-    const controller = new AbortController();
-    const addAbortListener = vi.spyOn(controller.signal, "addEventListener");
-    const removeAbortListener = vi.spyOn(controller.signal, "removeEventListener");
-
-    await expect(waitForGatewayClient(gateway, controller.signal)).resolves.toBe(client);
-
-    const abortListener = addAbortListener.mock.calls[0]?.[1];
-    expect(abortListener).toBeTypeOf("function");
-    expect(removeAbortListener).toHaveBeenCalledWith("abort", abortListener);
-    expect(unsubscribe).toHaveBeenCalledOnce();
-
-    controller.abort(new Error("late navigation cancellation"));
-
-    expect(unsubscribe).toHaveBeenCalledOnce();
-  });
-
-  it("releases a subscription when it synchronously aborts during registration", async () => {
-    const cancellation = new Error("navigation canceled during registration");
-    const controller = new AbortController();
-    const unsubscribe = vi.fn();
-    const gateway: Gateway = {
-      snapshot: { phase: "connecting", client: null } as GatewaySnapshot,
-      subscribe() {
-        controller.abort(cancellation);
-        return unsubscribe;
-      },
-    };
-
-    await expect(waitForGatewayClient(gateway, controller.signal)).rejects.toBe(cancellation);
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 });

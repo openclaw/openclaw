@@ -1,6 +1,7 @@
 // Discord helper module supports native command helpers behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { vi } from "vitest";
+import type { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 
 export type MockCommandInteraction = {
   user: { id: string; username: string; globalName: string };
@@ -71,4 +72,28 @@ export function createMockCommandInteraction(
     client: {},
   };
   return interaction;
+}
+
+type NativeRouteState = ReturnType<typeof resolveDiscordNativeInteractionRouteState>;
+export function createRouteState(params: {
+  sessionKey: string;
+  agentId?: string;
+  accountId?: string;
+  bound?: boolean;
+}): NativeRouteState {
+  const agentId = params.agentId ?? "main";
+  const route: NativeRouteState["effectiveRoute"] = {
+    agentId,
+    channel: "discord",
+    accountId: params.accountId ?? "default",
+    sessionKey: params.sessionKey,
+    mainSessionKey: `agent:${agentId}:main`,
+    lastRoutePolicy: "session",
+    matchedBy: params.bound ? "binding.channel" : "default",
+  };
+  return {
+    effectiveRoute: route,
+    boundSessionKey: params.bound ? params.sessionKey : undefined,
+    configuredBinding: null,
+  };
 }

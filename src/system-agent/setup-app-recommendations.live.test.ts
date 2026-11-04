@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useLiveTestRuntimeConfig } from "../agents/live-test-helpers.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -79,6 +80,7 @@ describe("setup app recommendations fixture", () => {
 
 describeLive("setup app recommendations live", () => {
   it("uses real ClawHub search and OpenAI while rejecting substring traps", async () => {
+    using _ = useLiveTestRuntimeConfig(config);
     let completion: CompleteSetupInferenceResult | undefined;
     vi.spyOn(inference, "completeSetupInference").mockImplementation(async ({ prompt }) => {
       completion = await completeSetupInferenceConfig({

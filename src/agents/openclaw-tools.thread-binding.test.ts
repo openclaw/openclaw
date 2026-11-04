@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "./runtime-capabilities.js";
 
 describe("registered sessions_spawn binding discovery", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
@@ -39,9 +39,10 @@ describe("registered sessions_spawn binding discovery", () => {
     } else {
       expect(tool?.parameters).not.toHaveProperty("properties.thread");
     }
-    const capabilities = collectRuntimeChannelCapabilities({
+    const { runtimeCapabilities: capabilities } = resolveRuntimeChannelPromptContext({
       cfg: config,
       channel: "binding-chat",
+      requester: { agentTo: "room:parent" },
     });
     expect(capabilities ?? []).toEqual(
       available ? ["threadbound-subagent-spawn", "threadbound-acp-spawn"] : [],

@@ -61,13 +61,28 @@ export type LogbookOperations = {
       startMs: number;
       endMs: number;
       drafts: LogbookCardDraft[];
-      selectKeyframes?: boolean;
     },
     void
   >;
   listDays: Operation<undefined, LogbookDay[]>;
   timelineForDay: Operation<{ day: string }, LogbookTimeline>;
   getStandup: Operation<{ day: string }, LogbookStandup | null>;
-  saveStandup: Operation<{ day: string; text: string }, void>;
+  saveStandup: Operation<{ day: string; text: string }, LogbookStandup>;
   pruneFrames: Operation<{ olderThanMs: number }, number>;
 };
+
+const writeOperations = new Set<keyof LogbookOperations>([
+  "insertFrame",
+  "createBatch",
+  "setBatchStatus",
+  "resetRunningBatches",
+  "resetErrorBatches",
+  "replaceObservations",
+  "replaceCardsInWindow",
+  "saveStandup",
+  "pruneFrames",
+]);
+
+export function isLogbookWriteOperation(type: keyof LogbookOperations): boolean {
+  return writeOperations.has(type);
+}

@@ -1,5 +1,4 @@
 import type { DeviceBootstrapMutationAdmission } from "./device-bootstrap.worker-types.js";
-import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
 import type {
   DevicePairingPendingRecord,
   PairedDevice,
@@ -19,7 +18,6 @@ export type DevicePairingAdmissionFacts =
     }
   | { kind: "pairing-prune"; deviceIds: readonly string[] }
   | { kind: "pairing-token-issuance" }
-  | { kind: "pairing-publication"; receipt: DevicePairingCommitReceipt }
   | ({ kind: "node-pending" } & NodePairingPendingSnapshot)
   | { kind: "node-surface"; nodeId: string; pairingGeneration?: string }
   | DeviceBootstrapMutationAdmission;

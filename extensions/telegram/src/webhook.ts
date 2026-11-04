@@ -170,7 +170,6 @@ export async function startTelegramWebhook(opts: {
   abortSignal?: AbortSignal;
   publicUrl?: string;
   webhookCertPath?: string;
-  webhookRegistrationRetryPolicy?: BackoffPolicy;
   stateDir?: string;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }) {
@@ -220,10 +219,8 @@ export async function startTelegramWebhook(opts: {
   }
   const status = createTelegramStatusPublisher("webhook", opts.setStatus);
   status.noteStart();
-  const webhookRegistrationRetryPolicy =
-    opts.webhookRegistrationRetryPolicy ?? TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY;
   const retryDelay = (operation: "getMe" | "setWebhook", attempt: number) => {
-    const delayMs = computeBackoff(webhookRegistrationRetryPolicy, attempt);
+    const delayMs = computeBackoff(TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY, attempt);
     runtime.log?.(
       `telegram ${operation} retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}`,
     );
@@ -278,18 +275,17 @@ export async function startTelegramWebhook(opts: {
       // The webhook owns this transport because it resolved and injected it into
       // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
       await runShutdownPhase("transport close", () => telegramTransport.close());
-      await runShutdownPhase("ingress drain", () =>
-        ingressStopTask
-          ? raceWithTimeout(
-              ingressStopTask,
-              TELEGRAM_WEBHOOK_INGRESS_STOP_GRACE_MS,
-              () => undefined,
-              {
-                ref: false,
-              },
-            )
-          : undefined,
-      );
+      await runShutdownPhase("ingress drain", () => {
+        if (ingressStopTask) {
+          return raceWithTimeout(
+            ingressStopTask,
+            TELEGRAM_WEBHOOK_INGRESS_STOP_GRACE_MS,
+            () => undefined,
+            { ref: false },
+          );
+        }
+        return undefined;
+      });
       await runShutdownPhase("ingress settlement", () => ingressMonitor?.waitForDeferredClaims());
       await runShutdownPhase("status update", () => status.noteStop());
     });
@@ -340,10 +336,7 @@ export async function startTelegramWebhook(opts: {
         });
         return;
       } catch (err) {
-        if (
-          !isRetryableTelegramApiError(err, { context: "webhook" }) ||
-          initializationAbortSignal?.aborted
-        ) {
+        if (!isRetryableTelegramApiError(err) || initializationAbortSignal?.aborted) {
           throw err;
         }
         attempt += 1;
@@ -481,7 +474,7 @@ export async function startTelegramWebhook(opts: {
         formatErrorMessage(err),
         isTelegramAuthenticationError(err)
           ? "blocked"
-          : isRetryableTelegramApiError(err, { context: "webhook" })
+          : isRetryableTelegramApiError(err)
             ? "recovering"
             : undefined,
       );
@@ -493,8 +486,8 @@ export async function startTelegramWebhook(opts: {
     status.noteReady();
     runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
   };
-  const retryWebhookRegistration = async (firstAttempt: number): Promise<void> => {
-    let attempt = firstAttempt;
+  const retryWebhookRegistration = async (): Promise<void> => {
+    let attempt = 1;
     while (true) {
       if (shutdownPromise || opts.abortSignal?.aborted) {
         return;
@@ -512,7 +505,7 @@ export async function startTelegramWebhook(opts: {
         await advertiseWebhook();
         return;
       } catch (err) {
-        if (!isRetryableTelegramApiError(err, { context: "webhook" })) {
+        if (!isRetryableTelegramApiError(err)) {
           runtime.error?.(
             `telegram setWebhook retry stopped after non-recoverable error: ${formatErrorMessage(err)}`,
           );
@@ -545,11 +538,11 @@ export async function startTelegramWebhook(opts: {
     try {
       await advertiseWebhook();
     } catch (err) {
-      if (!isRetryableTelegramApiError(err, { context: "webhook" })) {
+      if (!isRetryableTelegramApiError(err)) {
         await shutdown();
         throw err;
       }
-      void retryWebhookRegistration(1);
+      void retryWebhookRegistration();
     }
   }
   // Drain only after registration succeeds or after the retrying startup path

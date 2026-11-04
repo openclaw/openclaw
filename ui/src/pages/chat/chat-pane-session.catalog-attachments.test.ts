@@ -10,7 +10,7 @@ import {
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 
 describe("catalog session open", () => {
-  it("releases staged attachment payloads instead of stranding them for the tab", () => {
+  it("publishes the cleared composer and releases staged attachment payloads", () => {
     const { pane, state } = createTestChatPane({
       client: { request: () => new Promise(() => {}) } as unknown as GatewayBrowserClient,
       sessions: {} as SessionCapability,
@@ -21,6 +21,11 @@ describe("catalog session open", () => {
       file: new File(["staged"], "staged.png", { type: "image/png" }),
     });
     state.chatAttachments = [attachment];
+    pane.chatState.attach(state);
+    const publishedAttachments: (typeof state.chatAttachments)[] = [];
+    const unsubscribe = pane.chatState.composerDraft.subscribe(() => {
+      publishedAttachments.push(pane.chatState.composerDraft.read().attachments);
+    });
 
     (
       pane as TestChatPane & {
@@ -29,6 +34,8 @@ describe("catalog session open", () => {
     ).openCatalogSession({ catalogId: "cat-1", hostId: "host-1", threadId: "thread-1" }, state);
 
     expect(state.chatAttachments).toEqual([]);
+    expect(publishedAttachments).toEqual([[]]);
+    unsubscribe();
     // The payload-store entry must be gone: a retained entry keeps the File
     // and its object URL resident for the whole tab lifetime.
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();

@@ -54,7 +54,7 @@ describe("channel Gateway slot across staged registry activation", () => {
     "hands the channel Gateway slot back to its predecessor only when a staged replacement is %s",
     async (outcome) => {
       const original = captureActivePluginRegistrySnapshot();
-      const gatewayContext = {} as GatewayRequestContext;
+      const gatewayContext = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
       const gatewayContextResolver = vi.fn<GatewayContextResolver>(() => gatewayContext);
       const first = createRuntimeBuilder({
         origin: "bundled",
@@ -114,7 +114,7 @@ describe("channel Gateway slot across staged registry activation", () => {
   // commit must still take it: the retired candidates are compacted out, not stacked up.
   it("restores the same predecessor after repeated failed replacements", async () => {
     const original = captureActivePluginRegistrySnapshot();
-    const gatewayContext = {} as GatewayRequestContext;
+    const gatewayContext = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
     const gatewayContextResolver = vi.fn<GatewayContextResolver>(() => gatewayContext);
     const first = createRuntimeBuilder({
       origin: "bundled",

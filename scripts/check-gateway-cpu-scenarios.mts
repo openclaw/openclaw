@@ -11,6 +11,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import {
   parseNonNegativeInt,
   parsePositiveInt,
@@ -307,9 +308,7 @@ function buildPrivateQaEnv(
     ...env,
     ...(qaState
       ? {
-          HOME: qaState.home,
-          USERPROFILE: qaState.home,
-          OPENCLAW_HOME: qaState.home,
+          ...createBuildSmokeEnv(qaState.home, {}),
           OPENCLAW_STATE_DIR: qaState.stateDir,
           OPENCLAW_CONFIG_PATH: qaState.configPath,
         }
