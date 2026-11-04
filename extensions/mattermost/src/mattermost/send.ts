@@ -282,15 +282,16 @@ export async function sendMessageMattermost(
         )
       : [message];
   const kind = fileIds?.length ? "media" : opts.buttons?.length || props ? "card" : "text";
-  const posts: Array<{ messageId: string; content: string }> = [];
-  const createResult = (
-    sent: readonly { messageId: string; content: string }[],
-  ): MattermostSendResult => ({
+  type SentPost = { messageId: string; content: string; sentAt: number };
+  const posts: SentPost[] = [];
+  // Stamp each post once so progress reports and the returned receipt agree.
+  const createResult = (sent: readonly SentPost[]): MattermostSendResult => ({
     messageId: sent[0]!.messageId,
     channelId,
     receipt: createMessageReceiptFromOutboundResults({
       results: sent.map(({ messageId }) => ({ channel: "mattermost", messageId, channelId })),
       kind,
+      sentAt: sent[0]!.sentAt,
       ...(opts.replyToId ? { replyToId: opts.replyToId } : {}),
     }),
     content: sent.map((post) => post.content).join("\n"),
@@ -311,7 +312,7 @@ export async function sendMessageMattermost(
         rootId: opts.replyToId,
         ...(index === 0 ? { fileIds, props } : {}),
       });
-      posts.push({ messageId: post.id, content: post.message ?? part });
+      posts.push({ messageId: post.id, content: post.message ?? part, sentAt: Date.now() });
       // Core must learn each provider identity before a later post or local
       // bookkeeping can fail.
       await opts.onDeliveryResult?.(createResult(posts.slice(-1)));
