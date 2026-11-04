@@ -126,6 +126,59 @@ struct StatusMenuSummariesTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func `session preference checkmarks distinguish inheritance from explicit Off`(reuseMenu: Bool) async throws {
+        try await self.withFixture { fixture in
+            _ = AppKitTestSupport.application
+            _ = try await fixture.control.request(method: "health")
+            let states: [(overrides: [String: String], thinking: [String], verbose: [String])] = [
+                ([:], [], []),
+                (["thinkingLevel": "high", "verboseLevel": "on"], ["high"], ["on"]),
+                ([:], [], []),
+                (["thinkingLevel": "off", "verboseLevel": "off"], ["off"], ["off"]),
+                (["thinkingLevel": "xhigh", "verboseLevel": "full"], [], []),
+            ]
+            var item = NSMenuItem()
+            var previousMenu: NSMenu?
+            var previousThinking: NSMenu?
+            var previousVerbose: NSMenu?
+            defer {
+                item.view = nil
+                item.submenu = nil
+            }
+            for state in states {
+                fixture.sessionPreferences.setValue(state.overrides)
+                await fixture.sessions.refresh(force: true)
+                let row = try #require(fixture.sessions.rows.first)
+                #expect(row.thinkingLevel == state.overrides["thinkingLevel"])
+                #expect(row.verboseLevel == state.overrides["verboseLevel"])
+                if !reuseMenu { item = NSMenuItem() }
+                fixture.sessions.configureSessionItem(item, row: row)
+                let menu = try #require(item.submenu)
+                let thinking = try #require(menu.items.first {
+                    $0.identifier?.rawValue == "session.thinking"
+                }?.submenu)
+                let verbose = try #require(menu.items.first {
+                    $0.identifier?.rawValue == "session.verbose"
+                }?.submenu)
+                if reuseMenu, let previousMenu {
+                    #expect(menu === previousMenu)
+                    #expect(thinking === previousThinking)
+                    #expect(verbose === previousVerbose)
+                }
+                for (preference, expected) in [(thinking, state.thinking), (verbose, state.verbose)] {
+                    let checked = preference.items.filter { $0.state == .on }.compactMap {
+                        ($0.representedObject as? [String: String])?["value"]
+                    }
+                    #expect(checked == expected)
+                }
+                previousMenu = menu
+                previousThinking = thinking
+                previousVerbose = verbose
+            }
+        }
+    }
+
     @Test(arguments: ["unchanged", "reconnect", "replacement", "failed-replacement"])
     func `session previews never reuse another Gateway history`(_ transition: String) async throws {
         try await self.withFixture { fixture in
@@ -331,6 +384,7 @@ private final class UsageGatewayFixture {
     let requests = LockIsolated<[Request]>([])
     let coldUsage = LockIsolated(false)
     let previewFails = LockIsolated(false)
+    let sessionPreferences = LockIsolated<[String: String]>([:])
     private let pendingCostResponses = LockIsolated<[String: [@Sendable () -> Void]]>(["A": [], "B": []])
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
@@ -344,6 +398,7 @@ private final class UsageGatewayFixture {
         let requests = self.requests
         let coldUsage = self.coldUsage
         let previewFails = self.previewFails
+        let sessionPreferences = self.sessionPreferences
         let pendingCostResponses = self.pendingCostResponses
         self.session = GatewayTestWebSocketSession(taskFactory: {
             let owner = revision.value == 1 ? "A" : "B"
@@ -387,10 +442,16 @@ private final class UsageGatewayFixture {
                     let daily = owner == "A" ? #"[{"date":"2026-09-03",\#(totals)}]"# : "[]"
                     payload = #"{"updatedAt":1800000000000,"days":30,"daily":\#(daily),"totals":{\#(totals)}}"#
                 case "sessions.list":
-                    payload = #"""
-                    {"path":"/synthetic/\#(owner)/sessions.json","sessions":[
-                    {"key":"main","displayName":"Gateway \#(owner)","kind":"direct"}]}
-                    """#
+                    var row = sessionPreferences.value
+                    row["key"] = "main"
+                    row["displayName"] = "Gateway \(owner)"
+                    row["kind"] = "direct"
+                    row["effectiveThinkingLevel"] = row["thinkingLevel"] ?? "high"
+                    let data = try JSONSerialization.data(withJSONObject: [
+                        "path": "/synthetic/\(owner)/sessions.json",
+                        "sessions": [row],
+                    ])
+                    payload = String(decoding: data, as: UTF8.self)
                 case "sessions.preview":
                     if previewFails.value {
                         let response = #"""
