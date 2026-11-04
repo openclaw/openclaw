@@ -1,0 +1,2 @@
+8
+# Reuse admitted immutable history without reinspection while checking appended messages.
