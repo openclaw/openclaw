@@ -3327,6 +3327,13 @@ describe("ci workflow guards", () => {
             runnerBackend: "hybrid",
             ref: "refs/heads/main",
             steps: {
+              runner_profile: {
+                outputs: runRunnerProfileFixture({
+                  configuredProfile: "hybrid",
+                  eventName,
+                  targetSupportsContract: true,
+                }).outputs,
+              },
               changed_scope: {
                 outputs: {
                   run_node: "true",
@@ -5348,7 +5355,7 @@ describe("ci workflow guards", () => {
     });
     expect(invalid.status).toBe(1);
     expect(invalid.output).toContain(
-      "OPENCLAW_CI_RUNNER_BACKEND must be github, hybrid, blacksmith, or runson",
+      "OPENCLAW_CI_RUNNER_BACKEND must be github, hybrid, blacksmith, runson, or boat",
     );
 
     const workflow = readCiWorkflow();
