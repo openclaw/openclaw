@@ -107,6 +107,10 @@ function inferMimeTypeFromBase64(base64: string): string | undefined {
   return undefined;
 }
 
+// Formats every image-capable provider accepts. Others (GIF, etc.) are re-encoded even
+// within limits; xAI rejects GIF outright, which would poison every replayed turn.
+const PROVIDER_SAFE_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
 function imageWithinLimits(
   buffer: Buffer,
   metadata: ImageMetadata | null,
@@ -236,7 +240,8 @@ export async function sanitizeContentBlocksImages(
         const overBytes = buf.byteLength > maxBytes;
         const overDimensions =
           meta !== null && (meta.width > maxDimensionPx || meta.height > maxDimensionPx);
-        if (imageWithinLimits(buf, meta, maxDimensionPx, maxBytes)) {
+        const providerSafe = PROVIDER_SAFE_IMAGE_MIME_TYPES.has(mimeType.toLowerCase());
+        if (providerSafe && imageWithinLimits(buf, meta, maxDimensionPx, maxBytes)) {
           // An unavailable backend passes images through unverified; never record that.
           if (cacheKey !== undefined && (await verifyImageDecodability(buf))) {
             verifiedImageOutcomes.set(cacheKey, null);
