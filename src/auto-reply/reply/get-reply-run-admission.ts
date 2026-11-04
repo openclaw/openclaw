@@ -510,6 +510,14 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     shouldFollowup,
     resetTriggered: effectiveResetTriggered,
   });
+  // Continuation (karmaterminal): a continue_work wake runs its own turn now or is refused, never
+  // queued or steered, where its driver cannot see it run and would run it again (RFC §5.4.2).
+  // Refusing before the system-event drain consumes nothing.
+  if (activeRunQueueAction === "enqueue-followup" && opts?.continuationTrigger === "work-wake") {
+    typing.cleanup();
+    opts.onWorkWakeRefused?.();
+    return { kind: "reply", reply: undefined } as const;
+  }
   if (isActive && activeRunQueueAction === "run-now") {
     const queueReply = await waitForPreparedReplyQueue({
       activeSessionId: activeSessionId ?? preparedSessionState.sessionId,
