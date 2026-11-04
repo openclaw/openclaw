@@ -204,6 +204,9 @@ async function createFixture(stateDir: string, agentDir: string) {
     );
   };
   return {
+    get config() {
+      return cfg;
+    },
     invoke,
     async addThroughService(job: CronJobCreate & { schedule: { kind: "cron"; expr: string } }) {
       const lease = createPluginRuntimeCapabilityLease("inference test");
