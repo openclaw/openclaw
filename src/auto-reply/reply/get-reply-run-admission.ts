@@ -517,9 +517,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     opts?.continuationTrigger === "work-wake" &&
     (isActive || activeRunQueueAction === "enqueue-followup")
   ) {
-    typing.cleanup();
     opts.onWorkWakeRefused?.();
-    return { kind: "reply", reply: undefined } as const;
+    return finishReplyPreparation(typing);
   }
   if (isActive && activeRunQueueAction === "run-now") {
     const queueReply = await waitForPreparedReplyQueue({
