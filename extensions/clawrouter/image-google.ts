@@ -12,6 +12,7 @@ import {
   postJsonRequest,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
+import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -23,7 +24,7 @@ import {
 export const GOOGLE_IMAGE_MODELS = ["google/gemini-3.1-flash-image", "google/gemini-3-pro-image"];
 const JSON_LIMIT = 8 * 1024 * 1024;
 const OUTPUT_LIMIT = 4 * 1024 * 1024;
-const IMAGE_MIMES = ["image/png", "image/jpeg", "image/webp"];
+const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp"]);
 export const GOOGLE_IMAGE_CAPABILITIES: ImageGenerationProvider["capabilities"] = {
   generate: {
     maxCount: 1,
@@ -69,7 +70,7 @@ export function qualifiedGoogleImageOffers(offers: ClawRouterCapabilityOffer[]) 
         offer.model.capabilities.includes("image.generate")
       );
     })
-    .sort((a, b) => Number(a.routeKind === "manifest") - Number(b.routeKind === "manifest"));
+    .toSorted((a, b) => Number(a.routeKind === "manifest") - Number(b.routeKind === "manifest"));
 }
 
 function validateRequest(req: ImageGenerationRequest) {
@@ -93,8 +94,9 @@ function validateRequest(req: ImageGenerationRequest) {
   ) {
     throw new Error("ClawRouter Google image geometry is unsupported");
   }
-  if ((req.inputImages?.length ?? 0) > 5)
+  if ((req.inputImages?.length ?? 0) > 5) {
     throw new Error("ClawRouter Google images accept at most five inline images");
+  }
   if (
     Buffer.byteLength(req.prompt, "utf8") > JSON_LIMIT ||
     (req.inputImages ?? []).reduce((total, image) => total + image.buffer.length, 0) >
@@ -104,7 +106,7 @@ function validateRequest(req: ImageGenerationRequest) {
   }
   for (const image of req.inputImages ?? []) {
     if (
-      !IMAGE_MIMES.includes(image.mimeType) ||
+      !IMAGE_MIMES.has(image.mimeType) ||
       !image.buffer.length ||
       image.buffer.length > JSON_LIMIT ||
       sniffImageMimeType(image.buffer, "").mimeType !== image.mimeType
@@ -130,8 +132,8 @@ function readQualifiedImages(payload: unknown) {
     if (candidate?.finishReason !== "STOP" || !Array.isArray(content?.parts)) {
       throw new Error("ClawRouter Google image response is incomplete");
     }
-    for (const value of content.parts) {
-      const part = asOptionalRecord(value);
+    for (const partValue of content.parts) {
+      const part = asOptionalRecord(partValue);
       const inline = asOptionalRecord(part?.inlineData ?? part?.inline_data);
       if (
         !part ||
@@ -141,7 +143,7 @@ function readQualifiedImages(payload: unknown) {
         (part.inlineData !== undefined && part.inline_data !== undefined) ||
         (inline &&
           (part.thought === true ||
-            !IMAGE_MIMES.includes(String(inline.mimeType ?? inline.mime_type)) ||
+            !IMAGE_MIMES.has(String(inline.mimeType ?? inline.mime_type)) ||
             (inline.mimeType !== undefined && inline.mime_type !== undefined)))
       ) {
         throw new Error("ClawRouter Google image response has an unqualified asset");
@@ -154,7 +156,7 @@ function readQualifiedImages(payload: unknown) {
     images.reduce((total, image) => total + image.buffer.length, 0) > OUTPUT_LIMIT ||
     images.some(
       (image) =>
-        !IMAGE_MIMES.includes(image.mimeType) ||
+        !IMAGE_MIMES.has(image.mimeType) ||
         sniffImageMimeType(image.buffer, "").mimeType !== image.mimeType,
     )
   ) {
@@ -208,8 +210,9 @@ export async function generateClawRouterGoogleImage(req: ImageGenerationRequest)
     capability: "image",
     signal: req.signal,
   });
-  if (!auth.apiKey || auth.mode !== "api-key")
+  if (!auth.apiKey || auth.mode !== "api-key") {
     throw new Error("ClawRouter key missing; native Google credentials are not used");
+  }
   const context = resolveClawRouterCapabilityHttpContext(req.cfg, auth.apiKey, "image");
   const offers = await fetchClawRouterCapabilityOffers({
     context,
@@ -218,9 +221,12 @@ export async function generateClawRouterGoogleImage(req: ImageGenerationRequest)
     ssrfPolicy: req.ssrfPolicy,
     requireFreshProxyCatalog: true,
   });
-  const offer = qualifiedGoogleImageOffers(offers).find((offer) => offer.model?.id === req.model);
-  if (!offer)
+  const offer = qualifiedGoogleImageOffers(offers).find(
+    (candidate) => candidate.model?.id === req.model,
+  );
+  if (!offer) {
     throw new Error("ClawRouter Google image model has no qualified current catalog offer");
+  }
   const envelope =
     offer.routeKind === "manifest" ? { body, pathParams: { model: offer.model!.upstream } } : body;
   const headers = new Headers(context.headers);
@@ -231,14 +237,15 @@ export async function generateClawRouterGoogleImage(req: ImageGenerationRequest)
     body: envelope,
     timeoutMs: remaining(),
     signal: req.signal,
-    fetchFn: (input, init) => fetch(input, { ...init, redirect: "error" }),
+    fetchFn: (input, init) => fetchWithRuntimeDispatcher(input, { ...init, redirect: "error" }),
     allowPrivateNetwork: context.allowPrivateNetwork,
     ssrfPolicy: mergeSsrFPolicies(req.ssrfPolicy, context.ssrfPolicy),
     dispatcherPolicy: context.dispatcherPolicy,
   });
   try {
-    if (response.status !== 200)
+    if (response.status !== 200) {
       throw new Error(`ClawRouter Google image generation failed (HTTP ${response.status})`);
+    }
     const payload = await readProviderJsonResponse(response, "clawrouter.google-image", {
       maxBytes: JSON_LIMIT,
       timeoutMs: remaining,

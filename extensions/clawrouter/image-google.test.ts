@@ -30,7 +30,13 @@ async function fixture(
     cfg: OpenClawConfig;
     catalog: ReturnType<typeof imageCatalog>;
     listCatalog: () => Promise<unknown>;
-    calls: Array<{ url: string; auth?: string; googleKey?: string; body: unknown }>;
+    calls: Array<{
+      url: string;
+      method?: string;
+      auth?: string;
+      googleKey?: string;
+      body: unknown;
+    }>;
     generate: (
       overrides?: Partial<Parameters<typeof generateImage>[0]>,
     ) => ReturnType<typeof generateImage>;
@@ -40,21 +46,33 @@ async function fixture(
   const captured = createCapturedPluginRegistration();
   plugin.register?.(captured.api);
   const catalog = imageCatalog();
-  const calls: Array<{ url: string; auth?: string; googleKey?: string; body: unknown }> = [];
+  const calls: Array<{
+    url: string;
+    method?: string;
+    auth?: string;
+    googleKey?: string;
+    body: unknown;
+  }> = [];
   await withServer(
     (req, res) => {
       void (async () => {
         const raw = await buffer(req);
         calls.push({
           url: req.url!,
+          method: req.method,
           auth: req.headers.authorization,
           googleKey: req.headers["x-goog-api-key"] as string | undefined,
           body: raw.length ? JSON.parse(raw.toString()) : undefined,
         });
         res.setHeader("content-type", "application/json");
-        if (req.url === "/v1/catalog") res.end(JSON.stringify(catalog));
-        else respond(res);
-      })().catch((error) => res.destroy(error));
+        if (req.url === "/v1/catalog") {
+          res.end(JSON.stringify(catalog));
+        } else {
+          respond(res);
+        }
+      })().catch((error: unknown) =>
+        res.destroy(error instanceof Error ? error : new Error(String(error))),
+      );
     },
     async (baseUrl) => {
       const cfg: OpenClawConfig = {
@@ -91,7 +109,7 @@ async function fixture(
             log: { warn() {} },
           },
         );
-      const listCatalog = () =>
+      const listCatalog = async () =>
         captured.modelCatalogProviders.find((provider) =>
           provider.kinds.includes("image_generation"),
         )!.liveCatalog!({
@@ -161,7 +179,9 @@ describe("ClawRouter native Google image consumer", () => {
       await fixture(async ({ catalog, calls, generate }) => {
         const offer = catalog.providers[0]!.offers[0]!;
         offer.routeKind = route;
-        if (route === "manifest") offer.route = "/v1/proxy/google-gemini/image_generate";
+        if (route === "manifest") {
+          offer.route = "/v1/proxy/google-gemini/image_generate";
+        }
         const result = await generate({
           inputImages: [{ buffer: PNG, mimeType: "image/png" }],
           aspectRatio: "16:9",
@@ -256,16 +276,33 @@ describe("ClawRouter native Google image consumer", () => {
     await fixture(async ({ catalog, calls, generate }) => {
       const provider = catalog.providers[0]!,
         route = provider.routes[0]!;
-      if (invalid === "stale") catalog.observedAt = "2000-01-01T00:00:00Z";
-      if (invalid === "scope") catalog.scope.authType = "access";
-      if (invalid === "revoked") provider.offers[0]!.eligible = false;
-      if (invalid === "model") provider.models[0]!.upstream = "gemini-3-flash-preview";
-      if (invalid === "capability") provider.models[0]!.capabilities = ["llm.chat"];
-      if (invalid === "request format") route.requestFormat = "google.generate_content";
-      if (invalid === "response format") route.responseFormat = "google.text";
-      if (invalid === "path") route.path = "/v1beta/models/${model}:streamGenerateContent";
-      if (invalid === "foreign origin")
+      if (invalid === "stale") {
+        catalog.observedAt = "2000-01-01T00:00:00Z";
+      }
+      if (invalid === "scope") {
+        catalog.scope.authType = "access";
+      }
+      if (invalid === "revoked") {
+        provider.offers[0]!.eligible = false;
+      }
+      if (invalid === "model") {
+        provider.models[0]!.upstream = "gemini-3-flash-preview";
+      }
+      if (invalid === "capability") {
+        provider.models[0]!.capabilities = ["llm.chat"];
+      }
+      if (invalid === "request format") {
+        route.requestFormat = "google.generate_content";
+      }
+      if (invalid === "response format") {
+        route.responseFormat = "google.text";
+      }
+      if (invalid === "path") {
+        route.path = "/v1beta/models/${model}:streamGenerateContent";
+      }
+      if (invalid === "foreign origin") {
         provider.offers[0]!.route = "https://foreign.example/generate";
+      }
       await expect(generate()).rejects.toThrow(/catalog|offer/);
       expect(calls).toHaveLength(1);
     });
@@ -280,9 +317,12 @@ describe("ClawRouter native Google image consumer", () => {
     "missing proxy key",
   ])("denies %s before catalog or paid dispatch", async (invalid) => {
     await fixture(async ({ cfg, calls, generate }) => {
-      if (invalid === "foreign credential")
+      if (invalid === "foreign credential") {
         cfg.models!.providers!.clawrouter!.headers = { "x-goog-api-key": "synthetic-foreign" };
-      if (invalid === "missing proxy key") delete cfg.models!.providers!.clawrouter!.apiKey;
+      }
+      if (invalid === "missing proxy key") {
+        delete cfg.models!.providers!.clawrouter!.apiKey;
+      }
       await expect(
         generate({
           ...(invalid === "count" ? { count: 2 } : {}),
@@ -314,15 +354,20 @@ describe("ClawRouter native Google image consumer", () => {
         },
         (res) => {
           const body = payload();
-          if (invalid === "partial") body.candidates[0]!.finishReason = "MAX_TOKENS";
-          if (invalid === "thought")
+          if (invalid === "partial") {
+            body.candidates[0]!.finishReason = "MAX_TOKENS";
+          }
+          if (invalid === "thought") {
             Object.assign(body.candidates[0]!.content.parts[0]!, { thought: true });
-          if (invalid === "missing MIME")
+          }
+          if (invalid === "missing MIME") {
             body.candidates[0]!.content.parts[0]!.inlineData.mimeType = "";
-          if (invalid === "invalid sibling")
+          }
+          if (invalid === "invalid sibling") {
             body.candidates[0]!.content.parts.push({
               inlineData: { mimeType: "image/png", data: "bad" },
             });
+          }
           res.end(JSON.stringify(body));
         },
       );
@@ -337,16 +382,17 @@ describe("ClawRouter native Google image consumer", () => {
       },
       (res) => {
         const body = payload();
-        if (bound === "output bytes")
+        if (bound === "output bytes") {
           body.candidates[0]!.content.parts[0]!.inlineData.data = Buffer.concat([
             PNG,
             Buffer.alloc(4 * 1024 * 1024),
           ]).toString("base64");
-        else
+        } else {
           body.candidates[0]!.content.parts = Array.from(
             { length: 5 },
             () => payload().candidates[0]!.content.parts[0]!,
           );
+        }
         res.end(JSON.stringify(body));
       },
     );
@@ -381,18 +427,59 @@ describe("ClawRouter native Google image consumer", () => {
     );
   });
 
-  it("does not follow redirects or reflect proxy credentials", async () => {
-    await fixture(
-      async ({ calls, generate }) => {
-        const error = await generate().catch((error: unknown) => error);
-        expect(String(error)).not.toContain("synthetic-router");
-        expect(String(error)).toMatch(/redirect|fetch/i);
-        expect(calls).toHaveLength(2);
+  it.each([
+    ["native", "same-origin"],
+    ["manifest", "same-origin"],
+    ["native", "second-server"],
+    ["manifest", "second-server"],
+  ])("rejects %s image redirects to %s without credential egress", async (route, destination) => {
+    let destinationRequests = 0;
+    await withServer(
+      (_req, res) => {
+        destinationRequests++;
+        res.end(JSON.stringify(payload()));
       },
-      (res) => {
-        res.statusCode = 307;
-        res.setHeader("location", "https://foreign.example/result");
-        res.end();
+      async (destinationOrigin) => {
+        await fixture(
+          async ({ catalog, calls, generate }) => {
+            const offer = catalog.providers[0]!.offers[0]!;
+            offer.routeKind = route;
+            if (route === "manifest") {
+              offer.route = "/v1/proxy/google-gemini/image_generate";
+            }
+            const error = await generate().catch((caught: unknown) => caught);
+            expect(String(error)).not.toContain("synthetic-router");
+            expect(String(error)).toMatch(/redirect|fetch/i);
+            const generationPosts = calls.filter((call) => call.method === "POST");
+            expect(generationPosts).toHaveLength(1);
+            expect(generationPosts[0]).toMatchObject({
+              url:
+                route === "manifest"
+                  ? "/v1/proxy/google-gemini/image_generate"
+                  : "/v1/native/google-gemini/v1beta/models/gemini-3.1-flash-image:generateContent",
+              auth: "Bearer synthetic-router",
+              googleKey: undefined,
+            });
+            expect(calls).toHaveLength(2);
+            expect(calls.some((call) => call.url === "/redirect-target")).toBe(false);
+            expect(destinationRequests).toBe(0);
+          },
+          (res) => {
+            if (res.req.url === "/redirect-target") {
+              destinationRequests++;
+              res.end(JSON.stringify(payload()));
+              return;
+            }
+            res.statusCode = 307;
+            res.setHeader(
+              "location",
+              destination === "same-origin"
+                ? "/redirect-target"
+                : `${destinationOrigin}/redirect-target`,
+            );
+            res.end();
+          },
+        );
       },
     );
   });
