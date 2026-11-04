@@ -22,7 +22,9 @@ import {
 import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -42,6 +44,8 @@ import {
   createUsageTranscriptEntry as assistantEntry,
   encodeOversizedUsageRollup,
 } from "./session-cost-usage-fixtures.test-support.js";
+import { usageCostPartitionKey } from "./session-cost-usage-partitions.js";
+import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
 import {
   observeUsageWorkerReads,
   withUsageWorkerPreload,
@@ -146,11 +150,7 @@ it("reads recorded usage across append, rewrite, and rollup replacement without 
         sessionId: "usage-rewrite",
         storePath: database.path,
       });
-      const sessionFile = formatSqliteSessionFileMarker({
-        agentId: scope.agentId,
-        sessionId: scope.sessionId,
-        storePath: database.path,
-      });
+      const sessionFile = formatSqliteSessionFileMarker({ ...scope, storePath: database.path });
       const refresh = () => refreshUsage({ agentId: "main", sessionFiles: [sessionFile] });
       const cached = (reportBudgetBytes?: number) =>
         loadCached({
@@ -272,6 +272,191 @@ it("reads recorded usage across append, rewrite, and rollup replacement without 
     });
   });
 });
+
+it("filters refresh work before reading historical transcripts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { archive, encoded } = await writeArchive(state.stateDir, "excluded-archive");
+    const { archive: recordedArchive } = await writeArchive(state.stateDir, "recorded-archive");
+    const probe = await observeUsageWorkerReads(state.stateDir, [archive, recordedArchive]);
+    await probe.run(async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const historical = ["uncached-history", "recorded-history"].map((sessionId) => {
+        const scope = resolveSqliteTranscriptScope({
+          agentId: "main",
+          sessionKey: `agent:main:${sessionId}`,
+          sessionId,
+          storePath: database.path,
+        });
+        return {
+          scope,
+          sessionFile: formatSqliteSessionFileMarker({ ...scope, storePath: database.path }),
+        };
+      });
+      const transact = <T>(write: (owner: typeof database) => T) =>
+        runOpenClawAgentWriteTransaction(write, { agentId: "main", path: database.path });
+      for (const { scope } of historical) {
+        transact((owner) => {
+          writeSessionEntry(owner, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+          appendTranscriptEventsInTransaction(
+            owner,
+            scope,
+            [
+              { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId },
+              { ...assistantEntry(10, { cost: 1 }), id: "first", parentId: null },
+            ],
+            { scheduleProjectionReconcile: false },
+          );
+        });
+      }
+      const oversized = encodeSessionArchiveContent("x".repeat(2 * 1024 * 1024));
+      await fs.writeFile(archive, oversized.bytes);
+      await probe.clear();
+      await expect(refreshUsage({ agentId: "main" })).rejects.toThrow(/decompressed bytes/);
+      await expectNoRead(probe, "transcript-stats");
+      await fs.writeFile(archive, encoded.bytes);
+      const sessions = await writeSessions(
+        await sessionsDirectory(state.stateDir),
+        ["current", "quarter-gap", "removed"],
+        (index) => assistantEntry(index + 2, { cost: 1 }),
+      );
+      const current = sessions[0]!;
+      const gap = sessions[1]!;
+      const recorded = historical[1]!;
+      await refreshUsage({
+        agentId: "main",
+        sessionFiles: [recorded.sessionFile, recordedArchive, ...sessionPaths(sessions)],
+      });
+      const retained = storedRollup(recorded.sessionFile);
+      const archiveReadPath = materializeSessionArchiveForRead(recordedArchive);
+      const retainedArchive = storedRollup(archiveReadPath);
+      await fs.rm(archiveReadPath);
+      const quarterKey = usageCostPartitionKey(gap.sessionFile, "2026-09-01");
+      transact((owner) => {
+        owner.db
+          .prepare("DELETE FROM cache_entries WHERE scope = ? AND key = ?")
+          .run(USAGE_COST_QUARTER_SCOPE, quarterKey);
+        appendTranscriptEventsInTransaction(
+          owner,
+          recorded.scope,
+          [{ ...assistantEntry(7, { cost: 1 }), id: "second", parentId: "first" }],
+          { scheduleProjectionReconcile: false },
+        );
+      });
+      await fs.rm(sessions[2]!.sessionFile);
+      await fs.appendFile(
+        current.sessionFile,
+        JSON.stringify(assistantEntry(2, { cost: 1 })) + "\n",
+      );
+      // Keep the SQLite owner's mutation timestamps intact; only this file is in range.
+      const startMs = Date.now() + 86_400_000;
+      await fs.utimes(current.sessionFile, new Date(startMs), new Date(startMs));
+      await probe.clear();
+      expect(await refreshUsage({ agentId: "main", startMs })).toBe("refreshed");
+      await expectNoRead(probe, "transcript-stats");
+      await expectNoRead(probe);
+      expect(storedRollup(recorded.sessionFile)).toEqual(retained);
+      expect(storedRollup(archiveReadPath)).toEqual(retainedArchive);
+      expect(
+        readRows("main")
+          .map((row) => row.key)
+          .toSorted(),
+      ).toEqual(
+        [recorded.sessionFile, archiveReadPath, current.sessionFile, gap.sessionFile].toSorted(),
+      );
+      expect(
+        database.db
+          .prepare("SELECT count(*) AS count FROM cache_entries WHERE scope = ? AND key = ?")
+          .get(USAGE_COST_QUARTER_SCOPE, quarterKey),
+      ).toEqual({ count: 1 });
+      expect(
+        await loadCached({
+          agentId: "main",
+          sessions: [current, gap],
+          requestRefresh: false,
+        }),
+      ).toMatchObject({ summaries: [{ totalTokens: 4 }, { totalTokens: 3 }] });
+
+      await probe.clear();
+      await refreshUsage({ agentId: "main", startMs, sessionFiles: [recorded.sessionFile] });
+      expect((await probe.read()).some((entry) => entry.kind === "transcript-stats")).toBe(true);
+      expect(
+        await loadCached({
+          agentId: "main",
+          sessions: [{ sessionFile: recorded.sessionFile }],
+          requestRefresh: false,
+        }),
+      ).toMatchObject({ summaries: [{ totalTokens: 17 }], cacheStatus: { status: "fresh" } });
+    });
+  });
+});
+
+it.each(["table-missing", "schema-missing"] as const)(
+  "preserves usage rollups when source metadata is unavailable (%s)",
+  async (reason) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const source = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: state.path("usage-source.sqlite"),
+      });
+      const scope = resolveSqliteTranscriptScope({
+        agentId: "main",
+        sessionKey: "agent:main:unavailable-source",
+        sessionId: "unavailable-source",
+        storePath: source.path,
+      });
+      const sessionFile = formatSqliteSessionFileMarker({ ...scope, storePath: source.path });
+      const params = { agentId: "main", storePath: source.path };
+      const append = (events: Parameters<typeof appendTranscriptEventsInTransaction>[2]) =>
+        runOpenClawAgentWriteTransaction(
+          (owner) =>
+            appendTranscriptEventsInTransaction(owner, scope, events, {
+              scheduleProjectionReconcile: false,
+            }),
+          { agentId: "main", path: source.path },
+        );
+      append([
+        { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId },
+        { ...assistantEntry(10, { cost: 1 }), id: "first", parentId: null },
+      ]);
+      await refreshUsage({ ...params, sessionFiles: [sessionFile] });
+      const before = readRows("main");
+      expect(before).toHaveLength(1);
+      const pricingFingerprint = JSON.parse(before[0]!.valueJson).pricingFingerprint as string;
+      append([{ ...assistantEntry(7, { cost: 1 }), id: "second", parentId: "first" }]);
+      const table = reason === "table-missing" ? "transcript_events" : "schema_meta";
+      source.db.exec(`ALTER TABLE ${table} RENAME TO unavailable_usage_source`);
+      try {
+        await expect(refreshUsage(params)).rejects.toMatchObject({
+          name: "SessionMetadataUnavailableError",
+          reason,
+        });
+        expect(readRows("main")).toEqual(before);
+        await expect(
+          runUsageCostWorker(prepareUsageCostWorker(params), {
+            kind: "summary",
+            pricingFingerprint,
+            startMs: 0,
+            endMs: Date.now(),
+            dayBucket: utcBucket,
+          }),
+        ).resolves.toMatchObject({
+          kind: "summary",
+          summary: { totals: { totalTokens: 0 } },
+        });
+        expect(readRows("main")).toEqual(before);
+      } finally {
+        source.db.exec(`ALTER TABLE unavailable_usage_source RENAME TO ${table}`);
+      }
+      if (reason === "table-missing") {
+        await closeOpenClawAgentDatabaseByPathAsync(source.path);
+        unregisterOpenClawAgentDatabase({ agentId: "main", path: source.path });
+        await fs.rm(source.path);
+        expect(await refreshUsage(params)).toBe("refreshed");
+        expect(readRows("main")).toEqual([]);
+      }
+    });
+  },
+);
 
 it.each(["zstd", "plain"] as const)(
   "inventories %s archives without reading payloads and materializes only for a summary",

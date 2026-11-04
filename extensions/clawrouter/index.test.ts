@@ -551,6 +551,13 @@ describe("ClawRouter plugin", () => {
     ],
     ["google-generative-ai", "google/gemini-3.5-flash", { validateGeminiTurns: true }],
     ["openai-completions", "deepseek/deepseek-v4-flash", { sanitizeToolCallIds: true }],
+    [
+      "openai-completions",
+      "mistral/mistral-large-latest",
+      { sanitizeToolCallIds: true, toolCallIdMode: "strict9" },
+    ],
+    ["openai-completions", "openrouter/mistralai/large", { toolCallIdMode: "strict" }],
+    ["openai-responses", "mistral/mistral-large-latest", { toolCallIdMode: "strict" }],
   ])("dispatches replay policy for %s", (modelApi, modelId, expected) => {
     expect(
       provider.buildReplayPolicy?.({ provider: "clawrouter", modelApi, modelId } as never),

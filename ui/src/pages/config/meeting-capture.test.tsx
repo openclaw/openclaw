@@ -575,8 +575,8 @@ describe("curated meeting capture", () => {
     await expectSaved(runtimeConfig, request, [
       { providerId: "test-voice", guildId: "second-guild", channelId: "second-room" },
     ]);
-    flush();
-    click(page, "Add source");
+    await waitForSolid(() => expect(settingsButton(page, "Add source").disabled).toBe(false));
+    click(page, "Add source", true);
     expect(providerSelect(page).value).toBe("");
     input(page, "title", "Discard this draft");
     click(page, "Cancel");

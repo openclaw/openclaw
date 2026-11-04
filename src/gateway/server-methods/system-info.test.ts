@@ -61,6 +61,8 @@ vi.mock("../../infra/advertised-lan-host.js", async (importOriginal) => ({
 
 import { systemHandlers } from "./system.js";
 
+const adminClient = { connect: { scopes: ["operator.admin"] } };
+
 describe("system.info", () => {
   let sampleTime = Date.now();
   beforeEach(() => {
@@ -107,6 +109,7 @@ describe("system.info", () => {
     const request = {
       params: {},
       respond,
+      client: adminClient,
       context: {
         ...createModelsListTestContext({
           cfg: { gateway: { port: 18789 } },
@@ -212,6 +215,7 @@ describe("system.info", () => {
         handler({
           params: {},
           respond,
+          client: adminClient,
           context: createModelsListTestContext({
             cfg: config,
             catalog: [providerCatalogEntry("custom", "small")],
@@ -247,6 +251,7 @@ describe("system.info", () => {
       const request = {
         params: {},
         respond,
+        client: adminClient,
         context: createModelsListTestContext({ cfg: {}, catalog: [] }),
       } as unknown as GatewayRequestHandlerOptions;
       const handler = expectDefined(systemHandlers["system.info"], "system.info handler");
@@ -296,6 +301,7 @@ describe("system.info", () => {
     )({
       params: {},
       respond,
+      client: adminClient,
       context: createModelsListTestContext({ cfg: {}, catalog: [] }),
     } as unknown as GatewayRequestHandlerOptions);
 
@@ -335,6 +341,7 @@ describe("system.info", () => {
       )({
         params: {},
         respond,
+        client: adminClient,
         context: createModelsListTestContext({ cfg: {}, catalog: [] }),
       } as unknown as GatewayRequestHandlerOptions);
       const [ok, payload] = respond.mock.calls[0] ?? [];
@@ -349,4 +356,45 @@ describe("system.info", () => {
       );
     },
   );
+
+  it("withholds host paths from read-only callers while keeping state-volume capacity", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/home/operator/.openclaw-private");
+    vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+      targetPath,
+      checkedPath: targetPath,
+      totalBytes: 4096,
+      availableBytes: 1024,
+    }));
+    const handler = expectDefined(systemHandlers["system.info"], "system.info handler");
+    const respond = vi.fn();
+    // Unavailable native discovery exercises the state-directory fallback entry too.
+    mocks.runCommandWithTimeout.mockRejectedValueOnce(new Error("unavailable"));
+    for (const scopes of [["operator.read"], ["operator.read", "operator.admin"]]) {
+      await handler({
+        params: {},
+        respond,
+        client: { connect: { scopes } },
+        context: createModelsListTestContext({ cfg: {}, catalog: [] }),
+      } as unknown as GatewayRequestHandlerOptions);
+    }
+
+    const payloads = respond.mock.calls.map(([ok, payload]) => {
+      expect(ok).toBe(true);
+      if (!validateSystemInfoResult(payload)) {
+        throw new Error("system.info returned an invalid payload");
+      }
+      return payload;
+    });
+    const readOnly = expectDefined(payloads[0], "read-only system.info payload");
+    const admin = expectDefined(payloads[1], "admin system.info payload");
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(readOnly)).not.toContain("/home/operator");
+    expect(readOnly.diskPath).toBeUndefined();
+    expect(readOnly.disks).toBeUndefined();
+    expect(readOnly).toMatchObject({ diskTotalBytes: 4096, diskAvailableBytes: 1024 });
+    expect(admin).toMatchObject({
+      diskPath: "/home/operator/.openclaw-private",
+      disks: [{ path: "/home/operator/.openclaw-private", totalBytes: 4096, availableBytes: 1024 }],
+    });
+  });
 });

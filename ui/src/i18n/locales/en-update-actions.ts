@@ -6,7 +6,8 @@ import { en } from "./en.ts";
 const enUpdateActions = {
   updates: {
     adminRequired: "Administrator access is required to change update settings or start an update.",
-    refreshFailed: "Could not refresh. Check your connection and try again.",
+    refreshUnreachable: "Couldn't reach the server",
+    refreshBlocked: "Finish pending work first",
     campaign: en.updates.campaign,
     holdOneHour: "Hold 1 h",
     reviewUpdate: "Review update",
@@ -168,12 +169,19 @@ export const registerUpdateActionsEnglish = Object.assign(
       triage,
       report,
       adminRequired,
-      refreshFailed,
+      refreshUnreachable,
+      refreshBlocked,
       holdOneHour,
       reviewUpdate,
     } = enUpdateActions.updates;
     const { phase, ...runLabels } = run;
-    Object.assign(en.updates, { adminRequired, refreshFailed, holdOneHour, reviewUpdate });
+    Object.assign(en.updates, {
+      adminRequired,
+      refreshUnreachable,
+      refreshBlocked,
+      holdOneHour,
+      reviewUpdate,
+    });
     Object.assign(en.updates.run, runLabels);
     Object.assign(en.updates.run.phase, phase);
     Object.assign(en.updates.target, target);
