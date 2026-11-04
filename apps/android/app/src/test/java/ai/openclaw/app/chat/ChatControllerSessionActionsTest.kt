@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -25,6 +26,101 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class ChatControllerSessionActionsTest {
   private val json = Json { ignoreUnknownKeys = true }
+
+  @Test
+  fun categoryPatchCannotFollowGatewayAfterTransportWait() =
+    runTest {
+      var gatewayScope = ChatCacheScope("original", 1L)
+      val entered = CompletableDeferred<Unit>()
+      val release = CompletableDeferred<Unit>()
+      val effects = mutableListOf<String>()
+
+      suspend fun dispatch(
+        method: String,
+        captured: ChatCacheScope?,
+      ): String {
+        if (method != "sessions.patch") return """{"sessions":[]}"""
+        entered.complete(Unit)
+        release.await()
+        val target = captured ?: gatewayScope
+        if (target != gatewayScope) throw GatewayRequestNotEnqueued("Gateway changed")
+        effects += target.gatewayId
+        return "{}"
+      }
+      val controller =
+        ChatController(
+          scope = this,
+          commandOutbox = createChatCommandOutbox(),
+          json = json,
+          cacheScope = { gatewayScope },
+          requestGateway = { method, _ -> dispatch(method, null) },
+          captureRequestLease = { captured ->
+            captured?.let { owner ->
+              GatewaySession.RequestLease(endpointStableId = owner.gatewayId, isCurrentImpl = { owner == gatewayScope }) { method, _, _, _ ->
+                dispatch(method, owner)
+              }
+            }
+          },
+        )
+      controller.outboxPresentationRestored.first { it }
+      val patch = async { controller.patchSession(ChatSessionPatch(key = "agent:main:main", ownerAgentId = "main", category = "Shared")) }
+      entered.await()
+      gatewayScope = ChatCacheScope("replacement", 2L)
+      release.complete(Unit)
+      assertFalse(patch.await())
+      assertTrue(effects.isEmpty())
+    }
+
+  @Test
+  fun createAndAssignRetainsGatewayAndCredentialGenerationAcrossCatalogReload() =
+    runTest {
+      for (replacement in listOf(ChatCacheScope("replacement", 2L), ChatCacheScope("original", 2L))) {
+        var gatewayScope = ChatCacheScope("original", 1L)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val assignments = mutableListOf<String>()
+        val controller =
+          ChatController(
+            scope = this,
+            commandOutbox = createChatCommandOutbox(),
+            json = json,
+            cacheScope = { gatewayScope },
+            requestGateway = { method, _ ->
+              if (method == "sessions.patch") assignments += gatewayScope.gatewayId
+              "{}"
+            },
+            captureRequestLease = { captured ->
+              captured?.let { owner ->
+                GatewaySession.RequestLease(endpointStableId = owner.gatewayId, isCurrentImpl = { owner == gatewayScope }) { method, _, _, _ ->
+                  when (method) {
+                    "sessions.groups.list" -> {
+                      entered.complete(Unit)
+                      release.await()
+                      """{"groups":[{"name":"Shared","position":0}],"sectionOrder":[]}"""
+                    }
+
+                    "sessions.patch" -> {
+                      assignments += owner.gatewayId
+                      "{}"
+                    }
+
+                    else -> {
+                      "{}"
+                    }
+                  }
+                }
+              }
+            },
+          )
+        controller.outboxPresentationRestored.first { it }
+        val action = async { runCatching { controller.createSessionGroupForSession("Shared", "agent:main:main", "main", "original") } }
+        entered.await()
+        gatewayScope = replacement
+        release.complete(Unit)
+        assertTrue(action.await().isFailure)
+        assertTrue(assignments.isEmpty())
+      }
+    }
 
   private suspend fun controller(
     scope: kotlinx.coroutines.CoroutineScope,

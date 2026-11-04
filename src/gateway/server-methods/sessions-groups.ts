@@ -22,6 +22,7 @@ import {
   putSessionGroups,
   renameSessionGroup,
   SessionGroupNotEmptyError,
+  SessionGroupCatalogConflictError,
   SessionGroupNotFoundError,
   updateSessionGroupDefaults,
 } from "../session-groups.js";
@@ -41,6 +42,11 @@ function sessionGroupMutationError(
 ) {
   if (error instanceof SessionMutationAuthorizationChangedError) {
     throw error;
+  }
+  if (error instanceof SessionGroupCatalogConflictError) {
+    return errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+      details: { code: "SESSION_GROUP_CATALOG_CHANGED" },
+    });
   }
   return inputError && error instanceof inputError
     ? errorShape(ErrorCodes.INVALID_REQUEST, error.message)
@@ -92,6 +98,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       const groups = await putSessionGroups({
         cfg: context.getRuntimeConfig(),
         names: params.names,
+        expected: params.expected,
         sectionOrder: params.sectionOrder,
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
         assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,

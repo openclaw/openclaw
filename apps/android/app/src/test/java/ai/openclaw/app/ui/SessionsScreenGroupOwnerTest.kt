@@ -6,6 +6,7 @@ import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.chat.SessionGroupCatalogSnapshot
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.drainWithMainLooper
 import ai.openclaw.app.gateway.GatewayRegistryEntry
@@ -56,8 +57,11 @@ class SessionsScreenGroupOwnerTest {
     }
     prefs.gatewayRegistry.setActive(originalGateway)
     val group = "Owner-bound group"
-    prefs.setSessionCustomGroups(listOf(group))
     val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+    val catalog = ReflectionHelpers.getField<MutableStateFlow<SessionGroupCatalogSnapshot>>(runtime.chat, "sessionGroupCatalogMutable")
+    val originalCatalog = SessionGroupCatalogSnapshot(listOf(group))
+    val replacementCatalog = SessionGroupCatalogSnapshot(listOf("Replacement group"))
+    catalog.value = originalCatalog
     val models = ViewModelStore()
     val mounted = mutableStateOf(true)
     var replaceGatewayWhenDisposed = false
@@ -71,7 +75,10 @@ class SessionsScreenGroupOwnerTest {
         if (mounted.value) {
           DisposableEffect(Unit) {
             onDispose {
-              if (replaceGatewayWhenDisposed) prefs.gatewayRegistry.setActive(replacementGateway)
+              if (replaceGatewayWhenDisposed) {
+                prefs.gatewayRegistry.setActive(replacementGateway)
+                catalog.value = replacementCatalog
+              }
             }
           }
           ClawDesignTheme(dark = true) {
@@ -86,7 +93,10 @@ class SessionsScreenGroupOwnerTest {
           composeRule.onNodeWithText(title).assertIsDisplayed()
         }
 
-        composeRule.runOnIdle { prefs.gatewayRegistry.setActive(originalGateway) }
+        composeRule.runOnIdle {
+          prefs.gatewayRegistry.setActive(originalGateway)
+          catalog.value = originalCatalog
+        }
         openDialog()
         if (action == "Rename") composeRule.onNode(hasSetTextAction() and hasAnyAncestor(isDialog())).performTextReplacement("Renamed group")
         val confirm =
@@ -99,13 +109,17 @@ class SessionsScreenGroupOwnerTest {
           )
         composeRule.runOnIdle {
           prefs.gatewayRegistry.setActive(replacementGateway)
+          catalog.value = replacementCatalog
           // Invoke the real registered button before recomposition can retire its dialog.
           confirm()
         }
-        composeRule.runOnIdle { assertEquals("Stale $action must not change app-global groups", listOf(group), prefs.sessionCustomGroups.value) }
+        composeRule.runOnIdle { assertEquals("Stale $action must not change the replacement catalog", replacementCatalog, catalog.value) }
         composeRule.onNodeWithText(title).assertDoesNotExist()
 
-        composeRule.runOnIdle { prefs.gatewayRegistry.setActive(originalGateway) }
+        composeRule.runOnIdle {
+          prefs.gatewayRegistry.setActive(originalGateway)
+          catalog.value = originalCatalog
+        }
         openDialog()
         restoration.emulateSavedInstanceStateRestore()
         composeRule.onNodeWithText(title).assertIsDisplayed()
@@ -114,7 +128,7 @@ class SessionsScreenGroupOwnerTest {
         restoration.emulateSavedInstanceStateRestore()
         replaceGatewayWhenDisposed = false
         composeRule.onNodeWithText(title).assertDoesNotExist()
-        composeRule.runOnIdle { assertEquals(listOf(group), prefs.sessionCustomGroups.value) }
+        composeRule.runOnIdle { assertEquals(replacementCatalog, catalog.value) }
       }
     } finally {
       replaceGatewayWhenDisposed = false

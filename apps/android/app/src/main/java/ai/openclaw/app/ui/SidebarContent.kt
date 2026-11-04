@@ -58,6 +58,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -479,16 +480,40 @@ internal fun OpenClawSidebar(
   val lifecycle = LocalLifecycleOwner.current.lifecycle
   val scrollState = rememberScrollState()
   val agentPicker = agentPickerState(agents, selectedAgentId)
-  val localGroups by viewModel.sessionCustomGroups.collectAsState()
   val groupCatalog by viewModel.sessionGroupCatalog.collectAsState()
   val rosterHasMore by viewModel.sessionRosterHasMore.collectAsState()
   val rosterLoadingMore by viewModel.sessionRosterLoadingMore.collectAsState()
   val rosterLoadFailed by viewModel.sessionRosterLoadFailed.collectAsState()
-  val storedGroups = (groupCatalog.names + localGroups).distinct()
+  val storedGroups = groupCatalog.names
   val questions by viewModel.chatQuestions.collectAsState()
   val approvalInbox by viewModel.execApprovalInbox.collectAsState()
   val defaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
   val gatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  var reorderSections by remember(gatewayStableId) { mutableStateOf(false) }
+  var reorderPending by remember(gatewayStableId) { mutableStateOf(false) }
+  var groupMutationError by remember(gatewayStableId) { mutableStateOf<String?>(null) }
+
+  fun moveSharedSection(
+    section: String,
+    anchor: String,
+    before: Boolean,
+  ) {
+    if (reorderPending) return
+    val expectedGatewayId = gatewayStableId
+    reorderPending = true
+    scope.launch {
+      ai.openclaw.app.chat
+        .runCatchingCancellable {
+          viewModel.reorderChatSessionSection(section, anchor, before, expectedGatewayId)
+        }.onFailure {
+          if (expectedGatewayId == viewModel.activeGatewayStableId.value) groupMutationError = it.message ?: "Folder update failed"
+        }
+      if (expectedGatewayId == viewModel.activeGatewayStableId.value) reorderPending = false
+    }
+  }
+  groupMutationError?.let { message ->
+    SessionGroupMutationError(message, onDismiss = { groupMutationError = null })
+  }
   val attentionRequests = remember(questions, approvalInbox, defaultAgentId) { sidebarAttentionRequests(questions, approvalInbox.approvals, defaultAgentId) }
 
   fun attentionFor(keys: Collection<String>): SidebarAttention? {
@@ -860,7 +885,21 @@ internal fun OpenClawSidebar(
             }
           }
 
-          for (token in sectionOrder) {
+          TextButton(onClick = { reorderSections = !reorderSections }) {
+            Text(nativeString(if (reorderSections) "Done" else "Reorder sections"))
+          }
+          for ((index, token) in sectionOrder.withIndex()) {
+            if (reorderSections) {
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(token.removePrefix("category:").removePrefix("catalog:"), modifier = Modifier.weight(1f), maxLines = 1)
+                TextButton(enabled = !reorderPending && index > 0, onClick = {
+                  moveSharedSection(token, sectionOrder[index - 1], true)
+                }) { Text(nativeString("Move up")) }
+                TextButton(enabled = !reorderPending && index < sectionOrder.lastIndex, onClick = {
+                  moveSharedSection(token, sectionOrder[index + 1], false)
+                }) { Text(nativeString("Move down")) }
+              }
+            }
             when {
               token.startsWith("catalog:") -> {
                 val section = catalogSections.firstOrNull { it.catalog.id == token.removePrefix("catalog:") }

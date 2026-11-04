@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { SessionGroupNotEmptyError, SessionGroupNotFoundError } from "../session-groups.js";
+import {
+  SessionGroupCatalogConflictError,
+  SessionGroupNotEmptyError,
+  SessionGroupNotFoundError,
+} from "../session-groups.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -83,6 +87,21 @@ beforeEach(() => {
 });
 
 describe("sessions.groups.put", () => {
+  it("returns an explicit catalog conflict without emitting a change", async () => {
+    const expected = { names: ["Keep"], sectionOrder: ["ungrouped"] };
+    groupMocks.put.mockRejectedValue(new SessionGroupCatalogConflictError());
+    const h = groupRequest("sessions.groups.put", { names: ["Keep"], expected });
+    const subscribers = vi.fn(() => new Set<string>());
+    h.options.context.getSessionEventSubscriberConnIds = subscribers;
+    await h.invoke();
+    expectFailure(h.respond, {
+      code: "INVALID_REQUEST",
+      details: { code: "SESSION_GROUP_CATALOG_CHANGED" },
+    });
+    expect(groupMocks.put).toHaveBeenCalledWith(expect.objectContaining({ expected }));
+    expect(subscribers).not.toHaveBeenCalled();
+  });
+
   it("rejects dropping a non-empty group as an invalid request", async () => {
     const error = new SessionGroupNotEmptyError([{ name: "Gone", memberSessions: 1 }]);
     groupMocks.put.mockRejectedValue(error);

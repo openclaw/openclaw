@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSessionPatch
 import ai.openclaw.app.chat.SessionSnooze
 import ai.openclaw.app.chat.isSessionRunActive
+import ai.openclaw.app.chat.runCatchingCancellable
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawLoadingState
@@ -129,7 +130,7 @@ internal fun SessionsScreen(
   var deleteGroupTarget by key("delete-group-owner") {
     rememberSaveable(stateSaver = SessionGroupActionTargetSaver) { mutableStateOf<SessionGroupActionTarget?>(null) }
   }
-  var newGroupDialogVisible by rememberSaveable { mutableStateOf(false) }
+  var newGroupDialogVisible by rememberSaveable(activeGatewayStableId) { mutableStateOf(false) }
   val searchState =
     rememberSessionBrowserSearchState(
       viewModel = viewModel,
@@ -146,7 +147,9 @@ internal fun SessionsScreen(
       nowMs = sessionStatusNowMs,
     )
   val nextAttentionExpiry = nextSessionStatusExpiry(searchState.entries, sessionStatusNowMs)
-  val storedGroups by viewModel.sessionCustomGroups.collectAsState()
+  val groupCatalog by viewModel.sessionGroupCatalog.collectAsState()
+  val storedGroups = groupCatalog.names
+  var groupMutationError by remember(activeGatewayStableId) { mutableStateOf<String?>(null) }
   val sections =
     buildSessionTreeSections(
       entries = visibleSessions,
@@ -167,6 +170,10 @@ internal fun SessionsScreen(
     deleteSessionTarget = deleteSessionTarget?.takeIf { it.matchesGateway(activeGatewayStableId) }
     renameGroupTarget = renameGroupTarget?.takeIf { it.gatewayStableId == activeGatewayStableId }
     deleteGroupTarget = deleteGroupTarget?.takeIf { it.gatewayStableId == activeGatewayStableId }
+  }
+
+  LaunchedEffect(isConnected, activeGatewayStableId) {
+    if (isConnected) viewModel.refreshSessionGroups()
   }
 
   LaunchedEffect(isConnected, filter) {
@@ -440,6 +447,10 @@ internal fun SessionsScreen(
     )
   }
 
+  groupMutationError?.let { message ->
+    SessionGroupMutationError(message, onDismiss = { groupMutationError = null })
+  }
+
   groupSessionTarget?.let { session ->
     SessionTextDialog(
       title = nativeString("New group"),
@@ -451,10 +462,11 @@ internal fun SessionsScreen(
       onConfirm = { value ->
         groupSessionTarget = null
         if (!session.matchesGateway(activeGatewayStableId)) return@SessionTextDialog
-        // Remember the name so the group survives locally even if the patch later empties it.
-        viewModel.addChatSessionGroup(value)
+        // Register the shared empty folder before assigning the session.
         coroutineScope.launch {
-          viewModel.patchChatSession(ChatSessionPatch(key = session.key, ownerAgentId = session.ownerAgentId, category = value.trim()))
+          runCatchingCancellable {
+            viewModel.addChatSessionGroupForSession(value, session.key, session.ownerAgentId, session.gatewayStableId)
+          }.onFailure { groupMutationError = it.message ?: "Folder update failed" }
         }
       },
     )
@@ -474,7 +486,9 @@ internal fun SessionsScreen(
         val next = value.trim()
         if (next.isNotEmpty() && next != target.name) {
           coroutineScope.launch {
-            viewModel.renameChatSessionGroup(from = target.name, to = next, expectedGatewayStableId = target.gatewayStableId)
+            runCatchingCancellable {
+              viewModel.renameChatSessionGroup(from = target.name, to = next, expectedGatewayStableId = target.gatewayStableId)
+            }.onFailure { groupMutationError = it.message ?: "Folder update failed" }
           }
         }
       },
@@ -491,7 +505,10 @@ internal fun SessionsScreen(
       onDismiss = { newGroupDialogVisible = false },
       onConfirm = { value ->
         newGroupDialogVisible = false
-        viewModel.addChatSessionGroup(value)
+        coroutineScope.launch {
+          runCatchingCancellable { viewModel.addChatSessionGroup(value, activeGatewayStableId) }
+            .onFailure { groupMutationError = it.message ?: "Folder update failed" }
+        }
       },
     )
   }
@@ -506,7 +523,9 @@ internal fun SessionsScreen(
         deleteGroupTarget = null
         if (target.gatewayStableId != viewModel.activeGatewayStableId.value) return@SessionDeleteDialog
         coroutineScope.launch {
-          viewModel.deleteChatSessionGroup(group, expectedGatewayStableId = target.gatewayStableId)
+          runCatchingCancellable {
+            viewModel.deleteChatSessionGroup(group, expectedGatewayStableId = target.gatewayStableId)
+          }.onFailure { groupMutationError = it.message ?: "Folder update failed" }
         }
       },
     )
@@ -525,6 +544,19 @@ internal fun SessionsScreen(
       },
     )
   }
+}
+
+@Composable
+internal fun SessionGroupMutationError(
+  message: String,
+  onDismiss: () -> Unit,
+) {
+  AppAlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text(nativeString("Error")) },
+    text = { Text(message) },
+    confirmButton = { TextButton(onClick = onDismiss) { Text(nativeString("OK")) } },
+  )
 }
 
 @Composable

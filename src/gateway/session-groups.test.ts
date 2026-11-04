@@ -59,6 +59,48 @@ describe("session groups catalog", () => {
     names: string[],
     options: Partial<Omit<Parameters<typeof putSessionGroups>[0], "names">> = {},
   ) => putSessionGroups({ cfg, names, ...options });
+  it("rejects stale catalog and section-order preconditions without partial changes", async () => {
+    await put(["One", "Two"], { sectionOrder: ["category:One", "category:Two", "ungrouped"] });
+    const expected = { names: ["One", "Two"], sectionOrder: catalog().sectionOrder };
+    await register("Concurrent");
+    await defaults("Concurrent", "/concurrent");
+    const afterAddition = catalog();
+    await expect(
+      put(["Two", "One"], {
+        expected,
+        sectionOrder: ["category:Two", "category:One", "ungrouped"],
+      }),
+    ).rejects.toThrow("catalog changed");
+    expect(catalog()).toEqual(afterAddition);
+
+    const fresh = {
+      names: catalog().groups.map((group) => group.name),
+      sectionOrder: catalog().sectionOrder,
+    };
+    await put(fresh.names, {
+      sectionOrder: ["ungrouped", "category:Concurrent", "category:One", "category:Two"],
+    });
+    const afterReorder = catalog();
+    await expect(put(["Two", "One", "Concurrent"], { expected: fresh })).rejects.toThrow(
+      "catalog changed",
+    );
+    expect(catalog()).toEqual(afterReorder);
+  });
+
+  it("accepts matching normalized preconditions and preserves unguarded callers", async () => {
+    await put(["One", "Two"], { sectionOrder: ["category:One", "category:Two", "work"] });
+    await put(["Two", "One"], {
+      expected: {
+        names: [" One ", "One", "Two"],
+        sectionOrder: [" category:One ", "category:One", "category:Two", "work"],
+      },
+      sectionOrder: ["category:Two", "category:One", "work"],
+    });
+    expect(catalog().groups).toEqual(groups("Two", "One"));
+    await put(["One"]);
+    expect(catalog().groups).toEqual(groups("One"));
+  });
+
   const defaults = (name: string, cwd: string | null, worktree = true) =>
     updateSessionGroupDefaults(name, { cwd, worktree }, env);
   const groups = (...names: string[]) => names.map((name, position) => ({ name, position }));
