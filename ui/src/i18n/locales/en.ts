@@ -616,14 +616,14 @@ const startupEnglish = {
     checkError: "Couldn’t check for updates. {error}",
     status: "Update {status}: {reason}. {guidance}",
     verificationFailedWithIdentity:
-      "Couldn’t verify the update. Expected {expected}, running {actual}. Run `openclaw triage` on this computer before retrying.",
+      "Couldn’t verify the update. Expected {expected}, running {actual}. Run `openclaw triage` on the computer running OpenClaw before retrying.",
     handoffTimeout:
-      "Couldn’t confirm the update finished. Run `openclaw triage` on this computer and inspect the result before retrying.",
+      "Couldn’t confirm the update finished. Run `openclaw triage` on the computer running OpenClaw and inspect the result before retrying.",
     outcomeUnknown:
-      "Couldn’t confirm the update outcome. Run `openclaw triage` on this computer and inspect the result before retrying.",
+      "Couldn’t confirm the update outcome. Run `openclaw triage` on the computer running OpenClaw and inspect the result before retrying.",
     triage: {
       hostHint:
-        "If Ask OpenClaw is unavailable, run `openclaw triage` on this computer to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
+        "If Ask OpenClaw is unavailable, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     },
     report: {},
     failureReasons: {
