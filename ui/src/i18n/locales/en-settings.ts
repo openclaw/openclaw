@@ -1810,6 +1810,12 @@ const enSettings = {
       overrideAgents: "Override for this device",
     },
     appearance: {
+      customTheme: "Custom",
+      themeImport: {
+        invalidLink: "Unsupported tweakcn link. Expected a theme share URL.",
+        invalidToken: "Unsupported tweakcn token: {token}",
+        missingToken: "tweakcn theme is missing required token: {token}",
+      },
       intro:
         "Theme, chat, and sidebar preferences for this Control UI client. Stored in this browser unless noted.",
       languageAndText: "Language and text",
@@ -1979,6 +1985,9 @@ const enSettings = {
     itemCount: "[{count} item]",
     itemCountPlural: "[{count} items]",
     open: "Open",
+    fileOpenFailed: "Failed to open config file",
+    filePathCopied: "File path copied to clipboard: {path}",
+    filePath: "File path: {path}",
     fileOpenedOnGateway: en.configView.fileOpenedOnGateway,
     applying: registerSettingsSidebarEnglish.catalog.configView.applying,
     autoSaveSaving: registerSettingsSidebarEnglish.catalog.configView.autoSaveSaving,
