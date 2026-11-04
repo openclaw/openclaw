@@ -163,7 +163,7 @@ it("explains an unresolved initial turn while offline without blocking the outbo
   try {
     const { input, send } = draw();
     expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).toBe(
-      "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
+      "The first message is unresolved. Reconnect if needed, then review it before sending another.",
     );
     expect(input.disabled).toBe(false);
     expect(send.disabled).toBe(false);
@@ -302,7 +302,7 @@ it.each([
     pane.render();
 
     expect(pane.chatProps?.disabledBanner?.actionLabel).toBe(
-      restricted ? undefined : "Connect an AI provider",
+      restricted ? undefined : "Set up a model",
     );
     expect(pane.chatProps?.disabledReason).toBeNull();
     expect(pane.chatProps?.canSend).toBe(true);
@@ -441,7 +441,7 @@ it.each([
       const settled = draw();
       expect(state.chatModelCatalogInitialized).toBe(true);
       expect(settled.disabledBanner?.actionLabel).toBe(
-        !restricted && !cachedDefault ? "Connect an AI provider" : undefined,
+        !restricted && !cachedDefault ? "Set up a model" : undefined,
       );
       if (restricted) {
         expect(settled.modelRequiredReason).toBe("No models are permitted by your administrator.");

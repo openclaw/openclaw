@@ -10,7 +10,7 @@ const enMcpApp = {
     threadApps: "Conversation apps",
     empty: "No plugin apps are available for this agent.",
     loading: "Loading plugin apps…",
-    disconnected: "Connect to the Gateway to use plugin apps.",
+    disconnected: "Reconnect to use this app.",
     configure: "Configure MCP servers",
     settings: "App settings",
     onboarding: "Set up app",

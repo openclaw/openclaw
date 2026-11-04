@@ -210,8 +210,8 @@ describe("DraftSubmissionFlow", () => {
         expect(flow).toMatchObject({
           error:
             storage === "unavailable before create"
-              ? "Couldn't prepare session recovery. Your draft has been kept."
-              : "The session was created, but startup needs attention: placement recovery storage is unavailable",
+              ? "Couldn’t prepare session recovery. Your draft has been kept."
+              : "Couldn’t start this session. Retry setup. placement recovery storage is unavailable",
           message: "Keep my model and runtime",
         });
       }
