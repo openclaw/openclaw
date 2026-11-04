@@ -31,6 +31,59 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector terminal errors", () => {
+  it("retains live no-answer terminal classification and native ordering without content", async () => {
+    vi.stubEnv("OPENCLAW_LIVE_TEST", "1");
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          id: "comment",
+          type: "agentMessage",
+          phase: "commentary",
+          text: "PRIVATE-ASSISTANT",
+        },
+      }),
+    );
+    projector.recordDynamicToolResult({
+      callId: "tool-a",
+      tool: "exec",
+      success: false,
+      contentItems: [{ type: "inputText", text: "PRIVATE-TOOL-ERROR" }],
+    });
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", { turn: { id: TURN_ID, status: "completed", items: [] } }),
+    );
+    await projector.closeProjection();
+    const result = snapshot(projector);
+    expect(result.assistantTexts).toEqual([]);
+    const diagnostics = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "codex_app_server.diagnostic");
+    expect(diagnostics.map((event) => event.data)).toEqual([
+      expect.objectContaining({ phase: "notification", sequence: 1, method: "item/completed" }),
+      expect.objectContaining({
+        phase: "native_item",
+        itemId: "comment",
+        itemType: "agentMessage",
+        itemPhase: "commentary",
+        textLength: 17,
+      }),
+      expect.objectContaining({ phase: "notification", sequence: 2, method: "turn/completed" }),
+      expect.objectContaining({
+        phase: "no_answer",
+        runId: "run-1",
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        nativeStatus: "completed",
+        classification: "empty",
+        terminalKind: "ok",
+        lastToolName: "exec",
+      }),
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toMatch(/PRIVATE/);
+  });
+
   type Projector = Awaited<ReturnType<typeof createProjector>>;
 
   function terminalError(

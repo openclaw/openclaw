@@ -164,7 +164,10 @@ export abstract class CodexTurnProjection {
     );
     this.contextTokens = options.initialContextTokens;
     this.contextTokensSource = options.initialContextTokens === undefined ? undefined : "resolved";
-    this.diagnostics = new CodexProjectionDiagnostics(threadId, turnId);
+    // Terminal diagnostics remain observable after ordinary projection is retired.
+    this.diagnostics = new CodexProjectionDiagnostics(threadId, turnId, (data) =>
+      emitCodexAgentEvent(this.params, { stream: "codex_app_server.diagnostic", data }),
+    );
     this.nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
       params,
       threadId,
@@ -413,6 +416,12 @@ export abstract class CodexTurnProjection {
     for (const toolResult of toolTelemetry.coreTtsToolResults ?? []) {
       transferTtsProvenance?.(toolResult, result, toolAutoDeliveryMediaUrls ?? []);
     }
+    this.diagnostics.recordNoAnswer(
+      runParams.runId,
+      result,
+      completedTurn,
+      toolTelemetry.finalSourceReplyDelivered === true,
+    );
     return result;
   }
 
