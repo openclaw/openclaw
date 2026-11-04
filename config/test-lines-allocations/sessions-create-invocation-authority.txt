@@ -1,2 +1,2 @@
-# Invocation-time write authority: already-built tools accept a live caller and reject absent/revoked authority.
-21
+# Real sessions_create tool, live Gateway dispatch and SQLite persistence: late, absent, read-only, revoked and replaced authority.
+233

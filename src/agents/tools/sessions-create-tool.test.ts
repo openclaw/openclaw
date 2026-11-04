@@ -48,26 +48,6 @@ beforeEach(() => {
 });
 
 describe("sessions_create", () => {
-  it("resolves current write authority when an already-built tool is invoked", async () => {
-    const tool = createSessionsCreateTool();
-    const { authority } = issueAuthority();
-
-    await withSessionToolTestCaller(() => tool.execute("authorized-create", {}), authority);
-    expect(gateway.request).toHaveBeenCalledTimes(1);
-    expect(gateway.request.mock.calls[0]?.[0].params).toMatchObject({
-      idempotencyKey: expect.any(String),
-    });
-
-    gateway.request.mockClear();
-    const { authority: readOnly } = issueAuthority(["operator.read"]);
-    const denied = await withSessionToolTestCaller(
-      () => tool.execute("read-only-create", {}),
-      readOnly,
-    );
-    expect(denied.details).toMatchObject({ gated: true });
-    expect(gateway.request).not.toHaveBeenCalled();
-  });
-
   it("keeps the definition stable while refusing calls without session-write authority", async () => {
     const denied = [
       createSessionsCreateTool(),
