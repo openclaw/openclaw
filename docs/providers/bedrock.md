@@ -166,8 +166,17 @@ openclaw automations edit <jobId> \
 
 Until an automation records an account, its runs are refused with `Automation
 has no recorded inference account`. Signing the account out revokes the
-automations bound to it; signing back in creates a new account lifetime, so
-rerun `openclaw doctor --fix` (or reselect the model) to rebind them.
+automations bound to it, and signing back in creates a new account lifetime
+rather than restoring the old one, so their runs stay refused with `was removed
+or signed out` (or `was replaced`). Doctor only records an account on
+automations that have none, so it does not re-adopt a revoked one: select the
+new account explicitly per automation.
+
+```bash
+openclaw automations edit <jobId> \
+  --model 'amazon-bedrock/us.anthropic.claude-opus-4-6-v1@amazon-bedrock:aws-sdk'
+```
+
 Interactive turns are unaffected and keep using `auth: "aws-sdk"` on its own.
 
 ## Automatic model discovery
