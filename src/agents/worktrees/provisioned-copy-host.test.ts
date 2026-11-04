@@ -9,7 +9,8 @@ const { run, poolOptions, log, event } = vi.hoisted(() => ({
   event: vi.fn(),
 }));
 // Only the worker transport is simulated; timing and host authority are the production owners.
-vi.mock("../../infra/worker-task-pool.js", () => ({
+vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/worker-task-pool.js")>()),
   WorkerTaskPool: class {
     constructor(options: unknown) {
       poolOptions(options);
@@ -18,10 +19,8 @@ vi.mock("../../infra/worker-task-pool.js", () => ({
   },
   WorkerTaskError: class extends Error {},
 }));
-vi.mock("../../infra/runtime-process-entrypoints.js", () => ({
-  runtimeProcessEntrypoints: { fsSafeCopy: "copy-worker" },
-}));
-vi.mock("../../infra/runtime-worker-url.js", () => ({
+vi.mock("../../infra/runtime-worker-url.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/runtime-worker-url.js")>()),
   resolveRuntimeWorkerUrl: () => new URL("file:///copy-worker.js"),
 }));
 vi.mock("../../shared/global-singleton.js", async (importOriginal) => {
@@ -34,13 +33,16 @@ vi.mock("../../shared/global-singleton.js", async (importOriginal) => {
         : actual.resolveGlobalSingleton(...args),
   };
 });
-vi.mock("../../infra/diagnostic-events.js", () => ({
+vi.mock("../../infra/diagnostic-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/diagnostic-events.js")>()),
   createQueuedDiagnosticPhaseEmitter: () => event,
 }));
-vi.mock("../../infra/diagnostics-timeline.js", () => ({
+vi.mock("../../infra/diagnostics-timeline.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/diagnostics-timeline.js")>()),
   recordDiagnosticsTimelineDuration: vi.fn(),
 }));
-vi.mock("../../logging/subsystem.js", () => ({
+vi.mock("../../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
   createSubsystemLogger: () => ({ info: log }),
 }));
 afterEach(() => {
