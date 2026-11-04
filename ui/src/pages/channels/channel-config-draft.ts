@@ -59,7 +59,7 @@ function savedAt(
 }
 
 /** Emptying a field typed over a stored secret keeps the secret; nothing here deletes it. */
-export function emptiesStoredSecret(
+function emptiesStoredSecret(
   base: Record<string, unknown> | null,
   channelId: string,
   path: ReadonlyArray<string | number>,
@@ -75,7 +75,7 @@ export function emptiesStoredSecret(
  * field is read-only then, so only a reference that arrived after typing began gets here, and
  * Save leaves it alone.
  */
-export function writesOverReference(
+function writesOverReference(
   snapshot: ConfigSnapshot | null | undefined,
   path: ReadonlyArray<string | number>,
   hints: ConfigUiHints = {},
@@ -108,7 +108,7 @@ function sameValue(left: unknown, right: unknown): boolean {
  * emptying one keeps it, and one that isn't proven plain text in the file is never written over.
  * Returns undefined when, after that, the edit changes nothing.
  */
-export function keepStoredSecrets(params: {
+function keepStoredSecrets(params: {
   base: Record<string, unknown> | null;
   snapshot: ConfigSnapshot | null | undefined;
   hints?: ConfigUiHints;
@@ -232,7 +232,7 @@ const startsWith = (path: ConfigPath, prefix: ConfigPath) =>
 
 /** The saved value an edit was made against, at the unit Save writes whole: the edited field,
     or the whole list when the edit lands in one, since lists go out in full. */
-export function channelConfigEditBase(
+function channelConfigEditBase(
   saved: Readonly<Record<string, unknown>>,
   path: ConfigPath,
 ): ChannelConfigBase {

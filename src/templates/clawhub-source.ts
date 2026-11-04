@@ -443,7 +443,7 @@ async function readClawHubTemplateContents(
       archivePath: download.archivePath,
       tempDirPrefix: "openclaw-template-catalog-",
       timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
-      rootMarkers: ["package.json", "CLAW.md", "template.json"],
+      rootMarkers: ["package.json", "CLAW.md"],
       onExtracted: async (rootDir) => {
         const verified = await readVerifiedArtifactSource({
           sourceRoot: rootDir,
@@ -619,7 +619,7 @@ export async function withResolvedClawHubSource<T>(
       archivePath: download.archivePath,
       tempDirPrefix: "openclaw-template-source-",
       timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
-      rootMarkers: ["package.json", "CLAW.md", "template.json"],
+      rootMarkers: ["package.json", "CLAW.md"],
       onExtracted: async (rootDir) => {
         const artifactSource = await readVerifiedArtifactSource({
           sourceRoot: rootDir,

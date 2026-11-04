@@ -150,13 +150,20 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     if (!scope) {
       return;
     }
-    const message = t(
-      rows.length === 1
-        ? "sessionsView.deleteSelectedConfirmOne"
-        : "sessionsView.deleteSelectedConfirm",
-      { count: String(rows.length) },
-    );
-    if (!(await confirmDelete(message, rows, scope)) || !isRequestScopeCurrent(scope)) {
+    const [only] = rows;
+    const prompt =
+      only && rows.length === 1
+        ? {
+            title: t("sessionsView.deleteSessionTitle", {
+              session: normalizeOptionalString(only.label) ?? only.key,
+            }),
+            message: t("sessionsView.deleteSelectedConfirmOne"),
+          }
+        : {
+            title: t("sessionsView.deleteSessionsTitle", { count: String(rows.length) }),
+            message: t("sessionsView.deleteSelectedConfirm"),
+          };
+    if (!(await confirmDelete(prompt, rows, scope)) || !isRequestScopeCurrent(scope)) {
       return;
     }
     return deleteSessions(rows.filter((row) => state.selectedSessions.get(row.key) === row));
@@ -173,12 +180,12 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
 
   // Bound automations turn the delete confirm into an explicit pause warning.
   function confirmDelete(
-    message: string,
+    prompt: { title: string; message: string },
     rows: readonly SessionDeleteRow[],
     scope: SessionsPageRequestScope,
   ) {
     const options = {
-      message,
+      ...prompt,
       confirmLabel: t("common.delete"),
       danger: true,
       signal: scope.signal,
@@ -200,12 +207,13 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     );
   }
 
-  function confirmMutation(
-    message: string,
-    options: { confirmLabel?: string; signal?: AbortSignal } = {},
-  ) {
+  function confirmMutation(options: {
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    signal?: AbortSignal;
+  }) {
     return showConfirmDialog({
-      message,
       confirmLabel: t("common.delete"),
       danger: true,
       ...options,
@@ -318,12 +326,11 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       return;
     }
     if (
-      !(await confirmMutation(
-        t("sessionsView.deleteAllArchivedConfirm", {
-          count: String(archivedRows.length),
-        }),
-        { signal: scope.signal },
-      )) ||
+      !(await confirmMutation({
+        title: t("sessionsView.deleteAllArchivedTitle", { count: String(archivedRows.length) }),
+        message: t("sessionsView.deleteSessionsConfirm"),
+        signal: scope.signal,
+      })) ||
       !isRequestScopeCurrent(scope)
     ) {
       return;
@@ -337,7 +344,10 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     if (
       !scope ||
       !(await confirmDelete(
-        t("sessionsView.deleteSessionConfirm", { session: label }),
+        {
+          title: t("sessionsView.deleteSessionTitle", { session: label }),
+          message: t("sessionsView.deleteSessionConfirm"),
+        },
         [row],
         scope,
       )) ||
@@ -357,7 +367,9 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     const scope = captureRequestScope();
     if (
       !scope ||
-      !(await confirmMutation(t("sessionsView.stopCloudWorkerConfirm", { session: label }), {
+      !(await confirmMutation({
+        title: t("sessionsView.stopCloudWorkerConfirm", { session: label }),
+        message: t("sessionsView.stopCloudWorkerBody"),
         confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
         signal: scope.signal,
       })) ||

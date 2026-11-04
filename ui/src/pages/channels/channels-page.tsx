@@ -151,7 +151,7 @@ export function ChannelsPage() {
       yield Promise.race([pending, retired]);
     } catch (error) {
       if (isCurrent(view)) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   });
@@ -447,10 +447,10 @@ export function ChannelsPage() {
   /** Resolves true once the channel has nothing unsaved; false keeps the user editing. */
   async function resolveUnsavedConfig(channelId: string) {
     const choice = await showConfirmChoiceDialog({
-      title: t("channels.config.unsavedTitle"),
-      message: t("channels.config.unsavedMessage", {
+      title: t("channels.config.unsavedTitle", {
         channel: resolveChannelLabel(viewProps(), channelId),
       }),
+      message: t("channels.config.unsavedMessage"),
       confirmLabel: t("common.save"),
       alternativeLabel: t("channels.config.discard"),
       cancelLabel: t("channels.config.keepEditing"),
@@ -503,6 +503,7 @@ export function ChannelsPage() {
     const labels = channelIds.map((channelId) => resolveChannelLabel(props, channelId));
     const [only] = channelIds.length === 1 ? channelIds : [];
     showToast({
+      actionPrimary: true,
       message:
         only !== undefined
           ? t("channels.config.unsavedOnLeave", { channel: resolveChannelLabel(props, only) })
@@ -747,7 +748,7 @@ export function ChannelsPage() {
         title={t("tabs.channels")}
         subtitle={
           <>
-            {t("subtitles.channels")} <LearnMoreLink url={CHANNELS_DOCS_URL} />
+            <LearnMoreLink url={CHANNELS_DOCS_URL} />
           </>
         }
       />

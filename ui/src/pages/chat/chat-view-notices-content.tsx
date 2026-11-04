@@ -17,7 +17,7 @@ import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-s
 import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
-import { clampText } from "../../lib/format.ts";
+import { formatUiErrorDetails } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { isChatSendReconnecting } from "./chat-send-presentation.ts";
 import type { ChatComposerNoticesProps, ChatViewNoticesProps } from "./chat-view-notices.tsx";
@@ -299,6 +299,7 @@ function renderWorkerRuntimeInstallNotice(
 
 function ChatErrorNotice(props: {
   error: string;
+  detail?: unknown;
   action?: JSX.Element;
   displayError?: string;
   tone?: "danger" | "warn";
@@ -306,17 +307,26 @@ function ChatErrorNotice(props: {
   compact?: boolean;
   actionAvailable?: boolean;
 }) {
-  const displayError = () => props.displayError ?? formatWebUiIconErrorText(props.error);
-  const lines = () =>
-    displayError()
-      .trim()
-      .split(/\r?\n/u)
-      .map((line) => line.replace(/\s+/gu, " ").trim());
-  // Local action errors already contain recovery instructions; keep those visible.
-  const title = () => props.summary ?? clampText(lines()[0] ?? "");
-  const hasDetails = () => lines().some((line) => line !== "" && line !== title());
+  const displayError = () =>
+    props.detail === undefined
+      ? (props.displayError ?? formatWebUiIconErrorText(props.error))
+      : formatUiErrorDetails(props.detail);
+  const title = () =>
+    props.summary ??
+    (props.detail === undefined
+      ? displayError().trim().split(/\r?\n/u)[0]?.trim() || t("chat.errorSummary")
+      : props.error);
+  const hasDetails = () => {
+    const detail = displayError().trim();
+    return detail !== "" && detail !== title();
+  };
   const tone = () => props.tone ?? "danger";
-  return (
+  // Notice refreshes must not replace an open disclosure unless its failure changed.
+  const current = createMemo(() => ({ message: props.error, detail: props.detail }), {
+    equals: (previous, next) =>
+      previous.message === next.message && previous.detail === next.detail,
+  });
+  const content = (error: string) => (
     <Show
       when={props.compact}
       fallback={
@@ -336,18 +346,18 @@ function ChatErrorNotice(props: {
             fallback={
               <span class="chat-error__content">
                 <strong>{title()}</strong>
-                <CopyButton text={props.error} idleLabel={t("chat.copyError")} />
+                <CopyButton text={error} idleLabel={t("chat.copyError")} />
               </span>
             }
           >
             <details class="chat-error__content">
               <summary class="chat-error__summary">
                 <strong>{title()}</strong>
-                <span>{t("chat.details")}</span>
+                <span>{t("common.showDetails")}</span>
                 <span class="chat-error__chevron" aria-hidden="true">
                   <Icon name="chevronDown" />
                 </span>
-                <CopyButton text={props.error} idleLabel={t("chat.copyError")} />
+                <CopyButton text={error} idleLabel={t("chat.copyError")} />
               </summary>
               <pre class="chat-error__diagnostic" tabindex={0} aria-label={t("chat.errorDetails")}>
                 {displayError()}
@@ -400,11 +410,16 @@ function ChatErrorNotice(props: {
               <pre tabindex={0} aria-label={t("chat.errorDetails")}>
                 {displayError()}
               </pre>
-              <CopyButton text={props.error} idleLabel={t("chat.copyError")} bare />
+              <CopyButton text={error} idleLabel={t("chat.copyError")} bare />
             </div>
           </details>
         </Show>
       </div>
+    </Show>
+  );
+  return (
+    <Show when={props.error ? current() : undefined} keyed>
+      {(error) => content(error.detail === undefined ? error.message : displayError())}
     </Show>
   );
 }
@@ -429,7 +444,7 @@ export function ChatTopbarNoticesContent(props: ChatViewNoticesProps) {
       {renderDiskSpaceNotice(props.diskSpace)}
       {renderWorkerRuntimeInstallNotice(props.workerRuntimeInstall)}
       <Show when={props.error}>
-        {(error) => <ChatErrorNotice error={error()} action={dismiss} />}
+        {(error) => <ChatErrorNotice error={error()} detail={props.errorDetail} action={dismiss} />}
       </Show>
     </>
   );

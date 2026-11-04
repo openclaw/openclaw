@@ -201,7 +201,7 @@ suite.define(() => {
               .toBeGreaterThan(0);
             await nameInput.fill("");
             await nameInput.press("Enter");
-            await text(".profile-hero__name").toBe(authenticatedUser);
+            await text(".profile-hero__name").toBe(`Person ${guest.id.slice(0, 8)}`);
             await expect.poll(() => draft.inputValue()).toBe("Local draft");
             await editor.close();
             const auth = () =>

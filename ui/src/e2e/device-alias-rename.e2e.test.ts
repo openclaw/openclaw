@@ -58,7 +58,7 @@ suite.define(() => {
       const openAlias = async (entry = row) => {
         // A row stays open through its own rename.
         if (!(await entry.evaluate((element) => (element as HTMLDetailsElement).open))) {
-          await entry.locator("summary").click();
+          await entry.locator(":scope > summary").click();
         }
         await entry.getByRole("button", { name: "Edit alias", exact: true }).click();
       };

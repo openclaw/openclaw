@@ -267,7 +267,7 @@ active model. New chats using Muse then start with **Full access** and optional
 sandboxing off, without repeating the prompt.
 
 If you set up Muse through the CLI or manual configuration instead, the Control
-UI may still offer **Continue for this chat** when consent is needed. Setup
+UI may still offer **Continue for this session** when consent is needed. Setup
 outside these flows does not grant permission automatically. That fallback
 changes only the current chat. Remove `muse` from
 `agents.entries.<agentId>.nativeRuntimeConsent` to revoke the remembered choice.
