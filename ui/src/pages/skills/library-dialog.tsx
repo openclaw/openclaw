@@ -30,7 +30,12 @@ export function LibraryDialog(props: {
           if (props.editor) {
             void props.library.save();
           } else if (source) {
-            void props.library.importClawHub(current().importSlug, source.slug, source.version);
+            void props.library.importRemote(current().importSlug, { kind: "clawhub", ...source });
+          } else if (current().importMethod === "github") {
+            void props.library.importRemote(current().importSlug, {
+              kind: "github",
+              url: current().importUrl.trim(),
+            });
           } else {
             void props.library.importFiles(current().importSelection);
           }

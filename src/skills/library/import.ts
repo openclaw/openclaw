@@ -12,7 +12,6 @@ import {
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
-import { installSkillFromClawHub } from "../lifecycle/clawhub.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import {
   decodeSkillLibraryFile,
@@ -21,6 +20,7 @@ import {
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
   SKILL_LIBRARY_MAX_TREE_ENTRIES,
 } from "./bundle.js";
+import { withSkillRepository } from "./repository.js";
 import { saveSkillLibrary, skillLibraryReceipt } from "./service.js";
 import { captureSkillLibraryAccess } from "./store-access.js";
 import type { SkillLibraryAuthority } from "./store.js";
@@ -58,13 +58,26 @@ export async function importSkillLibrary(
 ) {
   const access = captureSkillLibraryAccess(authority, options);
   await access.read("profile", undefined);
+  if (params.source.kind === "github") {
+    return withSkillRepository(params.source.url, access.assertCurrent, (directory) =>
+      publishDirectory(
+        { ...authority, assertCurrent: access.assertCurrent },
+        params.slug,
+        directory,
+        access.options,
+      ),
+    );
+  }
+  const source = params.source;
   return withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-library-source-" },
     async ({ dir }) => {
+      const { installSkillFromClawHub } = await import("../lifecycle/clawhub.js");
+      access.assertCurrent();
       const installed = await installSkillFromClawHub({
         workspaceDir: dir,
-        slug: params.source.slug,
-        version: params.source.version,
+        slug: source.slug,
+        version: source.version,
         config: authority.getConfig(),
       });
       access.assertCurrent();

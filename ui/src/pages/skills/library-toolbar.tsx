@@ -28,12 +28,11 @@ export function SkillLibraryNavigation(props: SkillLibraryNavigationProps) {
 }
 
 function openLibraryImport(library: SkillLibraryModel) {
-  if (library.uploadsEnabled()) {
-    library.edit((state) => {
-      state.importSource = null;
-    });
-    library.setImportOpen(true);
-  }
+  library.edit((state) => {
+    state.importSource = null;
+    state.importMethod = library.uploadsEnabled() ? "files" : "github";
+  });
+  library.setImportOpen(true);
 }
 
 // Phone widths swap the toolbar's page actions for this menu; both run the same actions.
@@ -49,9 +48,7 @@ export function SkillLibraryPageMenu(
     { id: "search", label: t("skillDiscovery.search") },
     { id: "workshop", label: t("pluginsPage.workshopTab") },
     { id: "create", label: t("skillLibrary.create"), disabled: locked() },
-    ...(props.library.uploadsEnabled()
-      ? [{ id: "import", label: t("skillLibrary.import"), disabled: locked() }]
-      : []),
+    { id: "import", label: t("skillLibrary.import"), disabled: locked() },
   ];
   return (
     <Menu
@@ -134,16 +131,14 @@ export function SkillLibraryToolbar(props: {
         >
           {t("skillLibrary.create")}
         </button>
-        <Show when={props.library.uploadsEnabled()}>
-          <button
-            type="button"
-            class="btn"
-            disabled={busy() || !props.library.canCreate()}
-            onClick={() => openLibraryImport(props.library)}
-          >
-            {t("skillLibrary.import")}
-          </button>
-        </Show>
+        <button
+          type="button"
+          class="btn"
+          disabled={busy() || !props.library.canCreate()}
+          onClick={() => openLibraryImport(props.library)}
+        >
+          {t("skillLibrary.import")}
+        </button>
       </div>
       <Show when={options().length > 0 || !props.library.showWorkspace()}>
         <div class="plugins-toolbar skill-library-toolbar__views">

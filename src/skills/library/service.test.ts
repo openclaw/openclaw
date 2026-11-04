@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { SKILL_LIBRARY_MAX_FILE_BYTES } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { openOpenClawStateDatabase as openDatabase } from "../../state/openclaw-state-db.js";
@@ -590,4 +590,67 @@ it("bounds growing team defaults without stopping session creation", async () =>
       bob,
     ),
   ).toHaveLength(64);
+});
+
+it("imports an exact public GitHub skill through personal save and scanning", async () => {
+  const { options, alice, lib } = fixture();
+  const { default: JSZip } = await import("jszip");
+  const zip = new JSZip()
+    .file("checkout/skills/example/SKILL.md", content)
+    .file("checkout/skills/example/references/guide.md", "Reference material")
+    .file("checkout/skills/example/scripts/helper.py", "print('data only')")
+    .file("checkout/skills/other/SKILL.md", "Not the selected skill.");
+  const bytes = await zip.generateAsync({ type: "nodebuffer" });
+  const net = await import("../../infra/net/fetch-guard.js");
+  const release = vi.fn(async () => {});
+  const commit = "a".repeat(40);
+  const fetchSource = vi.spyOn(net, "fetchWithSsrFGuard").mockImplementation(async (params) => {
+    params.beforeRequest?.();
+    return {
+      response: params.url.startsWith("https://api.github.com/")
+        ? new Response(commit)
+        : new Response(new Uint8Array(bytes)),
+      release,
+      finalUrl: params.url,
+    };
+  });
+  try {
+    const { importSkillLibrary } = await import("./import.js");
+    const result = await importSkillLibrary(
+      alice,
+      {
+        slug: "example",
+        source: {
+          kind: "github",
+          url: "https://github.com/example/skills/tree/main/skills/example",
+        },
+      },
+      options,
+    );
+    expect(result.state).toBe("published");
+    expect(result.entry.shared).toBe(false);
+    expect(result.entry.ownerProfileId).toBe(alice.profileId);
+    const detail = await lib.read(result.entry.skillId);
+    expect(detail.content).toBe(content);
+    expect(detail.files.map((file) => file.path).toSorted()).toEqual([
+      "references/guide.md",
+      "scripts/helper.py",
+    ]);
+    expect(release).toHaveBeenCalledTimes(2);
+    expect(fetchSource).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        url: "https://api.github.com/repos/example/skills/commits/main",
+        policy: { hostnameAllowlist: ["api.github.com", "codeload.github.com"] },
+        maxRedirects: 0,
+        beforeRequest: expect.any(Function),
+      }),
+    );
+    expect(fetchSource).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ url: `https://codeload.github.com/example/skills/zip/${commit}` }),
+    );
+  } finally {
+    fetchSource.mockRestore();
+  }
 });

@@ -8,6 +8,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
+import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
@@ -21,6 +22,7 @@ import { SkillLibrary, SkillLibraryDialogs } from "./library-view.tsx";
 import { connectedGateway, libraryEntry, libraryList, requestFor } from "./skills.test-support.ts";
 
 registerSkillsBrowserEnglish();
+registerSkillLibraryEnglish();
 
 function harness() {
   const request = requestFor();
@@ -191,7 +193,7 @@ it.each(["files", "clawhub"])(
     const operation =
       kind === "files"
         ? library.importFiles([fileWithReader("SKILL.md", () => reading.promise)])
-        : library.importClawHub("imported-skill", "@fixture/calendar");
+        : library.importRemote("imported-skill", { kind: "clawhub", slug: "@fixture/calendar" });
     await waitForFast(() => {
       expect(submit.disabled).toBe(true);
       expect(submit.textContent).toContain("Importing");
@@ -518,4 +520,83 @@ it.each([
   }
   expect(request).not.toHaveBeenCalled();
   expect(library.state.error).toBe(uploadsDisabledMessage());
+});
+
+it("imports an exact GitHub skill URL without requiring file uploads", async () => {
+  const { library, config, request } = harness();
+  config.current.uploadsEnabled = false;
+  const pending = createDeferred<SkillsLibraryReceipt>();
+  request.mockImplementation(async (method) => {
+    if (method === "skills.library.import") {
+      return pending.promise;
+    }
+    if (method === "skills.library.list") {
+      return libraryList(false);
+    }
+    return {};
+  });
+  library.state.importSlug = "calendar";
+  library.state.importMethod = "github";
+  library.state.importUrl = " https://github.com/example/skills/blob/main/calendar/SKILL.md ";
+  library.setImportOpen(true);
+  const view = mountLibrary(library);
+  flush();
+  await waitForFast(() => expect(view.container.querySelector('input[type="url"]')).not.toBeNull());
+  view.container.querySelector<HTMLFormElement>("form")!.requestSubmit();
+  await waitForFast(() =>
+    expect(request).toHaveBeenCalledWith("skills.library.import", {
+      slug: "calendar",
+      source: {
+        kind: "github",
+        url: "https://github.com/example/skills/blob/main/calendar/SKILL.md",
+      },
+    }),
+  );
+  expect(view.container.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(
+    true,
+  );
+  pending.resolve(savedReceipt(existingSkill()));
+  await waitForFast(() => expect(library.local.importOpen).toBe(false));
+  expect(library.state.notice).not.toBeNull();
+});
+
+it("keeps a failed repository URL editable and preserves selected uploads across source changes", async () => {
+  const { library, request } = harness();
+  const selected = fileWithReader(
+    "SKILL.md",
+    async () => new TextEncoder().encode("# Skill").buffer,
+  );
+  library.state.importSlug = "calendar";
+  library.state.importSelection = [selected];
+  library.setImportOpen(true);
+  const view = mountLibrary(library);
+  flush();
+  expect(
+    view.container.querySelector('[aria-label="Import from"]'),
+    view.container.innerHTML,
+  ).not.toBeNull();
+  const sourceButtons = () =>
+    Array.from(
+      view.container.querySelectorAll<HTMLButtonElement>('[aria-label="Import from"] button'),
+    );
+  sourceButtons()
+    .find((button) => button.textContent === "GitHub URL")!
+    .click();
+  await waitForFast(() => expect(library.state.importMethod).toBe("github"));
+  expect(
+    view.container.querySelector('input[type="url"]'),
+    view.container.innerHTML,
+  ).not.toBeNull();
+  library.state.importUrl = "https://github.com/example/skills/tree/main/missing";
+  flush();
+  request.mockRejectedValueOnce(new Error("No SKILL.md found at this path."));
+  view.container.querySelector<HTMLFormElement>("form")!.requestSubmit();
+  await waitForFast(() => expect(library.state.error).toContain("No SKILL.md"));
+  expect(library.local.importOpen).toBe(true);
+  expect(library.state.importUrl).toContain("/missing");
+  sourceButtons()
+    .find((button) => button.textContent === "Upload files")!
+    .click();
+  await waitForFast(() => expect(library.state.importMethod).toBe("files"));
+  expect(library.state.importSelection).toEqual([selected]);
 });

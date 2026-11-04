@@ -145,9 +145,20 @@ bundled, extra, and state-owned managed skills continue to load normally.
 
 On a shared Gateway, identified operators can keep a personal skill library
 without receiving permission to change everybody's workspace skills or Gateway
-configuration. Open **Plugins → Skills** to create a skill, import a `SKILL.md`
-or ZIP bundle, or add a skill from ClawHub. The editor keeps supporting scripts,
-references, and assets with the instructions.
+configuration. Open **Plugins → Skills → My skills** to create a skill, import a
+`SKILL.md` or ZIP bundle, or add a skill from ClawHub. In **Import skill**, choose
+**GitHub URL** to import a public repository skill folder or its `SKILL.md`,
+including supporting scripts, references, and assets in that folder. For example:
+`https://github.com/owner/repo/tree/main/skills/my-skill` or
+`https://github.com/owner/repo/blob/main/skills/my-skill/SKILL.md`.
+
+Repository imports support public `github.com` links only; they do not use GitHub
+credentials or execute repository scripts. The first segment after `tree` or
+`blob` is the branch, tag, or commit. Encode slashes in a ref as `%2F` (for example,
+`tree/feature%2Fskills/skills/my-skill`), or use a commit URL to avoid ambiguity.
+The repository archive must fit within the 32 MiB download limit; the selected
+skill must fit within the normal bundle limits. Imports use the same validation, security scans, and
+personal ownership rules as uploaded bundles.
 
 The ordinary single-admin setup stays unchanged: workspace authoring still
 uses `<workspace>/skills`, and existing file-backed skills are not moved into

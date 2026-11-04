@@ -78,6 +78,12 @@ const enSkillLibrary = {
       "Choose SKILL.md together with its supporting files, or a folder containing SKILL.md at its root.",
     uploadFailed:
       "The Gateway did not confirm the upload. Check your library before retrying the import.",
+    importSource: "Import from",
+    uploadFiles: "Upload files",
+    githubUrl: "GitHub URL",
+    repositoryUrl: "Skill URL",
+    repositoryHelp:
+      "Paste a public GitHub link to the skill folder or its SKILL.md. Supporting files in the folder are included.",
     importHelp: "Import a skill into your private library.",
     importClawHub: "Import {source} into your private library.",
     files: "Files",
