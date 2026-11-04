@@ -101,12 +101,14 @@ describe("PostgreSQL conformance shards", () => {
       shards.flat().toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
     ).toEqual(full.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)));
     expect(new Set(shards.flat()).size).toBe(full.length);
-    expect(full).toHaveLength(engineFiles.length + 3);
+    expect(full).toHaveLength(engineFiles.length + 4);
     expect(full).toContain("extensions/workboard/nested/default-weight.test.ts");
     expect(full).toContain("src/infra/postgres-sync/nested/default-weight.test.ts");
     expect(full).toContain("src/state/openclaw-state-db.postgres.test.ts");
+    expect(full).toContain("extensions/imessage/src/monitor/recovery-cursor.postgres.test.ts");
     expect(full.some((target) => target.endsWith("not-a-test.ts"))).toBe(false);
     expect(targets(["--shard", "1/3"])).toEqual(first);
+    expect(targets(["--shard", "7/7"])).toHaveLength(1);
     for (const [index, shard] of shards.entries()) {
       expect(targets(["--shard", String(index + 1) + "/3"])).toEqual(shard);
     }
@@ -138,12 +140,13 @@ describe("PostgreSQL conformance shards", () => {
         }),
       );
       expect(targets(["--shard", "2/3"])).toEqual([
+        "src/infra/postgres-sync/nested/default-weight.test.ts",
         "src/infra/database-engine/command.integration.test.ts",
-        "src/state/openclaw-state-db.postgres.test.ts",
       ]);
       expect(targets(["--shard", "3/3"])).toEqual([
         "extensions/workboard/nested/default-weight.test.ts",
-        "src/infra/postgres-sync/nested/default-weight.test.ts",
+        "src/infra/database-engine/nested/new.integration.test.ts",
+        "extensions/imessage/src/monitor/recovery-cursor.postgres.test.ts",
       ]);
     } finally {
       writeFileSync(timingFile, original);
@@ -164,7 +167,7 @@ describe("PostgreSQL conformance shards", () => {
   it.each([
     ["--shard", "unknown"],
     ["--shard", "infra"],
-    ["--shard", "1/7"],
+    ["--shard", "1/8"],
     ["--shard", "01/3"],
     ["--shard", "1.5/3"],
     ["--shard", "0/3"],

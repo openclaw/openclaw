@@ -147,6 +147,20 @@ describe("happy path prompt snapshots", () => {
     }
   });
 
+  it("preserves canonical JSON bytes with a neutral temporary-root formatter config", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-json-"));
+    // CI temp roots do not inherit the repository config that ignores JSON files.
+    fs.writeFileSync(path.join(root, ".oxfmtrc.json"), "{}\n");
+    const tmpdir = vi.spyOn(os, "tmpdir").mockReturnValue(root);
+    try {
+      const materialized = await materializeCodexDynamicToolSnapshot("telegram-direct");
+      expect(materialized).toBe(`${JSON.stringify(JSON.parse(materialized), null, 2)}\n`);
+    } finally {
+      tmpdir.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects invalid Codex dynamic-tool materialization scenarios", async () => {
     await expect(materializeCodexDynamicToolSnapshot("../outside")).rejects.toThrow(
       "Invalid Codex dynamic-tool snapshot scenario",
