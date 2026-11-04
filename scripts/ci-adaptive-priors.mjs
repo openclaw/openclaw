@@ -255,7 +255,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
             const context = observations.observations?.context;
             requirePrior(
               observations.version === 1 &&
-                observations.observations?.version === 1 &&
+                [1, 2].includes(observations.observations?.version) &&
                 String(observations.source?.runId) === String(run.id) &&
                 String(observations.source?.runAttempt) === String(run.run_attempt) &&
                 observations.source?.event === "schedule" &&

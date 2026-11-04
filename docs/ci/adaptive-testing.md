@@ -81,7 +81,13 @@ and context. Changes to configuration or include files during execution cannot
 rewrite that frozen identity. A missing or invalid terminal receipt leaves the
 incomplete snapshot available if the artifact upload runs.
 
-If expanded dependency paths exceed the export limit, the capture retains
+If expanded dependency paths exceed the export limit, the capture first uses a
+version-2 observation payload: one shared `dependencyPaths` table with integer
+references in each file's `dependencies` array. Readers resolve those references
+before graph selection or model scoring; missing edges remain `null`. Small
+exports and frozen pre-execution snapshots keep version 1. Both versions remain
+readable, including retained historical artifacts. The outer export stays version 1.
+If the compact payload still exceeds the limit, the capture retains
 terminal outcomes and the frozen snapshot with all dependencies set to `null`,
 and emits a warning. Missing graph data still requires conservative selection.
 If that smaller export also exceeds the limit, the incomplete snapshot remains.

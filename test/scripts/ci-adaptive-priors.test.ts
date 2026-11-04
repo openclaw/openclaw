@@ -23,6 +23,7 @@ const env = {
 function fixture(
   options: {
     artifacts?: number;
+    compact?: boolean;
     consumerFork?: boolean;
     wrongConsumer?: boolean;
     sourceAttempt?: number;
@@ -61,7 +62,9 @@ function fixture(
       observations: { version: 1, context, invocations: [] },
       launchInputs: { sha256: options.launchMismatch ? "0".repeat(64) : sha256(launch) },
     },
-    observations: { version: 1, context, invocations: [] },
+    observations: options.compact
+      ? { version: 2, context, invocations: [], dependencyPaths: ["src/shared.ts"] }
+      : { version: 1, context, invocations: [] },
   };
   const files: Record<string, string> = {};
   for (const runtime of ["node", "bun"]) {
@@ -151,8 +154,8 @@ describe("adaptive CI prior restore", () => {
     expect(changed.requests.some((request) => request.endsWith("/zip"))).toBe(false);
   });
 
-  it("restores at most two verified archives and binds the bundle to the current checkout/run", async () => {
-    const f = fixture({ artifacts: 3 });
+  it.each([false, true])("restores bounded source-bound archives (compact=%s)", async (compact) => {
+    const f = fixture({ artifacts: 3, compact });
     const bundle = await restoreCiAdaptivePriors({ env, fetchImpl: f.fetchImpl });
     expect(bundle.consumer).toEqual({
       runId: "30",
