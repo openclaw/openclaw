@@ -17,7 +17,10 @@ import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
-import { isChatSendReconnecting } from "../chat-send-presentation.ts";
+import {
+  describeChatQueueAttachmentLabels,
+  isChatSendReconnecting,
+} from "../chat-send-presentation.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { handleQueueEditKeydown } from "./chat-composer-keydown.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
@@ -320,11 +323,18 @@ function ChatQueueItem(rowProps: {
   const editable = () =>
     Boolean(edit()?.onEdit) && isMovableChatQueueItem(item()) && !item().localCommandName;
   const canEdit = () => editable() && !edit()?.editingId;
-  const text = () =>
-    item().text ||
-    (item().attachments?.length
-      ? t("chat.queue.imageCount", { count: String(item().attachments?.length ?? 0) })
-      : "");
+  const text = () => {
+    const attachments = item().attachments ?? [];
+    return (
+      item().text.trim() ||
+      describeChatQueueAttachmentLabels(
+        attachments.some((attachment) => attachment.selectionAnnotation)
+          ? attachments.map(({ fileName }) => fileName)
+          : [],
+        attachments.length,
+      )
+    );
+  };
   const renderDeliveryAction = (action: "retry" | "steer", disabled = false) => (
     <button
       class={["chat-queue__action", `chat-queue__${action}`]}

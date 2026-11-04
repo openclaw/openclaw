@@ -55,6 +55,9 @@ Archived sessions keep earlier messages and recorded failures readable in the
 transcript. Past run failures do not show a recovery banner above the archived
 composer; unarchive the session to continue the conversation.
 
+Commentary written alongside tool calls stays in place as its own row, and those
+calls join the activity group that follows it instead of appearing as separate rows.
+
 Tool activity shows a tool-specific icon beside its purpose or details instead of
 repeating the tool name. When no distinct purpose or detail is available, the row
 shows the tool label instead of leaving the text blank. Activity summaries stay
@@ -1204,6 +1207,7 @@ and use extra space only as needed, without widening the surrounding prose or
 borrowing the space reserved for an open Details panel. Long
 cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
 Short values such as byte counts stay intact beside long filenames or hashes, including on mobile.
+Faded edges indicate hidden columns on that physical side, including in right-to-left locales.
 Table controls appear below the table. Wide desktop tables use compact icon-only
 controls; mobile and phone-landscape views retain larger touch controls and a visible
 **Expand table** label.

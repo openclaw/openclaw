@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Value } from "typebox/value";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { SessionsDispatchResult } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
-import type { CyberAccessProgram } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { readChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -67,7 +66,7 @@ import {
   type InProcessGatewayCaller,
 } from "./in-process-gateway.js";
 import { startVisibleCloudSession } from "./sessions-spawn-cloud.js";
-import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
+import type { VisibleSessionSpawnParams } from "./sessions-spawn-options.js";
 import {
   cleanupVisibleSpawnSession,
   summarizeVisibleSessionSpawnError,
@@ -79,25 +78,12 @@ import {
   validateVisibleSpawnOptions,
 } from "./sessions-spawn-visible.schema.js";
 
-type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
-  onSpawnEffectsStart?: () => void;
-  assertActive?: () => void;
-};
-
-export async function maybeSpawnVisibleSession(params: {
-  raw: Record<string, unknown>;
-  task: string;
-  taskName?: string;
-  label: string;
-  runtime: "subagent" | "acp";
-  requestedAgentId?: string;
-  runTimeoutSeconds?: number;
-  sandbox: "inherit" | "require";
-  expectsCompletionMessage: boolean;
-  cyberAccessProgram?: CyberAccessProgram;
-  options?: VisibleSessionsSpawnOptions;
-}): Promise<Record<string, unknown> | undefined> {
+export async function maybeSpawnVisibleSession(
+  params: VisibleSessionSpawnParams,
+): Promise<Record<string, unknown> | undefined> {
   const promptedAt = Date.now();
+  // sessions_create shares this owner's admission and containment, not its supervision.
+  const independent = params.options?.independent === true;
   const worktree = params.raw.worktree === true;
   const requestedPlacement = params.raw.placement;
   if (
@@ -416,7 +402,9 @@ export async function maybeSpawnVisibleSession(params: {
             ...(childSessionPublication ? { childSessionPublication } : {}),
             requesterSenderIsOwner: params.options?.senderIsOwner === true,
             gitContributorProfileId: params.options?.gitContributorProfileId,
-            completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+            ...(independent
+              ? {}
+              : { completionOwnerSessionKey: ownership.completionRequesterSessionKey }),
             ...(params.options?.sessionPermissionPolicy
               ? { inheritedPermissionMode: params.options.sessionPermissionPolicy.mode }
               : {}),
@@ -442,12 +430,15 @@ export async function maybeSpawnVisibleSession(params: {
       placement?: SessionsDispatchResult["placement"];
       initialTaskStatus?: "unknown" | "not-sent";
     };
-    const taskMessage = buildSubagentTaskMessage({
-      task: params.task,
-      spawnMode: "session",
-      childDepth: callerDepth + 1,
-      maxSpawnDepth: maxDepth,
-    });
+    // An independent session receives the user's brief verbatim and may start idle.
+    const taskMessage = independent
+      ? params.task
+      : buildSubagentTaskMessage({
+          task: params.task,
+          spawnMode: "session",
+          childDepth: callerDepth + 1,
+          maxSpawnDepth: maxDepth,
+        });
     try {
       const titleSource = placement && buildDashboardSessionTitleSource({ message: params.task });
       const createParams = {
@@ -457,7 +448,7 @@ export async function maybeSpawnVisibleSession(params: {
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
         ...(cyberAccessProgram !== undefined ? { cyberAccessProgram } : {}),
-        ...(placement ? { titleSource } : { task: taskMessage }),
+        ...(placement ? { titleSource } : taskMessage ? { task: taskMessage } : {}),
         timeoutMs:
           runTimeoutSeconds === 0
             ? 0
@@ -475,13 +466,21 @@ export async function maybeSpawnVisibleSession(params: {
         ...(worktreeBaseRef ? { worktreeBaseRef } : {}),
       };
       response = await runWithAgentToolSourceExecutionScope(assertActive, () =>
+        // Placement fences the whole request; independent sessions fence only the commit.
+        // Once committed, the session owns its opening run and receipt.
         placement
           ? createGatewayCall("sessions.create", createParams, {
               signal: params.options?.signal,
               sessionMutationCommitGuard: assertActive,
               timeoutMs: null,
             })
-          : createGatewayCall("sessions.create", createParams),
+          : independent
+            ? createGatewayCall("sessions.create", createParams, {
+                revalidateOnCompletion: false,
+                requesterCommitGuard: assertActive,
+                timeoutMs: null,
+              })
+            : createGatewayCall("sessions.create", createParams),
       );
     } catch (error) {
       const missingScope = readMissingScopeErrorDetails(
@@ -579,6 +578,12 @@ export async function maybeSpawnVisibleSession(params: {
         status: "error",
         error: runError,
       };
+    }
+    if (independent) {
+      // Unsupervised: no run registration or completion route, and a failed
+      // opening run leaves the created session available for inspection.
+      const runStarted = response.runStarted === true;
+      return { status: "created", childSessionKey, sessionId, runStarted, runId, runError };
     }
     const cleanupCreatedSession = () =>
       cleanupVisibleSpawnSession({

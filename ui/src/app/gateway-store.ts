@@ -588,7 +588,7 @@ export function createApplicationGateway(
             : error?.message
               ? formatUiError(error.message)
               : closeReason
-                ? `disconnected (${code}): ${closeReason}`
+                ? `${t("connection.interrupted", { code: String(code) })} ${closeReason}`
                 : t(willRetry ? "connection.interruptedRetrying" : "connection.interrupted", {
                     code: String(code),
                   }),
