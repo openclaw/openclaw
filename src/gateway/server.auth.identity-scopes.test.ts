@@ -22,6 +22,7 @@ import {
 } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import {
   linkEmail,
@@ -29,6 +30,7 @@ import {
   setUserProfileRole,
 } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { OperatorScope } from "./operator-scopes.js";
@@ -50,6 +52,8 @@ import {
   waitForWsClose,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
+import { onGatewayPolicyClientInvalidated } from "./server/ws-policy-close.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import { getTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -217,6 +221,143 @@ const GITHUB_RATE_LIMITED_ERROR = {
   message: expect.stringContaining("GitHub is rate limiting profile verification"),
   retryAfterMs: expect.toSatisfy((ms: number) => ms > 60_000),
 };
+
+test.each(["config", "profile", "profile-revocation"] as const)(
+  "renews the current person-timeline claim after committed %s changes",
+  async (publication) => {
+    const holdAcceptedWork = publication !== "config";
+    const roles: GatewayOperatorRolesConfig = {
+      default: "member",
+      definitions: {
+        member: role(["operator.read", "operator.sessions.write"]),
+        guest: role(["operator.sessions.write"]),
+        staff: role(["operator.admin"], "write"),
+        denied: role([], "none"),
+      },
+    };
+    await configureGatewayAuth(proxyAuth(ADMIN_GRANT), roles);
+    setUserProfileRole(ensureProfileForEmail("admin@example.com").id, "staff");
+    const person = ensureProfileForEmail("member@example.test");
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const completed = createDeferredCore<boolean>();
+    let accepted = false;
+    let revoked = false;
+    if (holdAcceptedWork) {
+      const { config, registry } = createPluginRegistryFixture();
+      registerVirtualTestPlugin({
+        registry,
+        config,
+        id: "timeline-proof",
+        name: "Timeline proof",
+        register(api) {
+          api.registerGatewayMethod(
+            "timeline-proof.accepted",
+            async ({ client }) => {
+              if (!client) {
+                throw new Error("expected the authenticated WebSocket caller");
+              }
+              // This real WS dispatch retains its actual source, independently of socket close.
+              const unbind = onGatewayPolicyClientInvalidated(client as GatewayWsClient, () => {
+                revoked = true;
+              });
+              accepted = true;
+              entered.resolve();
+              try {
+                await release.promise;
+                completed.resolve(!revoked);
+                return { completed: !revoked };
+              } finally {
+                unbind();
+              }
+            },
+            { scope: "operator.sessions.write" },
+          );
+        },
+      });
+      setTestPluginRegistry(registry.registry);
+    }
+    // Minimal fixtures own injected methods and real profile publications; full mode
+    // owns committed config reloads. Neither fixture can impersonate the other owner.
+    await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: holdAcceptedWork ? "1" : "0" }, () =>
+      withIdentityServer(async ({ connect }) => {
+        const headers = { ...TRUSTED_PROXY_HEADERS, "x-forwarded-user": "member@example.test" };
+        const { ws, connected } = await connect({ scopes: ["operator.sessions.write"] }, headers);
+        const admin = holdAcceptedWork ? undefined : await connect({ scopes: ["operator.admin"] });
+        expectScopes(connected, ["operator.sessions.write"]);
+        if (holdAcceptedWork) {
+          expect((connected.payload as HelloOk).features.methods).toContain(
+            "timeline-proof.accepted",
+          );
+        }
+        expect(responseAuth(connected)).not.toHaveProperty("profileActivityViewerId");
+        const patchRoles = async (next: GatewayOperatorRolesConfig) => {
+          if (!admin) {
+            throw new Error("expected the managed config publication owner");
+          }
+          const before = await rpcReq<{ hash: string }>(admin.ws, "config.get");
+          expect(before.ok).toBe(true);
+          const patched = await rpcReq(admin.ws, "config.patch", {
+            baseHash: before.payload?.hash,
+            raw: JSON.stringify({ gateway: { roles: next } }),
+            replacePaths: ["gateway.roles.definitions.member.scopes"],
+          });
+          expect(patched.ok, JSON.stringify(patched.error)).toBe(true);
+        };
+        try {
+          setDisplayName(person.id, "Renamed member");
+          if (!holdAcceptedWork) {
+            await patchRoles({
+              ...roles,
+              definitions: { ...roles.definitions, unrelated: role([]) },
+            });
+          }
+          await expectProfile(ws, person.id);
+          if (holdAcceptedWork) {
+            ws.send(
+              JSON.stringify({
+                type: "req",
+                id: "accepted-timeline-work",
+                method: "timeline-proof.accepted",
+                params: {},
+              }),
+            );
+            await entered.promise;
+          }
+          if (publication === "config") {
+            await patchRoles({
+              ...roles,
+              definitions: { ...roles.definitions, member: roles.definitions.guest! },
+            });
+          } else {
+            setUserProfileRole(person.id, "guest");
+          }
+          expect(await waitForWsClose(ws, 1_000)).toBe(true);
+          if (holdAcceptedWork) {
+            expect(revoked).toBe(false);
+          }
+          const replacement = await connect({ scopes: ["operator.sessions.write"] }, headers);
+          expectScopes(replacement.connected, ["operator.sessions.write"]);
+          expect(responseAuth(replacement.connected)?.profileActivityViewerId).toBe(person.id);
+          if (publication === "profile-revocation") {
+            // A later real authority loss must still reach the request retained after transport close.
+            setUserProfileRole(person.id, "denied");
+            expect(revoked).toBe(true);
+          }
+          if (holdAcceptedWork) {
+            release.resolve();
+            expect(await completed.promise).toBe(publication !== "profile-revocation");
+          }
+        } finally {
+          release.resolve();
+          if (accepted) {
+            await completed.promise;
+          }
+        }
+      }),
+    );
+  },
+);
 
 /** Stubs only api.github.com user lookups; `quotaExhausted` switches to GitHub's real 403. */
 function stubGitHubUserLookups(users: Record<string, { id: number; login: string }>) {

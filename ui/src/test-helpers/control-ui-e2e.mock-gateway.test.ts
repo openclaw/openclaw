@@ -15,11 +15,46 @@ import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockRequestHandler,
 } from "./control-ui-e2e.ts";
+import { normalizeControlUiMockAuth } from "./control-ui-mock-auth.ts";
 import { collectGarbageForTest } from "./garbage-collection.ts";
 import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
 const getGateway = (window: MockGatewayWindow) =>
   expectDefined(window.openclawControlUiE2eGateway, "Mock Gateway was not installed");
+
+it.for([undefined, null, "profile-current"])(
+  "keeps prepared role presentation separate from changed socket scopes (%s)",
+  async (profileActivityViewerId, { gatewayPage }) => {
+    const prepared = normalizeControlUiMockAuth({
+      roleAllowsAdmin: false,
+      operatorSessionCap: "write",
+      profileActivityViewerId,
+      operatorScopes: ["operator.sessions.write"],
+    });
+    gatewayPage.execute(createControlUiMockGatewayInitScript(prepared));
+    const first = gatewayPage.connect();
+    await flushMockTimers();
+    const hello = await first.request("first-connect", "connect", {});
+    expect(hello.auth).toMatchObject({
+      ...prepared.operatorRolePolicy,
+      scopes: prepared.operatorScopes,
+    });
+    getGateway(gatewayPage.window).setOperatorScopes(["operator.read"]);
+    getGateway(gatewayPage.window).closeLatest();
+    const replacement = gatewayPage.connect();
+    await flushMockTimers();
+    const renewed = await replacement.request("renewed-connect", "connect", {});
+    expect(renewed.auth).toMatchObject({
+      ...prepared.operatorRolePolicy,
+      scopes: ["operator.read"],
+    });
+    if (profileActivityViewerId === undefined) {
+      expect(renewed.auth).not.toHaveProperty("profileActivityViewerId");
+    } else {
+      expect(renewed.auth).toHaveProperty("profileActivityViewerId", profileActivityViewerId);
+    }
+  },
+);
 
 it("serves protocol-valid empty Custodian history without method advertisement", async ({
   gatewayPage,

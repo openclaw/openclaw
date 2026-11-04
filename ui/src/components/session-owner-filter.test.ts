@@ -187,6 +187,78 @@ describe("sidebar owner filter", () => {
     });
   });
 
+  describe("authenticated person-timeline admission", () => {
+    const hello = (viewerId?: string | null, sessionCap = "view") =>
+      ({
+        auth: {
+          role: "operator",
+          scopes: ["operator.sessions.write"],
+          roleAllowsAdmin: false,
+          sessionCap,
+          ...(viewerId !== undefined ? { profileActivityViewerId: viewerId } : {}),
+        },
+      }) as NonNullable<ApplicationGatewaySnapshot["hello"]>;
+
+    it.each(["write", "suggest", "view", "invited", "none"])(
+      "admits a restored owner before a %s role's first query",
+      (sessionCap) => {
+        storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("owner-bob"));
+        const { host, update } = fixture({ hello: hello("profile-ada", sessionCap) });
+        expectOwner(host, null, true);
+        update();
+        expectReads(host, 1);
+        expect(saved()).toEqual(choice(null, true));
+      },
+    );
+
+    it("keeps a broad role's foreign choice despite a reduced socket grant", () => {
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("owner-bob"));
+      const { host, update } = fixture({ hello: hello() });
+      update();
+      expectOwner(host, "owner-bob");
+      expect(saved()).toEqual(choice("owner-bob"));
+    });
+
+    it("reconciles a new hello for the same profile but preserves explicit same-hello denial", () => {
+      const { filter, host, update, facet } = fixture({ hello: hello() });
+      update();
+      filter.set("owner-bob");
+      update();
+      update({ hello: hello("profile-ada") });
+      expectOwner(host, null, true);
+      expect(saved()).toEqual(choice(null, true));
+      filter.set("owner-bob");
+      update();
+      facet({ ...ownerFacet("profile-ada"), error: "Other people's activity is private." });
+      expectOwner(host, "owner-bob");
+      expect(saved()).toEqual(choice("owner-bob"));
+    });
+
+    it("binds replacement admission to the hello identity while old display identity is retained", () => {
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("owner-before"));
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-bob", choice("owner-foreign"));
+      const { filter, host, update } = fixture({ hello: hello() });
+      update();
+      update({ phase: "reconnecting", selfUser: undefined });
+      expectOwner(host, "owner-before");
+      update({ phase: "connected", selfUser: undefined, hello: hello("profile-bob") });
+      expectOwner(host, null, true);
+      expect(filter.selfUserId).toBe("profile-bob");
+      expect(saved("profile-ada")).toEqual(choice("owner-before"));
+      expect(saved("profile-bob")).toEqual(choice(null, true));
+    });
+
+    it("does not overwrite a retained profile preference for an unidentified restricted hello", () => {
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("owner-before"));
+      const { filter, host, update } = fixture({ hello: hello() });
+      update();
+      update({ phase: "connected", selfUser: undefined, hello: hello(null) });
+      expectOwner(host, null);
+      expect(filter.selfUserId).toBeUndefined();
+      expect(saved()).toEqual(choice("owner-before"));
+    });
+  });
+
   it("keeps profiles and gateways isolated, including a temporarily unavailable identity", () => {
     const { filter, update, host } = fixture();
     update();

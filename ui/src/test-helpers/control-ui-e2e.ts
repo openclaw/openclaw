@@ -1437,10 +1437,7 @@ function installControlUiMockGateway(
                   recoveryScope: "e2e-recovery-scope",
                   role: "operator",
                   scopes: scenario.operatorScopes,
-                  roleAllowsAdmin: scenario.roleAllowsAdmin,
-                  ...(scenario.operatorSessionCap
-                    ? { sessionCap: scenario.operatorSessionCap }
-                    : {}),
+                  ...scenario.operatorRolePolicy,
                 },
               }),
           features: {
