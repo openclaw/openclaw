@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import {
+  deliveryContextKey,
+  normalizeDeliveryContext,
+} from "../../utils/delivery-context.shared.js";
 import type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
 import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import type { InternalSessionEntry } from "./types.js";
@@ -123,6 +126,17 @@ function projectPendingFinalDeliveryState(
     settled !== "queued" &&
     settled !== "unknown" &&
     existingNotice?.intentId === pending.intentId;
+  // A newer reply that reached the same chat settles older uncertainty: the user
+  // is no longer waiting in silence, and a later warning would arrive out of context.
+  const supersedesNotice =
+    existingNotice &&
+    existingNotice.state !== "acknowledged" &&
+    existingNotice.intentId !== pending.intentId &&
+    existingNotice.createdAt <= pending.createdAt &&
+    settled === "delivered" &&
+    current !== "delivered" &&
+    updatedDeliveries.every(({ state }) => state === "delivered" || state === "suppressed") &&
+    deliveryContextKey(existingNotice.context) === deliveryContextKey(pending.context);
   // One resolved sibling cannot erase another's ambiguity or owe an acknowledged notice again.
   if (settled === current && !owedNotice && !clearsNotice) {
     return { patch: null, state: settled };
@@ -131,7 +145,11 @@ function projectPendingFinalDeliveryState(
     state: settled,
     patch: {
       pendingFinalDelivery: { ...pending, deliveries: updatedDeliveries },
-      ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),
+      ...(clearsNotice
+        ? { pendingDeliveryNotice: undefined }
+        : supersedesNotice
+          ? { pendingDeliveryNotice: { ...existingNotice, state: "acknowledged" as const } }
+          : owedNotice),
     },
   };
 }

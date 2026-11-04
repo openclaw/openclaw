@@ -437,25 +437,24 @@ async function runOutboundDeliveryWithQueue(
       (params.requireUnknownSendReconciliation === true ||
         support.automaticUnknownSendReconciliation);
   }
-  const isTextOnlyChannelData =
-    params.retryAmbiguousFinalText === true &&
-    preparedPayloads.length === 1 &&
-    preparedPayloads[0]?.channelData !== undefined
+  // The caller marks an ordinary agent final; the channel decides whether a duplicate beats a loss.
+  const durableFinal =
+    params.retryAmbiguousFinalText === true
       ? (
           await resolveOutboundChannelMessageAdapter({
             cfg: params.cfg,
             agentId: params.session?.agentId,
             channel,
           })
-        )?.durableFinal?.isTextOnlyChannelData
+        )?.durableFinal
       : undefined;
   const deliveryParams: InternalDeliverOutboundPayloadsParams = {
     ...params,
     payloads: preparedPayloads,
     preparedBatch,
     retryAmbiguousFinalText:
-      params.retryAmbiguousFinalText === true &&
-      isOrdinaryFinalText(preparedPayloads, isTextOnlyChannelData)
+      durableFinal?.replayAmbiguousFinalText === true &&
+      isOrdinaryFinalText(preparedPayloads, durableFinal.isTextOnlyChannelData)
         ? true
         : undefined,
     // Recovery must preserve the provider-facing plan captured before local

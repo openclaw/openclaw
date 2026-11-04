@@ -3,6 +3,11 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../../agents/date-time.js";
+import {
+  acknowledgePendingDeliveryNotices,
+  PENDING_DELIVERY_CONTEXT_PREFIX,
+} from "../../channels/turn/pending-delivery-notice.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
@@ -88,6 +93,8 @@ export async function drainFormattedSystemEvents(params: {
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
+  /** Session store of `sessionKey`; consumed delivery-uncertainty offers settle there. */
+  storePath?: string;
   events?: readonly SystemEvent[];
   deferredEventIds?: readonly string[];
   onEventsAdmitted?: (events: readonly SystemEvent[]) => void;
@@ -113,6 +120,21 @@ export async function drainFormattedSystemEvents(params: {
   });
   if (sessionStateNotices.length > 0) {
     await acknowledgeSessionStateNotices(params.sessionKey, sessionStateNotices);
+  }
+  const deliveryIntents = queued.flatMap((event) =>
+    event.contextKey?.startsWith(PENDING_DELIVERY_CONTEXT_PREFIX)
+      ? [event.contextKey.slice(PENDING_DELIVERY_CONTEXT_PREFIX.length)]
+      : [],
+  );
+  if (deliveryIntents.length > 0) {
+    await acknowledgePendingDeliveryNotices({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      storePath:
+        params.storePath ??
+        resolveSessionStorePathCore(params.cfg.session?.store, { agentId: params.agentId }),
+      intentIds: deliveryIntents,
+    });
   }
   for (const event of queued) {
     // A same-store resolver handoff does not retire already-consumed events.

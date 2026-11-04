@@ -16,6 +16,8 @@ import {
 } from "../../infra/outbound/delivery-completion.js";
 import { createPendingFinalFixture } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
+import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -26,8 +28,6 @@ import { dispatchRoutedChannelTurn } from "./lifecycle.js";
 import type { ChannelTurnDeliveryAdapter } from "./types.js";
 
 const dispatchCore = vi.hoisted(() => vi.fn());
-const sendNotice = vi.hoisted(() => vi.fn());
-const appendAssistantMessageToSessionTranscript = vi.hoisted(() => vi.fn());
 const resolveDurableSupport = vi.hoisted(() => vi.fn());
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => ({
@@ -38,17 +38,12 @@ vi.mock("../session.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session.js")>()),
   recordInboundSession: vi.fn(async () => undefined),
 }));
-vi.mock("../../gateway/server-lifecycle-runtime-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../gateway/server-lifecycle-runtime-context.js")>()),
-  getGatewayLifecycleRuntime: () => ({ sendNotice }),
-}));
 vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/outbound/deliver.js")>()),
   resolveOutboundDurableFinalDeliverySupport: resolveDurableSupport,
 }));
 vi.mock("../../config/sessions/transcript.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/transcript.js")>()),
-  appendAssistantMessageToSessionTranscript,
   readRecentUserAssistantTextForSession: vi.fn(async () => []),
 }));
 
@@ -83,13 +78,14 @@ describe("pending delivery notice end to end", () => {
       },
       delivery,
     });
-  const expectNoticeState = (suppressed: boolean) =>
-    expect(entry()?.pendingDeliveryNotice?.state).toBe(suppressed ? "unresolved" : "acknowledged");
+  const noticeEvents = (key = sessionKey, agentId = "main") =>
+    peekSystemEventEntries(resolveSystemEventQueueKey(key, agentId)).filter((event) =>
+      event.contextKey?.startsWith("pending-delivery:"),
+    );
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    sendNotice.mockResolvedValue({ suppressed: false });
-    appendAssistantMessageToSessionTranscript.mockResolvedValue({ ok: true });
+    resetSystemEventsForTest();
     storePath = path.join(sessionDirs.make(), "sessions.json");
     const fixture = createPendingFinalFixture(storePath, "delivery-e2e", sessionKey, {
       text: "the final answer",
@@ -117,14 +113,8 @@ describe("pending delivery notice end to end", () => {
     const secondary = { agentId: "secondary", sessionKey: "global", storePath };
     await replaceSessionEntry(secondary, { ...entry()!, sessionId: "secondary-global" });
     const runDispatch = vi.fn(async () => {
-      expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          ...secondary,
-          expectedSessionId: "secondary-global",
-          expectedLifecycleRevision: null,
-        }),
-      );
-      expect(loadSessionEntry(secondary)?.pendingDeliveryNotice?.state).toBe("acknowledged");
+      expect(noticeEvents("global", "secondary")).toHaveLength(1);
+      expect(loadSessionEntry(secondary)?.pendingDeliveryNotice?.state).toBe("owed");
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     });
     await runPreparedChannelTurn({
@@ -177,8 +167,7 @@ describe("pending delivery notice end to end", () => {
     await sending.promise;
     try {
       await freshTurn();
-      expect(sendNotice).not.toHaveBeenCalled();
-      expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+      expect(noticeEvents()).toEqual([]);
       expect(entry()?.pendingDeliveryNotice?.state).toBe("owed");
 
       // A refused duplicate admission cannot release the original send's custody.
@@ -186,13 +175,13 @@ describe("pending delivery notice end to end", () => {
       await runTurn(duplicate);
       expect(duplicate).not.toHaveBeenCalled();
       await freshTurn();
-      expect(sendNotice).not.toHaveBeenCalled();
+      expect(noticeEvents()).toEqual([]);
     } finally {
       finish.resolve();
       await attempt;
     }
     await freshTurn();
-    expect(sendNotice).not.toHaveBeenCalled();
+    expect(noticeEvents()).toEqual([]);
     expect(entry()?.pendingDeliveryNotice).toBeUndefined();
   });
 
@@ -222,13 +211,11 @@ describe("pending delivery notice end to end", () => {
       ).resolves.toMatchObject({ dispatched: true });
       const afterReplay = await readSessionEntryReadOnlyInWorker(locator());
       expect(afterReplay?.pendingFinalDelivery).toEqual(admittedEntry?.pendingFinalDelivery);
-      expect(afterReplay?.pendingDeliveryNotice).toEqual({
-        ...admittedEntry?.pendingDeliveryNotice,
-        state: "acknowledged",
-      });
+      // Offered to the turn, but only a consumed prompt settles it.
+      expect(afterReplay?.pendingDeliveryNotice).toEqual(admittedEntry?.pendingDeliveryNotice);
     }
     expect(platformSend).not.toHaveBeenCalled();
-    expect(sendNotice).toHaveBeenCalledOnce();
+    expect(noticeEvents()).toHaveLength(1);
   });
 
   it.each([
@@ -266,11 +253,10 @@ describe("pending delivery notice end to end", () => {
     expect(onError).toHaveBeenCalledExactlyOnceWith(error, { kind: "final" });
 
     await freshTurn();
-    expect(sendNotice).not.toHaveBeenCalled();
+    expect(noticeEvents()).toEqual([]);
   });
 
-  it.each([false, true])("settles suppression=%s once", async (suppressed) => {
-    sendNotice.mockResolvedValue({ suppressed });
+  it("hands an ambiguous final to the next turn once, without chat text", async () => {
     const ambiguous = new Error("socket closed before response");
     await expect(runTurn(() => Promise.reject(ambiguous))).rejects.toBe(ambiguous);
 
@@ -278,26 +264,22 @@ describe("pending delivery notice end to end", () => {
       pendingFinalDelivery: { deliveries: [{ id: completion.deliveryId, state: "unknown" }] },
       pendingDeliveryNotice: { intentId: completion.intentId, state: "owed" },
     });
-    expect(sendNotice).not.toHaveBeenCalled();
+    expect(noticeEvents()).toEqual([]);
 
     await freshTurn();
-    expect(sendNotice).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        ...context,
-        text: expect.stringContaining("couldn’t confirm"),
-      }),
-    );
-    expectNoticeState(suppressed);
-    if (suppressed) {
-      expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    }
+    expect(noticeEvents().map((event) => event.text)).toEqual([
+      expect.stringContaining("may not have reached this chat"),
+    ]);
+    expect(entry()?.pendingDeliveryNotice?.state).toBe("owed");
+    // Restart loses the in-memory offer; the persisted debt re-offers it.
+    resetSystemEventsForTest();
 
     await closeOpenClawAgentDatabasesAsync(path.dirname(storePath));
     closeOpenClawAgentDatabasesForTest(path.dirname(storePath));
     // A queue restart can repeat owner settlement after its first write committed.
     await settleDurableDelivery(completion, { platformSendStarted: true });
     await freshTurn();
-    expect(sendNotice).toHaveBeenCalledTimes(1);
-    expectNoticeState(suppressed);
+    expect(noticeEvents()).toHaveLength(1);
+    expect(entry()?.pendingDeliveryNotice?.state).toBe("owed");
   });
 });

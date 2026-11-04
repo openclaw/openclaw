@@ -1555,6 +1555,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
                 bodyIncludes: action.bodyIncludes,
                 times: action.times,
                 retryAfter: action.retryAfter,
+                reset: action.reset,
               });
               telegramApi = { method: action.method, skip: action.skip };
             } else if (action.type === "telegramApiWaitHeld") {

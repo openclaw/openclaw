@@ -18,7 +18,7 @@ import {
   hasVisibleChannelTurnDispatch,
   type ChannelTurnDispatchResultLike,
 } from "./dispatch-result.js";
-import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
+import { admitPendingDeliveryNotice } from "./pending-delivery-notice.js";
 import type {
   ChannelTurnAdmission,
   ChannelTurnHistoryFinalizeOptions,
@@ -229,7 +229,7 @@ export async function runPreparedChannelTurnCore<
         });
         emitStage("record", "done");
         await params.afterRecord?.();
-        await deliverPendingDeliveryNotice(recordSessionKey, params.storePath, recordAgentId);
+        await admitPendingDeliveryNotice(recordSessionKey, params.storePath, recordAgentId);
       } catch (err) {
         emitStage("record", "error", err);
         try {

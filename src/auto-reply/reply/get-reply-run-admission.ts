@@ -222,6 +222,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: systemEventSessionKey,
         isMainSession: isCurrentSession && isMainSession,
         isNewSession: isCurrentSession && isNewSession,
+        storePath: isCurrentSession ? storePath : undefined,
         // Producer-owned turns consume only their captured occurrence selection.
         events: opts?.internalEventExecution ? (eventContext?.events ?? []) : undefined,
       });
