@@ -65,6 +65,7 @@ export function createSlackActions(
   return {
     writeAuthorityActions: ["edit"],
     providerOwnedReadGates: true,
+    writeAuthorityActions: ["edit"],
     readAuthorityActions: [
       "read",
       "reactions",
