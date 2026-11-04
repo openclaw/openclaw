@@ -117,11 +117,21 @@ describe("system-agent delegation scenario tool policy", () => {
   it.each([
     { senderId: "bob", provider: "qa-channel" },
     { senderId: "alice", provider: "webchat" },
-  ])("does not grant ownership to $provider:$senderId", ({ senderId, provider }) => {
+  ])("does not grant ownership to $provider:$senderId", async ({ senderId, provider }) => {
     expect(authorizationFor(config, senderId, provider).senderIsOwner).toBe(false);
-    expect(toolsFor(config, { senderId, provider }).map((tool) => tool.name)).not.toContain(
-      "openclaw",
+    // Session catalogs stay stable across senders; authority gates execution, not visibility.
+    const delegate = toolsFor(config, { senderId, provider }).find(
+      (tool) => tool.name === "openclaw",
     );
+    expect(delegate?.catalogMode).toBe("direct-only");
+    const result = await delegate!.execute("non-owner-delegation", { message: "probe" });
+    expect(result.details).toMatchObject({ gated: true });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "openclaw needs the owner's authority, and this turn was not started by the owner. Do not retry openclaw.",
+      },
+    ]);
   });
 
   it("does not bypass conversation-scoped tool policy", () => {
