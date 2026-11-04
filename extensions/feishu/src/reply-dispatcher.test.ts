@@ -1073,8 +1073,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     },
   );
 
-  // Strings are previews, [text] is a completed block and null is an idle close. Core does not
-  // await idle, so true holds one in flight; false rejects it after the card showed only "A.".
+  // Strings preview, [text] blocks, [text, true] error finals. null idles, true holds, false rejects.
   it.each([
     ["delta blocks", ["hello", ["lo world"]], ["hellolo world"]],
     ["covered tail", ["First.\n\nLast.", ["First."], ["\n\nLast."]], ["First.\n\nLast."]],
@@ -1086,7 +1085,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["idle-closed cards", ["One.", ["One."], null, "One.\n\nTwo.", ["\n\nTwo."]], ["One.", "Two."]],
     ["rejection", ["A.", ["A."], "A. X.", true, false, "A. X. E.", [" X. E."]], ["A. X.", "X. E."]],
     ["late rejection", [["A."], "A. X.", true, "A. X. E.", ["Z."], false], ["A. X.", "X. E.Z."]],
-  ] as const)("streams %s", async (_name, events, cards) => {
+    ["late error", [["A."], "A. X.", true, "A. X. E.", ["E.F", true], false], ["A. X.", "E.F"]],
+  ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
     const close = gate<StreamingCloseResult>();
@@ -1098,22 +1098,22 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         stream(0).closeWithResult.mockImplementationOnce(close.wait);
         await Promise.race([options.onIdle?.(), close.started]);
       } else if (event === false) {
-        // The block recovery resends "A."; "X." was never shown, so the next card must keep it.
         const shown = { visibleReplySent: true, content: "A.", finalTextAccepted: false };
         close.reject(streamingFailure(new Error("no"), shown));
         await expect(options.onIdle?.()).rejects.toThrow("no");
         expectSend(sendStructuredCardFeishuMock, { text: "A." });
         expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+        expect(streamingInstances).toHaveLength(name === "rejection" ? 1 : 2);
       } else if (typeof event === "string") {
         result.replyOptions.onPartialReply?.({ text: event });
       } else {
-        void (await options.block({ text: event[0] }))?.finalization?.catch(() => undefined);
+        const deliver = event[1] ? options.final : options.block;
+        void (await deliver({ text: event[0], isError: event[1] }))?.finalization?.catch(() => {});
       }
     }
     await options.onIdle?.();
-    expect(streamingInstances.map((stub) => stub.closeWithResult.mock.calls)).toEqual(
-      cards.map((text) => [[text, { note: "Agent: agent" }]]),
-    );
+    const closeCalls = streamingInstances.map((stub) => stub.closeWithResult.mock.calls);
+    expect(closeCalls).toEqual(cards.map((text) => [[text, { note: "Agent: agent" }]]));
   });
 
   it("keeps an over-limit block in its active streaming card", async () => {

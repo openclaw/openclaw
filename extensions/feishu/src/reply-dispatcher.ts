@@ -339,8 +339,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     const shown = `${snapshotBaseText}${continuedPreview(previewText)}`;
     closedPreviewText = next;
-    // Rebuild only the preview part of an open card; text appended after it stays.
-    if (lastPartial && (streaming || streamingStartPromise) && streamText.startsWith(shown)) {
+    // Rebuild only the preview part of an open card. A final owns its card and stays as delivered.
+    if (
+      !hasStreamingFinalText &&
+      lastPartial &&
+      (streaming || streamingStartPromise) &&
+      streamText.startsWith(shown)
+    ) {
       const appended = streamText.slice(shown.length);
       streamText = `${snapshotBaseText}${continuedPreview(previewText)}${appended}`;
       flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
