@@ -82,6 +82,13 @@
  * --crash-builder interrupts the fixture's outstanding rm after the first prepare,
  * then exits without finalizers. Reopen that same --output with --recover-builder
  * --fake-builder-removal-ms 36000 to prove startup cleanup from persisted state.
+ * --creation-contender starts an unrelated real managed checkout when the first
+ * cold template build begins. Its latency/phases and the combined owner cost
+ * expose global allocation head-of-line blocking. Use --serial-turns --fresh-only
+ * --acceleration with a native dependency fixture; run two identical controls
+ * and five counterbalanced baseline/candidate pairs. Child CPU is excluded.
+ * Add --owner-switch --head-advance cold to start the contender on other-first,
+ * after worker warmup, while a new commit still requires a cold template.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -116,6 +123,7 @@ const { values } = parseArgs({
     "fixture-source": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
     "owner-switch": { type: "boolean", default: false },
+    "creation-contender": { type: "boolean", default: false },
     "head-advance": { type: "string" },
     "fresh-only": { type: "boolean", default: false },
     acceleration: { type: "boolean", default: false },
@@ -281,6 +289,13 @@ assert(!values["fixture-source"] || serialTurns);
 assert(!values["owner-switch"] || serialTurns);
 assert(!values["fresh-only"] || serialTurns);
 assert(!values.acceleration || serialTurns);
+assert(
+  !values["creation-contender"] ||
+    (serialTurns &&
+      values["fresh-only"] &&
+      values.acceleration &&
+      (!values["owner-switch"] || values["head-advance"] === "cold")),
+);
 assert(
   !values["head-advance"] ||
     (["cold", "prewarm"].includes(values["head-advance"]) &&
@@ -892,6 +907,40 @@ measurement: try {
     fs.writeFileSync(path.join(canonical, sentinel), "canonical-only excluded bytes\n");
     const turns: unknown[] = [];
     const mutations = new Map<string, string | null>();
+    let createContender: (() => Promise<unknown>) | undefined;
+    if (values["creation-contender"]) {
+      const contenderRepo = path.join(output, "contender-repo");
+      fs.mkdirSync(contenderRepo);
+      const contenderGit = (...args: string[]) =>
+        execFileSync("git", ["-C", contenderRepo, ...args], { env: process.env });
+      contenderGit("init", "--quiet", "-b", "main");
+      contenderGit("config", "user.name", "Synthetic fixture");
+      contenderGit("config", "user.email", "fixture@example.invalid");
+      fs.writeFileSync(path.join(contenderRepo, "README.md"), "independent checkout\n");
+      contenderGit("add", ".");
+      contenderGit("commit", "--quiet", "-m", "Synthetic contender");
+      const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
+      const service = new ManagedWorktreeService({ getConfig: () => config });
+      createContender = async () => {
+        const spans: Record<string, number> = {};
+        const started = performance.now();
+        const record = await withDiagnosticsTimelineObserver(
+          (name, _attributes, duration) => {
+            const begin = performance.now();
+            return () => {
+              spans[name] = (spans[name] ?? 0) + (duration ?? performance.now() - begin);
+            };
+          },
+          () => service.create({ repoRoot: contenderRepo, name: "contender", baseRef: "HEAD" }),
+        );
+        const elapsedMs = performance.now() - started;
+        assert.equal(
+          fs.readFileSync(path.join(record.path, "README.md"), "utf8"),
+          "independent checkout\n",
+        );
+        return { elapsedMs, spans };
+      };
+    }
     const measureTurn = async (phase: string, prepare = prepareWorkspace) => {
       acquisitions = scans = probes = 0;
       manifestReads.length = 0;
@@ -904,8 +953,25 @@ measurement: try {
         totalBefore = process.cpuUsage();
       const allocationBefore = getHeapStatistics().total_allocated_bytes;
       const started = performance.now();
+      const buildStarted = Promise.withResolvers<void>();
+      let contenderStarted = false;
+      // Construct this continuation outside preparation's closure-bound authority.
+      const contender =
+        phase === (values["owner-switch"] ? "other-first" : "first") && createContender
+          ? buildStarted.promise.then(createContender)
+          : undefined;
+      void contender?.catch(() => {});
       const measuredWorkspace = await withDiagnosticsTimelineObserver(
         (name, _attributes, durationMs) => {
+          if (
+            contender &&
+            name.endsWith(".template.build") &&
+            durationMs === undefined &&
+            !contenderStarted
+          ) {
+            contenderStarted = true;
+            buildStarted.resolve();
+          }
           const begin = performance.now();
           return () => {
             const span = (spans[name] ??= { count: 0, totalMs: 0 });
@@ -914,7 +980,15 @@ measurement: try {
           };
         },
         () => withWorktreePreparationTiming("sandbox", prepare),
-      );
+      ).catch(async (error: unknown) => {
+        if (contenderStarted) {
+          await Promise.allSettled([contender]);
+        }
+        throw error;
+      });
+      const projectionElapsedMs = performance.now() - started;
+      assert(!contender || contenderStarted, "Cold template build never started contender");
+      const contenderResult = await contender;
       const elapsedMs = performance.now() - started;
       const cpu = process.threadCpuUsage(cpuBefore),
         total = process.cpuUsage(totalBefore);
@@ -931,6 +1005,7 @@ measurement: try {
       const result = {
         phase,
         elapsedMs,
+        ...(contender ? { projectionElapsedMs, contender: contenderResult } : {}),
         mainCpuMs: (cpu.user + cpu.system) / 1000,
         processCpuMs: (total.user + total.system) / 1000,
         allocatedBytes,
