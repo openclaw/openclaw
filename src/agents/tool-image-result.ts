@@ -24,7 +24,7 @@ export async function imageResultFromFile(params: {
     params.details?.media &&
     typeof params.details.media === "object" &&
     !Array.isArray(params.details.media)
-      ? (params.details.media as Record<string, unknown>)
+      ? params.details.media
       : undefined;
   const result: AgentToolResult<unknown> = {
     content,
