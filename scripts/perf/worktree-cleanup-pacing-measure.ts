@@ -235,8 +235,8 @@ const removals: Array<{ id: string; atMs: number; wallMs: number }> = [];
 const admissions: number[] = [];
 const gc = managedWorktrees.gc.bind(managedWorktrees);
 managedWorktrees.gc = async (params) => {
-  const beforeRemoval = params.beforeRemoval;
-  if (beforeRemoval) {
+  if (params?.beforeRemoval) {
+    const beforeRemoval = params.beforeRemoval;
     params.beforeRemoval = async () => {
       await beforeRemoval();
       admissions.push(now());
