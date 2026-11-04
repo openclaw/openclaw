@@ -1,0 +1,483 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { sessionManagerReadInitialContext } from "../agents/sessions/session-manager-current-turn.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
+import { withGatewayPersonalToolUser } from "../agents/tools/gateway-caller-context.js";
+import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
+import { createSessionStatusTool } from "../agents/tools/session-status-tool.js";
+import { resolveSessionToolContext } from "../agents/tools/sessions-helpers.js";
+import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool.js";
+import { createSessionsListTool } from "../agents/tools/sessions-list-tool.js";
+import { resolveSessionReference } from "../agents/tools/sessions-resolution.js";
+import { createSessionsSearchTool } from "../agents/tools/sessions-search-tool.js";
+import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
+import { createSessionsTool } from "../agents/tools/sessions-tool.js";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.js";
+import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import { mockSessionStatusModelDependencies } from "./local-request-context.session-status.test-support.js";
+import {
+  REQUESTER,
+  PARTICIPANT_SHARED,
+  withDelayedSessionToolsSteering,
+  PARTICIPANT_DRAFT,
+  PARTICIPANT_DRAFT_ID,
+  withParticipantSessionToolsFixture,
+  seedSessionToolsFixtureSession,
+  sessionToolsStorePath,
+  drainSessionToolsFixture,
+} from "./local-request-context.session-tools.test-support.js";
+
+let runtimeSetup: Promise<unknown>[] = [];
+beforeAll(() => {
+  // Prepare real handler imports outside the Gateway request deadlines.
+  runtimeSetup = [
+    import("./server-methods/chat.js"),
+    import("./server-methods/sessions-create.js"),
+    import("./server-methods/sessions-delete.js"),
+    import("./server-methods/sessions-mutations.js"),
+    import("./server-methods/sessions-read.js"),
+    import("./server-methods/sessions.runtime.js"),
+  ];
+  return Promise.all(runtimeSetup);
+});
+afterAll(async () => {
+  await Promise.allSettled(runtimeSetup);
+});
+afterEach(drainSessionToolsFixture);
+
+it("discovers and reads an independent session created by the requesting human", async () => {
+  await withParticipantSessionToolsFixture(
+    async ({ cfg, turn, alice, bob }) => {
+      const options = {
+        agentSessionKey: REQUESTER,
+        requesterTurnRunId: turn.runtimeIdentity.operationalRunInstance.runId,
+        sandboxed: true,
+      };
+      const listed = await createSessionsListTool(options).execute("own-created-list", {
+        relationship: "created",
+        user: alice.profileId,
+      });
+      expect(listed.details).toMatchObject({
+        sessions: expect.arrayContaining([expect.objectContaining({ key: PARTICIPANT_DRAFT })]),
+      });
+      const history = createSessionsHistoryTool(options);
+      await expect(
+        history.execute("own-created-history", {
+          sessionKey: PARTICIPANT_DRAFT,
+          user: alice.profileId,
+        }),
+      ).resolves.toMatchObject({
+        details: {
+          messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
+        },
+      });
+      const foreign = "agent:main:dashboard:foreign-created";
+      await seedSessionToolsFixtureSession({
+        sessionKey: foreign,
+        sessionId: "foreign-created-id",
+        creatorId: bob.profileId,
+        visibility: "draft",
+      });
+      await expect(
+        history.execute("foreign-created-history", {
+          sessionKey: foreign,
+          user: alice.profileId,
+        }),
+      ).resolves.toMatchObject({ details: { status: "forbidden" } });
+      for (const filter of [{ creatorId: bob.profileId }, { ownerId: bob.profileId }]) {
+        const filtered = await createSessionsListTool(options).execute("foreign-selector-list", {
+          ...filter,
+          user: alice.profileId,
+        });
+        expect(JSON.stringify(filtered.details)).not.toContain(foreign);
+      }
+      mockSessionStatusModelDependencies();
+      const status = createSessionStatusTool(options);
+      await expect(
+        status.execute("own-created-status", {
+          sessionKey: PARTICIPANT_DRAFT,
+          user: alice.profileId,
+        }),
+      ).resolves.toMatchObject({ details: { sessionKey: PARTICIPANT_DRAFT } });
+      await expect(
+        status.execute("no-model-mutation", {
+          sessionKey: PARTICIPANT_DRAFT,
+          user: alice.profileId,
+          model: "default",
+        }),
+      ).rejects.toThrow(/visibility is restricted/i);
+      await expect(
+        createSessionsTool(options).execute("no-session-mutation", {
+          action: "patch",
+          sessionKey: PARTICIPANT_DRAFT,
+          user: alice.profileId,
+          label: "Do not rename",
+        }),
+      ).rejects.toThrow(/visibility is restricted/i);
+      const search = createSessionsSearchTool(options);
+      for (const scoped of [true, false]) {
+        await expect(
+          search.execute("own-created-search", {
+            query: "distinctive",
+            user: alice.profileId,
+            ...(scoped ? { sessionKey: PARTICIPANT_DRAFT } : {}),
+          }),
+        ).resolves.toMatchObject({
+          details: {
+            results: expect.arrayContaining([
+              expect.objectContaining({ sessionKey: PARTICIPANT_DRAFT }),
+            ]),
+          },
+        });
+      }
+      const post = createSessionsSendTool(options);
+      const recipient = {
+        agentId: "main",
+        sessionKey: PARTICIPANT_DRAFT,
+        sessionId: PARTICIPANT_DRAFT_ID,
+        storePath: sessionToolsStorePath(cfg),
+      };
+      const activeManager = await SessionManager.openAsync(recipient, "/workspace");
+      const admitted = await activeManager.appendMessageWithTranscriptAnchorAsync({
+        role: "user",
+        content: "Active recipient user turn",
+        timestamp: Date.now(),
+      });
+      const admission = {
+        ...expectDefined(admitted.anchor, "committed recipient input anchor"),
+        role: "user" as const,
+        logicalTurnId: "passive-post-active-recipient",
+      };
+      const readActivePrompt = () =>
+        runWithSessionTranscriptReadFence(admission, async () => {
+          const reader = await SessionManager.openAsync(recipient, "/workspace");
+          return reader[sessionManagerReadInitialContext]();
+        });
+      const currentContext = await readActivePrompt();
+      const args = {
+        sessionKey: PARTICIPANT_DRAFT,
+        user: alice.profileId,
+        mode: "post",
+        message: "Passive session marker",
+        idempotencyKey: "passive-session-marker",
+      };
+      const first = await post.execute("passive-post", args);
+      expect(first.details).toMatchObject({
+        status: "posted",
+        sessionKey: PARTICIPANT_DRAFT,
+        sourceSessionKey: REQUESTER,
+        replayed: false,
+      });
+      // Reacquire from SQLite under the active input fence, not a retained in-memory array.
+      expect(await readActivePrompt()).toEqual(currentContext);
+      const replay = await post.execute("passive-post-retry", args);
+      if (!isRecord(first.details)) {
+        throw new Error("Expected post receipt");
+      }
+      expect(replay.details).toMatchObject({ ...first.details, replayed: true });
+      await runWithSessionTranscriptReadFence(admission, () =>
+        activeManager.appendMessageAsync({
+          role: "assistant",
+          content: [{ type: "text", text: "Existing turn finished" }],
+          api: "openai-responses",
+          provider: "openai",
+          model: "test-model",
+          usage: makeZeroUsageSnapshot(),
+          stopReason: "stop",
+          timestamp: Date.now(),
+        }),
+      );
+      const nextManager = await SessionManager.openAsync(recipient, "/workspace");
+      expect(JSON.stringify(nextManager.buildSessionContext())).toContain("Passive session marker");
+      const readBack = await history.execute("posted-history", {
+        sessionKey: PARTICIPANT_DRAFT,
+        user: alice.profileId,
+      });
+      expect(readBack.details).toMatchObject({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: "Alice's distinctive draft marker" }),
+          expect.objectContaining({
+            role: "assistant",
+            inputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: REQUESTER,
+              sourceTool: "sessions_send",
+            },
+          }),
+        ]),
+      });
+      expect(JSON.stringify(readBack.details).match(/Passive session marker/g)).toHaveLength(1);
+      await withDelayedSessionToolsSteering(cfg, async (receiver) => {
+        expect(receiver.pendingCount()).toBe(0);
+        await expect(
+          post.execute("busy-passive-post", {
+            sessionKey: PARTICIPANT_SHARED,
+            user: alice.profileId,
+            mode: "post",
+            message: "Busy passive marker",
+            idempotencyKey: "busy-passive-marker",
+          }),
+        ).resolves.toMatchObject({ details: { status: "posted" } });
+        expect(receiver.pendingCount()).toBe(0);
+      });
+      const busyReadBack = await history.execute("busy-post-history", {
+        sessionKey: PARTICIPANT_SHARED,
+        user: alice.profileId,
+      });
+      expect(JSON.stringify(busyReadBack.details)).toContain("Busy passive marker");
+      await expect(
+        post.execute("still-no-dispatch", {
+          sessionKey: PARTICIPANT_DRAFT,
+          user: alice.profileId,
+          message: "Do not start a turn",
+        }),
+      ).resolves.toMatchObject({ details: { status: "forbidden" } });
+    },
+    { visibility: "tree" },
+  );
+});
+
+type ExplicitPolicyCase = NonNullable<Parameters<typeof withParticipantSessionToolsFixture>[1]> & {
+  name: string;
+  targetAgent: string;
+};
+
+it.each<ExplicitPolicyCase>([
+  { name: "self", visibility: "self", targetAgent: "main", agentToAgent: undefined },
+  {
+    name: "A2A disabled",
+    visibility: "all",
+    targetAgent: "other",
+    agentToAgent: { enabled: false },
+  },
+  {
+    name: "A2A allow denial",
+    visibility: "all",
+    targetAgent: "other",
+    agentToAgent: { enabled: true, allow: ["unrelated"] },
+  },
+  { name: "agent-only", visibility: "agent", targetAgent: "other", agentToAgent: undefined },
+])(
+  "preserves explicit $name policy for creator reads and posts",
+  async ({ visibility, targetAgent, agentToAgent }) => {
+    await withParticipantSessionToolsFixture(
+      async ({ turn, alice }) => {
+        const key = "agent:" + targetAgent + ":dashboard:own-policy-target";
+        await seedSessionToolsFixtureSession({
+          agentId: targetAgent,
+          sessionKey: key,
+          sessionId: "own-policy-target-id",
+          creatorId: alice.profileId,
+          visibility: "draft",
+        });
+        const options = {
+          agentSessionKey: REQUESTER,
+          requesterTurnRunId: turn.runtimeIdentity.operationalRunInstance.runId,
+        };
+        const post = await createSessionsSendTool(options).execute("policy-post", {
+          sessionKey: key,
+          user: alice.profileId,
+          mode: "post",
+          message: "Must not bypass explicit policy",
+        });
+        const list = await createSessionsListTool(options).execute("policy-list", {
+          relationship: "created",
+          user: alice.profileId,
+        });
+        const history = await createSessionsHistoryTool(options).execute("policy-history", {
+          sessionKey: key,
+          user: alice.profileId,
+        });
+        expect({
+          post: post.details,
+          listed: JSON.stringify(list.details).includes(key),
+          history: history.details,
+        }).toMatchObject({
+          post: { status: "forbidden" },
+          listed: false,
+          history: { status: "forbidden" },
+        });
+      },
+      { visibility, agentToAgent },
+    );
+  },
+);
+
+it("does not expose out-of-tool-scope candidates from ambiguous session IDs", async () => {
+  await withParticipantSessionToolsFixture(
+    async ({ alice, bob }) => {
+      const ownKey = "agent:main:dashboard:resolve-own";
+      const foreignKey = "agent:other:dashboard:foreign-view-candidate";
+      const sharedId = "9e7322bd-99d9-40dd-8d93-1b6e92019e11";
+      await seedSessionToolsFixtureSession({
+        agentId: "main",
+        sessionKey: ownKey,
+        sessionId: sharedId,
+        creatorId: alice.profileId,
+        visibility: "draft",
+      });
+      await seedSessionToolsFixtureSession({
+        agentId: "other",
+        sessionKey: foreignKey,
+        sessionId: sharedId,
+        creatorId: bob.profileId,
+        visibility: "shared",
+      });
+      // The human's Gateway role can view both candidates; the agent's tree scope cannot.
+      let resolveError: unknown;
+      try {
+        await callAgentToolGatewayRequest({
+          method: "sessions.resolve",
+          params: { sessionId: sharedId, includeGlobal: true, includeUnknown: true },
+        });
+      } catch (error) {
+        resolveError = error;
+      }
+      if (!(resolveError instanceof Error)) {
+        throw new Error("Expected the Gateway ambiguity error");
+      }
+      expect(resolveError.message).toContain("Multiple sessions found");
+      expect(resolveError.message).toContain(ownKey);
+      expect(resolveError.message).toContain(foreignKey);
+      const history = createSessionsHistoryTool({
+        agentSessionKey: REQUESTER,
+        sandboxed: true,
+      });
+      for (const input of [sharedId, sharedId.slice(0, 8)]) {
+        const result = await history.execute("ambiguous-private-candidates", {
+          sessionKey: input,
+          user: alice.profileId,
+        });
+        expect(JSON.stringify(result.details)).not.toContain(foreignKey);
+        expect(JSON.stringify(result.details)).not.toContain("candidates");
+      }
+      await expect(
+        history.execute("foreign-candidate-direct", {
+          sessionKey: foreignKey,
+          user: alice.profileId,
+        }),
+      ).resolves.toMatchObject({ details: { status: "forbidden" } });
+    },
+    { visibility: "tree" },
+  );
+});
+
+it("does not turn an unscoped ID lookup into spawned-session ownership", async () => {
+  await withParticipantSessionToolsFixture(
+    async ({ alice, bob }) => {
+      const ownKey = "agent:main:dashboard:own-unambiguous-id";
+      const foreignKey = "agent:main:dashboard:foreign-unambiguous-id";
+      const ownId = "0e81472d-6883-44ce-bc60-53f793ab91e0";
+      const foreignId = "fc95e3ab-3f52-4f76-8ab6-d1464daebf84";
+      for (const [sessionKey, sessionId, creatorId, visibility, marker] of [
+        [ownKey, ownId, alice.profileId, "draft", "Own ID context marker"],
+        [foreignKey, foreignId, bob.profileId, "shared", "Foreign ID context must remain hidden"],
+      ] as const) {
+        await seedSessionToolsFixtureSession({
+          agentId: "main",
+          sessionKey,
+          sessionId,
+          creatorId,
+          visibility,
+        });
+        await appendTranscriptMessage(
+          { agentId: "main", sessionKey, sessionId },
+          { message: { role: "user", content: marker } },
+        );
+      }
+      const history = createSessionsHistoryTool({
+        agentSessionKey: REQUESTER,
+        sandboxed: true,
+      });
+      await expect(
+        history.execute("own-id-read", { sessionKey: ownId, user: alice.profileId }),
+      ).resolves.toMatchObject({
+        details: { messages: [expect.objectContaining({ content: "Own ID context marker" })] },
+      });
+      const foreign = await history.execute("foreign-id-read", {
+        sessionKey: foreignId,
+        user: alice.profileId,
+      });
+      expect(foreign.details).toMatchObject({ status: "forbidden" });
+      expect(JSON.stringify(foreign.details)).not.toContain(
+        "Foreign ID context must remain hidden",
+      );
+      const metadataOutageHistory = createSessionsHistoryTool({
+        agentSessionKey: REQUESTER,
+        sandboxed: true,
+        callGateway: async <T>(
+          request: Parameters<typeof callAgentToolGatewayRequest>[0],
+        ): Promise<T> => {
+          if (request.method === "sessions.describe") {
+            throw new Error("Synthetic descriptor lookup outage");
+          }
+          return callAgentToolGatewayRequest<T>(request);
+        },
+      });
+      await expect(
+        metadataOutageHistory.execute("foreign-id-during-descriptor-outage", {
+          sessionKey: foreignId,
+          user: alice.profileId,
+        }),
+      ).resolves.toMatchObject({ details: { status: "forbidden" } });
+      const context = resolveSessionToolContext({ agentSessionKey: REQUESTER, sandboxed: true });
+      const resolved = await withGatewayPersonalToolUser(alice.profileId, () =>
+        resolveSessionReference({
+          action: "history",
+          sessionKey: foreignId,
+          alias: context.alias,
+          mainKey: context.mainKey,
+          requesterInternalKey: REQUESTER,
+          restrictToSpawned: context.restrictToSpawned,
+        }),
+      );
+      expect(resolved).toMatchObject({ ok: true, key: foreignKey, requesterOwned: false });
+    },
+    { visibility: "tree" },
+  );
+});
+
+it("keeps reads allowed while enforcing explicit outbound post denial", async () => {
+  await withParticipantSessionToolsFixture(
+    async ({ turn, alice }) => {
+      const key = "agent:other:dashboard:outbound-post-denied";
+      const sessionId = "5f9f29bf-e59d-4a30-8a97-51c6f3b96c78";
+      await seedSessionToolsFixtureSession({
+        agentId: "other",
+        sessionKey: key,
+        sessionId,
+        creatorId: alice.profileId,
+        visibility: "draft",
+      });
+      await appendTranscriptMessage(
+        { agentId: "other", sessionKey: key, sessionId },
+        { message: { role: "user", content: "Readable despite outbound denial" } },
+      );
+      const options = {
+        agentSessionKey: REQUESTER,
+        requesterTurnRunId: turn.runtimeIdentity.operationalRunInstance.runId,
+      };
+      await expect(
+        createSessionsHistoryTool(options).execute("outbound-read", {
+          sessionKey: key,
+          user: alice.profileId,
+        }),
+      ).resolves.toMatchObject({
+        details: {
+          messages: [expect.objectContaining({ content: "Readable despite outbound denial" })],
+        },
+      });
+      await expect(
+        createSessionsSendTool(options).execute("outbound-post", {
+          sessionKey: key,
+          user: alice.profileId,
+          mode: "post",
+          message: "Must respect explicit outbound denial",
+        }),
+      ).resolves.toMatchObject({ details: { status: "forbidden" } });
+    },
+    { visibility: "all", mainSend: [] },
+  );
+});
