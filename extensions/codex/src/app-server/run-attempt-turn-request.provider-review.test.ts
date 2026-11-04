@@ -185,7 +185,7 @@ async function prepare(
       turnState,
       systemPromptReport: { injectedWorkspaceFiles: [] },
       contextImageGroups: [],
-      setParentLocalEgress: vi.fn(),
+      setInferenceInstructions: vi.fn(),
       buildRenderedCodexDeveloperInstructions: () => "developer instructions",
       refreshWorkspaceReferences: (include: boolean) => {
         turnState.codexTurnPromptText = include ? "workspace reference\nuser input" : "user input";
