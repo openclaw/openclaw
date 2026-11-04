@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { buildProviderSeries, type ProviderSeries } from "./provider-series.ts";
@@ -300,4 +301,21 @@ describe("DailyChartCompact", () => {
       vi.useRealTimers();
     }
   });
+});
+
+it("formats USD chart axes with the UI locale", () => {
+  const locale = vi.spyOn(i18n, "getLocale").mockReturnValue("de");
+  try {
+    const { container } = renderDailyChart([dailyEntry("2026-01-01", 20, 1234.5)]);
+    expect(container.textContent).toContain(
+      new Intl.NumberFormat("de", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+      }).format(0),
+    );
+  } finally {
+    locale.mockRestore();
+  }
 });
