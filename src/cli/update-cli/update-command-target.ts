@@ -16,10 +16,7 @@ import {
   EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
-import {
-  fetchNpmPackageTargetStatus,
-  isUnpublishedNpmTargetError,
-} from "../../infra/update-check-package-target.js";
+import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import { resolveExtendedStablePackage, resolveNpmChannelTag } from "../../infra/update-check.js";
 import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
 import {
@@ -565,7 +562,7 @@ export async function resolveUpdateCommandTarget(
             });
             if (targetMetadata.error || targetMetadata.version !== targetVersion) {
               const failure = createUpdatePreflightFailure(
-                targetMetadata.error && !isUnpublishedNpmTargetError(targetMetadata.error)
+                targetMetadata.error && !targetMetadata.versionMissing
                   ? "target-registry-metadata"
                   : "target-version-resolution",
                 `Could not inspect exact package target openclaw@${targetVersion}: ${targetMetadata.error ?? `registry returned version ${targetMetadata.version ?? "unknown"}`}.`,

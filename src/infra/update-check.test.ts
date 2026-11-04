@@ -302,24 +302,6 @@ it.each([
     { stdout: "", stderr: "npm ERR! 404 Not Found", code: 1 },
     "npm view failed: npm ERR! 404 Not Found",
   ],
-  [
-    "unpublished version",
-    {
-      stdout: "",
-      stderr: [
-        "npm error code E404",
-        "npm error 404 No match found for version 2026.11.5-beta.5",
-        "npm error 404",
-        "npm error 404  The requested resource 'openclaw@2026.11.5-beta.5' could not be found or you do not have permission to access it.",
-        "npm error 404",
-        "npm error 404 Note that you can also install from a",
-        "npm error 404 tarball, folder, http url, or git url.",
-        "npm error A complete log of this run can be found in: /tmp/npm-debug.log",
-      ].join("\n"),
-      code: 1,
-    },
-    "npm view failed: npm error code E404\nnpm error 404 No match found for version 2026.11.5-beta.5",
-  ],
 ] as const)("reports npm view errors for %s", async (_name, reply, error) => {
   expectPackageError(
     await packageTarget({ target: "openclaw", runCommand: async () => reply }),

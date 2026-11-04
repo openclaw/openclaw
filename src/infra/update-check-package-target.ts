@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as toOptionalTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -14,6 +15,7 @@ type NpmPackageTargetStatus = {
   nodeEngine: string | null;
   schemaVersions?: OpenClawSchemaVersions;
   error?: string;
+  versionMissing?: boolean;
 };
 
 export type NpmMetadataCommandRunner = (
@@ -111,28 +113,35 @@ export async function fetchRegistryPackageDocument<T = unknown>(params: {
   }
 }
 
-const UNPUBLISHED_NPM_TARGET_ERROR = /No match found for version|\bETARGET\b|\bE404\b|^HTTP 404\b/u;
+const UNPUBLISHED_NPM_VERSION =
+  /^(?:npm (?:ERR!|error) (?:404|notarget) )?No (?:match found for version|matching version found for) /u;
 
-/** The registry answered, and the requested package version is not published. */
-export function isUnpublishedNpmTargetError(error: string): boolean {
-  return UNPUBLISHED_NPM_TARGET_ERROR.test(error);
-}
-
-function formatNpmViewFailure(stdout: string, stderr: string): string {
+function parseNpmViewFailure(
+  stdout: string,
+  stderr: string,
+): Pick<NpmPackageTargetStatus, "error" | "versionMissing"> {
+  let json: unknown;
+  try {
+    json = JSON.parse(stdout);
+  } catch {
+    // Older npm output and interrupted commands may only provide text diagnostics.
+  }
+  const jsonError = isRecord(json) && isRecord(json.error) ? json.error : undefined;
+  const summary = toOptionalTrimmedString(jsonError?.summary);
   const lines = (stderr.trim() || stdout.trim())
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-  const match = lines.find((line) => /No match found for version/u.test(line));
-  const code = lines.find((line) => /error code E(?:404|TARGET)\b/u.test(line));
-  const selected: string[] = [];
-  for (const line of match ? [code, match] : lines.slice(-3)) {
-    if (line && !selected.includes(line)) {
-      selected.push(line);
-    }
-  }
-  const raw = selected.join("\n");
-  return raw ? `npm view failed: ${raw}` : "npm view failed";
+  const reason = summary ?? lines.find((line) => UNPUBLISHED_NPM_VERSION.test(line));
+  const code = summary
+    ? toOptionalTrimmedString(jsonError?.code)
+    : lines.find((line) => /^npm (?:ERR!|error) code E(?:404|TARGET)\b/u.test(line));
+  const raw = (reason ? [code, reason].filter(Boolean) : lines.slice(-3)).join("\n");
+  return {
+    error: raw ? `npm view failed: ${raw}` : "npm view failed",
+    // E404 alone also covers missing packages and registry access failures.
+    ...(reason && UNPUBLISHED_NPM_VERSION.test(reason) ? { versionMissing: true } : {}),
+  };
 }
 
 export async function fetchNpmPackageTargetStatus(params: {
@@ -190,7 +199,7 @@ export async function fetchNpmPackageTargetStatus(params: {
       return {
         version: null,
         nodeEngine: null,
-        error: formatNpmViewFailure(res.stdout, res.stderr),
+        ...parseNpmViewFailure(res.stdout, res.stderr),
       };
     }
     return parseNpmPackageTargetMetadata(
