@@ -191,26 +191,34 @@ async function normalizeXaiGifPayload(payload: Record<string, unknown>) {
   if (!Array.isArray(originalInput)) {
     return payload;
   }
-  const normalizePart = async (part: unknown) => {
-    const image = asOptionalRecord(part);
-    if (image?.type !== "input_image") {
-      return part;
+  let input: unknown[] | undefined;
+  for (let index = 0; index < originalInput.length; index += 1) {
+    const record = asOptionalRecord(originalInput[index]);
+    const key = record?.type === "function_call_output" ? "output" : "content";
+    const parts = record?.[key];
+    if (!Array.isArray(parts)) {
+      continue;
     }
-    const source = asOptionalRecord(image.source);
-    const url =
-      typeof image.image_url === "string"
-        ? image.image_url
-        : source?.type === "base64" &&
-            typeof source.media_type === "string" &&
-            typeof source.data === "string"
-          ? `data:${source.media_type};base64,${source.data}`
-          : undefined;
-    const canonical = url && sanitizeInlineImageDataUrl(url);
-    if (!canonical?.startsWith("data:image/gif;base64,")) {
-      return part;
-    }
-    try {
-      // Rastermill encodes the first frame. Keep this provider-only projection out of history.
+    let content: unknown[] | undefined;
+    for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+      const image = asOptionalRecord(parts[partIndex]);
+      if (image?.type !== "input_image") {
+        continue;
+      }
+      const source = asOptionalRecord(image.source);
+      const url =
+        typeof image.image_url === "string"
+          ? image.image_url
+          : source?.type === "base64" &&
+              typeof source.media_type === "string" &&
+              typeof source.data === "string"
+            ? `data:${source.media_type};base64,${source.data}`
+            : undefined;
+      const canonical = url && sanitizeInlineImageDataUrl(url);
+      if (!canonical?.startsWith("data:image/gif;base64,")) {
+        continue;
+      }
+      // Encode the first frame in this request projection, never in retained history.
       const { resizeToJpeg } = await import("openclaw/plugin-sdk/media-runtime");
       const bytes = await resizeToJpeg({
         buffer: Buffer.from(canonical.slice(canonical.indexOf(",") + 1), "base64"),
@@ -218,33 +226,18 @@ async function normalizeXaiGifPayload(payload: Record<string, unknown>) {
         quality: 85,
       });
       const data = bytes.toString("base64");
-      return typeof image.image_url === "string"
-        ? { ...image, image_url: `data:image/jpeg;base64,${data}` }
-        : { ...image, source: { ...source, media_type: "image/jpeg", data } };
-    } catch {
-      return {
-        type: "input_text",
-        text: "[GIF image omitted: conversion failed; try PNG or JPEG]",
-      };
+      content ??= [...parts];
+      content[partIndex] =
+        typeof image.image_url === "string"
+          ? { ...image, image_url: `data:image/jpeg;base64,${data}` }
+          : { ...image, source: { ...source, media_type: "image/jpeg", data } };
     }
-  };
-  const input = await Promise.all(
-    originalInput.map(async (item: unknown) => {
-      const record = asOptionalRecord(item);
-      const key = record?.type === "function_call_output" ? "output" : "content";
-      const parts = record?.[key];
-      if (!Array.isArray(parts)) {
-        return item;
-      }
-      const normalized = await Promise.all(parts.map(normalizePart));
-      return normalized.some((part, index) => part !== parts[index])
-        ? { ...record, [key]: normalized }
-        : item;
-    }),
-  );
-  return input.some((item, index) => item !== originalInput[index])
-    ? { ...payload, input }
-    : payload;
+    if (content) {
+      input ??= [...originalInput];
+      input[index] = { ...record, [key]: content };
+    }
+  }
+  return input ? { ...payload, input } : payload;
 }
 
 function createXaiGifCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
@@ -258,7 +251,7 @@ function createXaiGifCompatibilityWrapper(baseStreamFn: StreamFn | undefined): S
       onPayload: wrapProviderPayloadHook(
         options?.onPayload,
         (payload, replacement) => {
-          const selected = asOptionalRecord(replacement ?? payload);
+          const selected = asOptionalRecord(replacement === undefined ? payload : replacement);
           return selected ? normalizeXaiGifPayload(selected) : replacement;
         },
         undefined,
