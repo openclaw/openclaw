@@ -102,13 +102,9 @@ it("hands a matching pending cohort to Gateway readiness only under its actual l
         ).toBe(true);
         await expect(
           withUpdateCommandRecoveryUnwind({ run }, recoveryState, async () => {
-            throw new Error("foreground operation failed", {
-              cause: new Error("schema metadata is inconsistent"),
-            });
+            throw new Error("foreground operation failed", { cause: new Error("bad schema") });
           }),
-        ).rejects.toThrow(
-          /unfinished recovery[\s\S]*First failure: .*foreground operation failed.*schema metadata is inconsistent[\s\S]*Run `openclaw update repair`/u,
-        );
+        ).rejects.toThrow(/update\.\nFirst failure: .*bad schema\nRun `openclaw update repair/u);
         expect(completeUpdateCommandRun(input, run)).toMatchObject({ status: "ok", runId });
         expect(getUpdateRun(runId, { env: state.env })).toMatchObject({
           status: "running",
