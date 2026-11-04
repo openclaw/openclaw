@@ -609,6 +609,10 @@ reject the verified incident OV G3C intermediate in both trust modes. The report
 reducer requires all twelve TLS class/method identities exactly once, separately
 from the existing Access case and packaged-library checks.
 
+These rows use the Android toolchain action's filtered dependency install for
+native resource generation. They skip the full workspace pnpm store cache so the
+hosted runner has space to unpack the Android system image.
+
 These secretless, disposable emulators temporarily import a synthetic localhost
 root and the verified incident root into copied APEX CA stores in the zygote
 mount namespaces before launching the test app. Stock roots and SELinux remain
