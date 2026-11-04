@@ -16,6 +16,7 @@ const enMeetings = {
     waitingForSpeech: "Waiting for speech…",
     noSpeech: "No speech captured",
     listLabel: "Meetings by day",
+    moreActions: "More actions",
     newestFirst: "Newest first · grouped by meeting date",
     loadingMeetings: "Loading meetings…",
     loadingSummary: "Loading summary…",

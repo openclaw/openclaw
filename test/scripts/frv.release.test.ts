@@ -194,7 +194,7 @@ function runProtectedFrv(
   writeFileSync(
     gh,
     `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\\n");
 const fail = (message, code) => { console.error(message); process.exit(code); };
@@ -632,7 +632,8 @@ ${clockStep ? `let ticks = 0; const now = Date.now(); Date.now = () => now + tic
   writeFileSync(
     gh,
     `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
+import { join } from "node:path";
 const args = process.argv.slice(2);
 fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\\n");
 const reject = () => { console.error("unplanned or mutating request"); process.exit(23); };
@@ -641,7 +642,7 @@ if (legacy && args[0] === "run" && args[1] === "download" && args[2] === "77") {
   const name = args[args.indexOf("--name") + 1];
   if (name !== "full-release-execution-plan-77" && !name.startsWith("full-release-decision-77-")) reject();
   const decision = name.startsWith("full-release-decision-");
-  fs.copyFileSync(decision ? "legacy-decision.json" : "legacy-plan.json", require("node:path").join(args[args.indexOf("--dir") + 1], decision ? "full-release-decision.json" : "full-release-execution-plan.json"));
+  fs.copyFileSync(decision ? "legacy-decision.json" : "legacy-plan.json", join(args[args.indexOf("--dir") + 1], decision ? "full-release-decision.json" : "full-release-execution-plan.json"));
   process.exit(0);
 }
 if (args[0] !== "api" || (!legacy && (!args.includes("GET") || !args.includes("github.com"))) || (${args[0] !== "watch"} && !args.includes("Cache-Control: max-age=0"))) reject();
@@ -1305,9 +1306,10 @@ describe("publication status real CLI", () => {
     },
   );
 
-  it.each(["in_progress", "failure"])(
+  it.each(["in_progress", "failure", "legacy-failure"])(
     "observes detached Windows %s without equating acknowledgement and promotion",
     async (state) => {
+      const failed = state !== "in_progress";
       const fixture = publicationFixture();
       fixture.publisherJobs.push({
         ...job("Dispatch Windows assets after publication"),
@@ -1328,8 +1330,8 @@ describe("publication status real CLI", () => {
         id: 909,
         workflow_id: 9090,
         path: ".github/workflows/windows-node-release.yml",
-        status: state === "failure" ? "completed" : "in_progress",
-        conclusion: state === "failure" ? "failure" : null,
+        status: failed ? "completed" : "in_progress",
+        conclusion: failed ? "failure" : null,
       };
       const dispatch = {
         tag: "v2026.9.9",
@@ -1352,7 +1354,7 @@ describe("publication status real CLI", () => {
           total_count: 0,
           artifacts: [],
         };
-        if (state === "failure") {
+        if (failed) {
           await artifact(5, native, "windows-release-promotion-909-1", "windows-promotion.json", {
             schemaVersion: 1,
             ...dispatch,
@@ -1363,7 +1365,12 @@ describe("publication status real CLI", () => {
             total_count: 1,
             jobs: [
               {
-                ...job("Promote signed Windows installers", "failure"),
+                ...job(
+                  state === "legacy-failure"
+                    ? "Promote signed Windows installers"
+                    : "Record detached Windows outcome",
+                  state === "legacy-failure" ? "failure" : "success",
+                ),
                 id: 9091,
                 run_id: 909,
                 run_attempt: 1,
@@ -1387,14 +1394,14 @@ describe("publication status real CLI", () => {
       expect(surface.children[0].status).toBe(native.status);
       expect(surface.children[0].conclusion).toBe(native.conclusion);
       expect(surface.operation.state).toBe("unknown");
-      expect(surface.terminalMarker.state).toBe(state === "failure" ? "success" : "unknown");
-      if (state === "failure") {
+      expect(surface.terminalMarker.state).toBe(failed ? "success" : "unknown");
+      if (failed) {
         expect(surface.jobs).toContainEqual({
           jobId: 9091,
           runId: "909",
           runAttempt: 1,
           status: "completed",
-          conclusion: "failure",
+          conclusion: state === "legacy-failure" ? "failure" : "success",
           steps: [],
         });
       }

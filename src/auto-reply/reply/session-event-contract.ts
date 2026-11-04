@@ -56,7 +56,7 @@ export type SessionEventReceipt = {
   id: string;
   cancel: () => boolean;
   /** Resolves after ordinary turn adoption or committed follow-up queue admission. */
-  accepted: Promise<{ ok: true } | { ok: false; error: string }>;
+  accepted: Promise<{ ok: true } | { ok: false; error: string; cause?: Error }>;
   settled: Promise<SessionEventOutcome>;
 };
 
@@ -117,6 +117,8 @@ export type SessionEventOptions = {
   deliver?: boolean;
   /** Host-owned: runtime error payloads stay in the transcript, out of chat delivery. */
   suppressErrorDelivery?: true;
+  /** Host-owned: the producer's prompt permits NO_REPLY; input provenance never selects it. */
+  replyExpectation?: "optional";
   /** Host producer remains live through admission, execution and delivery. */
   assertCurrent?: () => void;
 };

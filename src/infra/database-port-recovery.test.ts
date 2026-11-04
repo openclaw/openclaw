@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -71,6 +72,33 @@ afterEach(() => {
 });
 
 describe("database port startup exclusion", () => {
+  it.skipIf(process.platform === "win32")(
+    "refuses a writerless FIFO and preserves recovery guidance",
+    () => {
+      fs.mkdirSync(path.dirname(fixed), { recursive: true });
+      expect(spawnSync("mkfifo", [fixed], { timeout: 5_000 }).status).toBe(0);
+      // A child bounds the synchronous hang so a regression cannot strand the test worker.
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          "--input-type=module",
+          "-e",
+          'import { assertDatabasePortStartupAllowed } from "./src/infra/database-port-recovery.ts"; assertDatabasePortStartupAllowed(process.argv[1]);',
+          stateDir,
+        ],
+        { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Database port recovery required");
+      expect(result.stderr).toContain(`--resume '${fixed}'`);
+      expect(result.stderr).toContain(`--rollback '${fixed}'`);
+      expect(fs.lstatSync(fixed).isFIFO()).toBe(true);
+    },
+  );
+
   it.skipIf(process.platform === "win32").each(["preparing", "publishing"] as const)(
     "refuses %s with both recovery commands",
     (state) => {

@@ -132,11 +132,18 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
     }
     const controlUi = loaded.manifest.controlUi;
     if (controlUi) {
-      const { directory, assets } = await readPluginControlUiAssets(rootDir, controlUi);
+      const { directory, assets, panelIcon } = await readPluginControlUiAssets(rootDir, controlUi);
       for (const [name, asset] of assets) {
         const relativePath = path.posix.join(directory, name);
         await destination.mkdir(path.posix.dirname(relativePath));
         await destination.create(relativePath, asset.body);
+      }
+      if (panelIcon) {
+        const iconDirectory = path.posix.dirname(panelIcon.path);
+        if (iconDirectory !== ".") {
+          await destination.mkdir(iconDirectory);
+        }
+        await destination.create(panelIcon.path, panelIcon.body);
       }
     }
     const archive = path.join(staging, "plugin.tgz");

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -483,6 +483,8 @@ it.each(["sessions.send", "sessions.create", "generated-create", "custom-store-s
       });
       expect(captured.error).toBeNull();
       const authorization = captured.authorization!;
+      // Created-session sharing facts stay retained until the request authorization releases.
+      onTestFinished(() => authorization.release?.());
       const notify = vi.fn<NonNullable<Creation["onCreatedSessionCommitted"]>>((created) => {
         expect(loadSessionEntry(scopeOf(created))).toMatchObject({
           sessionId: created.entry.sessionId,

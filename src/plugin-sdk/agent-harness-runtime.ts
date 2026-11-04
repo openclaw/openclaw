@@ -311,8 +311,10 @@ export {
 } from "../agents/embedded-agent-tool-results.js";
 export {
   formatToolExecutionErrorMessage,
-  isToolResultError,
   resolveToolExecutionErrorKind,
+} from "../agents/tool-execution-error.js";
+export {
+  isToolResultError,
   resolveToolResultFailureKind,
   type ToolResultFailureKind,
 } from "../agents/tool-result-error.js";
@@ -547,7 +549,8 @@ export const mcpStdioRuntime = Object.freeze({
   },
 });
 
-export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
+export type { McpToolCatalog } from "../agents/agent-bundle-mcp-catalog.types.js";
+export type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
 
 /**

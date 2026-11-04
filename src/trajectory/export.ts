@@ -17,6 +17,8 @@ import {
   loadTranscriptEvents,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import {
   isCanonicalSessionTranscriptEntry,
   scanSessionTranscriptTree,
@@ -145,6 +147,7 @@ async function readSessionEntries(params: {
       agentId: completeTarget.agentId,
       sessionKey: completeTarget.sessionKey,
       storePath: completeTarget.storePath,
+      projection: "list",
     });
     // Export remains available after the session index row is pruned. A row
     // that still exists must agree with the artifact's complete target.
@@ -191,13 +194,15 @@ async function readSessionEntries(params: {
     throw new Error("Trajectory export legacy marker does not match the requested session");
   }
   const targetKeyAgentId = parseAgentSessionKey(incompleteTarget?.sessionKey)?.agentId;
-  const targetKeyEntry = incompleteTarget?.sessionKey
-    ? loadSessionEntryReadOnly({
-        agentId: marker.agentId,
-        sessionKey: incompleteTarget.sessionKey,
-        storePath: marker.storePath,
-      })
-    : undefined;
+  const markerEntries = new Map(
+    listSessionEntriesReadOnly({
+      agentId: marker.agentId,
+      storePath: marker.storePath,
+      projection: "list",
+    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+  const entryForKey = (key = "") => markerEntries.get(resolveSqliteSessionKey(key, marker.agentId));
+  const targetKeyEntry = entryForKey(incompleteTarget?.sessionKey);
   if (
     incompleteTarget &&
     ((incompleteTarget.agentId && incompleteTarget.agentId !== marker.agentId) ||
@@ -209,30 +214,19 @@ async function readSessionEntries(params: {
   ) {
     throw new Error("Trajectory export transcript target conflicts with the legacy marker");
   }
-  const suppliedKeyEntry = params.sessionKey
-    ? loadSessionEntryReadOnly({
-        agentId: marker.agentId,
-        sessionKey: params.sessionKey,
-        storePath: marker.storePath,
-      })
-    : undefined;
-  const markerMatches = listSessionEntriesReadOnly({
-    agentId: marker.agentId,
-    storePath: marker.storePath,
-  }).filter(({ entry }) => entry.sessionId === marker.sessionId);
+  const suppliedKeyEntry = entryForKey(params.sessionKey);
+  const matches = [...markerEntries].filter(([, entry]) => entry.sessionId === marker.sessionId);
   if (suppliedKeyEntry && suppliedKeyEntry.sessionId !== marker.sessionId) {
     throw new Error("Trajectory export session key conflicts with the legacy marker");
   }
-  if (params.sessionKey && !suppliedKeyEntry && markerMatches.length > 0) {
+  if (params.sessionKey && !suppliedKeyEntry && matches.length > 0) {
     throw new Error("Trajectory export session key is not mapped to the legacy marker");
   }
   const markerSessionKey = suppliedKeyEntry
     ? params.sessionKey
-    : (resolvePreferredSessionKeyForSessionIdMatches(
-        markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
-        marker.sessionId,
-      ) ?? (markerMatches.length === 0 ? params.sessionKey : undefined));
-  if (!markerSessionKey && markerMatches.length > 0) {
+    : (resolvePreferredSessionKeyForSessionIdMatches(matches, marker.sessionId) ??
+      (matches.length === 0 ? params.sessionKey : undefined));
+  if (!markerSessionKey && matches.length > 0) {
     throw new Error("Trajectory export legacy marker session key is ambiguous");
   }
   return collectSessionEntries(
@@ -252,9 +246,7 @@ async function readSessionBranch(params: Parameters<typeof readSessionEntries>[0
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const entries = fileEntries.filter(
     (entry): entry is SessionEntry =>
-      entry.type !== "session" &&
-      isCanonicalSessionTranscriptEntry(entry) &&
-      typeof (entry as { id?: unknown }).id === "string",
+      isCanonicalSessionTranscriptEntry(entry) && typeof entry.id === "string",
   );
   const tree = scanSessionTranscriptTree(fileEntries);
   if (!tree.hasLeafUpdate) {
@@ -636,16 +628,17 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     leafId,
     branchEntries,
     warnings: sessionWarnings,
-  } = await readSessionBranch({
-    sessionFile: params.sessionFile,
-    sessionTarget: params.sessionTarget,
-    sessionId: params.sessionId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
+  } = await withSessionTranscriptHydrationCaller("export", () =>
+    readSessionBranch({
+      sessionFile: params.sessionFile,
+      sessionTarget: params.sessionTarget,
+      sessionId: params.sessionId,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    }),
+  );
   const { sessionFile, sessionId: runtimeSessionId } = params;
   const runtimeEvents = await (async (): Promise<TrajectoryEvent[]> => {
-    const marker =
-      normalizeCompleteSessionTarget(sessionTarget) ?? parseSqliteSessionFileMarker(sessionFile);
+    const marker = sessionTarget ?? parseSqliteSessionFileMarker(sessionFile);
     if (marker && marker.sessionId !== runtimeSessionId) {
       throw new Error("Trajectory runtime target does not match the requested session");
     }

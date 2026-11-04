@@ -59,28 +59,29 @@ suite.define(() => {
       const header = group.locator(":scope > .sidebar-recent-sessions__head");
       const label = header.locator(".sidebar-recent-sessions__label-text");
       await group.waitFor({ state: "visible", timeout: 10_000 });
+      const text = label.locator(".hover-marquee__text");
       await expect
-        .poll(() => label.evaluate((element) => getComputedStyle(element).maskImage))
-        .toContain("linear-gradient");
+        .poll(() =>
+          label.evaluate((element) => element.classList.contains("hover-marquee--overflowing")),
+        )
+        .toBe(true);
       await captureUiProof(suite, page, "sidebar-group-title-resting.png");
 
       const resting = await label.evaluate((element) => {
         const style = getComputedStyle(element);
+        const titleText = element.querySelector(".hover-marquee__text")!;
         return {
           clientWidth: element.clientWidth,
           height: element.getBoundingClientRect().height,
           lineHeight: Number.parseFloat(style.lineHeight),
-          scrollWidth: element.scrollWidth,
-          maskImage: style.maskImage,
+          scrollWidth: titleText.scrollWidth,
           whiteSpace: style.whiteSpace,
         };
       });
       expect(resting.whiteSpace).toBe("nowrap");
-      expect(resting.maskImage).toContain("linear-gradient");
       expect(resting.height).toBeLessThanOrEqual(resting.lineHeight + 1);
       expect(resting.scrollWidth).toBeGreaterThan(resting.clientWidth);
 
-      const text = label.locator(".hover-marquee__text");
       const offset = () =>
         text.evaluate((element) => {
           const transform = getComputedStyle(element).transform;

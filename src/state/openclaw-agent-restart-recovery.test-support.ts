@@ -311,11 +311,15 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
                 (await readSessionEntryReadOnlyInWorker(legacyScope))?.mainRestartRecovery,
               ).toBeUndefined();
               expect(warn).toHaveBeenCalledWith(
-                `Skipped restart resume for ${legacyScope.sessionKey}: Error: Session principal has no current run authority.`,
+                expect.stringContaining(
+                  `Skipped restart resume for ${legacyScope.sessionKey}: Error: Session principal has no current run authority.`,
+                ),
               );
             }
             expect(warn).toHaveBeenCalledWith(
-              `Skipped restart resume for ${scope.sessionKey}: Error: Session principal has no current run authority.`,
+              expect.stringContaining(
+                `Skipped restart resume for ${scope.sessionKey}: Error: Session principal has no current run authority.`,
+              ),
             );
           }
           await withinTest(resumeMarkedSessions({ context, signal, log: { warn } }), signal);
