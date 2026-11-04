@@ -442,6 +442,7 @@ describe("Control UI E2E resource ownership", () => {
     const skipped = probeOwnership({ filters: files, skipProductionArtifact: true });
     const artifact = probeOwnership({ productionArtifact: true });
     expect(skipped.files).toEqual([]);
+    expect(skipped.shards.flat()).toEqual([]);
     expect(skipped.passWithNoTests).toBe(true);
     expectInventory(artifact, files);
     expect(artifact.setupError).toBeUndefined();
@@ -450,14 +451,6 @@ describe("Control UI E2E resource ownership", () => {
     ).toBe(true);
     expect(artifact.leases).toEqual([]);
     expect(artifact.canonicalAssetsIntact).toBe(true);
-    expectInventory(
-      {
-        ...artifact,
-        files: [...skipped.files, ...artifact.files],
-        shards: [...skipped.shards, ...artifact.shards],
-      },
-      files,
-    );
 
     const partial = probeOwnership({ productionArtifact: true, filters: [files[0]!] });
     expectInventory(partial, [files[0]!]);
