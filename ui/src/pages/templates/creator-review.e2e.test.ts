@@ -100,7 +100,7 @@ async function withHeldCreator(
     const openAction = async () => {
       await row.hover();
       await menu.click();
-      await page.getByRole("menuitem", { name: "Create Template", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Create template", exact: true }).click();
     };
     await openAction();
     await expect.poll(() => held).toBe(1);
@@ -142,7 +142,7 @@ it.skipIf(!chromiumAvailable)(
       expect(creates).toHaveLength(1);
       expect(creates[0]?.params).toEqual({ agentId: "main" });
       expect(imports).toHaveLength(1);
-      const dialog = page.getByRole("dialog", { name: "Review your Template" });
+      const dialog = page.getByRole("dialog", { name: "Review your template" });
       expect(await dialog.count()).toBe(0);
       await gateway.resolveDeferred("chat.send", { status: "started" });
       await dialog.waitFor({ state: "visible" });
@@ -307,7 +307,7 @@ it.skipIf(!chromiumAvailable)(
       const waitForRequests = (method: string, count: number) =>
         expect.poll(async () => (await gateway.getRequests(method)).length).toBe(count);
       await page.goto(`${server.baseUrl}templates?draft=${draftId}&agent=main`);
-      const dialog = page.getByRole("dialog", { name: "Review your Template" });
+      const dialog = page.getByRole("dialog", { name: "Review your template" });
       await dialog.waitFor();
       expect(await dialog.getByText("View", { exact: true }).count()).toBe(1);
       expect(await dialog.getByLabel("Description").inputValue()).toBe("Summarizes releases");
@@ -330,7 +330,7 @@ it.skipIf(!chromiumAvailable)(
       const publicationError = page.getByRole("alert");
       await publicationError.waitFor();
       expect(await publicationError.textContent()).toContain("The package upload was interrupted.");
-      expect(await page.getByRole("button", { name: "Review Template package" }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Review template package" }).count()).toBe(0);
       await setReview("e");
       await publicationError.getByRole("button", { name: "Retry review" }).click();
       await waitForRequests("templates.drafts.review", 3);
@@ -479,7 +479,7 @@ it.skipIf(!process.env.OPENCLAW_TEMPLATE_CREATOR_AUTHORITY_PROOF)(
           const row = page.locator('.sidebar-agent-roster__row[data-agent-id="main"]');
           await row.hover();
           await page.getByRole("button", { name: "Options for Creator proof" }).click();
-          await page.getByRole("menuitem", { name: "Create Template", exact: true }).click();
+          await page.getByRole("menuitem", { name: "Create template", exact: true }).click();
           await expect.poll(() => runtimeUrl).toBeTruthy();
           expect(writes).toEqual([]);
           const application = await getControlUiContextHandle(page);
