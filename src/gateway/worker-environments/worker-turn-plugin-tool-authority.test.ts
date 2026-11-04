@@ -108,7 +108,14 @@ it("gives version-2 plugin tools live worker-turn invocation authority", async (
     ).rejects.toBe(completed);
     expect(effects).toHaveBeenCalledOnce();
     // The retained tool must not outlive the turn claim that admitted it.
-    await expect(retained!.execute("late-call", {})).rejects.toThrow();
+    const late = await retained!.execute("late-call", {}).then(
+      () => "executed",
+      (error: unknown) => `refused (${error instanceof Error ? error.message : String(error)})`,
+    );
+    console.info(
+      `[worker-authority] turn:live → call:ok → turn:closed → late call ${late}; effects: ${effects.mock.calls.length}`,
+    );
+    expect(late).toMatch(/^refused/);
     expect(effects).toHaveBeenCalledOnce();
   } finally {
     Reflect.deleteProperty(globalThis, probeKey);

@@ -11,6 +11,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands-fork.test.ts",
   "src/auto-reply/reply/commands-fork.authorization.test.ts",
   "src/agents/openclaw-tools.workshop-contract.test.ts",
+  "src/agents/openclaw-tools.workshop-authority.test.ts",
   "src/agents/harness/context-media-runtime.test.ts",
   "src/agents/subagents/registry/subagent-controller-inputs.test.ts",
   "src/commands/doctor/shared/model-replacement.test.ts",
