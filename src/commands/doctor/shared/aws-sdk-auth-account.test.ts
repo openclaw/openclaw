@@ -10,6 +10,7 @@ import { withDoctorConfigMaintenance } from "../../doctor-config-flow.test-suppo
 import { maybeCreateAwsSdkAuthProfileAccounts } from "./aws-sdk-auth-account.js";
 
 const PROFILE_ID = "amazon-bedrock:aws-sdk";
+const BEDROCK_URL = "https://bedrock-runtime.us-west-2.amazonaws.com";
 const MARKER: AuthProfileCredential = {
   type: "api_key",
   provider: "amazon-bedrock",
@@ -18,7 +19,11 @@ const MARKER: AuthProfileCredential = {
 
 const cfgWith = (state: OpenClawTestState, auth?: "aws-sdk"): OpenClawConfig => ({
   agents: { entries: { main: { agentDir: state.agentDir("main") } } },
-  models: { providers: { "amazon-bedrock": { models: [], ...(auth ? { auth } : {}) } } },
+  models: {
+    providers: {
+      "amazon-bedrock": { baseUrl: BEDROCK_URL, models: [], ...(auth ? { auth } : {}) },
+    },
+  },
 });
 
 function withState(

@@ -67,6 +67,7 @@ function storeWith(
   return { version: 1, profiles, ...rest };
 }
 
+const bedrockRoute = { baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com", models: [] };
 const awsSdkMarker = {
   type: "api_key",
   provider: "amazon-bedrock",
@@ -134,15 +135,7 @@ describe("resolveAuthProfileOrder", () => {
           "amazon-bedrock:default": { provider: "amazon-bedrock", mode: "aws-sdk" },
         },
       },
-      models: {
-        providers: {
-          "amazon-bedrock": {
-            auth: "aws-sdk",
-            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-            models: [],
-          },
-        },
-      },
+      models: { providers: { "amazon-bedrock": { auth: "aws-sdk", ...bedrockRoute } } },
     } satisfies OpenClawConfig;
     const store = storeWith({});
 
@@ -170,7 +163,7 @@ describe("resolveAuthProfileOrder", () => {
 
   it("resolves the stored marker account schedulers record for an AWS SDK route", () => {
     const cfg = {
-      models: { providers: { "amazon-bedrock": { auth: "aws-sdk", models: [] } } },
+      models: { providers: { "amazon-bedrock": { auth: "aws-sdk", ...bedrockRoute } } },
     } satisfies OpenClawConfig;
     const resolve = (params: { cfg: OpenClawConfig; store: AuthProfileStore }) =>
       resolveStoredAwsSdkAuthProfileId({ ...params, provider: "amazon-bedrock" });
