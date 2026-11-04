@@ -9,11 +9,11 @@ const enModelSetup = {
         "Find an account or set up a local model for {agent}. This changes only this agent’s model.",
       useForAgent: "Test & use for this agent",
       connectForAgent: "Add account for this agent",
-      connectProvider: "Connect provider",
+      connectProvider: "Add account",
       returnToModels: "Return to Models",
       otherSoftware: "Other detected software",
     },
-    heading: "Connect a verified AI model",
+    heading: "Set up a model",
     intro:
       "OpenClaw discovers AI access on this Gateway. Choose a provider to begin; nothing is selected, tested, installed, or saved automatically.",
     loading: "Checking this Gateway for available AI access…",
@@ -74,8 +74,7 @@ const enModelSetup = {
     },
     signIn: {
       title: "Set up and verify a model",
-      description:
-        "Setup requests a model reply. To save an account first, choose Connect provider.",
+      description: "Setup requests a model reply. To save an account first, choose Add account.",
       verify: "Set up & verify",
       install: "Review & install",
       custom: "Set up endpoint",
@@ -196,7 +195,7 @@ const enModelSetup = {
       expiresSoon: "Expires in less than a minute",
       cancelled: "Provider sign-in was cancelled.",
       finishingStep: "Setup is finishing the current step. You can cancel when it finishes.",
-      cancelFailed: "Could not confirm cancellation: {error}",
+      cancelFailed: "Couldn’t confirm cancellation. Try again. {error}",
       sessionExpired:
         "The Gateway no longer has this setup session. It may already have finished. Close this dialog and choose Check again to review the current setup.",
       gatewayNotResponding:
@@ -204,7 +203,7 @@ const enModelSetup = {
       gatewayReconnecting: "The Gateway is not responding. Waiting for it to reconnect.",
       notComplete: "Sign-in finished, but model setup is not complete yet.",
     },
-    providerConnected: "{provider} is connected",
+    providerConnected: "{provider} is ready",
   },
 } satisfies TranslationMap;
 

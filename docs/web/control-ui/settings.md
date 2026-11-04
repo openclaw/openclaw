@@ -23,9 +23,15 @@ Configuration field text and `tag:` comparisons ignore case and match canonicall
 People search in **Session access**, the **New Session → Where** picker, and provider
 search also match equivalent composed and decomposed Unicode text without changing
 the original labels or identifiers. Filtering does not change sharing permissions.
-The **Connect provider** search and command palette session-settings workspace
+The **Add account** search and command palette session-settings workspace
 search use the same comparison-only matching. Filtering does not start sign-in or
-change the selected provider, machine, or project.
+change the selected provider, device, or project.
+
+In **Models**, choose **Add account** to save a provider sign-in or API key for an agent.
+**Accounts** lists saved access; keys supplied by config or the environment stay
+managed at their source. **Sign out** removes a saved sign-in. Removing a provider
+also removes its saved accounts and may stop active replies; the confirmation
+explains whether shared accounts and other agents are affected.
 
 Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact. Where custom entry is supported, choose **Custom model…** to enter a provider/model reference.
 
@@ -47,7 +53,7 @@ An unsettled Save or Apply stays bound to its original Gateway. Switching Gatewa
 
 In Memory's **Settings** tab, unfinished number text such as `1e` restores the last accepted value when you leave the field, without removing its override. Deliberately clearing the field still removes the override, and valid edits save normally.
 
-In **Models**, **Connect provider** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide every model of the provider, saving its API key or sign-in adds `<provider>/*` to them so its models appear in the model picker; restrictions that already name some of its models stay unchanged. Choose **Models → Connect provider → On this Gateway** to find existing connections or open [setup and explicit model activation](/start/onboarding). Saving credentials does not activate a model; testing and using a model remains a separate choice for the selected agent. If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved credentials.
+In **Models**, **Add account** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide every model of the provider, saving its API key or sign-in adds `<provider>/*` to them so its models appear in the model picker; restrictions that already name some of its models stay unchanged. Choose **Models → Add account → On this Gateway** to find existing connections or open [setup and explicit model activation](/start/onboarding). Saving credentials does not activate a model; testing and using a model remains a separate choice for the selected agent. If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved accounts.
 
 Model pickers show the authentication methods available to the selected agent. In **Models** settings, this muted information appears on the right of each open option row; the closed control shows only the model name and icon. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
 

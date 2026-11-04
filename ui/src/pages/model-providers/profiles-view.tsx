@@ -30,9 +30,13 @@ export function showProfileActionError(error: unknown): void {
 }
 
 export function showProfileLogoutSuccess(warning?: string): void {
+  // The account disappearing already confirms success; warnings still need attention.
+  if (!warning) {
+    return;
+  }
   showToast({
-    message: [t("modelProviders.logout.done"), warning].filter(Boolean).join(" "),
-    severity: "success",
+    message: warning,
+    severity: "warning",
   });
 }
 
