@@ -213,6 +213,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
   function confirmMutation(options: {
     title: string;
     message: string;
+    details?: string;
     confirmLabel?: string;
     signal?: AbortSignal;
   }) {
@@ -374,6 +375,9 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
           session: normalizeOptionalString(row.label) ?? row.key,
         }),
         message: t(`${stopAction.copyKey}Description`),
+        details: t("sessionsView.stopCloudWorkerTarget", {
+          session: normalizeOptionalString(row.label) ?? row.key,
+        }),
         confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
         signal: scope.signal,
       })) ||

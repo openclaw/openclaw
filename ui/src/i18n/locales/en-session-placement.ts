@@ -76,7 +76,7 @@ const enSessionPlacement = {
     failedSessionTitle: "Couldn’t continue this session",
     failedSessionRestartPrompt: "Restart this session to continue.",
     failedSessionStopPrompt: "Stop this session on its device before restarting it.",
-    failedSessionUnavailable: "This session can’t accept messages because its device failed.",
+    failedSessionUnavailable: "This session stopped and can’t accept messages.",
   },
 } satisfies TranslationMap;
 

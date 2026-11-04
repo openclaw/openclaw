@@ -3,7 +3,7 @@ import { listen } from "./reactive/listener.ts";
 
 type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
-/** One signal per variant: the leading icon's color. Neutral toasts omit severity. */
+/** One signal per variant: the leading icon's color. Neutral toasts explicitly use undefined. */
 export type ToastSeverity = "success" | "info" | "warning" | "error" | "progress";
 
 export type ToastOptions = {
@@ -20,7 +20,7 @@ export type ToastOptions = {
    * not trigger (a background session, the Gateway, a queue). */
   placement?: ToastPlacement;
   /** Errors announce through role="alert"; every other variant uses role="status". */
-  severity?: ToastSeverity;
+  severity: ToastSeverity | undefined;
   /** Agent identity shown for session notifications, using the shared avatar loader. */
   avatar?: AgentIdentity;
   actionLabel?: string;
