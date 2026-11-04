@@ -381,6 +381,7 @@ Full configuration: [Configuration](/gateway/configuration)
 | Key                                                    | Meaning                                                                                                                      |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | `channels.tlon.enabled`                                | Enable/disable channel startup.                                                                                              |
+| `channels.tlon.configWrites`                           | Allow or deny Tlon-initiated config writes (`/config set`, `/config unset`); enabled by default.                             |
 | `channels.tlon.ship`                                   | Bot's Urbit ship name (e.g. `~sampel-palnet`).                                                                               |
 | `channels.tlon.url`                                    | Ship URL (e.g. `https://sampel-palnet.tlon.network`).                                                                        |
 | `channels.tlon.code`                                   | Ship login code.                                                                                                             |
