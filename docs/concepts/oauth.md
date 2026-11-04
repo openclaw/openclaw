@@ -158,6 +158,8 @@ and [Z.AI / GLM Coding Plan](/providers/zai).
 
 OpenClaw's OAuth registry and adapters live in `src/llm/utils/oauth/`. Shared provider helpers live in `src/plugin-sdk/provider-oauth-runtime.ts` and `src/plugin-sdk/provider-auth-runtime.ts`. The auth commands in `src/commands/models/auth.ts` run the selected provider method and persist the returned profiles.
 
+<a id="restarting-sign-in-in-model-setup" />
+
 ### Restarting sign-in in Models
 
 In **Models**, starting the same sign-in again replaces your unfinished
