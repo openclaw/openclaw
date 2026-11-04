@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import { attachProviderAuthAuthority } from "../../plugins/provider-auth-authority.js";
 import { secretRefKey } from "../../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
 import {
@@ -80,13 +81,18 @@ type ResolveApiKeyForProfileResult = {
 
 function buildApiKeyProfileResult(
   params: Omit<ResolveApiKeyForProfileResult, "readCurrentCredential"> &
-    Partial<Pick<ResolveApiKeyForProfileResult, "readCurrentCredential">>,
+    Partial<Pick<ResolveApiKeyForProfileResult, "readCurrentCredential">> & {
+      assertCurrent?: () => void;
+    },
 ): ResolveApiKeyForProfileResult {
-  const result = {
-    apiKey: params.apiKey,
-    provider: params.provider,
-    email: params.email,
-  };
+  const result = attachProviderAuthAuthority(
+    {
+      apiKey: params.apiKey,
+      provider: params.provider,
+      email: params.email,
+    },
+    params.assertCurrent,
+  );
   for (const key of ["profileId", "profileType", "credential", "readCurrentCredential"] as const) {
     Object.defineProperty(result, key, {
       value: key === "readCurrentCredential" ? (params[key] ?? null) : params[key],
@@ -340,13 +346,37 @@ async function resolveApiKeyForProfileOwned(
     if (!apiKey) {
       return null;
     }
+    // Prepared stores retain selection, not authority to use a removed or replaced key.
+    // Keep the physical owner through projections and asynchronous provider preparation.
+    const readCurrentCredential =
+      personalStore?.readCurrentCredential ??
+      (!setupProfile &&
+      store.runtimePersistedProfileIds?.includes(profileId) &&
+      !store.runtimeExternalProfileIds?.includes(profileId)
+        ? await prepareAuthProfileCredentialRead(params)
+        : null);
+    params.signal?.throwIfAborted();
+    const assertCurrent = readCurrentCredential
+      ? () => {
+          const current = readCurrentCredential();
+          const comparable =
+            current && refKey && authProfileSecretRefKey(current, refDefaults) === refKey
+              ? { ...current, [cred.type === "api_key" ? "key" : "token"]: inlineValue }
+              : current;
+          if (!isDeepStrictEqual(comparable, cred)) {
+            throw new Error(`Auth profile "${profileId}" was removed or replaced.`);
+          }
+        }
+      : undefined;
+    assertCurrent?.();
     return buildApiKeyProfileResult({
       apiKey,
       provider: cred.provider,
       email: cred.email,
       profileId,
       profileType: cred.type,
-      readCurrentCredential: personalStore?.readCurrentCredential,
+      readCurrentCredential,
+      assertCurrent,
     });
   }
 

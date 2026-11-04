@@ -6,6 +6,7 @@ import { resolveMergedModelProviderConfig } from "../config/model-provider-confi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
@@ -305,6 +306,7 @@ export async function resolveApiKeyForProviderCore(input: {
     const mode = resolved.profileType ?? credential?.type;
     return authConfig.projectResolvedProfileAuth({
       apiKey: resolved.apiKey,
+      assertCurrent: getProviderAuthAuthority(resolved),
       enabled: params.secretSentinels,
       profileId: resolvedProfileId,
       provider,
