@@ -10,6 +10,7 @@ const publicationHosts = resolveGlobalSingleton(
 );
 // The current native wire names are retained while workspace transaction custody stays host-owned.
 const workspacePublicationMethods = new Set([
+  "sessions.github.readiness",
   "sessions.github.action",
   "sessions.github.publish",
   "sessions.github.options",
