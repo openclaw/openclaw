@@ -145,7 +145,7 @@ jobs:
             --source apps/ios/build/SnapshotDerivedData \
             --output "$RUNNER_TEMP/ios-spotlight-probe.json"
 
-      - name: Retain screenshots and sanitized diagnostics
+      - name: Retain screenshots and XCTest diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -153,6 +153,8 @@ jobs:
           path: |
             apps/ios/fastlane/screenshots/en-US/*.png
             apps/ios/build/SnapshotTestResults/capture-attempts.json
+            apps/ios/build/SnapshotTestResults/*.xcresult
+            apps/ios/build/SnapshotLogs/*.log
             apps/ios/build/screenshot-diagnostics.json
             ${{ runner.temp }}/ios-resource-timeline.jsonl
             ${{ runner.temp }}/ios-spotlight-probe.json

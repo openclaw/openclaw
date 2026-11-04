@@ -1,9 +1,13 @@
+import { spawnSync } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import { beforeEach, expect, it, vi } from "vitest";
+import { startChatSendDiagnostics } from "../../gateway/server-methods/chat-send-diagnostics.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   prepareSandboxDependencyTemplate,
   resolveSandboxDependencyTemplateIdentity,
+  retireSandboxDependencyTemplate,
 } from "./dependency-template.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxConfig } from "./types.js";
@@ -125,7 +129,14 @@ it("installs the pinned guest image without session credentials or writable Git 
     image,
     workdir: "/workspace",
     network: "bridge",
-    env: { CI: "1" },
+    env: {
+      CI: "1",
+      HOME: "/tmp/openclaw-deps",
+      XDG_CONFIG_HOME: "/tmp/openclaw-deps/config",
+      XDG_DATA_HOME: "/tmp/openclaw-deps/data",
+      XDG_STATE_HOME: "/tmp/openclaw-deps/state",
+      XDG_CACHE_HOME: "/tmp/openclaw-deps/cache",
+    },
     binds: undefined,
     setupCommand: undefined,
   });
@@ -143,21 +154,112 @@ it("installs the pinned guest image without session credentials or writable Git 
   expect(cfg.docker.env).toHaveProperty("REGISTRY_PASSWORD", "private-fixture");
 });
 
-it("records install failure without exposing installer output and retires the writer", async () => {
-  mocks.exec.mockImplementation(async (_engine, args: string[]) => ({
-    code: args[0] === "exec" ? 1 : 0,
-    stdout: args[0] === "image" ? image : containerId,
-    stderr: "registry password private-fixture",
-  }));
-  expect(await prepare()).toEqual({ installed: false, reason: "pnpm install failed (exit 1)" });
-  expect(mocks.retire).toHaveBeenCalledOnce();
-});
+// Build test/fixtures/sandbox-home/Dockerfile and opt in with its image tag.
+it.runIf(process.env.OPENCLAW_TEST_SANDBOX_HOME_IMAGE)(
+  "installs offline with an absent image HOME and read-only root",
+  async () => {
+    const { buildSandboxCreateArgs } = await import("./container-allocation.js");
+    const run = (args: string[]) => {
+      const result = spawnSync("docker", args, { encoding: "utf8", timeout: 30_000 });
+      if (result.error) {
+        throw result.error;
+      }
+      return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
+    };
+    let id = "";
+    mocks.exec.mockImplementation((_engine, args: string[]) => run(args));
+    mocks.registry.mockResolvedValue({ entries: [] });
+    mocks.ensure.mockImplementation(async (params) => {
+      const { argv, env } = buildSandboxCreateArgs({
+        name: `openclaw-home-test-${process.pid}`,
+        cfg: params.cfg.docker,
+        scopeKey: "home-test",
+      });
+      const created = run([
+        ...argv,
+        ...Object.entries(env).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
+        "--tmpfs",
+        "/workspace:mode=1777",
+        "--workdir",
+        "/workspace",
+        params.cfg.docker.image,
+      ]);
+      expect(created.code, created.stderr).toBe(0);
+      id = created.stdout.trim();
+      expect(run(["start", id]).code).toBe(0);
+      const seeded = run([
+        "exec",
+        id,
+        "/bin/sh",
+        "-c",
+        [
+          "test ! -e /home/sandbox",
+          'printf \'%s\' \'{"name":"home-fixture","private":true}\' > package.json',
+          "printf '%s\\n' \"lockfileVersion: '9.0'\" 'settings:' '  autoInstallPeers: true' '  excludeLinksFromLockfile: false' 'importers:' '  .: {}' > pnpm-lock.yaml",
+        ].join(" && "),
+      ]);
+      expect(seeded.code, seeded.stderr).toBe(0);
+      return { containerName: id, containerId: id };
+    });
+    try {
+      expect(
+        await prepare({
+          ...cfg,
+          docker: {
+            ...cfg.docker,
+            image: process.env.OPENCLAW_TEST_SANDBOX_HOME_IMAGE!,
+            readOnlyRoot: true,
+            network: "none",
+            user: "1001:1001",
+            tmpfs: [],
+          },
+        }),
+      ).toEqual({ installed: true });
+      const files = run(["exec", id, "find", "/workspace", "-mindepth", "1", "-maxdepth", "1"]);
+      expect(files.stdout.trim().split("\n").toSorted()).toEqual([
+        "/workspace/node_modules",
+        "/workspace/package.json",
+        "/workspace/pnpm-lock.yaml",
+      ]);
+      expect(run(["exec", id, "find", "/workspace", "-name", ".pnpm-store"]).stdout).toBe("");
+    } finally {
+      if (id) {
+        expect(run(["rm", "-f", id]).code).toBe(0);
+      }
+    }
+  },
+);
+
+it.each(["stdout", "stderr"] as const)(
+  "records a bounded, redacted install failure from %s and retires the writer",
+  async (stream) => {
+    mocks.exec.mockImplementation(async (_engine, args: string[]) => ({
+      code: args[0] === "exec" ? 1 : 0,
+      stdout: args[0] === "image" ? image : containerId,
+      stderr: "",
+      ...(args[0] === "exec"
+        ? {
+            [stream]: `${"progress\n".repeat(400)}ERR_PNPM_NO_OFFLINE_META\npassword=fixture-secret`,
+          }
+        : {}),
+    }));
+    const result = await prepare();
+    expect(result.installed).toBe(false);
+    if (!result.installed) {
+      expect(result.reason).toContain("pnpm install failed (exit 1)");
+      expect(result.reason).toContain("ERR_PNPM_NO_OFFLINE_META");
+      expect(result.reason).not.toContain("fixture-secret");
+      expect(result.reason.length).toBeLessThanOrEqual(2100);
+    }
+    expect(mocks.retire).toHaveBeenCalledOnce();
+  },
+);
 
 it("uses offline installation when the sandbox has no network", async () => {
   const offlineCfg = { ...cfg, docker: { ...cfg.docker, network: "none" } };
   await prepare(offlineCfg);
   expect(mocks.exec.mock.calls.find(([, args]) => args[0] === "exec")?.[1]).toContain(
-    "exec pnpm install --offline --frozen-lockfile",
+    'exec pnpm install --offline --frozen-lockfile --store-dir "$XDG_DATA_HOME/pnpm/store"',
   );
 });
 
@@ -177,6 +279,52 @@ it("refuses to publish a template whose builder could not be retired", async () 
   mocks.retire.mockRejectedValue(new Error("writer is still live"));
   await expect(prepare()).rejects.toThrow("writer is still live");
 });
+
+it.each([true, false])(
+  "attributes retirement on the slow-send line (terminated=%s)",
+  async (terminated) => {
+    let clock = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const info = vi.fn();
+    const diagnostics = startChatSendDiagnostics({ info });
+    const prefix =
+      "detail.attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency.retire";
+    mocks.exec.mockImplementation(async (_engine, args: string[]) => {
+      clock += args[0] === "kill" ? 19_000 : args[0] === "wait" ? 500 : 100;
+      return { code: 0, stdout: containerId, stderr: "" };
+    });
+    mocks.retire.mockImplementation(async () => {
+      clock += 200;
+      return terminated;
+    });
+    try {
+      const retired = withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        retireSandboxDependencyTemplate(directory, () => {}),
+      );
+      if (terminated) {
+        await retired;
+      } else {
+        await expect(retired).rejects.toThrow("still running; template retained");
+      }
+      diagnostics.finish();
+      expect(info).toHaveBeenCalledOnce();
+      const line = info.mock.calls[0]![0];
+      for (const field of [
+        "inspect=100ms",
+        "kill=19000ms",
+        "wait=500ms",
+        "verify=200ms",
+        "verify.attempts=1",
+      ]) {
+        expect(line).toContain(`${prefix}.${field}`);
+      }
+      expect(line).not.toContain(containerId);
+      expect(line).not.toContain(directory);
+    } finally {
+      now.mockRestore();
+    }
+  },
+);
 
 it("retries a failed dependency generation when its network policy changes", async () => {
   const options = { assertCurrent: () => {} };

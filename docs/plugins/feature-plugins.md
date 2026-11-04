@@ -38,9 +38,11 @@ Native browser UI is available by default for enabled plugins, including
 user-installed and local development plugins. There is no Custom plugin UI
 Labs switch. Install and enable only plugins you trust: their browser code runs
 inside the Control UI with each signed-in viewer's Gateway permissions.
-Installed plugin details and existing enable reviews disclose a native UI entry
-when the inspected manifest declares one. Catalog install surfaces explain that
-plugin code may include native UI when that metadata is not available yet.
+Plugin details list declared UI contributions under **Extensions**, with a short
+description of what each adds and where it appears. Existing enable reviews
+disclose a native UI entry when the inspected manifest declares one. Catalog
+install surfaces explain that plugin code may include native UI when that
+metadata is not available yet.
 
 The existing config key remains an advanced opt-out. To disable native browser
 code from user-installed plugins, set:

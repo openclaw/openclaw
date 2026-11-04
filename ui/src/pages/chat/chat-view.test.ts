@@ -3453,9 +3453,9 @@ describe("chat model controls", () => {
       undefined,
     );
 
+    await import("./components/chat-effort-picker-panel.tsx");
     await waitForSolid(() => expect(getThinkingSlider(container)).toBeInstanceOf(HTMLInputElement));
     const slider = getThinkingSlider(container);
-    expect(slider).toBeInstanceOf(HTMLInputElement);
     if (slider) {
       slider.value = "0";
       slider.dispatchEvent(new Event("input", { bubbles: true }));
