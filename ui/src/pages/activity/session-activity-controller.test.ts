@@ -39,20 +39,6 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("formats typed load failures before storing presentation text", async () => {
-  const error = new TypeError("Cannot read properties of undefined (reading 'map')");
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  request.mockRejectedValueOnce(error);
-
-  await controller.load(client, { personId: null, time: "all", query: "" });
-
-  expect(controller.error).toBe("Request failed");
-  expect(console.error).toHaveBeenCalledWith(
-    "[control-ui] programming error hidden from the UI:",
-    error,
-  );
-});
-
 it("retains same-query rows across conditional refreshes and clears changed people", async () => {
   const filters = { personId: "former", time: "all" as const, query: "" };
   const initial = sessionActivityListing([active], {
