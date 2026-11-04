@@ -40,6 +40,7 @@ import {
 import {
   ensureSessionWithModelRef,
   withAcpxSessionOptions,
+  withAnnouncedModelControl,
   withOpenClawModelRef,
 } from "./model-ref.js";
 import {
@@ -1104,11 +1105,8 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     const capabilities = await this.delegate.getCapabilities(
       input?.handle ? toAcpxResourceInput({ handle: input.handle }) : input,
     );
-    return {
-      ...capabilities,
-      // Core exposes model control through config options; native harnesses call setModel directly.
-      controls: capabilities.controls.filter((control) => control !== "session/set_model"),
-    };
+    const status = input?.handle ? await this.getStatus({ handle: input.handle }) : undefined;
+    return withAnnouncedModelControl(capabilities, status);
   }
 
   async getStatus(
@@ -1122,13 +1120,15 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   }
 
   async setModel(input: Parameters<BaseAcpxRuntime["setModel"]>[0]): Promise<void> {
-    await this.runWithOperationSnapshot(input.handle, (snapshot) => {
-      input.signal?.throwIfAborted();
-      input.assertActive?.();
-      return this.resolveDelegateForOperationSnapshot(input.handle, snapshot).setModel(
-        toAcpxResourceInput(input),
-      );
-    });
+    await this.runWithOperationSnapshot(input.handle, (snapshot) =>
+      withOpenClawModelRef(input.model, (model) => {
+        // ACPX checks the signal and assertActive authority at dispatch.
+        this.generationRegistry.assertCurrentGeneration(snapshot.generation);
+        return this.resolveDelegateForOperationSnapshot(input.handle, snapshot).setModel(
+          toAcpxResourceInput({ ...input, model }),
+        );
+      }),
+    );
   }
 
   async setMode(input: Parameters<NonNullable<AcpRuntime["setMode"]>>[0]): Promise<void> {

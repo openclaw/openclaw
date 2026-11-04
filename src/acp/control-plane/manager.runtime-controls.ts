@@ -165,6 +165,28 @@ export async function resolveManagerRuntimeCapabilities(params: {
   };
 }
 
+/**
+ * Selects the model write protocol from the session announcement before any write. An advertised
+ * model config key keeps `session/set_config_option`; a rejected write is never retried through
+ * the other protocol.
+ */
+export function resolveModelControlRoute(
+  runtime: AcpRuntime,
+  capabilities: AcpRuntimeCapabilities,
+): "session/set_model" | "session/set_config_option" {
+  const modelKey = normalizeLowercaseStringOrEmpty(
+    resolveRuntimeConfigOptionKey("model", capabilities.configOptionKeys),
+  );
+  const advertisesModelConfigKey = (capabilities.configOptionKeys ?? []).some(
+    (key) => normalizeLowercaseStringOrEmpty(key) === modelKey,
+  );
+  return !advertisesModelConfigKey &&
+    runtime.setModel &&
+    capabilities.controls.includes("session/set_model")
+    ? "session/set_model"
+    : "session/set_config_option";
+}
+
 /** Applies persisted runtime options to a live handle once per unique option signature. */
 export async function applyManagerRuntimeControls(params: {
   sessionKey: string;
@@ -202,6 +224,11 @@ export async function applyManagerRuntimeControls(params: {
       .map((entry) => normalizeLowercaseStringOrEmpty(entry))
       .filter(Boolean),
   );
+  const modelConfigKey = resolveRuntimeConfigOptionKey("model", capabilities.configOptionKeys);
+  const setModelKey =
+    options.model && resolveModelControlRoute(params.runtime, capabilities) === "session/set_model"
+      ? modelConfigKey
+      : undefined;
 
   await withAcpRuntimeErrorBoundary({
     run: async () => {
@@ -220,7 +247,7 @@ export async function applyManagerRuntimeControls(params: {
       }
 
       if (configOptions.length > 0) {
-        if (!params.runtime.setConfigOption) {
+        if (!params.runtime.setConfigOption && configOptions.some(([key]) => key !== setModelKey)) {
           throw createUnsupportedControlError({
             backend,
             control: "session/set_config_option",
@@ -228,6 +255,12 @@ export async function applyManagerRuntimeControls(params: {
         }
         for (const [key, requestedValue] of configOptions) {
           assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+          if (key === setModelKey) {
+            await params.runtime.setModel!({ handle: params.handle, model: requestedValue });
+            assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+            params.onModelApplied?.(requestedValue);
+            continue;
+          }
           // Model changes can clamp or remove unsupported thinking before its turn in the replay.
           const value = key === thinkingConfigKey ? options.thinking : requestedValue;
           if (value === undefined) {
@@ -243,13 +276,13 @@ export async function applyManagerRuntimeControls(params: {
             );
           }
           try {
-            const result = await params.runtime.setConfigOption({
+            const result = await params.runtime.setConfigOption!({
               handle: params.handle,
               key,
               value,
             });
             assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
-            if (key === resolveRuntimeConfigOptionKey("model", capabilities.configOptionKeys)) {
+            if (key === modelConfigKey) {
               const applied = result?.configOptions.find((option) => option.id === key);
               params.onModelApplied?.(
                 result

@@ -2,7 +2,10 @@ import type { AcpRuntimeConfigOptionResult } from "@openclaw/acp-core/runtime/ty
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
-import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
+import {
+  resolveManagerRuntimeCapabilities,
+  resolveModelControlRoute,
+} from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
   AcpSessionRuntimeOptions,
@@ -96,6 +99,16 @@ export async function runSetManagerSessionRuntimeOption(
       },
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "Could not update ACP runtime mode.",
+    });
+  } else if (
+    normalizeLowercaseStringOrEmpty(update.key) === "model" &&
+    resolveModelControlRoute(runtime, capabilities) === "session/set_model"
+  ) {
+    params.assertActive?.();
+    await withAcpRuntimeErrorBoundary({
+      run: async () => await runtime.setModel!({ handle, model: update.value }),
+      fallbackCode: "ACP_TURN_FAILED",
+      fallbackMessage: "Could not update ACP runtime model.",
     });
   } else {
     if (!runtime.setConfigOption) {
