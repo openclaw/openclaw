@@ -205,12 +205,17 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Batch106, pinned main `7e06a07a6279`: qualify removal of an unused response
-Set and its write from the long-turn stop fixture. The primary is unchanged;
-physical dependency qualification and official before/after runtime are pending.
-The sole case, all42 exec steps, stop/history assertions and existing socket
-cleanup remain required. The proposed change removes two test lines and no
-production behavior. No runtime or removal credit is claimed yet.
+Batch106, pinned main `7e06a07a6279`: remove the unused response Set, its
+write and the unused type import from the long-turn stop fixture. The official
+unchanged and candidate browser runs each pass the same single real-Gateway case,
+including all42 exec steps and the original stop/history assertions. The complete
+suite body and existing socket cleanup remain byte-identical; production is
+unchanged. Two test lines are removed. Scoped UI types, typed lint, format, ledger
+compilation, whitespace and the test-line ratchet pass. Both unused-file phases
+and all three export phases pass. The dependency scan reports the same single
+`tokenjuice` declaration finding on the original and candidate; it remains
+unresolved. Fresh review and exact-head CI/security remain required; no
+source-census reclassification.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
