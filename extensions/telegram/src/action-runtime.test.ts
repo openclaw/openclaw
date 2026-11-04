@@ -1,6 +1,11 @@
 import path from "node:path";
 import type { Message } from "grammy/types";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -66,10 +71,14 @@ describe("Telegram registered action authority and input contracts", () => {
     };
     resetTelegramMessageCacheForTest();
     setTelegramPluginStateRuntimeForTests();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
   });
   afterEach(async () => {
     clearTelegramRuntimeForTest();
     resetTelegramMessageCacheForTest();
+    resetPluginRuntimeStateForTest();
     env.restore();
     await state.cleanup();
   });
@@ -505,6 +514,15 @@ describe("Telegram registered action authority and input contracts", () => {
       params: { to: "123", message: "choose", buttons: '[[{"text":"Yes","callback_data":"yes"}]]' },
       error: /native "buttons" is unsupported/,
     },
+    {
+      action: "edit",
+      params: {
+        chatId: "123",
+        messageId: 456,
+        copyTextButtons: [{ label: "Copy", text: "value" }],
+      },
+      error: /supported only for send/,
+    },
   ] as const)(
     "rejects invalid external $action input before network delivery: $error",
     async ({ action, params, error }) => {
@@ -513,6 +531,27 @@ describe("Telegram registered action authority and input contracts", () => {
       expect(requests).toEqual([]);
     },
   );
+
+  it("delivers copy-text buttons through the registered Telegram send action", async () => {
+    const text = "  TOKEN-7319 🦞  ";
+    await expect(
+      invoke("send", {
+        to: "123",
+        message: "Deployment token:",
+        copyTextButtons: [{ label: "Copy token", text }],
+      }),
+    ).resolves.toMatchObject({ details: { ok: true } });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      method: "sendMessage",
+      fields: {
+        text: "Deployment token:",
+        reply_markup: {
+          inline_keyboard: [[{ text: "Copy token", copy_text: { text } }]],
+        },
+      },
+    });
+  });
 
   it("preserves structured missing-topic-name validation", async () => {
     cfg.channels!.telegram!.actions = { createForumTopic: true };

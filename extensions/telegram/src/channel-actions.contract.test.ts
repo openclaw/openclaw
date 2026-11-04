@@ -8,10 +8,14 @@ const telegramConfig = (
 type PreparedSend = Parameters<
   NonNullable<NonNullable<typeof telegramPlugin.actions>["prepareSendPayload"]>
 >[0];
-function prepareSend(params: PreparedSend["ctx"]["params"], payload: PreparedSend["payload"]) {
+function prepareSend(
+  params: PreparedSend["ctx"]["params"],
+  payload: PreparedSend["payload"],
+  options: { cfg?: OpenClawConfig; to?: string } = {},
+) {
   return telegramPlugin.actions?.prepareSendPayload?.({
-    ctx: { channel: "telegram", action: "send", cfg: {}, params },
-    to: "123456",
+    ctx: { channel: "telegram", action: "send", cfg: options.cfg ?? {}, params },
+    to: options.to ?? "123456",
     payload,
   });
 }
@@ -32,8 +36,29 @@ function expectActions(
     expect(actions).not.toContain(action);
   }
 }
+function messageToolProperties(cfg: OpenClawConfig): string[] {
+  const schema = telegramPlugin.actions?.describeMessageTool?.({
+    cfg,
+    accountId: "default",
+  })?.schema;
+  const contributions = Array.isArray(schema) ? schema : schema ? [schema] : [];
+  return contributions.flatMap((entry) => Object.keys(entry.properties));
+}
 
 describe("telegram actions contract", () => {
+  it("discovers copy-text buttons only when Telegram inline buttons are enabled", () => {
+    expect(
+      messageToolProperties(
+        telegramConfig({ botToken: "tok", capabilities: { inlineButtons: "allowlist" } }),
+      ),
+    ).toContain("copyTextButtons");
+    expect(
+      messageToolProperties(
+        telegramConfig({ botToken: "tok", capabilities: { inlineButtons: "off" } }),
+      ),
+    ).not.toContain("copyTextButtons");
+  });
+
   it("requires send and poll permission on the same discoverable account", () => {
     const cfg = telegramConfig({
       defaultAccount: "senderOnly",
@@ -175,6 +200,104 @@ describe("telegram actions contract", () => {
     expect(
       await prepareSend({ quoteText: "original message" }, { text: "legacy send" }),
     ).toBeNull();
+  });
+
+  it("prepares exact Telegram copy-text buttons for durable delivery", async () => {
+    const text = "  café 🦞\nnext line  ";
+    await expect(
+      prepareSend(
+        {
+          copyTextButtons: [
+            { label: "Copy value", text },
+            { label: "Copy ID", text: "item-42" },
+          ],
+        },
+        { text: "Reusable value" },
+      ),
+    ).resolves.toEqual({
+      text: "Reusable value",
+      channelData: {
+        telegram: {
+          buttons: [
+            [{ text: "Copy value", copy_text: { text } }],
+            [{ text: "Copy ID", copy_text: { text: "item-42" } }],
+          ],
+        },
+      },
+    });
+  });
+
+  it("accepts the 256-Unicode-scalar Telegram copy boundary", async () => {
+    const text = "🦞".repeat(256);
+    await expect(
+      prepareSend(
+        { copyTextButtons: [{ label: "Copy boundary", text }] },
+        { text: "Boundary value" },
+      ),
+    ).resolves.toMatchObject({
+      channelData: { telegram: { buttons: [[{ copy_text: { text } }]] } },
+    });
+  });
+
+  it.each([
+    { value: [], error: /must contain 1-100 buttons/ },
+    { value: [{ label: "Copy", text: "" }], error: /text.*1-256 characters/ },
+    { value: [{ label: " ", text: "value" }], error: /label must not be blank/ },
+    { value: [{ label: "Copy", text: "x".repeat(257) }], error: /text.*1-256 characters/ },
+    { value: [{ label: "Copy", text: "\ud800" }], error: /valid Unicode string/ },
+    {
+      value: [{ label: "Copy", text: "value", callback_data: "not-allowed" }],
+      error: /only label and text strings/,
+    },
+    {
+      value: Array.from({ length: 101 }, () => ({ label: "Copy", text: "value" })),
+      error: /must contain 1-100 buttons/,
+    },
+  ])("rejects malformed copy buttons before delivery: $error", async ({ value, error }) => {
+    await expect(prepareSend({ copyTextButtons: value }, { text: "Value" })).rejects.toThrow(error);
+  });
+
+  it.each([
+    {
+      payload: {},
+      error: /require message or media content/,
+    },
+    {
+      payload: { text: "Choose", presentation },
+      error: /cannot be combined with presentation or interactive controls/,
+    },
+    {
+      payload: {
+        text: "Choose",
+        channelData: { telegram: { buttons: [[{ text: "Existing", callback_data: "existing" }]] } },
+      },
+      error: /cannot replace existing Telegram controls/,
+    },
+  ])("rejects incompatible copy-text delivery before send: $error", async ({ payload, error }) => {
+    await expect(
+      prepareSend({ copyTextButtons: [{ label: "Copy", text: "value" }] }, payload),
+    ).rejects.toThrow(error);
+  });
+
+  it.each([
+    {
+      scope: "off" as const,
+      to: "123456",
+      error: /inline buttons are disabled/,
+    },
+    {
+      scope: "dm" as const,
+      to: "-100123456",
+      error: /limited to DMs/,
+    },
+  ])("enforces copy-text $scope scope during prepared sends", async ({ scope, to, error }) => {
+    await expect(
+      prepareSend(
+        { copyTextButtons: [{ label: "Copy", text: "value" }] },
+        { text: "Value" },
+        { cfg: telegramConfig({ botToken: "tok", capabilities: { inlineButtons: scope } }), to },
+      ),
+    ).rejects.toThrow(error);
   });
 
   it("rejects retired native buttons before prepared presentation delivery", async () => {
