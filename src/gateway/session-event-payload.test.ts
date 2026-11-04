@@ -125,7 +125,7 @@ it("carries descendant-only subagent liveness in session snapshots", () => {
     hasActiveSubagentDescendantRun: true,
   };
 
-  expect(buildGatewaySessionSnapshot({ sessionRow, includeSession: true })).toMatchObject({
+  expect(buildGatewaySessionSnapshot({ sessionRow, lifecycle: true })).toMatchObject({
     hasActiveSubagentRun: true,
     hasActiveSubagentDescendantRun: true,
     session: {
