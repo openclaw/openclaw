@@ -523,6 +523,7 @@ export async function stopCloudWorker(
   const confirmed = await showConfirmDialog({
     title: t(`${stopAction.copyKey}Confirm`, { session: session.label }),
     message: t(`${stopAction.copyKey}Description`),
+    details: t("sessionsView.stopCloudWorkerTarget", { session: session.label }),
     confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
     danger: true,
     signal: scope.signal,

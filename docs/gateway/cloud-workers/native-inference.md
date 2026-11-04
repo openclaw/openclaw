@@ -297,7 +297,7 @@ or restart the failed worker placement.
 | `model ... is unavailable on this node`            | Configure that exact provider/model reference and credential in the node's `openclaw.json`, then restart the node host.                                                                    |
 | `startup data exceeds 2 MiB`                       | Reduce the number or size of configured node models and headers, then restart the node host.                                                                                               |
 
-If the Control UI reports **Runner failed**, open the placement details for the
+If the Control UI reports **Couldn’t continue the session**, open the placement details for the
 diagnostic. Restarting without changing the named configuration will repeat the
 same failure. Gateway logs do not contain node credentials or the node-local
 model catalog in full.
