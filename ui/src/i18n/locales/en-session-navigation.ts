@@ -35,7 +35,7 @@ const enSessionNavigation = {
       homeUnavailableTitle: "Start a conversation",
       homeUnavailableBody:
         "This Home is unavailable. Start a new conversation, or open one from Sessions.",
-      startConversation: "New conversation",
+      startConversation: "New session",
       goToMain: "Go to main session",
       viewSessions: "View sessions",
       catalogShareUnavailable: "This shared session route is unavailable.",
