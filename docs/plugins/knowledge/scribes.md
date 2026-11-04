@@ -200,6 +200,10 @@ reopening the scribe shows its current state.
   session key, so renaming it is safe. A scribe without an automation is found by
   its `Scribe · <title>` name; renaming that conversation means the scribe starts a
   new one next time.
+- A save can write several full pages in one reply. A custom provider model without
+  `maxTokens` stops at 8,192 output tokens, which can cut a long save short.
+  `openclaw doctor` warns when an agent's default model allows fewer than 65,536;
+  raise `models.providers.<provider>.maxTokens` if the model supports it.
 
 ## Related
 

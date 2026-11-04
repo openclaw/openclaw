@@ -4,6 +4,10 @@ import type {
   ExplainToolAvailabilityParams,
   ToolAvailabilityReport,
 } from "../agents/tool-availability-explanation.js";
+import type {
+  AgentModelOutputLimit,
+  AgentModelOutputLimitParams,
+} from "../commands/doctor-model-output-limit.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   OpenKeyedStoreOptions,
@@ -71,6 +75,13 @@ type BundledHealthApi = {
       params: ExplainToolAvailabilityParams,
     ) => Promise<ToolAvailabilityReport>;
   }) => void;
+  registerKnowledgeDoctorChecks?: (host: {
+    getHealthCheck: typeof getHealthCheck;
+    registerHealthCheck: typeof registerHealthCheck;
+    resolveAgentModelOutputLimit: (
+      params: AgentModelOutputLimitParams,
+    ) => Promise<AgentModelOutputLimit | undefined>;
+  }) => void;
 };
 
 type WorkerProviderHealthApi = {
@@ -129,6 +140,7 @@ const HEALTH_CHECK_REGISTRATIONS = [
   defineHealthCheckRegistration(registerOpenAIHealthChecks),
   defineHealthCheckRegistration(registerCuaHealthChecks),
   defineHealthCheckRegistration(registerSkillWorkshopHealthChecks),
+  defineHealthCheckRegistration(registerKnowledgeHealthChecks),
   defineHealthCheckRegistration(registerBundledWorkerProviderHealthChecks),
 ];
 
@@ -359,6 +371,27 @@ function registerSkillWorkshopHealthChecks(
   });
 }
 
+function registerKnowledgeHealthChecks(
+  params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
+): void {
+  if (!isMemorySlotPluginActive(params.cfg, "knowledge")) {
+    return;
+  }
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync<BundledHealthApi>({
+    dirName: "knowledge",
+    artifactCandidates: ["doctor-health-api.js"],
+  })?.registerKnowledgeDoctorChecks?.({
+    getHealthCheck,
+    registerHealthCheck: registerCheck,
+    async resolveAgentModelOutputLimit(limitParams) {
+      const { resolveAgentModelOutputLimit } =
+        await import("../commands/doctor-model-output-limit.js");
+      return resolveAgentModelOutputLimit(limitParams);
+    },
+  });
+}
+
 function registerCuaHealthChecks(
   params: BundledHealthCheckParams,
   registerCheck: typeof registerHealthCheck,
@@ -419,6 +452,10 @@ function shouldRegisterCodexManagedHealth(cfg: OpenClawConfig): boolean {
 }
 
 function isMemoryCoreActive(cfg: OpenClawConfig): boolean {
+  return isMemorySlotPluginActive(cfg, "memory-core");
+}
+
+function isMemorySlotPluginActive(cfg: OpenClawConfig, pluginId: string): boolean {
   const plugins = normalizePluginsConfig(cfg.plugins);
   const selectedMemoryPluginId =
     typeof plugins.slots.memory === "string"
@@ -427,11 +464,11 @@ function isMemoryCoreActive(cfg: OpenClawConfig): boolean {
   const configuredMemorySlot = cfg.plugins?.slots?.memory;
   const explicitlySelected =
     typeof configuredMemorySlot === "string" &&
-    normalizePluginId(configuredMemorySlot) === "memory-core";
+    normalizePluginId(configuredMemorySlot) === pluginId;
   return (
-    selectedMemoryPluginId === "memory-core" &&
+    selectedMemoryPluginId === pluginId &&
     passesManifestOwnerBasePolicy({
-      plugin: { id: "memory-core" },
+      plugin: { id: pluginId },
       normalizedConfig: plugins,
       allowRestrictiveAllowlistBypass: explicitlySelected,
     })
