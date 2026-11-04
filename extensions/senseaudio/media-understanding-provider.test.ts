@@ -25,7 +25,9 @@ describe("transcribeSenseAudioAudio", () => {
       fetchFn,
     });
     const form = getRequest().init?.body;
-    if (!(form instanceof FormData)) throw new Error("expected transcription form");
+    if (!(form instanceof FormData)) {
+      throw new Error("expected transcription form");
+    }
     const file = form.get("file") as File;
     expect(file.name).toBe("voice.aac");
     expect(file.type).toBe("audio/aac");

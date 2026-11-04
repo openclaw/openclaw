@@ -4,7 +4,7 @@ import { buffer as consumeBuffer } from "node:stream/consumers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
 
-type Capture = { url: string; authorization?: string; form: FormData };
+type Capture = { url: string; authorization?: string; body: Buffer; form: FormData };
 export type AudioCatalog = {
   provider: string;
   model: string;
@@ -118,10 +118,16 @@ export async function withClawRouterAudioFixture(
               );
               return;
             }
-            const form = await new Response(await consumeBuffer(req), {
+            const body = await consumeBuffer(req);
+            const form = await new Response(body, {
               headers: { "content-type": req.headers["content-type"] ?? "" },
             }).formData();
-            requests.push({ url: req.url ?? "", authorization: req.headers.authorization, form });
+            requests.push({
+              url: req.url ?? "",
+              authorization: req.headers.authorization,
+              body,
+              form,
+            });
             respond(res);
           })().catch((error: unknown) =>
             res.destroy(error instanceof Error ? error : new Error(String(error))),

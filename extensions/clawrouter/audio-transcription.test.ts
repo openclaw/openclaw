@@ -206,6 +206,9 @@ describe("ClawRouter registered file transcription", () => {
         proxy.listen(0, "127.0.0.1", resolve);
       });
       const address = proxy.address() as AddressInfo;
+      // Strict proxy DNS pinning requires HTTPS; the proxy rejects before target TLS.
+      cfg.models!.providers!.clawrouter!.baseUrl =
+        cfg.models!.providers!.clawrouter!.baseUrl!.replace("http:", "https:");
       cfg.models!.providers!.clawrouter!.request = {
         allowPrivateNetwork: true,
         proxy: { mode: "explicit-proxy", url: `http://127.0.0.1:${address.port}` },

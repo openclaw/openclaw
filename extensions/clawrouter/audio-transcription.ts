@@ -245,8 +245,9 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
           Array.isArray(candidate.model.capabilities) &&
           candidate.model.capabilities.includes("audio.transcription"),
       );
-      if (!offer)
+      if (!offer) {
         throw new Error("ClawRouter transcription has no eligible supported catalog offer");
+      }
       context.signal?.throwIfAborted();
       const value = await transcribeOpenAiCompatibleAudio({
         ...context,
