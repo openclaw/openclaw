@@ -31,6 +31,7 @@ const registry = (value = publication()) =>
   });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -84,6 +85,50 @@ describe("gateway publication notification", () => {
       });
       expect(fetchMock.mock.calls[index * 2]?.[1]?.headers).toBeUndefined();
     }
+  });
+
+  it("waits for an exact npm version to appear before dispatching once", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockResolvedValueOnce(registry())
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const notification = notifyPublications([publication()], token);
+    const outcome = notification.then(
+      () => "sent",
+      () => "failed",
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await outcome).toBe("sent");
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(
+      1,
+    );
+  });
+
+  it("shares the visibility deadline and dispatches neither package after it expires", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const notification = notifyPublications(
+      [publication(), publication("@openclaw/gateway-protocol")],
+      token,
+    );
+    const failure = expect(notification).rejects.toThrow("HTTP 404");
+    await vi.advanceTimersByTimeAsync(180_000);
+    await failure;
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(
+      fetchMock.mock.calls.every(([url]) => url === "https://registry.npmjs.org/openclaw/2026.9.9"),
+    ).toBe(true);
   });
 
   it.each(["invalid identity", "missing auth"])("rejects %s before I/O", async (fault) => {
