@@ -86,13 +86,17 @@ function TranscriptRows(props: {
   };
   return (
     <>
-      {props.snapshot.header}
+      {/* Live controls can retire before a gesture releases the accepted row model. */}
+      <div style={{ height: `${props.snapshot.headerHeight}px`, "transition-property": "none" }}>
+        {props.snapshot.header}
+      </div>
       <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
         {props.snapshot.overlay}
         <div
           class="chat-virtual-block"
           style={{
-            transform: `translateY(${(virtualRows()[0]?.start ?? props.snapshot.virtualizer.options.scrollMargin) - props.snapshot.virtualizer.options.scrollMargin}px)`,
+            // WebKit 26.4 omits ancestor transforms from top-layer CSS anchor coordinates.
+            top: `${(virtualRows()[0]?.start ?? props.snapshot.virtualizer.options.scrollMargin) - props.snapshot.virtualizer.options.scrollMargin}px`,
           }}
         >
           <For each={virtualRows()} keyed={(row) => row.key}>

@@ -226,7 +226,7 @@ suite.define(() => {
     await pollCount(suggestions).toBe(4);
     expect(await suggestions.allTextContents()).toEqual([
       "What can you do?",
-      "Tour OpenClaw's code and docs",
+      "Tour OpenClaw’s code and docs",
       "Investigate an issue in a sandbox",
       "Fix a bug and open a draft PR",
     ]);
@@ -297,7 +297,7 @@ suite.define(() => {
     }
   });
 
-  it("centers the mobile composer and scrolls long prompts inside the editor", async () => {
+  it("fits the docked mobile composer and scrolls long prompts inside the editor", async () => {
     const page = await openPage({ viewport: { width: 320, height: 568 } });
     await installMockGateway(page, {
       methodResponses: {

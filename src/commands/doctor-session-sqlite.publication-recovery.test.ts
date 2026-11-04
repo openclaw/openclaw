@@ -41,7 +41,7 @@ async function cleanupRecovery(store: TestStore, cfg = {}) {
   closeOpenClawAgentDatabasesForTest();
   return retireSessionSqliteRecovery({
     env: store.env,
-    preview: inspectSessionSqliteRecovery({ cfg, env: store.env }),
+    preview: await inspectSessionSqliteRecovery({ cfg, env: store.env }),
     readConfig: async () => cfg,
     confirm: async () => true,
   });
@@ -356,7 +356,7 @@ it("protects historical v2 restore metadata and its retained transcript dependen
       dependencies: [canonicalTestPath(store.transcriptPath)],
     });
   }
-  const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+  const preview = await inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
   expect(preview.artifacts.find((item) => item.path === index.archivePath)?.outcome).toBe(
     "protected",
   );

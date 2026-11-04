@@ -19,7 +19,11 @@ import { createUpdateRunRecordFixture } from "./update-run-record.test-support.j
 import { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.js";
 
 vi.mock("./update-run-reader.js", () => ({ listUpdateRunsAsync: vi.fn() }));
-vi.mock("./update-run-recovery-admission.js", () => ({ assertUpdateRecoveryAdmission: vi.fn() }));
+vi.mock("./update-run-recovery-admission.js", async (original) => ({
+  ...(await original<typeof import("./update-run-recovery-admission.js")>()),
+  assertUpdateRecoveryAdmission: vi.fn(),
+  inspectPluginCohortRecoveryAdmission: vi.fn(async () => undefined),
+}));
 
 const dirs = useStateDatabaseTempDirs();
 let root: string;
@@ -118,12 +122,20 @@ describe("managed handoff repair facts", () => {
   });
 
   it("finds a Gateway-started macOS helper under the service TMPDIR", async () => {
-    mockProcessPlatform("darwin");
     // The LaunchAgent's TMPDIR is <state>/tmp; this CLI's os.tmpdir() is another root.
     const serviceTmp = path.join(env.OPENCLAW_STATE_DIR!, "tmp");
     await fs.mkdir(serviceTmp, { recursive: true, mode: 0o700 });
     const directory = await helper("gateway", {}, serviceTmp);
     history.mockResolvedValue([run("retained-run", {})]);
+
+    const realpath = fs.realpath.bind(fs);
+    const platform = mockProcessPlatform("darwin");
+    vi.spyOn(fs, "realpath").mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
+      if (String(args[0]) === serviceTmp) {
+        platform.mockRestore();
+      }
+      return await realpath(...args);
+    });
 
     await expectFacts("retained-run", [directory]);
   });
@@ -153,6 +165,12 @@ describe("managed handoff repair facts", () => {
       expect((await readFacts()).timeoutMs).toBe(expected);
     },
   );
+
+  it("identifies a child lease's own run after adoption dropped its dead updater", async () => {
+    history.mockResolvedValue([run(lease.owner, {})]);
+
+    await expectFacts(lease.owner, [lease.key]);
+  });
 
   it.each(["missing", "conflicting"])("refuses %s original run identity", async (identity) => {
     if (identity === "conflicting") {

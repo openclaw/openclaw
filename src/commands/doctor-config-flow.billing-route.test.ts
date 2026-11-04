@@ -14,9 +14,10 @@ import {
 } from "../flows/doctor-health-contribution-runners.config.js";
 import { createUpdatePostInstallDoctorResultPath } from "../infra/update-doctor-result.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../infra/update-run-report.js";
+import { updateRunWarningMessages } from "../infra/update-run-step.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { maybeMigrateAuthProfileJsonStoresToSqlite } from "./doctor-auth-flat-profiles.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { collectModelBillingRouteMigrationWarnings } from "./doctor/shared/model-billing-route-migration.js";
@@ -83,7 +84,7 @@ function billingDefaults(model: string, retired: string) {
 
 it("does not compare Decision selectors through conversational billing routes", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
-    const { config: before, configPath } = await writeBillingFixture(home, "gpt-4o-mini", {
+    const { config: before } = await writeBillingFixture(home, "gpt-4o-mini", {
       defaults: billingDefaults("gpt-5.4", "gpt-4o-mini"),
       entries: { main: { decisionModel: "openai/gpt-4o-mini" } },
     });
@@ -91,8 +92,10 @@ it("does not compare Decision selectors through conversational billing routes", 
       ...before,
       agents: { ...before.agents, entries: { main: { decisionModel: "openai/gpt-5.6-luna" } } },
     };
-    await using ctx = await prepareDoctorContext(configPath);
-    expect(ctx.sourceConfigValid).toBe(true);
+    await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: before,
+      prompter: { confirmAutoFix: async () => true },
+    });
     expect(collectModelBillingRouteMigrationWarnings({ before, after })).toEqual([]);
     const withChatSelection = (config: OpenClawConfig, model: string): OpenClawConfig => ({
       ...config,
@@ -105,13 +108,10 @@ it("does not compare Decision selectors through conversational billing routes", 
       before: withChatSelection(before, "openai/gpt-4o-mini"),
       after: withChatSelection(after, "openai/gpt-5.6-luna"),
     });
-    expect(warnings).toEqual(
-      ["model.primary", "subagents.model"].map((selector) =>
-        expect.stringContaining(
-          `Billing route changed for agents.entries.main.${selector} (agent main):`,
-        ),
-      ),
-    );
+    expect(warnings).toEqual([
+      "Billing route changed for agents.entries.main.model.primary (agent main): openai/gpt-4o-mini via metered API-key profile openai:default -> openai/gpt-5.6-luna via subscription/OAuth profile openai:chatgpt-default. Review its model and authentication settings.",
+      "Billing route changed for agents.entries.main.subagents.model (agent main): openai/gpt-4o-mini via metered API-key profile openai:default -> openai/gpt-5.6-luna via subscription/OAuth profile openai:chatgpt-default. Review its model and authentication settings.",
+    ]);
   });
 });
 
@@ -208,7 +208,10 @@ it.each(["run-id", "result-channel"] as const)(
         await runInitialConfigWriteHealth(swap);
         expect(resolveAgentEffectiveModelPrimary(swap.cfg, "main")).toBe("openai/gpt-5.4");
         await expectInheritedHeartbeatAutomation(swap.cfg);
-        expect(f.receipt()).toMatchObject({ status: "skipped" });
+        expect(f.receipt()).toMatchObject({
+          status: "skipped",
+          detail: expect.stringContaining("the updating parent still owns plugin installation"),
+        });
       }
       await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }, async () => {
         {
@@ -239,9 +242,9 @@ it.each(["run-id", "result-channel"] as const)(
           if (!completedRun) {
             throw new Error("Expected the update run after Doctor committed its repair.");
           }
-          expect(renderUpdateRunReport(completedRun).lines).toContain(
-            "Warning: Deferred model retirement repair completed after plugin convergence.",
-          );
+          expect(updateRunWarningMessages(completedRun.steps)).toEqual([
+            "Deferred model retirement repair completed after plugin convergence.",
+          ]);
         }
 
         f.defer();

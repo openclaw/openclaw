@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRouter } from "@openclaw/uirouter";
 import { IDBFactory } from "fake-indexeddb";
@@ -14,8 +12,8 @@ import { createSolidApplicationContextProvider } from "../../test-helpers/solid-
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { settleChatPage, stubMatchMedia } from "./chat-page.test-support.ts";
-import "./chat-page.tsx";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
+import "./chat-page.tsx";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { nativeHistoryMessage } from "./chat-pane.test-support.ts";
 import type { ChatPaneElement } from "./chat-pane.tsx";
@@ -32,6 +30,8 @@ import {
 } from "./session-message-cache.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 beforeEach(() => {
   installTranscriptDomMocks();
@@ -73,8 +73,8 @@ it.each([false, true])(
     const researchSnapshotKey = resolveChatSnapshotKey(snapshotHost, {
       sessionKey: "agent:research:main",
     });
-    writer.write(mainSnapshotKey, mainSnapshot);
-    writer.write(researchSnapshotKey, researchSnapshot);
+    writeSnapshotFixture(writer, mainSnapshotKey, mainSnapshot);
+    writeSnapshotFixture(writer, researchSnapshotKey, researchSnapshot);
     await writer.flush();
     const originalRequest = client.request.bind(client);
     const routedClient = createTestGatewayClient(async (method, params, options) => {
@@ -138,9 +138,8 @@ it.each([false, true])(
     vi.spyOn(SessionSnapshotStore.prototype, "read").mockImplementation(async function (
       this: SessionSnapshotStore,
       key,
-      onBoard,
     ) {
-      const snapshot = await originalRead.call(this, key, onBoard);
+      const snapshot = await originalRead.call(this, key);
       if (key === mainSnapshotKey) {
         entered.resolve();
         await release.promise;

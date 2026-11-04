@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
+import {
+  QA_AGENTIC_PARITY_SCENARIO_TITLES,
+  resolveQaParityPackScenarioIds,
+} from "./agentic-parity.js";
 import { resolveQaRepoPath } from "./repo-path.js";
 import { resolveQaRuntimePairLaneScenarioIds } from "./runtime-pair-lane-selection.js";
 import {
@@ -18,6 +21,15 @@ import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 
 it("keeps repo-backed scenarios YAML-only", () => {
   expect(listScenarioMarkdownPaths()).toStrictEqual([]);
+});
+
+it("contains the apply-patch parity probe to its QA workspace", () => {
+  expect(readQaScenarioById("runtime-tool-apply-patch").gatewayConfigPatch).toMatchObject({
+    tools: {
+      fs: { workspaceOnly: true },
+      exec: { applyPatch: { workspaceOnly: true } },
+    },
+  });
 });
 
 it("keeps scenario documentation and code references backed by the repository", () => {
@@ -94,15 +106,15 @@ it("requires explicit suite isolation for gateway state restart scenarios", () =
   for (const scenario of scenarios) {
     expect(scenario.execution.suiteIsolation, scenario.id).toBe("isolated");
   }
-  expect(
-    scenarios.find((scenario) => scenario.id === "gateway-restart-unclaimed-delivery")?.execution,
-  ).toMatchObject({ suiteIsolation: "isolated", isolationReason: expect.stringMatching(/\S/) });
 });
 
 it("declares every release agentic scenario in the core lane", () => {
   const scenarioIds = resolveQaParityPackScenarioIds({ parityPack: "agentic" });
 
   expect(scenarioIds).toHaveLength(12);
+  expect(scenarioIds.map((scenarioId) => readQaScenarioById(scenarioId).title)).toEqual(
+    QA_AGENTIC_PARITY_SCENARIO_TITLES,
+  );
   expect(scenarioIds.map((scenarioId) => readQaScenarioById(scenarioId).runtimePairLane)).toEqual(
     scenarioIds.map(() => "core"),
   );

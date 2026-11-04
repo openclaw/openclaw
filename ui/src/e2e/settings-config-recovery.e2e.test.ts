@@ -22,6 +22,7 @@ const snapshot = {
 };
 const configPath = "/settings/openclaw.json";
 const recoveryBackupPath = `${configPath}.bak`;
+const prefixName = "Outbound response prefix";
 const missing = { ...snapshot, exists: false, config: {}, raw: null, hash: "missing" };
 
 async function edit(prefix: Locator, value: string) {
@@ -59,12 +60,10 @@ suite.define(() => {
       withPage(async ({ page, context }) => {
         const restored = rollbackStatus === "restored";
         const finalDraft = restored ? "retained draft" : "saved after recovery";
-        if (!restored) {
-          await page.clock.install();
-        }
+        await page.clock.install();
         const gateway = await installMockGateway(page, scenario);
         await page.goto(`${suite.server.baseUrl}settings/communications`);
-        const prefix = page.getByRole("textbox", { name: "Outbound Response Prefix" });
+        const prefix = page.getByRole("textbox", { name: prefixName });
         await prefix.waitFor();
         await gateway.deferNext("config.set");
         await edit(prefix, "retained draft");
@@ -73,7 +72,7 @@ suite.define(() => {
         const indicator = page.locator("openclaw-settings-save-indicator");
         await expect
           .poll(() => indicator.textContent())
-          .toContain(restored ? "Save failed" : "Your draft is kept");
+          .toContain(restored ? "Couldn’t save settings. Try again." : "Your draft is kept");
         expect(await indicator.getByRole("button", { name: "Reload", exact: true }).count()).toBe(
           0,
         );
@@ -93,9 +92,7 @@ suite.define(() => {
           await expect
             .poll(() => secondPage.locator("openclaw-settings-save-indicator").textContent())
             .toContain(recoveryBackupPath);
-          const secondPrefix = secondPage.getByRole("textbox", {
-            name: "Outbound Response Prefix",
-          });
+          const secondPrefix = secondPage.getByRole("textbox", { name: prefixName });
           await expect.poll(() => secondPrefix.isDisabled()).toBe(true);
           expect(await secondGateway.getRequests("config.set")).toHaveLength(0);
           await secondPage.close();
@@ -107,10 +104,16 @@ suite.define(() => {
           expect(await prefix.inputValue()).toBe("later draft");
           expect(await indicator.textContent()).toContain(configPath);
           expect(await indicator.textContent()).toContain(recoveryBackupPath);
-          const recover = indicator.getByRole("button", { name: "Discard draft and reload" });
+          const recover = indicator.getByRole("button", { name: "Discard changes" });
+          const discard = page.getByRole("dialog").getByRole("button", {
+            name: "Discard changes",
+            exact: true,
+          });
           await recover.waitFor();
+          expect(await indicator.getByRole("button", { name: "Retry" }).count()).toBe(0);
           await gateway.setOnline(false);
           await recover.click();
+          await discard.click();
           await expect.poll(() => prefix.inputValue()).toBe("later draft");
           expect(await indicator.textContent()).toContain(recoveryBackupPath);
           expect(await gateway.getRequests("config.set")).toHaveLength(1);
@@ -125,6 +128,7 @@ suite.define(() => {
             const reads = (await gateway.getRequests("config.get")).length;
             await gateway.deferNext("config.get");
             await recover.click();
+            await discard.click();
             await gateway.waitForRequest("config.get", { after: reads });
             await gateway.resolveDeferred("config.get", candidate);
             await expect.poll(() => prefix.inputValue()).toBe("later draft");
@@ -135,6 +139,7 @@ suite.define(() => {
           await expect.poll(() => prefix.inputValue()).toBe("initial");
           await gateway.setMethodResponse("config.get", { ...snapshot, hash: "recovered" });
           await recover.click();
+          await discard.click();
           await expect.poll(() => indicator.textContent()).not.toContain("Your draft is kept");
           await gateway.deferNext("config.set");
           await edit(prefix, finalDraft);
@@ -149,7 +154,10 @@ suite.define(() => {
         const { raw } = saved.params as { raw: string };
         expect(JSON.parse(raw)).toEqual({ ...config, messages: { responsePrefix: finalDraft } });
         await gateway.resolveDeferred("config.set");
-        await expect.poll(() => indicator.textContent()).toContain("Apply changes");
+        await expect
+          .poll(() => page.clock.runFor(1_000).then(() => indicator.textContent()))
+          .toContain("Apply changes");
+        await page.clock.resume();
         if (restored) {
           await page.reload();
           await expect.poll(() => prefix.inputValue()).toBe(finalDraft);
@@ -172,8 +180,6 @@ suite.define(() => {
       expect(await diagnostics.textContent()).toContain("Expected number, received string");
       const indicator = page.locator("openclaw-settings-save-indicator");
       expect(await indicator.textContent()).not.toContain("restoration");
-      expect(
-        await indicator.getByRole("button", { name: "Discard draft and reload" }).count(),
-      ).toBe(0);
+      expect(await indicator.getByRole("button", { name: "Discard changes" }).count()).toBe(0);
     }));
 });

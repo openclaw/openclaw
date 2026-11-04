@@ -12,7 +12,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice } from "./auth-choice.apply.js";
 
 type ResolveDeprecatedProviderInstallCatalogEntry =
@@ -29,47 +28,12 @@ vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntry: vi.fn(() => undefined),
 }));
 
-vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
+vi.mock("../plugins/provider-auth-choice.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-auth-choice.runtime.js")>()),
   resolvePluginProviders,
   resolvePluginSetupProvider: () => undefined,
-  resolveProviderPluginChoice,
   runProviderModelSelectedHook,
 }));
-
-vi.mock("./auth-choice.apply.api-providers.js", () => {
-  const normalizeProviderIdLocal = (value: string) => value.trim().toLowerCase();
-  const resolveChoiceByKind = (params: {
-    authChoice: string;
-    kind: ProviderAuthMethod["kind"];
-    tokenProvider?: string;
-  }) => {
-    const providerId = normalizeProviderIdLocal(params.tokenProvider ?? "");
-    if (!providerId) {
-      return params.authChoice;
-    }
-    const provider = resolvePluginProviders().find(
-      (entry) => normalizeProviderIdLocal(entry.id) === providerId,
-    );
-    return (
-      provider?.auth.find((method) => method.kind === params.kind)?.wizard?.choiceId ??
-      params.authChoice
-    );
-  };
-  return {
-    normalizeApiKeyTokenProviderAuthChoice: (params: {
-      authChoice: string;
-      tokenProvider?: string;
-    }) => {
-      if (params.authChoice === "token" || params.authChoice === "setup-token") {
-        return resolveChoiceByKind({ ...params, kind: "token" });
-      }
-      if (params.authChoice === "apiKey") {
-        return resolveChoiceByKind({ ...params, kind: "api_key" });
-      }
-      return params.authChoice;
-    },
-  };
-});
 
 vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
@@ -98,33 +62,6 @@ vi.mock("../infra/remote-env.js", () => ({
 
 vi.mock("../plugins/provider-oauth-flow.js", () => ({
   createVpsAwareOAuthHandlers: vi.fn(),
-}));
-
-vi.mock("../plugins/provider-auth-helpers.js", () => ({
-  applyAuthProfileConfig: (
-    cfg: OpenClawConfig,
-    params: {
-      profileId: string;
-      provider: string;
-      mode: "api_key" | "aws-sdk" | "oauth" | "token";
-      email?: string;
-      displayName?: string;
-    },
-  ): OpenClawConfig => ({
-    ...cfg,
-    auth: {
-      ...cfg.auth,
-      profiles: {
-        ...cfg.auth?.profiles,
-        [params.profileId]: {
-          provider: params.provider,
-          mode: params.mode,
-          ...(params.email ? { email: params.email } : {}),
-          ...(params.displayName ? { displayName: params.displayName } : {}),
-        },
-      },
-    },
-  }),
 }));
 
 type StoredAuthProfile = {
@@ -166,6 +103,7 @@ function seedTestAuthProfile(params: {
   testAuthProfileStores.set(key, store);
 }
 
+// mock-isolation: Capture profile payloads without writing the credential store.
 vi.mock("../agents/auth-profiles.js", () => ({
   persistAuthProfileBatch: async (params: {
     profiles: readonly {
@@ -184,68 +122,12 @@ vi.mock("../agents/auth-profiles.js", () => ({
     }
     return { rollback() {} };
   },
-  upsertAuthProfile: (params: {
-    profileId: string;
-    credential: StoredAuthProfile;
-    agentDir?: string;
-  }) => {
-    seedTestAuthProfile(params);
-  },
-  upsertAuthProfileWithLock: async (params: {
-    profileId: string;
-    credential: StoredAuthProfile;
-    agentDir?: string;
-  }) => {
-    seedTestAuthProfile(params);
-    return { version: 1, profiles: readTestAuthProfileStore(params.agentDir).profiles };
-  },
-  upsertAuthProfileWithLockOrThrow: async (params: {
-    profileId: string;
-    credential: StoredAuthProfile;
-    agentDir?: string;
-  }) => {
-    seedTestAuthProfile(params);
-  },
 }));
-
-function normalizeProviderId(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function resolveProviderPluginChoice(params: { providers: ProviderPlugin[]; choice: string }) {
-  const choice = params.choice.trim();
-  if (!choice) {
-    return null;
-  }
-  if (choice.startsWith("provider-plugin:")) {
-    const payload = choice.slice("provider-plugin:".length);
-    const separator = payload.indexOf(":");
-    const providerId = separator >= 0 ? payload.slice(0, separator) : payload;
-    const methodId = separator >= 0 ? payload.slice(separator + 1) : undefined;
-    const provider = params.providers.find(
-      (entry) => normalizeProviderId(entry.id) === normalizeProviderId(providerId),
-    );
-    const method = methodId
-      ? provider?.auth.find((entry) => entry.id === methodId)
-      : provider?.auth[0];
-    return provider && method ? { provider, method } : null;
-  }
-  for (const provider of params.providers) {
-    for (const method of provider.auth) {
-      if (method.wizard?.choiceId === choice) {
-        return { provider, method, wizard: method.wizard };
-      }
-    }
-    if (normalizeProviderId(provider.id) === normalizeProviderId(choice) && provider.auth[0]) {
-      return { provider, method: provider.auth[0] };
-    }
-  }
-  return null;
-}
 
 function createOpenAiProvider(): ProviderPlugin {
   return {
     id: "openai",
+    pluginId: "openai",
     label: "OpenAI API key",
     auth: [
       {
@@ -287,6 +169,7 @@ function createFixedChoiceProvider(params: {
 }): ProviderPlugin {
   return {
     id: params.providerId,
+    pluginId: params.providerId,
     label: params.label,
     auth: [
       {
@@ -326,29 +209,6 @@ describe("applyAuthChoice", () => {
     const agentDir = path.join(stateDir, "agent");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
-  }
-  function createSelectFirstOption(): WizardPrompter["select"] {
-    return vi.fn(async (params) => params.options[0]?.value as never);
-  }
-  function createNoopMultiselect(): WizardPrompter["multiselect"] {
-    return vi.fn(async () => []);
-  }
-  function createApiKeyPromptHarness(
-    overrides: Partial<Pick<WizardPrompter, "select" | "multiselect" | "text" | "confirm">> = {},
-  ): {
-    select: WizardPrompter["select"];
-    multiselect: WizardPrompter["multiselect"];
-    prompter: WizardPrompter;
-    runtime: ReturnType<typeof createExitThrowingRuntime>;
-  } {
-    const select = overrides.select ?? createSelectFirstOption();
-    const multiselect = overrides.multiselect ?? createNoopMultiselect();
-    return {
-      select,
-      multiselect,
-      prompter: createPrompter({ ...overrides, select, multiselect }),
-      runtime: createExitThrowingRuntime(),
-    };
   }
   async function readAuthProfiles() {
     return readTestAuthProfileStore(resolveAgentDir({} as OpenClawConfig, "main"));
@@ -513,14 +373,12 @@ describe("applyAuthChoice", () => {
     const env = { OPENAI_API_KEY: "sk-openai-explicit" } as NodeJS.ProcessEnv; // pragma: allowlist secret
     const text = vi.fn().mockResolvedValue("should-not-be-used");
     const confirm = vi.fn(async () => true);
-    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
-
     const result = await applyAuthChoice({
       authChoice: "openai-api-key",
       config: {},
       env,
-      prompter,
-      runtime,
+      prompter: createPrompter({ text, confirm }),
+      runtime: createExitThrowingRuntime(),
       setDefaultModel: false,
     });
 

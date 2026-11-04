@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { toErrorObject } from "../../infra/errors.js";
 import type { ProcessCleanupResult } from "./types.js";
 
@@ -42,6 +43,7 @@ export function createServiceChildRelayRetirement(params: {
     signalError = signalError
       ? new AggregateError([signalError, failure], "service child retirement signals failed")
       : failure;
+    materializeErrorStack(signalError);
   };
   const reconcile = () => {
     if (!requested || exit || !params.canRetire()) {

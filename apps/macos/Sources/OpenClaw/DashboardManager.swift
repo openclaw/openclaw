@@ -36,6 +36,8 @@ final class DashboardManager {
     @ObservationIgnored let connectionProvider: @Sendable (DashboardGatewayTarget) async -> GatewayConnection
     @ObservationIgnored let browserIdentityURLProvider:
         @Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws -> URL?
+    @ObservationIgnored let controlUiBasePathProvider:
+        @Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws -> String?
     @ObservationIgnored let legacyCredentialsProvider:
         @Sendable (DashboardGatewayTarget, GatewayConnection.EndpointSnapshot) async throws
         -> DashboardNativeGatewayAuth.LegacyCredentials
@@ -73,6 +75,8 @@ final class DashboardManager {
         },
         browserIdentityURLProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
             -> URL?)? = nil,
+        controlUiBasePathProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
+            -> String?)? = nil,
         legacyCredentialsProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.EndpointSnapshot) async throws
             -> DashboardNativeGatewayAuth.LegacyCredentials)? = nil,
         routeProbe: @escaping @Sendable (DashboardRouteProbePurpose) async -> Void = { purpose in
@@ -104,6 +108,10 @@ final class DashboardManager {
         self.browserIdentityURLProvider = browserIdentityURLProvider ?? { target, config in
             let connection = await connectionProvider(target)
             return try await connection.controlUiBrowserIdentityURL(config: config)
+        }
+        self.controlUiBasePathProvider = controlUiBasePathProvider ?? { target, config in
+            let connection = await connectionProvider(target)
+            return try await connection.controlUiBasePath(config: config)
         }
         self.legacyCredentialsProvider = legacyCredentialsProvider ?? { target, endpoint in
             let connection = await connectionProvider(target)
@@ -334,7 +342,7 @@ final class DashboardManager {
             let revisionChanged = (previousRoute?.revision).map { $0 != routeRevision } ?? (routeRevision > 0)
             let routeChanged = revisionChanged || controller.documentHost.tlsParams != configuration.tlsParams ||
                 controller.auth.gatewayUrl != auth.gatewayUrl
-            let credentialChanged = controller.auth != auth
+            let credentialChanged = !controller.auth.hasSameDocumentIdentity(as: auth)
             if routeChanged || credentialChanged {
                 guard auth.hasCredential || auth.hasAcceptedNativeBinding || auth.usesBrowserIdentity else {
                     self.replaceWithRouteFailure(controller)
@@ -800,6 +808,7 @@ final class DashboardManager {
                     // refuse that document's native challenges in flight.
                     controller.documentHost.nativeGatewayAuthProvider = configuration.nativeAuthProvider
                     controller.documentHost.legacyNativeCredentials = configuration.legacyNativeCredentials
+                    controller.auth = configuration.auth
                 }
             }
             observation?.needsRefresh = false

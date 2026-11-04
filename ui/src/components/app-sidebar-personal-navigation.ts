@@ -94,6 +94,7 @@ export function hidePersonalSidebarCatalog(
   );
   message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
   showToast({
+    severity: "success",
     message,
     actionLabel: t("common.undo"),
     onAction: () => setStoredSessionCatalogHidden(catalogId, false),
@@ -374,6 +375,10 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
       ];
   const canonical = new Map(rows.map((row) => [row.key, row]));
   const pins = [...new Set(keys)].flatMap((key) => {
+    // Query replacement may retain a descriptor; a known deletion may not.
+    if (host.sessionDataContext?.sessions.deletionState(key)) {
+      return [];
+    }
     const projected = canonical.get(key);
     const row =
       projected ??
@@ -406,12 +411,13 @@ export function personalSidebarGroupRows(
   host: PersonalNavigationHost & { reconciledSidebarZone(): SidebarPinZone },
   group: PersonalSessionGroup,
   zone?: SidebarPinZone,
+  sortedRows?: () => readonly SidebarRecentSession[],
 ): SidebarRecentSession[] {
   if (host.sidebarSnapshot) {
     return [];
   }
   const rows = (zone ?? host.reconciledSidebarZone()).sessionRows;
-  return group.sessionKeys.flatMap((key) => {
+  const members = group.sessionKeys.flatMap((key) => {
     const row = rows.get(key);
     return row?.pinnable &&
       !row.archived &&
@@ -419,6 +425,36 @@ export function personalSidebarGroupRows(
       ? [{ ...row, selectionKey: `personal:${JSON.stringify([group.id, key])}` }]
       : [];
   });
+  if (!sortedRows || members.length < 2) {
+    return members;
+  }
+  // Sections follow the sidebar's Sort by. The stable sort keeps members outside
+  // the loaded list after it, in the order they were added.
+  const positions = sidebarRowPositions(sortedRows());
+  const position = (key: string) => positions.get(key) ?? Number.MAX_SAFE_INTEGER;
+  return members.toSorted((a, b) => position(a.key) - position(b.key));
+}
+
+const rowPositions = new WeakMap<readonly SidebarRecentSession[], ReadonlyMap<string, number>>();
+
+/** Position of each loaded row, including children, in the projected list order. */
+function sidebarRowPositions(rows: readonly SidebarRecentSession[]): ReadonlyMap<string, number> {
+  let positions = rowPositions.get(rows);
+  if (!positions) {
+    const next = new Map<string, number>();
+    const visit = (list: readonly SidebarRecentSession[]) => {
+      for (const row of list) {
+        if (!next.has(row.key)) {
+          next.set(row.key, next.size);
+        }
+        visit(row.children);
+      }
+    };
+    visit(rows);
+    positions = next;
+    rowPositions.set(rows, positions);
+  }
+  return positions;
 }
 
 export function projectUnpinnedSessionRows(
@@ -461,11 +497,12 @@ export function personalSidebarOwnerProjection(
 ) {
   const context = host.sessionDataContext;
   const self = context ? gatewayPresentationScope(context.gateway).displayUser : null;
+  const selectedOwnerId = host.sessionOwnerFilterId;
   return applySidebarSessionOwnerFilter({
     projected,
     ownerFacet,
-    selectedOwnerId: host.sessionOwnerFilterId,
-    selectedProfileId: host.sessionOwnerFilterId === self?.id ? self.id : undefined,
+    selectedOwnerId,
+    selectedProfileId: selectedOwnerId === self?.id ? self.id : undefined,
     self,
   });
 }
@@ -499,5 +536,5 @@ export function sidebarVisibleRowsInOrder(
         host.sessionDataContext?.sessions.archiveVisibility(key),
       );
   // Keep appearances until the clicked range is resolved; batch targets deduplicate later.
-  return [...personalGroupRows, ...pins, ...visibleRows];
+  return [...pins, ...personalGroupRows, ...visibleRows];
 }

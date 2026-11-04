@@ -80,17 +80,31 @@ export type SqliteWorkerNativeSettlementOwner = {
 /** The broker resolves this only from the executing owner's settlement evidence. */
 export type RetainedWorkerTransactionAdmission = {
   readonly settled: Promise<SqliteWorkerOperationSettlement>;
+  /** Actual native retirement, including failed-close recovery after an unknown outcome. */
+  readonly nativeStopped?: Promise<void>;
 };
+
+export function resolveSqliteWorkerFinishSettlement(
+  settlement: SqliteWorkerNativeSettlement | undefined,
+  committed: SqliteWorkerNativeSettlementOwner["committed"],
+  outcome?: "not-entered",
+): SqliteWorkerNativeSettlement | undefined {
+  // Only the broker proves dispatch never began. Preserve that no-effect outcome
+  // before publication observers mistake missing receipts for an unknown write.
+  return (
+    settlement ?? (outcome === "not-entered" && !committed ? { kind: "completed" } : undefined)
+  );
+}
 
 /** Observe each finish after the previously installed handler, including failure. */
 export function observeSqliteWorkerAdmissionFinish(
-  admission: { finish(): void },
+  admission: { finish(outcome?: "not-entered"): void },
   observer: () => void,
 ): void {
   const finish = admission.finish.bind(admission);
-  admission.finish = () => {
+  admission.finish = (outcome) => {
     try {
-      finish();
+      finish(outcome);
     } finally {
       observer();
     }

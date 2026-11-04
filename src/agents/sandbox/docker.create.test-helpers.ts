@@ -37,6 +37,7 @@ const spawnState = freshSpawnState();
 
 const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
+  readRegisteredSandboxRuntimeIds: vi.fn(),
   removeRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
   completeSandboxRegistryReservation: vi.fn(),
@@ -80,9 +81,10 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   const globalArgs: string[] = [];
   let args = rawArgs;
   if (command === "podman") {
-    while (args[0] === "--url" || args[0] === "--identity") {
-      globalArgs.push(...args.slice(0, 2));
-      args = args.slice(2);
+    while (["--url", "--identity", "--remote=false"].includes(args[0] ?? "")) {
+      const width = args[0] === "--remote=false" ? 1 : 2;
+      globalArgs.push(...args.slice(0, width));
+      args = args.slice(width);
     }
   }
   const envFileIndex = args.indexOf("--env-file");
@@ -149,6 +151,9 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   if (args[0] === "image" && args[1] === "inspect" && spawnState.imageError) {
     return result(1, "", spawnState.imageError);
   }
+  if (args[0] === "exec" && args.at(-1) === "/proc/self/mountinfo") {
+    return result(0, "1 0 8:1 / / rw - ext4 /dev/synthetic rw\n");
+  }
   if (args[0] === "rm" && args[1] === "-f") {
     spawnState.containerExists = spawnState.inspectRunning = false;
   } else if (args[0] === "create") {
@@ -202,7 +207,6 @@ export function createSandboxContainerTestHarness() {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeAll(async () => {
-    vi.resetModules();
     // mock-isolation: keep container registration in the suite-owned registry fixture.
     vi.doMock("./registry.js", () => registryMocks);
     // mock-isolation: route runtime logging and exits to fixture spies.
@@ -213,8 +217,6 @@ export function createSandboxContainerTestHarness() {
       ...(await importOriginal<typeof import("../../process/exec.js")>()),
       spawnCommand: spawnDockerProcess,
     }));
-    ({ prepareSandboxMountPlan } = await import("./mount-plan.js"));
-    docker = await import("./docker.js");
   });
 
   async function computeTestSandboxHash(input: Parameters<typeof computeSandboxConfigHash>[0]) {
@@ -253,10 +255,14 @@ export function createSandboxContainerTestHarness() {
     return createCall;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ prepareSandboxMountPlan } = await import("./mount-plan.js"));
+    docker = await import("./docker.js");
     Object.assign(spawnState, freshSpawnState());
     resolveDockerSourceNamespace.mockResolvedValue(undefined);
     registryMocks.readRegistryEntry.mockClear();
+    registryMocks.readRegisteredSandboxRuntimeIds.mockClear().mockResolvedValue([]);
     registryMocks.removeRegistryEntry.mockClear().mockResolvedValue(undefined);
     registryMocks.updateRegistry.mockClear().mockResolvedValue(undefined);
     registryMocks.completeSandboxRegistryReservation.mockClear().mockResolvedValue(undefined);

@@ -4,11 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import bedrockMantlePlugin from "./index.js";
 
 const env = { AWS_BEARER_TOKEN_BEDROCK: "test-token", AWS_REGION: "us-east-1" };
+const getTokenProvider = vi.hoisted(() => vi.fn());
+vi.mock("@aws/bedrock-token-generator", () => ({ getTokenProvider }));
 
 describe("amazon-bedrock-mantle provider plugin", () => {
   let provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
   beforeEach(async () => {
     vi.restoreAllMocks();
+    getTokenProvider.mockReset().mockReturnValue(async () => "synthetic-iam-token");
     provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
   });
   afterEach(() => vi.useRealTimers());
@@ -19,6 +22,51 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     } as never);
   const mockModels = (data: unknown[]) =>
     vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ data }));
+
+  it.each(["chat", "decision"] as const)(
+    "prepares %s credentials without requiring chat model limits",
+    async (capability) => {
+      const prepare = provider.prepareRuntimeAuthV2;
+      assert(prepare, "expected capability-aware auth hook");
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("unexpected fetch"));
+      expect(
+        await prepare({
+          capability,
+          provider: "amazon-bedrock-mantle",
+          modelId: "fixture-model",
+          model: { id: "fixture-model", provider: "amazon-bedrock-mantle" },
+          apiKey: "fixture-token",
+          authMode: "api-key",
+          env,
+        }),
+      ).toEqual({ apiKey: "fixture-token" });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(getTokenProvider).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["chat", "decision"] as const)(
+    "prepares %s ambient AWS credentials",
+    async (capability) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1000);
+      const prepare = provider.prepareRuntimeAuthV2;
+      assert(prepare, "expected capability-aware auth hook");
+      expect(
+        await prepare({
+          capability,
+          provider: "amazon-bedrock-mantle",
+          modelId: "fixture-model",
+          model: { id: "fixture-model", provider: "amazon-bedrock-mantle" },
+          apiKey: "__aws_sdk_auth__",
+          authMode: "aws-sdk",
+          env,
+        }),
+      ).toEqual({ apiKey: "synthetic-iam-token", expiresAt: 7201000 });
+    },
+  );
 
   it("uses live plugin config to disable catalog discovery", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected fetch"));

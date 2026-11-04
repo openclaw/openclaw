@@ -11,7 +11,7 @@ import {
 import type { ChatHistoryParams } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveAgentConfig, resolveAgentVerboseDefault } from "../../agents/agent-scope.js";
-import { findModelCatalogEntry } from "../../agents/model-catalog.js";
+import { findModelCatalogEntry } from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import {
   getSubagentSessionListReadSnapshotIdentity,
@@ -294,6 +294,9 @@ export async function handleChatHistoryRequest({
       ? {
           ...historyPage.encodedResponse,
           messages: new SerializedJsonArray(historyPage.encodedResponse.messages),
+          activity: historyPage.encodedResponse.activity
+            ? new SerializedJsonArray(historyPage.encodedResponse.activity)
+            : undefined,
         }
       : prepareChatHistoryResponsePage(historyPage, {
           entry: historyEntry,

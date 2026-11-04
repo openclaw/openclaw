@@ -15,7 +15,7 @@ import {
 } from "../local-model-lean.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-protocol.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -34,7 +34,7 @@ const CODE_MODE_CONTROL_ALLOWLIST_NAMES = [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_W
 
 type PreparedToolSurface = Pick<
   Parameters<typeof createCodeModeTools>[0],
-  "abortSignal" | "executeTool" | "forceRestartSafeTools" | "toolExecutionAllow" | "codeModeSkills"
+  "abortSignal" | "executeTool" | "toolExecutionAllow" | "codeModeSkills"
 > & { preserveToolNames: Iterable<string> };
 
 export function createAgentHarnessToolSurfaceRuntimeCore(
@@ -169,7 +169,6 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
           catalogRef: toolSearchCatalogRef,
           abortSignal: prepared?.abortSignal ?? params.abortSignal,
           executeTool: prepared?.executeTool ?? params.executeTool,
-          forceRestartSafeTools: prepared?.forceRestartSafeTools,
           toolExecutionAllow: prepared?.toolExecutionAllow,
           codeModeSkills,
         })

@@ -7,6 +7,7 @@ import {
   observeGcSamples,
   type GcSample,
 } from "./gc-observer.js";
+import { observeSqliteReaderCounters } from "./sqlite-reader-metrics.js";
 import {
   getTrackedPostgresBridgeCounters,
   observeTrackedPostgresBridgeCounters,
@@ -41,6 +42,9 @@ export function serveWorkerMemorySamples(
 ) {
   const { port1, port2 } = new MessageChannel();
   diagnosticPort = port1;
+  const stopReaderCounters = observeSqliteReaderCounters((sqliteReaderCounter) => {
+    port1.postMessage({ sqliteReaderCounter });
+  });
   const stopBridgeCounters = observeTrackedPostgresBridgeCounters(() => {
     port1.postMessage({ postgresBridgeCounters: getTrackedPostgresBridgeCounters() });
   });
@@ -131,6 +135,7 @@ export function serveWorkerMemorySamples(
   port1.once("close", () => {
     diagnosticPort = undefined;
     stopBridgeCounters();
+    stopReaderCounters();
     stopGc?.();
     gc = undefined;
   });
@@ -153,6 +158,7 @@ export function serveWorkerMemorySamples(
     close(this: void) {
       diagnosticPort = undefined;
       stopBridgeCounters();
+      stopReaderCounters();
       stopGc?.();
       stopGc = undefined;
       flushGc();

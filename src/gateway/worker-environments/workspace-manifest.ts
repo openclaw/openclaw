@@ -57,6 +57,12 @@ export const MAX_RECONCILIATION_PACK_BYTES = 256 * 1024 * 1024;
 const MANIFEST_REF_PATTERN = /^sha256:([a-f0-9]{64})$/u;
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 
+export class UnsafeWorkspaceManifestPathError extends Error {
+  constructor() {
+    super("Worker workspace manifest contains an unsafe path");
+  }
+}
+
 export function manifestPath(value: unknown): string {
   if (
     typeof value !== "string" ||
@@ -68,7 +74,7 @@ export function manifestPath(value: unknown): string {
     value === ".." ||
     value.startsWith("../")
   ) {
-    throw new Error("Worker workspace manifest contains an unsafe path");
+    throw new UnsafeWorkspaceManifestPathError();
   }
   return value;
 }
@@ -91,6 +97,10 @@ function compareManifestPaths(left: { path: string }, right: { path: string }): 
 type RawManifestEntry =
   | { path: string; type: "directory"; mode: number }
   | WorkerWorkspaceManifestEntry;
+
+// Stored baselines retain their admitted inventory until normal reconciliation;
+// applying today's exclusions while decoding them would change their references.
+export type WorkspaceManifestPathPolicy = "current" | "stored";
 
 function createManifestBudget() {
   let pathBytes = 0;
@@ -165,6 +175,7 @@ function parseRawEntry(entry: unknown): RawManifestEntry {
 function validateAndProjectEntries(
   values: unknown[],
   buildCacheInputs?: string[],
+  pathPolicy: WorkspaceManifestPathPolicy = "current",
 ): {
   entries: WorkerWorkspaceManifestEntry[];
   directories: string[];
@@ -191,18 +202,24 @@ function validateAndProjectEntries(
   }
   const stagedInputs = stagedInputDirectoriesFromEntries(rawEntries);
   const retained = buildCacheInputPaths(buildCacheInputs);
-  const eligible = projectWorkspaceEntries(
-    rawEntries,
-    (entryPath) => retained.has(entryPath) || isStagedInputPath(entryPath, stagedInputs),
-    buildCacheInputs !== undefined,
-  );
+  const eligible =
+    pathPolicy === "stored"
+      ? rawEntries
+      : projectWorkspaceEntries(
+          rawEntries,
+          (entryPath) => retained.has(entryPath) || isStagedInputPath(entryPath, stagedInputs),
+          buildCacheInputs !== undefined,
+        );
   return {
     entries: eligible.filter((entry) => entry.type !== "directory"),
     directories: eligible.filter((entry) => entry.type === "directory").map((entry) => entry.path),
   };
 }
 
-export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManifest): string {
+export function serializeWorkerWorkspaceManifest(
+  manifest: WorkerWorkspaceManifest,
+  pathPolicy: WorkspaceManifestPathPolicy = "current",
+): string {
   const rawEntries = [
     ...(manifest.directories ?? []).map((entryPath) => ({
       path: entryPath,
@@ -215,11 +232,14 @@ export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManife
   ].toSorted(compareManifestPaths);
   const stagedInputs = stagedInputDirectoriesFromEntries(rawEntries);
   const retained = buildCacheInputPaths(manifest.buildCacheInputs);
-  const entries = projectWorkspaceEntries(
-    rawEntries,
-    (entryPath) => retained.has(entryPath) || isStagedInputPath(entryPath, stagedInputs),
-    manifest.buildCacheInputs !== undefined,
-  );
+  const entries =
+    pathPolicy === "stored"
+      ? rawEntries
+      : projectWorkspaceEntries(
+          rawEntries,
+          (entryPath) => retained.has(entryPath) || isStagedInputPath(entryPath, stagedInputs),
+          manifest.buildCacheInputs !== undefined,
+        );
   if (entries.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
     throw new Error("Worker workspace manifest has too many entries");
   }
@@ -242,6 +262,7 @@ export function parseWorkerWorkspaceManifest(
   raw: string,
   expectedRef: string,
   buildCacheInputs?: string[],
+  pathPolicy: WorkspaceManifestPathPolicy = "current",
 ): WorkerWorkspaceManifest {
   if (Buffer.byteLength(raw) > MAX_WORKSPACE_MANIFEST_BYTES) {
     throw new Error("Worker workspace manifest exceeds the 64 MiB safety limit");
@@ -268,7 +289,7 @@ export function parseWorkerWorkspaceManifest(
   return {
     version: 1,
     baseCommit: manifest.baseCommit,
-    ...validateAndProjectEntries(manifest.entries, buildCacheInputs),
+    ...validateAndProjectEntries(manifest.entries, buildCacheInputs, pathPolicy),
     ...(buildCacheInputs !== undefined ? { buildCacheInputs } : {}),
   };
 }
