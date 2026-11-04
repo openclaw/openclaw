@@ -32,7 +32,10 @@ vi.mock("../auth-profiles.js", () => ({
   resolveAuthProfileOrder: () => [],
 }));
 
+// mock-isolation: Resolution tests supply their own rows; bundled vendor rows must not leak in.
 vi.mock("./model.static-catalog.js", () => ({
+  createBundledStaticCatalogModelResolver: () => () => undefined,
+  listBundledVendorCatalogRows: () => [],
   resolveBundledProviderStaticCatalogModel: () => undefined,
   resolveBundledStaticCatalogModel: () => undefined,
   resolveManifestModelCatalogProviderAliasMetadata: ({

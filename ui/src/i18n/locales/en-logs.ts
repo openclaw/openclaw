@@ -16,6 +16,7 @@ const enLogs = {
     file: "File: {file}",
     truncated: "Log output truncated; showing latest chunk.",
     empty: "No log entries.",
+    moreActions: "More actions",
   },
 } satisfies TranslationMap;
 

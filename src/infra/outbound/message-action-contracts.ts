@@ -39,7 +39,6 @@ export type MessageActionGateway = Omit<
   resolveAgentRuntimeIdentityToken?: (
     context?: OutboundGatewayRequestContext,
   ) => Promise<string | undefined>;
-  terminalSourceReplyReceiptOwner?: "caller";
   clientName: GatewayClientName;
   clientDisplayName?: string;
   mode: GatewayClientMode;
@@ -93,7 +92,7 @@ export type MessageActionInput = Pick<
   workspaceMediaAccess?: OutboundMediaAccess;
   gateway?: MessageActionGateway;
   sessionKey?: string;
-  /** @internal Durable session key for source-reply transcript and receipt state. */
+  /** @internal Durable session key for source-reply transcript mirrors. */
   sourceReplySessionKey?: string;
   agentId?: string;
   /** @internal The Gateway owns this call and may use its active gateway-mode adapter directly. */
@@ -148,6 +147,8 @@ export type MessageActionResult =
       channel: ChannelId;
       action: "send";
       to: string;
+      /** Account selected by the message routing owner, not the original tool arguments. */
+      accountId?: string;
       handledBy: "plugin" | "core" | "internal-source";
       payload: unknown;
       normalization?: MessageActionNormalization;

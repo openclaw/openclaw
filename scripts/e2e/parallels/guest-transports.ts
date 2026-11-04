@@ -1,8 +1,9 @@
 // Guest Transports script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
+import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import { sleep } from "../../lib/sleep.mjs";
 import { run } from "./host-command.ts";
-import { runMacosHostCommand } from "./macos-exec.ts";
+import { runMacosHostCommand, runWindowsHostCommand } from "./macos-exec.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";
 import type { CommandResult } from "./types.ts";
@@ -20,6 +21,7 @@ interface PosixGuestOptions extends GuestExecOptions {
 interface WindowsBackgroundPowerShellOptions {
   append?: (chunk: string | Uint8Array) => void;
   beforeLaunchAttempt?: () => void;
+  commandTimeoutMs?: number;
   completedLogDrainGraceMs?: number;
   env?: Record<string, string>;
   label: string;
@@ -95,6 +97,13 @@ function throwIfFailed(label: string, result: CommandResult, check: boolean | un
   throw new Error(`${label} failed with exit code ${result.status}`);
 }
 
+function isParallelsSdkResultFailure(result: CommandResult): boolean {
+  return (
+    result.status === 255 &&
+    /PrlJob_Get(?:Result|RetCode): Invalid argument/u.test(`${result.stdout}\n${result.stderr}`)
+  );
+}
+
 const PARALLELS_GUEST_SESSION_UNAVAILABLE = "Unable to open new session in this virtual machine.";
 const PARALLELS_VM_NOT_STARTED =
   "This operation can be performed for running virtual machines only.";
@@ -122,7 +131,15 @@ const POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS = 30_000;
 const POSIX_BACKGROUND_LOG_MAX_BYTES = 8 * 1024 * 1024;
 const WINDOWS_BACKGROUND_LOG_MAX_BYTES = 8 * 1024 * 1024;
 const WINDOWS_BACKGROUND_CLEANUP_RESERVE_MS = 120_000;
+const WINDOWS_BACKGROUND_LAUNCH_TIMEOUT_MS = 8_000;
 const WINDOWS_BACKGROUND_POLL_FAILURE_LIMIT = 3;
+
+export function windowsBackgroundPowerShellTimeoutMs(commandTimeoutMs: number): number {
+  // Upload/launch and status capture must not consume the CLI's own deadline.
+  return (
+    addTimerTimeoutGraceMs(commandTimeoutMs, 150_000 + WINDOWS_BACKGROUND_CLEANUP_RESERVE_MS) ?? 1
+  );
+}
 
 function appendCommandResult(phases: PhaseRunner, result: CommandResult): void {
   phases.append(result.stdout);
@@ -347,7 +364,7 @@ export async function runWindowsBackgroundPowerShell(
     Math.floor(options.completedLogDrainGraceMs ?? 30_000),
   );
   const pollIntervalMs = Math.max(1, Math.floor(options.pollIntervalMs ?? 5_000));
-  const runCommand = options.runCommand ?? run;
+  const runCommand = options.runCommand ?? runWindowsHostCommand;
   const safeLabel = options.label.replaceAll(/[^A-Za-z0-9_-]/g, "-");
   const nonce = `${safeLabel}-${randomUUID()}`;
   const guestRunDir = `openclaw-parallels\\${nonce}`;
@@ -470,7 +487,17 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
     // Setup can consume the active budget before the first launch; still observe
     // its real result before using the deadline to suppress later attempts.
     for (let attempt = 1; attempt <= 5 && (attempt === 1 || Date.now() < deadline); attempt++) {
-      options.beforeLaunchAttempt?.();
+      // Successful staging already proved readiness. Avoid another guest
+      // session between that proof and the first Windows launch.
+      if (attempt > 1) {
+        options.beforeLaunchAttempt?.();
+      }
+      if (
+        options.commandTimeoutMs !== undefined &&
+        deadline - Date.now() < options.commandTimeoutMs + WINDOWS_BACKGROUND_LAUNCH_TIMEOUT_MS
+      ) {
+        throw new Error(`${options.label} setup left insufficient time for the command deadline`);
+      }
       const launch = runCommand(
         "prlctl",
         windowsPowerShellArgs(
@@ -483,7 +510,7 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
         // A busy Windows guest can leave one Parallels Tools session wedged.
         // Keep polls short so a single transport cancellation cannot consume
         // the entire install timeout while the detached process continues.
-        { check: false, timeoutMs: timeoutBefore(deadline, 8_000) },
+        { check: false, timeoutMs: timeoutBefore(deadline, WINDOWS_BACKGROUND_LAUNCH_TIMEOUT_MS) },
       );
       appendOutput(append, launch);
       throwIfParallelsVmStopped(options.label, launch);
@@ -850,6 +877,7 @@ export class MacosGuest extends ParallelsGuest<PosixGuestOptions> {
 }
 
 export class WindowsGuest extends ParallelsGuest<GuestExecOptions> {
+  protected override runCommand = runWindowsHostCommand;
   protected label = "Windows guest command";
   private vmName: string;
   private getEnv: () => Record<string, string>;
@@ -864,28 +892,46 @@ export class WindowsGuest extends ParallelsGuest<GuestExecOptions> {
     return ["exec", this.vmName, "--current-user", ...args];
   }
 
-  powershell(script: string, options: GuestExecOptions = {}): string {
+  powershell(script: string, options: GuestExecOptions & { readOnly?: boolean } = {}): string {
     const scriptName = guestScriptName("ps1");
     const writeScript = `$scriptPath = Join-Path $env:TEMP ${JSON.stringify(scriptName)}
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))`;
-    const write = run("prlctl", windowsPowerShellArgs(this.vmName, writeScript, true), {
-      input: `${windowsProcessEnvScript(this.getEnv())}\n${script}`,
-      timeoutMs: this.phases.remainingTimeoutMs(120_000),
-    });
-    this.phases.append(write.stdout);
-    this.phases.append(write.stderr);
+    const writeArgs = windowsPowerShellArgs(this.vmName, writeScript, true);
+    const input = `${windowsProcessEnvScript(this.getEnv())}\n${script}`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const write = this.runCommand("prlctl", writeArgs, {
+        check: false,
+        input,
+        timeoutMs: this.phases.remainingTimeoutMs(120_000),
+      });
+      appendCommandResult(this.phases, write);
+      // Rewriting this unique temporary file is idempotent; the command has
+      // not launched yet, so staging recovery cannot replay its effects.
+      if (attempt === 0 && isParallelsSdkResultFailure(write)) {
+        this.phases.append("Retry Windows script write after Parallels transport failure\n");
+        continue;
+      }
+      throwIfFailed("Windows guest script write", write, undefined);
+      break;
+    }
     const scriptPath = `%TEMP%\\${scriptName}`;
     try {
-      return this.exec(
-        [
-          "cmd.exe",
-          "/d",
-          "/s",
-          "/c",
-          `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`,
-        ],
-        options,
-      );
+      const args = [
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`,
+      ];
+      let result = this.run(args, { ...options, check: false });
+      // Parallels can lose the result after execution. Replay only reads, once,
+      // and only for its known SDK error; guest failures remain terminal.
+      if (options.readOnly && isParallelsSdkResultFailure(result)) {
+        this.phases.append("Retry read-only Windows command after Parallels transport failure\n");
+        result = this.run(args, { ...options, check: false });
+      }
+      throwIfFailed(this.label, result, options.check);
+      return result.stdout.trim();
     } finally {
       this.exec(["cmd.exe", "/d", "/s", "/c", `del /F /Q "${scriptPath}"`], {
         check: false,

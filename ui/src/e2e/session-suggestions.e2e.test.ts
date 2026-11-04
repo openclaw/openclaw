@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Locator } from "playwright/test";
 import { it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
@@ -387,7 +388,11 @@ suite.define(() => {
       const typingAvatar = typingRow.locator(
         ".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot)",
       );
-      await expect(typingAvatar).toBeVisible();
+      const typingInitials = typingRow.locator(
+        ".chat-message-avatar-anchor .chat-avatar--sender-initials",
+      );
+      await expect(typingInitials).toBeVisible();
+      await expect(typingInitials).toHaveText("O");
       await expect(typingAvatar).toHaveCSS("position", "absolute");
 
       const draft = "yea, cool. Live drafts stream into the bubble now.";
@@ -398,7 +403,7 @@ suite.define(() => {
         await expect(previewBubble).toHaveText(visible);
       }
       await expect(typingRow.locator(".agent-chat__typing-preview-label")).toHaveText("Owner");
-      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing...");
+      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing…");
       await expect(typingRow.locator(".agent-chat__typing-bubble")).toHaveCount(0);
       const activeBox = await previewBubble.boundingBox();
       await page.clock.runFor(10_000);
@@ -457,13 +462,7 @@ suite.define(() => {
       });
       await ownerTyping(draft);
       await expect(previewBubble).toHaveText(draft);
-      await expect
-        .poll(() =>
-          typingRow
-            .locator(".chat-group")
-            .evaluate((row) => Number.parseFloat(getComputedStyle(row).gridTemplateColumns)),
-        )
-        .toBeGreaterThan(0);
+      await waitForLayoutSettled(page, '[data-virtual-row-key="presence:typing"] .chat-group');
       const beforeSend = await bubbleGeometry(previewBubble);
       await gateway.emitGatewayEvent("session.message", {
         sessionKey: "main",
@@ -477,6 +476,7 @@ suite.define(() => {
       await expect(typingRow).toHaveCount(0);
       const sentText = page.locator(".chat-group--peer .chat-text").filter({ hasText: draft });
       await expect(sentText).toHaveCount(1);
+      await waitForLayoutSettled(page, ".chat-group--peer .chat-text");
       const afterSend = await bubbleGeometry(sentText);
       expect(afterSend).toMatchObject({
         padding: beforeSend.padding,

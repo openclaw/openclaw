@@ -161,6 +161,7 @@ suite.define(() => {
 
         await openModelSetup(page, suite.server.baseUrl);
         await page.getByRole("heading", { name: "On this Gateway", exact: true }).waitFor();
+        await page.locator("[data-prepare-choice]").first().waitFor();
         const colors = await page
           .locator("[data-prepare-choice] [data-provider-icon]")
           .evaluateAll((icons) => icons.map((icon) => getComputedStyle(icon).color));

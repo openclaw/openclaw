@@ -50,6 +50,9 @@ export class TranscriptPrependAnchor {
     commanded: boolean,
     readingProjectionChanged = false,
   ): void {
+    if (commanded) {
+      this.pending = null;
+    }
     // A second projection may commit before measurement settles. Keep the
     // original reader target rather than recapturing an already shifted bubble.
     const retained =
@@ -183,9 +186,9 @@ function restoreTranscriptPrependAnchor(
   if (Math.abs(offset - before) <= 1) {
     return false;
   }
-  // Commit one measured message target through the scroll owner. This also
-  // retires deferred row corrections already represented by the measured DOM.
+  // The scroll owner retires deferred row corrections represented by the DOM.
+  // An ignored native write must not keep the measurement loop alive.
   virtualizer.scrollToOffset(offset, { behavior: "instant" });
   onLayoutCorrection(before, scrollElement.scrollTop);
-  return true;
+  return scrollElement.scrollTop !== before;
 }

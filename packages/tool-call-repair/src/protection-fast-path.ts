@@ -8,6 +8,8 @@ export type ProtectionScanState = {
   fenceLength: number;
   /** Unmodeled paragraph syntax; cleared by a blank line. */
   paragraphAmbiguous: boolean;
+  /** Paragraph syntax that may own block code; inline backticks alone do not. */
+  blockAmbiguous: boolean;
   /** An unclassified delimiter makes fence parity permanently unknown. */
   structuralUnknown: boolean;
   /** Trailing partial line; block structure is only decidable on whole lines. */
@@ -19,6 +21,7 @@ export function createProtectionScanState(): ProtectionScanState {
     fenceChar: undefined,
     fenceLength: 0,
     paragraphAmbiguous: false,
+    blockAmbiguous: false,
     structuralUnknown: false,
     partialLine: "",
   };
@@ -51,6 +54,7 @@ function applyLine(state: ProtectionScanState, line: string): void {
   }
   if (BLANK_LINE.test(line)) {
     state.paragraphAmbiguous = false;
+    state.blockAmbiguous = false;
     return;
   }
   const open = FENCE_OPEN.exec(line);
@@ -74,7 +78,10 @@ function applyLine(state: ProtectionScanState, line: string): void {
     state.structuralUnknown = true;
     return;
   }
-  if (line.includes("`") || UNMODELED_BLOCK_START.test(line)) {
+  if (UNMODELED_BLOCK_START.test(line)) {
+    state.blockAmbiguous = true;
+  }
+  if (line.includes("`") || state.blockAmbiguous) {
     state.paragraphAmbiguous = true;
   }
 }

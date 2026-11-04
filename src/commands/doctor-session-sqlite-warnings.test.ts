@@ -109,10 +109,10 @@ it("keeps cleanup import proof after resolved warnings disappear", async () => {
   manifest.targets[0]!.issues.push(active(store.transcriptPath, "agent:main:main"));
   fs.writeFileSync(manifestPath, JSON.stringify(manifest));
   const original = fs.readFileSync(manifestPath);
-  const before = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+  const before = await inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
   expect(before.totals.candidateBytes).toBeGreaterThan(0);
   expect(readSessionSqliteMigrationWarnings(store.env)).toEqual([]);
-  expect(inspectSessionSqliteRecovery({ cfg: {}, env: store.env })).toEqual(before);
+  expect(await inspectSessionSqliteRecovery({ cfg: {}, env: store.env })).toEqual(before);
   expect(fs.readFileSync(manifestPath)).toEqual(original);
 });
 

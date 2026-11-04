@@ -12,10 +12,12 @@ import {
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { calculateCost } from "../model-utils.js";
+import { resolveProviderContext, PROVIDER_MODEL_INPUT } from "../provider-types.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildGuardedModelFetch } from "../transports/host-policy.js";
 import { parseJsonPreservingUnsafeIntegers } from "../transports/json-unsafe-integers.js";
 import {
+  awaitProviderLifecycleCallback,
   failTransportStream,
   iterateSseFrames,
   notifyProviderHttpResponse,
@@ -35,21 +37,25 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   buildGoogleInteractionsParams,
+  normalizeGoogleInteractionsToolChoice,
   resolveGoogleApiClientHeaders,
+  type GoogleInteractionsOptions,
   type GoogleInteractionsRequestBody,
 } from "./google-interactions-request.js";
+import { buildGoogleInteractionsSimpleThinking, type GoogleApiType } from "./google-shared.js";
+import { mapGoogleToolArguments } from "./google-tool-parameters.js";
 import {
-  buildGoogleInteractionsSimpleThinking,
-  type GoogleApiType,
-  type GoogleProviderOptions,
-} from "./google-shared.js";
+  GOOGLE_VIDEO_SLOT_OMISSION,
+  materializeGoogleVideoSlots,
+  type GoogleVideoSlots,
+} from "./google-video-slots.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 let toolCallCounter = 0;
 
 function resolveGoogleInteractionsApiKey<T extends GoogleApiType>(
   model: Model<T>,
-  options?: GoogleProviderOptions,
+  options?: Pick<GoogleInteractionsOptions, "apiKey">,
 ): string {
   return (
     options?.apiKey ||
@@ -85,7 +91,7 @@ function isGoogleInteractionsRequestBody(value: unknown): value is GoogleInterac
 
 export const streamGoogleInteractions: StreamFunction<
   "google-interactions",
-  GoogleProviderOptions
+  GoogleInteractionsOptions
 > = (model, context, options) => {
   const stream = new AssistantMessageEventStream();
   const output = createAssistantOutput(model, "google-interactions");
@@ -100,14 +106,55 @@ export const streamGoogleInteractions: StreamFunction<
       if (!apiKey.trim()) {
         throw new Error(`No API key for provider: ${model.provider}`);
       }
-      let body = buildGoogleInteractionsParams(model, context, options);
-      const nextBody = await options?.onPayload?.(body, model);
+      const providerInput = options?.[PROVIDER_MODEL_INPUT] ?? model.input;
+      const providerContext = providerInput.includes("video")
+        ? await resolveProviderContext(context, options)
+        : context;
+      const videoSlots: GoogleVideoSlots = new Map();
+      let body = buildGoogleInteractionsParams(model, providerContext, options, videoSlots);
+      const nextBody = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(body, model) : undefined,
+        options?.signal,
+      );
       if (nextBody !== undefined) {
         if (!isGoogleInteractionsRequestBody(nextBody)) {
           throw new Error("Google Interactions onPayload returned an invalid request body");
         }
         body = nextBody;
       }
+      const optionRecord = asRecord(options);
+      const metadata = asRecord(optionRecord.videoMetadata ?? optionRecord.video_metadata);
+      const processing: Record<string, unknown> = {};
+      for (const [camel, snake] of [
+        ["startOffset", "start_offset"],
+        ["endOffset", "end_offset"],
+        ["fps", "fps"],
+      ] as const) {
+        const value = metadata[camel] ?? metadata[snake];
+        if (value !== undefined) {
+          processing[snake] = value;
+        }
+      }
+      materializeGoogleVideoSlots(
+        body,
+        videoSlots,
+        (slot, video) => {
+          Object.assign(slot, {
+            type: "video",
+            mime_type: video.mimeType,
+            data: video.data,
+            ...(Object.keys(processing).length > 0
+              ? { processing: { type: "static", ...processing } }
+              : {}),
+          });
+        },
+        (part) => {
+          if (part.type === "video") {
+            Object.keys(part).forEach((key) => Reflect.deleteProperty(part, key));
+            Object.assign(part, { type: "text", text: GOOGLE_VIDEO_SLOT_OMISSION });
+          }
+        },
+      );
 
       let baseUrl = (model.baseUrl || "https://generativelanguage.googleapis.com/v1beta")
         .trim()
@@ -186,6 +233,12 @@ export const streamGoogleInteractions: StreamFunction<
           if (currentBlock.partialJson?.trim()) {
             currentBlock.arguments = parseTerminalToolCallArguments(currentBlock.partialJson);
           }
+          currentBlock.arguments = mapGoogleToolArguments(
+            providerContext.tools,
+            currentBlock.name,
+            currentBlock.arguments,
+            "decode",
+          );
           delete currentBlock.partialJson;
           stream.push({
             type: "toolcall_end",
@@ -512,8 +565,15 @@ export const streamSimpleGoogleInteractions: StreamFunction<
   }
 
   const base = buildBaseOptions(model, options, apiKey);
+  // Google-specific call options are not part of the shared base projection.
+  const record = asRecord(options);
+  const toolChoice = normalizeGoogleInteractionsToolChoice(record.toolChoice);
+  const videoMetadata = record.videoMetadata ?? record.video_metadata;
   return streamGoogleInteractions(model, context, {
     ...base,
+    ...(typeof record.topP === "number" ? { topP: record.topP } : {}),
     thinking: buildGoogleInteractionsSimpleThinking(model, options),
-  } satisfies GoogleProviderOptions);
+    ...(toolChoice ? { toolChoice } : {}),
+    ...(videoMetadata !== undefined ? { videoMetadata } : {}),
+  });
 };

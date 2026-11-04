@@ -46,6 +46,10 @@ import { buildCodexMigrationProvider } from "./src/migration/provider.js";
 import { createCodexPluginsTool } from "./src/native-plugin-tool.js";
 import { createCodexThreadsTool } from "./src/native-thread-tool.js";
 import {
+  createCodexNodeAppServerCommand,
+  createCodexNodeAppServerInvokePolicy,
+} from "./src/node-app-server.js";
+import {
   createCodexCliSessionNodeHostCommands,
   createCodexCliSessionNodeInvokePolicies,
   listCodexCliSessionsOnNode,
@@ -273,10 +277,11 @@ export default definePluginEntry({
             });
           },
         },
-        { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] },
+        { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES], workspaceAccess: "execute" },
       );
     }
     const agentHarnessOptions = {
+      pluginConfig: registrationConfig,
       bindingStore,
       sessionCatalogControlFactory,
       resolveConfig: resolveCurrentConfig,
@@ -304,7 +309,7 @@ export default definePluginEntry({
             getPluginConfig: resolveCurrentPluginConfig,
           }),
       },
-      { name: "codex_threads" },
+      { name: "codex_threads", workspaceAccess: "execute" },
     );
     api.registerToolMetadata({
       toolName: "codex_threads",
@@ -323,7 +328,7 @@ export default definePluginEntry({
             getPluginConfig: resolveCurrentPluginConfig,
           }),
       },
-      { name: "codex_plugins" },
+      { name: "codex_plugins", workspaceAccess: "execute" },
     );
     api.registerToolMetadata({
       toolName: "codex_plugins",
@@ -340,6 +345,8 @@ export default definePluginEntry({
     for (const policy of createCodexCliSessionNodeInvokePolicies()) {
       api.registerNodeInvokePolicy(policy);
     }
+    api.registerNodeHostCommand(createCodexNodeAppServerCommand());
+    api.registerNodeInvokePolicy(createCodexNodeAppServerInvokePolicy());
     api.registerNodeHostCommand(createCodexNodeExecServerCommand());
     api.registerNodeInvokePolicy(createCodexNodeExecServerInvokePolicy());
     api.registerCommand(

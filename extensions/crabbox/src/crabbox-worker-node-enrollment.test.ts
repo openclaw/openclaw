@@ -29,9 +29,13 @@ import {
   createNodePackageFixture,
   expectSetupPhases,
   readLaunch,
+  runtimeManifestSha256,
   type DesktopFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
-import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
+import {
+  resolveCrabboxProvisionProfile,
+  type CrabboxOperatingSystem,
+} from "./crabbox-worker-profile.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import { openCrabboxWarmImageStore } from "./crabbox-worker-warm-image-store.js";
@@ -219,10 +223,26 @@ async function enroll(
   desktop?: DesktopFixture,
   runtimeOnly = false,
   workerBundle?: CrabboxWorkerNodeEnrollment["nodeBootstrap"] & { packageRelativePath: string },
-  options?: { credentials?: string; timeoutMs?: number; signal?: AbortSignal },
+  options?: {
+    credentials?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    trustBin?: string;
+    target?: CrabboxOperatingSystem;
+  },
 ) {
   const bin = path.join(home, "bin");
   const proc = path.join(home, "proc");
+  fs.mkdirSync(bin, { recursive: true });
+  // Never update the test host\'s certificate store from a generated guest command.
+  fs.writeFileSync(path.join(bin, "update-ca-certificates"), "#!/bin/sh\nexit 0\n", {
+    mode: 0o700,
+  });
+  fs.writeFileSync(
+    path.join(bin, "sudo"),
+    '#!/bin/sh\nset -eu\ntest "$1" = -n && test "$2" = --\nshift 2\nexec "$@"\n',
+    { mode: 0o700 },
+  );
   if (desktop) {
     fs.mkdirSync(bin, { recursive: true });
     fs.mkdirSync(path.join(proc, "123"), { recursive: true });
@@ -250,9 +270,15 @@ echo 123
     );
   }
   const setup = runtimeOnly
-    ? createCrabboxNodeRuntimeSetup({ leaseId, nodeBootstrap, workerBundle: workerBundle! })
+    ? createCrabboxNodeRuntimeSetup({
+        leaseId,
+        nodeBootstrap,
+        workerBundle: workerBundle!,
+        target: options?.target,
+      })
     : createCrabboxNodeEnrollmentSetup({
         leaseId,
+        target: options?.target,
         desktop: desktop?.enabled,
         desktopSetup: desktop?.setup,
         enrollment: {
@@ -284,7 +310,7 @@ childProcess.spawn = (command, args, options) => {
     env: {
       HOME: home,
       NODE_OPTIONS: `--require ${JSON.stringify(hooks)}`,
-      PATH: `${bin}:${process.env.PATH}`,
+      PATH: `${options?.trustBin ?? bin}:${process.env.PATH}`,
       ...(desktop ? loginEnvironment : {}),
       ...setup.forwardedEnv,
       ...(options?.credentials ? { CRABBOX_WORKER_BOOTSTRAP_TOKEN: options.credentials } : {}),
@@ -307,6 +333,10 @@ childProcess.spawn = (command, args, options) => {
   // Replace only OS fixture roots; the generated bootstrap and credential flow execute unchanged.
   child.stdin.end(
     setup.command
+      .replaceAll(
+        "/usr/sbin/update-ca-certificates",
+        path.join(options?.trustBin ?? bin, "update-ca-certificates"),
+      )
       .replaceAll("/var/lib/crabbox/desktop.env", path.join(home, "desktop.env"))
       .replaceAll("/proc/$process_pid/environ", `${proc}/$process_pid/environ`),
   );
@@ -326,6 +356,118 @@ childProcess.spawn = (command, args, options) => {
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
+  it.for([
+    { cached: false, uid: 0, status: 0, target: "linux" as const },
+    { cached: true, uid: 1000, status: 0, target: "linux" as const },
+    { cached: false, uid: 1000, status: 17, target: "linux" as const },
+    { cached: false, uid: 1000, status: 0, target: "macos" as const },
+  ])("registers platform trust before node enrollment with %j", async (testCase, { signal }) => {
+    const { home, stateDir } = testHome();
+    const bin = path.join(home, "trust-bin");
+    fs.mkdirSync(bin);
+    const events = path.join(home, "trust-events");
+    for (const [name, body] of Object.entries({
+      id: `printf '%s\\n' ${testCase.uid}`,
+      sudo: 'test "$1" = -n && test "$2" = --\nshift 2\nexec "$@"',
+      "update-ca-certificates": `test "$#" = 0
+[ -z "\${CRABBOX_WORKER_SETUP_CODE-}" ]
+[ -z "\${CRABBOX_WORKER_BOOTSTRAP_TOKEN-}" ]
+[ -z "\${CRABBOX_WORKER_CODEX_CONFIG-}" ]
+[ ! -e "$HOME/.openclaw/cloud-workers/${leaseId}/node.pid" ]
+printf 'registered\\n' >> "$HOME/trust-events"
+exit ${testCase.status}`,
+    })) {
+      fs.writeFileSync(path.join(bin, name), `#!/bin/sh\nset -eu\n${body}\n`, { mode: 0o700 });
+    }
+    const { nodeBootstrap, authorizations } = await serveArtifact(await packageFixture("trust"));
+    const options = { signal, trustBin: bin, target: testCase.target };
+    if (testCase.cached) {
+      await expectSetupPhases(enroll(home, nodeBootstrap, undefined, true, undefined, options));
+      expect(fs.existsSync(events)).toBe(false);
+    }
+    const result = await enroll(home, nodeBootstrap, undefined, false, undefined, options);
+    expect(result.code, result.output).toBe(testCase.status === 0 ? 0 : 1);
+    if (testCase.target === "linux") {
+      expect(fs.readFileSync(events, "utf8")).toBe("registered\n");
+    } else {
+      expect(fs.existsSync(events)).toBe(false);
+    }
+    if (testCase.status !== 0) {
+      expect(result.output).toContain("platform trust registration failed");
+      expect(authorizations).toHaveLength(0);
+      expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
+    } else {
+      expect(await readLaunch(stateDir, receipts, signal)).toMatchObject({ build: "trust" });
+      expect(authorizations).toHaveLength(1);
+    }
+  });
+
+  it("installs and reuses a bundle beside a retained npm runtime without rerunning npm", async () => {
+    const bytes = await createNodePackageFixture(
+      (prefix) => tempDirs.make(prefix),
+      "offline",
+      receipts,
+      "process.exit(98)",
+      "bundle",
+    );
+    const served = await serveArtifact(bytes);
+    const worker = await serveArtifact(Buffer.from("verified-worker-archive"));
+    const manifestSha256 = await runtimeManifestSha256(bytes);
+    if (!manifestSha256) {
+      throw new Error("Fixture runtime manifest is missing");
+    }
+    const bootstrap = {
+      ...served.nodeBootstrap,
+      install: "bundle" as const,
+      buildId: "fixture-runtime-build",
+      manifestSha256,
+    };
+    const { url: _nodeUrl, token: _nodeToken, install: _install, ...nodeIdentity } = bootstrap;
+    const {
+      sha256,
+      bytes: workerSize,
+      packageRelativePath,
+    } = workerBundleFor(worker.nodeBootstrap);
+    const identity = {
+      nodeBootstrap: nodeIdentity,
+      workerBundle: { sha256, bytes: workerSize, packageRelativePath },
+    };
+    const { home, stateDir } = testHome();
+    const retained = await servePackage("retained-npm-runtime");
+    await expectSetupPhases(
+      enroll(home, retained.nodeBootstrap, undefined, true, workerBundleFor(worker.nodeBootstrap)),
+    );
+    const npmCalls = readText(home, "npm-calls");
+    const retainedInstallation = readText(
+      runtimePackage(home, retained.nodeBootstrap.sha256),
+      "installed.json",
+    );
+    const prepare = () =>
+      enroll(home, bootstrap, undefined, true, workerBundleFor(worker.nodeBootstrap));
+    await expectSetupPhases(prepare(), identity);
+    expect(readText(home, "npm-calls")).toBe(npmCalls);
+    expectAbsent(path.join(runtimePackage(home, bootstrap.sha256), "installed.json"), stateDir);
+    expect(
+      readText(runtimePackage(home, bootstrap.sha256), "node_modules/runtime-fixture/index.js"),
+    ).toContain("2026.8.1");
+    await expectSetupPhases(prepare(), identity);
+    expect(served.authorizations).toHaveLength(1);
+    expect(worker.authorizations).toHaveLength(2);
+    const failed = await enroll(
+      home,
+      { ...bootstrap, manifestSha256: "0".repeat(64) },
+      undefined,
+      true,
+      workerBundleFor(worker.nodeBootstrap),
+    );
+    expectFailure(failed, "inventory does not match");
+    expect(readText(home, "npm-calls")).toBe(npmCalls);
+    expect(readText(runtimePackage(home, retained.nodeBootstrap.sha256), "installed.json")).toBe(
+      retainedInstallation,
+    );
+    expectAbsent(stateDir);
+  });
+
   it.each(["present", "absent", "rejected", "download failure"])(
     "installs a prepared runtime with a %s project lock and keeps fallback available",
     async (mode) => {

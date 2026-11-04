@@ -56,10 +56,11 @@ export function createCronAgentWatchdog(params: {
 }) {
   let state: CronAgentWatchdogState = params.deferUntilRunner ? "waiting_for_runner" : "executing";
   let timeoutId: NodeJS.Timeout | undefined;
+  let timeoutStartedAt = 0;
+  let remainingTimeoutMs = params.jobTimeoutMs;
   let setupTimeoutId: NodeJS.Timeout | undefined;
   let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
-  let observedLaneWait = false;
   let waitingForLane = false;
 
   const setTimedOut = (reason: string) => {
@@ -70,12 +71,13 @@ export function createCronAgentWatchdog(params: {
     params.triggerTimeout(reason);
   };
   const startTimeout = () => {
-    if (timeoutId || state === "disposed") {
+    if (timeoutId || waitingForLane || state === "disposed" || state === "timed_out") {
       return;
     }
+    timeoutStartedAt = Date.now();
     timeoutId = setTimeout(() => {
       setTimedOut(timeoutErrorMessage(activeExecution));
-    }, params.jobTimeoutMs);
+    }, remainingTimeoutMs);
   };
   const clearSetupTimeout = () => {
     if (!setupTimeoutId) {
@@ -109,7 +111,7 @@ export function createCronAgentWatchdog(params: {
   const isWaitingForExecution = () =>
     state === "waiting_for_initial_progress" || state === "waiting_for_fallback_execution";
   const startPreExecutionTimeout = () => {
-    if (preExecutionTimeoutId || !isWaitingForExecution()) {
+    if (preExecutionTimeoutId || waitingForLane || !isWaitingForExecution()) {
       return;
     }
     preExecutionTimeoutId = setTimeout(() => {
@@ -138,25 +140,27 @@ export function createCronAgentWatchdog(params: {
 
   return {
     start: () => {
+      // Bound silent setup and teardown stalls, but pause explicit capacity waits.
+      startTimeout();
       if (params.deferUntilRunner) {
         startSetupTimeout();
-        return;
       }
-      startTimeout();
     },
     noteLaneWait: () => {
-      if (state === "waiting_for_runner") {
-        observedLaneWait = true;
-        waitingForLane = true;
-        clearSetupTimeout();
+      waitingForLane = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+        remainingTimeoutMs -= Date.now() - timeoutStartedAt;
       }
+      clearSetupTimeout();
+      clearPreExecutionTimeout();
     },
     noteLaneAdmitted: () => {
-      if (state === "waiting_for_runner") {
-        observedLaneWait = false;
-        waitingForLane = false;
-        startSetupTimeout();
-      }
+      waitingForLane = false;
+      startTimeout();
+      startSetupTimeout();
+      startPreExecutionTimeout();
     },
     noteRunnerStarted: (info?: CronAgentExecutionStarted) => {
       if (state === "disposed" || state === "timed_out") {
@@ -186,7 +190,7 @@ export function createCronAgentWatchdog(params: {
       noteExecutionProgress(info);
     },
     activeExecution: () => activeExecution,
-    observedLaneWait: () => observedLaneWait,
+    observedLaneWait: () => waitingForLane,
     dispose: () => {
       state = "disposed";
       if (timeoutId) {

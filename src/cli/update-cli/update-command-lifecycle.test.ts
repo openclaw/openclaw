@@ -563,7 +563,6 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({
       ...successfulPluginUpdate,
       status: "error",
-      assessment: { kind: "unsafe", reason: "convergence-failed" },
       changed: false,
       npm: {
         changed: false,

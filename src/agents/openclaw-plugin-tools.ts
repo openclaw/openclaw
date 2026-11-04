@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
 import { getRuntimeConfigSnapshot, selectLiveRuntimeConfig } from "../config/config.js";
@@ -19,6 +20,7 @@ import { resolveAgentScopedOutboundMediaAccess } from "../media/read-capability.
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import {
+  getInProcessGatewayRequestContext,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
@@ -30,10 +32,15 @@ import { resolvePluginTools, resolvePluginToolsSteps } from "../plugins/tools.js
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { sanitizeNodeIdFragment, sanitizeServerName } from "./agent-bundle-mcp-names.js";
+import { bindAgentToolExecutionLocation } from "./agent-tool-metadata.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { bindRequesterOwnerIdentity } from "./cron-creator-authority-context.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
+import {
+  createMcpClientElicitationHandler,
+  MCP_ELICITATION_TIMEOUT_MS,
+} from "./mcp-client-elicitation.js";
 import {
   projectMcpCallToolResult,
   setMcpCodeModeGuestResultFromAgentResult,
@@ -52,7 +59,10 @@ import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.type
 import type { AgentToolResult } from "./runtime/index.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
-import { captureGatewayToolCallerAssertion } from "./tools/gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
 import { captureAgentWorkspaceReadiness } from "./workspace-readiness.js";
@@ -65,6 +75,37 @@ type MaterializedNodeToolEntry = ReturnType<typeof listConnectedNodePluginTools>
   command: string;
   normalizedName: string;
 };
+
+function registerNodeToolElicitation(
+  nodeId: string,
+  sessionKey: string | undefined,
+  signal?: AbortSignal,
+) {
+  const caller = getGatewayToolCallerIdentity();
+  const assertCurrent = captureGatewayToolCallerAssertion();
+  if (!caller || !assertCurrent || caller.sessionKey !== sessionKey) {
+    return undefined;
+  }
+  const registry = getInProcessGatewayRequestContext(caller.gatewayContextResolver)?.nodeRegistry;
+  const node = registry?.get(nodeId);
+  if (!registry || !node) {
+    return undefined;
+  }
+  assertCurrent();
+  const id = randomUUID();
+  const handle = createMcpClientElicitationHandler({
+    sessionKey,
+    agentId: caller.agentId,
+    assertCurrent,
+  });
+  const release = registry.mcpElicitation.register({
+    id,
+    node,
+    signal: AbortSignal.any([...(caller.approvalSignals ?? []), ...(signal ? [signal] : [])]),
+    handle,
+  });
+  return { id, [Symbol.dispose]: release };
+}
 
 function isAgentToolResult(value: unknown): value is AgentToolResult<unknown> {
   return isRecord(value) && Array.isArray(value.content);
@@ -509,11 +550,16 @@ function* resolveOpenClawPluginToolSteps(
         : {}),
       execute: async (toolCallId, toolParams, signal) => {
         const assistantTurnId = getAgentToolAssistantTurnId();
+        using elicitation =
+          mcpTool && resolveCurrentRuntimeConfig()?.mcp?.apps?.enabled === true
+            ? registerNodeToolElicitation(entry.nodeId, nodeAgentSessionKey, signal)
+            : undefined;
+        const inputAllowance = elicitation ? MCP_ELICITATION_TIMEOUT_MS : 0;
         const raw = await callGatewayTool(
           "node.invoke",
           {
             timeoutMs: mcpTool
-              ? NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS
+              ? NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS + inputAllowance
               : NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS,
           },
           {
@@ -524,9 +570,12 @@ function* resolveOpenClawPluginToolSteps(
                   server: mcpTool.server,
                   tool: mcpTool.tool,
                   arguments: toolParams,
+                  ...(elicitation ? { elicitationId: elicitation.id } : {}),
                 }
               : toolParams,
-            timeoutMs: mcpTool ? NODE_MCP_TOOL_CALL_TIMEOUT_MS : NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
+            timeoutMs: mcpTool
+              ? NODE_MCP_TOOL_CALL_TIMEOUT_MS + inputAllowance
+              : NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
             idempotencyKey: assistantTurnId ? `${assistantTurnId}:${toolCallId}` : toolCallId,
             ...(nodeAgentSessionKey ? { sessionKey: nodeAgentSessionKey } : {}),
           },
@@ -545,6 +594,13 @@ function* resolveOpenClawPluginToolSteps(
         return descriptor.mcp ? setMcpCodeModeGuestResultFromAgentResult(result) : result;
       },
     };
+    if (mcpTool && availabilityConfig?.mcp?.apps?.enabled) {
+      // A dedicated worker using the Gateway route must wait through the same user question.
+      bindAgentToolExecutionLocation(tool, {
+        kind: "gateway",
+        timeout: { minimumMs: NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS + MCP_ELICITATION_TIMEOUT_MS },
+      });
+    }
     setPluginToolMeta(tool, {
       pluginId: descriptor.pluginId,
       optional: false,

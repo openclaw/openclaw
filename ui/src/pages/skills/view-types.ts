@@ -57,6 +57,7 @@ export type SkillsProps = {
   libraryEntries?: SkillLibraryEntry[];
   onLibraryOpen?: (skillId: string) => void;
   library?: JSX.Element;
+  pageMenu?: () => JSX.Element;
   showInventory?: boolean;
   canUpdate: boolean;
   canInstall: boolean;

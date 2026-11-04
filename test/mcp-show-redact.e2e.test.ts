@@ -17,11 +17,7 @@ const ARG_SECRET = "e2e-live-mcp-argv-secret-value";
 const ARG_INLINE_SECRET = "e2e-live-mcp-inline-argv-secret-value";
 const ARG_POSITIONAL_SECRET = "ghp_e2elivemcpargvtoken1234567890ABCD";
 const SERVER_NAME = "billing-server";
-const serverConnection = {
-  command: "uvx",
-  transport: "streamable-http",
-  url: "https://billing.example.com/mcp",
-} as const;
+const serverConnection = { command: "uvx" } as const;
 
 const serverSecrets = (redacted = false) => ({
   headers: { Authorization: redacted ? REDACTED_SENTINEL : HEADER_SECRET },

@@ -6,8 +6,8 @@ import {
   StateDatabaseOfflineMaintenanceError,
 } from "../infra/gateway-state-owner-record.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import {
-  ExpectedCliError,
   formatCliFailureLines,
   formatCliJsonFailure,
   toPluginCommandFailure,

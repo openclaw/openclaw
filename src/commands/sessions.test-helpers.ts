@@ -34,9 +34,6 @@ vi.mock("../config/config.js", () => ({
   captureRuntimeConfigAsyncReader: () => async () => sessionsConfigState.loadConfig(),
 }));
 
-// The base sessions suite still calls this; importing the module installs the mock.
-export function mockSessionsConfig() {}
-
 export function setMockSessionsConfig(loader: () => Record<string, unknown>) {
   sessionsConfigState.loadConfig = loader;
 }
@@ -45,15 +42,8 @@ export function resetMockSessionsConfig() {
   sessionsConfigState.loadConfig = defaultSessionsConfigLoader;
 }
 
-export function makeRuntime(params?: { throwOnError?: boolean }) {
+export function makeRuntime() {
   const captured = createCapturingTestRuntime();
-  const recordError = captured.runtime.error;
-  captured.runtime.error = (msg) => {
-    recordError(msg);
-    if (params?.throwOnError) {
-      throw new Error(String(msg));
-    }
-  };
   captured.runtime.exit = (code) => {
     throw new Error(`exit ${code}`);
   };
