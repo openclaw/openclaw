@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 // Process replacement, real model streams/tools and durable input custody need the real Gateway.
 import { once } from "node:events";
@@ -14,11 +15,13 @@ import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-res
 import { executeSqliteQuerySync } from "../src/infra/kysely-sync.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { openOpenClawAgentDatabase } from "../src/state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { restartResumeConfig } from "./gateway-restart-resume.test-support.js";
 import {
+  connectProxiedRestartOperator,
   connectRestartClient,
   readRestartSession,
   restartEnv,
@@ -870,5 +873,144 @@ it(
         () => instance.cleanup(),
       );
     }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "resumes a signed-in person's session and queued input on a Gateway without roles",
+  { timeout: 180_000 },
+  async ({ signal, onTestFailed }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const origin = "https://control.restart.example.test";
+    const email = "person@restart.example.test";
+    const admin = "admin@restart.example.test";
+    const scopes = ["operator.read", "operator.write"];
+    const noProxy = [process.env.no_proxy ?? process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"]
+      .filter(Boolean)
+      .join(",");
+    const instance = await createOpenClawTestInstance({
+      name: "restart-untiered-person",
+      signal,
+      config: {
+        ...restartResumeConfig(model),
+        gateway: {
+          mode: "local",
+          bind: "loopback",
+          trustedProxies: ["127.0.0.1", "::1"],
+          auth: {
+            mode: "trusted-proxy",
+            token: undefined,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-proto"],
+              allowLoopback: true,
+              deviceAutoApprove: { enabled: true, scopes },
+            },
+            identityScopes: { [admin]: ["operator.admin"] },
+          },
+          controlUi: { enabled: false, allowedOrigins: [origin] },
+        },
+      },
+      env: {
+        ...restartEnv,
+        // Only the owned loopback fixture bypasses inherited external proxy routing.
+        NO_PROXY: noProxy,
+        no_proxy: noProxy,
+        OPENCLAW_NO_RESPAWN: "1",
+      },
+    });
+    const connectAs = (user: string, requested: string[]) =>
+      connectProxiedRestartOperator(instance, { user, origin, scopes: requested, signal });
+    const connectPerson = () => connectAs(email, scopes);
+    const sessionKey = key(2, "stream");
+    let client: Awaited<ReturnType<typeof connectPerson>> | undefined;
+    onTestFailed(() => {
+      process.stderr.write(`${instance.logs()}\n`);
+    });
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectPerson();
+        const self = await client.call<{ profile: { id: string } }>("users.self", {});
+        expect(self.profile.id).not.toBe("gateway-owner");
+        // The first send creates the session; its accepted input alone records the source.
+        await client.call("chat.send", {
+          sessionKey,
+          message: marker(2, "stream"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("ready:2:stream");
+        // Another person's queued input runs under that sender's own recorded source.
+        const sender = await connectAs(admin, ["operator.admin"]);
+        try {
+          await sender.call("chat.send", {
+            sessionKey,
+            message: queued(2, 1),
+            idempotencyKey: randomUUID(),
+          });
+        } finally {
+          await sender.close();
+        }
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const closed = once(child, "close");
+        provider.restart();
+        expect(child.kill("SIGTERM")).toBe(true);
+        expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
+        await client.close();
+        client = undefined;
+        await instance.stopGateway();
+        const marked = readRestartSession(
+          path.dirname(resolveOpenClawAgentSqlitePath({ agentId: "main", env: instance.env })),
+          sessionKey,
+        );
+        expect(marked?.resumeAfterRestart?.queuedInputIds).toHaveLength(1);
+        // The recorded source keeps the connection's own scopes; restart grants no more.
+        expect(marked?.operatorSources?.[self.profile.id]?.scopes).toEqual(scopes);
+        await closeOpenClawStateDatabaseAsync();
+        await instance.startGateway();
+        client = await connectPerson();
+        await provider.wait("resume:2:stream");
+        provider.release(2);
+        await vi.waitFor(
+          async () => {
+            const history = await client!.call<{
+              messages: unknown[];
+              sessionInfo: { hasActiveRun: boolean };
+            }>("chat.history", { sessionKey });
+            const text = JSON.stringify(history.messages);
+            expect(text).toContain("RESUMED_2_stream");
+            expect(text).toContain(`HANDLED_${queued(2, 1)}`);
+            expect(history.sessionInfo.hasActiveRun).toBe(false);
+          },
+          { timeout: 15_000 },
+        );
+        // A host event in the person's session runs as its principal, outside restart recovery.
+        const operator = await connectAs(admin, ["operator.admin"]);
+        try {
+          await operator.call("system-event", {
+            text: "SYSTEM_TURN_AFTER_RESTART",
+            sessionKey,
+            wake: true,
+          });
+        } finally {
+          await operator.close();
+        }
+        await vi.waitFor(
+          async () => {
+            const history = await client!.call<{ messages: unknown[] }>("chat.history", {
+              sessionKey,
+            });
+            expect(JSON.stringify(history.messages)).toContain("HANDLED_NEW_INPUT");
+          },
+          { timeout: 15_000 },
+        );
+        expect(instance.logs()).not.toContain("no current run authority");
+      },
+      () => client?.close(),
+      () => instance.cleanup(),
+      provider.close,
+    );
   },
 );

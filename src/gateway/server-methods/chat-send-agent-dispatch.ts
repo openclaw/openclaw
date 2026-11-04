@@ -33,6 +33,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
+import { recordSessionOperatorSource } from "../session-operator-sources.js";
 import { prepareGatewaySkillLibraryTurn } from "../skill-library-authoring.js";
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
@@ -380,6 +381,18 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                     phase?.mark("preparation");
                     admission.onSessionPrepared(binding);
                     replyDispatch.notePreparedSession(binding);
+                    // First input creates its entry here; keep recording in source settlement.
+                    trackSessionControllerSourceWork(
+                      admission.sourceRef.input,
+                      recordSessionOperatorSource({
+                        agentId,
+                        sessionKey,
+                        storePath: binding.storePath ?? storePath,
+                        authority: admission.operatorAuthority,
+                        assertCurrent: admission.assertWorkAdmissionCurrent,
+                        log: context.logGateway,
+                      }),
+                    );
                   },
                   onTranscriptStartPreparation: () => diagnostics.scope("snapshot")?.finish,
                   abortSignal: activeRunAbort.controller.signal,

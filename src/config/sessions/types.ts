@@ -693,6 +693,11 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     >;
     hadBackgroundExec?: true;
   };
+  /** Latest authenticated source per person; private evidence revalidated before recovery. */
+  operatorSources?: Record<
+    string,
+    import("../../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot
+  >;
   /** Upgrade-only cycle; remove once stable includes the restart redesign (#185730). */
   mainRestartRecovery?: { cycleId: string };
 };

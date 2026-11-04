@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
@@ -233,10 +234,26 @@ export function createInternalHookEvent(
     type,
     action,
     sessionKey,
-    context,
+    context: omitHookContextOperatorSources(context),
     timestamp: new Date(),
     messages: [],
   };
+}
+
+/** Hook payloads must not disclose the private source used to recover a person. */
+function omitHookContextOperatorSources(context: Record<string, unknown>): Record<string, unknown> {
+  if (!("sessionEntry" in context) && !("previousSessionEntry" in context)) {
+    return context;
+  }
+  const next = { ...context };
+  for (const key of ["sessionEntry", "previousSessionEntry"]) {
+    const entry = next[key];
+    if (isRecord(entry) && Object.hasOwn(entry, "operatorSources")) {
+      const { operatorSources: _private, ...projected } = entry;
+      next[key] = projected;
+    }
+  }
+  return next;
 }
 
 function hasHookEventContext(

@@ -1,0 +1,2 @@
+470
+# Authenticated session source recovery: source regressions and real restart fixture (461 net lines), plus 9 loopback proxy-isolation fixture lines. Tests cover private evidence, configured roles, live revocation, node isolation, and restart/resume.

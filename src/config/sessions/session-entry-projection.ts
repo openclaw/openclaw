@@ -31,6 +31,7 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "localWorkspaceHandoff",
   "inheritedGitContributorProfileIds",
   "profileInvolvement",
+  "operatorSources",
   "cliHistoryBoundary",
   "publicShare",
   "activeWriterRunId",
