@@ -95,13 +95,14 @@ export function prepareBackgroundSessionCompletion(params: {
       const row = context.sessions.state.result?.sessions.find((session) =>
         areUiSessionKeysEquivalent(session.key, key),
       );
+      // A finished run needs no label; any other outcome names itself in one muted word.
       const status =
         result.status === "ok"
-          ? t("sessionsView.statusDone")
+          ? undefined
           : result.status === "timeout"
             ? t("sessionsView.statusTimeout")
             : result.stopReason === "rpc"
-              ? t("sessionsView.statusKilled")
+              ? t("chat.handoffSessionStatus.stopped")
               : t("sessionsView.statusFailed");
       const nativeTarget = sessionNavigationTarget({
         face: "chat",
@@ -126,7 +127,8 @@ export function prepareBackgroundSessionCompletion(params: {
           avatar: resolveAgentAvatarUrl(agent, identity),
           textAvatar: resolveAgentTextAvatar(agent, identity),
         },
-        message: `${resolveSessionDisplayName(key, row)}: ${status}`,
+        message: resolveSessionDisplayName(key, row),
+        description: status,
         actionLabel: t("sessionsView.openSession"),
         actionHref: sessionNavigationTarget({ context, face: "chat", sessionKey: key, agentId })
           .href,
