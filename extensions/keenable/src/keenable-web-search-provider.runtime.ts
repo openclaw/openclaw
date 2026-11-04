@@ -34,6 +34,11 @@ import {
 const KEENABLE_SEARCH_ENDPOINT = "https://api.keenable.ai/v1/search";
 const KEENABLE_DEFAULT_APP_TITLE = "OpenClaw";
 const KEENABLE_SEARCH_MODES = ["pro", "realtime"] as const;
+type KeenableSearchMode = (typeof KEENABLE_SEARCH_MODES)[number];
+
+function isKeenableSearchMode(value: string): value is KeenableSearchMode {
+  return KEENABLE_SEARCH_MODES.some((candidate) => candidate === value);
+}
 const KEENABLE_MAX_SEARCH_COUNT = 50;
 const KEENABLE_MIN_SNIPPET_LENGTH = 180;
 const KEENABLE_MAX_SNIPPET_LENGTH = 10_000;
@@ -43,8 +48,7 @@ const KEENABLE_SEARCH_JSON_MAX_BYTES = 16 * 1024 * 1024;
 function invalidBaseUrlPayload() {
   return {
     error: "invalid_base_url",
-    message:
-      "plugins.entries.keenable.config.webSearch.baseUrl must be a valid http(s) URL.",
+    message: "plugins.entries.keenable.config.webSearch.baseUrl must be a valid http(s) URL.",
     docs: "https://docs.openclaw.ai/tools/keenable-search",
   };
 }
@@ -86,7 +90,7 @@ export async function executeKeenableWebSearchProviderTool(
     ctx.searchConfig,
     "keenable",
     resolveProviderWebSearchPluginConfig(ctx.config, "keenable"),
-  ) as SearchConfigRecord | undefined;
+  ) as SearchConfigRecord | undefined; // SAFETY: mergeScopedSearchConfig returns the merged provider search slice typed as SearchConfigRecord.
   const keenableConfig = asOptionalObjectRecord(searchConfig?.keenable);
   const apiKey = readWebSearchApiKey(
     keenableConfig?.apiKey,
@@ -111,7 +115,7 @@ export async function executeKeenableWebSearchProviderTool(
   const query = readStringParam(args, "query", { required: true });
   const rawMode = readStringParam(args, "mode");
   const mode = KEENABLE_SEARCH_MODES.find((candidate) => candidate === rawMode) ?? "pro";
-  if (rawMode && !KEENABLE_SEARCH_MODES.includes(rawMode as (typeof KEENABLE_SEARCH_MODES)[number])) {
+  if (rawMode && !isKeenableSearchMode(rawMode)) {
     return {
       error: "invalid_mode",
       message: 'mode must be "pro" or "realtime".',
@@ -133,10 +137,7 @@ export async function executeKeenableWebSearchProviderTool(
     max: KEENABLE_MAX_SNIPPET_LENGTH,
     message: `snippet_max_length must be an integer from ${KEENABLE_MIN_SNIPPET_LENGTH} to ${KEENABLE_MAX_SNIPPET_LENGTH}.`,
   });
-  if (
-    snippetMaxLength !== undefined &&
-    snippetMaxLength < KEENABLE_MIN_SNIPPET_LENGTH
-  ) {
+  if (snippetMaxLength !== undefined && snippetMaxLength < KEENABLE_MIN_SNIPPET_LENGTH) {
     return {
       error: "invalid_snippet_max_length",
       message: `snippet_max_length must be an integer from ${KEENABLE_MIN_SNIPPET_LENGTH} to ${KEENABLE_MAX_SNIPPET_LENGTH}.`,
@@ -152,8 +153,7 @@ export async function executeKeenableWebSearchProviderTool(
     rawDateBefore: readStringParam(args, "published_before"),
     invalidDateAfterMessage: "published_after must be YYYY-MM-DD format.",
     invalidDateBeforeMessage: "published_before must be YYYY-MM-DD format.",
-    invalidDateRangeMessage:
-      "published_after must be earlier than or equal to published_before.",
+    invalidDateRangeMessage: "published_after must be earlier than or equal to published_before.",
   });
   if ("error" in parsedPublishedRange) {
     return parsedPublishedRange;

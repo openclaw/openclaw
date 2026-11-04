@@ -18,7 +18,9 @@ function requireKeenableTool(webSearch: JsonRecord = {}, searchConfig: JsonRecor
 }
 
 function respondWith(results: JsonRecord[]) {
-  fetchMock.mockImplementation(async () => Response.json({ query: "fixture", mode: "pro", results }));
+  fetchMock.mockImplementation(async () =>
+    Response.json({ query: "fixture", mode: "pro", results }),
+  );
 }
 
 function requestBody(index = fetchMock.mock.calls.length - 1) {
@@ -48,7 +50,11 @@ it("returns a missing-key payload when no credential is configured", async () =>
 it("maps count to max_results and sends required Keenable headers", async () => {
   respondWith([{ url: "https://example.com/a", title: "A", snippet: "Snippet A" }]);
   const tool = requireKeenableTool();
-  const result = await tool.execute({ query: "Keenable header contract", count: 2, mode: "realtime" });
+  const result = await tool.execute({
+    query: "Keenable header contract",
+    count: 2,
+    mode: "realtime",
+  });
 
   expect(result).toMatchObject({
     provider: "keenable",
@@ -76,22 +82,26 @@ it("uses a configured app title for X-Keenable-Title", async () => {
 
 it("shares cached answers only with the same resolved credential", async () => {
   fetchMock.mockImplementation(async (_url, init) => {
-    const account =
-      new Headers(init?.headers).get("X-API-Key") === "keen_fixture_a" ? "a" : "b";
+    const account = new Headers(init?.headers).get("X-API-Key") === "keen_fixture_a" ? "a" : "b";
     return Response.json({
-      results: [{ url: `https://example.com/account-${account}`, title: account, snippet: account }],
+      results: [
+        { url: `https://example.com/account-${account}`, title: account, snippet: account },
+      ],
     });
   });
   const args = { query: "Keenable credential cache isolation" };
-  const first = await requireKeenableTool({ apiKey: "keen_fixture_a" }, { cacheTtlMinutes: 5 }).execute(
-    args,
-  );
-  const other = await requireKeenableTool({ apiKey: "keen_fixture_b" }, { cacheTtlMinutes: 5 }).execute(
-    args,
-  );
-  const repeated = await requireKeenableTool({ apiKey: "keen_fixture_a" }, { cacheTtlMinutes: 5 }).execute(
-    args,
-  );
+  const first = await requireKeenableTool(
+    { apiKey: "keen_fixture_a" },
+    { cacheTtlMinutes: 5 },
+  ).execute(args);
+  const other = await requireKeenableTool(
+    { apiKey: "keen_fixture_b" },
+    { cacheTtlMinutes: 5 },
+  ).execute(args);
+  const repeated = await requireKeenableTool(
+    { apiKey: "keen_fixture_a" },
+    { cacheTtlMinutes: 5 },
+  ).execute(args);
 
   expect(first.results).toMatchObject([{ url: "https://example.com/account-a" }]);
   expect(other.results).toMatchObject([{ url: "https://example.com/account-b" }]);

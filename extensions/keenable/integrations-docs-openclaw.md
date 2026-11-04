@@ -4,7 +4,7 @@ Mintlify-ready content for [docs.keenable.ai/integrations/openclaw](https://docs
 
 ---
 
-```mdx
+````mdx
 ---
 title: OpenClaw
 description: Official bundled web_search provider for OpenClaw — same install path as Exa, Firecrawl, and Parallel on the OpenClaw side.
@@ -12,18 +12,28 @@ description: Official bundled web_search provider for OpenClaw — same install 
 
 > A web-search provider for OpenClaw, installable from ClawHub or npm.
 
-*Search provider plugin*
+_Search provider plugin_
 
 OpenClaw lists Keenable alongside [Exa](https://docs.openclaw.ai/tools/exa-search), [Firecrawl](https://docs.openclaw.ai/tools/firecrawl), [Parallel](https://docs.openclaw.ai/tools/parallel-search), Tavily, Brave, and other managed providers. The official plugin is **`@openclaw/keenable-plugin`**. It registers provider id `keenable` on the Gateway `web_search` tool and calls `POST https://api.keenable.ai/v1/search` with your API key when configured.
 
 → [@openclaw/keenable-plugin on npm](https://www.npmjs.com/package/@openclaw/keenable-plugin)  
 → [OpenClaw setup guide](https://docs.openclaw.ai/tools/keenable-search)
 
-<video controls poster="https://app.keenable.ai/integrations/openclaw.jpg" src="https://app.keenable.ai/integrations/openclaw.mp4" style={{ width: '100%', borderRadius: '12px' }} />
+<video
+  controls
+  poster="https://app.keenable.ai/integrations/openclaw.jpg"
+  src="https://app.keenable.ai/integrations/openclaw.mp4"
+  style={{ width: "100%", borderRadius: "12px" }}
+/>
 
 Plugin install, enable, and a first search.
 
-<video controls poster="https://app.keenable.ai/integrations/openclaw-agent.jpg" src="https://app.keenable.ai/integrations/openclaw-agent.mp4" style={{ width: '100%', borderRadius: '12px' }} />
+<video
+  controls
+  poster="https://app.keenable.ai/integrations/openclaw-agent.jpg"
+  src="https://app.keenable.ai/integrations/openclaw-agent.mp4"
+  style={{ width: "100%", borderRadius: "12px" }}
+/>
 
 A live agent turn: `web_search` routes through Keenable and the answer cites its sources.
 
@@ -36,6 +46,7 @@ Install from npm:
 ```bash
 openclaw plugins install @openclaw/keenable-plugin
 ```
+````
 
 Or install from ClawHub:
 
@@ -110,20 +121,21 @@ Ask your agent a question that needs current web data. `web_search` returns norm
 
 On OpenClaw, Exa, Firecrawl, Parallel, and Keenable are all **official search-provider plugins** (`@openclaw/*-plugin`), selected with `tools.web.search.provider`. Keenable is optimized for agent workflows: long snippets, `pro` / `realtime` modes, and publication or index date filters. Pair with the [Keenable MCP server](/mcp-server) when you want search and fetch tools outside OpenClaw’s built-in `web_search`.
 
-| OpenClaw provider | Plugin package | OpenClaw docs |
-| --- | --- | --- |
-| Exa | `@openclaw/exa-plugin` | [Exa search](https://docs.openclaw.ai/tools/exa-search) |
-| Firecrawl | `@openclaw/firecrawl-plugin` | [Firecrawl](https://docs.openclaw.ai/tools/firecrawl) |
-| Parallel | `@openclaw/parallel-plugin` | [Parallel search](https://docs.openclaw.ai/tools/parallel-search) |
-| Keenable | `@openclaw/keenable-plugin` | [Keenable search](https://docs.openclaw.ai/tools/keenable-search) |
+| OpenClaw provider | Plugin package               | OpenClaw docs                                                     |
+| ----------------- | ---------------------------- | ----------------------------------------------------------------- |
+| Exa               | `@openclaw/exa-plugin`       | [Exa search](https://docs.openclaw.ai/tools/exa-search)           |
+| Firecrawl         | `@openclaw/firecrawl-plugin` | [Firecrawl](https://docs.openclaw.ai/tools/firecrawl)             |
+| Parallel          | `@openclaw/parallel-plugin`  | [Parallel search](https://docs.openclaw.ai/tools/parallel-search) |
+| Keenable          | `@openclaw/keenable-plugin`  | [Keenable search](https://docs.openclaw.ai/tools/keenable-search) |
 
 ## Legacy `@keenable/openclaw-search`
 
 An earlier third-party plugin (`@keenable/openclaw-search`, ClawHub `keenable/openclaw-search`) registered a Keenable provider before OpenClaw shipped the official bundled plugin. **New installs should use `@openclaw/keenable-plugin`.** The legacy package could call keyless public search endpoints; the official plugin always uses authenticated `/v1/search` with your API key (including the free **100k requests/month** tier).
-```
+
+````
 
 **Integrations index blurb** (for `integrations.md` table row):
 
 ```mdx
 | [OpenClaw](/integrations/openclaw) | Official `@openclaw/keenable-plugin` — same managed-provider model as Exa and Firecrawl on OpenClaw. |
-```
+````
