@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  attachRemoteEmbeddingErrorDiagnostic,
   fetchWithSsrFGuard,
   shouldUseEnvHttpProxyForUrl,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
@@ -11,11 +12,57 @@ import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 /** Proxy mode used only for URLs that the runtime classified as env-proxy safe. */
 const MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE = "trusted_env_proxy";
 
+/** Credential classes safe to include in operator diagnostics; never retain source identifiers. */
+export type RemoteEmbeddingAuthDiagnostic = {
+  mode: "oauth" | "api-key" | "token" | "aws-sdk" | "configured-bearer" | "unknown";
+  source:
+    | "stored-profile"
+    | "environment"
+    | "provider-config"
+    | "memory-config"
+    | "authorization-header"
+    | "provider-credential"
+    | "unknown";
+};
+
+/** Describe static credentials only while the prepared request still uses those credentials. */
+export type RemoteEmbeddingAuthDiagnosticResolver = (
+  headers: Headers,
+) => RemoteEmbeddingAuthDiagnostic | undefined;
+
 /** Resolve current credentials for one request, or refresh after an expired-token rejection. */
 export type RemoteEmbeddingRequestAuth = (params: {
   forceRefresh: boolean;
   signal?: AbortSignal;
+  /** Report the credential selected for this dispatch, without identifiers or credential values. */
+  onAuthResolved?: (diagnostic: RemoteEmbeddingAuthDiagnostic) => void;
 }) => Promise<Record<string, string>>;
+
+function safeAuthDiagnostic(
+  diagnostic: RemoteEmbeddingAuthDiagnostic | undefined,
+): RemoteEmbeddingAuthDiagnostic {
+  const mode = diagnostic?.mode;
+  const source = diagnostic?.source;
+  return {
+    mode:
+      mode === "oauth" ||
+      mode === "api-key" ||
+      mode === "token" ||
+      mode === "aws-sdk" ||
+      mode === "configured-bearer"
+        ? mode
+        : "unknown",
+    source:
+      source === "stored-profile" ||
+      source === "environment" ||
+      source === "provider-config" ||
+      source === "memory-config" ||
+      source === "authorization-header" ||
+      source === "provider-credential"
+        ? source
+        : "unknown",
+  };
+}
 
 /** Build an SSRF allow policy from a configured remote base URL. */
 export const buildRemoteBaseUrlPolicy: (baseUrl: string) => SsrFPolicy | undefined =
@@ -29,6 +76,9 @@ export async function withRemoteHttpResponse<T>(params: {
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
+  resolveRequestAuthDiagnostic?: RemoteEmbeddingAuthDiagnosticResolver;
+  /** Adapter-owned public constant; configured or redirected destinations are never disclosed. */
+  publicDiagnosticEndpoint?: string;
   fetchWithSsrFGuardImpl?: typeof fetchWithSsrFGuard;
   shouldUseEnvHttpProxyForUrlImpl?: typeof shouldUseEnvHttpProxyForUrl;
   auditContext?: string;
@@ -39,10 +89,14 @@ export async function withRemoteHttpResponse<T>(params: {
   const request = async (forceRefresh: boolean): Promise<T> => {
     params.signal?.throwIfAborted();
     let init = params.init;
+    let authDiagnostic = safeAuthDiagnostic(undefined);
     if (params.resolveRequestHeaders) {
       const authHeaders = await params.resolveRequestHeaders({
         forceRefresh,
         signal: params.signal,
+        onAuthResolved: (diagnostic) => {
+          authDiagnostic = safeAuthDiagnostic(diagnostic);
+        },
       });
       params.signal?.throwIfAborted();
       const headers = new Headers(init?.headers);
@@ -50,13 +104,23 @@ export async function withRemoteHttpResponse<T>(params: {
         headers.set(name, value);
       }
       init = { ...init, headers };
+    } else if (params.resolveRequestAuthDiagnostic) {
+      const headers = new Headers(init?.headers);
+      authDiagnostic = safeAuthDiagnostic(params.resolveRequestAuthDiagnostic(headers));
+      init = { ...init, headers };
     }
+    let sawRedirect = false;
     const { response, release, finalUrl } = await guardedFetch({
       url: params.url,
       fetchImpl: params.fetchImpl,
       init,
       signal: params.signal,
       policy: params.ssrfPolicy,
+      onResponse: (status) => {
+        if ([301, 302, 303, 307, 308].includes(status)) {
+          sawRedirect = true;
+        }
+      },
       auditContext: params.auditContext ?? "memory-remote",
       ...(shouldUseEnvProxy(params.url) ? { mode: MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE } : {}),
     });
@@ -70,6 +134,18 @@ export async function withRemoteHttpResponse<T>(params: {
         new URL(finalUrl).origin !== new URL(params.url).origin ||
         asOptionalRecord(error)?.code !== "token_expired"
       ) {
+        if (response.status === 401 && error !== null && typeof error === "object") {
+          const redirected = sawRedirect || new URL(finalUrl).origin !== new URL(params.url).origin;
+          const auth = redirected ? safeAuthDiagnostic(undefined) : authDiagnostic;
+          const endpoint =
+            params.publicDiagnosticEndpoint && finalUrl === params.publicDiagnosticEndpoint
+              ? params.publicDiagnosticEndpoint
+              : "custom (redacted)";
+          await attachRemoteEmbeddingErrorDiagnostic(
+            error,
+            `Embedding client request: auth_mode=${auth.mode}, credential_source=${auth.source}; endpoint=${endpoint}; HTTP 401; force_refresh_requested=${forceRefresh}.${redirected ? " Redirect observed: final credential source is unknown." : ""}`,
+          );
+        }
         throw error;
       }
     } finally {

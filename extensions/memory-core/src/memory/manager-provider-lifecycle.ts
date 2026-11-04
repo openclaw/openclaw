@@ -23,6 +23,7 @@ import { resolveEmbeddingProviderAdapterTransport, type EmbeddingProvider } from
 import { MemoryManagerReloadError } from "./lifecycle.js";
 import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import { formatMemoryEmbeddingProbeError } from "./manager-embedding-policy.js";
 import {
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderLifecycle,
@@ -734,8 +735,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         await this.probeEmbeddingProvider(this.provider, this.providerRuntime);
         return this.cacheProbeResult({ ok: true });
       } catch (err) {
-        const message = formatErrorMessage(err);
-        return this.cacheProbeResult({ ok: false, error: message });
+        return this.cacheProbeResult({ ok: false, error: formatMemoryEmbeddingProbeError(err) });
       }
     });
   }

@@ -212,6 +212,35 @@ embedding access. The separate Sign in with ChatGPT token-sharing grant does not
 authorize embeddings. Run `openclaw memory status --deep` to check your account.
 </Note>
 
+The native OpenAI embedding endpoint is `https://api.openai.com/v1/embeddings`,
+separate from the Codex chat endpoint. A compatible saved OAuth profile normally
+takes precedence over `OPENAI_API_KEY`; the presence of that variable does not
+prove that an embedding request used it.
+
+For an OpenAI request rejected after HTTP dispatch, the probe includes the
+client-selected auth mode and credential-resolution source, plus whether forced
+refresh was requested for that dispatch. Errors before dispatch retain their
+original reason. These facts do not inspect token contents or establish provider
+acceptance, and do not rule out an automatic expiry renewal by the auth owner. The exact native
+OpenAI endpoint is shown only when the request reaches that declared public URL;
+custom destinations are redacted, and redirects make the final credential source
+unknown. Tokens, profile ids, and account identifiers are not included. Cached
+results describe the earlier checked request, not a new network request.
+
+If the embedding probe returns HTTP 401 `invalid_authentication`, a working chat
+login or successful OAuth renewal does not establish embedding access. That
+response alone does not distinguish a credential or grant problem from account
+access restrictions. Repeated login and forced reindexing are not evidence of a
+repair. Keep the existing index until a synthetic embedding probe succeeds, then
+complete any pending index upgrade and verify semantic search.
+
+If you choose API-billed embeddings, set a dedicated credential explicitly at
+`memory.search.remote.apiKey`, including an
+[environment-backed SecretRef](/reference/secretref-credential-surface#memory),
+while keeping the chat profile unchanged. Local embedding providers are another
+explicit choice. Neither alternative is selected automatically by this diagnostic;
+changing provider or model can require rebuilding the index.
+
 ---
 
 ## Remote endpoint config

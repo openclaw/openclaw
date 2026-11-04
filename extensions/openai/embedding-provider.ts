@@ -59,6 +59,7 @@ export async function createOpenAiEmbeddingProvider(
     provider: createRemoteEmbeddingProvider({
       id: "openai",
       client,
+      publicDiagnosticEndpoint: `${DEFAULT_OPENAI_BASE_URL}/embeddings`,
       errorPrefix: "openai embeddings failed",
       maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)],
       // https://developers.openai.com/api/reference/resources/embeddings/methods/create

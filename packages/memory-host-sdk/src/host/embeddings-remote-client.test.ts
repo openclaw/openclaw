@@ -1,5 +1,5 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import { createServer } from "node:http";
+import { createServer, type RequestListener } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard } from "../../../../src/infra/net/fetch-guard.js";
 import type { EmbeddingProviderCreateOptions } from "../../../../src/plugins/embedding-provider-types.js";
@@ -49,28 +49,22 @@ describe("remote embedding private-network policy", () => {
   let cleanup: () => Promise<void>;
 
   beforeAll(async () => {
-    const target = await reserveTestPortListener({
-      offsets: [0],
-      createListener: () =>
-        createServer((_req, res) => {
-          requests.push("redirect-target");
-          res.end('{"data":[{"embedding":[1,2,3]}]}');
-        }),
+    const listen = (handler: RequestListener) =>
+      reserveTestPortListener({ offsets: [0], createListener: () => createServer(handler) });
+    const target = await listen((_req, res) => {
+      requests.push("redirect-target");
+      res.end('{"data":[{"embedding":[1,2,3]}]}');
     });
-    const source = await reserveTestPortListener({
-      offsets: [0],
-      createListener: () =>
-        createServer((req, res) => {
-          requests.push(req.url ?? "");
-          if (req.url === "/redirect/embeddings") {
-            res.writeHead(307, {
-              location: `http://127.0.0.1:${target.claim.port}/embeddings`,
-            });
-            res.end();
-          } else {
-            res.end('{"data":[{"embedding":[1,2,3]}]}');
-          }
-        }),
+    const source = await listen((req, res) => {
+      requests.push(req.url ?? "");
+      if (req.url === "/redirect/embeddings") {
+        res.writeHead(307, {
+          location: `http://127.0.0.1:${target.claim.port}/embeddings`,
+        });
+        res.end();
+      } else {
+        res.end('{"data":[{"embedding":[1,2,3]}]}');
+      }
     });
     baseUrl = `http://127.0.0.1:${source.claim.port}`;
     cleanup = async () => {
@@ -180,6 +174,15 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
       headers: { Authorization: authorization, "X-Remote-Tenant": "remote-b" },
     });
     expect(client.headers).not.toHaveProperty("X-Provider-Tenant");
+    expect(client.resolveRequestAuthDiagnostic?.(new Headers(client.headers))).toEqual(
+      kind === "apiKey"
+        ? { mode: "configured-bearer", source: "memory-config" }
+        : { mode: "unknown", source: "authorization-header" },
+    );
+    client.headers.Authorization = "Bearer replacement-fixture";
+    expect(client.resolveRequestAuthDiagnostic?.(new Headers(client.headers))).toBeUndefined();
+    delete client.headers.Authorization;
+    expect(client.resolveRequestAuthDiagnostic?.(new Headers(client.headers))).toBeUndefined();
   });
 
   it.each([
@@ -260,40 +263,43 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
     ).rejects.toThrow(/memory\.search\.remote\.apiKey|Authorization header/);
   });
 
-  it("does not inherit a chat-only subscription base URL for embeddings", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "");
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const client = await resolveClient(
-      {
-        ...configuredProvider,
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-      },
-      { headers: { Originator: "caller", "user-agent": "caller" } },
-    );
+  it.each(["native", "custom"] as const)(
+    "resolves the %s chat-only subscription embedding destination",
+    async (kind) => {
+      const native = kind === "native";
+      vi.stubEnv("OPENAI_API_KEY", "");
+      vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+      const client = await resolveClient(
+        {
+          ...configuredProvider,
+          api: "openai-chatgpt-responses",
+          baseUrl: native ? "https://chatgpt.com/backend-api/codex" : configuredProvider.baseUrl,
+        },
+        native ? { headers: { Originator: "caller", "user-agent": "caller" } } : undefined,
+      );
 
-    expect(client.baseUrl).toBe("https://api.openai.com/v1");
-    expect(client.headers).toEqual({
-      Authorization: "Bearer provider-key",
-      "Content-Type": "application/json",
-      "X-Provider-Tenant": "provider-a",
-      originator: "openclaw",
-      version: "2026.3.22",
-      "User-Agent": "openclaw/2026.3.22",
-    });
-  });
-
-  it("does not redirect a custom provider URL for a chat-only subscription api mode", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "");
-    const client = await resolveClient({
-      ...configuredProvider,
-      api: "openai-chatgpt-responses",
-    });
-
-    expect(client).toMatchObject({
-      baseUrl: "https://provider.example.test/v1",
-      headers: { Authorization: "Bearer provider-key", "X-Provider-Tenant": "provider-a" },
-    });
-    expect(client.headers).not.toHaveProperty("originator");
-  });
+      expect(client.baseUrl).toBe(
+        native ? "https://api.openai.com/v1" : configuredProvider.baseUrl,
+      );
+      expect(client.headers).toEqual({
+        Authorization: "Bearer provider-key",
+        "Content-Type": "application/json",
+        "X-Provider-Tenant": "provider-a",
+        ...(native
+          ? {
+              originator: "openclaw",
+              version: "2026.3.22",
+              "User-Agent": "openclaw/2026.3.22",
+            }
+          : {}),
+      });
+      if (!native) {
+        expect(client.headers).not.toHaveProperty("originator");
+      }
+      expect(client.resolveRequestAuthDiagnostic?.(new Headers(client.headers))).toEqual({
+        mode: "api-key",
+        source: "provider-config",
+      });
+    },
+  );
 });

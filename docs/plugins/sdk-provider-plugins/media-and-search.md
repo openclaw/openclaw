@@ -83,6 +83,23 @@ merging a nested value such as voice settings.
     resolves headers once with `forceRefresh: true`, and retries only that request.
     Uploads must use a replayable body such as the batch helper's `FormData`.
 
+    Shared clients also supply `resolveRequestAuthDiagnostic(headers)` for static
+    credentials; it reports a finite credential category only while the prepared
+    Authorization header still matches the selected credential. OAuth header
+    resolvers can call the optional `onAuthResolved` argument with the selected
+    `mode` and `source` for that dispatch. Forward these optional callbacks when
+    using the shared HTTP helpers. No credential values or source identifiers
+    belong in these diagnostics.
+
+    A factory adapter can set `publicDiagnosticEndpoint` to a fixed public URL
+    constant. Never pass a configured endpoint here. Only an exact final-URL match
+    is displayed; other destinations are redacted. HTTP 401 request facts are
+    display-only metadata: render them with `formatErrorMessageForDisplay` from
+    `openclaw/plugin-sdk/error-runtime`. They do not change the underlying error
+    or retry policy. Redirects make final credential attribution unknown, and
+    `force_refresh_requested` describes the dispatch flag, not whether an automatic
+    credential renewal occurred.
+
     Embedding adapters can use `resolveEmbeddingProviderSsrFPolicy` from
     `openclaw/plugin-sdk/memory-core-host-engine-embeddings` to apply the shared model
     provider network policy. Pass the embedding provider ID, API, effective base URL,

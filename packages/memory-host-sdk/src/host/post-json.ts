@@ -1,5 +1,9 @@
 import { createProviderHttpError, type SsrFPolicy } from "./openclaw-runtime-network.js";
-import { withRemoteHttpResponse, type RemoteEmbeddingRequestAuth } from "./remote-http.js";
+import {
+  withRemoteHttpResponse,
+  type RemoteEmbeddingAuthDiagnosticResolver,
+  type RemoteEmbeddingRequestAuth,
+} from "./remote-http.js";
 import { readResponseJsonWithLimit } from "./response-snippet.js";
 
 // Shared JSON POST helper for guarded remote memory provider calls.
@@ -11,6 +15,8 @@ export async function postJson<T>(params: {
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
+  resolveRequestAuthDiagnostic?: RemoteEmbeddingAuthDiagnosticResolver;
+  publicDiagnosticEndpoint?: string;
   signal?: AbortSignal;
   body: unknown;
   errorPrefix: string;
@@ -24,6 +30,8 @@ export async function postJson<T>(params: {
     ssrfPolicy: params.ssrfPolicy,
     fetchImpl: params.fetchImpl,
     resolveRequestHeaders: params.resolveRequestHeaders,
+    resolveRequestAuthDiagnostic: params.resolveRequestAuthDiagnostic,
+    publicDiagnosticEndpoint: params.publicDiagnosticEndpoint,
     signal: params.signal,
     init: {
       method: "POST",

@@ -16,3 +16,16 @@ export const createProviderHttpError: typeof CreateProviderHttpError = async (..
   const http = await import("../../../../src/agents/provider-http-errors.js");
   return http.createProviderHttpError(...args);
 };
+
+/** Preserve transport facts as display-only metadata without changing auth or retry classification. */
+export async function attachRemoteEmbeddingErrorDiagnostic(
+  error: object,
+  diagnostic: string,
+): Promise<void> {
+  try {
+    const { attachErrorDiagnostic } = await import("../../../../src/infra/error-diagnostics.js");
+    attachErrorDiagnostic(error, diagnostic);
+  } catch {
+    // Display-only enrichment must never replace the original transport failure.
+  }
+}

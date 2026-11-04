@@ -5,12 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { buffer as consumeBuffer } from "node:stream/consumers";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import {
   createRemoteEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
@@ -85,6 +88,19 @@ function createOptions(
   };
 }
 
+async function updateProfiles(
+  agentDir: string,
+  updater: Parameters<typeof updateAuthProfileStoreWithLock>[0]["updater"],
+) {
+  await expect(
+    updateAuthProfileStoreWithLock({
+      agentDir,
+      saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+      updater,
+    }),
+  ).resolves.not.toBeNull();
+}
+
 afterEach(async () => {
   await Promise.all(
     servers.splice(0).map(
@@ -118,59 +134,38 @@ describe("OpenAI embedding provider HTTP contract", () => {
     { additional: "token", custom: true, binding: undefined },
     { additional: "token", custom: true, binding: "openai:api" },
     { additional: "none", custom: true, binding: undefined },
-  ])(
+  ] as const)(
     "selects compatible embedding auth with SIWC and $additional (custom=$custom, binding=$binding)",
     async ({ additional, custom, binding }) => {
       const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedding-auth-"));
       vi.stubEnv("OPENAI_API_KEY", "");
       try {
         const server = custom ? await startEmbeddingServer() : undefined;
-        await expect(
-          updateAuthProfileStoreWithLock({
-            agentDir,
-            saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
-            updater(store) {
-              store.profiles = {
-                "openai:siwc": {
-                  type: "oauth",
-                  provider: "openai",
-                  authFlow: "chatgpt-token-sharing",
-                  access: "fixture-siwc-access",
-                  refresh: "fixture-siwc-refresh",
-                  expires: Date.now() + 3_600_000,
-                },
-                ...(additional === "api-key"
-                  ? {
-                      "openai:api": {
-                        type: "api_key" as const,
-                        provider: "openai",
-                        key: "fixture-embedding-api-key",
-                      },
-                    }
-                  : additional === "codex"
-                    ? {
-                        "openai:api": {
-                          type: "oauth" as const,
-                          provider: "openai",
-                          access: "fixture-codex-access",
-                          refresh: "fixture-codex-refresh",
-                          expires: Date.now() + 3_600_000,
-                        },
-                      }
-                    : additional === "token"
-                      ? {
-                          "openai:api": {
-                            type: "token" as const,
-                            provider: "openai",
-                            token: "fixture-embedding-token",
-                          },
-                        }
-                      : {}),
-              };
-              return true;
+        await updateProfiles(agentDir, (store) => {
+          const compatibleProfiles = {
+            "api-key": { type: "api_key", provider: "openai", key: "fixture-embedding-api-key" },
+            codex: {
+              type: "oauth",
+              provider: "openai",
+              access: "fixture-codex-access",
+              refresh: "fixture-codex-refresh",
+              expires: Date.now() + 3_600_000,
             },
-          }),
-        ).resolves.not.toBeNull();
+            token: { type: "token", provider: "openai", token: "fixture-embedding-token" },
+          } as const;
+          store.profiles = {
+            "openai:siwc": {
+              type: "oauth",
+              provider: "openai",
+              authFlow: "chatgpt-token-sharing",
+              access: "fixture-siwc-access",
+              refresh: "fixture-siwc-refresh",
+              expires: Date.now() + 3_600_000,
+            },
+            ...(additional === "none" ? {} : { "openai:api": compatibleProfiles[additional] }),
+          };
+          return true;
+        });
         const result = createOpenAiEmbeddingProvider(
           createOptions({
             agentDir,
@@ -219,30 +214,44 @@ describe("OpenAI embedding provider HTTP contract", () => {
     },
   );
 
-  it("uses the newly stored OAuth bearer on the next embedding request after re-login", async () => {
+  it("isolates concurrent embedding credential diagnostics after re-login", async ({ signal }) => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedding-relogin-"));
-    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("OPENAI_API_KEY", "fixture-environment-key");
     vi.stubEnv("OPENAI_OAUTH_TOKEN", "");
-    const publishBearer = async (access: string) => {
-      await expect(
-        updateAuthProfileStoreWithLock({
-          agentDir,
-          saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
-          updater(store) {
-            store.profiles["openai:embedding"] = {
-              type: "oauth",
-              provider: "openai",
-              access,
-              refresh: "fixture-refresh",
-              expires: Date.now() + 3_600_000,
-            };
-            return true;
-          },
+    const publishBearer = (access: string) =>
+      updateProfiles(agentDir, (store) => {
+        store.profiles["openai:embedding"] = {
+          type: "oauth",
+          provider: "openai",
+          access,
+          refresh: "fixture-refresh",
+          expires: Date.now() + 3_600_000,
+        };
+        return true;
+      });
+    const controller = new AbortController();
+    const oauthReceived = createDeferred<CapturedRequest>();
+    const pending: Promise<unknown>[] = [];
+    let heldOAuth: CapturedRequest | undefined;
+    const rejectRequest = (request: CapturedRequest) => {
+      request.response.writeHead(401, { "content-type": "application/json" });
+      request.response.end(
+        JSON.stringify({
+          error: { message: "Invalid authentication.", code: "invalid_authentication" },
         }),
-      ).resolves.not.toBeNull();
+      );
     };
     try {
-      const server = await startEmbeddingServer();
+      const server = await startEmbeddingServer((request) => {
+        if (request.body.input[0] === "oauth rejected") {
+          heldOAuth = request;
+          oauthReceived.resolve(request);
+        } else if (request.body.input[0]?.endsWith("rejected")) {
+          rejectRequest(request);
+        } else {
+          respondWithEmbeddings(request);
+        }
+      });
       await publishBearer("fixture-before-login");
       const { provider, client } = await createOpenAiEmbeddingProvider(
         createOptions({
@@ -257,12 +266,61 @@ describe("OpenAI embedding provider HTTP contract", () => {
       await expect(provider.embed("first")).resolves.toEqual([5, 1]);
       await publishBearer("fixture-after-login");
       await expect(provider.embedBatch(["second"])).resolves.toEqual([[6, 1]]);
+      const rejectEmbedding = (text: string) => {
+        const outcome = provider
+          .embed(text, { signal: controller.signal })
+          .catch((error: unknown) => error);
+        pending.push(outcome);
+        return outcome;
+      };
+      const oauthFailure = rejectEmbedding("oauth rejected");
+      const oauthRequest = await withinTest(
+        awaitGateBeforeSettlement(
+          oauthReceived.promise,
+          oauthFailure,
+          "OAuth request did not reach HTTP",
+        ),
+        signal,
+      );
+      expect(server.requests).toHaveLength(3);
+      // Keep the OAuth response pending while the next dispatch selects a different credential.
+      await updateProfiles(agentDir, (store) => {
+        delete store.profiles["openai:embedding"];
+        return true;
+      });
+      const keyFailure = await withinTest(rejectEmbedding("environment rejected"), signal);
+      expect(keyFailure).toMatchObject({ status: 401, code: "invalid_authentication" });
+      const keyDiagnostic = formatErrorMessageForDisplay(keyFailure);
+      expect(keyDiagnostic).toContain("auth_mode=api-key");
+      expect(keyDiagnostic).toContain("credential_source=environment");
+      rejectRequest(oauthRequest);
+      const oauthError = await withinTest(oauthFailure, signal);
+      expect(oauthError).toMatchObject({ status: 401, code: "invalid_authentication" });
+      const oauthDiagnostic = formatErrorMessageForDisplay(oauthError);
+      expect(oauthDiagnostic).toContain("auth_mode=oauth");
+      expect(oauthDiagnostic).toContain("credential_source=stored-profile");
+      for (const diagnostic of [oauthDiagnostic, keyDiagnostic]) {
+        expect(diagnostic).toContain("endpoint=custom (redacted)");
+        for (const secret of [
+          "fixture-after-login",
+          "fixture-environment-key",
+          "openai:embedding",
+          server.baseUrl,
+        ]) {
+          expect(diagnostic).not.toContain(secret);
+        }
+      }
       expect(server.requests.map((request) => request.authorization)).toEqual([
         "Bearer fixture-before-login",
         "Bearer fixture-after-login",
+        "Bearer fixture-after-login",
+        "Bearer fixture-environment-key",
       ]);
       expect(client.headers).not.toHaveProperty("Authorization");
     } finally {
+      controller.abort();
+      heldOAuth?.response.destroy();
+      await Promise.all(pending);
       clearRuntimeAuthProfileStoreSnapshots();
       await closeOpenClawAgentDatabasesAsync();
       fs.rmSync(agentDir, { recursive: true, force: true });
@@ -270,12 +328,8 @@ describe("OpenAI embedding provider HTTP contract", () => {
     }
   });
 
-  it.each([
-    {
-      name: "overridden",
-      fields: { model: "other-model", input: ["shortened"], input_type: "document" },
-    },
-  ])("rejects short responses when callback fields have $name model/input", async ({ fields }) => {
+  it("rejects short responses when callback fields override model/input", async () => {
+    const fields = { model: "other-model", input: ["shortened"], input_type: "document" };
     const server = await startEmbeddingServer((request) => {
       request.response.writeHead(200, { "content-type": "application/json" });
       request.response.end(JSON.stringify({ data: [{ embedding: [1, 2] }] }));
@@ -533,16 +587,16 @@ describe("OpenAI embedding provider HTTP contract", () => {
     },
   );
 
-  it.each(["https://API.OPENAI.COM/v1"])(
-    "strips the model prefix only for native endpoint %s",
-    async (baseUrl) => {
-      const { provider } = await createOpenAiEmbeddingProvider(
-        createOptions({ model: "openai/text-embedding-3-small", remote: { baseUrl } }),
-      );
-      expect(provider.model).toBe("text-embedding-3-small");
-      expect(provider.maxInputTokens).toBe(8192);
-    },
-  );
+  it("strips the model prefix for the native endpoint", async () => {
+    const { provider } = await createOpenAiEmbeddingProvider(
+      createOptions({
+        model: "openai/text-embedding-3-small",
+        remote: { baseUrl: "https://API.OPENAI.COM/v1" },
+      }),
+    );
+    expect(provider.model).toBe("text-embedding-3-small");
+    expect(provider.maxInputTokens).toBe(8192);
+  });
 
   it("preserves qualified router models in metadata and request bodies", async () => {
     const server = await startEmbeddingServer();

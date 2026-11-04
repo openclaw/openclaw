@@ -1,11 +1,15 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSensitiveText } from "../logging/redact.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { formatErrorMessage } from "./errors.js";
 
 // Supplemental process output is display-only: message/cause/code feed retry and auth policy.
-// Weak ownership also preserves frozen errors without retaining completed runs.
-const diagnostics = new WeakMap<object, string>();
+// Plugin and host module graphs must share weak ownership, including for frozen errors.
+const diagnostics = resolveGlobalSingleton(
+  Symbol.for("openclaw.errorDiagnostics"),
+  () => new WeakMap<object, string>(),
+);
 
 /** Attach operator diagnostics; callers must mask opaque credentials before attachment. */
 export function attachErrorDiagnostic<T extends object>(error: T, diagnostic: string): T {
