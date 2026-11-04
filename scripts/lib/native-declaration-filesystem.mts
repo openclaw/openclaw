@@ -167,6 +167,9 @@ export function createDeclarationFileSystem(
         return accepted;
       }
     },
+    removeFile(this: void) {
+      reject(new Error("Native declarations must be emitted in memory"));
+    },
     writeFile(this: void) {
       reject(new Error("Native declarations must be emitted in memory"));
     },
@@ -197,6 +200,7 @@ export function createDeclarationFileSystem(
       observe({ kind: "realpath", path: file, result });
       return result;
     },
+    removeFile: physical.removeFile,
     writeFile: physical.writeFile,
   } satisfies FileSystem;
   return {

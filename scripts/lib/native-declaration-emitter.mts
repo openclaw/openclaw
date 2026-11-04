@@ -149,11 +149,17 @@ export async function compileNativeProject({
         throw new Error(`Invalid declaration package manifest: ${manifestFile}`);
       }
     }
-    // Earlier clients forward only the callbacks they know and ignore stat.
+    const filesystem = view.filesystem;
+    // Earlier clients use null for missing files; the stable callback API uses
+    // undefined. Keep the missing-file result local instead of requesting OS fallback.
     const compilerFileSystem =
       compiler.fakeStat === undefined
-        ? view.filesystem
-        : { ...view.filesystem, stat: compiler.fakeStat };
+        ? filesystem
+        : {
+            ...filesystem,
+            stat: compiler.fakeStat,
+            readFile: (file: string) => filesystem.readFile(file) ?? undefined,
+          };
     api = new compiler.module.API({
       cwd: root,
       tsserverPath: binary,
