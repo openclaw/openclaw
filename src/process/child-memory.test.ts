@@ -4,11 +4,7 @@ import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import {
-  resolveHostExecMemoryBudget,
-  getHostExecMemoryBudget,
-  watchHostExecMemory,
-} from "./child-memory.js";
+import { getHostExecMemoryBudget, watchHostExecMemory } from "./child-memory.js";
 
 const procfs = vi.hoisted(() => ({
   readFile: vi.fn<(path: string) => Promise<string>>(),
@@ -88,6 +84,11 @@ function watch(pid = 100) {
   return { onLimit, onDiagnostic, stop };
 }
 
+function freshBudget() {
+  memoryOwner.current!.budget = undefined;
+  return getHostExecMemoryBudget();
+}
+
 function mockFiles(files: Record<string, string>, onRead = (_file: string) => {}, code = "ENOENT") {
   return procfs.readFile.mockImplementation(async (file) => {
     onRead(file);
@@ -106,24 +107,24 @@ it("reserves host and Gateway RAM instead of imposing a per-command quarter cap"
   vi.spyOn(os, "totalmem").mockReturnValue(192 * GiB);
   const constrained = vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
   const rss = vi.spyOn(process.memoryUsage, "rss").mockReturnValue(8 * GiB);
-  expect(resolveHostExecMemoryBudget()?.memoryBytes).toBe(144 * GiB);
-  expect(resolveHostExecMemoryBudget()?.swapBytes).toBe(48 * GiB);
+  expect(freshBudget()?.memoryBytes).toBe(144 * GiB);
+  expect(freshBudget()?.swapBytes).toBe(48 * GiB);
   constrained.mockReturnValue(64 * GiB);
-  expect(resolveHostExecMemoryBudget()?.memoryBytes).toBe(44 * GiB);
-  expect(resolveHostExecMemoryBudget()?.swapBytes).toBe(16 * GiB);
+  expect(freshBudget()?.memoryBytes).toBe(44 * GiB);
+  expect(freshBudget()?.swapBytes).toBe(16 * GiB);
   constrained.mockReturnValue(4 * GiB);
   rss.mockReturnValue(GiB);
-  expect(resolveHostExecMemoryBudget()?.memoryBytes).toBe(2 * GiB);
+  expect(freshBudget()?.memoryBytes).toBe(2 * GiB);
   // A loaded Gateway must retain the former single-command allowance.
   rss.mockReturnValue((9 * GiB) / 4);
-  expect(resolveHostExecMemoryBudget()?.memoryBytes).toBe((7 * GiB) / 8);
+  expect(freshBudget()?.memoryBytes).toBe((7 * GiB) / 8);
   rss.mockReturnValue((9 * GiB) / 4 + 4096);
-  expect(resolveHostExecMemoryBudget()?.memoryBytes).toBe(895 * 1024 ** 2);
+  expect(freshBudget()?.memoryBytes).toBe(895 * 1024 ** 2);
   rss.mockReturnValue(GiB);
   meminfo.mockImplementation(() => {
     throw new Error("swap facts unavailable");
   });
-  expect(resolveHostExecMemoryBudget()?.swapBytes).toBe(0);
+  expect(freshBudget()?.swapBytes).toBe(0);
   // Once resolved, later Gateway allocations do not change the shared budget.
   memoryOwner.current!.budget = undefined;
   const budget = getHostExecMemoryBudget();
@@ -168,7 +169,7 @@ it.each([
   vi.spyOn(os, "totalmem").mockReturnValue(32 * GiB);
   vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
   vi.spyOn(process.memoryUsage, "rss").mockReturnValue(128 * 1024 ** 2);
-  expect(resolveHostExecMemoryBudget()).toEqual({
+  expect(freshBudget()).toEqual({
     memoryBytes: (group === "/" ? 6 : 3) * GiB,
     swapBytes: 0,
   });
@@ -176,7 +177,7 @@ it.each([
   delete files[`${root}/memory.max`];
   delete files[`${root}/memory.swap.max`];
   if (group !== "/") {
-    expect(resolveHostExecMemoryBudget()).toEqual({ memoryBytes: 3 * GiB, swapBytes: GiB / 2 });
+    expect(freshBudget()).toEqual({ memoryBytes: 3 * GiB, swapBytes: GiB / 2 });
   }
 });
 

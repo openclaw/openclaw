@@ -75,7 +75,7 @@ function constrainToCgroupAncestors(capacity: HostExecMemoryBudget): void {
 }
 
 /** Reserve physical RAM for the host and Gateway; swap is a separate, finite allowance. */
-export function resolveHostExecMemoryBudget(): HostExecMemoryBudget | undefined {
+function resolveHostExecMemoryBudget(): HostExecMemoryBudget | undefined {
   if (process.platform !== "linux") {
     return undefined;
   }
