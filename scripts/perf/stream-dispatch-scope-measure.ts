@@ -18,7 +18,7 @@
 // --ambient-fields also widens the shared carrier to include its object-copy cost.
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
@@ -36,6 +36,7 @@ import {
   getAsyncWorkSignal,
   runOutsideAsyncWorkScope,
 } from "../../src/shared/async-work-scope.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -217,9 +218,6 @@ function enter(index: number, run: () => Promise<void>): Promise<void> {
       )
     : stores[index]!.run(index, () => enter(index + 1, run));
 }
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 const inspector = new Session();
 try {
   await enter(0, () => stream(4800));
@@ -297,7 +295,7 @@ try {
       deliveries: delivered.reduce((sum, count) => sum + count, 0),
       elapsedMs,
       cpuUsPerEvent: (used.user + used.system) / events,
-      allocatedBytesPerEvent: profile ? allocated(profile.head) / events : undefined,
+      allocatedBytesPerEvent: profile ? sumSampledHeapBytes(profile.head) / events : undefined,
       allocationSamples: profile?.samples.length,
       gc: gcTails,
       gcMsPerEvent: collections.reduce((sum, entry) => sum + entry.duration, 0) / events,

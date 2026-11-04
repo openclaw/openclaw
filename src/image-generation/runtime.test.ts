@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { ImageGenerationProvider, ImageGenerationRequest } from "./provider-types.js";
 import { generateImage, type GenerateImageParams } from "./runtime.js";
-import type { ImageGenerationProvider, ImageGenerationRequest } from "./types.js";
 
 type ImageGenerationRuntimeDeps = NonNullable<Parameters<typeof generateImage>[1]>;
 type Geometry = NonNullable<ImageGenerationProvider["capabilities"]["geometry"]>;

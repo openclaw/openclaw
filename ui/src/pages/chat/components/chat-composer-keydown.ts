@@ -25,6 +25,7 @@ type ComposerKeyDownDeps = {
     event: KeyboardEvent,
     followUpModeOverride?: ChatFollowUpMode,
   ) => void;
+  queueSubmit: (draft: string) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
   goalComposer: GoalComposer;
@@ -41,6 +42,7 @@ export function createComposerKeyDownHandler({
   sendShortcut,
   canSubmitDraft,
   submitDraft,
+  queueSubmit,
   showAbortableUi,
   alternateFollowUpMode,
   goalComposer,
@@ -182,6 +184,10 @@ export function createComposerKeyDownHandler({
         return;
       }
       if (!canSubmitDraft(target.value)) {
+        if (props.submitPending) {
+          event.preventDefault();
+          queueSubmit(target.value);
+        }
         return;
       }
       event.preventDefault();

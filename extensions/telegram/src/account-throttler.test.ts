@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { Api } from "grammy";
 import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
@@ -5,6 +6,7 @@ import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vi
 import {
   getOrCreateAccountThrottler,
   releaseAccountThrottler,
+  runAuthorizedTelegramRequest,
   runReplaceableTelegramRequest,
 } from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
@@ -61,7 +63,7 @@ const tick = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 const success = { ok: true, result: true };
 const unauthorized = { ok: false, error_code: 401, description: "Unauthorized" };
 const response = (body: unknown) => new Response(JSON.stringify(body));
-const messageResponse = (text?: string) => response({ ok: true, result: { text } });
+const messageResponse = (text?: string) => response({ ok: true, result: { text, message_id: 1 } });
 const flood = (seconds?: number) =>
   response({
     ok: false,
@@ -149,21 +151,66 @@ beforeEach(() => {
   resetTelegramAccountThrottlersForTest();
 });
 
+it.each([42, -100123])("keeps queued sends in their caller context for chat %s", async (chatId) => {
+  const callers = new AsyncLocalStorage<AbortSignal>();
+  const firstCaller = new AbortController();
+  const nextCaller = new AbortController();
+  const firstEntered = deferred<void>();
+  const firstResponse = deferred<Response>();
+  const token = `caller-context-${chatId}`;
+  const { api, sent } = callers.run(firstCaller.signal, () =>
+    floodApi(token, (_call, count) => {
+      if (count === 1) {
+        firstEntered.resolve();
+        return firstResponse.promise;
+      }
+      return undefined;
+    }),
+  );
+  onTestFinished(async () => {
+    firstResponse.resolve(messageResponse("first"));
+    await releaseAccountThrottler(token);
+  });
+  const first = callers.run(firstCaller.signal, () => api.sendMessage(chatId, "first"));
+  await firstEntered.promise;
+  const assertNextCaller = () => {
+    callers.getStore()?.throwIfAborted();
+    expect(callers.getStore()).toBe(nextCaller.signal);
+  };
+  const sendNext = (text: string) =>
+    callers.run(nextCaller.signal, () =>
+      runAuthorizedTelegramRequest(assertNextCaller, () => api.sendMessage(chatId, text)),
+    );
+  const next = Promise.allSettled([sendNext("second")]);
+  firstResponse.resolve(messageResponse("first"));
+  await first;
+  firstCaller.abort();
+  expect(await next).toEqual([{ status: "fulfilled", value: { text: "second", message_id: 1 } }]);
+
+  nextCaller.abort();
+  await expect(sendNext("revoked")).rejects.toMatchObject({ name: "AbortError" });
+  expect(sent.map(({ text }) => text)).toEqual(["first", "second"]);
+});
+
 it("preserves the group message budget while sending topic actions", async () => {
   vi.useFakeTimers();
-  const { api, sent } = floodApi("typing-budget", ({ method }) =>
-    method === "sendChatAction" ? response(success) : undefined,
+  const topicMessage = response({ ok: true, result: { message_id: 1, message_thread_id: 99 } });
+  const { api, sent } = floodApi("typing-budget", ({ method }, count) =>
+    method === "sendChatAction" ? response(success) : count === 2 ? topicMessage : undefined,
   );
-  const actions = Array.from({ length: 21 }, (_, index) => typing(api, index + 1));
+  const { sendChatAction: sendAction } = getOrCreateAccountThrottler("typing-budget").chatActions;
+  const cue = () => sendAction(-100123, "typing", { message_thread_id: 99 }, () => typing(api, 99));
+  const reply = { reply_parameters: { message_id: 77 } };
+  await Promise.all([cue().then(() => api.sendMessage(-100123, "Complete", reply)), tick(100)]);
+  await Promise.all([cue(), tick(3_000)]);
+  expect(sent.filter(({ method }) => method === "sendChatAction")).toHaveLength(2);
+  const actions = Array.from({ length: 21 }, (_, i) => typing(api, i + 1));
   const replies = Array.from({ length: 21 }, () => api.sendMessage(-100123, "Complete"));
   finishClock(180_000, () => Promise.all([...actions, ...replies]));
-  await tick(100);
-  expect(sent.filter(({ method }) => method === "sendChatAction")).toHaveLength(1);
-  await tick(21_000);
-  expect(sent.filter(({ method }) => method === "sendChatAction")).toHaveLength(21);
+  await tick(23_000);
   expect(sent.filter(({ method }) => method === "sendMessage")).toHaveLength(20);
   await tick(40_000);
-  expect(sent.filter(({ method }) => method === "sendMessage")).toHaveLength(21);
+  expect(sent.filter(({ method }) => method === "sendMessage")).toHaveLength(22);
 });
 
 it("shares suspension and recovery across clients for the same token", async () => {

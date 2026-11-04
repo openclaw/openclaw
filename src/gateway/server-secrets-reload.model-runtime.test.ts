@@ -27,7 +27,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
-import { createDefaultGatewayReloadState } from "./server-reload-handlers.config.test-support.js";
+import { createHotReloadHandlerTestParams } from "./server-reload-handlers.config.test-support.js";
 import { createGatewayReloadHandlers } from "./server-reload-hot.js";
 import { createGatewaySecretsReloader } from "./server-secrets-reload.js";
 import {
@@ -155,35 +155,17 @@ async function coldRuntime(clients: SharedGatewayAuthClient[] = []) {
 }
 
 function hotReloadRuntime() {
-  let runtimeState: ReturnType<GatewayReloadHandlerParams["getState"]> =
-    createDefaultGatewayReloadState();
   const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-  const handlers = createGatewayReloadHandlers({
-    scheduler: createTestGatewayScheduler(),
-    deps: {} as GatewayReloadHandlerParams["deps"],
-    broadcast: vi.fn(),
-    getState: () => runtimeState,
-    setState: (next) => {
-      runtimeState = next;
-    },
-    getPluginRegistry: vi.fn<GatewayReloadHandlerParams["getPluginRegistry"]>(),
-    startChannel: vi.fn(async () => new Map()),
-    stopChannel: vi.fn(async () => {}),
-    releaseChannelRouteHandoffs: vi.fn(),
-    pruneInactiveChannelAccountState: vi.fn(),
-    reloadPlugins: vi.fn(async () => {
-      throw new Error("Unexpected plugin reload in model publication test");
+  const handlers = createGatewayReloadHandlers(
+    createHotReloadHandlerTestParams({
+      scheduler: createTestGatewayScheduler(),
+      deps: {} as GatewayReloadHandlerParams["deps"],
+      reloadPlugins: vi.fn(async () => {
+        throw new Error("Unexpected plugin reload in model publication test");
+      }),
+      requestRecoveryRestart,
     }),
-    logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    logChannels: { info: vi.fn(), error: vi.fn() },
-    logCron: { error: vi.fn() },
-    logReload: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    cronReconciliation: {
-      arm: vi.fn(() => ({ complete: vi.fn(async () => {}) })),
-      invalidate: vi.fn(),
-    },
-    requestRecoveryRestart,
-  });
+  );
   return { handlers, requestRecoveryRestart };
 }
 

@@ -11,7 +11,9 @@ sidebarTitle: "Control UI"
 The Knowledge page and chat panel. Part of the
 [Knowledge plugin](/plugins/knowledge) guide.
 
-The Knowledge UI is a read-only inspector, even when agent writes are enabled.
+The Knowledge UI is a read-only inspector of vault records, even when agent
+writes are enabled. The Scribes tab is the exception: it starts and controls
+scribe conversations and their automations, never vault records directly.
 **Ask** starts a new chat with the selected agent and sends your request as its
 first message, with the exact observed record ID, revision, and hash attached.
 The dialog shows only the editable request. Native UI from an enabled bundled plugin
@@ -22,20 +24,23 @@ does not need the **Custom plugin UI** Labs setting.
 Open **Knowledge** from the Control UI sidebar.
 
 - **Recent** and **Browse** list records; **Search** runs keyword retrieval.
-- Entity pages show linked claims with evidence, typed connections, references
-  and backlinks, retained originals under **File details**, and revision history.
+- **Scribes** lists, starts, and controls [scribes](/plugins/knowledge/scribes).
+- Entity pages show a **Timeline** derived from records (one row per dated
+  source, with that source's note about the entity and its claim count), linked
+  claims with evidence, typed connections, references and backlinks, retained
+  originals under **File details**, and revision history.
 - **Activity & issues** shows validation findings and local Git checkpoint state.
 - An agent selector chooses whose effective store to view. It changes only what
   you see; it does not change membership or create a store.
 
 **Settings** has four sections:
 
-| Section          | Shows                                                                                                                              |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Stores & sharing | Agents, their stores, and membership changes; see [Stores](/plugins/knowledge/stores-and-access#manage-stores-from-the-control-ui) |
-| Vocabulary       | The effective ontology: page and relationship types, fields, counts, and examples                                                  |
-| Vault status     | Store identity and status for the selected agent                                                                                   |
-| Maintenance      | Schedule, next and last run, and per-store results                                                                                 |
+| Section          | Shows                                                                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stores & sharing | Agents, their stores, membership changes, and conversation access; see [Stores](/plugins/knowledge/stores-and-access#manage-stores-from-the-control-ui) |
+| Vocabulary       | The effective ontology: page and relationship types, fields, counts, and examples                                                                       |
+| Vault status     | Store identity and status for the selected agent                                                                                                        |
+| Maintenance      | Schedule, next and last run, and per-store results                                                                                                      |
 
 Operator access needs `operator.read` (or higher) and `operatorRead: true`. A
 named operator role limits browsing to its agents, and a Gateway shared by
@@ -55,6 +60,7 @@ The page stores its navigation in Control UI `p.*` query parameters:
   store identity. Neither grants access. If the agent now uses a different store,
   the page explains the mismatch instead of opening a record there.
 - `p.record` is the stable record ID, so renames do not change the address.
+- `p.scribe` (with `p.view=scribes`) opens one scribe's detail.
 - `p.view`, `p.section`, `p.kind`, `p.type`, `p.q`, `p.filter`, `p.history`,
   `p.origin`, `p.offset`, `p.upper`, `p.before`, and `p.back` keep the view,
   search, filters, settings section, and pagination. Invalid values reset to safe

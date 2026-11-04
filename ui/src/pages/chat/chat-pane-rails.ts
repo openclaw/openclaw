@@ -3,6 +3,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
+import type { WorkspaceFileSearchTarget } from "./components/chat-message-media-actions.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import {
@@ -79,21 +80,27 @@ export function createChatPaneRails(params: {
   };
   const togglePanelSlot = (slot: SidebarSlotId) =>
     isPanelVisible(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
+  const sessionWorkspace = createSessionWorkspaceProps(state, {
+    draftScope: params.presentationId,
+    presentation: params.presentation,
+    openIntent: "navigate",
+    draftContext: {
+      sessionTitle: params.sessionTitle,
+      paneLabel: params.paneLabel,
+    },
+    expanded: isPanelVisible("workspace"),
+    presented: params.presented,
+  });
   return {
     closePanelSlot,
     openPanelSlot,
+    onFindWorkspaceFile: (target: WorkspaceFileSearchTarget) => {
+      if (sessionWorkspace.onFindWorkspaceFile(target)) {
+        openPanelSlot("workspace");
+      }
+    },
     sessionWorkspace: {
-      ...createSessionWorkspaceProps(state, {
-        draftScope: params.presentationId,
-        presentation: params.presentation,
-        openIntent: "navigate",
-        draftContext: {
-          sessionTitle: params.sessionTitle,
-          paneLabel: params.paneLabel,
-        },
-        expanded: isPanelVisible("workspace"),
-        presented: params.presented,
-      }),
+      ...sessionWorkspace,
       collapsed: !isPanelVisible("workspace"),
       onToggleCollapsed: () => togglePanelSlot("workspace"),
       onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,

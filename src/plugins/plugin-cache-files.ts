@@ -311,22 +311,21 @@ export function readPluginCacheFile(params: {
   /** null preserves the uncapped bundle JSON contract; ordinary metadata stays bounded. */
   maxBytes?: number | null;
 }): PluginFileCacheEntry {
-  const lexicalRoot = path.resolve(params.rootDir);
-  let root = getPluginCacheRoot(lexicalRoot);
+  let root = getPluginCacheRoot(params.rootDir);
   const maxBytes =
     params.maxBytes === null ? undefined : (params.maxBytes ?? DEFAULT_PLUGIN_METADATA_MAX_BYTES);
   const key = entryKey(params.relativePath, params.rejectHardlinks);
-  const limitKey = JSON.stringify([key, maxBytes]);
+  let cached = root.files.get(key) ?? root.files.get(JSON.stringify([key, maxBytes]));
   // A successful strict check also satisfies the bundled/raw-reader policy;
   // its failures never stand in for a more permissive read.
-  const strict = params.rejectHardlinks
-    ? undefined
-    : root.files.get(entryKey(params.relativePath, true));
-  const cached =
-    root.files.get(key) ?? root.files.get(limitKey) ?? (strict?.ok ? strict : undefined);
+  if (!cached && !params.rejectHardlinks) {
+    const strict = root.files.get(entryKey(params.relativePath, true));
+    cached = strict?.ok ? strict : undefined;
+  }
   if (cached) {
     return enforceFileSize(cached, maxBytes);
   }
+  const lexicalRoot = path.resolve(params.rootDir);
   const requestedPath = path.resolve(lexicalRoot, params.relativePath);
   const checked = root.checkedEntries.get(key);
   if (pathFacts(requestedPath).exists === false || (checked && (!checked.ok || !checked.exists))) {
@@ -395,7 +394,7 @@ export function readPluginCacheFile(params: {
   if (!entry.ok) {
     materializeErrorStack(entry.failure.error);
   }
-  root.files.set(entry.ok ? key : limitKey, entry);
+  root.files.set(entry.ok ? key : JSON.stringify([key, maxBytes]), entry);
   return entry;
 }
 

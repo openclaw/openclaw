@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import { assert, expect, it, vi } from "vitest";
+import { attachInternalToolResultAcknowledgement } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
   loadSessionEntry,
@@ -37,7 +39,6 @@ import {
 } from "../../admitted-run-context.js";
 import { isRecordedModelFallbackStop } from "../../model-fallback-stop.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
-import { attachInternalToolResultAcknowledgement } from "../../runtime/internal-hooks.js";
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import {
   createAssistant,
@@ -501,6 +502,24 @@ it("refuses a prepared target whose owner closes during lifecycle preparation", 
         ),
       ).rejects.toThrow("admitted run authority is no longer active");
       expect(arm).not.toHaveBeenCalled();
+    },
+    { existing: true },
+  ));
+
+it("prepares a warm transcript from its admitted database identity without resolving its path", () =>
+  withInitialWriter(
+    async ({ preparedSessionTarget, runParams }) => {
+      using realpath = vi.spyOn(fs.realpathSync, "native");
+      const prepared = await prepareTranscript({ ...runParams, preparedSessionTarget });
+      try {
+        expect(prepared.ownedTranscriptWriteContext.sessionActor?.actor.target).toMatchObject({
+          database: { kind: "file" },
+          sessionKey: runParams.sessionKey,
+        });
+        expect(realpath).not.toHaveBeenCalled();
+      } finally {
+        await prepared.transcriptLifecycle.dispose();
+      }
     },
     { existing: true },
   ));

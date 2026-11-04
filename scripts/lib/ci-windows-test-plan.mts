@@ -72,7 +72,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/infra/ports.test.ts": 3.2,
   "src/infra/process-env.test.ts": 0.1,
   "src/infra/sqlite-private-directory.windows.test.ts": 1.3,
-  "src/infra/sqlite-snapshot-staging.cancellation.test.ts": 7.4,
   "src/infra/sqlite-snapshot.test.ts": 9.7,
   "src/infra/ssh-client.windows.test.ts": 0.4,
   "src/infra/state-migrations.audit-logs.windows.test.ts": 1.6,

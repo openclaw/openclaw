@@ -343,6 +343,8 @@ export async function withPluginLifecycleLease<T>(
         },
         leaseMs: options.leaseMs ?? DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS,
         waitMs,
+        // Finalize, Doctor, and installs can block the parent past the lease duration.
+        heartbeat: "worker",
         processBound: options.processBound,
         ...(options.signal ? { signal: options.signal } : {}),
         leaseLabel: "plugin lifecycle lease",

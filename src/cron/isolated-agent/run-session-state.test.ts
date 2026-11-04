@@ -129,6 +129,30 @@ describe("syncCronSessionLiveSelection", () => {
 });
 
 describe("createPersistCronSessionEntry", () => {
+  it("replaces intermediate request occupancy only when final accounting owns the write", async () => {
+    const sessionKey = "agent:main:cron:context";
+    const initial = makeSessionEntry({ totalTokens: 436_631, totalTokensFresh: true });
+    const cronSession = makeCronSession({ ...initial });
+    cronSession.initialSessionEntry = initial;
+    const rows = { [sessionKey]: { ...initial, totalTokens: 810_448 } };
+    const persist = createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
+      persistSessionEntry: makeGuardedPersistSessionEntry(rows),
+    });
+    await persist();
+    expect(rows[sessionKey]?.totalTokens).toBe(810_448);
+    rows[sessionKey]!.totalTokens = 900_000;
+    cronSession.sessionEntry.totalTokens = 20_015;
+    cronSession.contextTotalsAccounted = true;
+    await persist();
+    expect(rows[sessionKey]?.totalTokens).toBe(20_015);
+    rows[sessionKey]!.totalTokens = 30_000;
+    await persist();
+    expect(rows[sessionKey]?.totalTokens).toBe(30_000);
+  });
+
   // Regression (review P1): a stale cron reset landing on an empty prior
   // transcript used to create the header from process.cwd(), so the window
   // persisted the gateway process directory as its workspace.

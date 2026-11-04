@@ -740,12 +740,24 @@ it("bounds committed actor growth across the window limit without retaining roll
 
     const committed = forkSessionActorStoredState(resident);
     write(() => append(committed));
+    const { navigation, identities, active } = committed.transcript;
     residency.remember(committed);
+    // Appending already detached these collections from the rollback preimage.
+    expect(committed.transcript.navigation).toBe(navigation);
+    expect(committed.transcript.identities).toBe(identities);
+    expect(committed.transcript.active).toBe(active);
     expect(committed.transcript.complete).toBe(false);
     expect(committed.transcript.navigation).toHaveLength(512);
-    expect(committed.transcript.identities.size).toBeLessThanOrEqual(512);
-    expect(committed.transcript.active.size).toBeLessThanOrEqual(512);
+    expect(committed.transcript.navigation.at(0)?.seq).toBe(2);
+    expect(committed.transcript.navigation.at(-1)?.seq).toBe(513);
+    expect(committed.transcript.identities.size).toBe(512);
+    expect(committed.transcript.active.size).toBe(512);
     expect(committed.transcript.identities.has("message-0")).toBe(false);
+    expect(resident.transcript.navigation).toHaveLength(512);
+    expect(resident.transcript.navigation.at(0)?.seq).toBe(0);
+    expect(resident.transcript.identities.has("message-0")).toBe(true);
+    expect(resident.transcript.identities.has("next-one")).toBe(false);
+    expect(resident.transcript.active.size).toBe(511);
     inState(committed, () => {
       expect(f.append("must-not-append", originalMessage)).toMatchObject({
         appended: false,

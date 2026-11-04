@@ -80,7 +80,7 @@ it("hands its prestarted child to the first scheduler slot without spending insp
   }
 });
 
-it("inspects state in cold children without executing comparison DDL", async () => {
+it("reads closed live state in cold children without copying or executing comparison DDL", async () => {
   const directory = tempDirs.make("state-schema-contract-transfer-");
   const pathname = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: directory } }).path;
   closeOpenClawStateDatabaseForTest();
@@ -111,7 +111,6 @@ DatabaseSync.prototype.exec = function(sql) {
           scope: "state",
         },
         undefined,
-        pathname,
       );
       expect(result?.schemas).toEqual({ incompatible: [], indeterminate: [] });
       expect(fs.readFileSync(ddlLog, "utf8")).toBe("");

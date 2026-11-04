@@ -25,7 +25,7 @@ scenario:
     - The child performs exactly one real write before returning empty assistant output.
     - The requester receives one visible parent acknowledgement.
     - Exhausted finalization retains the failed child outcome and no assistant result.
-    - The requester receives exactly one system failure notice, with no fabricated success or replay after Gateway restart.
+    - A visible but unsent parent completion triggers exactly one system failure notice, with no fabricated success or replay after Gateway restart.
   docsRefs:
     - docs/tools/subagents.md
     - docs/help/testing.md
@@ -38,7 +38,7 @@ scenario:
     kind: flow
     providerMode: mock-openai
     retryCount: 0
-    summary: Exercise empty post-tool output, exhausted bounded finalization, and exact-once failure reporting through mock provider, ephemeral Gateway, native subagent state, and QA channel capture.
+    summary: Exercise empty child post-tool output, exhausted bounded finalization, and exact-once failure reporting after a visible but unsent parent completion through mock provider, ephemeral Gateway, native subagent state, and QA channel capture.
     config:
       requiredProviderMode: mock-openai
       metadataSentinel: QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK

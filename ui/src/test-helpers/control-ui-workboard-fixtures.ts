@@ -10,7 +10,7 @@ import {
   buildWorkboardStateSessions,
   MATRIX_STATES,
 } from "./control-ui-workboard-states.ts";
-import { cronListResponseFixture } from "./cron.ts";
+import { cronJobsListResponse, cronListResponseFixture } from "./cron.ts";
 
 export function buildWorkboardMocks(
   baseTime: number,
@@ -565,15 +565,11 @@ export function buildWorkboardMocks(
           },
         ],
       },
-      "cron.list": cronListResponseFixture({
-        jobs: [automationJob],
-        snapshotRevision: "workboard-mock-cron",
-        total: 1,
-        offset: 0,
-        limit: 50,
-        hasMore: false,
-        nextOffset: null,
-      }),
+      "cron.list": cronListResponseFixture(
+        cronJobsListResponse([automationJob], {
+          snapshotRevision: "workboard-mock-cron",
+        }),
+      ),
 
       "board.get": {
         sessionKey,

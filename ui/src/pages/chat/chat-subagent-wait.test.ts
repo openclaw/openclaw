@@ -3,7 +3,13 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { listSubagents, projectSubagentStatus } from "./chat-subagent-wait.ts";
+import {
+  handoffSessionLinks,
+  listResumedHandoffSessions,
+  listSubagents,
+  projectProgressCardRuntime,
+  projectSubagentStatus,
+} from "./chat-subagent-wait.ts";
 import { UnplacedSubagentWait } from "./components/chat-message-stream-view.tsx";
 import {
   SubagentActivity,
@@ -209,6 +215,7 @@ describe("chat waiting on subagents", () => {
         startedAt: 2_000,
         runId: "parent-run",
         runningCount: 1,
+        sessions: [{ key: child.key, label: "Backend implementation", status: "running" }],
       });
     }
   });
@@ -217,31 +224,38 @@ describe("chat waiting on subagents", () => {
     const derive = (childRows?: GatewaySessionRow[]) =>
       status({ subagentSessions: childRows, subagentSessionsHydrated: childRows !== undefined })
         .wait;
-    expect(derive()).toEqual({ startedAt: 2_000, runId: "parent-run", runningCount: 0 });
-    const summarize = (childRows: GatewaySessionRow[]) => {
-      const wait = derive(childRows);
-      return wait?.runningCount;
-    };
+    expect(derive()).toMatchObject({ runningCount: 0, sessions: [] });
+    const summarize = (childRows: GatewaySessionRow[]) => derive(childRows)?.runningCount;
     expect(summarize([child, { ...child, key: "agent:main:subagent:other" }])).toBe(2);
+    // A child that handed off to its own subagents is unfinished.
+    const delegating = { ...child, key: "agent:main:subagent:yielded", hasActiveRun: false };
+    expect(summarize([child, { ...delegating, hasActiveSubagentRun: true }])).toBe(2);
     expect(derive([{ ...child, spawnedBy: "agent:main:other" }])).toBeNull();
     expect(derive([{ ...child, hasActiveRun: false }])).toBeNull();
     expect(
       summarize([child, { ...child, key: "agent:main:grandchild", spawnedBy: child.key }]),
     ).toBe(1);
+    // A paused child keeps the wait open, uncounted, once the child query is complete.
+    const done = { ...child, hasActiveRun: false, status: "done" as const, endedAt: 1_500 };
+    const paused = [{ ...done, subagentRunState: "paused" as const }];
+    const settled = { ...parent, hasActiveSubagentRun: false };
+    const idle = (subagentSessions: GatewaySessionRow[], subagentSessionsPending = false) =>
+      status({ selectedSession: settled, subagentSessions, subagentSessionsPending }).wait;
+    expect([idle(paused)?.pausedOnly, idle(paused)?.pausedNote]).toEqual([true, undefined]);
+    // The clock follows execution, not the attention label shown on a row.
+    const agentStatus = { note: "Pick one", attention: "hand" as const, expiresAt: 9e15 };
+    expect(idle([{ ...paused[0]!, agentStatus }])?.pausedOnly).toBe(true);
+    const mixed = status({ subagentSessions: [...paused, { ...child, agentStatus }] }).wait;
+    expect([mixed?.runningCount, mixed?.pausedOnly]).toEqual([1, undefined]);
+    // After the parent resumes, paused children alone read as a note.
+    const resumed = { ...settled, startedAt: 3_000, endedAt: 4_000 };
+    expect(status({ selectedSession: resumed, subagentSessions: paused }).wait?.pausedNote).toBe(
+      true,
+    );
+    expect([idle([done]), idle(paused, true)]).toEqual([null, null]);
   });
 
-  it("counts a child that handed off to its own subagents as unfinished", () => {
-    const yielded = {
-      ...child,
-      key: "agent:main:subagent:yielded",
-      status: "running" as const,
-      hasActiveRun: false,
-      hasActiveSubagentRun: true,
-    };
-    expect(status({ subagentSessions: [child, yielded] }).wait).toMatchObject({ runningCount: 2 });
-  });
-
-  it("counts child sessions that are not subagents without naming them", () => {
+  it("counts child sessions that are not subagents apart and names them on the wait", () => {
     const session = { ...child, key: "agent:main:dashboard:opened", label: "Opened session" };
     const derive = (rows: GatewaySessionRow[]) => status({ subagentSessions: rows }).wait;
     expect(derive([session])).toEqual({
@@ -249,6 +263,7 @@ describe("chat waiting on subagents", () => {
       runId: "parent-run",
       runningCount: 0,
       sessionCount: 1,
+      sessions: [{ key: session.key, label: "Opened session", status: "running" }],
     });
     const acp = { ...child, key: "agent:main:acp:coder", label: "Coder" };
     expect(derive([acp])).toMatchObject({ runningCount: 1 });
@@ -256,12 +271,6 @@ describe("chat waiting on subagents", () => {
       runningCount: 1,
       sessionCount: 1,
     });
-  });
-
-  it("counts children only once the pane's own child query has answered", () => {
-    const derive = (subagentSessionsHydrated: boolean) => status({ subagentSessionsHydrated }).wait;
-    expect(derive(false)).toEqual({ startedAt: 2_000, runId: "parent-run", runningCount: 0 });
-    expect(derive(true)).toMatchObject({ runningCount: 1 });
   });
 
   it.each([2_500, 1_500])("uses lifecycle end %i, not a later transcript timestamp", (endedAt) => {
@@ -289,6 +298,7 @@ describe("chat waiting on subagents", () => {
         startedAt: 4_000,
         runningCount: 0,
         sessionCount: 1,
+        sessions: [{ key: dashboardChild.key, label: "Backend implementation", status: "running" }],
       });
       expect(projection.placedWait).toBeUndefined();
     }
@@ -373,11 +383,6 @@ describe("chat waiting on subagents", () => {
       running: 1,
       listed: true,
     });
-    expect(projectSubagentStatus({ ...input, selectedSession: parent }, false).wait).toEqual({
-      startedAt: 2_000,
-      runId: "parent-run",
-      runningCount: 0,
-    });
   });
 
   it("leads to the Subagents panel only when it lists every subagent the line mentions", () => {
@@ -402,7 +407,7 @@ describe("chat waiting on subagents", () => {
   });
 
   it.each([false, true])(
-    "keeps idle waits quiet and the footer count navigable (bubble mode: %s)",
+    "names the one session a wait is on in place of the working text (bubble mode: %s)",
     (bubbleMode) => {
       const now = 66_500;
       vi.spyOn(Date, "now").mockReturnValue(now);
@@ -410,8 +415,12 @@ describe("chat waiting on subagents", () => {
         vi.restoreAllMocks();
       });
       const container = document.createElement("div");
-      const onOpenSubagents = vi.fn();
-      const wait = { startedAt: 1_500, runningCount: 1 };
+      const onOpenSessionLink = vi.fn();
+      const wait = {
+        startedAt: 1_500,
+        runningCount: 1,
+        sessions: [{ key: child.key, label: "Backend implementation", status: "running" as const }],
+      };
       mountWorkingIndicator(
         container,
         { kind: "reading-indicator", key: "parent-wait", startedAt: 5_000 },
@@ -419,7 +428,7 @@ describe("chat waiting on subagents", () => {
           bubbleMode,
           waitingSubagents: wait,
           runningSubagents: wait.runningCount,
-          onOpenSubagents,
+          sessionLinks: handoffSessionLinks({ subagentSessions: [child], onOpenSessionLink }),
           outputTokens: 4_700,
           workingPhrases: ["Building"],
         },
@@ -430,17 +439,226 @@ describe("chat waiting on subagents", () => {
       expect(
         container.querySelector("openclaw-working-phrase, details, .chat-subagent-activity"),
       ).toBeNull();
-      expect(container.textContent).not.toContain("Backend implementation");
-      expect(container.textContent).toContain("4.7k output tokens");
-      expect(container.querySelector("openclaw-elapsed-time")?.textContent).toBe("1m 5s");
-      const count = container.querySelector<HTMLButtonElement>(
-        ".chat-working-indicator__subagents",
+      const line = container.querySelector(".chat-subagent-wait");
+      expect(line?.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+        "Waiting on Backend implementation · 1m 5s",
       );
-      expect(count?.textContent).toBe("1 subagent running");
-      count?.click();
-      expect(onOpenSubagents).toHaveBeenCalledOnce();
+      expect(container.querySelector(".chat-working-indicator__subagents")).toBeNull();
+      expect(line?.querySelector("[aria-expanded]")).toBeNull();
+      const name = line?.querySelector<HTMLAnchorElement>("a");
+      expect(name?.getAttribute("href")).toBe("/chat/main/subagent/child");
+      name?.click();
+      expect(onOpenSessionLink).toHaveBeenCalledOnce();
     },
   );
+
+  it("names and links no child until the pane's own child query is complete", () => {
+    // Rows seeded from the sidebar can be a partial set: naming one would name
+    // the wrong session, so the wait keeps its unnamed status until hydration.
+    const sibling = { ...child, key: "agent:main:subagent:sibling", label: "Sibling" };
+    const onOpenSessionLink = vi.fn();
+    const handoff = { yieldedAt: 2_000, resumedAt: 3_000 };
+    for (const roster of [
+      { subagentSessions: [child], subagentSessionsHydrated: false },
+      { subagentSessions: [child], subagentSessionsHydrated: true, subagentSessionsPending: true },
+    ]) {
+      const projection = status(roster);
+      // Neither counted nor named until the child query answers.
+      expect(projection.wait).toMatchObject({ runningCount: 0, sessions: [] });
+      expect(listResumedHandoffSessions(parent.key, roster, handoff)).toEqual([]);
+      const container = document.createElement("div");
+      mountWorkingIndicator(
+        container,
+        { kind: "reading-indicator", key: "parent-wait", startedAt: 5_000 },
+        {
+          waitingSubagents: projection.wait!,
+          sessionLinks: handoffSessionLinks({ ...roster, onOpenSessionLink }),
+        },
+      );
+      expect(container.querySelector(".chat-subagent-wait, a")).toBeNull();
+      expect(container.textContent).not.toContain(child.label);
+    }
+    // Once the child query answers, the complete set is named and linked.
+    const complete = { subagentSessions: [child, sibling], subagentSessionsHydrated: true };
+    expect(status(complete).wait?.sessions.map((session) => session.key)).toEqual([
+      child.key,
+      sibling.key,
+    ]);
+    const finished = { hasActiveRun: false, status: "done" as const, endedAt: 2_500 };
+    expect(
+      listResumedHandoffSessions(
+        parent.key,
+        {
+          subagentSessions: [
+            { ...child, ...finished },
+            { ...sibling, ...finished },
+          ],
+          subagentSessionsHydrated: true,
+        },
+        handoff,
+      ).map((session) => session.key),
+    ).toEqual([child.key, sibling.key]);
+  });
+
+  it("lists a resumed handoff's children from runs that overlapped it", () => {
+    const roster = (rows: GatewaySessionRow[]) => ({
+      subagentSessions: rows,
+      subagentSessionsHydrated: true,
+    });
+    const handoff = { yieldedAt: 2_000, resumedAt: 3_000 };
+    const finished = { hasActiveRun: false, status: "done" as const };
+    const during = { ...child, ...finished, createdAt: 1_000, startedAt: 1_000, endedAt: 2_500 };
+    // Created before the handoff and finished before it: not waited on.
+    const before = { ...during, key: "agent:main:subagent:before", endedAt: 1_500 };
+    // The same kind of child, started again after the resume: its current run
+    // is later work, and the row keeps no record of the earlier one.
+    const restarted = {
+      ...child,
+      key: "agent:main:subagent:restarted",
+      createdAt: 1_000,
+      startedAt: 4_000,
+      hasActiveRun: true,
+    };
+    expect(
+      listResumedHandoffSessions(parent.key, roster([during, before, restarted]), handoff).map(
+        (session) => session.key,
+      ),
+    ).toEqual([during.key]);
+  });
+
+  it("links child names only to sessions this pane loaded and can open", () => {
+    const onOpenSessionLink = vi.fn();
+    const dashboard = {
+      ...child,
+      key: "agent:main:dashboard:docs",
+      label: "Docs",
+      boardFace: "dashboard" as const,
+    };
+    const links = handoffSessionLinks({
+      subagentSessions: [child, dashboard],
+      basePath: "/ui",
+      onOpenSessionLink,
+    });
+    expect(links?.(child.key)?.href).toBe("/ui/chat/main/subagent/child");
+    expect(links?.(dashboard.key)?.href).toBe("/ui/dashboard/main/dashboard/docs");
+    links?.(dashboard.key)?.open();
+    expect(onOpenSessionLink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        namespace: "dashboard",
+        pathname: "/ui/dashboard/main/dashboard/docs",
+      }),
+    );
+    // Not in the pane's access-scoped child rows, or no way to open sessions here: text.
+    expect(links?.("agent:main:subagent:unloaded")).toBeUndefined();
+    expect(handoffSessionLinks({ subagentSessions: [child] })).toBeUndefined();
+
+    const container = document.createElement("div");
+    const wait = {
+      startedAt: 1_500,
+      runningCount: 1,
+      sessions: [
+        { key: child.key, label: "Backend implementation", status: "running" as const },
+        { key: "agent:main:subagent:unloaded", label: "Unloaded", status: "done" as const },
+      ],
+    };
+    mountWorkingIndicator(
+      container,
+      { kind: "reading-indicator", key: "parent-wait", startedAt: 5_000 },
+      { waitingSubagents: wait, sessionLinks: links },
+    );
+    const [linked, plain] = container.querySelectorAll("li");
+    const anchor = linked?.querySelector<HTMLAnchorElement>("a");
+    expect(anchor?.getAttribute("href")).toBe("/ui/chat/main/subagent/child");
+    expect(plain?.querySelector("a")).toBeNull();
+    expect(plain?.querySelector("span")?.textContent).toBe("Unloaded");
+    onOpenSessionLink.mockClear();
+    // Modified and middle clicks keep native link behavior for a new tab.
+    for (const init of [{ metaKey: true }, { ctrlKey: true }, { button: 1 }]) {
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...init });
+      anchor?.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(onOpenSessionLink).not.toHaveBeenCalled();
+    const plainClick = new MouseEvent("click", { bubbles: true, cancelable: true });
+    anchor?.dispatchEvent(plainClick);
+    expect(plainClick.defaultPrevented).toBe(true);
+    expect(onOpenSessionLink).toHaveBeenCalledWith(
+      expect.objectContaining({ namespace: "chat", pathname: "/ui/chat/main/subagent/child" }),
+    );
+  });
+
+  it("lists several sessions with statuses in words, attention first, open until closed", () => {
+    const now = 66_500;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+    const ended = (key: string, label: string, endedAt: number, row = {}): GatewaySessionRow => {
+      const facts = { key: `agent:main:${key}`, label, hasActiveRun: false, endedAt };
+      return { ...child, ...facts, status: "done", ...row };
+    };
+    const rows: GatewaySessionRow[] = [
+      { ...child, createdAt: 10 },
+      ended("subagent:review", "Review", 3_000, {
+        createdAt: 20,
+        agentStatus: { note: "Pick a merge method", attention: "hand", expiresAt: now + 60_000 },
+      }),
+      ended("dashboard:docs", "Docs", 4_000, { createdAt: 30 }),
+      // Paused before this handoff, still owing its task.
+      ended("subagent:audit", "Audit", 1_200, { subagentRunState: "paused" }),
+      // Finished before this handoff: not what it waits on.
+      ended("subagent:earlier", "Earlier", 1_500),
+    ];
+    const wait = status({ subagentSessions: rows }).wait;
+    expect(wait?.sessions).toEqual([
+      {
+        key: "agent:main:subagent:review",
+        label: "Review",
+        status: "attention",
+        note: "Pick a merge method",
+      },
+      { key: "agent:main:subagent:audit", label: "Audit", status: "paused" },
+      { key: child.key, label: "Backend implementation", status: "running" },
+      { key: "agent:main:dashboard:docs", label: "Docs", status: "done" },
+    ]);
+    const container = document.createElement("div");
+    const update = mountWorkingIndicator(
+      container,
+      { kind: "reading-indicator", key: "parent-wait", startedAt: 5_000 },
+      { waitingSubagents: { ...wait!, startedAt: 1_500 } },
+    );
+    const toggle = container.querySelector<HTMLButtonElement>(".chat-subagent-wait__toggle");
+    expect(toggle?.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+      "Waiting on 4 sessions · 1 needs your input · 1 paused · 1m 5s",
+    );
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    const list = container.querySelector(`#${toggle?.getAttribute("aria-controls")}`);
+    expect(
+      [...(list?.querySelectorAll("li") ?? [])].map((row) =>
+        row.textContent?.replace(/\s+/gu, " ").trim(),
+      ),
+    ).toEqual([
+      "Review Needs your input",
+      "Audit Paused",
+      "Backend implementation Running",
+      "Docs Done",
+    ]);
+    toggle?.click();
+    flush();
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector("li")).toBeNull();
+    // The clock follows the projection's execution facts, not row labels.
+    const [review, audit] = wait!.sessions;
+    const text = () => container.textContent?.replace(/\s+/gu, " ").trim();
+    update({ waitingSubagents: { ...wait!, startedAt: 1_500, sessions: [review!, audit!] } });
+    expect(text()).toBe("Waiting on 2 sessions · 1 needs your input · 1 paused · 1m 5s");
+    update({ waitingSubagents: { ...wait!, pausedOnly: true, sessions: [audit!] } });
+    expect(text()).toBe("Waiting on Audit · Paused");
+    update({ waitingSubagents: { ...wait!, pausedNote: true, sessions: [audit!] } });
+    expect(text()).toBe("Audit is paused");
+    update({ waitingSubagents: { ...wait!, pausedNote: true, sessions: [audit!, audit!] } });
+    expect(text()).toBe("2 sessions are paused");
+  });
 
   it("makes the running count the way to the list when navigation is available", () => {
     const container = document.createElement("div");
@@ -462,4 +680,57 @@ describe("chat waiting on subagents", () => {
     draw({ runningSubagents: 0 });
     expect(container.querySelector(".chat-working-indicator__subagents")).toBeNull();
   });
+});
+
+it("counts only hydrated direct children and keeps current failures separate from saved progress", () => {
+  const rows: GatewaySessionRow[] = [
+    child,
+    { ...child, key: "agent:main:queued", hasActiveRun: false, status: "queued" },
+    {
+      ...child,
+      key: "agent:main:waiting",
+      hasActiveRun: false,
+      hasActiveSubagentRun: true,
+      status: "done",
+    },
+    {
+      ...child,
+      key: "agent:main:failed",
+      hasActiveRun: false,
+      status: "failed",
+      endedAt: 3000,
+      lastRunError: "Access denied",
+    },
+    { ...child, key: "agent:main:stopped", hasActiveRun: false, status: "killed", endedAt: 3000 },
+    { ...child, key: "agent:main:old", hasActiveRun: false, status: "failed", endedAt: 1000 },
+    { ...child, key: "agent:main:unrelated", spawnedBy: "agent:main:other" },
+  ];
+  const roster = { subagentSessions: rows, subagentSessionsHydrated: true };
+  expect(projectProgressCardRuntime(parent, roster, 2000)).toMatchObject({
+    hasActiveSubagentRun: true,
+    children: { running: 1, queued: 1, waiting: 1, failed: 1, stopped: 1 },
+    childError: "Backend implementation: Access denied",
+  });
+  expect(
+    projectProgressCardRuntime(parent, { ...roster, subagentSessionsPending: true }, 2000).children,
+  ).toBeUndefined();
+  expect(
+    projectProgressCardRuntime(parent, { ...roster, subagentSessionsHydrated: false }, 2000)
+      .children,
+  ).toBeUndefined();
+});
+
+it("counts an interrupted child as stopped only for its current progress snapshot", () => {
+  const session = { ...parent, hasActiveSubagentRun: false };
+  const roster = {
+    subagentSessions: [
+      { ...child, status: "interrupted" as const, hasActiveRun: false, endedAt: 3000 },
+    ],
+    subagentSessionsHydrated: true,
+  };
+  expect(projectProgressCardRuntime(session, roster, 2000)).toMatchObject({
+    hasActiveSubagentRun: false,
+    children: { running: 0, queued: 0, waiting: 0, failed: 0, stopped: 1 },
+  });
+  expect(projectProgressCardRuntime(session, roster, 3001).children?.stopped).toBe(0);
 });

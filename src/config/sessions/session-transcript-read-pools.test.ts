@@ -5,7 +5,12 @@ import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
+import * as readAdmission from "../../state/agent-database-admission.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import {
+  invalidateOpenClawAgentDatabaseValidation,
+  setOpenClawAgentDatabaseValidation,
+} from "../../state/openclaw-agent-db-validation-cache.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
@@ -13,6 +18,8 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { replaceSessionEntrySync } from "./session-accessor.js";
+import { withTranscriptDatabase } from "./session-transcript-fixture.test-support.js";
 import { createSessionTranscriptReadPool } from "./session-transcript-read-worker-runtime.js";
 import type { SessionSqliteTargetWorkerInput } from "./session-transcript-worker-read.types.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -133,6 +140,50 @@ it("revokes a foreground read waiting for database admission before it can reope
       release.resolve();
       await preceding;
       await pending?.catch(() => undefined);
+    }
+  });
+});
+
+it("captures renewed physical validation after queued read admission", async () => {
+  await withTranscriptDatabase("renewed-reader", async ({ state, database, scope }) => {
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const read = () =>
+      withSessionHistoryWorkerDatabase(
+        { agentId: database.agentId, path: database.path, env: state.env },
+        (owner) => owner.readEntryPresence({ ...scope, databaseAgentId: database.agentId }),
+      );
+    await expect(read()).resolves.toBe(true);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const admit = readAdmission.runWithAgentDatabaseReadAdmissionTurn;
+    let waiting = false;
+    const held = vi
+      .spyOn(readAdmission, "runWithAgentDatabaseReadAdmissionTurn")
+      .mockImplementation(async (paths, operation, families, signal, options) => {
+        if (!waiting) {
+          waiting = true;
+          entered.resolve();
+          await release.promise;
+        }
+        return admit(paths, operation, families, signal, options);
+      });
+    const pending = read();
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("Read admission was not held");
+        }),
+      ]);
+      // A preceding writer can renew the same file's proof while this reader is queued.
+      invalidateOpenClawAgentDatabaseValidation(database.path);
+      setOpenClawAgentDatabaseValidation(database);
+      release.resolve();
+      await expect(pending).resolves.toBe(true);
+    } finally {
+      release.resolve();
+      await pending.catch(() => {});
+      held.mockRestore();
     }
   });
 });

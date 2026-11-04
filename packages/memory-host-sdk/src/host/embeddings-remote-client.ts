@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { EmbeddingProviderOptions } from "./embeddings.types.js";
+import type { EmbeddingProviderCreateOptions } from "../../../../src/plugins/embedding-provider-types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
 import {
   resolveProviderRequestPolicyConfig,
@@ -110,7 +110,7 @@ function isNativeChatOnlySubscriptionRoute(
 export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
   capability?: string;
-  options: EmbeddingProviderOptions;
+  options: EmbeddingProviderCreateOptions;
   defaultBaseUrl: string;
 }): Promise<{
   baseUrl: string;

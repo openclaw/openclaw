@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, afterEach, beforeAll, beforeEach, expect } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
@@ -24,8 +24,67 @@ type ConnectedServerReady = Parameters<typeof installConnectedControlUiServerSui
 
 export function installGatewayServerChatTestSuite(
   onReady: ConnectedServerReady,
-  waitForConnectWork?: () => Promise<void>,
+  waitForAdditionalWork?: () => Promise<void>,
 ) {
+  const connectWork: Promise<unknown>[] = [];
+  let restoreConnectWork: (() => void) | undefined;
+  const waitForConnectWork = async () => {
+    // A producer can register catalog tails before releasing its own root.
+    while (connectWork.length > 0) {
+      await Promise.allSettled(connectWork.splice(0));
+    }
+  };
+
+  // Install before this suite opens either socket; delegate admission to its real owner.
+  beforeAll(async () => {
+    const admission = await import("../process/gateway-work-admission.js");
+    const beginRoot = admission.tryBeginGatewayRootWorkAdmission;
+    const runIndependent = admission.runWithGatewayIndependentRootWorkAdmission;
+    const producers = vi
+      .spyOn(admission, "tryBeginGatewayRootWorkAdmission")
+      .mockImplementation((origin) => {
+        const lease = beginRoot(origin);
+        // Handler completion can precede release of retained request work.
+        return lease && (origin === "ws:connect" || origin === "ws:chat.send")
+          ? {
+              ...lease,
+              run: (run) =>
+                lease.run(() => {
+                  const released = createDeferred<"settled" | "reset">();
+                  const observeRelease = admission.captureGatewayRootWorkReleaseObserver();
+                  if (!observeRelease) {
+                    throw new Error("connect producer must retain its admitted root");
+                  }
+                  observeRelease(released.resolve);
+                  connectWork.push(released.promise);
+                  return run();
+                }),
+            }
+          : lease;
+      });
+    const tails = vi
+      .spyOn(admission, "runWithGatewayIndependentRootWorkAdmission")
+      .mockImplementation((run, origin, signal) => {
+        const pending = runIndependent(run, origin, signal);
+        if (origin === "ws:preauth") {
+          connectWork.push(pending);
+        }
+        return pending;
+      });
+    restoreConnectWork = () => {
+      tails.mockRestore();
+      producers.mockRestore();
+    };
+  });
+  beforeEach(waitForConnectWork);
+  afterAll(async () => {
+    try {
+      await waitForConnectWork();
+    } finally {
+      restoreConnectWork?.();
+    }
+  });
+
   installGatewayTestHooks({ scope: "suite" });
   let ws: WebSocket | undefined;
   installConnectedControlUiServerSuite((started) => {
@@ -36,7 +95,8 @@ export function installGatewayServerChatTestSuite(
   let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>> | undefined;
   const settleGatewayFixture = async () => {
     await expectDefined(requestExecution, "request execution observer").waitForCompletion();
-    await waitForConnectWork?.();
+    await waitForConnectWork();
+    await waitForAdditionalWork?.();
     await drainOpenClawAgentWriteQueuesForTest();
     await flushPendingSessionsChangedEvents();
     expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
@@ -92,9 +152,11 @@ export function installGatewayServerChatTestSuite(
     sendChatAndExpectStarted: (runId: string, message = "/context list") =>
       request("chat.send", { sessionKey: "main", message, idempotencyKey: runId }, "started"),
     settleGatewayFixture,
+    waitForConnectWork,
     waitForAgentRunDrained: async (runId: string, target = socket()) => {
       await expectDefined(requestExecution, "request execution observer").waitForCompletion(runId);
-      await waitForConnectWork?.();
+      await waitForConnectWork();
+      await waitForAdditionalWork?.();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       await request("agent.wait", { runId, timeoutMs: 0 }, "ok", target);
     },

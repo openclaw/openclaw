@@ -197,28 +197,16 @@ describe("chat pane connection lifecycle", () => {
         },
       },
     };
-    chatHistoryRequests(h.state).initialSnapshotHydration = {
-      sessionKey: h.state.sessionKey,
-      connected: false,
-      promise: Promise.resolve(),
-      readReadyHistory: () => ({
-        deltaCursor: snapshot.deltaCursor,
-        historyState: snapshot.historyState,
-      }),
-      adoptReadySnapshot: async () => {
-        applyChatCacheSnapshot(h.state, snapshot);
-        cacheChatSessionSnapshot(
-          h.state.chatMessagesBySession,
-          h.state,
-          { sessionKey: h.state.sessionKey },
-          snapshot,
-        );
-      },
-    };
-    expect(h.state.chatMessages).toEqual([]);
+    applyChatCacheSnapshot(h.state, snapshot);
+    cacheChatSessionSnapshot(
+      h.state.chatMessagesBySession,
+      h.state,
+      { sessionKey: h.state.sessionKey },
+      snapshot,
+    );
     h.dispatchConnect();
     await h.requested;
-    expect(h.state.chatMessages).toEqual([]);
+    expect(h.state.chatMessages).toEqual(snapshot.messages);
     expect(requestCalls(h.request, "sessions.messages.subscribe")[0]?.[1]).toMatchObject({
       initialHistory: { cursor: "warm-cursor", knownState: { commands: "commands-1" } },
     });
@@ -458,19 +446,15 @@ describe("chat pane connection lifecycle", () => {
       state.loadAssistantIdentity = vi.fn(async () => undefined);
       pane.connectedClient = null;
       const snapshot = pane.context.gateway.snapshot;
+      const presence = ["owner", "alice"].map((id) => ({ ts: 0, user: { id } }));
       const connected = {
         ...snapshot,
-        hello: {
-          ...snapshot.hello!,
-          snapshot: {
-            presence: [
-              { ts: 0, user: { id: "owner" } },
-              { ts: 0, user: { id: "alice" } },
-            ],
-          },
-        },
+        hello: { ...snapshot.hello!, snapshot: { presence } },
       };
-
+      pane.context = {
+        ...pane.context,
+        gateway: { ...pane.context.gateway, readPresence: () => presence },
+      };
       pane.applyGatewaySnapshot(connected);
       pane.applySessionsState(sessions.state);
       listed.resolve({ suggestions: [], role: "owner" });

@@ -1,9 +1,9 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it } from "vitest";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 afterEach(() => {

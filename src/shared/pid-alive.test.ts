@@ -134,7 +134,7 @@ it.each(["ESRCH", "EPERM", "success"])(
 );
 
 describe("process start times", () => {
-  it("parses linux /proc stat start times and rejects malformed variants", async () => {
+  it.each(["linux", "android"] as const)("parses %s /proc stat start times", async (platform) => {
     mockProcReads({
       [`/proc/${process.pid}/stat`]: procStat(process.pid, 98765),
       "/proc/42/stat": procStat(42, 55555),
@@ -144,9 +144,9 @@ describe("process start times", () => {
       "/proc/46/stat": procStat(46, 1.5),
     });
 
-    await withMockedPlatform("linux", async () => {
+    await withMockedPlatform(platform, async () => {
       expect(getProcessStartTime(process.pid)).toBe(98765);
-      expect(getProcessStartTime(42)).toBe(55555);
+      expect(getFileLockProcessStartTime(42)).toBe(55555);
       expect(getProcessInstanceStartTime(42)).toBe(55555);
       expect(getProcessStartTime(43)).toBeNull();
       expect(getProcessStartTime(44)).toBe(66666);
@@ -280,6 +280,31 @@ describe("native process identity policy", () => {
       expect(liveness(42)).toEqual([true, false]);
     },
   );
+
+  it.each([
+    { owner: "absent", value: null, stale: true },
+    { owner: "exited", value: { ...identity(), exited: true }, stale: true },
+    { owner: "live", value: identity(), stale: false },
+    { owner: "protected", value: new ProcSafeError("access-denied", "hidden"), stale: false },
+    {
+      owner: "unavailable",
+      value: new ProcSafeError("helper-unavailable", "missing"),
+      stale: false,
+    },
+  ])("recovers only a proven dead Windows EPERM lock owner ($owner)", async ({ value, stale }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockKill("EPERM");
+    nativeIdentity.mockImplementation(() => {
+      if (value instanceof Error) {
+        throw value;
+      }
+      return value;
+    });
+    const { isLockOwnerDefinitelyStale } = await import("../infra/stale-lock-file.js");
+    expect(
+      isLockOwnerDefinitelyStale({ payload: { pid: 42, createdAt: "2000-01-01T00:00:00Z" } }),
+    ).toBe(stale);
+  });
 
   it("keeps sealed helpers on the bounded shell path", () => {
     vi.stubGlobal("SEALED_RUNTIME_BUILD", true);

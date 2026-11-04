@@ -126,7 +126,7 @@ suite.define(() => {
             },
           });
           const microphone = button(page, "Dictation", true);
-          await button(page, "Stop generating", true).waitFor();
+          await button(page, "Stop", true).waitFor();
           await page
             .locator('[data-chat-talk-capability="dictation"]')
             .waitFor({ state: "detached" });
@@ -400,6 +400,6 @@ suite.define(() => {
       await captureFullPage(page, "microphone-picker-capability-gating-full");
       await picker.locator('[data-chat-talk-capability="dictation"]').focus();
       await page.keyboard.press("Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/talk");
     }));
 });
