@@ -157,7 +157,8 @@ it("rejects a freshly self-certified application closure", () => {
 });
 
 it("binds finite initialization metadata and refuses foreign, changed or oversized candidates", () => {
-  const parent = fs.realpathSync(dirs.make("installed-contract-metadata-"));
+  // Keep both ancestor candidates inside this fixture, below the runner package scope.
+  const parent = path.join(fs.realpathSync(dirs.make("installed-contract-metadata-")), "prefix");
   const root = path.join(parent, "app");
   fs.mkdirSync(path.join(root, "dist/infra"), { recursive: true });
   const build = { version: "1.0.0", commit: "1".repeat(40), buildId: "fixture" };
@@ -200,9 +201,13 @@ it("binds finite initialization metadata and refuses foreign, changed or oversiz
     }
     delete files[relative];
   }
-  writeJson(path.join(parent, "package.json"), { version: "foreign" });
-  expect(() => readInstalledTerminalMetadata(root, identity)).toThrow("Uninventoried");
-  fs.unlinkSync(path.join(parent, "package.json"));
+  for (const relative of ["../package.json", "../../package.json"]) {
+    expect(result.files[relative], relative).toBeNull();
+    const file = path.resolve(root, relative);
+    writeJson(file, { version: "foreign" });
+    expect(() => readInstalledTerminalMetadata(root, identity), relative).toThrow("Uninventoried");
+    fs.unlinkSync(file);
+  }
   fs.appendFileSync(path.join(root, "dist/build-info.json"), " ");
   expect(() => readInstalledTerminalMetadata(root, identity)).toThrow();
   writeJson(path.join(root, "dist/build-info.json"), build);
