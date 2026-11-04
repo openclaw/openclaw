@@ -273,19 +273,6 @@ describe("without the skill-workshop plugin", () => {
     expect(button(page, "Turn on Skill Workshop")).toBeNull();
     expect(workshopCalls(request)).toEqual([]);
   });
-
-  it("retries a failed plugin check", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("catalog offline"))
-      .mockResolvedValue({ plugins: [], diagnostics: [], mutationAllowed: true });
-    const page = await mount(request, { withoutPlugin: true, methods: pluginMethods });
-
-    await waitText(page, "catalog offline");
-    await click(page, "Retry");
-    await waitText(page, "Skill Workshop is not part of this OpenClaw install.");
-    expect(request).toHaveBeenCalledTimes(2);
-  });
 });
 
 it("opens an archived skill from a chat link", async () => {

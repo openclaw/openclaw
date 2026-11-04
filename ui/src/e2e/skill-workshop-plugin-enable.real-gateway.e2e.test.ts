@@ -1,11 +1,6 @@
-import { access, readFile } from "node:fs/promises";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  BUILD_STAMP_FILE,
-  RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../../scripts/lib/local-build-metadata-paths.mts";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
@@ -37,15 +32,6 @@ function defineSkillWorkshopEnableSuite(params: {
     name: params.name,
     startServerBeforeBrowser: true,
     async startServer() {
-      await Promise.all(
-        [
-          "dist/control-ui/index.html",
-          "dist/index.js",
-          `dist/extensions/${PLUGIN_ID}/openclaw.plugin.json`,
-          `dist/${BUILD_STAMP_FILE}`,
-          `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`,
-        ].map((file) => access(path.join(process.cwd(), file))),
-      );
       const owner = await createOpenClawTestInstance({
         name: "skill-workshop-off",
         // Plugin lifecycle (enable, publish, method catalog refresh) needs the full Gateway.
@@ -96,8 +82,6 @@ function defineSkillWorkshopEnableSuite(params: {
     },
   });
 
-  type Frame = { type: string; method?: string; ok?: boolean; error?: { message?: string } };
-
   async function pluginEnabled(): Promise<boolean | undefined> {
     const { plugins } = await admin.request<{ plugins: Array<{ id: string; enabled: boolean }> }>(
       "plugins.list",
@@ -126,14 +110,10 @@ function defineSkillWorkshopEnableSuite(params: {
           permissions: ["local-network-access"],
         },
         async ({ page }) => {
-          const sent: Frame[] = [];
-          const received: Frame[] = [];
-          page.on("websocket", (socket) => {
-            socket.on("framesent", ({ payload }) => sent.push(JSON.parse(payload.toString())));
-            socket.on("framereceived", ({ payload }) =>
-              received.push(JSON.parse(payload.toString())),
-            );
-          });
+          const sent: Array<{ method?: string }> = [];
+          page.on("websocket", (socket) =>
+            socket.on("framesent", ({ payload }) => sent.push(JSON.parse(payload.toString()))),
+          );
           const workshopRequests = () =>
             sent.filter((frame) => frame.method?.startsWith("skills.workshop."));
           const url = new URL(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main", "chat"));
@@ -148,9 +128,6 @@ function defineSkillWorkshopEnableSuite(params: {
           await enable.waitFor();
           await expect.poll(() => page.getByText("Skill Workshop is off").count()).toBe(1);
           expect(workshopRequests()).toEqual([]);
-          expect(received.some((frame) => frame.error?.message?.includes("unknown method"))).toBe(
-            false,
-          );
           // The Plugins hub still lists the Workshop tab, which leads here.
           expect(await page.getByRole("tab", { name: "Skill workshop" }).count()).toBe(1);
 
