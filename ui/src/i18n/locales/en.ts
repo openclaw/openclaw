@@ -716,7 +716,7 @@ const startupEnglish = {
   },
   sessionsView: {
     pullRequestCount: "{count} pull requests",
-    mainSession: "Main Session",
+    mainSession: "Main session",
     subagentPrefix: "Subagent:",
     automationPrefix: "Automation:",
     actionRequiresConnection: "Connect to the Gateway to change sessions.",
