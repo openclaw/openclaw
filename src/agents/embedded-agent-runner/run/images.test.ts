@@ -54,6 +54,13 @@ function gifImage() {
     mimeType: "image/gif",
   };
 }
+// The shared sanitizer re-encodes within-limit GIFs to JPEG (#192426).
+const sanitizedGif = () =>
+  expect.objectContaining({
+    type: "image",
+    mimeType: "image/jpeg",
+    data: expect.stringMatching(/^\/9j\//),
+  });
 type ImageOptions = Parameters<typeof detectAndLoadPromptImages>[0];
 function loadImages(options: Omit<ImageOptions, "model"> & Partial<Pick<ImageOptions, "model">>) {
   return detectAndLoadPromptImages({ model: { input: ["text", "image"] }, ...options });
@@ -326,7 +333,7 @@ describe("detectAndLoadPromptImages", () => {
         suppressedFactIndexes: [0],
       },
     });
-    expect(result.images).toEqual([kept]);
+    expect(result.images).toEqual([sanitizedGif()]);
     expect(result.imageFactIndexes).toEqual([1]);
   });
 
@@ -358,7 +365,7 @@ describe("detectAndLoadPromptImages", () => {
       pathRef("./prompt-b.png"),
     ]);
     expect(result.loadedCount).toBe(2);
-    expect(result.images).toEqual([gifImage(), pngImage(), pngImage()]);
+    expect(result.images).toEqual([sanitizedGif(), pngImage(), pngImage()]);
   });
 
   it("preserves an empty described-image slot in mixed attachment order", async () => {
@@ -381,7 +388,7 @@ describe("detectAndLoadPromptImages", () => {
       imageOrder: ["offloaded", "inline", "offloaded"],
     });
 
-    expect(result.images).toEqual([inlineImage, gifImage()]);
+    expect(result.images).toEqual([inlineImage, sanitizedGif()]);
   });
 
   it("does not load an explicit prompt ref twice when the same fact owns it", async () => {
@@ -523,7 +530,7 @@ describe("hydratePromptMediaMessages", () => {
     const firstContent = (first?.[0] as unknown as { content?: unknown })?.content;
     const secondContent = (second?.[0] as unknown as { content?: unknown })?.content;
 
-    expect(firstContent).toEqual([{ type: "text", text: "compare" }, gifImage(), inlineImage]);
+    expect(firstContent).toEqual([{ type: "text", text: "compare" }, sanitizedGif(), inlineImage]);
     expect(secondContent).toEqual(firstContent);
     expect(message.content).toEqual([{ type: "text", text: "compare" }, inlineImage]);
   });
@@ -571,7 +578,7 @@ describe("hydratePromptMediaMessages", () => {
       expect((result[0] as unknown as { content?: unknown }).content).toEqual([
         { type: "text", text: "compare" },
         pngImage(),
-        inlineImage,
+        sanitizedGif(),
       ]);
     },
   );

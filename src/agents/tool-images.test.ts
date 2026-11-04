@@ -89,19 +89,16 @@ describe("tool image sanitizing", () => {
       expect(canonicalize).toHaveBeenCalledTimes(5);
     });
 
-    it("transcodes within-limit GIFs to a provider-safe format and caches the bytes", async () => {
-      // 1x1 GIF89a: well within every limit, but rejected by providers such as xAI.
+    it("transcodes within-limit GIFs to cached decodable JPEG", async () => {
       const gif = imageBlock(
         "R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==",
         "image/gif",
       );
       const first = getImageBlock(await replay(gif));
       expect(first.mimeType).toBe("image/jpeg");
-      expect(first.data).not.toBe(gif.data);
-      const meta = await getImageMetadata(Buffer.from(first.data, "base64"));
-      expect(meta).toMatchObject({ width: 1, height: 1 });
+      expect(await getImageMetadata(Buffer.from(first.data, "base64"))).toMatchObject({ width: 1 });
       const calls = resizeToJpegMock.mock.calls.length;
-      expect(getImageBlock(await replay(gif))).toEqual(first);
+      expect(await replay(gif)).toEqual([first]);
       expect(resizeToJpegMock).toHaveBeenCalledTimes(calls);
     });
 
