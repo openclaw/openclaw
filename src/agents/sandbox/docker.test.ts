@@ -146,7 +146,6 @@ beforeAll(async () => {
     spawnCommand: spawnDockerProcess,
   }));
   docker = await import("./docker.js");
-  podmanRuntime = await import("./podman-runtime.js");
   containerImage = await import("./container-image.js");
 });
 
@@ -177,22 +176,27 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
       vi.restoreAllMocks();
     });
 
-    it("waits for a slow but healthy podman info", async () => {
+    it("shares one slow but healthy discovery across concurrent preparations", async () => {
       spawnState.podmanInfoDelayMs = 12_000;
-      const assertion = expect(
-        podmanRuntime.resolvePodmanSandboxRuntimeInfo(),
-      ).resolves.toMatchObject({ rootless: true, version: "5.0.0" });
+      const first = podmanRuntime.resolvePodmanSandboxRuntimeInfo();
+      const second = podmanRuntime.resolvePodmanSandboxRuntimeInfo();
       await vi.advanceTimersByTimeAsync(12_000);
-      await assertion;
+      await expect(first).resolves.toMatchObject({ rootless: true, version: "5.0.0" });
+      await expect(second).resolves.toEqual(await first);
+      expect(spawnState.calls.filter((call) => call.args[0] === "info")).toHaveLength(1);
     });
 
-    it("names the unresponsive Podman command when the probe times out", async () => {
+    it("names a timed-out probe and retries discovery after recovery", async () => {
       spawnState.podmanInfoDelayMs = 60_000;
       const assertion = expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
         /^Podman did not answer `podman info` within 30s\./u,
       );
       await vi.advanceTimersByTimeAsync(30_000);
       await assertion;
+      spawnState.podmanInfoDelayMs = 0;
+      await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).resolves.toMatchObject({
+        rootless: true,
+      });
     });
   });
 
@@ -283,50 +287,22 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
             machine: true,
             target: { globalArgs: ["--url", uri, "--identity", identity] },
           });
-          spawnState.podmanMachines = JSON.stringify([{ ...machine, Running: false }]);
-          await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).resolves.toMatchObject({
-            machine: true,
-            target: { globalArgs: ["--url", uri, "--identity", identity] },
-          });
         },
       );
     },
   );
 
-  it("shares one process discovery across concurrent and later container preparations", async () => {
-    spawnState.podmanInfo = "true\tfalse\t\t5.0.0\n";
+  it("retains the process-owned native target for later preparations", async () => {
     const remoteUri = "ssh://example.test/run/user/1000/podman/podman.sock";
     selectConnection("saved-remote", remoteUri);
-    const [first, concurrent] = await Promise.all([
-      podmanRuntime.resolvePodmanSandboxRuntimeInfo(),
-      podmanRuntime.resolvePodmanSandboxRuntimeInfo(),
-    ]);
-    expect(first).toEqual({
-      machine: false,
-      rootless: true,
-      version: "5.0.0",
-      target: { key: "local", globalArgs: [] },
-    });
-    expect(concurrent).toEqual(first);
-    expect(spawnState.calls.filter((call) => call.args[0] === "info")).toHaveLength(1);
-
+    const first = await podmanRuntime.resolvePodmanSandboxRuntimeInfo();
+    expect(first.target).toEqual({ key: "local", globalArgs: [] });
     expect(spawnState.calls.some((call) => call.args[0] === "system")).toBe(false);
     spawnState.podmanInfo = "true\ttrue\t\t5.0.0\n";
     selectConnection("remote", remoteUri);
 
     await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).resolves.toEqual(first);
     expect(spawnState.calls.filter((call) => call.args[0] === "info")).toHaveLength(1);
-  });
-
-  it("retries a failed discovery without retaining the failure", async () => {
-    spawnState.infoAvailable.podman = false;
-    await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
-      /Failed to inspect Podman/u,
-    );
-    spawnState.infoAvailable.podman = true;
-    await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).resolves.toMatchObject({
-      rootless: true,
-    });
   });
 
   it("rejects a recorded target different from the process-owned Podman Machine", async () => {

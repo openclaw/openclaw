@@ -207,7 +207,6 @@ export function createSandboxContainerTestHarness() {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeAll(async () => {
-    vi.resetModules();
     // mock-isolation: keep container registration in the suite-owned registry fixture.
     vi.doMock("./registry.js", () => registryMocks);
     // mock-isolation: route runtime logging and exits to fixture spies.
