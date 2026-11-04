@@ -163,6 +163,7 @@ module.exports = {
       const workerInputs = new Set<Worker["stdin"]>();
       const onWorker = (worker: Worker) => workerInputs.add(worker.stdin);
       nodeProcess.on("worker", onWorker);
+      // oxlint-disable-next-line typescript/unbound-method -- Preserve each emitter receiver through emit.call below.
       const emit = EventEmitter.prototype.emit;
       const observe = vi.spyOn(EventEmitter.prototype, "emit").mockImplementation(function (
         this: EventEmitter,
@@ -181,6 +182,7 @@ module.exports = {
         }
         return emit.call(this, event, ...args);
       });
+      // oxlint-disable-next-line typescript/unbound-method -- Preserve each Worker receiver through postMessage.call below.
       const postMessage = Worker.prototype.postMessage;
       const launch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
         this: Worker,
