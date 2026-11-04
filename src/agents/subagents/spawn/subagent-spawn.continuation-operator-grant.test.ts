@@ -30,6 +30,7 @@ import {
   pairedOperator,
   persistDevices,
 } from "../../../gateway/operator-run-recovery.test-support.js";
+import type { GatewayLifecycleRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -72,6 +73,7 @@ vi.mock("../registry/subagent-registry-persistence.js", { spy: true });
 const OWNER = "agent:main:main";
 const OTHER = "agent:main:other";
 const INTERRUPTED_NOTICE = "[continuation:delegate-spawn-interrupted]";
+const CHILD_RESULT = "the crane is folded";
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 const persistRegistryRows = vi.fn<MockSubagentRegistryRows>();
 let stateDir = "";
@@ -108,6 +110,22 @@ function gatewayInstance(config: OpenClawConfig) {
       throw new Error("unexpected child wait");
     },
   });
+  const unexpected = async (): Promise<never> => {
+    throw new Error("unexpected Gateway lifecycle call");
+  };
+  // Each child finishes its task at once; the registry returns its result to the requester.
+  context.lifecycleRuntime = {
+    waitForAgent: async <T>() =>
+      ({
+        status: "ok",
+        startedAt: Date.now(),
+        endedAt: Date.now(),
+        terminalReply: { disposition: "visible", text: CHILD_RESULT },
+      }) as T,
+    dispatchAgent: unexpected,
+    dispatchSessionMethod: unexpected,
+    sendNotice: unexpected,
+  } satisfies GatewayLifecycleRuntime;
   return { context, launches };
 }
 
@@ -183,6 +201,23 @@ async function settledDelegate(recordId: string) {
       const [record] = await listContinuationRecords({ recordIds: [recordId] });
       expect(record?.status).toMatch(/^(succeeded|failed|cancelled)$/);
       return expectDefined(record, "settled delegate record");
+    },
+    { timeout: 10_000, interval: 20 },
+  );
+}
+
+/** The children's results delivered back to the owner session, once each settles. */
+async function expectReturnsToOwner(count: number) {
+  await vi.waitFor(
+    async () => {
+      const deliveries = await loadPendingSessionDeliveries(captureContinuationQueueContext());
+      const returns = deliveries.filter(
+        (entry) =>
+          entry.sessionKey === OWNER &&
+          entry.kind === "systemEvent" &&
+          entry.text.includes(CHILD_RESULT),
+      );
+      expect(returns).toHaveLength(count);
     },
     { timeout: 10_000, interval: 20 },
   );
@@ -275,6 +310,7 @@ describe("continuation delegate dispatch under the elector's bounded grant", () 
       requesterSessionKey: OWNER,
       childSessionKey: gateway.launches[0]!.sessionKey,
     });
+    await expectReturnsToOwner(1);
     expect(await delegateRecords(OWNER)).toHaveLength(1);
     expect(await interruptedNotices()).toEqual([]);
     expect(peekSystemEvents(OWNER).filter((text) => text.includes("DELEGATE spawn"))).toEqual([]);
@@ -312,8 +348,9 @@ describe("continuation delegate dispatch under the elector's bounded grant", () 
       { agentId: "main", sessionKey: OTHER },
       { sessionId: "other-session", updatedAt: Date.now() },
     );
+    const copiedId = newContinuationRecordId();
     const copied = await createContinuationRecord({
-      recordId: newContinuationRecordId(),
+      recordId: copiedId,
       kind: "delegate",
       ownerSessionKey: OTHER,
       status: "queued",
@@ -324,7 +361,7 @@ describe("continuation delegate dispatch under the elector's bounded grant", () 
     expect(copied.outcome).toBe("created");
     await operator.dispatch(OTHER);
 
-    await expectRefused(gateway, copied.record!.recordId, /belongs to another session/);
+    await expectRefused(gateway, copiedId, /belongs to another session/);
   });
 
   it("refuses an expired grant even while the electing connection is open", async () => {
@@ -366,6 +403,7 @@ describe("continuation delegate dispatch under the elector's bounded grant", () 
     expect(before.launches).toEqual([]);
     expect(after.launches).toHaveLength(1);
     expectChildUnderElector(after.launches[0], operator.profileId);
+    await expectReturnsToOwner(1);
     expect(await interruptedNotices()).toEqual([]);
   });
 
@@ -381,6 +419,7 @@ describe("continuation delegate dispatch under the elector's bounded grant", () 
     expect(gateway.launches).toHaveLength(2);
     expect(gateway.launches[0]!.client.internal?.operatorRunAuthority).toBeUndefined();
     expectChildUnderElector(gateway.launches[1], operator.profileId);
+    await expectReturnsToOwner(2);
     expect(await interruptedNotices()).toEqual([]);
   });
 });
