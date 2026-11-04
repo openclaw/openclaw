@@ -10,6 +10,7 @@ import {
   resolveModelCostConfigFingerprint,
 } from "../utils/usage-format.js";
 import { configFor as modelConfig, modelDefinition } from "./model-auth.fixtures.test-support.js";
+import { MODELS_JSON_STATE } from "./models-config-state.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -241,7 +242,40 @@ it("refreshes prices only for the published agent", async ({ home }) => {
   expect(resolveModelCostConfigFingerprint(config, secondDir)).toBe(secondFingerprint);
 });
 
-it("maintains private cached models in the configured default agent dir", async ({ home }) => {
+it("publishes live catalog refreshes without retaining their configurations", async ({
+  agentDir,
+}) => {
+  const options = {
+    pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+    onProviderCatalogOutcome: vi.fn(),
+  };
+  for (const generation of [1, 2, 3]) {
+    const baseUrl = `https://fixture.invalid/v${generation}`;
+    const contents = catalog({ fixture: cachedProvider(baseUrl) });
+    planCatalog("fixture", contents);
+
+    const result = await ensureOpenClawModelsJson(
+      modelConfig("fixture", baseUrl),
+      agentDir,
+      options,
+    );
+
+    expect(result.publishedSource).toEqual({
+      modelsJsonContents: emptyModelsJson,
+      pluginCatalogs: [{ pluginId: "fixture", contents }],
+    });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "fixture", contents },
+    ]);
+  }
+  expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(3);
+  expect(await fs.readFile(path.join(agentDir, "models.json"), "utf8")).toBe(emptyModelsJson);
+  expect(MODELS_JSON_STATE.readyCache.size).toBe(0);
+});
+
+it("reuses alternating configurations while keeping cached models private and current", async ({
+  home,
+}) => {
   const contents = catalog({});
   planCatalog("fixture", contents);
   let modeAfterWrite: number | undefined;
@@ -278,8 +312,9 @@ it("maintains private cached models in the configured default agent dir", async 
   if (process.platform !== "win32") {
     await fs.chmod(modelsPath, 0o644);
   }
+  await ensureOpenClawModelsJson({ ...cfg, models: { mode: "merge" } });
   expect(await ensureOpenClawModelsJson(cfg)).toEqual({});
-  expect(planOpenClawModelsJsonMock).toHaveBeenCalledOnce();
+  expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
   expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
   expect(await fs.readFile(modelsPath, "utf8")).toBe(emptyModelsJson);
   await expectPrivate(modelsPath);
@@ -287,6 +322,7 @@ it("maintains private cached models in the configured default agent dir", async 
   const externalMtime = new Date(Date.now() + 2000);
   await fs.utimes(modelsPath, externalMtime, externalMtime);
   await ensureOpenClawModelsJson(cfg);
+  expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(3);
   expect(await fs.readFile(modelsPath, "utf8")).toBe(emptyModelsJson);
 });
 
