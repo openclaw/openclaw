@@ -12,7 +12,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
@@ -114,11 +114,7 @@ const suite = createControlUiE2eSuite({
       });
       realGateway = await gatewayStartup;
       // Post-ready cron hydration invalidates catalogs separately from sidecar startup.
-      await withTestTimeout(
-        cronBindingsLoaded.promise,
-        10_000,
-        "Initial cron binding publication did not arrive",
-      );
+      await withinTest(cronBindingsLoaded.promise, signal);
       signal.throwIfAborted();
     },
     async close() {
