@@ -27,6 +27,10 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import {
+  captureGatewayRootWorkAdmissionContinuationScope,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import {
   clearSecretsRuntimeSnapshot,
@@ -207,98 +211,116 @@ function captureConfigWriteListener(ref: ConfigWriteListenerRef) {
 }
 
 describe("managed gateway reload context", () => {
-  it("starts replacement channels with the current Gateway owner after a writer settles", async () => {
-    // Scheduler jobs retain the writer context even when the fake clock wakes elsewhere.
-    const time = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(time.clock);
-    const initialConfig: OpenClawConfig = {
-      channels: { telegram: { accounts: { default: { name: "Before" } } } },
-    };
-    const nextConfig: OpenClawConfig = {
-      channels: { telegram: { accounts: { default: { name: "After" } } } },
-    };
-    const plugin: ChannelPlugin = {
-      ...createChannelTestPluginBase({ id: "telegram" }),
-      reload: { configPrefixes: ["channels.telegram"] },
-    };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", plugin, source: "test" }]));
-    const writerContext = new AsyncLocalStorage<string>();
-    const previousGateway = new LegacyPluginSdkResourceHost();
-    const currentGateway = new LegacyPluginSdkResourceHost();
-    const writerWork = new AsyncWorkScope();
-    const writeListenerRef: ConfigWriteListenerRef = { current: null };
-    const channelContexts: Array<
-      [string | undefined, LegacyPluginSdkResourceHost, AbortSignal | undefined]
-    > = [];
-    const logReloadError = vi.fn<(message: string) => void>();
-    const startChannel = vi.fn(async () => {
-      const host = getLegacyPluginSdkResourceHost();
-      channelContexts.push([writerContext.getStore(), host, getAsyncWorkSignal()]);
-      return host.invoke(() => new Map());
-    });
-    const startupWork = new AsyncWorkScope();
-    let reloader: ReturnType<typeof StartManagedGatewayConfigReloader> | undefined;
-    try {
-      // Production lazily imports this module inside the first Gateway's SDK host.
-      // Keep that module instance when the replacement Gateway takes ownership.
-      const { startManagedGatewayConfigReloader: startReloader } = await previousGateway.run(
-        () => import("./server-reload-managed.js"),
+  it.each([false, true])(
+    "starts replacement channels with the current Gateway owner (awaiting RPC: %s)",
+    async (awaitingRpc) => {
+      // Scheduler jobs retain the writer context even when the fake clock wakes elsewhere.
+      const time = createGatewaySchedulerClock();
+      const scheduler = createTestGatewayScheduler(time.clock);
+      const initialConfig: OpenClawConfig = {
+        channels: { telegram: { accounts: { default: { name: "Before" } } } },
+      };
+      const nextConfig: OpenClawConfig = {
+        channels: { telegram: { accounts: { default: { name: "After" } } } },
+      };
+      const plugin: ChannelPlugin = {
+        ...createChannelTestPluginBase({ id: "telegram" }),
+        reload: { configPrefixes: ["channels.telegram"] },
+      };
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "telegram", plugin, source: "test" }]),
       );
-      await previousGateway.close();
-      reloader = currentGateway.run(() =>
-        startupWork.run(() =>
-          startManagedGatewayConfigReloader(startReloader, {
-            scheduler,
-            initialConfig,
-            readSnapshot: async () => createValidConfigSnapshot(nextConfig, "profile-change"),
-            subscribeToWrites: captureConfigWriteListener(writeListenerRef),
-            startChannel,
-            logReload: { info: vi.fn(), warn: vi.fn(), error: logReloadError },
-          }),
-        ),
-      );
-      await reloader.ready;
-      await startupWork.drain();
-      const application = createRuntimeConfigWriteApplication();
-      const listener = writeListenerRef.current;
-      if (!listener) {
-        throw new Error("Expected managed config write listener");
+      const writerContext = new AsyncLocalStorage<string>();
+      const previousGateway = new LegacyPluginSdkResourceHost();
+      const currentGateway = new LegacyPluginSdkResourceHost();
+      const writerWork = new AsyncWorkScope();
+      const writeListenerRef: ConfigWriteListenerRef = { current: null };
+      const channelContexts: Array<
+        [string | undefined, LegacyPluginSdkResourceHost, AbortSignal | undefined]
+      > = [];
+      const logReloadError = vi.fn<(message: string) => void>();
+      const startChannel = vi.fn(async () => {
+        const host = getLegacyPluginSdkResourceHost();
+        channelContexts.push([writerContext.getStore(), host, getAsyncWorkSignal()]);
+        return host.invoke(() => new Map());
+      });
+      const startupWork = new AsyncWorkScope();
+      let reloader: ReturnType<typeof StartManagedGatewayConfigReloader> | undefined;
+      const request = awaitingRpc ? tryBeginGatewayRootWorkAdmission() : null;
+      if (awaitingRpc && !request) {
+        throw new Error("Expected request admission");
       }
-      writerContext.run("channel-turn", () =>
-        writerWork.run(() => {
-          listener(
-            attachRuntimeConfigWriteApplication(
-              createConfigWriteNotification(
-                nextConfig,
-                "profile-change",
-                1,
-                "runtime-profile-change",
-                "source-profile-change",
-              ),
-              application,
-            ),
-          );
-        }),
-      );
-      await writerWork.drain();
-      expect(startChannel).not.toHaveBeenCalled();
-      await time.advanceBy(0);
-
-      const status = await application.result;
-      expect(startChannel).toHaveBeenCalled();
-      for (const [writer, host, signal] of channelContexts) {
-        expect(writer).toBeUndefined();
-        expect(host === currentGateway, "reload must use the current Gateway SDK host").toBe(true);
-        expect(signal).toBeUndefined();
-      }
-      expect(status, logReloadError.mock.calls.flat().join("\n")).toBe("applied");
-    } finally {
       try {
-        await reloader?.stop();
-        await scheduler.stop();
+        // Production lazily imports this module inside the first Gateway's SDK host.
+        // Keep that module instance when the replacement Gateway takes ownership.
+        const { startManagedGatewayConfigReloader: startReloader } = await previousGateway.run(
+          () => import("./server-reload-managed.js"),
+        );
+        await previousGateway.close();
+        reloader = currentGateway.run(() =>
+          startupWork.run(() =>
+            startManagedGatewayConfigReloader(startReloader, {
+              scheduler,
+              initialConfig,
+              readSnapshot: async () => createValidConfigSnapshot(nextConfig, "profile-change"),
+              subscribeToWrites: captureConfigWriteListener(writeListenerRef),
+              startChannel,
+              logReload: { info: vi.fn(), warn: vi.fn(), error: logReloadError },
+            }),
+          ),
+        );
+        await reloader.ready;
+        await startupWork.drain();
+        const application = request
+          ? await request.run(async () =>
+              createRuntimeConfigWriteApplication(
+                captureGatewayRootWorkAdmissionContinuationScope()?.run,
+              ),
+            )
+          : createRuntimeConfigWriteApplication();
+        const listener = writeListenerRef.current;
+        if (!listener) {
+          throw new Error("Expected managed config write listener");
+        }
+        writerContext.run("channel-turn", () =>
+          writerWork.run(() => {
+            listener(
+              attachRuntimeConfigWriteApplication(
+                createConfigWriteNotification(
+                  nextConfig,
+                  "profile-change",
+                  1,
+                  "runtime-profile-change",
+                  "source-profile-change",
+                ),
+                application,
+              ),
+            );
+          }),
+        );
+        await writerWork.drain();
+        expect(startChannel).not.toHaveBeenCalled();
+        await time.advanceBy(0);
+
+        const status = await application.result;
+        expect(startChannel).toHaveBeenCalled();
+        for (const [writer, host, signal] of channelContexts) {
+          expect(writer).toBeUndefined();
+          expect(host === currentGateway, "reload must use the current Gateway SDK host").toBe(
+            true,
+          );
+          expect(signal).toBeUndefined();
+        }
+        expect(status, logReloadError.mock.calls.flat().join("\n")).toBe("applied");
       } finally {
-        await Promise.all([previousGateway.close(), currentGateway.close()]);
+        request?.release();
+        try {
+          await reloader?.stop();
+          await scheduler.stop();
+        } finally {
+          await Promise.all([previousGateway.close(), currentGateway.close()]);
+        }
       }
-    }
-  });
+    },
+  );
 });

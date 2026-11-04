@@ -52,7 +52,11 @@ type GatewayWorkAdmissionState = {
 };
 
 const admissionLog = createSubsystemLogger("gateway/admission");
-const reloadWaitingRoots = new AsyncLocalStorage<ReadonlySet<GatewayRootWorkAdmission>>();
+// Lazy reload chunks must share the carrier just as they share root admission.
+const reloadWaitingRoots = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayReloadWaitingRoots"),
+  () => new AsyncLocalStorage<ReadonlySet<GatewayRootWorkAdmission>>(),
+);
 
 /** This root awaits the same reload transaction; retain admission while excluding its wait. */
 export function runWithGatewayReloadWaitingRoot<T>(run: () => T): T {
