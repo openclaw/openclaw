@@ -3,29 +3,24 @@ import { stripAnsi, visibleWidth } from "./ansi.js";
 import { noteToStream, resolveNoteColumns, wrapNoteMessage } from "./note.js";
 
 describe("wrapNoteMessage", () => {
-  it.each([["Unicode paragraph separator", "\u2029"]])(
-    "preserves note text across %s line endings",
-    (_label, separator) => {
-      const input = ["First paragraph.", "", "- Second paragraph."].join(separator);
-      const writes: string[] = [];
-      const output = {
-        columns: 80,
-        write(chunk: string) {
-          writes.push(chunk);
-          return true;
-        },
-      } as unknown as NodeJS.WriteStream;
+  it("preserves note text across Unicode paragraph separator line endings", () => {
+    const input = ["First paragraph.", "", "- Second paragraph."].join("\u2029");
+    const writes: string[] = [];
+    const output = {
+      columns: 80,
+      write(chunk: string) {
+        writes.push(chunk);
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
 
-      noteToStream(input, "Note", output);
+    noteToStream(input, "Note", output);
 
-      const rendered = stripAnsi(writes.join(""));
-      expect(rendered).toContain("First paragraph.");
-      expect(rendered).toContain("- Second paragraph.");
-      expect(wrapNoteMessage(input, { columns: 80 })).toBe(
-        "First paragraph.\n\n- Second paragraph.",
-      );
-    },
-  );
+    const rendered = stripAnsi(writes.join(""));
+    expect(rendered).toContain("First paragraph.");
+    expect(rendered).toContain("- Second paragraph.");
+    expect(wrapNoteMessage(input, { columns: 80 })).toBe("First paragraph.\n\n- Second paragraph.");
+  });
 
   it("preserves long file-like underscore tokens for copy safety", () => {
     const input =
