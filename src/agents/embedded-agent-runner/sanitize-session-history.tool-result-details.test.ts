@@ -7,6 +7,7 @@ import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixture
 import { sanitizeSessionHistory } from "./replay-history.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
+  // mock-isolation: Replay sanitization precedes provider-specific behavior.
   resolveProviderRuntimePlugin: () => undefined,
   sanitizeProviderReplayHistoryWithPluginAsync: () => undefined,
   validateProviderReplayTurnsWithPlugin: () => undefined,
@@ -79,7 +80,6 @@ describe("sanitizeSessionHistory", () => {
       } satisfies ToolResultMessage<{ raw: string }>,
       makeUserMessage("continue", 3),
     ];
-
     const sanitized = await replay(messages);
     const found = sanitized.find((m) => m && typeof m === "object" && m.role === "toolResult");
     expect(found).toMatchObject({ role: "toolResult", toolCallId: "call1", toolName: "web_fetch" });
