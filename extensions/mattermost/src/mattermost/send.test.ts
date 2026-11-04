@@ -27,7 +27,6 @@ const mockState = vi.hoisted(() => ({
   fetchMattermostUser: vi.fn(),
   fetchMattermostUserTeams: vi.fn(),
   fetchMattermostUserByUsername: vi.fn(),
-  normalizeMattermostBaseUrl: vi.fn((input: string | undefined) => input?.trim() ?? ""),
   uploadMattermostFile: vi.fn<typeof Client.uploadMattermostFile>(),
 }));
 
@@ -48,9 +47,8 @@ vi.mock("./accounts.js", async (importOriginal) => ({
   resolveMattermostAccount: mockState.resolveMattermostAccount,
 }));
 
-vi.mock("./client.js", async () => ({
-  parseMattermostApiStatus: (await vi.importActual<typeof import("./client.js")>("./client.js"))
-    .parseMattermostApiStatus,
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
   createMattermostClient: mockState.createMattermostClient,
   createMattermostDirectChannelWithRetry: mockState.createMattermostDirectChannelWithRetry,
   createMattermostPost: mockState.createMattermostPost,
@@ -59,15 +57,11 @@ vi.mock("./client.js", async () => ({
   fetchMattermostUser: mockState.fetchMattermostUser,
   fetchMattermostUserTeams: mockState.fetchMattermostUserTeams,
   fetchMattermostUserByUsername: mockState.fetchMattermostUserByUsername,
-  normalizeMattermostBaseUrl: mockState.normalizeMattermostBaseUrl,
   uploadMattermostFile: mockState.uploadMattermostFile,
 }));
 
-beforeAll(async () => {
-  ({ sendMessageMattermost } = await import("./send.js"));
-});
+beforeAll(async () => ({ sendMessageMattermost } = await import("./send.js")));
 
-const normalizeBaseUrl = mockState.normalizeMattermostBaseUrl.getMockImplementation()!;
 let defaultAccountSequence = 0;
 
 beforeEach(() => {
@@ -81,7 +75,6 @@ beforeEach(() => {
       },
     }),
   );
-  mockState.normalizeMattermostBaseUrl.mockImplementation(normalizeBaseUrl);
   mockState.currentConfig.mockReturnValue({});
   mockState.resolveMattermostAccount.mockReturnValue(
     makeAccount("mattermost-cache-" + defaultAccountSequence++),
@@ -140,11 +133,15 @@ describe("sendMessageMattermost", () => {
     );
     mockState.recordActivity.mockImplementation(() => {
       events.push("activity");
-      if (stage === "activity") throw failure;
+      if (stage === "activity") {
+        throw failure;
+      }
     });
     let posted = 0;
     mockState.createMattermostPost.mockImplementation(async () => {
-      if (stage === "post" && posted === 1) throw failure;
+      if (stage === "post" && posted === 1) {
+        throw failure;
+      }
       return { id: `post-${++posted}`, message: "provider-final" };
     });
     const caption = "first part\nsecond part\nthird part";
@@ -154,7 +151,9 @@ describe("sendMessageMattermost", () => {
       replyToId: "root-post",
       onDeliveryResult,
     }).catch((error: unknown) => error);
-    if (!isChannelPartialDeliveryError(result)) throw new Error("expected partial delivery");
+    if (!isChannelPartialDeliveryError(result)) {
+      throw new Error("expected partial delivery");
+    }
     const ids = stage === "post" ? ["post-1"] : ["post-1", "post-2", "post-3"];
     expect(result.cause).toBe(failure);
     expect(result.deliveryResult).toMatchObject({
