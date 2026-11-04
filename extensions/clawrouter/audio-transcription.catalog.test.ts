@@ -49,7 +49,9 @@ describe("ClawRouter catalog-scoped multipart transcription", () => {
     async (override) => {
       await fixture(async ({ cfg, filePath, catalogRequests, requests }) => {
         const provider = cfg.models!.providers!.clawrouter!;
-        if (override === "header") provider.headers = { "x-api-key": "fixture-foreign" };
+        if (override === "header") {
+          provider.headers = { "x-api-key": "fixture-foreign" };
+        }
         if (override === "request header") {
           provider.request!.headers = { "content-type": "audio/wav" };
         }
@@ -144,7 +146,7 @@ describe("ClawRouter catalog-scoped multipart transcription", () => {
       expect(requests).toHaveLength(1);
       const file = requests[0]!.form.get("file") as File;
       expect(file.name).toBe("voice.aac");
-      expect(file.type).toBe("audio/aac");
+      expect(requests[0]!.body.toString("latin1")).toMatch(/content-type: audio\/aac\r\n/i);
       expect(Buffer.from(await file.arrayBuffer())).toEqual(audio);
     });
   });
@@ -152,33 +154,39 @@ describe("ClawRouter catalog-scoped multipart transcription", () => {
   it.each(["missing key", "language", "prompt", "file bytes", "upload format"])(
     "rejects SenseAudio %s before discovery or upload without borrowing the native key",
     async (invalid) => {
-      await fixture(async ({ cfg, filePath, catalog, requests, catalogRequests, audio }) => {
-        Object.assign(catalog, senseaudioOffer);
-        cfg.tools!.media!.models![0]!.model = `senseaudio/${senseaudioModel}`;
-        if (invalid === "missing key") delete cfg.models!.providers!.clawrouter!.apiKey;
-        if (invalid === "file bytes") {
-          cfg.tools!.media!.models![0]!.maxBytes = 12_000_000;
-          await fs.writeFile(
-            filePath,
-            Buffer.concat([audio, Buffer.alloc(10_000_001 - audio.length)]),
-          );
-        }
-        if (invalid === "upload format") {
-          const nextPath = filePath.replace(/\.wav$/, ".webm");
-          await fs.rename(filePath, nextPath);
-          filePath = nextPath;
-        }
-        await expect(
-          transcribeAudioFile({
-            cfg,
-            filePath,
-            language: invalid === "language" ? "en-US" : undefined,
-            prompt: invalid === "prompt" ? "x".repeat(16385) : undefined,
-          }),
-        ).rejects.toThrow(/API key|credential|ISO-639|10000000|MIME/i);
-        expect(catalogRequests).toHaveLength(0);
-        expect(requests).toHaveLength(0);
-      });
+      await fixture(
+        async ({ cfg, filePath: initialFilePath, catalog, requests, catalogRequests, audio }) => {
+          let filePath = initialFilePath;
+          Object.assign(catalog, senseaudioOffer);
+          cfg.tools!.media!.models![0]!.model = `senseaudio/${senseaudioModel}`;
+          if (invalid === "missing key") {
+            delete cfg.models!.providers!.clawrouter!.apiKey;
+          }
+          if (invalid === "file bytes") {
+            cfg.tools!.media!.models![0]!.maxBytes = 12_000_000;
+            await fs.writeFile(
+              filePath,
+              Buffer.concat([audio, Buffer.alloc(10_000_001 - audio.length)]),
+            );
+          }
+          if (invalid === "upload format") {
+            const nextPath = filePath.replace(/\.wav$/, ".webm");
+            await fs.rename(filePath, nextPath);
+            filePath = nextPath;
+          }
+          await expect(
+            transcribeAudioFile({
+              cfg,
+              filePath,
+              mime: invalid === "upload format" ? "audio/webm" : undefined,
+              language: invalid === "language" ? "en-US" : undefined,
+              prompt: invalid === "prompt" ? "x".repeat(16385) : undefined,
+            }),
+          ).rejects.toThrow(/API key|credential|ISO-639|10000000|MIME/i);
+          expect(catalogRequests).toHaveLength(0);
+          expect(requests).toHaveLength(0);
+        },
+      );
     },
   );
 });
