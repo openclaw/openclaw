@@ -4,6 +4,7 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveAmbientOwnerAgentId,
 } from "../../agents/agent-scope.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveStateDir } from "../../config/state-dir.js";
@@ -17,13 +18,17 @@ import { getPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { hasChannelMessageActionHandler } from "./channel-action-support.js";
 
 function resolveSendCapableRegistry(
   registry: PluginRegistry | null | undefined,
   channel: string,
+  action?: ChannelMessageActionName,
 ): PluginRegistry | undefined {
   const entry = registry?.channels?.find((candidate) => candidate?.plugin?.id === channel);
-  return registry && (entry?.plugin?.outbound?.sendText ?? entry?.plugin?.message?.send?.text)
+  return registry &&
+    (hasChannelMessageActionHandler(entry?.plugin, action) ||
+      (entry?.plugin?.outbound?.sendText ?? entry?.plugin?.message?.send?.text))
     ? registry
     : undefined;
 }
@@ -32,6 +37,7 @@ type OutboundChannelBootstrapParams = {
   channel: string;
   cfg?: OpenClawConfig;
   agentId?: string;
+  action?: ChannelMessageActionName;
 };
 
 type OutboundChannelBootstrapPlan =
@@ -40,6 +46,7 @@ type OutboundChannelBootstrapPlan =
       kind: "cold";
       cfg: OpenClawConfig;
       agentId: string | undefined;
+      action?: ChannelMessageActionName;
     };
 
 function resolveBootstrapPlan(
@@ -55,7 +62,11 @@ function resolveBootstrapPlan(
     (entry) => entry?.plugin?.id === params.channel,
   );
   const activeRegistry = scopedEntry ? scopedRegistry : getActivePluginRegistry();
-  const activeSendRegistry = resolveSendCapableRegistry(activeRegistry, params.channel);
+  const activeSendRegistry = resolveSendCapableRegistry(
+    activeRegistry,
+    params.channel,
+    params.action,
+  );
   if (activeSendRegistry) {
     return { kind: "resolved", registry: activeSendRegistry };
   }
@@ -67,7 +78,7 @@ function resolveBootstrapPlan(
   // delivery recovery runs this path — and bootstrap with global-scope
   // plugin discovery only.
   const agentId = tryResolveAmbientOwnerAgentId(cfg, params.agentId);
-  return { kind: "cold", cfg, agentId };
+  return { kind: "cold", cfg, agentId, action: params.action };
 }
 
 function loadBootstrapPlan(
@@ -106,7 +117,7 @@ function loadBootstrapPlan(
         allowGatewaySubagentBinding: true,
       },
     });
-    sendRegistry = resolveSendCapableRegistry(registry, channel);
+    sendRegistry = resolveSendCapableRegistry(registry, channel, plan.action);
   } catch {
     // Best-effort bootstrap; the caller reports the unavailable channel.
   }
