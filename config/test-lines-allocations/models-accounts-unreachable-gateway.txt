@@ -1,2 +1,0 @@
-# Report an unreachable Gateway from models accounts with the shared transport guidance.
-26

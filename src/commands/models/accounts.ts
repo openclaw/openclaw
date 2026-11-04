@@ -453,7 +453,6 @@ async function withModelsAccountsGateway<T>(
     maxProtocol: PROTOCOL_VERSION,
     notifyOnStartupRetry: true,
     onHelloOk: () => ready.resolve(),
-    // Raw socket failures (ECONNREFUSED and friends) get the shared start-the-Gateway guidance.
     onConnectError: (error) =>
       fail(
         isGatewayUnreachableSocketError(error)
