@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Page } from "playwright/test";
 import { it } from "vitest";
+import { registerGitHubConnectionsEnglish } from "../i18n/locales/en-github-connections.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -143,13 +144,12 @@ suite.define(() => {
           const coauthorPreference = await coauthor.isChecked();
           await expect(github).toContainText("@personal-octocat");
           const personalConnection = github.locator('[data-github-connection="personal"]');
+          const manageLabel = registerGitHubConnectionsEnglish.catalog.githubConnections.manage;
           await expect(
-            personalConnection.getByRole("button", { name: "Manage connections", exact: true }),
+            personalConnection.getByRole("button", { name: manageLabel, exact: true }),
           ).toBeEnabled();
           await expect(github.getByRole("button", { name: "Verify", exact: true })).toBeEnabled();
-          await personalConnection
-            .getByRole("button", { name: "Manage connections", exact: true })
-            .click();
+          await personalConnection.getByRole("button", { name: manageLabel, exact: true }).click();
           const setup = personalConnection.locator("[data-github-setup]");
           await expect(setup).toBeVisible();
           await expect(setup).toContainText("Access required");
