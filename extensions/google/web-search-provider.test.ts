@@ -227,7 +227,7 @@ describe("google web search provider", () => {
   });
 
   it.each([0, 1])("honors the current Gemini cache TTL of %s minutes", async (cacheTtlMinutes) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000_000);
     let content = "Original grounded answer";
     const mockFetch = vi.fn(
       async () =>

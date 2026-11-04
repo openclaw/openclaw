@@ -42,7 +42,7 @@ describe("minimax web search provider", () => {
   });
 
   it.each([0, 1])("applies current TTL of %i minutes to cached results", async (ttl) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_700_000_000_000);
     const fetchMock = vi.spyOn(globalThis, "fetch");
     for (const result of ["initial", "fresh", "uncached"]) {
       fetchMock.mockResolvedValueOnce(

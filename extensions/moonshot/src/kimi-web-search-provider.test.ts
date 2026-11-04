@@ -180,7 +180,7 @@ it("sets up the API region without prompting for or adding a model", async () =>
 });
 
 it.each([0, 1])("honors the current Kimi cache TTL of %s minutes", async (cacheTtlMinutes) => {
-  const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+  const now = vi.spyOn(performance, "now").mockReturnValue(1_000_000);
   let snippet = "Original";
   fetchMock.mockImplementation(async () => searchResponse([{ snippet }]));
   const original = await executeKimiSearch(15);

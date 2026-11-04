@@ -142,8 +142,8 @@ describe("Firecrawl search cache", () => {
   });
 
   it("honors a shorter reader TTL and does not extend the replacement entry's expiry", async () => {
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const query = "shorter cache TTL";
     await search(query, 15);
     for (const [elapsed, ttl, content, calls, cached] of [
