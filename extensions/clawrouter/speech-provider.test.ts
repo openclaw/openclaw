@@ -930,10 +930,18 @@ describe("ClawRouter native Azure SSML speech", () => {
         },
         (res) => {
           res.setHeader("content-type", failure === "mime" ? "audio/ogg" : "audio/mpeg");
-          if (failure === "partial") res.statusCode = 206;
-          if (failure === "range") res.setHeader("content-range", "bytes 0-15/100");
-          if (failure === "encoding") res.setHeader("content-encoding", "gzip");
-          if (failure === "oversized") res.setHeader("content-length", 16 * 1024 * 1024 + 1);
+          if (failure === "partial") {
+            res.statusCode = 206;
+          }
+          if (failure === "range") {
+            res.setHeader("content-range", "bytes 0-15/100");
+          }
+          if (failure === "encoding") {
+            res.setHeader("content-encoding", "gzip");
+          }
+          if (failure === "oversized") {
+            res.setHeader("content-length", 16 * 1024 * 1024 + 1);
+          }
           if (failure === "truncated") {
             res.setHeader("content-length", AZURE_MP3.length + 1);
             res.setHeader("connection", "close");
