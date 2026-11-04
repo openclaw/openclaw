@@ -29,6 +29,7 @@ import {
   resolveChangedTestTargetPlan,
   UI_E2E_VITEST_CONFIG,
 } from "../test-projects.test-support.mts";
+import { routeBoatNodeTestJobs } from "./ci-node-test-capacity.mts";
 import { getChangedPathFacts, isTestOnlyPath } from "./changed-path-facts.mjs";
 import {
   createChangedExtensionConfigShards,
@@ -995,6 +996,10 @@ export function createChangedNodeTestShards(
       selectedTestTargets?: readonly string[];
     } = {},
 ): ChangedNodeTestShard[] | null {
+  if (options.runnerBackend === "boat") {
+    const jobs = createChangedNodeTestShards(changedPaths, { ...options, runnerBackend: "hybrid" });
+    return jobs && routeBoatNodeTestJobs(jobs);
+  }
   const cwd = options.cwd ?? process.cwd();
   const fallback = (reason: string) => {
     options.onFallback?.(reason);

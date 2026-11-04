@@ -1,4 +1,4 @@
-import type { CompactNodeTestShard } from "./ci-node-test-plan.mts";
+import type { CompactNodeTestShard, NodeTestShard } from "./ci-node-test-plan.mts";
 
 export const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 export const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
@@ -104,4 +104,29 @@ export function resolveSelectedNodeTestRunner(
     })
     ? "blacksmith-16vcpu-ubuntu-2404"
     : job.runner;
+}
+
+const BOAT_NODE_TEST_CAPACITY: Record<string, { runner: string; cpuBudget: number }> = {
+  "blacksmith-4vcpu-ubuntu-2404": { runner: "boat", cpuBudget: 2 },
+  "blacksmith-8vcpu-ubuntu-2404": { runner: "boat", cpuBudget: 2 },
+  "blacksmith-16vcpu-ubuntu-2404": { runner: "boat-large", cpuBudget: 4 },
+  "blacksmith-32vcpu-ubuntu-2404": { runner: "boat-xlarge", cpuBudget: 8 },
+};
+
+export function resolveBoatNodeTestCapacity(runner: string, checkName?: string) {
+  // These rows already receive the 16-class physical runner in the workflow.
+  const promotedRunner =
+    runner === DEFAULT_NODE_TEST_RUNNER &&
+    (checkName === "checks-node-compact-large-9" || checkName === "checks-node-compact-large-5")
+      ? "blacksmith-16vcpu-ubuntu-2404"
+      : runner;
+  return BOAT_NODE_TEST_CAPACITY[promotedRunner];
+}
+
+// Map only final jobs: group runners remain logical placement/timing identities.
+export function routeBoatNodeTestJobs<T extends NodeTestShard>(jobs: T[]): T[] {
+  return jobs.map((job) => {
+    const capacity = resolveBoatNodeTestCapacity(job.runner, job.checkName);
+    return capacity ? { ...job, ...capacity } : job;
+  });
 }

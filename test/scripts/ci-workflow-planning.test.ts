@@ -444,6 +444,8 @@ function readFrozenAdditionalCheckRows(): Array<{
 function runRunnerProfileFixture(options: {
   authorAssociation?: string;
   configuredProfile?: string;
+  author?: string;
+  starter?: string;
   eventName: "pull_request" | "push" | "workflow_dispatch";
   headRepository?: string;
   repository?: string;
@@ -466,6 +468,7 @@ function runRunnerProfileFixture(options: {
       ].join("\n"),
       "utf8",
     );
+    writeFileSync(path.join(root, "qualification-pr.json"), JSON.stringify({ author: options.author ?? "vincentkoc" }));
     const outputPath = path.join(root, "profile.out");
     writeFileSync(outputPath, "", "utf8");
     const step = requiredWorkflowStep(
@@ -479,6 +482,10 @@ function runRunnerProfileFixture(options: {
         AUTHOR_ASSOCIATION: options.authorAssociation ?? "",
         CONFIGURED_RUNNER_PROFILE: options.configuredProfile ?? "",
         GITHUB_EVENT_NAME: options.eventName,
+        GITHUB_ACTOR: options.starter ?? "vincentkoc",
+        GITHUB_TRIGGERING_ACTOR: options.starter ?? "vincentkoc",
+        SOURCE_AUTHOR: options.author ?? "vincentkoc",
+        RUNNER_TEMP: root,
         GITHUB_OUTPUT: outputPath,
         GITHUB_REPOSITORY: options.repository ?? "openclaw/openclaw",
         HEAD_REPOSITORY: options.headRepository ?? options.repository ?? "openclaw/openclaw",
@@ -5503,137 +5510,128 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it("qualifies only the first-attempt Boat build and keeps sibling routing and caches", () => {
-    const fixture = {
-      configuredProfile: "hybrid",
-      eventName: "workflow_dispatch" as const,
-      requestedProfile: "boat" as const,
+  it.each([
+    { author: "vincentkoc", starter: "vincentkoc", admitted: true },
+    { author: "contributor", starter: "vincentkoc", admitted: false },
+    { author: "vincentkoc", starter: "contributor", admitted: false },
+    { author: "vincentkoc", starter: "vincentkoc", runAttempt: 2, admitted: false },
+    { author: "vincentkoc", starter: "vincentkoc", headRepository: "fork/openclaw", admitted: false },
+    { author: "", starter: "vincentkoc", eventName: "workflow_dispatch" as const, admitted: false },
+  ])("admits the Boat backend only for the trusted author and starter: %j", (scenario) => {
+    const result = runRunnerProfileFixture({
+      configuredProfile: "boat",
+      eventName: "pull_request",
       targetSupportsContract: true,
-    };
-    expect(runRunnerProfileFixture(fixture).status).not.toBe(0);
-    const admitted = runRunnerProfileFixture({ ...fixture, qualificationDispatch: true });
-    expect(admitted.status, admitted.output).toBe(0);
-    expect(admitted.outputs).toMatchObject({
-      runner_profile: "hybrid",
-      node_runner_backend: "hybrid",
-      qualification_runner_backend: "hybrid",
-      boat_build_qualification: "true",
+      ...scenario,
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs).toMatchObject({
+      runner_profile: scenario.admitted ? "hybrid" : "github",
+      node_runner_backend: scenario.admitted ? "boat" : "github",
+      effective_runner_backend: scenario.admitted ? "boat" : "github",
+    });
+  });
+
+  it("routes general Boat jobs and retained retries without pilot exceptions", () => {
+    const admitted = runRunnerProfileFixture({
+      configuredProfile: "boat",
+      eventName: "pull_request",
+      targetSupportsContract: true,
     });
     const workflow = readCiWorkflow();
     const context = {
-      eventName: "workflow_dispatch" as const,
+      eventName: "pull_request" as const,
       repository: "openclaw/openclaw",
-      runnerBackend: "hybrid" as const,
+      headRepository: "openclaw/openclaw",
+      runnerBackend: "boat" as const,
       runAttempt: 1,
       runnerEnvironment: "self-hosted" as const,
-      matrix: { runner: "blacksmith-8vcpu-ubuntu-2404", check_name: "fixture", task: "build-play" },
       preflightOutputs: admitted.outputs,
     };
-    for (const name of Object.keys(workflow.jobs)) {
-      const job = workflow.jobs[name];
-      if (
-        !String(job.needs).includes("preflight") ||
-        typeof job["runs-on"] !== "string" ||
-        !job["runs-on"].startsWith("${{")
-      ) {
-        continue;
-      }
-      const control = {
-        ...context,
-        preflightOutputs: { ...admitted.outputs, boat_build_qualification: "false" },
-      };
-      expect(evaluateWorkflowExpression(job["runs-on"], context), name).toEqual(
-        name === "build-artifacts"
-          ? "boat-xlarge"
-          : evaluateWorkflowExpression(job["runs-on"], control),
+    const nodeJob = workflow.jobs["checks-node-core-test-nondist-shard"];
+    expect(evaluateWorkflowExpression(nodeJob.strategy["max-parallel"], context)).toBe(130);
+    expect(
+      evaluateWorkflowExpression(nodeJob.strategy["max-parallel"], { ...context, runAttempt: 2 }),
+    ).toBe(96);
+    for (const [runner, cpu_budget] of [
+      ["boat", 2],
+      ["boat-large", 4],
+      ["boat-xlarge", 8],
+    ] as const) {
+      const job = workflow.jobs["checks-node-core-test-nondist-shard"];
+      const row = { ...context, matrix: { runner, cpu_budget, plan_concurrency: 1 } };
+      expect(evaluateWorkflowExpression(job["runs-on"], row)).toBe(runner);
+      expect(evaluateWorkflowExpression(job["runs-on"], { ...row, runAttempt: 2 })).toBe(
+        "ubuntu-24.04",
       );
-      for (const step of job.steps ?? []) {
-        if (step.with?.["dependency-cache"] === undefined) {
-          continue;
+      const resources = requiredWorkflowStep(job.steps, "Configure Node test resources");
+      expect(evaluateWorkflowExpression(resources.env.OPENCLAW_NODE_TEST_CPU_BUDGET, row)).toBe(
+        cpu_budget,
+      );
+      expect(
+        evaluateWorkflowExpression(resources.env.OPENCLAW_NODE_TEST_CPU_BUDGET, {
+          ...row,
+          runAttempt: 2,
+        }),
+      ).toBe("");
+      const cache = requiredWorkflowStep(job.steps, "Setup Node environment").with["dependency-cache"];
+      expect(evaluateWorkflowExpression(cache, row)).toBe("false");
+    }
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      for (const step of (job as { steps?: WorkflowStep[] }).steps ?? []) {
+        const cache = step.with?.["dependency-cache"];
+        if (typeof cache === "string" && cache.startsWith("${{")) {
+          expect(evaluateWorkflowExpression(cache, { ...context, job: name }), name).toBe("false");
         }
-        expect(
-          evaluateWorkflowExpression(step.with["dependency-cache"], { ...context, job: name }),
-          name,
-        ).toBe(
-          name === "build-artifacts"
-            ? "false"
-            : evaluateWorkflowExpression(step.with["dependency-cache"], { ...control, job: name }),
-        );
       }
     }
-    const retry = runRunnerProfileFixture({
-      ...fixture,
-      qualificationDispatch: true,
-      runAttempt: 2,
-    });
-    expect(retry.status, retry.output).toBe(0);
-    expect(retry.outputs.boat_build_qualification).toBe("false");
+    expect(evaluateWorkflowExpression(workflow.jobs["build-artifacts"]["runs-on"], context)).toBe(
+      "boat-large",
+    );
     expect(
-      evaluateWorkflowExpression(workflow.jobs["build-artifacts"]["runs-on"], {
-        ...context,
-        runAttempt: 2,
-      }),
-    ).toBe("ubuntu-24.04");
-    expect(
-      runRunnerProfileFixture({
-        ...fixture,
-        configuredProfile: "boat",
-        requestedProfile: "default",
-      }).status,
-    ).not.toBe(0);
+      evaluateWorkflowExpression(workflow.jobs["build-artifacts"]["timeout-minutes"], context),
+    ).toBe(35);
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    for (const [job, expected] of [
+      ["dependencies", ["linux-hosted", "macos"]],
+      ["warm", ["linux-hosted"]],
+    ] as const) {
+      expect(evaluateWorkflowExpression(warmer.jobs[job].strategy.matrix.platform, context)).toEqual(
+        expected,
+      );
+    }
   });
 
-  it("qualifies one bounded Boat Node row and keeps retained-output retries hosted", () => {
-    const admitted = runRunnerProfileFixture({
-      configuredProfile: "hybrid",
-      eventName: "workflow_dispatch",
-      requestedProfile: "boat",
-      ciShape: "main",
-      qualificationDispatch: true,
-      targetSupportsContract: true,
+  it.each([2, 4, 8])("applies the %s CPU budget through self-hosted worker scheduling", (budget) => {
+    const step = requiredWorkflowStep(
+      readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps,
+      "Configure Node test resources",
+    );
+    const root = tempDirs.make("node-resource-budget-");
+    const bin = path.join(root, "bin");
+    mkdirSync(bin);
+    writeExecutable(path.join(bin, "nproc"), ["#!/bin/sh", "echo 16"]);
+    const output = path.join(root, "env");
+    writeFileSync(output, "");
+    const result = runWorkflowShellScript(step.run, {
+      env: {
+        ...process.env,
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        GITHUB_ENV: output,
+        CI: "true",
+        RUNNER_ENVIRONMENT: "self-hosted",
+        FROZEN_TARGET: "false",
+        RUNSON_JOB: "false",
+        SHARD_PLAN_CONCURRENCY: "1",
+        PREDICTED_TEST_SECONDS: "",
+        OPENCLAW_NODE_TEST_CPU_BUDGET: String(budget),
+      },
     });
-    expect(admitted.status, admitted.output).toBe(0);
-    const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
-    const cache = requiredWorkflowStep(job.steps, "Setup Node environment").with[
-      "dependency-cache"
-    ];
-    const matrix = {
-      check_name: "checks-node-compact-large-4",
-      runner: "blacksmith-8vcpu-ubuntu-2404",
-      plan_concurrency: 1,
-      test_runtime_policy: "node",
-    };
-    const context = {
-      eventName: "workflow_dispatch" as const,
-      repository: "openclaw/openclaw",
-      runnerBackend: "hybrid" as const,
-      runnerEnvironment: "self-hosted" as const,
-      runAttempt: 1,
-      matrix,
-      preflightOutputs: admitted.outputs,
-    };
-    expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe("boat-xlarge");
-    expect(evaluateWorkflowExpression(cache, context)).toBe("false");
-    expect(evaluateWorkflowExpression(job["timeout-minutes"], context)).toBe(60);
-    // Failed-job-only retries retain the successful first-attempt preflight outputs.
-    const retry = { ...context, runAttempt: 2 };
-    expect(evaluateWorkflowExpression(job["runs-on"], retry)).toBe("ubuntu-24.04");
-    expect(evaluateWorkflowExpression(cache, retry)).toBe("false");
-    for (const override of [
-      { preflightOutputs: { ...admitted.outputs, boat_build_qualification: "false" } },
-      { preflightOutputs: { ...admitted.outputs, ci_shape: "default" } },
-      { matrix: { ...matrix, check_name: "checks-node-compact-large-3" } },
-      { matrix: { ...matrix, plan_concurrency: 2 } },
-      { matrix: { ...matrix, pretest_build_mode: "private-qa" } },
-      { matrix: { ...matrix, test_runtime_policy: "bun-all" } },
-    ]) {
-      const control = { ...context, ...override };
-      expect(evaluateWorkflowExpression(job["runs-on"], control)).toBe(matrix.runner);
-      expect(evaluateWorkflowExpression(cache, control)).toBe("true");
-    }
-    const larger = { ...context, matrix: { ...matrix, runner: "blacksmith-32vcpu-ubuntu-2404" } };
-    expect(evaluateWorkflowExpression(job["runs-on"], larger)).toBe(larger.matrix.runner);
-    expect(evaluateWorkflowExpression(cache, larger)).toBe("true");
+    expect(result.status, result.stderr).toBe(0);
+    const env = readWorkflowOutputs(output);
+    expect(env.OPENCLAW_NODE_TEST_CPU_BUDGET).toBe(String(budget));
+    expect(Number(env.OPENCLAW_VITEST_MAX_WORKERS)).toBeGreaterThan(0);
+    expect(Number(env.OPENCLAW_VITEST_MAX_WORKERS)).toBeLessThanOrEqual(budget);
   });
 
   it.each([1, 2])("keeps Boat artifact consumers and build budget on attempt %s", (runAttempt) => {
@@ -6258,9 +6256,10 @@ describe("ci workflow guards", () => {
         );
       }
     }
-    expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
-      "${{ (needs.preflight.outputs.boat_build_qualification == 'true' || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))) && 35 || 20 }}",
-    );
+    expect(evaluateWorkflow(workflow.jobs["build-artifacts"]["timeout-minutes"], {
+      runnerBackend: "hybrid", runAttempt: 2,
+    })).toBe(35);
+
     // PR events validate the artifact build on hosted runners (landing gate
     // stays satisfiable during Blacksmith outages); Testbox leases are
     // dispatch-only, mirroring ci-check-testbox.yml.

@@ -137,7 +137,7 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     resolveTargetOutputs?: Record<string, string>;
     validationTier?: "full" | "main";
     repository: string;
-    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
+    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson" | "boat";
     requestedRunnerBackend?: "default" | "hybrid" | "runson" | "boat";
     ciShape?: "default" | "main";
     inputs?: Record<string, unknown>;
@@ -286,6 +286,7 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
           frozen_target: String(context.frozenTarget ?? false),
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
           run_check: String(context.runCheck ?? true),
+          effective_runner_backend: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
           runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
           // Preflight defaults the Node planner backend to the logical profile.
           node_runner_backend: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",

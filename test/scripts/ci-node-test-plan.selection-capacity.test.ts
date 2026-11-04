@@ -1,8 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
+import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { routeBoatNodeTestJobs } from "../../scripts/lib/ci-node-test-capacity.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
+  type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 
 it("retains canonical capacity and exact scope for a compact selection", () => {
@@ -51,3 +54,52 @@ it("retains canonical capacity and exact scope for a compact selection", () => {
     }
   }
 });
+
+it("maps final Boat plans without changing hybrid groups, packing, or timings", () => {
+  const targets = [
+    "src/gateway/mcp-app-extension-runtime.test.ts",
+    "src/agents/cli-runner.helpers.test.ts",
+  ];
+  const expectedCapacity: Record<string, [string, number]> = {
+    "blacksmith-4vcpu-ubuntu-2404": ["boat", 2],
+    "blacksmith-8vcpu-ubuntu-2404": ["boat", 2],
+    "blacksmith-16vcpu-ubuntu-2404": ["boat-large", 4],
+    "blacksmith-32vcpu-ubuntu-2404": ["boat-xlarge", 8],
+  };
+  const expectedJob = (job: NodeTestShard) => {
+    const capacity = expectedCapacity[job.runner];
+    const promoted =
+      job.runner === "blacksmith-8vcpu-ubuntu-2404" &&
+      ["checks-node-compact-large-9", "checks-node-compact-large-5"].includes(job.checkName);
+    return promoted
+      ? { ...job, runner: "boat-large", cpuBudget: 4 }
+      : capacity
+        ? { ...job, runner: capacity[0], cpuBudget: capacity[1] }
+        : job;
+  };
+  for (const compactMode of [undefined, "pull-request", "push"] as const) {
+    const options = { compactMode, includeProofTests: false, includeReleaseOnlyPluginShards: false };
+    const hybrid = createNodeTestShardBundles({ ...options, runnerBackend: "hybrid" });
+    const boat = createNodeTestShardBundles({ ...options, runnerBackend: "boat" });
+    expect(boat).toEqual(hybrid.map(expectedJob));
+  }
+  for (const plan of [createSelectedNodeTestShardBundles, createChangedNodeTestShards]) {
+    const hybrid = expectDefined(plan(targets, { runnerBackend: "hybrid" }), "hybrid selection");
+    const boat = expectDefined(plan(targets, { runnerBackend: "boat" }), "Boat selection");
+    expect(boat).toEqual(hybrid.map(expectedJob));
+  }
+});
+
+it.each(["checks-node-compact-large-9", "checks-node-compact-large-5"])(
+  "retains the existing 4-CPU physical promotion for %s",
+  (checkName) => {
+    const job = {
+      checkName,
+      shardName: checkName,
+      requiresDist: false,
+      runner: "blacksmith-8vcpu-ubuntu-2404",
+      configs: ["test/vitest/vitest.unit-fast.config.ts"],
+    };
+    expect(routeBoatNodeTestJobs([job])).toEqual([{ ...job, runner: "boat-large", cpuBudget: 4 }]);
+  },
+);
