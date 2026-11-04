@@ -344,6 +344,7 @@ it("enforces a physical archive budget without ordinary host SQLite calls", asyn
   );
   const retained = { sessionKey: "agent:main:guard-retained", storePath: fixture.storePath };
   replaceSessionEntrySync(retained, { sessionId: "guard-retained", updatedAt: 1 });
+  await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
   const database = openOpenClawAgentDatabase(fixture.options);
   database.walMaintenance.checkpoint();
   database.db.exec("PRAGMA incremental_vacuum;");

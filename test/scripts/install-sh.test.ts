@@ -33,7 +33,7 @@ import {
   createInstallGitTagPreferenceFixtureScript,
 } from "./install-git-fixtures.js";
 import { writeNpmInstallRetryFixture, writeNpmLifecycleFixture } from "./install-npm-fixtures.js";
-import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
+import { findDarwinReexecBash, runStreamedInstallerHelp } from "./install-reexec-fixtures.js";
 import {
   defineInstallerNpmConfigContract,
   defineInstallerNpmArchiveIdentityContract,
@@ -103,20 +103,7 @@ describe("install.sh", () => {
       return;
     }
     const tmp = tempDirs.make("openclaw-install-reexec-");
-    const result = spawnSync(bash, ["-s", "--", "--help"], {
-      input: script,
-      encoding: "utf8",
-      timeout: 10_000,
-      env: {
-        ...process.env,
-        HOME: tmp,
-        TMPDIR: tmp,
-        BASH_ENV: "",
-        ENV: "",
-        OPENCLAW_INSTALL_SH_NO_RUN: "0",
-        OPENCLAW_INSTALL_CLI_SH_NO_RUN: "0",
-      },
-    });
+    const result = runStreamedInstallerHelp(bash, script, tmp);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("OpenClaw installer (macOS + Linux)");
     expect(result.stderr).not.toContain("Run this installer with /bin/bash");
@@ -3378,6 +3365,36 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     );
     expect(result.stdout).not.toContain("brew:link");
     expect(result.stdout).not.toContain("ensure-called");
+  });
+
+  it("reports a stale Homebrew node without PATH advice", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=macos
+      stale_prefix="$(mktemp -d "$HOME/stale-node.XXXXXX")/node"
+      mkdir -p "$stale_prefix/bin"
+      printf '#!/bin/sh\\necho v26.10.0\\n' > "$stale_prefix/bin/node"
+      chmod +x "$stale_prefix/bin/node"
+      brew() {
+        if [[ "$1" == "--prefix" ]]; then
+          echo "$stale_prefix"
+          return 0
+        fi
+        return 0
+      }
+      node_binary_is_supported() { return 1; }
+      if ensure_macos_default_node_active; then
+        echo "ensure returned success"
+      else
+        echo "ensure returned failure"
+      fi
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("ensure returned failure");
+    expect(result.stdout).toContain("brew update && brew upgrade node");
+    expect(`${result.stdout}${result.stderr}`).toContain("v26.10.0 does not meet");
   });
 
   it("does not print PATH advice when Homebrew node is missing at runtime", () => {

@@ -39,6 +39,7 @@ import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerEnvironmentAbandonment } from "./provider-lifecycle.types.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 import { requireWorkerProfile } from "./service-validation.js";
 import type {
@@ -562,6 +563,21 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     readPreparedPoolSummary: preparedPool.summary,
     readReadyWorkerTarget: preparedPool.target,
     readRuntimeRefresh: providerLifecycle.readRuntimeRefresh,
+    resumeNode: providerLifecycle.resumeNode,
+    ensureRetainedRunning: providerLifecycle.ensureRetainedRunning,
+    suspendRetained: providerLifecycle.suspendRetained,
+    inspectTurnLease: (params: Parameters<typeof providerLifecycle.inspectTurnLease>[0]) => {
+      const signal = params.signal ? AbortSignal.any([scope.signal, params.signal]) : scope.signal;
+      const operation = trackOperation(
+        withLock(params.environmentId, async () => {
+          signal.throwIfAborted();
+          await store.ready();
+          await providerLifecycle.inspectTurnLease({ ...params, signal });
+        }),
+      );
+      // A cancelled waiter cannot detach accepted cleanup from the service lifetime.
+      return racePromiseWithAbortSignal(operation, signal);
+    },
     supportsProviderExecutionMode: providerSupportsExecutionMode,
     supportsExecutionMode: (profileId: string, mode: WorkerExecutionMode) => {
       const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
@@ -611,6 +627,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           !record ||
           record.ownerEpoch !== ownerEpoch ||
           record.state !== "attached" ||
+          !isWorkerRetainedWindowOpen(record, now()) ||
           record.destroyRequestedAtMs !== null ||
           !record.leaseId
         ) {
@@ -625,7 +642,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       const result = await trackOperation(
         provider.runSetupCommand(
-          { leaseId, profile: requireWorkerProfile(record.profileSnapshot.settings) },
+          {
+            leaseId,
+            profile: requireWorkerProfile(record.profileSnapshot.settings),
+            ...(record.resourceReceipt ? { resourceReceipt: record.resourceReceipt } : {}),
+            ...(record.retention ? { retention: record.retention.policy } : {}),
+          },
           { ...command, signal, assertCurrent },
         ),
       );

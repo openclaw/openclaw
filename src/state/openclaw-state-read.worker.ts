@@ -13,8 +13,10 @@ import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import { ownedWorkerBytes } from "../infra/worker-transfer-bytes.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   openOpenClawStateReadConnection,
@@ -31,6 +33,8 @@ import type {
   OpenClawStateReadResult,
 } from "./openclaw-state-read.types.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+
+const log = createSubsystemLogger("sqlite/transaction");
 
 const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
   message,
@@ -50,6 +54,10 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       input.command.type === "agentDatabaseRegistry.read"
         ? await import("./openclaw-agent-db-registry.read.js")
         : undefined;
+    const deletionSnapshotReader =
+      input.command.type === "agentDatabaseDeletion.snapshot"
+        ? await import("./agent-deletion-journal.snapshot.worker.js")
+        : undefined;
     const manifestReader =
       input.command.type === "localWorkspace.manifest"
         ? await import("../gateway/worker-environments/local-workspace-manifest-scan.js")
@@ -68,7 +76,8 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       input.command.type === "plugins.metadata.read" ||
       input.command.type === "gatewayOwnerLease.read" ||
       input.command.type === "localWorkspace.manifest" ||
-      input.command.type === "agentDatabaseRegistry.read";
+      input.command.type === "agentDatabaseRegistry.read" ||
+      input.command.type === "agentDatabaseDeletion.snapshot";
     const prepared = dedicatedRead ? undefined : stateReadRegistry.prepare(input.command.type);
     if (prepared) {
       return prepared.then(() => read(input, channel, control));
@@ -131,7 +140,9 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       const locationArgs = [
         input.databasePath,
         input.location,
-        undefined,
+        command.type === "updateRuns.recoveryAdmission"
+          ? openDoctorStateSchemaReadAdmission
+          : undefined,
         input.expectedIdentity,
         input.snapshotRoot,
         true,
@@ -194,6 +205,25 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
           quarantineStorePath,
         );
         return { ok: true, sourceAdmitted: true, ...result };
+      }
+      if (command.type === "agentDatabaseDeletion.snapshot") {
+        if (!deletionSnapshotReader) {
+          throw new Error("Agent database deletion snapshot reader is unavailable");
+        }
+        const snapshot = withOpenClawStateReadOnlyLocation(
+          ({ db }) => {
+            sourceAdmitted = true;
+            return deletionSnapshotReader.readAgentDatabaseDeletionWorkerSnapshot(
+              db,
+              input.databasePath,
+              command.purpose,
+            );
+          },
+          ...locationArgs,
+          undefined,
+          quarantineStorePath,
+        );
+        return { ok: true, type: command.type, sourceAdmitted: true, snapshot };
       }
       if (command.type === "agentDatabaseRegistry.read") {
         if (!registryReader) {
@@ -271,8 +301,11 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
     };
     const selection = input.context.databaseEngineSelection ?? getDatabaseEngineSelection();
     const execute = () =>
-      withSqliteReaderOwner({ operation: input.command.type, ownerKind: "worker" }, () =>
-        runWithSqliteWorkerStateContext(input.context, executeRead),
+      withSqliteReaderOwner(
+        { operation: input.command.type, ownerKind: "worker" },
+        () => runWithSqliteWorkerStateContext(input.context, executeRead),
+        undefined,
+        log,
       );
     const run = () =>
       input.postgresSnapshot

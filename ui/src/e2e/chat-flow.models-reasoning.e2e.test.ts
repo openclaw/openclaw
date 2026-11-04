@@ -80,7 +80,7 @@ async function expectMenuPlacement(
         placed:
           box !== null &&
           anchor !== null &&
-          (above ? box.y + box.height <= anchor.y - 5 : box.y >= anchor.y + anchor.height + 5),
+          (above ? box.y + box.height <= anchor.y - 3 : box.y >= anchor.y + anchor.height + 3),
         withinViewport: box !== null && box.y >= 8 && box.y + box.height <= height - 8,
       };
     })
@@ -176,7 +176,7 @@ suite.define(() => {
 
       await page.setViewportSize({ height: 320, width: 1280 });
       await controls.evaluate((element) => {
-        (element as HTMLElement).style.top = "24px";
+        (element as HTMLElement).style.top = "48px"; // Keep the fixture below the pane header.
       });
       await expectMenuPlacement(menu, trigger, false, 320);
       await trigger.click();

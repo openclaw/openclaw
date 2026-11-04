@@ -19,10 +19,30 @@ it(
   { timeout: 240_000 },
   async () => {
     let responses = 0;
+    let backgroundRequested = false;
+    let phase = "ordinary";
+    let compacted = false;
+    let backgroundReleased = false;
+    let accepted = false;
+    let captureFailure: (() => Promise<void>) | undefined;
+    const releaseBackground = Promise.withResolvers<void>();
     const dispatch = async ({ body }: { body: Record<string, unknown> }) => {
       const ordinal = ++responses;
       const stream = new MockResponseStream(`resp_anchor_${ordinal}`);
-      stream.message({ id: `msg_anchor_${ordinal}`, text: MARKER, phase: "final_answer" });
+      if (ordinal === 11) {
+        // The normal review has now admitted its source anchor and reached the model.
+        backgroundRequested = true;
+        await releaseBackground.promise;
+        stream.tool({
+          type: "function_call",
+          id: "fc_anchor_review",
+          call_id: "call_anchor_review",
+          name: "skill_workshop",
+          arguments: JSON.stringify({ action: "list" }),
+        });
+      } else {
+        stream.message({ id: `msg_anchor_${ordinal}`, text: MARKER, phase: "final_answer" });
+      }
       return {
         events: stream.complete(8),
         model: typeof body.model === "string" ? body.model : "",
@@ -70,6 +90,7 @@ it(
           forcedRuntime: "openclaw",
           runtimeSelection: "configured",
           controlUiEnabled: false,
+          enabledPluginIds: ["skill-workshop"],
           runtimeEnvPatch: {
             HTTP_PROXY: "http://127.0.0.1:9",
             HTTPS_PROXY: "http://127.0.0.1:9",
@@ -79,7 +100,16 @@ it(
           mutateConfig: (config) => ({
             ...config,
             logging: { ...config.logging, level: "debug", consoleLevel: "debug" },
-            skills: { workshop: { autonomous: { mode: "auto", channelNotices: false } } },
+            plugins: {
+              ...config.plugins,
+              entries: {
+                ...config.plugins?.entries,
+                "skill-workshop": {
+                  enabled: true,
+                  config: { autonomous: { mode: "auto", channelNotices: false } },
+                },
+              },
+            },
             tools: { profile: "full", allow: ["skill_workshop"] },
             agents: {
               ...config.agents,
@@ -132,62 +162,164 @@ it(
         const fingerprint = createHash("sha256")
           .update(JSON.stringify(["qa", history.sessionId, history.sessionInfo.activeLeafEntryId]))
           .digest("hex");
-        const mark = gateway.markLogs();
+        const logDir = path.join(gateway.workspaceDir, "logs");
+        const readRecords = async () =>
+          (
+            await Promise.all(
+              (await fs.readdir(logDir)).map((file) =>
+                fs.readFile(path.join(logDir, file), "utf8"),
+              ),
+            )
+          ).flatMap((text) =>
+            text
+              .split("\n")
+              .slice(0, -1)
+              .map(
+                (line) =>
+                  JSON.parse(line) as {
+                    _meta?: { logLevelName?: string };
+                    [key: string]: unknown;
+                  },
+              ),
+          );
+        const findCancellation = (records: Awaited<ReturnType<typeof readRecords>>) =>
+          records.find((record) =>
+            Object.values(record).some(
+              (value) =>
+                typeof value === "string" &&
+                value.includes("skill experience review cancelled:") &&
+                value.includes(`source=${fingerprint}`),
+            ),
+          );
+        captureFailure = async () => {
+          const records = await readRecords();
+          const messages = records
+            .flatMap(Object.values)
+            .filter((value) => typeof value === "string");
+          const cancellations = messages.filter((value) =>
+            value.includes("skill experience review cancelled:"),
+          );
+          console.log(
+            "WORKSHOP_ANCHOR_DIAGNOSTIC " +
+              JSON.stringify({
+                phase,
+                modelResponses: responses,
+                compacted,
+                backgroundReleased,
+                parsedLogCount: records.length,
+                logLevels: Object.fromEntries(
+                  ["DEBUG", "INFO", "WARN", "ERROR"].map((level) => [
+                    level,
+                    records.filter((record) => record._meta?.logLevelName === level).length,
+                  ]),
+                ),
+                cancellationCount: cancellations.length,
+                matchingCancellationCount: cancellations.filter((value) =>
+                  value.includes(`source=${fingerprint}`),
+                ).length,
+                fingerprintInAnyRecord: messages.some((value) =>
+                  value.includes(`source=${fingerprint}`),
+                ),
+                failureWarningCount: messages.filter((value) =>
+                  value.includes("skill experience review failed:"),
+                ).length,
+                failureDiagnostics: [
+                  ...new Set(
+                    messages
+                      .filter((value) => value.includes("skill experience review failed:"))
+                      .map((value) =>
+                        value
+                          .slice(
+                            value.indexOf("skill experience review failed:") +
+                              "skill experience review failed:".length,
+                          )
+                          .replace(/\s+source=[a-f0-9]{64}\s*$/i, "")
+                          .replaceAll(sessionKey, "<session>")
+                          .replaceAll(history.sessionId, "<session>")
+                          .replaceAll(history.sessionInfo.activeLeafEntryId, "<entry>")
+                          .replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, "<id>")
+                          .replace(/https?:\/\/[^\s"'<>]+/gi, "<url>")
+                          .replace(/(?:[A-Z]:\\|\/)[^\s"'<>]*/gi, "<path>")
+                          .replace(/\s+/g, " ")
+                          .trim()
+                          .slice(0, 400),
+                      ),
+                  ),
+                ].slice(0, 4),
+                fenceReasons: [
+                  "unavailable",
+                  "agentId",
+                  "sessionId",
+                  "sessionKey",
+                  "generation",
+                  "entryId",
+                  "rawSeq",
+                  "effectiveParentId",
+                  "activeMessagePosition",
+                  "storePath",
+                ].filter((field) =>
+                  messages.some((value) =>
+                    value.includes(`Completed-turn transcript anchor changed (${field})`),
+                  ),
+                ),
+                genericUserAbort: messages.some((value) =>
+                  value.includes("Skill experience review was stopped by the user."),
+                ),
+                missingInput: messages.some((value) => value.includes("no longer holds the input")),
+                runtimeAbort: messages.some((value) =>
+                  value.includes("Session fork model run aborted."),
+                ),
+                changedDuringContextRead: messages.some((value) =>
+                  value.includes("Session transcript changed during context read"),
+                ),
+                forkAuthorityChanged: messages.some((value) =>
+                  value.includes("Session fork authority changed"),
+                ),
+              }),
+          );
+        };
+        await expect.poll(() => backgroundRequested, { timeout: 65_000, interval: 200 }).toBe(true);
+        phase = "background-admitted";
         const compact = (await gateway.call("sessions.compact", {
           key: sessionKey,
           maxLines: 1,
         })) as { compacted: boolean };
         expect(compact.compacted).toBe(true);
+        compacted = compact.compacted;
+        phase = "compacted";
+        releaseBackground.resolve();
+        backgroundReleased = true;
+        phase = "poll";
+        // The plugin runtime logger owns the structured file sink, not Gateway console output.
         await expect
-          .poll(() => gateway.readLogsSince(mark).includes("skill experience review cancelled:"), {
+          .poll(async () => Boolean(findCancellation(await readRecords())), {
             timeout: 65_000,
             interval: 200,
           })
           .toBe(true);
-        const logs = gateway.readLogsSince(mark);
-        const diagnostic = logs
-          .split("\n")
-          .find((line) => line.includes("skill experience review cancelled:"));
+        const records = await readRecords();
+        const cancellation = findCancellation(records);
+        const diagnostic = Object.values(cancellation ?? {}).find(
+          (value): value is string =>
+            typeof value === "string" && value.includes("skill experience review cancelled:"),
+        );
         expect(diagnostic).toContain("Completed-turn transcript anchor changed (");
         expect(diagnostic).toContain(`source=${fingerprint}`);
         expect(diagnostic).not.toContain(sessionKey);
         expect(diagnostic).not.toContain(history.sessionId);
-        expect(logs).not.toContain("skill experience review failed:");
-        const logDir = path.join(gateway.workspaceDir, "logs");
-        const records = (
-          await Promise.all(
-            (await fs.readdir(logDir)).map((file) => fs.readFile(path.join(logDir, file), "utf8")),
-          )
-        ).flatMap((text) =>
-          text
-            .trim()
-            .split("\n")
-            .map(
-              (line) =>
-                JSON.parse(line) as {
-                  _meta?: { logLevelName?: string };
-                  [key: string]: unknown;
-                },
-            ),
-        );
-        const cancellation = records.find((record) =>
-          Object.values(record).some(
-            (value) =>
-              typeof value === "string" &&
-              value.includes("skill experience review cancelled:") &&
-              value.includes(`source=${fingerprint}`),
-          ),
-        );
+        expect(JSON.stringify(records)).not.toContain("skill experience review failed:");
         expect(cancellation?._meta?.logLevelName).toBe("DEBUG");
         const mismatch = /Completed-turn transcript anchor changed \((\w+)\)/.exec(
           diagnostic ?? "",
         )?.[1];
+        phase = "continuation";
         await turn();
         console.log(
           "WORKSHOP_ANCHOR_PROOF " +
             JSON.stringify({
               foregroundTurnsCompleted: 11,
               rewriteCompacted: compact.compacted,
+              backgroundReviewReachedProvider: backgroundRequested,
               mismatch,
               sourceFingerprint: fingerprint,
               sourceCorrelationMatches: true,
@@ -200,7 +332,18 @@ it(
               delivery: false,
             }),
         );
+        accepted = true;
       },
+      async () => {
+        if (!accepted) {
+          await captureFailure?.().catch(() => {
+            console.log(
+              "WORKSHOP_ANCHOR_DIAGNOSTIC " + JSON.stringify({ phase, captureUnavailable: true }),
+            );
+          });
+        }
+      },
+      () => releaseBackground.resolve(),
       () => stopQaGatewayFixture(owner),
       async () => {
         await sockets.close();

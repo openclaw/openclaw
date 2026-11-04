@@ -42,6 +42,9 @@ const catalog = {
       everyMinutes: "Every {count} minutes",
       everyHours: "Every {count} hours",
       everyDuration: registerChatSessionEnglish.catalog.chat.sessionAutomation.everyDuration,
+      onceAt: registerChatSessionEnglish.catalog.chat.sessionAutomation.onceAt,
+      today: registerChatSessionEnglish.catalog.chat.sessionAutomation.today,
+      tomorrow: registerChatSessionEnglish.catalog.chat.sessionAutomation.tomorrow,
       hourMinutes: "At minutes {minutes} of every hour",
       clockFields: "Hours: {hours}; minutes: {minutes}; seconds: {seconds}",
       monthDays: "Days {days} of the month",
@@ -368,24 +371,6 @@ const catalog = {
       elapsed: "Elapsed time",
       duration: "Run duration",
     },
-    sessionSharing: {
-      noPeopleFound: "No people found",
-      tryAnotherName: "Try another name",
-      visibility: "Visibility",
-      publishDraft: "Publish draft",
-      noPeople: "No paired people found.",
-      publicAccess: "Public access",
-      notPublic: "Only signed-in people with access can view this session.",
-      enablePublicAccess: "Enable public access…",
-      disablePublicAccess: "Disable public access",
-      copyPublicLink: "Copy public link",
-      publicConfirmTitle: "Make this session world-readable?",
-      publicConfirmMessage:
-        "Anyone with the public link can read existing and future conversation text, including all user and assistant messages and progress, plus tool names, short argument summaries, and images without signing in.\n\nReasoning, tool-result text, and private dashboards stay hidden. Image contents are not redacted. Review for private information before sharing; disabling access cannot recall downloaded copies.",
-      publicConfirmEnable: "Make public",
-      publicEnabled: "Public access enabled. Copy the public link from Session sharing.",
-      publicDisabled: "Public access disabled.",
-    },
     sessionHeader: {
       continueInTerminal: {
         title: "Continue in terminal",
@@ -485,7 +470,6 @@ export const registerChatSessionOptionalEnglish = Object.assign(
     Object.assign(en.chat.rail, catalog.chat.rail);
     Object.assign(en.chat.sessionDiff, catalog.chat.sessionDiff);
     mergeCatalog(en.chat.subagentsPanel, catalog.chat.subagentsPanel);
-    Object.assign(en.chat.sessionSharing, catalog.chat.sessionSharing);
     mergeCatalog(en.chat.sessionHeader, catalog.chat.sessionHeader);
     Object.assign(en.chat.workspaceConflict, catalog.chat.workspaceConflict);
     Object.assign(en.chat.workspaceFiles, catalog.chat.workspaceFiles);

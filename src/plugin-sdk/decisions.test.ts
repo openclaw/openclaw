@@ -1,4 +1,4 @@
-import { expect, expectTypeOf, it } from "vitest";
+import { expect, expectTypeOf, it, vi } from "vitest";
 import {
   DecisionContractError,
   decisionBatchV1ToV2,
@@ -10,6 +10,36 @@ import {
   type DecisionBatch,
   type DecisionBatchV2,
 } from "./decisions.js";
+
+// mock-isolation: Decision execution must load without initializing the host harness.
+vi.mock("./agent-harness-runtime.js", () => {
+  throw new Error("Decision transport must not initialize the host harness");
+});
+// mock-isolation: Decision execution must load without initializing extension helpers.
+vi.mock("./extension-shared.js", () => {
+  throw new Error("Decision transport must not initialize extension helpers");
+});
+
+it("handles Decision admission without initializing host runtime bundles", async () => {
+  const { executeOpenAIDecision } = await import("./decisions-openai-runtime.js");
+  await expect(
+    executeOpenAIDecision(
+      {
+        state: { type: "text", text: "explicit fixture" },
+        questions: { truth: { type: "boolean" } },
+      },
+      {
+        provider: "fixture",
+        modelId: "fixture",
+        baseUrl: "https://example.com",
+        auth: { mode: "api-key", apiKey: undefined },
+        signal: new AbortController().signal,
+        deadlineMonotonicMs: performance.now() + 1_000,
+        isAdmissible: () => true,
+      },
+    ),
+  ).resolves.toEqual({ status: "unavailable", reason: "credentials-unavailable" });
+});
 
 it("exposes lossless codecs and bounded validation through the public decision entrypoint", () => {
   const legacy: DecisionBatch = {

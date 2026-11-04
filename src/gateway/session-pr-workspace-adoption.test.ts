@@ -548,6 +548,7 @@ function stubPullRequestPreparation(sessionKey: string) {
   vi.spyOn(inspect, "inspectOwnGitHubPullRequest").mockImplementation(
     async ({ assertCurrent }) => ({
       result: { ...pullRequest, author: { accountId: 9, login: "guest" }, state: "open" },
+      details: {},
       assertCurrent,
       ownPublication: false,
       requirePublicRepositories: false,

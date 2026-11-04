@@ -40,11 +40,7 @@ merge_outcome_stop() {
     [ "$capture_state" = absent ] && [ "$captures" = false ]; then
     echo "Confirmed pre-dispatch abort: no merge request was sent by this attempt. Next: rerun merge-run; if the operation lock was retained, first run its exact lock-recover command after verifying no child tools remain." >&2
   else
-    echo 'Next: investigate; see scripts/AGENTS.md merge-outcome doctrine and `scripts/pr merge-recover`. No automatic merge retry.' >&2
-    if [ -n "${MERGE_OUTCOME_OID:-}" ] && printf '%s\n' "${MERGE_OUTCOME_RECORD:-null}" |
-      jq -e '.phase == "intent" and .route == "auto"' >/dev/null; then
-      echo "After investigation, retire the auto request: scripts/pr merge-recover ${MERGE_OUTCOME_REF##*/} $MERGE_OUTCOME_OID --confirmed-operator-recovery --cancel-auto" >&2
-    fi
+    echo 'Next: investigate the retained outcome. Follow docs/reference/scripts/merge-recovery.md for reconciliation or explicit recovery. No automatic merge retry.' >&2
   fi
   return 1
 }
@@ -1104,7 +1100,7 @@ merge_outcome_stable() {
   printf 'Merge stability observation: %s\nMerge stability reread: %s\n' \
     "$MERGE_OBSERVATION" "$reread" >&2
   merge_outcome_diagnose "$1" "$reread" "$MERGE_OBSERVATION"
-  merge_outcome_stop "PR or main changed during observation; rerun for read-only reconciliation if intent exists"
+  merge_outcome_stop "PR or main changed during observation; investigate before selecting reconciliation or explicit recovery"
 }
 
 merge_outcome_verify_landed() {
@@ -1282,7 +1278,7 @@ merge_outcome_accept_head_drift() {
     --arg actor "$actor" --arg outcome "$expected_oid" --arg merged "$merged_head" --arg landed "$landed" \
     '.phase="merged" | .landed=$landed | .headDrift={actor:$actor,outcome:$outcome,mergedHead:$merged}')" || return 1
   echo "MERGED pushed head $merged_head (retained auto head $head) as $landed; head-drift receipt retained at $MERGE_OUTCOME_REF."
-  echo "After ownership-checked cleanup, explicitly finalize: scripts/pr merge-complete $pr $MERGE_OUTCOME_OID --confirmed-operator-completion"
+  merge_outcome_print_cleanup_guidance "$pr"
 }
 
 merge_outcome_cancel_auto() {
@@ -1560,6 +1556,15 @@ merge_complete() {
   echo "completion comment: $MERGE_COMPLETION_COMMENT_URL"
 }
 
+merge_outcome_print_cleanup_guidance() {
+  local pr="$1"
+  echo "After checking ownership and releasing the checkout's session cwd, run from the persistent checkout with a qualified wrapper."
+  echo "Replace the placeholder path with its absolute path. See docs/reference/scripts/merge-recovery.md#delayed-completion."
+  printf '/path/to/qualified-checkout/scripts/pr gc --pr %s &&\n' "$pr"
+  printf '%s\n' "  pr_cleanup_outcome=\$(git rev-parse --verify refs/openclaw/pr-merge-outcomes/$pr) &&"
+  printf '%s\n' "  /path/to/qualified-checkout/scripts/pr merge-complete $pr \"\$pr_cleanup_outcome\" --confirmed-operator-completion"
+}
+
 merge_outcome_resume() {
   local pr="$1" phase MERGE_COMPLETION_COMMENT_URL
   merge_outcome_reconcile "$pr" || return 1
@@ -1577,6 +1582,8 @@ merge_outcome_resume() {
     retire_pr_workflow_binding "$pr" || return 1
   else
     echo "Merge confirmed; completion pending. Recovery does not repeat comment POST or cleanup. Inspect the completion marker in PR comments and any remaining .worktrees/pr-$pr/local branches; verify their ownership before manual cleanup."
-    echo "After cleanup, explicitly finalize: scripts/pr merge-complete $pr $MERGE_OUTCOME_OID --confirmed-operator-completion"
+    if [ "$phase" != commenting ] || [ -n "$MERGE_COMPLETION_COMMENT_URL" ]; then
+      merge_outcome_print_cleanup_guidance "$pr"
+    fi
   fi
 }

@@ -18,9 +18,11 @@ export {
 export { normalizeVideoGenerationDuration } from "../video-generation/duration-support.js";
 export { parseVideoGenerationModelRef } from "../media-generation/model-ref.js";
 export type {
+  VideoGenerationProvider,
+  VideoGenerationRequest,
+} from "../video-generation/provider-types.js";
+export type {
   GeneratedVideoAsset,
   VideoGenerationMode,
   VideoGenerationModeCapabilities,
-  VideoGenerationProvider,
-  VideoGenerationRequest,
 } from "../video-generation/types.js";

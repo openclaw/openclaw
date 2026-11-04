@@ -135,7 +135,7 @@
 .chat-footer,
 .agent-chat__composer-shell,
 .agent-chat__input {
-  --chat-composer-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  --chat-composer-radius: var(--composer-radius);
   --chat-composer-light-outline: rgb(0 0 0 / 6%);
   --composer-attached-surface: color-mix(
     in srgb,
@@ -166,8 +166,6 @@
   --icon-interactive: var(--chat-composer-control-icon);
   --chat-composer-hover: var(--surface-hover);
   --chat-composer-group-hover: var(--surface-hover);
-  --chat-composer-popover-border: var(--overlay-border);
-  --chat-composer-popover-radius: calc(14px * var(--openclaw-corner-radius-scale));
   /* Footer control box. Smaller than the editor's own line box on purpose: the
      controls read as chrome beside the text, not as peers of it. */
   --chat-composer-control-size: 28px;
@@ -202,7 +200,6 @@
   --chat-composer-menu-row-height: 40px;
   --chat-composer-menu-row-padding: 6px 9px;
   --chat-composer-menu-row-gap: 8px;
-  --chat-composer-menu-row-radius: calc(10px * var(--openclaw-corner-radius-scale));
   --chat-composer-menu-icon: 16px;
   --chat-composer-menu-selected: var(--menu-selected);
   /* Breathing room between the draft and the surface it sits in. Small on
@@ -298,6 +295,23 @@
   box-shadow:
     0 0 0 1px rgb(0 0 0 / 6%),
     0 4px 18px rgb(0 0 0 / 6%);
+}
+
+/* Incognito belongs to the session, so it frames the whole composer: a dashed
+   edge says "this box keeps nothing" without borrowing a warning or accent
+   color. Light mode draws its resting edge as a box-shadow ring, so the ring is
+   dropped here in favor of a real dashed border in every theme, focus and dictation
+   state; this block stays after the dictation rules so it wins their ties. */
+:root .agent-chat__input[data-incognito="true"],
+:root .agent-chat__input--dictating[data-incognito="true"]:focus-within,
+:root
+  .agent-chat__input[data-incognito="true"]:has(
+    .agent-chat__composer-combobox > :is(textarea, input):focus
+  ) {
+  border-style: dashed;
+  /* Same edge as the /new Incognito composer, so sending keeps the frame. */
+  border-color: color-mix(in srgb, var(--text-strong) 22%, transparent);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 5%);
 }
 
 .agent-chat__input--prefill-attention {
@@ -1019,7 +1033,7 @@
   display: contents;
 }
 
-/* Soft danger fill so Stop generating reads as the one destructive control
+/* Soft danger fill so Stop reads as the one destructive control
    next to the accent-filled send button. */
 .chat-send-btn--stop {
   background: color-mix(in srgb, var(--danger) 12%, transparent);

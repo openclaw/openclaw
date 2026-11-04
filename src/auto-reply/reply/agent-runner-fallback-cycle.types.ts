@@ -58,7 +58,10 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions &
     signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
     prepareAgentRunStart: () => void | Promise<void>;
     notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
-    hasAgentRunStarted: () => boolean;
+    notifyScheduledExecutionStarted: (
+      lifecycleBackstop: AgentLifecycleTerminalBackstop,
+      resolveSessionKey: () => string | undefined,
+    ) => Promise<void>;
     preserveProgressCallbackStartOrder: boolean;
     onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => void;
     deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
@@ -107,11 +110,8 @@ export type AgentFallbackCycleParams = AgentFallbackRunContext & {
   directBlockDeliveries: DirectBlockDelivery[];
   createAgentRunStartCallbacks: () => Pick<
     AgentFallbackCandidateCommonParams,
-    | "prepareAgentRunStart"
-    | "notifyAgentRunStart"
-    | "hasAgentRunStarted"
-    | "signalExecutionPhaseForTyping"
-  > & { close: () => void };
+    "prepareAgentRunStart" | "notifyAgentRunStart" | "signalExecutionPhaseForTyping"
+  > & { hasAgentRunStarted: () => boolean; close: () => void };
   notifyUserAboutCompaction: boolean;
   modelPatch: {
     captureFallbackFailure: (attempts: RuntimeFallbackAttempt[]) => boolean | undefined;

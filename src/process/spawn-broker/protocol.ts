@@ -18,6 +18,7 @@ export type BrokerSpawnOptions = Pick<
   | "uid"
   | "gid"
 > & { stdio: ("pipe" | "ignore" | "inherit" | "ipc")[] };
+export type ProcessOutputFile = { path: string; maxBytes?: number };
 export type BrokerRequest =
   | {
       type: "read-file";
@@ -32,6 +33,7 @@ export type BrokerRequest =
       argv: string[];
       options: BrokerSpawnOptions;
       execCgroup?: string;
+      outputFile?: ProcessOutputFile;
     }
   | { type: "launch"; id: number; allowed: boolean }
   | {
@@ -57,6 +59,7 @@ export type BrokerError = {
   spawnargs?: string[];
 };
 export type BrokerResponse =
+  | ({ type: "file-output"; id: number } & ({ bytes: number } | { error: BrokerError }))
   // Initialization failed before any native resource server or child launch was admitted.
   | { type: "startup-failed"; error: BrokerError }
   | { type: "file-read-chunk"; id: number; bytes: Buffer }
