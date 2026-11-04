@@ -2093,7 +2093,7 @@ it.each([false, true])(
 it("admits package-bound heartbeat lifetimes only outside predecessor observation", () => {
   const f = fixture();
   const relativePath = "dist/state/openclaw-state-lease-heartbeat.worker.js";
-  const packageRoot = path.join(f.root, "openclaw");
+  const packageRoot = path.join(f.root, "prefix/openclaw");
   const worker = path.join(packageRoot, relativePath);
   fs.mkdirSync(path.dirname(worker), { recursive: true });
   const source = `/*${" ".repeat(70 * 1024)}*/
@@ -2199,7 +2199,7 @@ it("admits package-bound heartbeat lifetimes only outside predecessor observatio
   }
   const result = runProcess(node, [f.spec.bin], f.env, 10_000);
   expect(result.status, result.stderr).toBe(0);
-  const observed = f.records();
+  const observed = packageRecords(f);
   const created = observed.find((row) => row.event === "thread");
   assert(created);
   const physical = fs.lstatSync(packageRoot, { bigint: true });
@@ -2338,7 +2338,10 @@ it("admits package-bound heartbeat lifetimes only outside predecessor observatio
     }
     const root = foreign
       ? path.join(f.root, name)
-      : path.join(f.root, ".openclaw.update-stage-test/lib/node_modules/openclaw");
+      : path.join(
+          path.dirname(packageRoot),
+          ".openclaw.update-stage-test/lib/node_modules/openclaw",
+        );
     fs.cpSync(packageRoot, root, { recursive: true });
     if (changed) {
       fs.appendFileSync(path.join(root, "dist/shared.js"), "// changed\n");
@@ -2368,7 +2371,10 @@ it("admits package-bound heartbeat lifetimes only outside predecessor observatio
   for (const name of fs.readdirSync(f.spec.directory)) {
     fs.unlinkSync(path.join(f.spec.directory, name));
   }
-  const staged = path.join(f.root, ".openclaw.update-stage-rename/lib/node_modules/openclaw");
+  const staged = path.join(
+    path.dirname(packageRoot),
+    ".openclaw.update-stage-rename/lib/node_modules/openclaw",
+  );
   fs.cpSync(packageRoot, staged, { recursive: true });
   const stagedResult = runProcess(
     node,
