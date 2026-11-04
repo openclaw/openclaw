@@ -1919,11 +1919,11 @@ describe("scripts/crabbox-wrapper", () => {
       mkdirSync(path.dirname(candidate));
       writeShellCommand(
         candidate,
-        `OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG=${shellQuote(candidateLog)} exec node ${shellQuote(fake)} "$@"`,
+        `OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG=${shellQuote(candidateLog)} exec ${shellQuote(fake)} "$@"`,
       );
       writeShellCommand(
         managed,
-        `unset OPENCLAW_FAKE_CRABBOX_VERSION\nexec node ${shellQuote(fake)} "$@"`,
+        `unset OPENCLAW_FAKE_CRABBOX_VERSION\nexec ${shellQuote(fake)} "$@"`,
       );
       const log = makeInvocationLog();
       const options = {
