@@ -468,23 +468,19 @@ export async function maybeSpawnVisibleSession(
       response = await runWithAgentToolSourceExecutionScope(assertActive, () =>
         // Placement fences the whole request; independent sessions fence only the commit.
         // Once committed, the session owns its opening run and receipt.
-        createGatewayCall(
-          "sessions.create",
-          createParams,
-          placement
-            ? {
-                signal: params.options?.signal,
-                sessionMutationCommitGuard: assertActive,
+        placement
+          ? createGatewayCall("sessions.create", createParams, {
+              signal: params.options?.signal,
+              sessionMutationCommitGuard: assertActive,
+              timeoutMs: null,
+            })
+          : independent
+            ? createGatewayCall("sessions.create", createParams, {
+                revalidateOnCompletion: false,
+                requesterCommitGuard: assertActive,
                 timeoutMs: null,
-              }
-            : independent
-              ? {
-                  revalidateOnCompletion: false,
-                  requesterCommitGuard: assertActive,
-                  timeoutMs: null,
-                }
-              : undefined,
-        ),
+              })
+            : createGatewayCall("sessions.create", createParams),
       );
     } catch (error) {
       const missingScope = readMissingScopeErrorDetails(
