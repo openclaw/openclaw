@@ -100,7 +100,7 @@ it("refuses a cached assessment when grant authority is revoked during write adm
 
 it("reviews a changed named query even with identical HTML and a narrower field set", async () => {
   vi.stubEnv("GH_TOKEN", "synthetic-actions-token");
-  onTestFinished(() => vi.unstubAllEnvs());
+  onTestFinished(() => void vi.unstubAllEnvs());
   const github = vi
     .spyOn(globalThis, "fetch")
     .mockImplementation(
