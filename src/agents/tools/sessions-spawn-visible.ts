@@ -322,11 +322,6 @@ export async function maybeSpawnVisibleSession(params: {
     };
   }
 
-  const requesterPrefs = resolveRequesterPreferences({
-    cfg,
-    requesterAgentId,
-    requesterEntry,
-  });
   const modelPlan = await resolveSubagentModelAndThinkingPlan({
     cfg,
     targetAgentId,
@@ -334,10 +329,13 @@ export async function maybeSpawnVisibleSession(params: {
     targetAgentConfig: resolveAgentConfig(cfg, targetAgentId),
     modelOverride,
     workspaceDir: spawnedWorkspaceDir,
-    callerThinkingRaw: params.options?.requesterThinkingLevel ?? requesterPrefs.thinkingLevel,
+    callerThinkingRaw:
+      params.options?.requesterThinkingLevel ??
+      resolveRequesterPreferences({ cfg, requesterAgentId, requesterEntry }).thinkingLevel,
     inheritedModel:
       targetAgentId === requesterAgentId
-        ? (params.options?.requesterModel ?? requesterPrefs.model)
+        ? (params.options?.requesterModel ??
+          resolveRequesterPreferences({ cfg, requesterAgentId, requesterEntry }).model)
         : undefined,
   });
   if (modelPlan.status === "error") {
