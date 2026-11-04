@@ -1,0 +1,2 @@
+# Knowledge doctor check covers low saving-model output limits and the core resolver defaults.
+74
