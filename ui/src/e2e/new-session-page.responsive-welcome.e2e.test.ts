@@ -333,7 +333,7 @@ suite.define(() => {
     expect(await page.locator(".agent-chat__recent").isVisible()).toBe(true);
   });
 
-  it("shows selected people inline in the cold New Session native editor", async () => {
+  it("shows font-sized people inline in the cold New Session document-aware editor", async () => {
     const page = await openPage({ viewport: { width: 1280, height: 900 } });
     const gateway = await installMockGateway(page, {
       presenceUsers: [
@@ -346,79 +346,73 @@ suite.define(() => {
       ],
       methodResponses: {
         "users.mentionable": {
-          users: [{ profileId: "profile-bob", displayName: "Bob", online: true }],
+          users: [
+            {
+              profileId: "profile-bob",
+              displayName: "Bob averylongmentionlabel",
+              online: true,
+            },
+          ],
           truncated: false,
         },
       },
     });
-
-    await page.goto(`${suite.server.baseUrl}new`);
+    await page.goto(suite.server.baseUrl + "new");
     await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
     await waitForGatewayRecoveryScope(page);
-    const textarea = page.locator(".new-session-page__message");
-    await textarea.pressSequentially("@Bob");
+    const surface = page.locator(".new-session-page__composer");
+    const textbox = surface.getByRole("textbox");
+    const backing = surface.locator("textarea.new-session-page__message");
+    await textbox.pressSequentially("@Bob");
     expect((await gateway.waitForRequest("users.mentionable")).params).toMatchObject({
       agentId: "main",
     });
     await page.getByRole("option", { name: /Bob/ }).click();
-    const layer = page.locator(".new-session-page__composer .chat-composer-mention-layer");
-    await pollText(layer).toContain("@averylongmentionlabel");
+    const editor = surface.locator('[data-composer-editor="true"]');
+    const mark = editor.locator(".chat-composer-mention-label");
+    await pollText(mark).toContain("averylongmentionlabel");
+    await pollCount(surface.getByRole("textbox")).toBe(1);
     await pollCount(page.locator(".chat-compose__mention-preview")).toBe(0);
-    await pollAttribute(layer, "aria-hidden").toBe("true");
-    await pollCount(layer.locator(".markdown-person-reference__avatar")).toBe(1);
-
+    await expect.poll(() => backing.evaluate((element) => element.hidden)).toBe(true);
     for (const width of [390, 320]) {
       await page.setViewportSize({ width, height: 720 });
       await waitForLayoutSettled(page, ".new-session-page__composer");
-      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-        width,
-      );
-      const metrics = await layer.evaluate((element) => {
-        const nativeInput = element.parentElement!.querySelector("textarea")!;
-        const nativeStyle = getComputedStyle(nativeInput);
-        const mirrorStyle = getComputedStyle(element);
-        const person = element.querySelector(".chat-composer-mention")!;
-        const avatarBounds = person
+      const geometry = await editor.evaluate((element) => {
+        const person = element.querySelector(".chat-composer-mention-label")!;
+        const avatar = person
           .querySelector(".markdown-person-reference__avatar")!
           .getBoundingClientRect();
         const nameNode = [...person.childNodes].find(
-          (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+          (node) =>
+            node.nodeType === Node.TEXT_NODE && node.textContent?.includes("averylongmentionlabel"),
         )!;
-        const nameRange = document.createRange();
-        nameRange.selectNodeContents(nameNode);
+        const range = document.createRange();
+        range.selectNodeContents(nameNode);
         return {
-          avatarGap: nameRange.getBoundingClientRect().left - avatarBounds.right,
-          nativeFont: [nativeStyle.fontFamily, nativeStyle.fontSize, nativeStyle.lineHeight],
-          mirrorFont: [mirrorStyle.fontFamily, mirrorStyle.fontSize, mirrorStyle.lineHeight],
-          nativeWidth: nativeInput.clientWidth,
-          mirrorWidth: element.clientWidth,
-          horizontalOverflow: element.scrollWidth > element.clientWidth,
+          font: Number.parseFloat(getComputedStyle(person).fontSize),
+          avatarWidth: avatar.width,
+          avatarHeight: avatar.height,
+          gap: range.getBoundingClientRect().left - avatar.right,
+          documentWidth: document.documentElement.scrollWidth,
         };
       });
-      expect(metrics.avatarGap).toBeGreaterThanOrEqual(2);
-      expect(metrics.mirrorFont).toEqual(metrics.nativeFont);
-      expect(metrics.mirrorWidth).toBe(metrics.nativeWidth);
-      expect(metrics.horizontalOverflow).toBe(false);
+      expect(Math.abs(geometry.avatarWidth - geometry.font)).toBeLessThan(0.5);
+      expect(Math.abs(geometry.avatarHeight - geometry.font)).toBeLessThan(0.5);
+      expect(geometry.gap).toBeGreaterThanOrEqual(2);
+      expect(geometry.documentWidth).toBeLessThanOrEqual(width);
     }
-    await textarea.press("Control+End");
+    await textbox.press("Control+End");
     await page.keyboard.insertText("x".repeat(700));
-    await waitForLayoutSettled(page, ".new-session-page__composer");
     await expect
       .poll(() =>
-        layer.evaluate((element) => {
-          const nativeInput = element.parentElement!.querySelector("textarea")!;
-          return {
-            scrolling: nativeInput.scrollHeight > nativeInput.clientHeight,
-            paddingMatches:
-              getComputedStyle(element).paddingInlineEnd ===
-              getComputedStyle(nativeInput).paddingInlineEnd,
-            heightMatches: element.scrollHeight === nativeInput.scrollHeight,
-          };
-        }),
+        surface
+          .locator(".cm-scroller")
+          .evaluate((element) => element.scrollHeight > element.clientHeight),
       )
-      .toEqual({ scrolling: true, paddingMatches: true, heightMatches: true });
-    await textarea.fill("Edited without a mention");
-    await pollCount(layer).toBe(0);
-    await expect.poll(() => textarea.inputValue()).toBe("Edited without a mention");
+      .toBe(true);
+    await textbox.fill("Edited without a mention");
+    await pollCount(mark).toBe(0);
+    await expect.poll(() => backing.inputValue()).toBe("Edited without a mention");
+    await pollCount(surface.getByRole("textbox")).toBe(1);
   });
 });

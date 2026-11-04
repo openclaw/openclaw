@@ -24,12 +24,14 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/browser-platform.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
-import { readHumanMentions, updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { syncComposerInput } from "../../lib/composer-input.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../lib/ime.ts";
+import { createComposerEditorBinding } from "../../lib/reactive/composer-editor.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -51,10 +53,6 @@ import {
 } from "../chat/components/chat-composer-dom.ts";
 import "../../components/tooltip.ts";
 import { EmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
-import {
-  ComposerMentionLayer,
-  createComposerMentionLayerBinding,
-} from "../chat/components/chat-composer-mention-layer.tsx";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu-state.ts";
 import { HumanMentionMenuView } from "../chat/components/chat-composer-mention-menu.tsx";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
@@ -397,11 +395,10 @@ export function NewSessionComposer(props: {
     },
   );
   const visibleMessage = createMemo(() => frame().visibleMessage);
-  const messageValue = createLiveValue(visibleMessage);
-  const inlineMentions = createMemo(
-    () => readHumanMentions(frame().visibleMessage, options().mentions) ?? [],
+  const messageValue = createLiveValue(visibleMessage, (input: HTMLTextAreaElement) =>
+    syncComposerInput(input),
   );
-  const mentionLayer = createComposerMentionLayerBinding(() => input);
+  const editorRef = createComposerEditorBinding();
   let input: HTMLTextAreaElement | undefined;
   let composer: HTMLDivElement | undefined;
   let footer: HTMLDivElement | undefined;
@@ -519,13 +516,14 @@ export function NewSessionComposer(props: {
               <SkillMenu menu={textarea.skillMenu} host={frame().skillMenuHost} />
             </Show>
             <textarea
+              data-composer-mentions={JSON.stringify(options().mentions ?? [])}
               dir={detectTextDirection(frame().visibleMessage)}
               ref={[
                 (element) => {
                   input = element;
                   messageValue(element);
                 },
-                mentionLayer.inputRef,
+                editorRef,
               ]}
               class="new-session-page__message"
               rows="1"
@@ -624,14 +622,6 @@ export function NewSessionComposer(props: {
                 }
               }}
             />
-            <Show when={inlineMentions().length > 0 && !options().dictationActive}>
-              <ComposerMentionLayer
-                text={frame().visibleMessage}
-                mentions={inlineMentions()}
-                dir={detectTextDirection(frame().visibleMessage)}
-                capture={mentionLayer.capture}
-              />
-            </Show>
             <span class="agent-chat__composer-placeholder" aria-hidden="true">
               {placeholder()}
             </span>

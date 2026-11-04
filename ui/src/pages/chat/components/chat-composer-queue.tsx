@@ -1,6 +1,6 @@
 import { For, createMemo, createUniqueId, onSettled } from "solid-js";
-import "../../../styles/chat/composer-queue-content.css";
 import { Icon } from "../../../components/solid/icon.tsx";
+import "../../../styles/chat/composer-queue-content.css";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
@@ -11,6 +11,7 @@ import {
 import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
+import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
@@ -131,8 +132,8 @@ function mountQueueEditInput(element: HTMLTextAreaElement, value: string): void 
   queueMicrotask(() => {
     if (element.isConnected) {
       fitQueueEditInput(element);
-      element.focus();
-      element.setSelectionRange(value.length, value.length);
+      focusComposerInput(element);
+      selectComposerInput(element, value.length, value.length);
     }
   });
 }

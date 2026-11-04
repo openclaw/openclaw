@@ -83,7 +83,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     expect(view.key("Tab").defaultPrevented).toBe(true);
     view.expectValue("@Alex ", [mention("profile-alex-offline")]);
     expect(view.send).not.toHaveBeenCalled();
-    expect(view.query(".chat-composer-mention-layer")?.textContent).toContain("@Alex");
+    expect(view.query<HTMLTextAreaElement>("textarea")!.value).toContain("@Alex");
     expect(view.query(".chat-compose__mention-preview")).toBeNull();
     view.key("Enter");
     expect(view.send).toHaveBeenCalledWith(view.value());
@@ -233,9 +233,8 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
       if (position !== "typed name") {
         return;
       }
-      const layer = view.query(".chat-composer-mention-layer")!;
-      expect(layer.textContent).toContain("@Peter Steinberger");
-      expect(layer.querySelector(".markdown-person-reference__avatar")).not.toBeNull();
+      expect(view.query<HTMLTextAreaElement>("textarea")!.value).toContain("@Peter Steinberger");
+      expect(view.value().mentions).toEqual([{ profileId: "profile-peter", start: 0, end: 18 }]);
       expect(view.query(".chat-compose__mention-preview")).toBeNull();
       view.edit("Peter Steinberger ", {
         start: 0,

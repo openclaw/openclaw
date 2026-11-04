@@ -1,5 +1,11 @@
 import { onSettled } from "solid-js";
 import { takeBootComposer } from "../../app/boot-composer.ts";
+import {
+  composerInputHasFocus,
+  focusComposerInput,
+  readComposerEditor,
+  selectComposerInput,
+} from "../../lib/composer-input.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { getChatComposerState, queueComposerSubmit } from "./components/chat-composer-state.ts";
 
@@ -35,16 +41,17 @@ export function adoptBootComposer(
     composer.restoreComposerFocus = true;
     return;
   }
-  textarea.focus({ preventScroll: true });
+  focusComposerInput(textarea, { preventScroll: true });
   // Restore the caret and its viewport after the draft and mobile editing layout
   // commit, before paint. A merged saved draft has a different text layout.
   const offset = draft.length - boot.text.length;
   const [start, end, direction] = boot.selection;
   onSettled(() => {
-    if (textarea.value === draft && document.activeElement === textarea) {
-      textarea.setSelectionRange(start + offset, end + offset, direction);
+    if (textarea.value === draft && composerInputHasFocus(textarea)) {
+      selectComposerInput(textarea, start + offset, end + offset, direction);
       if (!saved) {
-        [textarea.scrollLeft, textarea.scrollTop] = boot.scroll;
+        const scroll = readComposerEditor(textarea)?.scrollElement ?? textarea;
+        [scroll.scrollLeft, scroll.scrollTop] = boot.scroll;
       }
     }
   });
