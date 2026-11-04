@@ -1699,6 +1699,12 @@ private fun ManualGatewaySetupScreen(
           }
         }
         item {
+          BrowserSignInButton(
+            targetUrl = browserSignInUrl(manualHost, manualPort, transport.effectiveTls),
+            onSignedIn = onPair,
+          )
+        }
+        item {
           LabeledField(label = nativeString("Token")) {
             ClawTextField(value = token, onValueChange = onTokenChange, placeholder = nativeString("Paste token"), secret = true)
             Text(

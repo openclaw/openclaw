@@ -1775,6 +1775,12 @@ private fun GatewaySettingsScreen(
             TextButton(onClick = { pendingRenameStableId = entry.stableId }) { Text(nativeString("Rename")) }
             TextButton(onClick = { pendingForgetStableId = entry.stableId }) { Text(nativeString("Forget")) }
           }
+          if (entry.tls && entry.host != null && entry.port != null) {
+            BrowserSignInButton(
+              targetUrl = browserSignInUrl(entry.address, entry.port.toString(), true),
+              onSignedIn = { viewModel.switchToGateway(entry.stableId) },
+            )
+          }
         }
       }
     }

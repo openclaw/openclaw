@@ -1467,6 +1467,52 @@ class GatewaySessionCustomHeadersTest {
       }
     }
 
+  @Test
+  fun ingressHttpExchangesResolveCookiesPerPathAndRetainRotation() =
+    runBlocking {
+      val gateway = startCapturingGatewayServer {}
+      val media = MockWebServer().apply { start() }
+      val connected = CompletableDeferred<Unit>()
+      val captured = CompletableDeferred<OkHttpClient>()
+      val rotations = mutableListOf<String>()
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val authorization =
+        object : GatewayIngressAuthorization {
+          override suspend fun authorizeUpgrade(request: Request): Request = request.newBuilder().header("Cookie", "upgrade=only").build()
+
+          override fun authorizeHttp(request: Request): Request = request.newBuilder().header("Cookie", "path=" + request.url.encodedPath.removePrefix("/")).build()
+
+          override fun requireCurrent(request: Request) {}
+
+          override fun rejection(response: Response): GatewayExternalAuthorizationException? = null
+
+          override fun receiveResponse(response: Response) {
+            rotations.addAll(response.headers("Set-Cookie"))
+          }
+        }
+      val session =
+        ingressSession(scope, authorization, onConnected = { connected.complete(Unit) }) { client, request, listener ->
+          captured.complete(client)
+          client.newWebSocket(request.newBuilder().url(gateway.url("/upgrade")).build(), listener)
+        }
+      try {
+        connectIngressSession(session)
+        withTimeout(TEST_TIMEOUT_MS) { connected.await() }
+        val client = captured.await()
+        for (path in listOf("first", "second")) {
+          media.enqueue(MockResponse().setBody("ok").addHeader("Set-Cookie", "session=$path; Path=/; HttpOnly"))
+          client.newCall(Request.Builder().url(media.url("/$path")).build()).execute().use { assertEquals(200, it.code) }
+          assertEquals("path=$path", media.takeRequest(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)?.getHeader("Cookie"))
+        }
+        assertEquals(listOf("session=first; Path=/; HttpOnly", "session=second; Path=/; HttpOnly"), rotations)
+      } finally {
+        session.disconnectAndJoin()
+        scope.cancel()
+        gateway.shutdown()
+        media.shutdown()
+      }
+    }
+
   private fun ingressSession(
     scope: CoroutineScope,
     authorization: GatewayIngressAuthorization,

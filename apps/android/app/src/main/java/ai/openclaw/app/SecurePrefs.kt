@@ -474,6 +474,28 @@ class SecurePrefs(
     password: String? = null,
   ) = saveGatewayCredentials(stableId, GatewayCredentials(token, bootstrapToken, password))
 
+  // Only non-secret origin/profile references live here. Cookies remain in the app-private
+  // WebView profile, never in preferences or Gateway credentials.
+  internal fun loadBrowserSessionProfiles(): Map<String, String> =
+    plainPrefs.all.entries
+      .mapNotNull { (key, value) ->
+        if (key.startsWith("gateway.browserProfile.") && value is String) {
+          key.removePrefix("gateway.browserProfile.") to value
+        } else {
+          null
+        }
+      }.toMap()
+
+  internal fun saveBrowserSessionProfile(
+    origin: String,
+    profileName: String?,
+  ): Boolean {
+    val editor = plainPrefs.edit()
+    val key = "gateway.browserProfile.$origin"
+    if (profileName == null) editor.remove(key) else editor.putString(key, profileName)
+    return editor.commit()
+  }
+
   fun clearGatewayCredentials(stableId: String) {
     synchronized(gatewayCredentialLock) {
       val key = gatewayCredentialsKey(stableId)
