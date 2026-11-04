@@ -54,7 +54,7 @@ const capabilities: MusicGenerationProvider["capabilities"] = {
 function eligible(offer: ClawRouterCapabilityOffer): boolean {
   const id = normalizeOptionalString(offer.model?.id);
   return (
-    !!id &&
+    id !== undefined &&
     MODELS.has(id) &&
     offer.model?.upstream === MODELS.get(id) &&
     offer.providerId === "google-gemini" &&
