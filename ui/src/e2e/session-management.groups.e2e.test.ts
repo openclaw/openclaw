@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJobsListResult } from "../api/types.ts";
 import {
@@ -29,6 +30,12 @@ import {
 } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const groupOrder = (page: Page) =>
+  page
+    .locator('[data-session-section^="category:"]')
+    .evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-session-section")),
+    );
 
 suite.define(() => {
   it("keeps long group titles on one line and reveals them on hover", async () => {
@@ -569,15 +576,7 @@ suite.define(() => {
         name: "Research",
         to: "Projects",
       });
-      await expect
-        .poll(() =>
-          page
-            .locator('[data-session-section^="category:"]')
-            .evaluateAll((elements) =>
-              elements.map((element) => element.getAttribute("data-session-section")),
-            ),
-        )
-        .toEqual(["category:Apps", "category:Projects"]);
+      await expect.poll(() => groupOrder(page)).toEqual(["category:Apps", "category:Projects"]);
       const projectsGroup = groups.filter({ hasText: "Projects" });
       await expect.poll(() => projectsGroup.locator(".sidebar-recent-session").count()).toBe(2);
 
@@ -602,15 +601,7 @@ suite.define(() => {
       await deleteConfirm.getByRole("button", { name: "Delete", exact: true }).click();
       const deleteRequest = await gateway.waitForRequest("sessions.groups.delete");
       expect(requireRecord(deleteRequest.params)).toMatchObject({ name: "Projects" });
-      await expect
-        .poll(() =>
-          page
-            .locator('[data-session-section^="category:"]')
-            .evaluateAll((elements) =>
-              elements.map((element) => element.getAttribute("data-session-section")),
-            ),
-        )
-        .toEqual(["category:Apps"]);
+      await expect.poll(() => groupOrder(page)).toEqual(["category:Apps"]);
       await expect
         .poll(() =>
           page.locator('[data-session-section="ungrouped"] .sidebar-recent-session').count(),
@@ -710,8 +701,9 @@ suite.define(() => {
         code: "INVALID_REQUEST",
         message: "rejected group rename",
       });
+      await page.locator("openclaw-toast-host").getByRole("alert").waitFor();
       await expect
-        .poll(() => dialog.getByRole("alert").textContent())
+        .poll(() => dialog.locator('.callout.danger[role="alert"]').textContent())
         .toContain("rejected group rename");
       expect(await field.inputValue()).toBe("Projects");
       expect(await field.isEnabled()).toBe(true);
@@ -846,12 +838,7 @@ suite.define(() => {
       await gamma.locator(".sidebar-session-group-toggle").dragTo(alpha, {
         targetPosition: { x: 4, y: 2 },
       });
-      const customGroupOrder = () =>
-        page
-          .locator('[data-session-section^="category:"]')
-          .evaluateAll((elements) =>
-            elements.map((element) => element.getAttribute("data-session-section")),
-          );
+      const customGroupOrder = () => groupOrder(page);
       await expect
         .poll(customGroupOrder)
         .toEqual(["category:Gamma", "category:Alpha", "category:Beta"]);

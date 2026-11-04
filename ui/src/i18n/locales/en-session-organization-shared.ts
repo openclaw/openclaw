@@ -21,6 +21,8 @@ const enSessionOrganizationShared = {
     title: "Sessions",
     subtitle: "Browse sessions and manage per-session overrides.",
     archivedOnlyTooltip: "Show only archived sessions.",
+    transcriptSearchArchivedExcluded:
+      "{count} archived transcripts excluded; open a session to restore its searchable history.",
     archiveReasonManual: "Archived manually",
     archiveReasonAgeRetention: "Automatically archived by age retention",
     archiveReasonActiveSessionCap:

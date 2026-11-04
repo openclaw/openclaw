@@ -483,7 +483,8 @@ suite.define(() => {
           message: "rejected group defaults",
         });
 
-        const alert = dialog.getByRole("alert");
+        await dialog.locator("openclaw-toast-host").getByRole("alert").waitFor();
+        const alert = dialog.locator('.exec-approval-error[role="alert"]');
         await alert.waitFor({ state: "visible" });
         await expectText(alert, "rejected group defaults");
         await expectAttribute(modeTrigger, "data-value", "local");

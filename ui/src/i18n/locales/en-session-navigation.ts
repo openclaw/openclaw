@@ -7,6 +7,8 @@ const enSessionNavigation = {
     catalog: {
       remoteViewOnly: "This session is on a paired device and is view-only.",
       unsupportedViewOnly: "This external session source is view-only.",
+      sourceHandoffRequired:
+        "This is a read-only snapshot. Its authenticated original publisher must run the handoff command from the original conversation before you can continue here.",
       sessionMenu: "External session actions",
       openInOpenClaw: "Open in OpenClaw",
       importToOpenClaw: "Import to OpenClaw",

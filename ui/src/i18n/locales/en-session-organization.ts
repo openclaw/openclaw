@@ -55,6 +55,7 @@ const enSessionOrganization = {
     actionRequiresConnection: en.sessionsView.actionRequiresConnection,
     actionRequiresScope: en.sessionsView.actionRequiresScope,
     actionRequiresOwnership: en.sessionsView.actionRequiresOwnership,
+    removePreservedWorktreeTitle: "Remove worktree {branch}?",
     deletePreservedReasons: {
       "owner-mismatch": "owned elsewhere",
       busy: "live run or cleanup active",
@@ -90,8 +91,7 @@ const enSessionOrganization = {
     snoozeTomorrowTime: en.sessionsView.snoozeTomorrowTime,
     sessionArchived: "Session archived",
     deleteAllArchived: "Delete all archived…",
-    deleteAllArchivedConfirm:
-      "Delete {count} archived sessions and their transcripts? Any attached workers will be stopped safely first.",
+    deleteAllArchivedTitle: "Delete {count} archived sessions?",
     activeTooltip: "Loads sessions updated in the last {count} minutes.",
     limitTooltip: "Max sessions to load.",
     globalTooltip: "Include global sessions.",
@@ -99,6 +99,22 @@ const enSessionOrganization = {
     archivedOnlyTooltip: sharedSessions.archivedOnlyTooltip,
     minutesPlaceholder: "min",
     searchPlaceholder: "Filter by key, agent, label, kind…",
+    transcriptSearchTitle: "Search transcripts",
+    transcriptSearchDescription:
+      "Find exact words or phrases in user and assistant messages across the default agent's sessions.",
+    transcriptSearchInputLabel: "Search session transcripts",
+    transcriptSearchPlaceholder: "Search exact words or phrases…",
+    transcriptSearchAction: "Search",
+    transcriptSearchClear: "Clear",
+    transcriptSearchRetry: "Retry",
+    transcriptSearchSearching: "Searching transcripts…",
+    transcriptSearchUnavailable: "Connect to the Gateway to search transcripts.",
+    transcriptSearchError: "Transcript search failed",
+    transcriptSearchIndexing: "Results may be incomplete — search again shortly.",
+    transcriptSearchArchivedExcluded: sharedSessions.transcriptSearchArchivedExcluded,
+    transcriptSearchEmpty: "No transcript messages match that search.",
+    transcriptSearchMatches: "Transcript matches: {count}",
+    transcriptSearchTruncated: "Showing the first 25 matches.",
     clearSearch: "Clear search",
     user: en.sessionsView.user,
     assistant: en.sessionsView.assistant,
@@ -240,14 +256,16 @@ const enSessionOrganization = {
     stopCloudWorkerConfirmAction: sharedSessions.stopCloudWorkerConfirmAction,
     stopCloudWorkerStale:
       "The connection changed before work stopped on the cloud device for “{session}”. Try again.",
+    deleteSessionTitle: "Delete “{session}”?",
     deleteSessionConfirm:
-      "Delete “{session}” and its transcript? Work on any attached device stops first.",
+      "This also deletes its transcript. Work on any attached device stops first.",
+    deleteSessionsTitle: "Delete {count} sessions?",
     deleteSessionsConfirm:
-      "Delete {count} sessions and their transcripts? Any attached devices will stop working on them first.",
+      "This also deletes their transcripts. Any attached devices will stop working on them first.",
     deleteSelectedConfirmOne:
-      "Delete 1 session?\n\nStop work on any attached device, then delete the session entry and archive its transcript.",
+      "Stop work on any attached device, then delete the session entry and archive its transcript.",
     deleteSelectedConfirm:
-      "Delete {count} sessions?\n\nStop work on any attached devices, then delete the session entries and archive their transcripts.",
+      "Stop work on any attached devices, then delete the session entries and archive their transcripts.",
     archiveSessionTitle: "Also archive nested sessions?",
     archiveSessionNestedOne:
       "“{session}” has 1 directly nested session. If you archive only this session, that nested session moves to the top level.",
@@ -257,7 +275,6 @@ const enSessionOrganization = {
     archiveSessionNestedOffline:
       'Archive only "{session}"? Its directly nested sessions move to the top level. Reconnect to archive the complete subtree.',
     archiveAllSessions: "Archive all ({count})",
-    automationPauseTitle: "Pause automations?",
     automationPauseArchiveOne: 'Archiving "{session}" pauses its automations.',
     automationPauseArchiveOther:
       "Automations are bound to {count} of these conversations. Archiving a conversation pauses its automations.",
@@ -272,8 +289,10 @@ const enSessionOrganization = {
       "Archive the parent session and its nested sessions, not an individual subagent session.",
     archiveRunningSessions:
       "This selection contains active work. Archiving stops work in the selected sessions.",
+    archiveSessionPrompt: "Archive “{session}”?",
+    archiveSessionsPrompt: "Archive {count} sessions?",
     archiveRunningSessionConfirm:
-      "Archive {session}? Active work in this session will be stopped. Other sessions aren’t archived.",
+      "Active work in this session stops. Other sessions aren’t archived.",
     archiveTreeChanged:
       "The session tree changed. Nothing was archived. Open the menu and try again.",
     sessionMovedToTopLevel: "Session moved to top level",
@@ -344,7 +363,9 @@ const enSessionOrganization = {
     restorable: "Restorable",
     restore: "Restore",
     confirmDelete: "Snapshot and delete {name}?",
-    confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
+    confirmDeleteBody: "OpenClaw saves a safety snapshot first.",
+    confirmForceDeleteTitle: "Delete without a snapshot?",
+    confirmForceDelete: "Snapshot failed: {error}\n\nUncommitted changes are lost.",
   },
 } satisfies TranslationMap;
 
