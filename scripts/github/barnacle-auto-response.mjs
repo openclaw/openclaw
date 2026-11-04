@@ -38,7 +38,7 @@ const rules = [
   {
     label: "r: support",
     message:
-      "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq-first-run#i-am-stuck-fastest-way-to-get-unstuck.",
+      "Please use [our support server](https://openclaw.ai/discord?from=github-openclaw-support-reply) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq-first-run#i-am-stuck-fastest-way-to-get-unstuck.",
   },
   {
     label: "r: false-positive",
@@ -282,7 +282,7 @@ const bugSubtypeLabels = Object.keys(bugSubtypeLabelSpecs);
 
 const maintainerTeam = "maintainer";
 const pingWarningMessage =
-  "Please don’t spam-ping multiple maintainers at once. Be patient, or join our community Discord for help: https://discord.gg/clawd";
+  "Please don’t spam-ping multiple maintainers at once. Be patient, or join our community Discord for help: https://openclaw.ai/discord?from=github-openclaw-maintainer-warning";
 const mentionRegex = /@([A-Za-z0-9-]+)/g;
 const triggerLabel = "trigger-response";
 const activePrLimitLabel = "r: too-many-prs";
