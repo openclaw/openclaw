@@ -45,6 +45,7 @@ import {
   resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
+import { executeSessionPost } from "./sessions-post-tool.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 import { dispatchSessionsSendFollowup } from "./sessions-send-followup.js";
 import { sendFailure } from "./sessions-send-helpers.js";
@@ -87,6 +88,9 @@ export async function executeSessionsSend(
   const sendGatewayCall = opts?.callGateway ?? callSessionsSendGateway;
   const message = readSessionsSendMessage(params);
   const mode = readSessionsSendMode(params);
+  if (mode === "post") {
+    return executeSessionPost(opts, toolCallId, params, message);
+  }
   const resumeCaller =
     mode === undefined || mode === "resume"
       ? captureSessionsSendResumeCaller(opts?.retainedReplay ? opts.assertSourceCurrent : undefined)

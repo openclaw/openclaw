@@ -101,7 +101,12 @@ export async function seedSessionToolsFixtureSession({
 
 export function withSessionToolsFixture(
   run: (cfg: OpenClawConfig) => Promise<void>,
-  options?: { audit?: boolean },
+  options?: {
+    audit?: boolean;
+    visibility?: "self" | "tree" | "agent" | "all";
+    agentToAgent?: NonNullable<OpenClawConfig["tools"]>["agentToAgent"];
+    mainSend?: string[];
+  },
 ) {
   return (fixtureRun = withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
@@ -111,11 +116,19 @@ export function withSessionToolsFixture(
         ownership: "explicit",
         defaults: { systemAgent: { agentId: "main" } },
         entries: {
-          main: { workspace: state.workspaceDir },
+          main: {
+            workspace: state.workspaceDir,
+            ...(options?.mainSend !== undefined
+              ? { tools: { agentToAgent: { send: options.mainSend } } }
+              : {}),
+          },
           other: { workspace: state.path("other-workspace") },
         },
       },
-      tools: { sessions: { visibility: "all" } },
+      tools: {
+        sessions: { visibility: options?.visibility ?? "all" },
+        ...(options?.agentToAgent ? { agentToAgent: options.agentToAgent } : {}),
+      },
     };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
@@ -152,7 +165,12 @@ export function withParticipantSessionToolsFixture(
     alice: Parameters<typeof withPersonalToolTurn>[0]["owner"];
     bob: Parameters<typeof withPersonalToolTurn>[0]["owner"];
   }) => Promise<void>,
-  options?: { audit?: boolean },
+  options?: {
+    audit?: boolean;
+    visibility?: "self" | "tree" | "agent" | "all";
+    agentToAgent?: NonNullable<OpenClawConfig["tools"]>["agentToAgent"];
+    mainSend?: string[];
+  },
 ) {
   return withSessionToolsFixture(async (cfg) => {
     const person = (name: string) => {
