@@ -8,7 +8,10 @@ import {
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
+import {
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
+  resolveAgentRunErrorLifecycleFields,
+} from "../../agents/run-termination.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import {
   composeSessionSourceAssertion,
@@ -342,13 +345,18 @@ function enqueueSessionEventAttempt(
       const aborted = result?.kind === "aborted";
       const terminalSignal = operation?.abortSignal.aborted ? operation.abortSignal : signal;
       const terminalError = (failed ? result.cause : undefined) ?? failure;
-      // A watchdog failure also aborts its backend. Only the controller's recorded
-      // cancellation is cancellation; retain typed deadline facts before cleanup aborts.
+      // Frozen supersession records cancellation without aborting its signal.
+      // Watchdog failures may abort the backend without being cancellation;
+      // retain typed deadline facts ahead of the recorded cancellation defaults.
       terminalOutcome = mergeAgentRunTerminalOutcome(
         terminalOutcome,
         buildAgentRunTerminalOutcomeFromLifecycleEvent({
           phase: failed || aborted || failure ? "error" : "end",
           data: {
+            ...(aborted ? { aborted: true } : {}),
+            ...(aborted && result.code === "aborted_for_supersession"
+              ? { stopReason: AGENT_RUN_SUPERSEDED_STOP_REASON }
+              : {}),
             ...resolveAgentRunErrorLifecycleFields(
               terminalError ?? terminalSignal.reason,
               failed ? undefined : terminalSignal,

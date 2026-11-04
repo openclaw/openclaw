@@ -350,7 +350,7 @@ it.for([
   },
 );
 
-it.for(["user", "restart", "superseded", "timeout", "stalled"] as const)(
+it.for(["user", "restart", "superseded", "frozen-superseded", "timeout", "stalled"] as const)(
   "preserves controller-owned %s through the scheduled event receipt",
   async (reason, { signal }) => {
     await withOpenClawTestState(
@@ -372,8 +372,12 @@ it.for(["user", "restart", "superseded", "timeout", "stalled"] as const)(
           if (reason === "stalled") {
             owner.abortForStall();
             expect(owner.result).toMatchObject({ kind: "failed", code: "run_stalled" });
-          } else if (reason === "superseded") {
+          } else if (reason === "superseded" || reason === "frozen-superseded") {
+            if (reason === "frozen-superseded") {
+              owner.freezeAbort();
+            }
             owner.supersede();
+            expect(owner.abortSignal.aborted).toBe(reason !== "frozen-superseded");
           } else {
             owner.abort(
               reason === "timeout"
