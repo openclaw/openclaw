@@ -212,49 +212,45 @@ export function matchStandingIntentsInDatabase(
   if (!search.fullText) {
     throw new Error(search.diagnostics.join("; "));
   }
-  const fullText = search.fullText;
   // `unicode61` folds an unspaced CJK run into one token, so a prompt containing one also needs the
   // scoped rows the index cannot address. Every other prompt keeps index-only selection.
-  const literalCandidates = needsLiteralIntentCandidates(params.promptText);
-  const postgres = isPostgresSqlConnection(db);
-  const buildCandidatesQuery = (withFullText: boolean) => {
-    let candidatesQuery = (
-      withFullText && !postgres
-        ? kysely
-            .selectFrom("standing_intents as intent")
-            .innerJoin("standing_intents_fts as fts", "fts.rowid", "intent.intent_key")
-        : kysely.selectFrom("standing_intents as intent")
-    )
-      .selectAll("intent")
-      .where("intent.status", "=", "armed")
-      .where("intent.creator_sender", "is not", null)
-      .where("intent.expires_at", ">", nowMs)
-      .whereRef("intent.fire_count", "<", "intent.max_fires");
-    if (withFullText) {
-      candidatesQuery = candidatesQuery.where(fullText.match(search.text.intents!, ftsQuery));
-    }
-    for (const [column, scopes] of [
-      ["intent.channel_scope", channelScopes],
-      ["intent.sender_scope", storedSenderScope ? [storedSenderScope] : []],
-    ] as const) {
-      candidatesQuery =
-        scopes.length > 0
-          ? candidatesQuery.where((expression) =>
-              expression.or([
-                expression(column, "is", null),
-                ...scopes.map((scope) => expression(column, "=", scope)),
-              ]),
-            )
-          : candidatesQuery.where(column, "is", null);
-    }
-    return candidatesQuery;
-  };
+  const candidatePassCount = needsLiteralIntentCandidates(params.promptText) ? 2 : 1;
+  let scopedCandidatesQuery = kysely
+    .selectFrom("standing_intents as intent")
+    .selectAll("intent")
+    .where("intent.status", "=", "armed")
+    .where("intent.creator_sender", "is not", null)
+    .where("intent.expires_at", ">", nowMs)
+    .whereRef("intent.fire_count", "<", "intent.max_fires");
+  for (const [column, scopes] of [
+    ["intent.channel_scope", channelScopes],
+    ["intent.sender_scope", storedSenderScope ? [storedSenderScope] : []],
+  ] as const) {
+    scopedCandidatesQuery =
+      scopes.length > 0
+        ? scopedCandidatesQuery.where((expression) =>
+            expression.or([
+              expression(column, "is", null),
+              ...scopes.map((scope) => expression(column, "=", scope)),
+            ]),
+          )
+        : scopedCandidatesQuery.where(column, "is", null);
+  }
+  const indexedCandidatesQuery = (
+    isPostgresSqlConnection(db)
+      ? scopedCandidatesQuery
+      : scopedCandidatesQuery.innerJoin(
+          "standing_intents_fts as fts",
+          "fts.rowid",
+          "intent.intent_key",
+        )
+  ).where(search.fullText.match(search.text.intents!, ftsQuery));
   const fired: StandingIntent[] = [];
   let scannedCandidates = 0;
   // The literal lane reads the same scoped rows without the index, so it runs last and shares the
   // candidate budget: firing writes `fired`/`done`, which keeps the second lane off a fired row.
-  for (const withFullText of literalCandidates ? [true, false] : [true]) {
-    const candidatesQuery = buildCandidatesQuery(withFullText);
+  for (let pass = 0; pass < candidatePassCount; pass++) {
+    const candidatesQuery = pass === 0 ? indexedCandidatesQuery : scopedCandidatesQuery;
     let cursor: { createdAt: number; id: string } | undefined;
     while (
       fired.length < INTENT_INJECTION_MAX_COUNT &&

@@ -1,4 +1,0 @@
-# Literal matching for unspaced Han/Hiragana/Katakana/Hangul trigger terms needs the look-alike
-# table: a CJK sentence fires, a mixed entry fires once through both candidate lanes, and
-# `café`/`release` keep word boundaries.
-14

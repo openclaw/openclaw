@@ -170,8 +170,8 @@ export function parseStoredTriggerKeywords(value: string): string[] {
   }
 }
 
-export function tokenizeIntentText(text: string): string[] {
-  return text.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [];
+function tokenizeNormalizedIntentText(text: string): string[] {
+  return text.match(/[\p{L}\p{N}_-]+/gu) ?? [];
 }
 
 /** Scripts written without spaces between words; `unicode61` tokenizes a whole run as one token. */
@@ -182,17 +182,13 @@ export function needsLiteralIntentCandidates(promptText: string): boolean {
   return UNSPACED_SCRIPT_TERM.test(promptText);
 }
 
-/**
- * A trigger entry matches when every unspaced-script term appears literally inside the prompt and
- * every other term is its own prompt word. Word equality cannot address the interior of an unspaced
- * CJK prompt, while substring matching would break word boundaries for scripts that do use spacing.
- */
+/** Unspaced-script terms match literally; other terms retain whole-word boundaries. */
 export function triggerKeywordMatchesPrompt(
   keyword: string,
   promptTokens: ReadonlySet<string>,
   promptText: string,
 ): boolean {
-  const terms = tokenizeIntentText(keyword);
+  const terms = tokenizeNormalizedIntentText(keyword.toLowerCase().normalize("NFC"));
   return (
     terms.length > 0 &&
     terms.every((term) =>
@@ -218,7 +214,8 @@ export function prepareStandingIntentMatch(params: {
   senderId?: string;
   nowMs?: number;
 }): StandingIntentMatchInput | undefined {
-  const promptTokens = [...new Set(tokenizeIntentText(params.prompt))];
+  const promptText = params.prompt.toLowerCase().normalize("NFC");
+  const promptTokens = [...new Set(tokenizeNormalizedIntentText(promptText))];
   if (promptTokens.length === 0) {
     return undefined;
   }
@@ -251,7 +248,7 @@ export function prepareStandingIntentMatch(params: {
       : undefined;
   return {
     promptTokens,
-    promptText: params.prompt.toLowerCase(),
+    promptText,
     ftsQuery: { kind: "any", clauses: promptTokens.map((text) => ({ kind: "phrase", text })) },
     channelScopes,
     senderScope: storedSenderScope,
