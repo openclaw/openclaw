@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
 import {
@@ -26,9 +27,9 @@ import { getMediaFileExtension, labelForMediaPath } from "../media-file-extensio
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import {
-  resolveAgentOpeningSender,
   resolveMessageSender,
   resolveMessageSenderLabel,
+  type SenderIdentity,
 } from "./sender-label.ts";
 
 function imageDataUrl(data: unknown, mimeType: unknown): string | undefined {
@@ -132,6 +133,25 @@ function readMessageDelivery(value: unknown): MessageDelivery | undefined {
     replyToCurrent: delivery.replyToCurrent,
     replyToId: readStringField(delivery, "replyToId"),
   };
+}
+
+// Session creation records its agent-written opening as inter-session
+// provenance; the transcript sender stays an opaque id without an identity.
+/** Identifies the agent that wrote a session's opening message. */
+function resolveAgentOpeningSender(message: Record<string, unknown>): SenderIdentity | null {
+  const provenance = asOptionalRecord(message.provenance);
+  const sourceTool = readStringField(provenance, "sourceTool");
+  if (
+    message.role !== "user" ||
+    provenance?.kind !== "inter_session" ||
+    (sourceTool !== "sessions_create" && sourceTool !== "sessions_spawn")
+  ) {
+    return null;
+  }
+  const agentId = parseAgentSessionKeyParts(
+    readStringField(provenance, "sourceSessionKey") ?? "",
+  )?.agentId;
+  return agentId ? { identity: { type: "agent", id: agentId }, id: `agent:${agentId}` } : null;
 }
 
 export function readMessageSenderSession(value: unknown): NormalizedMessage["senderSession"] {
