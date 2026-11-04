@@ -323,12 +323,22 @@ describe("cron.runs session visibility", () => {
               nextOffset: null,
             });
             const page = respond.mock.calls[0]?.[1];
-            for (const field of ["diagnostics", "delivery", "failureNotificationDelivery"]) {
+            for (const field of ["delivery", "failureNotificationDelivery"]) {
               if (view === "summary") {
                 expect(page).not.toHaveProperty(`entries.0.${field}`);
               } else {
                 expect(page).toHaveProperty(`entries.0.${field}`);
               }
+            }
+            if (view === "summary") {
+              // Bounded diagnostic note survives on summary pages without entries or traces.
+              expect(page).toHaveProperty(
+                "entries.0.diagnostics.summary",
+                "Diagnostic-only search",
+              );
+              expect(page).toHaveProperty("entries.0.diagnostics.entries", []);
+            } else {
+              expect(page).toHaveProperty("entries.0.diagnostics");
             }
           }
         }

@@ -48,6 +48,33 @@ describe("cron view run history", () => {
     });
   });
 
+  it("shows diagnostic notes on delivered runs without overriding execution status", async () => {
+    const container = await renderView(
+      {
+        runs: [
+          createRun({
+            status: "ok",
+            completionStatus: "succeeded",
+            deliveryStatus: "delivered",
+            summary: "Report delivered",
+            diagnostics: {
+              summary: "Result was sent to a chat owned by another agent",
+              entries: [],
+            },
+          }),
+        ],
+      },
+      "job",
+    );
+    const entry = getElement(container, ".cron-run-entry", HTMLDivElement);
+    expect(entryText(entry, "title")?.replace(/\s+/g, " ").trim()).toBe("job-1 · OK");
+    expect(entryText(entry, "facts")).toBe("Delivered");
+    const note = getElement(entry, '[data-test-id="cron-run-diagnostic-note"]', HTMLDivElement);
+    expect(note.textContent).toContain("Diagnostics: Result was sent to a chat owned by another");
+    expect(note.textContent).not.toMatch(/· Error/);
+    expect(entryText(entry, "title")).not.toContain("Error");
+  });
+
   it("formats run token counts and durations in the rendered entry", async () => {
     const container = await renderView({
       runs: [

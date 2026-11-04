@@ -181,9 +181,16 @@ export function selectCronRunHistoryPage(
   if (options.view === "summary") {
     // Search and visibility use the full record before pruning the response page.
     for (const entry of entries) {
-      delete entry.diagnostics;
       delete entry.delivery;
       delete entry.failureNotificationDelivery;
+      // Keep only the bounded operator note; summary pages never ship diagnostic entries.
+      if (entry.diagnostics) {
+        if (entry.diagnostics.summary) {
+          entry.diagnostics = { summary: entry.diagnostics.summary, entries: [] };
+        } else {
+          delete entry.diagnostics;
+        }
+      }
     }
   }
   const nextOffset = boundedOffset + entries.length;

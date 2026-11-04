@@ -367,7 +367,18 @@ it("pages large history without reading off-page payloads or changing completion
           expect(runIds(page.entries)).toEqual(expected);
           if (options.view === "summary") {
             expect(JSON.stringify(records)).not.toContain("diagnostic-payload:");
-            expect(page.entries.every((entry) => !entry.diagnostics && !entry.delivery)).toBe(true);
+            expect(page.entries.every((entry) => !entry.delivery)).toBe(true);
+            // Summary pages keep the bounded diagnostic note and never ship entry payloads.
+            expect(
+              page.entries.every(
+                (entry) =>
+                  !entry.diagnostics ||
+                  (entry.diagnostics.summary !== undefined &&
+                    entry.diagnostics.entries.length === 0),
+              ),
+            ).toBe(true);
+            expect(page.entries.some((entry) => entry.diagnostics?.summary)).toBe(true);
+            expect(JSON.stringify(page.entries)).not.toContain("diagnostic-payload:");
           } else {
             expect(page.entries[0]?.diagnostics?.entries[0]?.message).toContain(
               "diagnostic-payload:",

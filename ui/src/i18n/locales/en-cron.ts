@@ -321,6 +321,7 @@ const enCron = {
     runEntry: {
       noSummary: "No summary.",
       deliverySuppression: "Delivery suppression: {reason}",
+      diagnosticNote: "Diagnostics: {note}",
       runAt: "Run at",
       transcript: "Run transcript",
       viewTranscript: "View transcript",
