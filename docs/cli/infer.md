@@ -165,6 +165,7 @@ Notes:
 - Use `model run --gateway` to test Gateway routing or agent-runtime setup while keeping the model input raw. Use [`openclaw agent`](/cli/agent) or a chat surface for full agent context, tools, memory, and session transcript.
 - `--thinking adaptive` maps to the completion-runtime level `medium`; `--thinking max` maps to `max` for OpenAI models that support the native max effort, otherwise `xhigh`.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.
+- An interrupt accepted during generation cancels the in-flight local request or Gateway call and stops waiting for it instead of letting the run finish, and publishes no output for the interrupted run.
 
 ## Image
 

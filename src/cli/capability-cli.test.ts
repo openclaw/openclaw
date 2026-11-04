@@ -786,10 +786,11 @@ describe("capability cli", () => {
       } else {
         await fs.writeFile(tempInput, Buffer.from(PNG_1X1_BASE64, "base64"));
       }
-      await runModelProbe(
-        "--prompt",
-        chatGpt ? "hello" : "describe this",
-        ...(chatGpt ? ["--model", "openai/gpt-5.5"] : ["--file", tempInput, "--thinking", "high"]),
+      const probeArgs = chatGpt
+        ? ["--model", "openai/gpt-5.5"]
+        : ["--file", tempInput, "--thinking", "high"];
+      await new AsyncWorkScope().track(() =>
+        runModelProbe("--prompt", chatGpt ? "hello" : "describe this", ...probeArgs),
       );
       const call = firstCompletionCall();
       expect(call?.context?.messages?.[0]?.role).toBe("user");
@@ -799,7 +800,7 @@ describe("capability cli", () => {
         );
         expect(call?.context?.messages?.[0]?.content).toBe("hello");
       } else {
-        expect(call?.options?.reasoning).toBe("high");
+        expect(call?.options).toMatchObject({ reasoning: "high", signal: expect.any(AbortSignal) });
         expect(firstJsonOutput()?.transport).toBe("local");
         expect(mocks.callGateway).not.toHaveBeenCalled();
         expect(call?.context?.messages?.[0]?.content).toEqual([
@@ -936,11 +937,8 @@ describe("capability cli", () => {
       mocks.loadModelCatalog.mockResolvedValueOnce([
         { id: catalogId, provider: "anthropic", name },
       ]);
-      await runModelProbe(
-        "--gateway",
-        "--model",
-        model,
-        ...(thinking ? ["--thinking", "high"] : []),
+      await new AsyncWorkScope().track(() =>
+        runModelProbe("--gateway", "--model", model, ...(thinking ? ["--thinking", "high"] : [])),
       );
       if (thinking) {
         expect(firstGatewayCall()?.params?.thinking).toBe("high");
@@ -952,6 +950,7 @@ describe("capability cli", () => {
         clientName: "gateway-client",
         method: "agent",
         mode: "backend",
+        signal: expect.any(AbortSignal),
         scopes: ["operator.admin"],
         params: { provider, model: forwardedModel, modelRun: true, promptMode: "none" },
       });
