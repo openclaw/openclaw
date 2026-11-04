@@ -13,16 +13,12 @@ function requestClient(
   return new RequestClient("test-token", { fetch, ...options });
 }
 function bucketResponse(id: string, remaining = "1", extra: Record<string, string> = {}) {
-  return createJsonResponse(
-    { id },
-    {
-      headers: {
-        "X-RateLimit-Bucket": "channel-messages",
-        "X-RateLimit-Remaining": remaining,
-        ...extra,
-      },
-    },
-  );
+  const headers = {
+    "X-RateLimit-Bucket": "channel-messages",
+    "X-RateLimit-Remaining": remaining,
+    ...extra,
+  };
+  return createJsonResponse({ id }, { headers });
 }
 function rateLimitResponse(
   retryAfter: number | string,
@@ -40,9 +36,6 @@ function heldRequest(result: unknown = { ok: "second" }) {
     fetch.mock.calls.length === 1 ? await response.promise : createJsonResponse(result),
   );
   return { fetch, response };
-}
-function readRequestUrl(input: string | URL | Request): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
 const messagePath = "/channels/c1/messages";
 afterEach(() => vi.useRealTimers());
@@ -77,7 +70,7 @@ describe("RequestClient", () => {
     const release = createDeferred<void>();
     const blockers = Array.from({ length: 4 }, (_, index) => `/guilds/blocked-${index}/roles`);
     const fetch = vi.fn(async (input: string | URL | Request) => {
-      const path = new URL(readRequestUrl(input)).pathname.replace(/^\/api\/v\d+/, "");
+      const path = new URL(new Request(input).url).pathname.replace(/^\/api\/v\d+/, "");
       if (blockers.includes(path)) {
         await release.promise;
         return createJsonResponse({ ok: "first" });
@@ -96,7 +89,7 @@ describe("RequestClient", () => {
     await Promise.all(active);
     await expect(critical).resolves.toEqual({ ok: "critical" });
     await expect(background).resolves.toEqual({ ok: "background" });
-    expect(fetch.mock.calls.map(([input]) => new URL(readRequestUrl(input)).pathname)).toEqual([
+    expect(fetch.mock.calls.map(([input]) => new URL(new Request(input).url).pathname)).toEqual([
       ...blockers.map((path) => `/api/v10${path}`),
       "/api/v10/interactions/123/token/callback",
       "/api/v10/guilds/g2/roles",
@@ -145,12 +138,15 @@ describe("RequestClient", () => {
       ];
       const fetch = vi.fn(async () => {
         const response = responses.shift();
-        if (!response) throw new Error("unexpected request");
+        if (!response) {
+          throw new Error("unexpected request");
+        }
         return response;
       });
       const client = requestClient(fetch);
-      if (kind === "bucket")
+      if (kind === "bucket") {
         await expect(client.get(messagePath)).resolves.toEqual({ id: "first" });
+      }
       const request = client.get(messagePath);
       await Promise.resolve();
       expect(fetch).toHaveBeenCalledTimes(1);
@@ -259,7 +255,9 @@ describe("RequestClient", () => {
         callerSignal: controller.signal,
         retry: { attempts: 2, minDelayMs: 120_000, maxDelayMs: 120_000, jitter: 0 },
       });
-      if (mode === "pre-aborted") controller.abort();
+      if (mode === "pre-aborted") {
+        controller.abort();
+      }
       const pending =
         mode === "backoff" ? request(() => rest.post(messagePath)) : rest.post(messagePath);
       const settled = vi.fn();
