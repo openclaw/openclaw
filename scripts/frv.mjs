@@ -3180,9 +3180,15 @@ async function inspectPublicationStatus(options) {
         );
         if (terminal.state === "available") {
           const nativeJobs = await reader.getAttemptJobs(String(run.id), run.run_attempt);
+          // Keep pre-split published runs readable through their artifact retention window.
+          const evidenceOwner = nativeJobs.some(
+            (job) => job.name === "Record detached Windows outcome",
+          )
+            ? "Record detached Windows outcome"
+            : "Promote signed Windows installers";
           const nativeOwner = requireArtifactUploadJob(
             nativeJobs,
-            "Promote signed Windows installers",
+            evidenceOwner,
             "Upload Windows promotion evidence",
           );
           observeWindowsMarker(

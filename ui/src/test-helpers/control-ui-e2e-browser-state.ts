@@ -244,7 +244,7 @@ export function readControlUiE2eBrowserState() {
                   label: safeValue(sendLabel, [
                     "Send message",
                     "Type a message first.",
-                    "Sending message...",
+                    "Sending message…",
                     "Loading conversation…",
                   ]),
                   labelLength: sendLabel?.length ?? 0,

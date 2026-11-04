@@ -417,9 +417,12 @@ function Run(props: {
   const usageSummary = createMemo(() => {
     const usage = props.entry.usage;
     return usage?.total_tokens !== undefined
-      ? `${formatCompactTokenCount(usage.total_tokens)} ${t("usage.metrics.tokens")}`
+      ? t("cron.runEntry.tokens", { count: formatCompactTokenCount(usage.total_tokens) })
       : usage?.input_tokens !== undefined && usage.output_tokens !== undefined
-        ? `${formatCompactTokenCount(usage.input_tokens)} in / ${formatCompactTokenCount(usage.output_tokens)} out`
+        ? t("cron.runEntry.inputOutputTokens", {
+            input: formatCompactTokenCount(usage.input_tokens),
+            output: formatCompactTokenCount(usage.output_tokens),
+          })
         : null;
   });
   const bodySource = () =>

@@ -3,6 +3,21 @@ import { en } from "./en.ts";
 
 const enCron = {
   cron: {
+    job: {
+      state: "{status} · next {next} · last {last}",
+      pluginCommand: "Plugin command: /{command} ({plugin})",
+      system: "System: {text}",
+      command: "Command: {command}",
+      script: "Script: {script}",
+      agent: "Agent: {message}",
+    },
+    missingConfigRevision:
+      "This automation is missing its configuration revision. Refresh and try again.",
+    changedOnGateway:
+      "This automation changed on the Gateway. The latest definition is loaded; review it before retrying.",
+    changedOnGatewayLoadFailed:
+      "This automation changed on the Gateway, but the latest definition could not be loaded. Refresh before retrying.",
+    runQueued: "Run queued. Run ID: {runId}",
     adminRequired:
       "Browsing only. Only the human owner or an administrator can change this automation.",
     runNotStarted: {
@@ -320,6 +335,8 @@ const enCron = {
       nextRelative: "Next {at}",
     },
     runEntry: {
+      tokens: "{count} Tokens",
+      inputOutputTokens: "{input} in / {output} out",
       noSummary: "No summary.",
       deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Run at",

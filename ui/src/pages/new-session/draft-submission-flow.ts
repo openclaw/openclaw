@@ -11,7 +11,7 @@ import {
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence-feedback.ts";
+import { chatComposerDraftStorageError } from "../chat/composer-persistence-feedback.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { BackgroundCreatePreview } from "./background-create-preview.ts";
@@ -130,7 +130,7 @@ export class DraftSubmissionFlow {
           ...state,
           visibility: resetVisibility ? "normal" : this.visibilityValue,
         }),
-      () => this.setError(CHAT_COMPOSER_DRAFT_STORAGE_ERROR),
+      () => this.setError(chatComposerDraftStorageError()),
     );
     this.attachmentDraft = new NewSessionAttachmentDraft(this.draftChanged, () => {
       this.startedSession.current = null;

@@ -293,7 +293,7 @@ describe("session workspace path actions", () => {
     assert(copy);
     copy.focus();
     copy.click();
-    await vi.waitFor(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    await vi.waitFor(() => expect(copy.getAttribute("aria-label")).toBe("Copied"));
     loadSessionWorkspace(state, getSessionWorkspace(state), true);
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
     renderRows();
@@ -301,8 +301,8 @@ describe("session workspace path actions", () => {
       "README.md",
     );
     expect(document.activeElement).toBe(copy);
-    expect(container.querySelector('button[aria-label="Copied!"]')).toBe(copy);
-    expect(copy.parentElement?.querySelector('[role="status"]')?.textContent).toBe("Copied!");
+    expect(container.querySelector('button[aria-label="Copied"]')).toBe(copy);
+    expect(copy.parentElement?.querySelector('[role="status"]')?.textContent).toBe("Copied");
   });
 
   it("keeps Windows file labels readable and distinct", async () => {
@@ -346,7 +346,7 @@ describe("session workspace path actions", () => {
     expect(fileNames(mount)).toEqual([`ui${separator}index.ts`]);
   });
 
-  it("shows Copy failed when copying a session Files path", async () => {
+  it("shows Couldn’t copy. Try again. when copying a session Files path", async () => {
     const writeText = clipboard(
       vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError")),
     );
@@ -374,11 +374,13 @@ describe("session workspace path actions", () => {
     expect(copy).toBeInstanceOf(HTMLButtonElement);
 
     copy!.click();
-    await vi.waitFor(() => expect(copy!.getAttribute("aria-label")).toBe("Copy failed"));
+    await vi.waitFor(() =>
+      expect(copy!.getAttribute("aria-label")).toBe("Couldn’t copy. Try again."),
+    );
 
     expect(writeText).toHaveBeenCalledWith("src/edited.ts");
     const feedback = copy!.parentElement?.querySelector<HTMLElement>('[role="status"]');
-    expect(feedback).toMatchObject({ textContent: "Copy failed", hidden: false });
+    expect(feedback).toMatchObject({ textContent: "Couldn’t copy. Try again.", hidden: false });
     expect(rowClick).not.toHaveBeenCalled();
     expect(onOpenFile).not.toHaveBeenCalled();
 
@@ -572,7 +574,8 @@ it.each(["mobile", undefined] as const)(
 it("desktop browses lazy directories and restores activity after an incomplete search", async () => {
   setupDesktopLayout();
   const incompleteNotice = "Search is incomplete. Some files may not appear in these results.";
-  const directoryNotice = "Showing the first matching files. Refine the search to narrow results.";
+  const directoryNotice =
+    "Showing the first matching files. Refine your search to narrow the results.";
   const listFiles = vi.fn(
     async (_sessionKey: string, options?: { path?: string; search?: string }) => ({
       sessionKey: "agent:main:workspace",

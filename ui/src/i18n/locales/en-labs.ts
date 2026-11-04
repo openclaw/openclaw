@@ -22,8 +22,7 @@ const enLabs = {
     configureFeature: "Configure {name}",
     decisionAssistance: {
       title: "Decision assistance",
-      description:
-        "Enable experimental assistance from your configured Decision model. See the documentation for supported uses, setup, and data handling.",
+      description: "Enable experimental assistance from your configured Decision model.",
       optedIn: "Preference saved.",
       loading: "Loading setting…",
       unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
@@ -40,7 +39,7 @@ const enLabs = {
       executorQuickjs: "QuickJS (isolated)",
     },
     toolSearch: {
-      title: "Tool Search for all models",
+      title: "Tool search for all models",
       description:
         "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
     },
@@ -70,14 +69,14 @@ const enLabs = {
       description: "Templates are ready-made agents for specific tasks.",
     },
     hostDesktop: {
-      title: "Host Desktop",
+      title: "This computer’s desktop",
       description:
-        "Watch and control this Gateway machine from the Desktop panel through its existing VNC or Screen Sharing server.",
+        "Watch and control the computer running OpenClaw from the Desktop panel through its existing VNC or Screen Sharing server.",
     },
     workerDesktop: {
-      title: "Cloud Worker Desktop",
+      title: "Cloud device desktop",
       description:
-        "Watch and control node-carried desktops from capable Crabbox AWS, Azure, or Hetzner profiles with desktop: true.",
+        "Watch and control cloud device desktops from supported Crabbox AWS, Azure, or Hetzner profiles with desktop: true.",
     },
   },
 } satisfies TranslationMap;

@@ -21,9 +21,7 @@ it("loads route subtitles with command-palette search", async () => {
   );
   expect(en.subtitles).toBe(subtitles);
   expect(manager.t("subtitles.appearance")).toBe("Darstellung");
-  expect(manager.t("subtitles.connection")).toBe(
-    "Gateway endpoint, credentials, and handshake status.",
-  );
+  expect(manager.t("subtitles.connection")).toBe("Gateway connection and browser sign-in.");
 });
 
 it("loads executor-only copy when a slash command is executed", async () => {
@@ -53,12 +51,14 @@ it("loads executor-only copy when a slash command is executed", async () => {
       sessions,
       sessionAccessSnapshot: snapshot,
     }),
-  ).resolves.toEqual({ content: "Unknown command: `/not-a-command`" });
+  ).resolves.toEqual({
+    content: "Couldn’t find `/not-a-command`. Type `/` to see available commands.",
+  });
   expect(request).not.toHaveBeenCalled();
   expect(manager.t("chat.commandResults.options", { options: "brief, full" })).toBe(
     "Options: brief, full.",
   );
   expect(manager.t("chat.commandResults.sessionUnavailable")).toBe(
-    "Session capability is unavailable",
+    "Couldn’t access this session. Open another session and try again.",
   );
 });
