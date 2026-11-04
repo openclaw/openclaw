@@ -313,7 +313,9 @@ it.each(unavailableLoginCases)(
       ];
       expect(controls.length).toBeGreaterThan(0);
       expect(controls.every((button) => button.disabled)).toBe(true);
-      expect(controls.every((button) => button.title.includes("operator.admin"))).toBe(true);
+      expect(
+        controls.every((button) => button.title === "You need admin access to change MCP servers."),
+      ).toBe(true);
       expect(enabledSwitch(card, "docs").disabled).toBe(true);
       enabledSwitch(card, "docs").click();
       expect(harness.patch).not.toHaveBeenCalled();
@@ -425,9 +427,7 @@ it.each([
   ["stdio", 'mcp "C:\\My Files\\\\"', { command: "mcp", args: ["C:\\My Files\\"] }],
 ] as const)("adds a %s server from %s", async (transport, target, expected) => {
   const { card, harness } = await mountCard();
-  expect(card.querySelector(".settings-empty")?.textContent).toContain(
-    "No MCP servers configured.",
-  );
+  expect(card.querySelector(".settings-empty")?.textContent).toContain("No MCP servers yet.");
   const setupLink = card.querySelector<HTMLAnchorElement>(".settings-empty a");
   expect(setupLink).toMatchObject({
     href: "https://docs.openclaw.ai/tools/mcp",

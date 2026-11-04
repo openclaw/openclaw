@@ -22,7 +22,7 @@ const enSessionSkillLibrary = {
       attachNamed: "Attach {name} · {owner}",
       detach: "Detach",
       queued:
-        "Skill selections updated for the next turn. An active turn keeps its current revision.",
+        "Skill selections updated for the next reply. A reply in progress keeps its current revision.",
       readOnly:
         "This is the exact revision selected for this session. Session access allows reading this pin, not editing its library or browsing other revisions.",
     },
