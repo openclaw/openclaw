@@ -119,7 +119,6 @@ class SecurePrefs(
     private const val currentAppearanceSyncMigrationVersion = 1
     private const val chatModelFavoritesKey = "chat.modelFavorites"
     private const val chatModelRecentsKey = "chat.modelRecents"
-    private const val sessionCustomGroupsKey = "sessions.customGroups"
     private const val sidebarPageOrderKey = "sidebar.pageOrder"
     private const val sidebarVisiblePagesKey = "sidebar.visiblePages"
     private val appearanceSyncKeys = setOf("ui.theme", "ui.themeMode", "ui.accent")
@@ -293,11 +292,6 @@ class SecurePrefs(
 
   private val _modelRecents = MutableStateFlow(loadStringList(chatModelRecentsKey))
   val modelRecents: StateFlow<List<String>> = _modelRecents
-
-  // Custom session group names the user created locally; assigned groups also
-  // persist server-side via the session category field (mirrors web localStorage).
-  private val _sessionCustomGroups = MutableStateFlow(loadStringList(sessionCustomGroupsKey))
-  val sessionCustomGroups: StateFlow<List<String>> = _sessionCustomGroups
 
   private val _sidebarPageOrder = MutableStateFlow(sanitizeSidebarPageOrder(loadStringList(sidebarPageOrderKey)))
   val sidebarPageOrder: StateFlow<List<String>> = _sidebarPageOrder
@@ -1013,8 +1007,6 @@ class SecurePrefs(
     if (trimmed.isEmpty()) return
     _modelRecents.persistStringList(chatModelRecentsKey, (listOf(trimmed) + _modelRecents.value.filterNot { it == trimmed }).take(maxChatModelRecents))
   }
-
-  fun setSessionCustomGroups(groups: List<String>) = _sessionCustomGroups.persistStringList(sessionCustomGroupsKey, groups.map(String::trim).filter { it.isNotEmpty() }.distinct())
 
   fun setSidebarPageOrder(pageIds: List<String>) = _sidebarPageOrder.persistStringList(sidebarPageOrderKey, sanitizeSidebarPageOrder(pageIds))
 

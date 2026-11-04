@@ -5,6 +5,7 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeSidebarSectionOrder } from "./session-group-catalog-normalization.js";
 import {
   ensureSessionGroupCatalog,
   mutateSessionGroupCatalog,
@@ -19,6 +20,13 @@ import {
   SessionMutationAuthorizationChangedError,
   type SessionMutationTarget,
 } from "./session-mutation-authorization-error.js";
+
+export class SessionGroupCatalogConflictError extends Error {
+  constructor() {
+    super("Session group catalog changed; reload and retry the reorder.");
+    this.name = "SessionGroupCatalogConflictError";
+  }
+}
 
 export class SessionGroupNotFoundError extends Error {
   constructor(name: string) {
@@ -38,35 +46,6 @@ export class SessionGroupNotEmptyError extends Error {
   }
 }
 
-function normalizeSidebarSectionOrder(
-  sectionOrder: readonly string[],
-  groupNames: readonly string[],
-): string[] {
-  const groups = new Set(groupNames);
-  const normalized = new Set<string>();
-  for (const raw of sectionOrder) {
-    const sectionId = raw.trim();
-    let canonical: string | null = null;
-    if (sectionId === "ungrouped" || sectionId === "groups" || sectionId === "work") {
-      canonical = sectionId;
-    } else if (sectionId.startsWith("category:")) {
-      const name = normalizeOptionalString(sectionId.slice("category:".length));
-      if (name && groups.has(name)) {
-        canonical = `category:${name}`;
-      }
-    } else if (sectionId.startsWith("catalog:")) {
-      const catalogId = normalizeOptionalString(sectionId.slice("catalog:".length));
-      if (catalogId) {
-        canonical = `catalog:${catalogId}`;
-      }
-    }
-    if (canonical) {
-      normalized.add(canonical);
-    }
-  }
-  return [...normalized];
-}
-
 /**
  * Replaces the ordered catalog. Dropping a name whose group still has member
  * sessions is rejected: member sweeps stay owned by sessions.groups.delete,
@@ -76,6 +55,7 @@ export async function putSessionGroups(params: {
   cfg: OpenClawConfig;
   names: readonly string[];
   sectionOrder?: readonly string[];
+  expected?: { names: string[]; sectionOrder: string[] };
   assertCurrent?: () => void;
   assertTargetCurrent?: (target: { agentId?: string; sessionKey: string }) => void;
 }): Promise<SessionGroupRecord[]> {
@@ -87,6 +67,13 @@ export async function putSessionGroups(params: {
   const result = await mutateSessionGroupCatalog(
     {
       kind: "put",
+      expected: params.expected && {
+        names: normalizeUniqueTrimmedStringList(params.expected.names),
+        sectionOrder: normalizeSidebarSectionOrder(
+          params.expected.sectionOrder,
+          normalizeUniqueTrimmedStringList(params.expected.names),
+        ),
+      },
       names: normalized,
       sectionOrder: normalizedSectionOrder,
       cfg: { agents: cfg.agents, session: cfg.session },
@@ -101,6 +88,9 @@ export async function putSessionGroups(params: {
       }
     },
   );
+  if (result.conflict) {
+    throw new SessionGroupCatalogConflictError();
+  }
   if (result.nonEmpty?.length) {
     throw new SessionGroupNotEmptyError(result.nonEmpty);
   }

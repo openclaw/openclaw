@@ -8,6 +8,7 @@ import { ensureColumn, tableHasColumn } from "../state/openclaw-state-db-schema-
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { WorkerOperationContext } from "../state/worker-operation-registry.js";
+import { normalizeSidebarSectionOrder } from "./session-group-catalog-normalization.js";
 import type {
   SessionGroupCatalogMutation,
   SessionGroupCatalogMutationResult,
@@ -182,6 +183,19 @@ export function mutateSessionGroupCatalogInDatabase(
         stage: "transaction",
         facts: { names, groups },
       });
+      // Compare under the same writer transaction, before any catalog/default/order write.
+      if (input.kind === "put" && input.expected) {
+        const snapshot = readSessionGroupCatalogSnapshot(db);
+        if (
+          !isDeepStrictEqual(names, input.expected.names) ||
+          !isDeepStrictEqual(
+            normalizeSidebarSectionOrder(snapshot.sectionOrder, names),
+            input.expected.sectionOrder,
+          )
+        ) {
+          return { changed: false, conflict: true, snapshot };
+        }
+      }
       let changed = false;
       let source: SessionGroupCatalogMutationResult["source"];
       let missingName: string | undefined;

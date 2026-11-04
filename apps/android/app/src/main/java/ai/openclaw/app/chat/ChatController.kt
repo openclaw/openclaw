@@ -1323,10 +1323,14 @@ class ChatController internal constructor(
       }
     }
 
-  internal suspend fun patchSession(request: ChatSessionPatch): Boolean =
+  internal suspend fun patchSession(
+    request: ChatSessionPatch,
+    expectedScope: ChatCacheScope? = null,
+  ): Boolean =
     with(request) {
       val sessionKey = key.trim().takeIf { it.isNotEmpty() } ?: return@with false
-      val requestCacheScope = currentCacheScope()
+      val requestCacheScope = expectedScope ?: currentCacheScope()
+      if (expectedScope != null && expectedScope != currentCacheScope()) return@with false
       val capturedOwnerAgentId =
         normalizeSessionSelectionOwner(sessionKey, ownerAgentId)
           ?: if (sessionKey == _sessionKey.value) resolveAgentIdForSessionKey(sessionKey) else null
@@ -1403,7 +1407,8 @@ class ChatController internal constructor(
             }
           }
         } else {
-          requestGateway("sessions.patch", params.toString())
+          val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
+          lease.request("sessions.patch", params.toString())
         }
         fetchSessionsForCurrentWindow()
         true
@@ -1414,85 +1419,83 @@ class ChatController internal constructor(
     }
 
   /** Renames a session group everywhere: every member session moves to the new category. */
+  internal suspend fun createSessionGroup(
+    name: String,
+    expectedGatewayId: String?,
+    expectedScope: ChatCacheScope? = null,
+  ) {
+    mutateSessionGroupCatalog(expectedGatewayId, expectedScope) { connection ->
+      connection.request("sessions.groups.create", buildJsonObject { put("name", JsonPrimitive(name.trim())) }.toString())
+    }
+  }
+
+  internal suspend fun createSessionGroupForSession(
+    name: String,
+    key: String,
+    ownerAgentId: String?,
+    expectedGatewayId: String?,
+  ) {
+    val originalScope = currentCacheScope() ?: throw GatewayRequestNotEnqueued("not connected")
+    createSessionGroup(name, expectedGatewayId, originalScope)
+    if (!patchSession(ChatSessionPatch(key = key, ownerAgentId = ownerAgentId, category = name.trim()), expectedScope = originalScope)) {
+      throw IllegalStateException("Folder created, but session assignment failed. Reconnect to the original Gateway and retry.")
+    }
+  }
+
   suspend fun renameSessionGroup(
     from: String,
     to: String,
     expectedGatewayId: String?,
   ) {
-    val fromName = from.trim().takeIf { it.isNotEmpty() } ?: return
-    val toName = to.trim().takeIf { it.isNotEmpty() } ?: return
-    patchSessionGroupMembers(group = fromName, category = toName, expectedGatewayId = expectedGatewayId)
+    mutateSessionGroupCatalog(expectedGatewayId) { connection ->
+      connection.request(
+        "sessions.groups.rename",
+        buildJsonObject {
+          put("name", JsonPrimitive(from.trim()))
+          put("to", JsonPrimitive(to.trim()))
+        }.toString(),
+      )
+    }
   }
 
-  /** Deletes a session group: member sessions are kept and move back to Ungrouped. */
+  /** The Gateway removes the folder and unassigns its members atomically. */
   suspend fun dissolveSessionGroup(
     group: String,
     expectedGatewayId: String?,
   ) {
-    val groupName = group.trim().takeIf { it.isNotEmpty() } ?: return
-    patchSessionGroupMembers(group = groupName, category = null, expectedGatewayId = expectedGatewayId)
+    mutateSessionGroupCatalog(expectedGatewayId) { connection ->
+      connection.request("sessions.groups.delete", buildJsonObject { put("name", JsonPrimitive(group.trim())) }.toString())
+    }
   }
 
-  private suspend fun patchSessionGroupMembers(
-    group: String,
-    category: String?,
+  suspend fun reorderSessionSection(
+    section: String,
+    anchor: String,
+    before: Boolean,
     expectedGatewayId: String?,
   ) {
-    val gatewayScope = currentCacheScope()
-    if (gatewayScope?.gatewayId != expectedGatewayId) return
-    val ownerAgentId = resolveAgentIdForSessionKey(_sessionKey.value) ?: return
-    val lease = captureRequestLease(gatewayScope)
-
-    fun ownsCurrentAgent(): Boolean = gatewayScope == currentCacheScope() && ownerAgentId == resolveAgentIdForSessionKey(_sessionKey.value)
-
-    fun reportError(error: Throwable) {
-      publishGatewayState(lease, ::ownsCurrentAgent) { updateErrorText(error.message) }
+    mutateSessionGroupCatalog(expectedGatewayId) { connection ->
+      reorderSharedSessionSection(section, anchor, before) { method, params -> connection.request(method, params) }
     }
-
-    runCatchingCancellable {
-      val connection = lease ?: throw GatewayRequestNotEnqueued("not connected")
-      var firstError: Throwable? = null
-      for (member in listSessionGroupMembers(group, ownerAgentId, connection)) {
-        runCatchingCancellable {
-          val params =
-            buildJsonObject {
-              put("key", JsonPrimitive(member.key))
-              put("agentId", JsonPrimitive(ownerAgentId))
-              put("category", category?.let(::JsonPrimitive) ?: JsonNull)
-            }
-          connection.request("sessions.patch", params.toString())
-        }.onFailure { err ->
-          // Best-effort: one failed member patch must not strand the rest of the group.
-          if (firstError == null) firstError = err
-        }
-      }
-      firstError?.let(::reportError)
-      if (connection.isCurrent() && synchronized(gatewayScopeApplyLock) { ownsCurrentAgent() }) {
-        fetchSessionsForCurrentWindow()
-      }
-    }.onFailure(::reportError)
   }
 
-  /**
-   * Enumerates every session assigned to the group. The UI session list is windowed
-   * (limited, archived either-or), so group mutations must not derive membership from
-   * it. An absent limit is capped at 100 rows server-side, so both queries send an
-   * explicit high bound; sessions.list filters archived rows either-or, hence two calls.
-   */
-  private suspend fun listSessionGroupMembers(
-    group: String,
-    ownerAgentId: String,
-    lease: GatewaySession.RequestLease,
-  ): List<ChatSessionEntry> {
-    val members = LinkedHashMap<String, ChatSessionEntry>()
-    for (archived in listOf(false, true)) {
-      val params = sessionListParams(ownerAgentId, GROUP_MEMBER_FETCH_LIMIT, archived)
-      val rows = parseSessions(lease.request("sessions.list", params.toString())).sessions
-      for (row in rows) {
-        if (row.category?.trim() == group && !members.containsKey(row.key)) members[row.key] = row
-      }
+  private suspend fun mutateSessionGroupCatalog(
+    expectedGatewayId: String?,
+    expectedScope: ChatCacheScope? = null,
+    mutation: suspend (GatewaySession.RequestLease) -> Unit,
+  ) {
+    val gatewayScope = expectedScope ?: currentCacheScope() ?: throw GatewayRequestNotEnqueued("not connected")
+    if (gatewayScope.gatewayId != expectedGatewayId) throw GatewayRequestNotEnqueued("Gateway changed")
+    val connection = captureRequestLease(gatewayScope) ?: throw GatewayRequestNotEnqueued("not connected")
+    mutation(connection)
+    val sequence = sessionGroupCatalogSequence.incrementAndGet()
+    val catalog =
+      parseSessionGroupCatalog(connection.request("sessions.groups.list", "{}"))
+        ?: error("Invalid Gateway folder catalog")
+    publishGatewayState(connection, { gatewayScope == currentCacheScope() && sequence == sessionGroupCatalogSequence.get() }) {
+      sessionGroupCatalogMutable.value = catalog
     }
-    return members.values.toList()
+    if (connection.isCurrent() && gatewayScope == currentCacheScope()) fetchSessionsForCurrentWindow()
   }
 
   internal suspend fun deleteSession(
@@ -8225,7 +8228,6 @@ class ChatController internal constructor(
 }
 
 // Group mutations enumerate whole stores; far past any realistic session count.
-private const val GROUP_MEMBER_FETCH_LIMIT = 10_000
 private const val FULL_MESSAGE_TEXT_MAX_CHARS = 1_000_000
 
 internal inline fun <T> runCatchingCancellable(block: () -> T): Result<T> =

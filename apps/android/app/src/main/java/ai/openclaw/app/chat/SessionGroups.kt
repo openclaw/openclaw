@@ -1,10 +1,14 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 
 internal data class SessionGroupCatalogSnapshot(
   val names: List<String> = emptyList(),
@@ -83,4 +87,57 @@ private fun sidebarSectionToken(raw: String): String? {
     return if (name.isEmpty()) null else prefix + name
   }
   return trimmed.takeIf { it in sidebarBuiltInSections }
+}
+
+/** Reapply one relative move, never a stale replacement list, after a catalog conflict. */
+internal fun reorderSessionSection(
+  current: SessionGroupCatalogSnapshot,
+  section: String,
+  anchor: String,
+  before: Boolean,
+): SessionGroupCatalogSnapshot? {
+  val catalogs = (current.sectionOrder + listOf(section, anchor)).filter { it.startsWith("catalog:") }.map { it.removePrefix("catalog:") }
+  val order = normalizeSidebarSectionOrder(current.sectionOrder, current.names, catalogs).toMutableList()
+  if (section == anchor || section !in order || anchor !in order) return null
+  order.remove(section)
+  order.add(order.indexOf(anchor) + if (before) 0 else 1, section)
+  val names = order.filter { it.startsWith("category:") }.map { it.removePrefix("category:") }
+  return SessionGroupCatalogSnapshot(if (section.startsWith("category:")) names else current.names, order)
+}
+
+/** Only a definitive catalog conflict may replay this intent; denial/unknown outcomes escape. */
+internal suspend fun reorderSharedSessionSection(
+  section: String,
+  anchor: String,
+  before: Boolean,
+  request: suspend (String, String) -> String,
+) {
+  repeat(3) { attempt ->
+    val current =
+      parseSessionGroupCatalog(request("sessions.groups.list", "{}"))
+        ?: error("Invalid Gateway folder catalog")
+    val next =
+      reorderSessionSection(current, section, anchor, before)
+        ?: error("The section no longer exists. Reload and try again.")
+    try {
+      request(
+        "sessions.groups.put",
+        buildJsonObject {
+          put("names", JsonArray(next.names.map(::JsonPrimitive)))
+          put("sectionOrder", JsonArray(next.sectionOrder.map(::JsonPrimitive)))
+          put(
+            "expected",
+            buildJsonObject {
+              put("names", JsonArray(current.names.map(::JsonPrimitive)))
+              put("sectionOrder", JsonArray(current.sectionOrder.map(::JsonPrimitive)))
+            },
+          )
+        }.toString(),
+      )
+      return
+    } catch (error: GatewayRequestRejected) {
+      if (error.gatewayError.details?.code != "SESSION_GROUP_CATALOG_CHANGED") throw error
+      if (attempt == 2) throw IllegalStateException("Folders changed repeatedly. Reload and try again.", error)
+    }
+  }
 }

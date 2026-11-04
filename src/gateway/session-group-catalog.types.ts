@@ -24,7 +24,13 @@ export type SessionGroupMembershipSnapshot = {
 
 export type SessionGroupCatalogMutation =
   | { kind: "register"; name: string }
-  | { kind: "put"; names: string[]; sectionOrder?: string[]; cfg: OpenClawConfig }
+  | {
+      kind: "put";
+      names: string[];
+      sectionOrder?: string[];
+      expected?: { names: string[]; sectionOrder: string[] };
+      cfg: OpenClawConfig;
+    }
   | { kind: "defaults"; name: string; cwd: string | null; worktree: boolean; cfg: OpenClawConfig }
   | { kind: "prepare"; name: string; to?: string }
   | {
@@ -40,6 +46,7 @@ export type SessionGroupCatalogMutationResult = {
   changed: boolean;
   source?: SessionGroupCatalogEntry;
   missingName?: string;
+  conflict?: boolean;
   nonEmpty?: Array<{ name: string; memberSessions: number }>;
 };
 export type SessionGroupCatalogAdmission = {

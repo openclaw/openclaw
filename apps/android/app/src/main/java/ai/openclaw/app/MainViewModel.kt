@@ -550,7 +550,6 @@ class MainViewModel internal constructor(
 
   internal suspend fun loadMoreChatSessions(): Boolean = ensureRuntime().chat.loadMoreSessions()
 
-  val sessionCustomGroups: StateFlow<List<String>> = prefs.sessionCustomGroups
   val sidebarPageOrder: StateFlow<List<String>> = prefs.sidebarPageOrder
   val sidebarVisiblePages: StateFlow<List<String>> = prefs.sidebarVisiblePages
   val sessionCatalogAvailable: StateFlow<Boolean> =
@@ -1551,33 +1550,35 @@ class MainViewModel internal constructor(
     }
   }
 
-  /** Remembers a custom session group locally so it renders as an empty section. */
-  fun addChatSessionGroup(name: String) {
-    val trimmed = name.trim()
-    if (trimmed.isEmpty()) return
-    prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value + trimmed)
-  }
+  suspend fun addChatSessionGroup(
+    name: String,
+    expectedGatewayStableId: String?,
+  ) = ensureRuntime().chat.createSessionGroup(name, expectedGatewayStableId)
+
+  internal suspend fun addChatSessionGroupForSession(
+    name: String,
+    key: String,
+    ownerAgentId: String?,
+    expectedGatewayStableId: String?,
+  ) = ensureRuntime().chat.createSessionGroupForSession(name, key, ownerAgentId, expectedGatewayStableId)
 
   suspend fun renameChatSessionGroup(
     from: String,
     to: String,
     expectedGatewayStableId: String?,
-  ) {
-    if (activeGatewayStableId.value != expectedGatewayStableId) return
-    val stored = prefs.sessionCustomGroups.value
-    // Web semantics: replace a stored name in place, otherwise remember the new name.
-    prefs.setSessionCustomGroups(if (from in stored) stored.map { if (it == from) to else it } else stored + to)
-    ensureRuntime().chat.renameSessionGroup(from = from, to = to, expectedGatewayId = expectedGatewayStableId)
-  }
+  ) = ensureRuntime().chat.renameSessionGroup(from, to, expectedGatewayStableId)
 
   suspend fun deleteChatSessionGroup(
     group: String,
     expectedGatewayStableId: String?,
-  ) {
-    if (activeGatewayStableId.value != expectedGatewayStableId) return
-    prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value.filterNot { it == group })
-    ensureRuntime().chat.dissolveSessionGroup(group, expectedGatewayId = expectedGatewayStableId)
-  }
+  ) = ensureRuntime().chat.dissolveSessionGroup(group, expectedGatewayStableId)
+
+  suspend fun reorderChatSessionSection(
+    section: String,
+    anchor: String,
+    before: Boolean,
+    expectedGatewayStableId: String?,
+  ) = ensureRuntime().chat.reorderSessionSection(section, anchor, before, expectedGatewayStableId)
 
   suspend fun forkChatSession(
     parentKey: String,
