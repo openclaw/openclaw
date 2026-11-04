@@ -333,7 +333,7 @@ module.exports = {
           openai: { enabled: true },
           "recovery-instructions": {
             enabled: true,
-            hooks: { allowPromptInjection: true, allowConversationAccess: true },
+            hooks: { allowPromptModification: true, allowConversationAccess: true },
           },
         },
       },
