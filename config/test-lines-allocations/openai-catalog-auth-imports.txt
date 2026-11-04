@@ -1,0 +1,2 @@
+# Reject broad auth-module loading while exercising configured API-key catalog results.
+11
