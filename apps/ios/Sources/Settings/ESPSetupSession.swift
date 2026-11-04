@@ -73,6 +73,7 @@ final class ESPSetupSession {
         } catch { self.fail(error) }
     }
 
+    // periphery:ignore - The Settings Wi-Fi scan button invokes this through its SwiftUI action closure.
     func scan() async {
         await self.run {
             let result = try await self.request(.scan).networks()
