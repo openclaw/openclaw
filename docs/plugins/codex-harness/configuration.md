@@ -54,7 +54,9 @@ restrictions reuse the same native thread, including after a connection restart.
 Temporary restrictions, such as per-run allowlists, scheduled restrictions, or
 sender-specific restrictions, use an isolated thread where necessary and preserve
 the conversation's existing binding. A temporary first turn does not establish
-a permanent restricted binding.
+a permanent restricted binding. Temporary threads release their subscriptions
+after completion or failure, including in incognito sessions, without clearing
+the conversation's existing binding.
 
 When a managed restricted thread's creation policy changes, or an older binding
 has no saved policy fingerprint, OpenClaw creates a compatible successor and

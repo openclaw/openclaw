@@ -99,7 +99,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       throw new Error("Codex attempt cleanup authority has ended");
     }
   });
+  // Temporary threads own no durable binding. Their subscription can be released
+  // without clearing the conversation's predecessor.
   const clearThreadBinding = () =>
+    state.thread.lifecycle.preserveExistingBinding ||
     clearCodexBindingForClient(
       connection.bindingStore,
       connection.bindingIdentity,

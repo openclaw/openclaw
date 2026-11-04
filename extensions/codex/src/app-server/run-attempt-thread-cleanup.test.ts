@@ -472,7 +472,11 @@ describe("Codex app-server main thread cleanup", () => {
     await seedRunSessionOwnerForTest("session-1", sessionKey);
     const harness = createInferenceReadyClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
+    const params = createParams(sessionFile, workspaceDir, sessionKey);
+    params.disableTools = false;
+    params.toolsAllow = [];
+    params.pluginHarnessToolPolicyScope = "conversation";
+    const run = runCodexAppServerAttempt(params, {
       bindingStore: testCodexAppServerBindingStore,
     });
     const initialize = await waitForHarnessRequest(harness, "initialize");
@@ -524,16 +528,21 @@ describe("Codex app-server main thread cleanup", () => {
         }),
       },
     ].flatMap(({ reason, error }) =>
-      ["current", "successor"].map((owner) => ({ reason, error, owner })),
+      ["current", "successor", "temporary"].map((owner) => ({ reason, error, owner })),
     ),
   )(
-    "settles rejected incognito startup for the $owner physical owner when turn start $reason",
+    "settles rejected incognito startup with $owner binding ownership when turn start $reason",
     async ({ error, owner }) => {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const sessionKey = "agent:main:dashboard:incognito-failed-turn";
       await seedRunSessionOwnerForTest("session-1", sessionKey);
       const params = createParams(sessionFile, workspaceDir, sessionKey);
+      if (owner !== "temporary") {
+        params.disableTools = false;
+        params.toolsAllow = [];
+        params.pluginHarnessToolPolicyScope = "conversation";
+      }
       const identity = sessionBindingIdentity(params);
       const releaseLease = vi.spyOn(sharedClient, "releaseLeasedSharedCodexAppServerClient");
       const request = vi.fn(async (method: string) => {
@@ -578,9 +587,9 @@ describe("Codex app-server main thread cleanup", () => {
         "config/read",
         "thread/start",
         "turn/start",
-        ...(owner === "current" ? ["thread/unsubscribe"] : []),
+        ...(owner !== "successor" ? ["thread/unsubscribe"] : []),
       ]);
-      if (owner === "current") {
+      if (owner !== "successor") {
         expect(request).toHaveBeenCalledWith(
           "thread/unsubscribe",
           { threadId: "thread-1" },
