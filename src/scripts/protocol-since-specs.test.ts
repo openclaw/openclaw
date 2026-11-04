@@ -4,6 +4,7 @@ import {
   collectSnapshotMethodSpecs,
   snapshotReader,
 } from "../../scripts/lib/protocol-since-specs.mjs";
+import type { CoreGatewayMethodSpecRow } from "../gateway/methods/core-descriptor-types.js";
 const root = "src/core.ts";
 const row = (name = "test.new", since = "2026.10") =>
   JSON.stringify([name, "family", "operator.read", since]);
@@ -356,4 +357,96 @@ describe("tuple policy metadata shares the strict boundary", () => {
       expect(() => collectSnapshotMethodSpecs(root, read)).toThrow("missing selected snapshot");
     },
   );
+});
+
+describe("tuple policy cannot override tuple classification fields", () => {
+  const typedPolicies = [
+    { advertise: false, name: "new.method" },
+    { advertise: false, name: "old.method" },
+    { advertise: false, name: "" },
+    { advertise: false, since: "2026.10" },
+    { advertise: false, since: "2026.9" },
+    { advertise: false, since: "" },
+  ] as const;
+  // Named structurally typed policies accept extra fields under the actual row type.
+  const typedRows = typedPolicies.map(
+    (policy) =>
+      [
+        "new.method",
+        "system",
+        "operator.read",
+        "2026.10",
+        policy,
+      ] as const satisfies CoreGatewayMethodSpecRow,
+  );
+  it.each(typedRows)("rejects typed override policy %j", (...entry) => {
+    const policy = JSON.stringify(entry[4]);
+    const tuple = '["new.method","system","operator.read","2026.10",POLICY]';
+    expect(() => scan({ [root]: table(JSON.stringify(entry)) })).toThrow();
+    expect(() =>
+      scan({ [root]: "const POLICY=" + policy + " as const;" + table(tuple) }),
+    ).toThrow();
+    expect(() =>
+      scan({
+        [root]:
+          'import {POLICY as selected} from "./policy.js";' +
+          table(tuple.replace("POLICY", "selected")),
+        "src/policy.ts": "export const POLICY=" + policy + " as const;",
+      }),
+    ).toThrow();
+    expect(() =>
+      scan({
+        [root]:
+          'import {ALIAS as selected} from "./export.js";' +
+          table(tuple.replace("POLICY", "selected")),
+        "src/export.ts": 'export {POLICY as ALIAS} from "./policy.js";',
+        "src/policy.ts": "export const POLICY=" + policy + " as const;",
+      }),
+    ).toThrow();
+    expect(() =>
+      scan({
+        [root]: "const BASE=" + policy + " as const;" + table(tuple.replace("POLICY", "{...BASE}")),
+      }),
+    ).toThrow();
+  });
+  it("keeps all three object-row fields consumed and legitimate tuple policy flags faithful", () => {
+    const object = scan({
+      [root]: table('{name:"object.method",since:"<=2026.9",compatibilityRestored:true}'),
+    });
+    expect(object[0]).toMatchObject({
+      name: "object.method",
+      since: "<=2026.9",
+      compatibilityRestored: true,
+    });
+    const policyRows = [
+      [
+        "new.method",
+        "system",
+        "operator.read",
+        "2026.10",
+        { advertise: false, controlPlaneWrite: true },
+      ],
+      [
+        "restored.method",
+        "system",
+        "operator.read",
+        "<=2026.9",
+        { advertise: false, compatibilityRestored: true },
+      ],
+    ] as const satisfies readonly CoreGatewayMethodSpecRow[];
+    const specs = scan({
+      [root]: table(policyRows.map((value) => JSON.stringify(value)).join(",")),
+    });
+    expect(specs[0]).toMatchObject({
+      name: "new.method",
+      since: "2026.10",
+      compatibilityRestored: false,
+    });
+    expect(specs[1]).toMatchObject({
+      name: "restored.method",
+      since: "<=2026.9",
+      compatibilityRestored: true,
+    });
+    expect(classifyMethodSpecs(specs, [], "2026.10").violations).toEqual([]);
+  });
 });

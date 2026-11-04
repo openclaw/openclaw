@@ -46,8 +46,11 @@ function collectMethodSpec(
       );
     }
     const policy = element.elements[4];
-    const compatibilityRestored =
-      policy === undefined ? false : (metadataFor(policy, fileName).compatibilityRestored ?? false);
+    const metadata = policy === undefined ? {} : metadataFor(policy, fileName);
+    if (Object.hasOwn(metadata, "name") || Object.hasOwn(metadata, "since")) {
+      throw new Error(fileName + ": tuple policy cannot override tuple name or since positions");
+    }
+    const compatibilityRestored = metadata.compatibilityRestored ?? false;
     return { name: name.text, since: since.text, compatibilityRestored, line };
   }
   throw new Error(
