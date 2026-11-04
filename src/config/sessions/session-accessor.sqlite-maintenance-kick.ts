@@ -42,6 +42,7 @@ import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
   canDeferMaintenance,
   capturePendingSessionMaintenanceAgeChanges,
+  logProtectedMaintenanceOverflow,
   observeSessionEntryMaintenanceAgeChanges,
   restartSessionMaintenanceAgeScan,
   updateSessionEntryMaintenanceAgeFact,
@@ -651,20 +652,7 @@ async function runPendingMaintenance(
           "SQLite automatic maintenance activity changed during age publication",
         );
       }
-      const entries = owner.ageFact?.entryCount;
-      if (
-        entries !== undefined &&
-        shouldRunSessionEntryMaintenance({
-          entryCount: entries,
-          maxEntries: maintenance.maxEntries,
-        })
-      ) {
-        // Every remaining candidate is protected; the store stays over the cap until that ends.
-        getChildLogger({ subsystem: "session-sqlite" }).info(
-          "SQLite automatic session maintenance left the store over maxEntries: the remaining sessions are protected",
-          { path: databasePath, entries, maxEntries: maintenance.maxEntries },
-        );
-      }
+      logProtectedMaintenanceOverflow(databasePath, owner.ageFact, maintenance);
     }
     owner.rejections = 0;
     if (noFinalization && !owner.ageFact && isCurrent()) {

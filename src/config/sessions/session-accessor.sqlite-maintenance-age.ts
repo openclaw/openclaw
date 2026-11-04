@@ -5,6 +5,7 @@ import {
   deferSqlitePostCommitPublication,
   stageSqliteTransactionState,
 } from "../../infra/sqlite-post-commit.js";
+import { getChildLogger } from "../../logging/logger.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -45,6 +46,27 @@ export function canDeferMaintenance(
         maxEntries: maintenance.maxEntries,
       }))
   );
+}
+
+/**
+ * After a settled automatic pass: a store still at its cap trigger has only protected candidates
+ * left, and stays over `maxEntries` until their protection ends. Said once per pass.
+ */
+export function logProtectedMaintenanceOverflow(
+  path: string,
+  fact: SessionEntryMaintenanceAgeFact | undefined,
+  maintenance: Pick<ResolvedSessionMaintenanceConfig, "maxEntries">,
+): void {
+  const entries = fact?.entryCount;
+  if (
+    entries !== undefined &&
+    shouldRunSessionEntryMaintenance({ entryCount: entries, maxEntries: maintenance.maxEntries })
+  ) {
+    getChildLogger({ subsystem: "session-sqlite" }).info(
+      "SQLite automatic session maintenance left the store over maxEntries: the remaining sessions are protected",
+      { path, entries, maxEntries: maintenance.maxEntries },
+    );
+  }
 }
 
 type SessionEntryMaintenanceAgeCapture = { fact?: SessionEntryMaintenanceAgeFact };

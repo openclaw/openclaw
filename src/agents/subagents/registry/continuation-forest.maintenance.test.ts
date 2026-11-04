@@ -221,7 +221,7 @@ describe("the burning annex: store maintenance past the cap", () => {
 
     expect(rooms(forest)).toHaveLength(ROOMS);
     expect(rooms(forest)).toContain(relay.sessionKey);
-    expect(info.mock.calls.filter(([message]) => String(message).startsWith(OVERFLOWING))).toEqual([
+    expect(info.mock.calls.filter(([message]) => message.startsWith(OVERFLOWING))).toEqual([
       [expect.any(String), { path: databasePath, entries: ROOMS, maxEntries: 2 }],
     ]);
   });
