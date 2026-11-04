@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import { xaiModel } from "./test-helpers.js";
@@ -27,21 +28,37 @@ async function requestMime(provider: string): Promise<string> {
   const streamFn: StreamFn = (model, _context, options) => {
     const payload = { input };
     const pending = options?.onPayload?.(payload, model);
-    return {
-      async *[Symbol.asyncIterator]() {},
-      result: async () => {
-        const resolved = ((await pending) ?? payload) as { input?: unknown };
-        const wire = JSON.stringify(resolved);
-        mime = wire.includes("data:image/jpeg;base64,/9j/")
-          ? "image/jpeg"
-          : wire.includes("image/gif")
-            ? "image/gif"
-            : "missing";
-        if (JSON.stringify(input) !== before) {
-          mime = "history-mutated";
-        }
-      },
-    } as unknown as ReturnType<StreamFn>;
+    const stream = createAssistantMessageEventStream();
+    void (async () => {
+      const resolved = (await pending) ?? payload;
+      const wire = JSON.stringify(resolved);
+      mime = wire.includes("data:image/jpeg;base64,/9j/")
+        ? "image/jpeg"
+        : wire.includes("image/gif")
+          ? "image/gif"
+          : "missing";
+      if (JSON.stringify(input) !== before) {
+        mime = "history-mutated";
+      }
+      stream.end({
+        role: "assistant",
+        content: [],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 0,
+      });
+    })();
+    return stream;
   };
   const wrapped = wrapXaiProviderStream({
     provider,
