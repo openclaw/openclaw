@@ -71,6 +71,9 @@ async function fixture(page: Page, supported = true) {
   const settled = () => details.locator('.chat-summary__automations[aria-busy="false"]').waitFor();
   await settled();
   await page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).waitFor();
+  await gateway.waitForRequest("sessions.list", {
+    match: { source: "chat-pane", spawnedBy: sessionKey },
+  });
   return { page, gateway, details, row, settled };
 }
 
