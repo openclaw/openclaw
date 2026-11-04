@@ -131,6 +131,10 @@ it("pins an available prior and computes its full diff before subsequent outcome
       { ...files[0], reasons: ["dependency-change"] },
     ]);
     expect(decision.scheduledFiles).toEqual(files);
+    expect(decision.ranking?.rows).toEqual([
+      { ...files[0], score: 0.9565217391304348, unknownReasons: [] },
+      { ...files[1], score: 0, unknownReasons: [] },
+    ]);
     const frozen = JSON.stringify(decision);
     writeFileSync(target, "{}");
     expect(JSON.stringify(decision)).toBe(frozen);

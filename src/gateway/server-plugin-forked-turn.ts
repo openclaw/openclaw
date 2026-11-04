@@ -136,13 +136,20 @@ export async function runPluginForkedTurn<T>(
         const turnModel = turn.model ?? sessionModel;
         const override =
           params.provider && params.model ? splitTrailingAuthProfile(params.model) : undefined;
+        // On the session's own provider the fork runs on the credential the session's turns
+        // use (a user pin or an automatic rotation): its internal session has no stored
+        // selection, so without this it could bill another profile and miss the turn's cache.
+        const sessionProfile =
+          turnModel.provider === sessionModel.provider
+            ? target.entry.authProfileOverride?.trim()
+            : undefined;
         const model = override
           ? {
               provider: expectDefined(params.provider, "override provider"),
               model: override.model,
               ...(override.profile ? { authProfileId: override.profile } : {}),
             }
-          : turnModel;
+          : { ...turnModel, ...(sessionProfile ? { authProfileId: sessionProfile } : {}) };
         // Running on the turn's or session's own model needs no override trust.
         const ownModel =
           !override?.profile &&

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { readBoundedRegularFile } from "./actions-artifact-archive.mjs";
+import { captureAdaptiveModelRanking } from "./ci-adaptive-model.mts";
 import { planAdaptiveSelection } from "./ci-adaptive-selection.mjs";
 import {
   collectTestObservations,
@@ -53,6 +54,7 @@ export function captureAdaptiveGraphDecision(options: {
     prior: null as Omit<Prior, "observations"> | null,
     comparison: null as { revision: string; tree: string; changedFiles: string[] } | null,
     graph: null as ReturnType<typeof planAdaptiveSelection> | null,
+    ranking: null as ReturnType<typeof captureAdaptiveModelRanking> | null,
     scheduledFiles: files,
     fallbackReasons,
   };
@@ -169,6 +171,12 @@ export function captureAdaptiveGraphDecision(options: {
         };
         decision.comparison = { revision: context.revision, tree: context.tree, changedFiles };
         decision.graph = graph;
+        decision.ranking = captureAdaptiveModelRanking({
+          current,
+          baseline,
+          changedFiles,
+          prior: decision.prior,
+        });
         fallbackReasons.length = 0;
         fallbackReasons.push(...graph.fallbackReasons);
         return decision;
