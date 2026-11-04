@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronRunLogEntry } from "../../api/types.ts";
+import { configResponse } from "../../e2e/appearance-prefs.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "../../e2e/control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
@@ -239,7 +240,7 @@ suite.define(() => {
     });
   });
 
-  it("shows selected run context using German date formatting", async () => {
+  it("updates the retained run timestamp after a live locale switch", async () => {
     await suite.withPage({ locale: "de-DE", timezoneId: "UTC" }, async ({ page }) => {
       const gateway = await installCron(page, { "cron.history": history("Shared conversation") });
       await page.locator('html[lang="de"]').waitFor();
@@ -249,6 +250,17 @@ suite.define(() => {
       await exactText(region, "Shared conversation").waitFor();
       expect(await exactText(region, entry.jobName).count()).toBe(1);
       expect(await region.textContent()).toContain("2.1.2026, 9:00");
+      const retained = await region.elementHandle();
+      await gateway.setMethodResponse("config.get", configResponse({ locale: "en" }, "cron-en"));
+      await gateway.emitGatewayEvent("config.changed", { hash: "cron-en" });
+      await page.locator('html[lang="en"]').waitFor();
+      await expect.poll(() => region.textContent()).toContain("1/2/2026, 9:00 AM");
+      expect(
+        await retained?.evaluate(
+          (element) => element === document.querySelector("[data-cron-run-transcript]"),
+        ),
+      ).toBe(true);
+      expect(await exactText(region, entry.jobName).count()).toBe(1);
       expect(await gateway.getRequests("cron.history")).toMatchObject([
         { params: { id: entry.jobId, runAtMs: entry.runAtMs, limit: 100 } },
       ]);
