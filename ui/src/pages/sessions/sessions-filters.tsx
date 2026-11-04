@@ -3,13 +3,14 @@ import { hasMenuSurface } from "../../components/menu-surface.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { createPhoneSheetLayout, PhoneSheet } from "../../components/solid/phone-sheet.tsx";
+import { PhoneSheet } from "../../components/solid/phone-sheet.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
@@ -23,8 +24,14 @@ import type { JSX } from "../../types/solid-elements.js";
 
 registerSessionMenuEnglish();
 registerSessionOrganizationEnglish();
+registerEnglishCatalog(registerCronEnglish);
 
 export type SessionsAdvancedFiltersProps = {
+  /** Phone width: search lives in the toolbar and sort moves into the filter sheet. */
+  phoneLayout?: boolean;
+  sortColumn: "key" | "updated";
+  sortDir: "asc" | "desc";
+  onSortChange: (column: "key" | "updated", direction: "asc" | "desc") => void;
   activeMinutes: string;
   limit: string;
   includeGlobal: boolean;
@@ -65,7 +72,7 @@ const SESSION_GROUP_MODE_LABELS = {
 export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JSX.Element {
   const [searching, setSearching] = createSignal(false);
   let popover: PopoverHandle | undefined;
-  const phone = createPhoneSheetLayout();
+  const phone = () => Boolean(props.phoneLayout);
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
   const filterInputs = [
     ["activeMinutes", "minutes", "sessionsView.active"],
@@ -94,7 +101,9 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
     props.limit.trim() !== String(SESSIONS_PAGE_DEFAULT_LIMIT) ||
     !props.includeGlobal ||
     props.includeUnknown ||
-    props.searchQuery.trim() !== "" ||
+    (props.phoneLayout
+      ? props.sortColumn !== "updated" || props.sortDir !== "desc"
+      : props.searchQuery.trim() !== "") ||
     props.statusFilter !== "active" ||
     props.groupBy !== "none";
   const triggerClass = () => [
@@ -233,6 +242,44 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
           <Icon name="plus" /> {t("sessionsView.newGroup")}
         </button>
       ) : undefined}
+      <Show when={phone()}>
+        <div class="sessions-filter-popover__fields sessions-filter-popover__fields--sort">
+          <label class="field">
+            <span>{t("cron.jobs.sort")}</span>
+            <SettingsSelect
+              class="settings-select"
+              value={props.sortColumn}
+              options={[
+                { value: "updated", label: t("sessionsView.updated") },
+                { value: "key", label: t("sessionsView.session") },
+              ]}
+              onChange={(event) =>
+                props.onSortChange(
+                  event.currentTarget.value === "key" ? "key" : "updated",
+                  props.sortDir,
+                )
+              }
+            />
+          </label>
+          <label class="field">
+            <span>{t("cron.jobs.direction")}</span>
+            <SettingsSelect
+              class="settings-select"
+              value={props.sortDir}
+              options={[
+                { value: "desc", label: t("cron.jobs.descending") },
+                { value: "asc", label: t("cron.jobs.ascending") },
+              ]}
+              onChange={(event) =>
+                props.onSortChange(
+                  props.sortColumn,
+                  event.currentTarget.value === "asc" ? "asc" : "desc",
+                )
+              }
+            />
+          </label>
+        </div>
+      </Show>
       {props.statusFilter === "archived" ? (
         <button
           class="btn btn--sm danger"
@@ -284,7 +331,6 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
         trigger={<Icon name="listFilter" />}
         label={t("sessionsView.filters")}
         class="sessions-filter-popover"
-        headerAction={search()}
       >
         <div class="sessions-filter-popover__panel">{fields()}</div>
       </PhoneSheet>

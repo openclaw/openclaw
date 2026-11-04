@@ -295,7 +295,7 @@ test("checkout options preserve permitted Current access without exposing paths"
     const workspace = await initializeRepository(state.root, "workspace");
     const outside = await initializeRepository(state.root, "outside");
     const project = await registerProjectRegistry({ path: outside });
-    using gitReads = vi.spyOn(worktreeGit, "runGit");
+    using gitReads = vi.spyOn(worktreeGit, "runGit").mockRejectedValue(new Error("Git is stalled"));
     const cfg: OpenClawConfig = {
       agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
     };
@@ -311,7 +311,7 @@ test("checkout options preserve permitted Current access without exposing paths"
           scopes,
         ),
       ).toEqual({ ok: true, payload: { current: true, worktree: true }, error: undefined });
-      expect(gitReads).toHaveBeenCalledTimes(2);
+      expect(gitReads).not.toHaveBeenCalled();
       gitReads.mockClear();
     }
     const params = { projectId: project.id, agentId: "main" };
@@ -464,20 +464,25 @@ test("projects.searchRemote redacts unexpected error diagnostics", async () => {
   expect(JSON.stringify(result)).not.toContain("synthetic-secret");
 });
 
-test("projects.list exposes checkout details only at write scope", async () => {
+test("projects.list exposes safe repository identity at read scope and checkout details only at write scope", async () => {
   return withProjectState(async (state) => {
     const repo = await initializeRepository(state.root);
     await registerProjectRegistry({ path: repo, name: "Registered" });
     const cfg = projectConfig("/workspace/alpha");
 
-    const readResult = await listProjects(cfg, { scopes: ["operator.read"] });
+    const readResult = await listProjects(cfg, { scopes: ["operator.sessions.read"] });
     if (!readResult) {
       throw new Error("projects.list did not respond");
     }
     const readProjects = (readResult.payload as { projects: Record<string, unknown>[] }).projects;
     expect(readProjects).toEqual([
       { id: "workspace:main", displayName: "alpha", source: "workspace", agentId: "main" },
-      { id: "registered", displayName: "Registered", source: "registered" },
+      {
+        id: "registered",
+        displayName: "Registered",
+        source: "registered",
+        repositoryIdentity: "openclaw/openclaw",
+      },
     ]);
     expect(readResult.payload).not.toHaveProperty("observedProjects");
     expect(readResult.payload).not.toHaveProperty("githubHost");
@@ -485,6 +490,7 @@ test("projects.list exposes checkout details only at write scope", async () => {
     expect(resolveRepositoryIdentity).not.toHaveBeenCalled();
 
     const readOptIn = await listProjects(cfg, { observed: true, scopes: ["operator.read"] });
+    expect(readOptIn?.payload).toMatchObject({ projects: readProjects });
     expect(readOptIn?.payload).not.toHaveProperty("observedProjects");
     expect(listRegistryRecords).not.toHaveBeenCalled();
 
@@ -500,6 +506,7 @@ test("projects.list exposes checkout details only at write scope", async () => {
               id: "registered",
               repoRoot: repo,
               originUrl: "https://github.com/openclaw/openclaw.git",
+              repositoryIdentity: "openclaw/openclaw",
             },
           ],
         },
@@ -526,7 +533,9 @@ test("project responses redact credentials and URL suffixes from registered orig
       "remote",
       "set-url",
       "origin",
-      ["https://user", ":placeholder", "@host/private.git?visible=value#branch"].join(""),
+      ["https://user", ":placeholder", "@github.com/acme/private.git?visible=value#branch"].join(
+        "",
+      ),
     ]);
 
     const registered = await invoke("projects.register", { path: repo, name: "Private" }, {}, [
@@ -534,16 +543,26 @@ test("project responses redact credentials and URL suffixes from registered orig
     ]);
     expect(registered).toMatchObject({
       ok: true,
-      payload: { originUrl: "https://host/private.git" },
+      payload: { originUrl: "https://github.com/acme/private.git" },
     });
 
+    const read = await listProjects({}, { scopes: ["operator.sessions.read"] });
+    expect(read?.payload).toMatchObject({
+      projects: expect.arrayContaining([
+        { id: "private", displayName: "Private", source: "registered" },
+      ]),
+    });
+    expect(JSON.stringify(read)).not.toContain("placeholder");
     const listed = await listProjects();
     expect(listed).toMatchObject({
       ok: true,
       payload: {
         projects: expect.arrayContaining([
           expect.objectContaining({ id: "workspace:main" }),
-          expect.objectContaining({ id: "private", originUrl: "https://host/private.git" }),
+          expect.objectContaining({
+            id: "private",
+            originUrl: "https://github.com/acme/private.git",
+          }),
         ]),
       },
     });

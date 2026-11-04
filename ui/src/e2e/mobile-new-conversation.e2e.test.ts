@@ -276,7 +276,9 @@ suite.define(() => {
       const header = page.locator(".new-session-page .agent-chat__header--mobile");
       await header.waitFor();
       expect(await page.locator(".topbar").isVisible()).toBe(false);
-      expect(await header.locator(".mobile-header__title-text").textContent()).toBe("New session");
+      // The draft bar carries no visible title; it stays named for assistive tech.
+      expect(await header.locator(".mobile-header__title").isVisible()).toBe(false);
+      expect(await header.getAttribute("aria-label")).toBe("New session");
 
       // Everything the top bar offered stays one tap away.
       await header.locator(".mobile-header__search").tap();
@@ -288,20 +290,21 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
 
-      // Draft and incognito live in the capsule; toggling moves neither the title nor its edge.
+      // Draft and incognito live in the capsule; toggling never moves its edge.
       expect(await page.locator(".new-session-page__incognito-rail").count()).toBe(0);
       const capsule = header.locator(".mobile-header__capsule");
       const incognito = capsule.locator(".new-session-page__incognito-toggle");
-      const title = header.locator(".mobile-header__title-text");
-      const titleBox = await title.boundingBox();
       const capsuleBox = await capsule.boundingBox();
       await incognito.tap();
       expect(await incognito.getAttribute("aria-checked")).toBe("true");
       expect(await header.locator(".mobile-header__incognito").count()).toBe(0);
       expect(await incognito.textContent()).toBe("");
-      expect(await title.boundingBox()).toEqual(titleBox);
       expect(await capsule.boundingBox()).toEqual(capsuleBox);
-      await page.locator(".new-session-page__incognito-notice--visible").waitFor();
+      const note = page.locator(".new-session-page__incognito-note");
+      await note.waitFor();
+      await note.locator("p").first().tap();
+      await note.waitFor({ state: "hidden" });
+      expect(await incognito.getAttribute("aria-checked")).toBe("true");
       await incognito.tap();
       await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("false");
       await page

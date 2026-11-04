@@ -4,8 +4,10 @@ import {
   isSqliteReadOnlyError,
   readSourceJournalMode,
   readSourceSidecars,
+  requiresPrivateRollbackRecovery,
   SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
+import { readSqliteSchemaCookie } from "./sqlite-schema-contract.js";
 import { withSqliteSourceReadDatabase } from "./sqlite-source-handle.js";
 
 /** Inspect in a dedicated child: closing a source in the caller can release its POSIX locks. */
@@ -25,8 +27,8 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     throw error;
   }
   const sidecars = readSourceSidecars(canonicalPath);
-  // A certified clean close needs no private recovery. Let SQLite create empty
-  // WAL sidecars and acquire real read locks; never use immutable mode on a live path.
+  // Live runtime reads and certified clean closes permit empty WAL sidecars.
+  // Acquire real read locks; never use immutable mode on a live path.
   const closedWal = options.allowClosedWal && !sidecars.wal && !sidecars.shm && !sidecars.journal;
   if (mode === "empty" || (mode === "wal" && !(sidecars.wal && sidecars.shm) && !closedWal)) {
     return undefined;
@@ -62,5 +64,20 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     // sqlite-allow-raw -- End the read-only snapshot without committing any source changes.
     database.exec("ROLLBACK;");
     return { value };
+  });
+}
+
+/** The isolated reader lets SQLite distinguish a hot journal from harmless residue. */
+export function requiresSqliteRollbackRecoveryInProcess(pathname: string): boolean {
+  return withSqliteSourceReadDatabase(pathname, "source", (database) => {
+    try {
+      readSqliteSchemaCookie(database);
+      return false;
+    } catch (error) {
+      if (!requiresPrivateRollbackRecovery(pathname, error)) {
+        throw error;
+      }
+      return true;
+    }
   });
 }

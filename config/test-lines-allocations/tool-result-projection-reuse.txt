@@ -1,0 +1,2 @@
+# Protect retained projection identity when a subsequent tool result is truncated.
+25

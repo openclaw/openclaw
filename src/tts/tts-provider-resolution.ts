@@ -22,6 +22,7 @@ import {
   asProviderConfig,
   normalizeConfiguredSpeechProviderId,
   readTtsPrefs as readPrefs,
+  readTtsPrefsAsync,
   resolveTtsPersonaFromPrefs,
   type ResolvedTtsConfig,
   type TtsProviderPreference,
@@ -354,9 +355,14 @@ export async function resolveTtsProviderAsync(
   config: ResolvedTtsConfig,
   prefsPath: string,
   registry: TtsProviderRegistry = defaultProviderRegistry,
-  prefs = readPrefs(prefsPath),
+  prefs?: Awaited<ReturnType<typeof readTtsPrefsAsync>>,
 ): Promise<TtsProvider> {
-  const preferred = resolvePreferredTtsProvider(config, prefsPath, registry, prefs);
+  const preferred = resolvePreferredTtsProvider(
+    config,
+    prefsPath,
+    registry,
+    prefs ?? (await readTtsPrefsAsync(prefsPath)),
+  );
   if (preferred) {
     return preferred;
   }

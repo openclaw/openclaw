@@ -31,7 +31,7 @@ import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js"
 import {
   prepareCronRunContinuationCleanup,
   prepareScheduledAutomationStart,
-  resolveScheduledSessionReplyOptions,
+  resolveSessionEventReplyOptions,
   settleSessionEventTurn,
   type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
@@ -387,12 +387,12 @@ function enqueueSessionEventAttempt(
         ownership.cancel();
       }
       releaseOperatorAuthority?.();
-      releaseOperatorAuthority = undefined;
       if (!accepted) {
         acceptance.resolve(
           readmittedReceipt?.accepted ?? {
             ok: false,
             error: failure ? String(failure) : "Session event was cancelled before acceptance",
+            cause: failure instanceof Error ? failure : undefined,
           },
         );
       }
@@ -560,7 +560,7 @@ function enqueueSessionEventAttempt(
           !isCronSessionKey(sessionKey) &&
           !hasSessionEventOriginatingCaller(target),
         scheduledAutomation: options.scheduledAutomation,
-        ...resolveScheduledSessionReplyOptions(options.scheduledAutomation),
+        ...resolveSessionEventReplyOptions(options),
         operatorAuthority: options.scheduledAutomation?.operatorAuthority ?? operatorAuthority,
         admittedSessionSettings: settings,
         toolsAllow,

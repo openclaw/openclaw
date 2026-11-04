@@ -260,9 +260,7 @@ suite.define(() => {
         // The profileless roster has no ownership identities, so its title stays plain.
         await expect
           .poll(() =>
-            sidebar
-              .locator(".sidebar-session-toolbar .sidebar-recent-sessions__label-text")
-              .textContent(),
+            sidebar.locator(".sidebar-session-toolbar .sidebar-panel-header__title").textContent(),
           )
           .toBe("Sessions");
         await sidebar.getByText(canonicalLabel, { exact: true }).waitFor();

@@ -4,6 +4,7 @@ import { en } from "./en.ts";
 // Analysis copy loads with Usage; shared labels and Settings search stay eager.
 const enUsage = {
   usage: {
+    moreActions: "More actions",
     partialShort: "Partial results",
     presets: {
       today: "Today",
@@ -118,6 +119,8 @@ const enUsage = {
       perDay: "/ day",
     },
     overview: {
+      messageCounts: "{user} user · {assistant} assistant",
+      uniqueToolsCount: "{count} tools used",
       unpriced: "Unpriced",
       messages: "Messages",
       messagesHint: "Total user and assistant messages in range.",

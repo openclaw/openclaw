@@ -44,6 +44,7 @@ const { values } = parseArgs({
     "dashboard-pane-chrome": { type: "boolean", default: false },
     "plugin-activation": { type: "boolean", default: false },
     "details-session-facts": { type: "boolean", default: false },
+    "active-targets": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
@@ -58,7 +59,7 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
-  --transcript-late-paint --reload-after-navigation --cpu-profile
+  --transcript-late-paint --plugin-activation --active-targets --reload-after-navigation --cpu-profile
   --init-script <browser-script.js> (repeatable)
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
@@ -510,6 +511,7 @@ async function captureReload(
       ...probe.pluginStates,
       ...probe.pluginMarks,
       ...probe.textPaints,
+      ...probe.contextRingFrames,
     ]) {
       entry.atMs += documentOffsetMs;
     }
@@ -601,6 +603,8 @@ async function captureReload(
         `Signed-in admission must yield one top-level document; saw ${documents.length}. Inspect ${outputDir}`,
       );
     }
+    const firstRing = probe.contextRingFrames[0]?.ring;
+    const finalRing = probe.contextRingFrames.at(-1)?.ring;
     const report = {
       warm,
       ...(shortVisit ? { shortVisit } : {}),
@@ -618,6 +622,16 @@ async function captureReload(
       firstAppCandidateFrameMs: candidateFrameAfter(probe.firstAppDomMs),
       firstMainCandidateFrameMs: candidateFrameAfter(probe.firstMainDomMs),
       firstDashboardCandidateFrameMs: candidateFrameAfter(probe.firstDashboardContentDomMs),
+      firstComposerCandidateFrameMs: candidateFrameAfter(probe.contextRingFrames[0]?.atMs ?? null),
+      firstComposerDomHasFinalRing: Boolean(
+        firstRing &&
+        finalRing &&
+        firstRing.width > 0 &&
+        firstRing.height > 0 &&
+        firstRing.opacity === "1" &&
+        firstRing.label === finalRing.label &&
+        firstRing.dashOffset === finalRing.dashOffset,
+      ),
       paintMilestoneMethod: "DOM-correlated candidates; first visible paint requires a pixel audit",
       regions,
       visual,
@@ -754,6 +768,7 @@ try {
     dashboardPaneChrome: values["dashboard-pane-chrome"],
     pluginActivation: values["plugin-activation"],
     detailsSessionFacts: values["details-session-facts"],
+    activeTargets: values["active-targets"],
     ...(admission
       ? {
           admission: {
@@ -919,7 +934,7 @@ try {
             await page.addInitScript({ content: extraInitScripts.join("\n") });
           }
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]});`,
+            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"]});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");

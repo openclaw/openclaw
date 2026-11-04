@@ -140,6 +140,9 @@ suite.define(() => {
           });
           await gateway.waitForRequest("environments.list", { after: inventoryReads });
           await gateway.waitForRequest("backup.status", { after: backupReads });
+          if (width <= 640) {
+            await page.getByRole("button", { name: "Show statistics" }).click();
+          }
           await page.getByText("Loading backups…", { exact: true }).waitFor();
           // A phone draft shares chat's canvas; other pages sit under the floating header.
           expect(await outletOrigin()).toEqual(width === 400 ? { x: 4, y: 64 } : initialOrigin);
@@ -189,7 +192,7 @@ suite.define(() => {
           );
           await gateway.resolveDeferred("backup.status");
           await page
-            .getByText(backups ? "Recorded: 1 · Failed: 1" : "No backups recorded —", {
+            .getByText(backups ? "Recorded: 1 · Failed: 1" : "No backups yet.", {
               exact: false,
             })
             .waitFor();
@@ -255,6 +258,117 @@ suite.define(() => {
       );
     },
   );
+  it("opens on the viewer at phone width until the operator chooses stats", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installSystemsGateway(page, 0, {
+          "backup.status": {
+            targets: [
+              {
+                kind: "archive",
+                target: "Synthetic archive",
+                latest: { id: "backup", kind: "archive", createdAt: 1, archivePath: "/backup" },
+              },
+            ],
+            schedules: [],
+            locations: [],
+          },
+        });
+        await page.goto(suite.server.baseUrl + "systems");
+        await page.locator(".systems-mobile-picker option[value='worker-one']").waitFor({
+          state: "attached",
+        });
+        const overview = page.locator(".systems-overview");
+        const stats = page.locator(".systems-overview__telemetry");
+        const backups = page.locator(".systems-backups");
+        const toolbarBottom = () =>
+          page
+            .locator(".systems-toolbar")
+            .evaluate((element) => element.getBoundingClientRect().bottom);
+        const bodyTop = () =>
+          page.locator(".systems-body").evaluate((element) => element.getBoundingClientRect().top);
+
+        expect(await overview.isVisible()).toBe(false);
+        expect(await stats.count()).toBe(0);
+        expect(await backups.isVisible()).toBe(false);
+        expect(await bodyTop()).toBe(await toolbarBottom());
+
+        const show = page.getByRole("button", { name: "Show statistics" });
+        await show.click();
+        await stats.waitFor();
+        await backups.waitFor();
+        expect(await bodyTop()).toBeGreaterThan(await toolbarBottom());
+
+        // The choice survives leaving the page and overrides the width default.
+        await page.evaluate(() => {
+          window.openclawControlUi!.navigate("dashboards");
+        });
+        await expect.poll(() => page.locator("openclaw-systems-page").isVisible()).toBe(false);
+        await page.evaluate(() => {
+          window.openclawControlUi!.navigate("systems");
+        });
+        await stats.waitFor();
+
+        await page.getByRole("button", { name: "Hide statistics" }).click();
+        await expect.poll(() => stats.count()).toBe(0);
+        await page.setViewportSize({ width: 1280, height: 900 });
+        expect(await page.getByRole("button", { name: "Show statistics" }).isVisible()).toBe(true);
+        await backups.waitFor();
+      },
+    );
+  });
+
+  it("follows the viewport until the operator chooses", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const gateway = await installSystemsGateway(page, 0);
+        await page.goto(suite.server.baseUrl + "systems");
+        const stats = page.locator(".systems-overview__telemetry");
+        await stats.waitFor();
+        await page.setViewportSize({ width: 390, height: 844 });
+        await expect.poll(() => stats.count()).toBe(0);
+        const samples = (await gateway.getRequests("system.info")).length;
+        // Let the shared 10-second sample expire while statistics are hidden.
+        await page.waitForTimeout(10_100);
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await stats.waitFor();
+        // Revealing stats must request a fresh sample before the 15-second polling tick.
+        await expect
+          .poll(async () => (await gateway.getRequests("system.info")).length, { timeout: 2_000 })
+          .toBeGreaterThan(samples);
+      },
+    );
+  });
+
+  it("keeps search, filter and refresh reachable in the touch drawer", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: 390, height: 844 },
+        hasTouch: true,
+        isMobile: true,
+      },
+      async ({ page }) => {
+        const gateway = await installSystemsGateway(page, 0);
+        await page.goto(suite.server.baseUrl + "systems");
+        await gateway.waitForRequest("environments.list");
+        await page.getByRole("button", { name: "Expand sidebar", exact: true }).tap();
+        const inventory = page.locator(".systems-sidebar");
+        await inventory.getByRole("searchbox", { name: "Find a device…" }).waitFor();
+        await inventory.getByRole("button", { name: "Filter & sort devices" }).waitFor();
+        const refresh = inventory.getByRole("button", { name: "Refresh devices" });
+        await expect.poll(() => refresh.isEnabled()).toBe(true);
+        expect(await refresh.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+        const reads = (await gateway.getRequests("environments.list")).length;
+        await refresh.tap();
+        await gateway.waitForRequest("environments.list", { after: reads });
+      },
+    );
+  });
+
   it("names Macs consistently and enables a discovered desktop without reconnecting", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
@@ -316,18 +430,18 @@ suite.define(() => {
         });
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
-        await inventory.getByRole("searchbox", { name: "Find a machine…" }).fill("macOS");
+        await inventory.getByRole("searchbox", { name: "Find a device…" }).fill("macOS");
         await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(2);
         await page
           .locator(".systems-toolbar")
-          .getByRole("button", { name: "Machine details" })
+          .getByRole("button", { name: "Device details" })
           .click();
         expect(await page.locator(".systems-details dd").allTextContents()).toContain(
           "macOS 27.0.0",
         );
         const systemReads = (await gateway.getRequests("system.info")).length;
         await gateway.deferNext("system.info");
-        await inventory.getByRole("button", { name: "Refresh machines" }).click();
+        await inventory.getByRole("button", { name: "Refresh devices" }).click();
         await gateway.waitForRequest("system.info", { after: systemReads });
         await gateway.rejectDeferred("system.info", {
           code: "UNAVAILABLE",
@@ -579,7 +693,7 @@ suite.define(() => {
         ],
       });
       await page.setViewportSize({ width: 1440, height: 900 });
-      await inventory.getByRole("button", { name: "Refresh machines" }).click();
+      await inventory.getByRole("button", { name: "Refresh devices" }).click();
       await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(1);
       expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual([]);
       await page.setViewportSize({ width: 640, height: 900 });
