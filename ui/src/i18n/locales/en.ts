@@ -683,10 +683,10 @@ const startupEnglish = {
     readOnly: {},
     // The trigger and load failure stay eager; dialog copy follows its lazy renderer.
     pairing: {
-      button: "Pair device",
-      adminRequired: "Administrator access is required to create setup codes.",
-      title: "Pair a device",
-      loadFailed: "Could not load the pairing dialog. Check your connection and try again.",
+      button: "Connect a device",
+      adminRequired: "You need admin access to create setup codes.",
+      title: "Connect a device",
+      loadFailed: "Couldn’t load the connection dialog. Check your connection and try again.",
     },
     binding: {},
     inventory: {},
@@ -915,7 +915,7 @@ const startupEnglish = {
     agentPendingOne: "{count} pending approval",
     agentPending: "{count} pending approvals",
 
-    reviewOnly: "You don’t have permission to approve.",
+    reviewOnly: "You need approval access to approve.",
 
     labels: {},
   },
@@ -975,8 +975,8 @@ const startupEnglish = {
     title: "Terminal",
     toggle: "Toggle terminal",
     open: "Open terminal",
-    startCancelled: "Terminal start was cancelled. Try again.",
-    unavailable: "The terminal is not available on this gateway.",
+    startCancelled: "Couldn’t start the terminal. Try again.",
+    unavailable: "The terminal is unavailable.",
   },
   browser: {
     nativeTab: {},
@@ -1527,10 +1527,10 @@ const startupEnglish = {
     sessionDetails: {
       automations: "Automations",
       progressOptions: "Task progress options",
-      automationError: "Couldn't load automations.",
-      automationUnavailable: "Automations unavailable for this session.",
+      automationError: "Couldn’t load automations. Try again.",
+      automationUnavailable: "Automations unavailable.",
       automationLoading: "Loading automations…",
-      automationEmpty: "No automations for this session",
+      automationEmpty: "No automations yet.",
       automationMore: "Load more automations",
       automationAttention: "Needs attention",
       automationPaused: "Paused",
@@ -1545,7 +1545,7 @@ const startupEnglish = {
       manage: "Manage saved accounts…",
     },
     mentions: {},
-    cloudWorkerFailed: "Runner failed: {error}",
+    cloudWorkerFailed: "Couldn’t continue this session. Check its device and try again. {error}",
     errorDetails: "Error details",
     errorSummary: "Couldn’t complete this action. Try again.",
     errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",

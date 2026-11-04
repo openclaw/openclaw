@@ -454,7 +454,7 @@ it.each(["success", "failure"] as const)("retired %s keeps current polling", asy
     expectText(page).toContain("Starting your machine");
     replacement = { ...replacement, status: "error" };
     await updatePage(page, { presented: true });
-    await waitForText(page, "The machine could not start");
+    await waitForText(page, "Couldn’t start this device");
   } else {
     retired.reject(new Error("Previous machine failed"));
     await retired.promise.catch(() => undefined);

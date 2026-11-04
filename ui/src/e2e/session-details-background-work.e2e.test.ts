@@ -640,7 +640,7 @@ suite.define(() => {
           expect(await panel.locator(".chat-processes__output").textContent()).toContain(
             target.tail,
           );
-          await panel.getByRole("button", { name: "Back to Details", exact: true }).click();
+          await panel.getByRole("button", { name: "Back to details", exact: true }).click();
           await processGroup.waitFor({ state: "visible" });
           await waitForLayoutSettled(
             page,
@@ -656,7 +656,7 @@ suite.define(() => {
             .click();
           await panel.getByRole("button", { name: processes[0]!.name, exact: true }).waitFor();
           await panel.getByRole("button", { name: processes[0]!.name, exact: true }).click();
-          await panel.getByRole("button", { name: "Back to Processes", exact: true }).click();
+          await panel.getByRole("button", { name: "Back to processes", exact: true }).click();
           await panel.getByRole("button", { name: processes[0]!.name, exact: true }).waitFor();
           if (width === 390) {
             await pane
