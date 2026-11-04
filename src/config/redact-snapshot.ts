@@ -11,7 +11,11 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
-import { containsEnvVarReference } from "./env-substitution.js";
+import {
+  containsEnvVarReference,
+  renderEnvTemplateToken,
+  scanEnvTemplateTokens,
+} from "./env-substitution.js";
 import { REDACTED_SENTINEL } from "./redact-sentinel.js";
 import {
   replaceSensitiveValuesInRaw,
@@ -22,7 +26,6 @@ import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 const log = createSubsystemLogger("config/redaction");
-const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 
 function isSensitivePath(path: string): boolean {
   if (path.endsWith("[]")) {
@@ -33,7 +36,13 @@ function isSensitivePath(path: string): boolean {
 
 function isConcreteSensitiveString(value: string): boolean {
   const trimmed = value.trim();
-  return trimmed !== "" && !ENV_VAR_PLACEHOLDER_PATTERN.test(trimmed);
+  const reference = scanEnvTemplateTokens(trimmed)[0];
+  // Fallback text is credential material even when the environment currently overrides it.
+  const secretFreeReference =
+    reference?.kind === "substitution" &&
+    !reference.defaultValue &&
+    renderEnvTemplateToken(reference) === trimmed;
+  return trimmed !== "" && !secretFreeReference;
 }
 
 function isWholeObjectSensitivePath(path: string): boolean {
