@@ -31,11 +31,11 @@ import {
   buildLegacyScheduledCodexAppRecoveryPrompt,
 } from "./scheduled-app-authority.js";
 import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-configured-mcp-authority.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 import {
   getLeasedSharedCodexAppServerClient,
   getSharedCodexAppServerClient,
   releaseCodexProbeClient,
-  type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";

@@ -1,11 +1,8 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import {
-  releaseCodexProbeClient,
-  type CodexAppServerClientOptions,
-  type CodexAppServerClientFactory,
-} from "./shared-client.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
+import { releaseCodexProbeClient, type CodexAppServerClientFactory } from "./shared-client.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 function resolveOverriddenProviderWebSearchSupport(

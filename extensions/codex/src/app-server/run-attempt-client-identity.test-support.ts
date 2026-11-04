@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { CodexAppServerClientOptions } from "./shared-client.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 import { createCodexLifecycleTurnHarness as createLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 

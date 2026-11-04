@@ -98,11 +98,11 @@ import {
   resolveCodexEffectiveSessionPermissionPolicy,
   resolveCodexSessionPermissionCwd,
 } from "./session-permission-policy.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 import {
   releaseCodexAppServerClientLease,
   withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
-  type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { cleanupCodexSideQuestion } from "./side-question-cleanup.js";
 import {

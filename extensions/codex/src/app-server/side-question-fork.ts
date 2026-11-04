@@ -28,10 +28,10 @@ import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import type { CodexThreadForkParams, JsonObject, JsonValue } from "./protocol.js";
 import { isMissingCodexParentThreadError } from "./rpc-error.js";
 import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 import {
   getLeasedSharedCodexAppServerClient,
   retainSharedCodexAppServerClientByInstanceId,
-  type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { buildCodexUserInput } from "./user-input.js";
 

@@ -66,12 +66,12 @@ import {
   CODEX_SESSION_PERMISSION_EXEC_MODES,
   resolveCodexSessionPermissionCwd,
 } from "./app-server/session-permission-policy.js";
+import type { CodexAppServerClientOptions } from "./app-server/shared-client-options.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseCodexAppServerClientLease,
   withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
-  type CodexAppServerClientOptions,
   type CodexAppServerLeasedRequestOptions,
 } from "./app-server/shared-client.js";
 import {

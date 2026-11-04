@@ -20,8 +20,8 @@ import {
 import { waitForCodexDesktopGeneration } from "./desktop-generation.js";
 import { resolveManagedCodexAppServerStartOptions } from "./managed-binary.js";
 import { isCodexResponsesOAuth } from "./responses-oauth.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 import { shouldTrackDesktopGeneration } from "./shared-client-start-policy.js";
-import type { CodexAppServerClientOptions } from "./shared-client.js";
 
 export async function resolveCodexAppServerClientStartContext(
   options: CodexAppServerClientOptions | undefined,

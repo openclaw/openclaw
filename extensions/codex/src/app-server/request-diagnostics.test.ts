@@ -6,7 +6,7 @@ import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env"
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./rpc-error.js";
-import type { CodexAppServerClientOptions } from "./shared-client.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 
 const shared = vi.hoisted(() => ({
   acquire: vi.fn(),

@@ -23,7 +23,7 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-import type { CodexAppServerClientOptions } from "./shared-client.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 import { createCodexTestOAuthProfile } from "./test-support.js";
 
 /** Keeps native Codex bindings reusable while omitting OpenClaw tools and search. */

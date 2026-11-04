@@ -16,11 +16,11 @@ import {
   type CodexConfigReadResponse,
   type CodexGetAccountResponse,
 } from "./protocol.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
   type CodexAppServerClientFactory,
-  type CodexAppServerClientOptions,
 } from "./shared-client.js";
 
 /** Synthetic transports declare their own trust and proxy profile, never the host's. */

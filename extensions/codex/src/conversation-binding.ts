@@ -36,12 +36,12 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
+import type { CodexAppServerClientOptions } from "./app-server/shared-client-options.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseCodexAppServerClientLease,
   withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
-  type CodexAppServerClientOptions,
 } from "./app-server/shared-client.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,

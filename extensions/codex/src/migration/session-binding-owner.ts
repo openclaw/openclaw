@@ -1,8 +1,18 @@
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import type { LegacyBindingOwner } from "./session-binding-sidecars.js";
 
 type MigrationParams = Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0];
 const CODEX_AGENT_HARNESS_ID = "codex";
+
+export type LegacyBindingOwner = {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  transcriptPath: string;
+  lifecycleRevision?: string;
+  agentHarnessId?: string;
+  updatedAt?: number;
+};
 
 export async function recordSessionOwner(
   owner: LegacyBindingOwner,

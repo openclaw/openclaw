@@ -128,8 +128,8 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 import * as sharedClientModule from "./shared-client.js";
-import type { CodexAppServerClientOptions } from "./shared-client.js";
 import {
   appendSqliteHistoryMessage,
   attachSqliteSessionTarget,

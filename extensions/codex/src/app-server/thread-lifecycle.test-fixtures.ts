@@ -22,10 +22,10 @@ import {
   registerCodexTestSessionIdentity,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
-  type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";

@@ -53,13 +53,13 @@ import {
 } from "./sandbox-exec-server.js";
 import type { CodexBindingAuthority, CodexAppServerBindingStore } from "./session-binding.js";
 import { observeAcquire } from "./shared-client-lifecycle.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
   createIsolatedCodexAppServerClient,
   readCodexAppServerClientDesktopGenerationFingerprint,
   releaseLeasedSharedCodexAppServerClient,
   type CodexAppServerAcquireObservation,
-  type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";

@@ -16,7 +16,7 @@ import type {
   CodexControlRequestPhase,
 } from "./request-observation.js";
 import { CodexAppServerRpcError, CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
-import type { CodexAppServerClientOptions } from "./shared-client.js";
+import type { CodexAppServerClientOptions } from "./shared-client-options.js";
 import { withAbortableTimeout, withTimeout } from "./timeout.js";
 
 export { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";

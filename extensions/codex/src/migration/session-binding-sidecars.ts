@@ -31,7 +31,7 @@ import {
   readLegacySessionIndex,
   resolveLegacySessionFileLocator,
 } from "./session-binding-legacy-index.js";
-import { recordSessionOwner } from "./session-binding-owner.js";
+import { recordSessionOwner, type LegacyBindingOwner } from "./session-binding-owner.js";
 
 const LEGACY_BINDING_SUFFIX = ".codex-app-server.json";
 const CODEX_AGENT_HARNESS_ID = "codex";
@@ -55,17 +55,6 @@ type LegacyBindingSource = {
   sidecarPath: string;
   transcriptPath: string;
   agentIds: Set<string>;
-};
-
-export type LegacyBindingOwner = {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-  transcriptPath: string;
-  lifecycleRevision?: string;
-  agentHarnessId?: string;
-  updatedAt?: number;
 };
 
 type BindingOwnerCollection = {
