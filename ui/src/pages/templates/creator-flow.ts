@@ -198,6 +198,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
         this.reset(null);
         this.error = message;
         showToast({
+          severity: "error",
           message,
           actionLabel: t("common.retry"),
           onAction: () => void this.start(agentId),

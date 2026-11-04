@@ -59,8 +59,17 @@ export function formatMissingScopeMessage(scope: string, action: string): string
   return `Couldn’t ${action}. Ask an admin to grant ${access}.`;
 }
 
-export function formatMissingOperatorReadScopeMessage(feature: string): string {
-  return formatMissingScopeMessage("operator.read", `view ${feature}`);
+export async function formatMissingOperatorReadScopeMessage(
+  feature: string,
+  fallback: string,
+): Promise<string> {
+  try {
+    const errors = await import("./permission-error.ts");
+    return errors.formatMissingOperatorReadScopeMessage(feature);
+  } catch {
+    // Keep the Gateway denial visible if the optional error catalog cannot load.
+    return fallback;
+  }
 }
 
 /** Retry only a typed deadline or an explicitly retryable rejection of this read. */

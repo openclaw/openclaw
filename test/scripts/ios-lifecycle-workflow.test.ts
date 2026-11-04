@@ -303,13 +303,10 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       "CloudflareAccessTransferTests",
       "CloudflareAccessSessionStoreTests",
       "GatewayConnectionSecurityTests",
-      "Security2AdvertisementTests",
-      "ESPSetupWireTests",
-      "ESPSetupSessionTests",
-      "ESPSetupGatewayPreviewTests",
       "QRScannerResultHandoffTests",
     ]);
     expect(tests[0]?.args).toEqual(expect.arrayContaining(lifecycleSelectors));
+    expect(selectedTests(tests[0]!.args).join("\n")).not.toMatch(/\/(?:ESPSetup|Security2)/u);
     expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
     if (phase === "smoke") {
       expect(commands.at(-1)).toEqual({
@@ -399,10 +396,10 @@ it.skipIf(process.platform === "win32").each([
   { owner: "apps/ios/fastlane/Fastfile", groups: [] },
   { owner: "apps/ios/Tests/TalkModeConfigParsingTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/ChatSendHydrationTests.swift", groups: ["lifecycle"] },
-  { owner: "apps/ios/ThirdParty/ESPProvision/ESPProvision/ESPDevice.swift", groups: ["lifecycle"] },
-  { owner: "apps/ios/Tests/ESPSetupWireTests.swift", groups: ["lifecycle"] },
-  { owner: "apps/ios/Tests/ESPSetupSessionTests.swift", groups: ["lifecycle"] },
-  { owner: "apps/ios/Tests/ESPSetupGatewayPreviewTests.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/ThirdParty/ESPProvision/ESPProvision/ESPDevice.swift", groups: [] },
+  { owner: "apps/ios/Tests/ESPSetupWireTests.swift", groups: [] },
+  { owner: "apps/ios/Tests/ESPSetupSessionTests.swift", groups: [] },
+  { owner: "apps/ios/Tests/ESPSetupGatewayPreviewTests.swift", groups: [] },
   { owner: "apps/ios/Tests/QRScannerResultHandoffTests.swift", groups: ["lifecycle"] },
   {
     owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatComposerTextViewIOSTests.swift",

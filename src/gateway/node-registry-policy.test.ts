@@ -397,8 +397,8 @@ describe("dedicated worker MCP permission", () => {
     try {
       setActivePluginRegistry(pluginRegistry);
       registry.refreshRuntimePolicy();
-      setDenied(true);
       expect(policies()).toEqual([false, true, false]);
+      setDenied(true);
     } finally {
       resetPluginRuntimeStateForTest();
     }
