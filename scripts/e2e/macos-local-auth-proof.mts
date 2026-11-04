@@ -321,6 +321,14 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
           `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(cliEntry)} "$@" --verbose --ws-log full\n`,
           { mode: 0o700 },
         );
+        // Manual upgrades must let Doctor own backed-up credential migration
+        // before service installation opens state created by the stable app.
+        result.upgradeDoctorExit = await cli("upgrade-doctor", [
+          "doctor",
+          "--fix",
+          "--non-interactive",
+        ]);
+        assert.equal(result.upgradeDoctorExit, 0);
         assert.equal(
           await cli("upgrade-service", [
             "gateway",
