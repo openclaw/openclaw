@@ -135,7 +135,6 @@ function streamingFailure(cause: Error, source: Parameters<typeof streamingClose
 function visibleClose(content: string, messageId: string): StreamingCloseResult {
   return streamingCloseResult({ visibleReplySent: true, content, messageId });
 }
-
 afterAll(() => {
   vi.doUnmock("./accounts.js");
   vi.doUnmock("./runtime.js");
@@ -151,16 +150,13 @@ afterAll(() => {
 });
 describe("createFeishuReplyDispatcher streaming behavior", () => {
   type ReplyDispatcherArgs = Parameters<typeof createFeishuReplyDispatcher>[0];
-
   type ReplyDispatcherPlan = ReturnType<typeof createFeishuReplyDispatcher>;
-
   type DeliveryPayload = Parameters<ReplyDispatcherPlan["delivery"]["deliver"]>[0];
   type TypingDispatcherOptions = ReplyDispatcherPlan["dispatcherOptions"] &
     ReplyDispatcherPlan["delivery"] & {
       final: (payload: DeliveryPayload) => ReturnType<ReplyDispatcherPlan["delivery"]["deliver"]>;
       block: (payload: DeliveryPayload) => ReturnType<ReplyDispatcherPlan["delivery"]["deliver"]>;
     };
-
   beforeEach(() => {
     vi.clearAllMocks();
     streamingStartBackoffUntilByAccount.clear();
@@ -537,7 +533,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     "Allow Codex to bind this conversation?",
     "- Allow once: `/plugin allow`\n- Deny: `/plugin deny`",
   ].join("\n\n");
-
   const approvalPresentation = {
     title: "Plugin bind approval required",
     blocks: [
@@ -1048,8 +1043,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   );
 
   // Strings preview, [text] blocks, [text, true] error finals. null idles, true holds, false rejects.
-  // Numbers close invisibly: 0 fails recovery, 1 succeeds, 2 starts a message. Chunks end after
-  // a digit. Static sends in failing reject (false) or accept only that part of their text.
+  // Numbers close invisibly: 0 fails recovery, 1 succeeds, 3 throws. 2 starts a message. Chunks end
+  // after a digit. Static sends in failing reject (false) or accept only that part of their text.
   const failing: Record<string, string | false> = { "A2.": false, "G.": "G. A1.", "F.": "F." };
   it.each([
     ["delta blocks", ["hello", ["lo world"]], ["hellolo world"]],
@@ -1074,6 +1069,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["full", ["F. F.", ["F."], ["F."], 1, "F. F. D."], ["F. F.", "F. D."]],
     ["gap", ["G. A1.A2.", ["G."], ["A1.A2."], 1, "G. A1.A2. D."], ["G. A1.A2.", "G. A1.A2. D."]],
     ["stale", ["A1.A2.", ["A1.A2."], 2, "A1. N", 1, "A1. N D."], ["A1.A2.\n\nA1. N", "A1. N D."]],
+    ["rw", ["Z", ["Z"], null, "BA1.A2.", ["A1.A2."], 1, "BA1.A2.C"], ["Z", "BA1.A2.", "BA1.A2.C"]],
+    ["two throws", ["X.", ["X."], 3, "X. X.", ["X."], 3, "X. X. D."], ["X.", "X.", "X. D."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1108,6 +1105,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         }
       } else if (event === 2) {
         result.replyOptions.onAssistantMessageStart?.();
+      } else if (event === 3) {
+        streamingInstances.at(-1)?.closeWithResult.mockRejectedValueOnce(new Error("no"));
+        await expect(options.onIdle?.()).rejects.toThrow("no");
       } else if (typeof event === "number") {
         if (event === 0) {
           sendStructuredCardFeishuMock.mockRejectedValueOnce(new Error("no"));
