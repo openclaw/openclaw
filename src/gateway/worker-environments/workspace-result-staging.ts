@@ -26,7 +26,6 @@ import type {
 import { localPath } from "./workspace-reconcile-fs.js";
 import {
   applyStagedWorkerWorkspace,
-  assertWorkspaceMatchesManifest,
   inspectAcceptedWorkerWorkspace,
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
@@ -272,11 +271,7 @@ async function withMaterializedWorkerWorkspaceResult<T>(
       }
     }
     await flush();
-    await assertWorkspaceMatchesManifest({
-      root: stagingRoot,
-      manifest: snapshot.current,
-      entries: snapshot.changedEntries,
-    });
+    // The blob reader authenticated every payload before these private writes.
     return await use({ ...snapshot, stagingRoot });
   } finally {
     await runBestEffortCleanup({
@@ -310,7 +305,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
         root,
         expectedManifestRef: params.expectedBaseManifestRef,
         allowAdvancedLocalState: true,
-        base: staged.base,
+        reconciliation: staged.reconciliation,
         current: staged.current,
         additionalPaths: params.additionalPaths,
       });
@@ -331,7 +326,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
         stagingRoot,
         baseManifestRef: staged.baseManifestRef,
         currentManifestRef: staged.currentManifestRef,
-        base: staged.base,
+        reconciliation: staged.reconciliation,
         current: staged.current,
         additionalPaths: params.additionalPaths,
         journal: params.journal,

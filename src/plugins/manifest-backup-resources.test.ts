@@ -111,7 +111,8 @@ describe("plugin manifest backup resources", () => {
       scope: "agent",
       relativePath: "backup-owner/cache",
     });
-    const enabled = createPluginFixture([included, regenerable, included]);
+    const companion = { ...regenerable, profile: "local-companion" };
+    const enabled = createPluginFixture([included, regenerable, companion, included, companion]);
     const disabled = createPluginFixture(
       [{ ...regenerable, relativePath: "disabled-owner/cache" }],
       {
@@ -132,6 +133,7 @@ describe("plugin manifest backup resources", () => {
       pluginRoots: [],
       resources: [
         { pluginId: enabled.id, ...regenerable },
+        { pluginId: enabled.id, ...companion },
         { pluginId: enabled.id, ...included },
       ],
     });
@@ -158,20 +160,15 @@ describe("plugin manifest backup resources", () => {
     },
   );
 
-  it("retains distinct full and companion-only declarations without activating runtime", () => {
-    const full = resource({ disposition: "regenerable" });
-    const companion = { ...full, profile: "local-companion" };
-    const fixture = createPluginFixture([full, companion]);
-    expect(fixture.inventory({ entries: { [fixture.id]: { enabled: true } } }).resources).toEqual([
-      { pluginId: fixture.id, ...full },
-      { pluginId: fixture.id, ...companion },
-    ]);
-    expect(fixture.inventory({ enabled: false }).resources).toEqual([]);
-  });
-
   it("retains only database resources when plugins are disabled", () => {
     const database = resource({ databaseFamily: "state" });
-    const fixture = createPluginFixture([database, resource({ relativePath: "cache" })]);
+    const regenerable = resource({ disposition: "regenerable" });
+    const fixture = createPluginFixture([
+      database,
+      resource({ relativePath: "cache" }),
+      regenerable,
+      { ...regenerable, profile: "local-companion" },
+    ]);
     expect(fixture.inventory({ enabled: false })).toEqual({
       pluginRoots: [],
       resources: [{ pluginId: fixture.id, ...database }],

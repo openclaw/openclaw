@@ -108,6 +108,9 @@ will reject the operation on failure.
 For claim hooks, continuing means trying the next handler. The caller decides
 what happens if nobody claims; a failed `inbound_claim` for a bound
 conversation can produce a binding notice instead of an ordinary agent reply.
+ACP `reply_dispatch` errors and timeouts instead terminate dispatch, because the
+handler may already have started work. They never authorize another runtime to
+replay the task. Explicit declines and pre-invocation reload refusals can continue.
 
 Channel plugins that use `createReplyDispatcher` can likewise declare a larger
 positive per-stage budget with `beforeDeliverOptions: { timeoutMs }`, or when
@@ -293,6 +296,11 @@ api.on("run_stopped", (event) => {
 `skill_changed` fires after a live skill create, update, or removal commits and
 includes optional before/after artifacts with content and tree hashes, plus
 declared and source versions when available.
+
+`source` names the writer: `workshop`, `clawhub`, `source-install`, `upload`, or
+`plugin`. A `plugin` event comes from a plugin that changed its own skills root
+through [skill authoring](/plugins/sdk-entrypoints#skill-authoring); the host sets
+`pluginId` to that plugin's id.
 
 ### Channel pairing requests
 

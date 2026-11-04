@@ -684,7 +684,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       attachments?.some((attachment) => !attachment.selectionAnnotation) &&
       !uploadsEnabled(state.uploadConfig)
     ) {
-      showToast({ message: uploadsDisabledMessage() });
+      showToast({ severity: "error", message: uploadsDisabledMessage() });
       return;
     }
     // The question carries the model controls shown when it was asked.

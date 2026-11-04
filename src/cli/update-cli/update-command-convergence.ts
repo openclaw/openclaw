@@ -9,8 +9,8 @@ import {
   readRetiredDeferredUpdateWarnings,
   retireDeferredUpdateStepWarnings,
 } from "../../infra/deferred-update-warnings.js";
+import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
-import { compareSemverStrings } from "../../infra/update-check.js";
 import {
   hasDeferredUpdateModelRetirement,
   resolveDoctorUpdateRun,

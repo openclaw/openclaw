@@ -22,31 +22,31 @@ function fallbackFetch(org: Response, usage: Response) {
 describe("fetchClaudeUsage", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("normalizes quota windows, scoped model limits, and extra-usage billing", async () => {
+  it.each([Number, String])("normalizes %s usage windows and billing", async (numeric) => {
     const reset = "2026-01-12T00:00:00Z";
+    const fable = { scope: { model: { display_name: " ", id: " Fable " } }, resets_at: reset };
     const result = await fetchUsage({
-      five_hour: { utilization: -5, resets_at: "not-a-date" },
-      seven_day: { utilization: 140, resets_at: reset },
-      seven_day_sonnet: { utilization: 67 },
-      seven_day_opus: { utilization: 90 },
+      five_hour: { utilization: numeric(-5), resets_at: "not-a-date" },
+      seven_day: { utilization: numeric(140), resets_at: reset },
+      seven_day_sonnet: { utilization: numeric(67) },
+      seven_day_opus: { utilization: numeric(90) },
       limits: [
         null,
         [],
         "malformed",
         { percent: 50, scope: [] },
         { percent: 60, scope: { model: [] } },
-        { percent: "80", scope: { model: { id: "Numeric" } } },
         { percent: 80, is_active: false, scope: { model: { id: "Inactive" } } },
         { percent: 80, scope: { model: { display_name: " sonnet " } } },
-        { percent: 27, scope: { model: { display_name: " ", id: " Fable " } }, resets_at: reset },
+        { percent: numeric(27), ...fable },
         { percent: 90, scope: { model: { display_name: "FABLE" } } },
-        { percent: 0, is_active: null, scope: { model: { id: "Zero" } } },
+        { percent: numeric(0), is_active: null, scope: { model: { id: "Zero" } } },
       ],
       extra_usage: {
         is_enabled: true,
-        monthly_limit: 100000,
-        used_credits: 4132,
-        utilization: 4.132,
+        monthly_limit: numeric(100000),
+        used_credits: numeric(4132),
+        utilization: numeric(4.132),
         currency: "usd",
       },
     });
@@ -64,7 +64,7 @@ describe("fetchClaudeUsage", () => {
 
   it("preserves Opus when sibling windows and activity flags are malformed", async () => {
     const result = await fetchUsage({
-      five_hour: { utilization: "18" },
+      five_hour: { utilization: "not-a-number" },
       seven_day: null,
       seven_day_sonnet: {},
       seven_day_opus: { utilization: 44 },

@@ -8,7 +8,14 @@ import * as installMetadata from "../infra/install-source-utils.js";
 import * as clawPackageLease from "../state/claw-package-lifecycle-lease.js";
 import { createOpenClawStateLeaseCleanup } from "../state/openclaw-state-lease-cleanup.js";
 import * as clawhub from "./clawhub.js";
+import {
+  attachPluginInstallTransaction,
+  requestDeferredPluginInstall,
+  settlePluginInstallTransactions,
+  type PluginInstallTransaction,
+} from "./install-transaction.js";
 import * as installer from "./install.js";
+import * as officialInstallRecords from "./official-external-install-records.js";
 import * as catalog from "./official-external-plugin-catalog.js";
 import { installableEntry } from "./official-external-plugin-catalog.test-support.js";
 import {
@@ -16,7 +23,10 @@ import {
   withPluginLifecycleLeaseAsync,
 } from "./plugin-lifecycle-lease.js";
 import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
+import * as peerLinks from "./plugin-peer-link.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import {
+  acceptCapabilities,
   withUpdater,
   useUpdateControl,
   withPluginState,
@@ -30,6 +40,282 @@ afterEach(() => {
 });
 
 describe("plugin update authority", () => {
+  it.each([
+    [undefined, "@openclaw/acpx", true],
+    ["@openclaw/acpx@beta", "@openclaw/acpx", true],
+    ["@vendor/acpx-fork", "@vendor/acpx-fork", false],
+  ] as const)(
+    "reuses admitted official identity for npm override %s to %s (trusted=%s)",
+    async (specOverride, packageName, trusted) => {
+      await withPluginState("plugin-update-official-identity", async (state) => {
+        const installPath = state.statePath("extensions", "acpx");
+        await state.writeJson("extensions/acpx/package.json", {
+          name: "@openclaw/acpx",
+          version: "1.0.0",
+        });
+        const stagedArtifactDir = state.path("stage");
+        writeArtifacts(stagedArtifactDir, {
+          "package.json": {
+            name: packageName,
+            version: "1.0.1",
+            openclaw: { extensions: ["./index.js"] },
+          },
+          "index.js": "export default function register() {}\n",
+          "openclaw.plugin.json": { id: "acpx", configSchema: { type: "object" } },
+        });
+        vi.spyOn(installMetadata, "resolveNpmSpecMetadata").mockResolvedValue({
+          ok: true,
+          metadata: { name: packageName, version: "1.0.1" },
+        });
+        const resolveOfficial = vi.spyOn(
+          officialInstallRecords,
+          "resolveTrustedSourceLinkedOfficialNpmInstall",
+        );
+        const install = vi
+          .spyOn(installer, "installPluginFromNpmSpec")
+          .mockImplementationOnce(async (options) => {
+            await options.onBeforePluginArtifactCommit?.({
+              pluginId: "acpx",
+              stagedArtifactDir,
+              currentArtifactDir: installPath,
+              mode: "update",
+            });
+            return {
+              ok: true,
+              pluginId: "acpx",
+              targetDir: installPath,
+              version: "1.0.1",
+              extensions: ["index.js"],
+            };
+          });
+
+        const result = await updateNpmInstalledPlugins({
+          config: singleInstallConfig("acpx", {
+            source: "npm",
+            spec: "@openclaw/acpx",
+            installPath,
+          }),
+          ...(specOverride ? { specOverrides: { acpx: specOverride } } : {}),
+          onCapabilityConsent: acceptCapabilities,
+        });
+
+        expect(resolveOfficial).toHaveBeenCalledOnce();
+        expect(install).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            spec: specOverride ?? "@openclaw/acpx",
+            trustedSourceLinkedOfficialInstall: trusted,
+          }),
+        );
+        expect(result.outcomes).toEqual([
+          expect.objectContaining({ pluginId: "acpx", status: "updated", nextVersion: "1.0.1" }),
+        ]);
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "leaves failed peer-link repair rollback with its owner (deferred=%s)",
+    async (deferred) => {
+      await withPluginState("plugin-update-rollback-owner", async (state) => {
+        const installPath = state.statePath("extensions", "demo");
+        const stagedArtifactDir = state.path("stage");
+        writeArtifacts(stagedArtifactDir, {
+          "package.json": {
+            name: "demo",
+            version: "1.2.4",
+            openclaw: { extensions: ["./index.js"] },
+          },
+          "index.js": "export default function register() {}\n",
+          "openclaw.plugin.json": { id: "demo", configSchema: { type: "object" } },
+        });
+        const peerError = new Error("Cannot repair OpenClaw peer link");
+        const rollbackError = new Error("Cannot restore plugin backup");
+        const transaction = {
+          commit: vi.fn(async () => {}),
+          rollback: vi.fn(async () => {
+            throw rollbackError;
+          }),
+        };
+        const install = vi
+          .spyOn(installer, "installPluginFromNpmSpec")
+          .mockImplementationOnce(async (options) => {
+            await options.onBeforePluginArtifactCommit?.({
+              pluginId: "demo",
+              stagedArtifactDir,
+              currentArtifactDir: installPath,
+              mode: "update",
+            });
+            return attachPluginInstallTransaction(
+              {
+                ok: true,
+                pluginId: "demo",
+                targetDir: installPath,
+                version: "1.2.4",
+                extensions: ["index.js"],
+              },
+              transaction,
+            );
+          });
+        const repair = vi
+          .spyOn(peerLinks, "repairInstalledOpenClawHostLinks")
+          .mockRejectedValueOnce(peerError);
+        const params = {
+          config: singleInstallConfig("demo", { source: "npm", spec: "demo@1.2.4", installPath }),
+          onCapabilityConsent: acceptCapabilities,
+        };
+        await withPluginLifecycleLeaseAsync({}, async (lease) => {
+          const transactions: PluginInstallTransaction[] = [];
+          const owned = deferred
+            ? requestDeferredPluginInstall(
+                params,
+                transactions,
+                () => lease.assertCurrent(),
+                () => lease.assertOwned(),
+              )
+            : params;
+          let failure: unknown = await updateNpmInstalledPlugins(owned).catch(
+            (error: unknown) => error,
+          );
+          expect(install).toHaveBeenCalledOnce();
+          expect(repair).toHaveBeenCalledOnce();
+          if (deferred) {
+            expect(failure).toBe(peerError);
+            expect(transaction.rollback).not.toHaveBeenCalled();
+            failure = await settlePluginInstallTransactions(
+              transactions,
+              "rollback",
+              { error: failure },
+              () => lease.assertOwned(),
+            ).catch((error: unknown) => error);
+          }
+          expect(failure).toBeInstanceOf(AggregateError);
+          expect(failure).toMatchObject({ cause: peerError, errors: [peerError, rollbackError] });
+          expect(transaction.rollback).toHaveBeenCalledOnce();
+          expect(transaction.commit).not.toHaveBeenCalled();
+        });
+      });
+    },
+  );
+
+  it.each([
+    { dryRun: false, fallbackOk: true },
+    { dryRun: true, fallbackOk: true },
+    { dryRun: false, fallbackOk: false },
+    { dryRun: true, fallbackOk: false },
+  ])(
+    "uses the default ClawHub release after an unavailable beta (dryRun=$dryRun, ok=$fallbackOk)",
+    async ({ dryRun, fallbackOk }) => {
+      await withPluginState("plugin-update-channel-retry", async (state) => {
+        const installPath = state.statePath("extensions", "demo");
+        const config = singleInstallConfig("demo", {
+          source: "clawhub",
+          spec: "clawhub:demo",
+          clawhubPackage: "demo",
+          installPath,
+        });
+        const install = vi
+          .spyOn(clawhub, "installPluginFromClawHub")
+          .mockResolvedValueOnce({
+            ok: false,
+            code: "version_not_found",
+            error: "version not found: beta",
+          })
+          .mockImplementationOnce(async (options) => {
+            if (!fallbackOk) {
+              return {
+                ok: false,
+                code: "artifact_unavailable",
+                error: "default release unavailable",
+              };
+            }
+            if (!dryRun) {
+              const stagedArtifactDir = state.path("stage");
+              writeArtifacts(stagedArtifactDir, {
+                "package.json": {
+                  name: "demo",
+                  version: "1.2.4",
+                  openclaw: { extensions: ["./index.js"] },
+                },
+                "index.js": "export default function register() {}\n",
+                "openclaw.plugin.json": { id: "demo", configSchema: { type: "object" } },
+              });
+              await options.onBeforePluginArtifactCommit?.({
+                pluginId: "demo",
+                stagedArtifactDir,
+                currentArtifactDir: installPath,
+                mode: "update",
+              });
+            }
+            return {
+              ok: true,
+              pluginId: "demo",
+              targetDir: installPath,
+              version: "1.2.4",
+              extensions: ["index.js"],
+              packageName: "demo",
+              clawhub: {
+                source: "clawhub",
+                clawhubUrl: "https://clawhub.ai",
+                clawhubPackage: "demo",
+                clawhubFamily: "code-plugin",
+              },
+            };
+          });
+        const npm = vi.spyOn(installer, "installPluginFromNpmSpec");
+        const info = vi.fn();
+        const warn = vi.fn();
+
+        const result = await updateNpmInstalledPlugins({
+          config,
+          dryRun,
+          updateChannel: "beta",
+          onCapabilityConsent: acceptCapabilities,
+          logger: { info, warn },
+        });
+
+        expect(install.mock.calls.map(([options]) => options.spec)).toEqual([
+          "clawhub:demo@beta",
+          "clawhub:demo",
+        ]);
+        expect(npm).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalled();
+        expect(info.mock.calls).toEqual([
+          [
+            'Plugin "demo" has no beta ClawHub release for clawhub:demo@beta; using clawhub:demo instead. Core update can still complete.',
+          ],
+        ]);
+        const suffix = ` (warning: beta channel fallback ${dryRun ? "would use" : "used"} clawhub:demo because clawhub:demo@beta could not be used).`;
+        if (!fallbackOk) {
+          expect(result.config).toBe(config);
+          expect(result.changed).toBe(false);
+          expect(result.outcomes).toEqual([
+            expect.objectContaining({
+              status: "error",
+              code: "artifact_unavailable",
+              message: `Failed to ${dryRun ? "check" : "update"} demo: default release unavailable (ClawHub clawhub:demo).${suffix}`,
+            }),
+          ]);
+          return;
+        }
+        if (dryRun) {
+          expect(result.config).toBe(config);
+          expect(result.changed).toBe(false);
+        } else {
+          expect(result.config.plugins?.installs?.demo).toMatchObject({
+            source: "clawhub",
+            spec: "clawhub:demo",
+            installPath,
+            version: "1.2.4",
+            clawhubPackage: "demo",
+          });
+        }
+        expect(result.outcomes[0]?.message).toBe(
+          `${dryRun ? "Would update" : "Updated"} demo: unknown -> 1.2.4.${suffix}`,
+        );
+      });
+    },
+  );
+
   it.each(["initial", "beta-fallback"] as const)(
     "preserves installer and lease cleanup failures during the %s ClawHub attempt",
     async (stage) => {
