@@ -42,7 +42,11 @@ export type AnnexNode = {
   routing: Routing;
 };
 
-export type ElectionOutcome = "executed" | "refused" | "cancelled";
+/**
+ * `interrupted`: an attic wake whose turn ran once, then whose Gateway died before its delivery was
+ * recorded. It never runs again; its record fails as interrupted and its room is told once.
+ */
+export type ElectionOutcome = "executed" | "interrupted" | "refused" | "cancelled";
 export type ElectionExpectation = { outcome: ElectionOutcome; reason?: string; stage?: string };
 
 export type AnnexElection = {

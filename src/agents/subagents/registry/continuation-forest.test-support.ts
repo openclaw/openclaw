@@ -70,7 +70,10 @@ import {
   realNowMs,
 } from "./continuation-forest.model.test-support.js";
 import { tellStories } from "./continuation-forest.oracle.test-support.js";
-import { continuationForestSeams } from "./continuation-forest.seams.test-support.js";
+import {
+  continuationForestSeams,
+  type WorkMark,
+} from "./continuation-forest.seams.test-support.js";
 import * as trouble from "./continuation-forest.trouble.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 
@@ -188,6 +191,8 @@ export class ContinuationForest {
   readonly relaysToCheck = new Set<AnnexNode>();
   /** Runner (branch) elections by the id of the room that elected them. */
   readonly runners = new Map<string, AnnexElection[]>();
+  /** The Gateway dies as the work dispatcher writes this wake's `mark` (crashMidWake). */
+  dying: { flowId: string; mark: WorkMark; died: () => void } | undefined;
   stopDeliveryRuntime: (() => Promise<void>) | undefined;
 
   private readonly ops = new Set<Promise<unknown>>();
@@ -399,6 +404,14 @@ export class ContinuationForest {
     };
     continuationForestSeams.clockWait = () => this.clockWait();
     continuationForestSeams.beforeResetKill = (sessionKey) => this.gate(`reset-kill:${sessionKey}`);
+    continuationForestSeams.beforeWorkMark = async (mark, work) => {
+      const dying = this.dying;
+      if (dying?.flowId === work.flowId && dying.mark === mark) {
+        this.dying = undefined;
+        dying.died();
+        await this.die();
+      }
+    };
     continuationForestSeams.logLine = (subsystem, message) => {
       if (message.startsWith("[continuation:")) {
         this.logLines.push({ subsystem, message, at: Date.now() });
@@ -510,6 +523,18 @@ export class ContinuationForest {
     return () => {
       op.parked = false;
     };
+  }
+
+  /**
+   * The process running the current world operation dies here: the operation never resumes, so
+   * nothing after this point runs, and settle() no longer waits for it.
+   */
+  async die(): Promise<never> {
+    if (!opContext.getStore()) {
+      throw new Error("only a world operation can die: run it with forest.run()");
+    }
+    this.clockWait();
+    return await new Promise<never>(() => {});
   }
 
   /** A world operation's wait on the clock: settle() does not wait for it. */

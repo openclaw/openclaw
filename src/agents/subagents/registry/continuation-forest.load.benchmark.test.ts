@@ -23,7 +23,7 @@ import {
   runStorm,
   writeLoadReport,
 } from "./continuation-forest.load.test-support.js";
-import { ATTIC_DELAY_MS, realNowMs } from "./continuation-forest.model.test-support.js";
+import { realNowMs } from "./continuation-forest.model.test-support.js";
 import { useContinuationForest } from "./continuation-forest.test-support.js";
 
 const forestSeams = vi.hoisted(() => () => import("./continuation-forest.seams.test-support.js"));
@@ -154,27 +154,6 @@ describe.runIf(LOAD)("the burning annex under load", () => {
         `report ${file}`,
       ).toEqual([children, children, children]);
       expect(release, `report ${file}`).toMatchObject({ finished: true, duplicates: 0 });
-    },
-    TIMEOUT_MS,
-  );
-
-  // Finding (posted as TROUBLE): the delivered mark guards a restart only after the turn's
-  // provider run is recorded; a Gateway that dies between the two drives the wake again.
-  it(
-    "finding: a wake that died after its turn ran, before its delivered mark, is never driven again",
-    async () => {
-      const forest = await annex.build({ trees: 1, depth: 2, fanOut: 1 });
-      await forest.light();
-      await forest.advanceTo(ATTIC_DELAY_MS - 1_000);
-      await forest.crashMidWake(forest.attic(0), "effect");
-      await forest.advanceTo(80_000, 5_000);
-      const stories = await forest.stories();
-      const file = await writeLoadReport("finding-wake-before-delivered-mark", {
-        kind: "finding",
-        stories,
-        contention: contention(forest),
-      });
-      expect(stories, `report ${file}`).toEqual([]);
     },
     TIMEOUT_MS,
   );
