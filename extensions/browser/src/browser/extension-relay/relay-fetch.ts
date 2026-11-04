@@ -453,12 +453,19 @@ export class RelayFetch {
   }
 
   private sendPauseCleanup(pause: Pause): Promise<unknown> {
-    return pause.kind === "auth"
-      ? this.send("Fetch.continueWithAuth", {
-          requestId: pause.nativeId,
-          authChallengeResponse: { response: "CancelAuth" },
-        })
-      : this.send("Fetch.failRequest", { requestId: pause.nativeId, errorReason: "Aborted" });
+    const cleanup =
+      pause.kind === "auth"
+        ? this.send("Fetch.continueWithAuth", {
+            requestId: pause.nativeId,
+            authChallengeResponse: { response: "CancelAuth" },
+          })
+        : this.send("Fetch.failRequest", { requestId: pause.nativeId, errorReason: "Aborted" });
+    // A request Chromium already ended needs no cancellation.
+    return cleanup.catch((error: unknown) => {
+      if (!isRetiredFetchInterceptionError(error)) {
+        throw error;
+      }
+    });
   }
 
   private closeStream(handle: string, stream: OwnedStream): Promise<unknown> {
