@@ -86,8 +86,29 @@ terminal outcomes and the frozen snapshot with all dependencies set to `null`,
 and emits a warning. Missing graph data still requires conservative selection.
 If that smaller export also exceeds the limit, the incomplete snapshot remains.
 
-This snapshot follows configuration evaluation and native test selection. It
-does not contain a prior graph, source diff, model ranking or selection decision.
+Before launching each observed Vitest child, the shard wrapper also writes
+`launch.json`. It records the actual checkout commit/tree and whether tracked or
+untracked changes exist, the preflight comparison base commit/tree, and a
+rename/deletion-aware diff. The comparison base is not necessarily the source of
+a prior dependency graph; consumers must retain both identities independently.
+Recording does not fetch Git history; an unavailable comparison commit is a data gap.
+The file hashes the finalized command arguments and pre/post-shard include-file
+contents without exporting absolute paths. A missing base, dirty checkout, or
+unreadable input records a fallback reason. Every record includes
+`no-prior-snapshot`: this stage does not resolve prior artifacts or omit tests.
+
+The reporter freezes the launch file's SHA-256 hash when it initializes and
+retains it as `preExecution.launchInputs`. Consumers must match the hash to the
+same directory's uploaded `launch.json`, verify source/runtime identity, and
+check that recording preceded reporter initialization. A missing or mismatched
+record is a data gap. Both files use the existing sampled artifact upload;
+launch-only artifacts can survive a child that exits before producing inventory.
+Launch records are bounded to 1 MiB. Preparation is best effort and does not
+change the test command or result when it fails.
+
+The native snapshot follows configuration evaluation and native test selection;
+the launch record precedes them. Neither contains a prior graph, model ranking
+or evaluated selection decision.
 Global setup can still change worker settings after capture. The local recording
 timestamp is not artifact availability: a later consumer must also retain the
 publication/download time before using an earlier run as predictive evidence.

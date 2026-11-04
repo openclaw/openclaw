@@ -4,9 +4,11 @@ import { objectFormOfUnion } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { resolveStructuredDraftInitialValue } from "./config-form-structured-draft.ts";
 import { ConfigStructuredDraft } from "./config-form-structured-draft.tsx";
+import { configLabelInContext } from "./config-form.label-context.ts";
 import { ConfigArray, ConfigObject } from "./config-form.node.collection.tsx";
 import { NumberInput, SelectInput, TextInput } from "./config-form.node.scalar.tsx";
 import {
+  configEnumOptionLabel,
   getSensitiveRenderState,
   jsonValue,
   isAnySchema,
@@ -31,6 +33,18 @@ import {
 import { hintForPath, pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { SettingsToggle, SettingsToggleRow } from "./solid/settings-ui.tsx";
 
+// Past this a segmented control stops fitting the control column at a readable size.
+const SEGMENTED_MAX_OPTIONS = 3;
+const SEGMENTED_MAX_LABEL_CHARS = 12;
+
+function fitsSegmentedControl(options: readonly unknown[]): boolean {
+  return (
+    options.length <= SEGMENTED_MAX_OPTIONS &&
+    options.every(
+      (option) => configEnumOptionLabel(option, options).length <= SEGMENTED_MAX_LABEL_CHARS,
+    )
+  );
+}
 const isConfigObjectValue = (value: unknown) =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -229,7 +243,7 @@ function ResolvedNode(props: {
     >
       <Match when={props.node.kind === "options"}>
         <Show
-          when={(props.node.options?.length ?? 0) > 5 || props.node.nullable}
+          when={!fitsSegmentedControl(props.node.options ?? []) || props.node.nullable}
           fallback={
             <FieldRow
               {...field()}
@@ -365,6 +379,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
       <Match when={props.params.compact}>
         <FieldRow
           label={meta().label}
+          title={configLabelInContext(meta().label, props.params.contextLabel)}
           path={props.params.path}
           help={meta().help}
           helpContext={props.params.helpContext}
@@ -389,7 +404,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
         <SettingsToggleRow
           title={
             <>
-              {meta().label}
+              {configLabelInContext(meta().label, props.params.contextLabel)}
               <Show when={copy().hasHelp}>
                 <ConfigFieldHelp
                   path={props.params.path}

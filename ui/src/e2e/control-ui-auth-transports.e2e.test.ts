@@ -583,7 +583,7 @@ suite.define(() => {
         settingsUrl.searchParams.set("section", "messages");
         expect((await connected.page.goto(settingsUrl.toString()))?.status()).toBe(200);
         const prefix = connected.page.getByRole("textbox", {
-          name: "Outbound Response Prefix",
+          name: "Outbound response prefix",
           exact: true,
         });
         await expect.poll(() => prefix.inputValue()).toBe(configProofPrefixBefore);

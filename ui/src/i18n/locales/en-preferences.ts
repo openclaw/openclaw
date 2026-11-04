@@ -50,7 +50,6 @@ const enPreferences = {
         "This theme hides Lobsterdex. Your collection and preferences are preserved.",
     },
     security: {
-      intro: "Review gateway access, tool policy, device authentication, and approvals.",
       title: "Security",
       accessTitle: "Access",
       agentsTitle: "Agents",
