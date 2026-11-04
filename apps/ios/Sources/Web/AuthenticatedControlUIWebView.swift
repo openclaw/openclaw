@@ -52,20 +52,33 @@ enum AuthenticatedControlUI {
     }
 
     /// Origin-gated document-start script for the Control UI native-auth contract.
+    /// The native contract is announced whenever the app hosts the page with device
+    /// identity on a non-ingress route and either a stored grant or the live native
+    /// operator route backs it; the handler revalidates everything at challenge time
+    /// and fails closed, so this only declares the contract, it does not grant trust.
     static func authUserScript(
         config: GatewayConnectConfig?,
         pageURL: URL?,
         storedOperatorToken: String?,
-        usesNativeNavigationChrome: Bool = false) -> String?
+        usesNativeNavigationChrome: Bool = false,
+        isNativeOperatorRouteLive: Bool = false) -> String?
     {
         guard let config, let pageURL else { return nil }
         var payload: [String: Any] = ["gatewayUrl": config.url.absoluteString]
         let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let password = config.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let storedToken = storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let usesNativeConnectAuth = Self.storedOperatorAuthorization(
+        let hasStoredGrant = Self.storedOperatorAuthorization(
             config: config,
             expectedToken: storedToken) != nil
+        let usesNativeConnectAuth = config.nodeOptions.includeDeviceIdentity
+            && config.ingressAuthorization == nil
+            && (hasStoredGrant || isNativeOperatorRouteLive)
+        if usesNativeConnectAuth, !hasStoredGrant {
+            GatewayDiagnostics.log(
+                "control ui native auth announced via live operator route "
+                    + "without stored grant stableID=\(config.effectiveStableID)")
+        }
         if usesNativeConnectAuth { payload["nativeConnectAuth"] = true }
         if !token.isEmpty { payload["token"] = token }
         if !password.isEmpty { payload["password"] = password }
@@ -122,12 +135,21 @@ enum AuthenticatedControlUI {
     static func nativeAuthHandler(
         config: GatewayConnectConfig?,
         storedOperatorToken: String?,
-        appModel: NodeAppModel) -> ControlUINativeGatewayAuthHandler?
+        appModel: NodeAppModel,
+        isNativeOperatorRouteLive: Bool = false) -> ControlUINativeGatewayAuthHandler?
     {
-        let token = storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard let config, !token.isEmpty,
-              Self.storedOperatorAuthorization(config: config, expectedToken: token) != nil
+        // Install the message handler under the same condition that announces the native
+        // contract: a page told to use native signing must find this handler, or it fails
+        // closed at challenge time. The stored-grant read may be nil in windows where the
+        // operator socket has not persisted a device token for this route yet; the handler
+        // rechecks grants and route currency on every challenge.
+        let hasStoredGrant = self.storedOperatorAuthorization(config: config) != nil
+        guard let config,
+              config.nodeOptions.includeDeviceIdentity,
+              config.ingressAuthorization == nil,
+              isNativeOperatorRouteLive || hasStoredGrant
         else { return nil }
+        let token = storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return ControlUINativeGatewayAuthHandler(config: config, expectedToken: token, appModel: appModel)
     }
 

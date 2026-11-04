@@ -50,6 +50,17 @@ struct SettingsHubScreen: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
+                            self.push(.espSetup)
+                        } label: {
+                            Label { Text("ESP device setup").font(OpenClawType.subheadSemiBold) } icon: {
+                                Image(systemName: "cpu")
+                            }
+                            .labelStyle(.iconOnly)
+                        }
+                        .accessibilityIdentifier("SettingsHub.ESPSetup")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
                             self.push(.gateway)
                         } label: {
                             Text("Gateway")
@@ -171,7 +182,8 @@ struct EmbeddedDashboardContent: View {
                     config: self.config,
                     pageURL: self.url,
                     storedOperatorToken: storedOperatorToken,
-                    usesNativeNavigationChrome: true),
+                    usesNativeNavigationChrome: true,
+                    isNativeOperatorRouteLive: self.appModel.isOperatorGatewayConnected),
                 tls: self.config?.tls,
                 basicProxyCredentialProvider: {
                     AuthenticatedControlUI.basicProxyCredential(config: self.config)
@@ -180,7 +192,8 @@ struct EmbeddedDashboardContent: View {
                 nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
                     config: self.config,
                     storedOperatorToken: storedOperatorToken,
-                    appModel: self.appModel),
+                    appModel: self.appModel,
+                    isNativeOperatorRouteLive: self.appModel.isOperatorGatewayConnected),
                 usesNativeEmbed: true,
                 embedCompatibility: self.embedCompatibility)
                 .id(AuthenticatedControlUI.webContentIdentity(

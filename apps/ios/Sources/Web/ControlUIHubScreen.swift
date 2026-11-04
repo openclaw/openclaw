@@ -38,11 +38,16 @@ enum ControlUIHubPage {
         return AuthenticatedControlUI.pageURL(config: config, path: path, queryItems: [])
     }
 
-    func authUserScript(config: GatewayConnectConfig?, storedOperatorToken: String?) -> String? {
+    func authUserScript(
+        config: GatewayConnectConfig?,
+        storedOperatorToken: String?,
+        isNativeOperatorRouteLive: Bool = false) -> String?
+    {
         AuthenticatedControlUI.authUserScript(
             config: config,
             pageURL: self.url(config: config),
-            storedOperatorToken: storedOperatorToken)
+            storedOperatorToken: storedOperatorToken,
+            isNativeOperatorRouteLive: isNativeOperatorRouteLive)
     }
 
     func webContentIdentity(config: GatewayConnectConfig?, storedOperatorToken: String?) -> Int {
@@ -89,12 +94,16 @@ struct ControlUIHubScreen: View {
             if let url = self.page.url(config: config) {
                 AuthenticatedControlUIWebView(
                     url: url,
-                    authScript: self.page.authUserScript(config: config, storedOperatorToken: storedOperatorToken),
+                    authScript: self.page.authUserScript(
+                        config: config,
+                        storedOperatorToken: storedOperatorToken,
+                        isNativeOperatorRouteLive: self.appModel.isOperatorGatewayConnected),
                     tls: config?.tls,
                     nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
                         config: config,
                         storedOperatorToken: storedOperatorToken,
-                        appModel: self.appModel))
+                        appModel: self.appModel,
+                        isNativeOperatorRouteLive: self.appModel.isOperatorGatewayConnected))
                     // Unrelated SwiftUI updates must not reload a live desktop or shell.
                         .id(self.page.webContentIdentity(config: config, storedOperatorToken: storedOperatorToken))
                         .ignoresSafeArea(.container, edges: .bottom)

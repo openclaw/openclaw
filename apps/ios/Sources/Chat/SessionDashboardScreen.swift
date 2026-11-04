@@ -25,7 +25,8 @@ struct SessionDashboardScreen: View {
                         config: config,
                         pageURL: url,
                         storedOperatorToken: storedOperatorToken,
-                        usesNativeNavigationChrome: true),
+                        usesNativeNavigationChrome: true,
+                        isNativeOperatorRouteLive: self.appModel.isOperatorGatewayConnected),
                     tls: config?.tls,
                     allowedMainFramePathPrefix: Self.dashboardPathPrefix(config: config),
                     onMainFrameNavigationOutsideScope: {
@@ -34,7 +35,8 @@ struct SessionDashboardScreen: View {
                     nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
                         config: config,
                         storedOperatorToken: storedOperatorToken,
-                        appModel: self.appModel))
+                        appModel: self.appModel,
+                        isNativeOperatorRouteLive: self.appModel.isOperatorGatewayConnected))
                     .id(AuthenticatedControlUI.webContentIdentity(
                         config: config,
                         storedOperatorToken: storedOperatorToken))
