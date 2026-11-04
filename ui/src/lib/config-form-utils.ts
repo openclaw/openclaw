@@ -121,6 +121,31 @@ export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) 
   return resolveHintForPath(path, hints)?.hint;
 }
 
+/** The schema marks some array rows as list[].field rather than list.*.field. */
+function arrayHintKey(path: ReadonlyArray<string | number>): string {
+  return path.reduce<string>(
+    (key, segment) =>
+      typeof segment === "number" ? `${key}[]` : key ? `${key}.${segment}` : segment,
+    "",
+  );
+}
+
+/** The schema's own marking decides; the nearest explicit hint on the path wins. */
+export function isSecretConfigField(
+  path: ReadonlyArray<string | number>,
+  hints: ConfigUiHints,
+): boolean {
+  for (let end = path.length; end > 0; end -= 1) {
+    const prefix = path.slice(0, end);
+    const sensitive =
+      hintForPath(prefix, hints)?.sensitive ?? hints[arrayHintKey(prefix)]?.sensitive;
+    if (sensitive !== undefined) {
+      return sensitive;
+    }
+  }
+  return false;
+}
+
 export function localizedHintForPath(path: Array<string | number>, hints: ConfigUiHints) {
   const resolved = resolveHintForPath(path, hints);
   if (!resolved) {
@@ -294,4 +319,21 @@ export function removePathValue(
   path: Array<string | number>,
 ) {
   patchPathValue(obj, path, 0, undefined, "remove");
+}
+
+/**
+ * The named fields of a setting whose string form is shorthand for its `primary` field, such as a
+ * model and its fallbacks. Those fields describe the setting better than a raw JSON box can.
+ */
+export function objectFormOfUnion(schema: JsonSchema): JsonSchema | undefined {
+  const branches = (schema.anyOf ?? schema.oneOf ?? []).filter(
+    (branch) => schemaType(branch) !== "null",
+  );
+  const object = branches.find(
+    (branch) => schemaType(branch) === "object" && branch.properties?.primary !== undefined,
+  );
+  const string = branches.find(
+    (branch) => schemaType(branch) === "string" && !branch.enum && branch.const === undefined,
+  );
+  return branches.length === 2 && string ? object : undefined;
 }

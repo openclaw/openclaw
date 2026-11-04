@@ -38,6 +38,24 @@ backed by those local providers and repairs references to unavailable providers.
 This repair leaves `models.json` unchanged, preserving its comments. Unreadable
 or malformed catalogs still produce a warning and leave affected references intact.
 
+## Plugin prompt-modification permission
+
+The plugin hook policy key `plugins.entries.<id>.hooks.allowPromptInjection`
+was renamed to `plugins.entries.<id>.hooks.allowPromptModification`. Run
+`openclaw doctor --fix` after a direct package/source upgrade; normal updates
+run the same backed-up Doctor migration before admitting the candidate config.
+
+Doctor preserves explicit `true` and `false` values and leaves an unset grant
+unset. It removes the old key only after copying its value, or confirming both
+keys have the same boolean value. Conflicting or invalid values stop the repair
+before config publication; resolve the reported keys and run Doctor again.
+Ordinary reads reject the retired key instead of ignoring a denial. Doctor also
+keeps active legacy prompt policy ahead of last-known-good recovery, so an older
+backup cannot replace a newer grant or denial while an include needs repair. Existing
+include-write constraints still apply, and plugin-owned `config` fields are not
+renamed. No permission default or enforcement changes. Inspection responses keep
+the existing `grants.hooks.allowPromptInjection` field for API compatibility.
+
 ## Retired A2UI widgets
 
 A2UI widgets and the `registerBoardWidgetContentKind` Plugin SDK API have been
@@ -60,6 +78,18 @@ During `openclaw update`, the candidate's Doctor step owns this backed-up repair
 including when the update was started by an older installed update driver.
 Stored A2UI rows do not prevent the update. Runtime readers accept only the
 current widget formats; they do not retain a compatibility renderer.
+
+## Skill library tool split
+
+Personal-library authoring moved from `skill_workshop` to its own `skill_library` tool.
+For a config without `meta.migrations.skillLibraryToolSplit: true`, Doctor (also during
+`openclaw update`) adds `skill_library` wherever a tool policy list named `skill_workshop`
+without covering `skill_library`. Where `tools.gatewayPolicy` allowed `skill_workshop`, it
+allows `skill_library` with the intersection of the `skill_workshop` actions and the
+personal-library actions; it grants nothing a missing or Workshop-only action list did not.
+Doctor then records the marker. A config write records the marker too, extending only
+policy unchanged since the previous file. Once the marker exists, tool policy is never
+changed for the split again.
 
 ## Skill Workshop plugin policy
 
@@ -144,6 +174,14 @@ bindings. Doctor compares a legacy host environment value when one is present;
 a conflicting value leaves the profile unchanged. It also preserves an existing
 conflicting `setupSecrets` mapping instead of granting a different secret.
 
+Reserved environment names, including `OPENCLAW_*`, runner variables, and proxy/CA
+variables, require manual migration. Doctor reports them before inspecting the
+store. Map each secret under a non-reserved `setupSecrets` key and update the setup
+command and repository setup files to use that key, then remove `setupEnv`. The
+protected store provider, ID, and destination bindings can stay unchanged. For
+example, `TS_AUTHKEY` can reference the existing `OPENCLAW_CW_TS_AUTHKEY` store ID.
+Doctor leaves the profile unchanged and never rewrites setup commands.
+
 Doctor reports missing protected entries, missing bindings, conflicting values,
 and unavailable store inspection without exposing secret values. It never
 creates store entries, overwrites values, or infers allowed hosts. Repair the
@@ -156,8 +194,9 @@ include-aware writer. Update-time Doctor uses the same plugin health repair when
 that phase is admitted. An update that defers it records the repair warning;
 run `openclaw doctor --fix` afterward. Unrepaired `setupEnv` profiles refuse new
 provisioning, with no plaintext fallback. Existing lease inspection and cleanup
-remain available. Protected setup secrets keep snapshots enabled; old plaintext
-setup image identities are not adopted as protected images.
+and retained-checkpoint maintenance remain available. Protected setup secrets keep
+snapshots enabled; old plaintext setup image identities are not adopted as
+protected images.
 
 ## Runtime config migration
 

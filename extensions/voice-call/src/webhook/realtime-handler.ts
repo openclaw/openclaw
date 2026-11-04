@@ -1397,11 +1397,6 @@ export class RealtimeCallHandler {
     this.activeTelephonyBindingsByCallId.set(callId, telephonyBinding);
     telephonyBinding.noteMediaActivity();
     activity.start();
-    if (this.config.idleHangupMs) {
-      console.log(
-        `[voice-call] Realtime speech idle monitor armed callId=${callId} providerCallId=${callSid} timeoutMs=${this.config.idleHangupMs}`,
-      );
-    }
     if (previousTelephonyBinding && previousTelephonyBinding !== telephonyBinding) {
       previousTelephonyBinding.retire();
     }

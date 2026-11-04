@@ -5,7 +5,8 @@ import type { NodePluginToolDescriptor } from "../../../packages/gateway-protoco
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
-import type { LlmCompleteUsage, PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { LlmCompleteUsage } from "./runtime-llm.types.js";
+import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 import type { NativeSubagentRuntime } from "./types-native-subagent.js";
 import type {
   RuntimeSessionFactsResult,
@@ -84,7 +85,7 @@ export type SubagentForkedTurnParams<T> = {
   model?: string;
   /** Caller-chosen id so tools' records can be found even when the run fails; unique per run. */
   runId?: string;
-  /** Capped at 120 seconds. */
+  /** Defaults to 120 seconds; a larger value runs longer (the agent timeout, for example). */
   timeoutMs?: number;
   signal?: AbortSignal;
   /**

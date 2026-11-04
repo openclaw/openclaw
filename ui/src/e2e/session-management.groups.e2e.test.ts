@@ -710,8 +710,9 @@ suite.define(() => {
         code: "INVALID_REQUEST",
         message: "rejected group rename",
       });
+      await page.locator("openclaw-toast-host").getByRole("alert").waitFor();
       await expect
-        .poll(() => dialog.getByRole("alert").textContent())
+        .poll(() => dialog.locator('.callout.danger[role="alert"]').textContent())
         .toContain("rejected group rename");
       expect(await field.inputValue()).toBe("Projects");
       expect(await field.isEnabled()).toBe(true);

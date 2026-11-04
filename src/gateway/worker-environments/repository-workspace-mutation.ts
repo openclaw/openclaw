@@ -6,9 +6,13 @@ import { captureSessionEntryCurrentRead } from "../../config/sessions/session-en
 import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
+import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import {
   placementTurnOwner,
   type WorkerSessionPlacementIdentity,
@@ -20,8 +24,10 @@ import {
   isExactAttachedEnvironment,
 } from "./placement-target.js";
 import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
+import { captureRepositoryDiskCheckpoint } from "./repository-workspace-snapshot.js";
 import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { forkSessionRepositoryWorkspace } from "./session-repository-checkpoints.js";
 import {
   createWorkerWorkspaceReconcileRequest,
   type WorkerSessionWorkspace,
@@ -42,6 +48,66 @@ export function createRepositoryWorkspaceMutationService(options: {
 }) {
   const { placements, environments } = options;
   return {
+    async fork(
+      params: WorkerSessionPlacementIdentity & {
+        repository: SessionRepositoryWorkspaceRecord;
+        target: { agentId: string; sessionKey: string };
+        branchPrefix?: string;
+        runSetupScript: boolean;
+        assertCurrent: () => void;
+      },
+    ): Promise<SessionRepositoryWorkspaceRecord> {
+      const authority = params.repository.diskAuthority;
+      if (!authority) {
+        throw new Error("Repository child export requires its original disk");
+      }
+      const store = getSessionRepositoryWorkspaceStore();
+      const source = captureOpenClawStateWorkerContext({ path: store.path });
+      // Creation holds the parent's lifecycle. Reuse workspace exclusion without claiming
+      // another turn: a native parent may be spawning from its still-active turn.
+      return await options.workspaceOperations.run(authority.environmentId, async () => {
+        // Retain current parent predicates for Git/HTTP effects, not just SQLite writes.
+        const currentSource = await prepareSessionSourceAuthority(params.assertCurrent);
+        let child: SessionRepositoryWorkspaceRecord | undefined;
+        try {
+          return await captureRepositoryDiskCheckpoint(
+            {
+              identity: params,
+              repository: params.repository,
+              checkpointRef: workerWorkspaceResultRef("child-export-" + randomUUID()),
+              purpose: "child-fork",
+              placements,
+              environments,
+              assertCurrent: currentSource.assertCurrent,
+            },
+            async (snapshot, verifyCurrent) => {
+              child = await forkSessionRepositoryWorkspace({
+                ...params.target,
+                store,
+                branchPrefix: params.branchPrefix,
+                runSetupScript: params.runSetupScript,
+                sourceWorkspaceId: params.repository.workspaceId,
+                diskExport: { checkpointRef: snapshot.checkpointRef, verifyCurrent },
+                assertCurrent: currentSource.assertCurrent,
+              });
+              return child;
+            },
+          );
+        } catch (error) {
+          // Capture also owns resuming the parent. A failed resume must not leak an
+          // unexposed child after the checkpoint copier already returned it.
+          if (child) {
+            await store.delete({
+              workspaceId: child.workspaceId,
+              assertCurrent: () => source.admission.assertCurrent(),
+            });
+          }
+          throw error;
+        } finally {
+          await currentSource.release?.();
+        }
+      });
+    },
     async mutate<T>(
       params: WorkerSessionPlacementIdentity & {
         assertCurrent: () => void;

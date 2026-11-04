@@ -105,6 +105,7 @@ it.each([
   ["2026.9.1-beta.1", "2026.9.2", "2026.9.2", "latest", "tag-behind-latest"],
   ["2026.9.3-beta.1", "2026.9.2", "2026.9.3-beta.1", "beta", undefined],
   ["2026.9.2", "2026.9.2", "2026.9.2", "beta", undefined],
+  ["2026.9.2", "2026.9.2-1", "2026.9.2-1", "latest", "tag-behind-latest"],
   [null, "2026.9.2", "2026.9.2", "latest", undefined],
   ["2026.9.3-beta.1", null, "2026.9.3-beta.1", "beta", undefined],
 ] as const)(

@@ -938,6 +938,8 @@ extension OnboardingWizardView {
                 self.handleScannedLink(link)
             case let .setupCode(code):
                 self.handleScannedSetupCode(code)
+            case .espDevice:
+                return
             }
         }
         if delivery == nil {

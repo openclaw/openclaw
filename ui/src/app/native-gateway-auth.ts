@@ -3,9 +3,13 @@ import {
   gatewayCredentialScope,
   type ConnectParams,
 } from "@openclaw/gateway-client/browser";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeGatewayClientId,
+  normalizeGatewayClientMode,
+} from "@openclaw/gateway-protocol/client-info";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { createIdleImport } from "../lib/idle-import.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { generateUUID } from "../lib/uuid.ts";
 
@@ -51,6 +55,87 @@ type NativeAuthHost = Window & {
   };
 };
 
+function readNativeCredential(value: Record<string, unknown>): NativeGatewayAuthorization["auth"] {
+  // Preserve the accepted native method. In particular, role-configured Gateways
+  // distinguish shared-owner token/password auth from device-token authentication.
+  if (Object.keys(value).length === 1) {
+    if (typeof value.deviceToken === "string" && value.deviceToken) {
+      return { deviceToken: value.deviceToken };
+    }
+    if (typeof value.token === "string" && value.token) {
+      return { token: value.token };
+    }
+    if (typeof value.password === "string" && value.password) {
+      return { password: value.password };
+    }
+  }
+  throw new Error(t("runtimeErrors.nativeCredential"));
+}
+
+function readAuthorization(
+  value: unknown,
+  challenge: ChallengeMessage,
+): NativeGatewayAuthorization {
+  const result = isRecord(value) ? value : {};
+  const client = isRecord(result.client) ? result.client : {};
+  const device = isRecord(result.device) ? result.device : {};
+  const auth = isRecord(result.auth) ? result.auth : {};
+  const id = normalizeGatewayClientId(typeof client.id === "string" ? client.id : undefined);
+  const mode = normalizeGatewayClientMode(
+    typeof client.mode === "string" ? client.mode : undefined,
+  );
+  if (
+    !id ||
+    !mode ||
+    typeof client.version !== "string" ||
+    typeof client.platform !== "string" ||
+    !isStringArray(result.scopes) ||
+    typeof device.id !== "string" ||
+    typeof device.publicKey !== "string" ||
+    typeof device.signature !== "string" ||
+    device.nonce !== challenge.nonce ||
+    device.signedAt !== challenge.signedAt
+  ) {
+    throw new Error(t("runtimeErrors.nativeAuthorization"));
+  }
+  let nativeAuth: NativeGatewayAuthorization["auth"];
+  let expectedHelloAuth: NativeGatewayAuthorization["expectedHelloAuth"];
+  if (Object.keys(auth).length === 0) {
+    const recoveryScope = result.expectedRecoveryScope;
+    if (
+      !isRecord(result.auth) ||
+      result.requiredAuthMethod !== "tailscale" ||
+      typeof recoveryScope !== "string" ||
+      recoveryScope.trim().length === 0
+    ) {
+      throw new Error(t("runtimeErrors.nativeCredential"));
+    }
+    nativeAuth = {};
+    expectedHelloAuth = { method: "tailscale", recoveryScope };
+  } else {
+    nativeAuth = readNativeCredential(auth);
+  }
+  return {
+    client: {
+      id,
+      mode,
+      version: client.version,
+      platform: client.platform,
+      ...(typeof client.deviceFamily === "string" ? { deviceFamily: client.deviceFamily } : {}),
+      ...(typeof client.instanceId === "string" ? { instanceId: client.instanceId } : {}),
+    },
+    scopes: result.scopes,
+    auth: nativeAuth,
+    ...(expectedHelloAuth ? { expectedHelloAuth } : {}),
+    device: {
+      id: device.id,
+      publicKey: device.publicKey,
+      signature: device.signature,
+      nonce: challenge.nonce,
+      signedAt: challenge.signedAt,
+    },
+  };
+}
 /** Adapts native challenge signing; the app remains the sole credential and grant owner. */
 export function createNativeGatewayConnectAuth(
   gatewayUrl: string,
@@ -136,7 +221,7 @@ export function createNativeGatewayConnectAuth(
         stopPortMessage?.();
         port?.close();
         for (const id of pending.keys()) {
-          accept({ id, error: "Native dashboard document closed" });
+          accept({ id, error: t("runtimeErrors.nativeClosed") });
         }
         waitingForPort.clear();
       },
@@ -145,15 +230,14 @@ export function createNativeGatewayConnectAuth(
   }
 
   return async ({ gatewayUrl: target, nonce, signedAt, signal }) => {
+    const { registerLocalErrorsEnglish } = await import("../i18n/locales/en-local-errors.ts");
+    // This owner publishes resolved error text after registration, not reactive catalog reads.
+    registerLocalErrorsEnglish();
     if (gatewayCredentialScope(target) !== gatewayCredentialScope(gatewayUrl)) {
-      throw new Error(
-        "This dashboard belongs to a different Gateway. Select the Gateway in the app.",
-      );
+      throw new Error(t("runtimeErrors.nativeGateway"));
     }
     if (retired || host.top !== host || (!bridge && !webkit && !options.messagePort)) {
-      throw new Error(
-        "Native Gateway authorization is unavailable. Reopen this dashboard in the app.",
-      );
+      throw new Error(t("runtimeErrors.nativeUnavailable"));
     }
     // Match the supported native challenge representation before dispatch. A
     // malformed challenge cannot recover when the native connection reconnects.
@@ -164,19 +248,15 @@ export function createNativeGatewayConnectAuth(
       !Number.isSafeInteger(signedAt) ||
       signedAt <= 0
     ) {
-      throw new Error("The Gateway did not provide a valid native authentication challenge.");
+      throw new Error(t("runtimeErrors.nativeChallenge"));
     }
     signal.throwIfAborted();
     const request = { id: generateUUID(), nonce, signedAt };
     return await new Promise<NativeGatewayAuthorization>((resolve, reject) => {
-      const authorizationImport = createIdleImport(
-        () => import("./native-gateway-authorization.ts"),
-      );
       const finish = (error?: Error, authorization?: NativeGatewayAuthorization) => {
         if (!pending.delete(request.id)) {
           return;
         }
-        authorizationImport.dispose();
         waitingForPort.delete(request.id);
         clearTimeout(timer);
         stopAbort();
@@ -191,12 +271,7 @@ export function createNativeGatewayConnectAuth(
           new Error(formatUiError(signal.reason ?? "Native Gateway authorization cancelled.")),
         );
       const timer = setTimeout(
-        () =>
-          finish(
-            new NativeGatewayAuthUnavailableError(
-              "The app did not authorize this dashboard in time. Reconnect in the app.",
-            ),
-          ),
+        () => finish(new NativeGatewayAuthUnavailableError(t("runtimeErrors.nativeTimeout"))),
         // Leave half the preauth budget for sending the signed connect and receiving hello.
         DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS / 2,
       );
@@ -205,20 +280,11 @@ export function createNativeGatewayConnectAuth(
           finish(new NativeGatewayAuthUnavailableError(reply.error));
           return;
         }
-        void authorizationImport
-          .load()
-          .then(({ readAuthorization }) => {
-            if (!pending.has(request.id)) {
-              return;
-            }
-            finish(undefined, readAuthorization(reply.result, request));
-          })
-          .catch((error: unknown) => {
-            if (!pending.has(request.id)) {
-              return;
-            }
-            finish(error instanceof Error ? error : new Error(formatUiError(error)));
-          });
+        try {
+          finish(undefined, readAuthorization(reply.result, request));
+        } catch (error) {
+          finish(error instanceof Error ? error : new Error(formatUiError(error)));
+        }
       });
       const stopAbort = listen(signal, "abort", abort, { once: true });
       try {
