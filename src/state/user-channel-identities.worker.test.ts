@@ -7,6 +7,7 @@ import {
   configuredCommandOwnerPolicyFingerprint,
   isUserChannelPolicyUnchanged,
   listUserChannelIdentitiesInDatabase,
+  resolveUserChannelAuthorizationPolicy,
 } from "./user-channel-identities.js";
 import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
 import { useProfileDatabase } from "./user-profiles-fixture.test-support.js";
@@ -116,7 +117,7 @@ it("skips the write transaction when the startup policy is unchanged", () => {
     admission.service();
     return "ok";
   });
-  const policy = { roles: null, auth: { identityScopes: null } };
+  const policy = resolveUserChannelAuthorizationPolicy(undefined);
   operationAdmission.withSqliteWorkerOperationAdmission({ port: admission.port }, () => {
     expect(
       executeUserChannelIdentityChange(
@@ -134,9 +135,13 @@ it("skips the write transaction when the startup policy is unchanged", () => {
     ).toEqual({ ok: true, value: { kind: "policy" } });
     expect(stages).toEqual([]);
     expect(isUserChannelPolicyUnchanged(database.db, policy, OWNERS_HASH)).toBe(true);
-    expect(isUserChannelPolicyUnchanged(database.db, { roles: null, auth: null }, OWNERS_HASH)).toBe(
-      false,
-    );
+    expect(
+      isUserChannelPolicyUnchanged(
+        database.db,
+        resolveUserChannelAuthorizationPolicy({ auth: { identityScopes: ["main"] } }),
+        OWNERS_HASH,
+      ),
+    ).toBe(false);
     expect(isUserChannelPolicyUnchanged(database.db, policy, OTHER_HASH)).toBe(false);
     expect(isUserChannelPolicyUnchanged(database.db, policy, undefined)).toBe(false);
   });
