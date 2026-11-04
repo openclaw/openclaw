@@ -1,3 +1,4 @@
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { ChainState } from "./scheduler.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
 
@@ -9,6 +10,8 @@ export type DelegateDispatchContext = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  /** The Gateway a delegate's operator grant is restored on when no request scope names one. */
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 export type DelegateDispatchParams = {

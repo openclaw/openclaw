@@ -498,6 +498,7 @@ const CONTINUATION_CUSTODY_PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 function startPendingContinuationRecovery(params: {
   log: GatewayRuntimeServiceLogger;
+  resolveGatewayContext?: GatewayContextResolver;
 }): () => Promise<void> {
   // Captured BEFORE the deferred timer as the boot-time cutoff: only records
   // claimed at or before it belonged to the previous process, so a live
@@ -527,6 +528,7 @@ function startPendingContinuationRecovery(params: {
       // Only the custody steps run admitted; the activation wait does not.
       const summary = await runContinuationCustodyBoot({
         armedAt: recoveryArmedAt,
+        resolveGatewayContext: params.resolveGatewayContext,
         admit: (step) =>
           runWithGatewayIndependentRootWorkAdmission(step, "runtime:continuation-recovery"),
         // Stop must not wait on an activation that will never come.
@@ -637,6 +639,7 @@ export function activateGatewayScheduledServices(params: {
   });
   const stopContinuationRecovery = startPendingContinuationRecovery({
     log: params.log,
+    resolveGatewayContext: params.resolveGatewayContext,
   });
   let deliveryRecoveryStopPromise: Promise<void> | undefined;
   const stopDeliveryRecovery = () => {

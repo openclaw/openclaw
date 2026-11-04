@@ -8,6 +8,7 @@
  * still spells it that way.
  */
 import crypto from "node:crypto";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { validateSubagentAttachments } from "../../agents/subagents/spawn/subagent-attachments.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -34,6 +35,7 @@ import type {
   ContinuationRecordStatus,
   ContinuationUpdateResult,
 } from "./custody/custody-store.types.js";
+import { captureContinuationDelegateDispatchGrant } from "./delegate-dispatch-grant.js";
 import * as delegateFlowDiagnostics from "./delegate-flow-diagnostics.js";
 import {
   decodeDelegateStateJson,
@@ -191,6 +193,7 @@ function projectDelegate(
     ...(state.inheritedSilent ? { inheritedSilent: true } : {}),
     ...(state.inheritedWake ? { inheritedWake: true } : {}),
     ...(state.originRunId ? { originRunId: state.originRunId } : {}),
+    ...(state.dispatchGrant ? { dispatchGrant: state.dispatchGrant } : {}),
     flowId: record.recordId,
     expectedRevision: record.revision,
     ...(record.spawnAttempts.length > 0
@@ -421,24 +424,35 @@ export async function createDelegateRecord(params: {
   phase: string;
   /** Tests and non-tool producers can inject their resolved runtime policy. */
   attachmentConfig?: OpenClawConfig;
+  /** The electing run's admitted operator, for elections made outside a tool call. */
+  electingOperatorAuthority?: AdmittedRunOperatorAuthority;
   now?: number;
 }): Promise<DelegateCustodyRecord> {
-  const delegate = params.delegate.recipientAuthorityBinding
-    ? params.delegate
-    : {
-        ...params.delegate,
-        // Bound before the record exists: a failed capture commits no record, never an unbound one.
-        recipientAuthorityBinding: await createContinuationRecipientAuthorityBinding({
-          requesterSessionKey: params.ownerKey,
-          targetSessionKey: params.delegate.targetSessionKey,
-          targetSessionKeys: params.delegate.targetSessionKeys,
-          fanoutMode: params.delegate.fanoutMode,
-        }),
-      };
+  const createdAt = params.now ?? Date.now();
+  const delegate = {
+    ...params.delegate,
+    // Bound before the record exists: a failed capture commits no record, never an unbound one.
+    recipientAuthorityBinding:
+      params.delegate.recipientAuthorityBinding ??
+      (await createContinuationRecipientAuthorityBinding({
+        requesterSessionKey: params.ownerKey,
+        targetSessionKey: params.delegate.targetSessionKey,
+        targetSessionKeys: params.delegate.targetSessionKeys,
+        fanoutMode: params.delegate.fanoutMode,
+      })),
+    // Only the electing request grants; a caller-supplied grant is never persisted.
+    dispatchGrant:
+      params.controller === "pending"
+        ? await captureContinuationDelegateDispatchGrant({
+            ownerSessionKey: params.ownerKey,
+            dueAt: createdAt + (params.delegate.delayMs ?? 0),
+            electingOperatorAuthority: params.electingOperatorAuthority,
+          })
+        : undefined,
+  };
   const state = encodeDelegateState(delegate, params.attachmentConfig);
   const recordId = newContinuationRecordId();
   const attachmentId = state.attachments ? crypto.randomUUID() : undefined;
-  const createdAt = params.now ?? Date.now();
   const kind = params.controller === "post-compaction" ? "post_compaction" : "delegate";
   const result = await createContinuationRecord(
     {

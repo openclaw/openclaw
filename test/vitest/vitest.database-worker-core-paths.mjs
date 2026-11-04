@@ -1211,6 +1211,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/spawn/subagent-spawn.authority.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.requester-incarnation.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.in-process-gateway.test.ts",
+  "src/agents/subagents/spawn/subagent-spawn.continuation-operator-grant.test.ts",
   "src/agents/tools/swarm-tools.integration.test.ts",
   "src/templates/provenance-runtime-read.async.test.ts",
   "src/templates/provenance-runtime-read.test.ts",

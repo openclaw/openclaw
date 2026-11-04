@@ -3,6 +3,7 @@
  * custody store (RFC docs/design/continue-work-signal-v2.md §5.4).
  */
 
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readContinuationLiveWork } from "./custody/custody-projection.js";
@@ -204,7 +205,10 @@ export function spawnResultNeverDispatched(result: {
 export async function enqueuePendingDelegate(
   sessionKey: string,
   delegate: PendingContinuationDelegate,
-  options: { attachmentConfig?: OpenClawConfig } = {},
+  options: {
+    attachmentConfig?: OpenClawConfig;
+    electingOperatorAuthority?: AdmittedRunOperatorAuthority;
+  } = {},
 ): Promise<DelegateCustodyRecord> {
   const isPostCompaction = delegate.mode === "post-compaction";
   return await createDelegateRecord({
@@ -215,6 +219,7 @@ export async function enqueuePendingDelegate(
       ? "Staged for release after compaction"
       : "Queued for continuation dispatch",
     ...(options.attachmentConfig ? { attachmentConfig: options.attachmentConfig } : {}),
+    electingOperatorAuthority: options.electingOperatorAuthority,
   });
 }
 
