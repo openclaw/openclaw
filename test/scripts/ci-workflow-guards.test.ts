@@ -2039,6 +2039,25 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     });
     expect(android.with["install-native-deps"]).toBe("true");
     expect(job.steps.indexOf(node)).toBeLessThan(job.steps.indexOf(android));
+
+    const steps = readAndroidToolchainAction().runs.steps;
+    const reserve = requiredWorkflowStep(steps, "Reserve hosted runner disk for Android");
+    for (const [os, environment, expected] of [
+      ["Linux", "github-hosted", true],
+      ["Linux", "self-hosted", false],
+      ["macOS", "github-hosted", false],
+      ["Windows", "github-hosted", false],
+    ] as const) {
+      expect(runInNewContext(String(reserve.if), { runner: { os, environment } })).toBe(expected);
+    }
+    expect(reserve.run?.match(/^\s*sudo .*$/gm)).toEqual([
+      "sudo rm -rf -- /usr/share/dotnet",
+    ]);
+    for (const name of ["Setup Java", "Setup Gradle cache", "Restore Android SDK cache"]) {
+      expect(steps.indexOf(reserve)).toBeLessThan(
+        steps.indexOf(requiredWorkflowStep(steps, name)),
+      );
+    }
   });
 
   it("installs the Android SDK platform used by Gradle", () => {
