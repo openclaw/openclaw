@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { sanitizeInlineImageDataUrl } from "openclaw/plugin-sdk/inline-image-data-url-runtime";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
@@ -8,6 +9,7 @@ import {
   createPayloadPatchStreamWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
+  wrapProviderPayloadHook,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveXaiFastModelId } from "./fast-mode.js";
@@ -184,6 +186,88 @@ function createXaiToolPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undef
   });
 }
 
+async function normalizeXaiGifPayload(payload: Record<string, unknown>) {
+  const originalInput = payload.input;
+  if (!Array.isArray(originalInput)) {
+    return payload;
+  }
+  const normalizePart = async (part: unknown) => {
+    const image = asOptionalRecord(part);
+    if (image?.type !== "input_image") {
+      return part;
+    }
+    const source = asOptionalRecord(image.source);
+    const url =
+      typeof image.image_url === "string"
+        ? image.image_url
+        : source?.type === "base64" &&
+            typeof source.media_type === "string" &&
+            typeof source.data === "string"
+          ? `data:${source.media_type};base64,${source.data}`
+          : undefined;
+    const canonical = url && sanitizeInlineImageDataUrl(url);
+    if (!canonical?.startsWith("data:image/gif;base64,")) {
+      return part;
+    }
+    try {
+      // Rastermill encodes the first frame. Keep this provider-only projection out of history.
+      const { resizeToJpeg } = await import("openclaw/plugin-sdk/media-runtime");
+      const bytes = await resizeToJpeg({
+        buffer: Buffer.from(canonical.slice(canonical.indexOf(",") + 1), "base64"),
+        maxSide: 1200,
+        quality: 85,
+      });
+      const data = bytes.toString("base64");
+      return typeof image.image_url === "string"
+        ? { ...image, image_url: `data:image/jpeg;base64,${data}` }
+        : { ...image, source: { ...source, media_type: "image/jpeg", data } };
+    } catch {
+      return {
+        type: "input_text",
+        text: "[GIF image omitted: conversion failed; try PNG or JPEG]",
+      };
+    }
+  };
+  const input = await Promise.all(
+    originalInput.map(async (item: unknown) => {
+      const record = asOptionalRecord(item);
+      const key = record?.type === "function_call_output" ? "output" : "content";
+      const parts = record?.[key];
+      if (!Array.isArray(parts)) {
+        return item;
+      }
+      const normalized = await Promise.all(parts.map(normalizePart));
+      return normalized.some((part, index) => part !== parts[index])
+        ? { ...record, [key]: normalized }
+        : item;
+    }),
+  );
+  return input.some((item, index) => item !== originalInput[index])
+    ? { ...payload, input }
+    : payload;
+}
+
+function createXaiGifCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!isXaiProviderId(model.provider) || model.api !== "openai-responses") {
+      return underlying(model, context, options);
+    }
+    return underlying(model, context, {
+      ...options,
+      onPayload: wrapProviderPayloadHook(
+        options?.onPayload,
+        (payload, replacement) => {
+          const selected = asOptionalRecord(replacement ?? payload);
+          return selected ? normalizeXaiGifPayload(selected) : replacement;
+        },
+        undefined,
+        true,
+      ),
+    });
+  };
+}
+
 export function wrapXaiProviderStream(
   ctx: ProviderWrapStreamFnContext,
   runtime?: { clientVersion?: string },
@@ -195,6 +279,7 @@ export function wrapXaiProviderStream(
     (streamFn) => createXaiGrokOAuthHeadersWrapper(streamFn, runtime?.clientVersion),
     (streamFn) => xaiReasoning.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn ?? streamSimple,
     createXaiToolPayloadCompatibilityWrapper,
+    createXaiGifCompatibilityWrapper,
     Boolean(
       extraParams &&
       (Object.hasOwn(extraParams, "fastMode") || Object.hasOwn(extraParams, "fast_mode")),
