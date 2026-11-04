@@ -1,6 +1,7 @@
 export const databaseWorkerExtensionTestRoots = [
   "extensions/logbook",
   "extensions/memory-core",
+  "extensions/skill-workshop",
   "extensions/team-reports",
   "extensions/workboard",
 ];
@@ -149,6 +150,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/zalouser/src/ingress.test.ts",
   "extensions/zalouser/src/monitor.account-scope.test.ts",
   "extensions/zalouser/src/monitor.group-gating.test.ts",
+  "extensions/zalouser/src/monitor.media.test.ts",
   "extensions/imessage/src/monitor.reaction-owner.test.ts",
   "extensions/telegram/src/monitor.test.ts",
   "extensions/discord/src/durable-delivery.test.ts",
@@ -498,6 +500,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/bot-native-command-dispatch.routing.test.ts",
   "extensions/telegram/src/bot-native-command-login.test.ts",
   "extensions/telegram/src/bot.callback-retry.test.ts",
+  "extensions/telegram/src/bot-message-dispatch.topic-label-recovery.test.ts",
   "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
   "extensions/telegram/src/bot.create-telegram-bot.channel-post-media.test.ts",
   "extensions/telegram/src/bot.create-telegram-bot.disabled-bindings.test.ts",

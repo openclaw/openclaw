@@ -2333,6 +2333,13 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/skill-workshop:
+    dependencies:
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../../packages/gateway-protocol
+      typebox:
+        specifier: 1.4.3
+        version: 1.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -3032,6 +3039,8 @@ importers:
       typebox:
         specifier: 1.4.3
         version: 1.4.3
+
+  packages/openclaw-id-protocol: {}
 
   packages/plugin-package-contract: {}
 

@@ -5,6 +5,7 @@ import {
   ErrorCodes,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_LOCAL_MCP_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
@@ -18,6 +19,7 @@ import {
 } from "../../../infra/device-pairing-node.js";
 import { recordPairedDeviceAccess } from "../../../infra/device-pairing.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
+import { NODE_MCP_ELICITATION_CAPABILITY } from "../../../infra/node-commands.js";
 import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleResidentSessionSharingIdentities } from "../../../state/user-profile-list.js";
@@ -140,6 +142,11 @@ export async function sendGatewayHello(
     revisionProjector: buildRequestContext().configRevisionProjector,
     sessionRowProjection,
   });
+  if (scopes.includes(ADMIN_SCOPE)) {
+    // What this process runs with, which startup flags can set apart from the config file.
+    snapshot.authMode = resolvedAuth.mode;
+    Object.assign(snapshot, context.handler.gatewayExposure);
+  }
   const cachedHealth = getHealthCache();
   if (cachedHealth && !connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND)) {
     snapshot.health = connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
@@ -222,6 +229,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.WORKTREES_RETIRE_SNAPSHOT_OWNER,
         GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS,
+        ...(context.configSnapshot.mcp?.apps?.enabled ? [NODE_MCP_ELICITATION_CAPABILITY] : []),
         GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
@@ -234,6 +242,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
         GATEWAY_SERVER_CAPS.NODE_WORKER_NATIVE_INFERENCE,
+        WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
