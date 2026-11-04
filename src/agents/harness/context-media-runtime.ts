@@ -33,6 +33,7 @@ export async function prepareHarnessContextMedia(params: {
   accountId?: string;
   sandbox?: { root: string; bridge: SandboxFsBridge };
   assertCurrent: () => void;
+  signal?: AbortSignal;
 }): Promise<{ text?: string; images: ImageContent[] }> {
   params.assertCurrent();
   if (
@@ -64,6 +65,7 @@ export async function prepareHarnessContextMedia(params: {
     accountId: params.accountId,
     maxChars: params.maxChars,
     assertCurrent: params.assertCurrent,
+    signal: params.signal,
   });
   params.assertCurrent();
   const imageFacts = media.filter(isImageMediaFact);
@@ -84,6 +86,7 @@ export async function prepareHarnessContextMedia(params: {
     agentId: params.agentId,
   });
   const inlineFactIndexes = readPersistedImageBlockFactIndexes(message);
+  let localRoots: readonly string[] | undefined;
   const rawImages = await detectAndLoadPromptImages({
     prompt: "",
     workspaceDir: params.workspaceDir,
@@ -96,7 +99,12 @@ export async function prepareHarnessContextMedia(params: {
     workspaceOnly,
     localRoots: workspaceOnly
       ? undefined
-      : getAgentScopedMediaLocalRoots(params.config ?? {}, params.agentId, params.workspaceDir),
+      : () =>
+          (localRoots ??= getAgentScopedMediaLocalRoots(
+            params.config ?? {},
+            params.agentId,
+            params.workspaceDir,
+          )),
     sandbox: params.sandbox,
     ...limits,
   });

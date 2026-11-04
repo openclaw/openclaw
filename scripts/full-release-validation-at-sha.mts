@@ -197,7 +197,7 @@ export function fullReleaseConcurrencyBranchPrefix(
 }
 
 function usage() {
-  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <candidate-sha>] [--trusted-workflow-ref <candidate|main|release-publish-tag>] [--admission-workflow-sha <P-sha>] [--admission-workflow-ref <main|release-publish-tag>] [--request-file <path>] [--keep-branch] [--dry-run] [-- -f key=value ...]
+  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <candidate-sha>] [--trusted-workflow-ref <candidate|main|release-publish-tag>] [--admission-workflow-sha <P-sha>] [--admission-workflow-ref <main|release-publish-tag>] [--pin-admission-workflow] [--request-file <path>] [--keep-branch] [--dry-run] [-- -f key=value ...]
        node scripts/full-release-validation-at-sha.mjs --reconcile-request <path>
        node scripts/full-release-validation-at-sha.mjs --resume-request <path>
 
@@ -205,7 +205,9 @@ Candidate-owned qualification is the default: C=Q. Invoking it attests that the
 selected exact candidate and its qualification policy are reviewed. The existing
 prepare workflow at independently trusted P authenticates the complete request;
 then this same dispatch owner runs the candidate workflow graph at Q. P defaults
-to a pinned main revision, never the qualification harness. Missing C/Q or P
+to a verified main revision that may advance before dispatch, never the qualification harness.
+Pass --pin-admission-workflow with an exact P SHA to require that main remain unchanged;
+protected publication tags are always pinned. Missing C/Q or P
 contracts require a deliberate backport/tooling repair; there is no main fallback.
 Explicit main/protected qualification tooling retains the historical diagnostic
 route. Scheduled main qualification selects that route explicitly.
@@ -421,6 +423,7 @@ export function parseArgs(argv: string[]) {
     reconcileRequest: "",
     resumeRequest: "",
     specifiedInputs: [] as string[],
+    pinAdmissionWorkflow: false,
     keepBranch: false,
     dryRun: false,
     inputs,
@@ -455,6 +458,10 @@ export function parseArgs(argv: string[]) {
     if (valueKey) {
       args[valueKey] = requireOptionArgument(argv, i, arg);
       i += 1;
+      continue;
+    }
+    if (arg === "--pin-admission-workflow") {
+      args.pinAdmissionWorkflow = true;
       continue;
     }
     if (arg === "--keep-branch") {
@@ -585,6 +592,9 @@ export function parseArgs(argv: string[]) {
   }
   if (args.admissionWorkflowRef !== "main" && !SHA_PATTERN.test(args.admissionWorkflowSha)) {
     throw new Error("Protected admission tooling requires its full --admission-workflow-sha");
+  }
+  if (args.pinAdmissionWorkflow && !SHA_PATTERN.test(args.admissionWorkflowSha)) {
+    throw new Error("--pin-admission-workflow requires a full --admission-workflow-sha");
   }
   return args;
 }
@@ -2222,6 +2232,10 @@ async function main() {
           inputs: selection.wireInputs,
         }),
         workflowSha: admissionWorkflowSha,
+        workflowShaPolicy:
+          args.admissionWorkflowRef === "main" && !args.pinAdmissionWorkflow
+            ? "advance-with-main"
+            : "pinned",
         workflowRef: args.admissionWorkflowRef,
         workflowId: Number(metadata.id),
         phase: "prepared",

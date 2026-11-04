@@ -15,6 +15,7 @@ import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockRequestHandler,
 } from "./control-ui-e2e.ts";
+import { collectGarbageForTest } from "./garbage-collection.ts";
 import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
 const getGateway = (window: MockGatewayWindow) =>
@@ -31,6 +32,36 @@ it("serves protocol-valid empty Custodian history without method advertisement",
 
   expect(Compile(SystemAgentChatHistoryResultSchema).Check(history)).toBe(true);
   expect(history.turns).toEqual([]);
+});
+
+it("keeps catalog resolution read-only and preserves configured outcomes", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(
+    createControlUiMockGatewayInitScript({
+      sessions: [{ key: "agent:main:main", snapshotAt: 1 }],
+    }),
+  );
+  const { request, frames } = gatewayPage.connect();
+  await flushMockTimers();
+  const gateway = getGateway(gatewayPage.window);
+  const initial = await request("catalog-list-before", "sessions.list", {});
+  for (const method of ["sessions.catalog.resolve", "beam.owned.resolve"]) {
+    expect(await request(`${method}-unbound`, method, {})).toBeNull();
+    const destination = { sessionKey: "agent:main:catalog-destination" };
+    gateway.setMethodResponse(method, destination);
+    expect(await request(`${method}-bound`, method, {})).toEqual(destination);
+    gateway.setMethodResponse(method, {
+      __mockError: { code: "FORBIDDEN", message: "Destination access denied" },
+    });
+    await request(`${method}-denied`, method, {});
+    expect(frames.find((frame) => frame.id === `${method}-denied`)).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN", message: "Destination access denied" },
+    });
+  }
+  const final = await request("catalog-list-after", "sessions.list", {});
+  expect(final.sessions).toEqual(initial.sessions);
 });
 
 it("serves protocol-valid empty channel status and pairing defaults", async ({ gatewayPage }) => {
@@ -151,6 +182,34 @@ it("takes existing mock sockets offline without closing their replacement", asyn
 
   controls.setOnline(true);
   expect(replacement?.readyState).toBe(window.WebSocket.OPEN);
+});
+
+it("releases closed transports while preserving their connection history", async ({
+  gatewayPage,
+}) => {
+  const { window, execute } = gatewayPage;
+  execute(createControlUiMockGatewayInitScript());
+  const retired = (() => {
+    const socket = new window.WebSocket("ws://mock-gateway/retired");
+    window.setTimeout(() => socket.close(), 0);
+    return new WeakRef(socket);
+  })();
+  await flushMockTimers();
+  const current = new window.WebSocket("ws://mock-gateway/current");
+  await flushMockTimers();
+  const gateway = getGateway(window);
+  expect(gateway.socketCount()).toBe(2);
+  expect(gateway.socketUrls()).toEqual(["ws://mock-gateway/retired", "ws://mock-gateway/current"]);
+  expect(gateway.socketStates()).toEqual([
+    { readyState: window.WebSocket.CLOSED, state: "closed", url: "ws://mock-gateway/retired" },
+    { readyState: window.WebSocket.OPEN, state: "open", url: "ws://mock-gateway/current" },
+  ]);
+
+  const control = new WeakRef({ unowned: true });
+  await collectGarbageForTest();
+  expect(control.deref()).toBeUndefined();
+  expect(retired.deref()).toBeUndefined();
+  expect(current.readyState).toBe(window.WebSocket.OPEN);
 });
 
 it.for(["absent", "null", "explicit"] as const)(

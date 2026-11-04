@@ -44,7 +44,11 @@ function gatewayWithSnapshot(client: GatewayBrowserClient | null, connected: boo
     phase: connected ? "connected" : "stopped",
     sessionKey: "main",
   });
-  return { snapshot, subscribe: () => () => undefined } as unknown as ApplicationContext["gateway"];
+  return {
+    snapshot,
+    subscribe: () => () => undefined,
+    subscribeEvents: () => () => undefined,
+  } as unknown as ApplicationContext["gateway"];
 }
 
 function requestGateway(request: Request) {
@@ -273,7 +277,7 @@ describe("WorktreesPage lifecycle", () => {
     await waitForSolid(() => expect(page.model.records).toEqual([record]));
     await settle();
     expect(page.query(".callout.info")?.textContent).toContain(
-      "Worktree changes require operator.admin access.",
+      "You can view managed worktrees, but only admins can change them.",
     );
     expectDisabled(page, ["New worktree", "Clean up now", "Delete"]);
 

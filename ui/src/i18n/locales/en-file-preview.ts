@@ -4,11 +4,19 @@ import { en } from "./en.ts";
 const catalog = {
   chat: {
     detailPanel: {
+      filePreviewUnavailable: "This file is not previewable inline.",
+      filePreviewPath: "- Path: {path}",
+      filePreviewType: "- Type: {type}",
+      filePreviewSize: "- Size: {size}",
+      filePreviewUpdated: "- Updated: {date}",
+      sameOrigin: "File downloads require a same-origin Gateway connection.",
+      invalidUrl: "Invalid file download URL",
       close: "Close sidebar",
       copyPath: "Copy path",
       copyRelativePath: "Copy relative path",
       downloadToView: "Download this file to view it on your device.",
       discard: "Discard",
+      discardBody: "If you discard them, they’re lost.",
       editFile: "Edit file",
       downloadFile: "Download file",
       downloading: "Downloading…",
@@ -17,8 +25,13 @@ const catalog = {
       showInFiles: "Show in Files",
       toggleTree: "Toggle file tree",
       unavailable: "Unable to open",
+      attachmentOffline: "You're offline. Reconnect, then open this attachment link again.",
+      attachmentUnavailable:
+        "This attachment is unavailable in this chat. Ask the sender to share it again.",
       outsideSessionBoundary: "This file is outside {session}'s workspace, and you can't open it.",
       assetsUnavailable: "Some assets couldn't be loaded ({count})",
+      cspPreviewUnsupported:
+        "This security policy or resource setup does not support relative resources in Preview. Use Source or Download for the original file.",
       previousMatch: "Previous match",
       nextMatch: "Next match",
       overwrite: "Overwrite",

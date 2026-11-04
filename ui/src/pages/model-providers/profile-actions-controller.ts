@@ -298,6 +298,8 @@ export function createModelProviderProfileActions(options: {
       }
     },
     resetOrders(): void {
+      // Retire queued intent, but keep the active slot until the accepted save's
+      // finally releases it and drains any newer scope's order.
       pendingOrders.clear();
       options.setOrders({});
     },
@@ -339,7 +341,7 @@ export function createModelProviderProfileActions(options: {
       const confirmed = await showConfirmDialog({
         title: removing
           ? t("modelProviders.remove.title", { provider: pending.label })
-          : t("modelProviders.logout.actionFor", { account: pending.label }),
+          : t("modelProviders.logout.title", { account: pending.label }),
         message: removing
           ? [
               pending.removeTargets.some((target) => !target.credentialType)

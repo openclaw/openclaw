@@ -6,10 +6,6 @@ import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { withClientCredentialStore } from "./client-credential-store.test-support.js";
 import { normalizeLegacyDeviceIdentity } from "./device-identity-legacy.js";
 import {
-  generateStoredDeviceIdentity,
-  repairInvalidStoredDeviceIdentity,
-} from "./device-identity-store.js";
-import {
   deriveDeviceIdFromPublicKey,
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
@@ -20,6 +16,7 @@ import {
 } from "./device-identity.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { preparePrivateStoreFileSync } from "./private-store-file.js";
+import { repairInvalidCanonicalIdentity } from "./state-migrations.device-identity-repair.js";
 
 const SWIFT_RAW_DEVICE_ID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c";
 const SWIFT_RAW_PUBLIC_KEY = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
@@ -39,7 +36,7 @@ const pemKeys = {
   privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }),
 };
 const legacyPem = { ...pemKeys, version: 1, deviceId: "stale-device-id", createdAtMs };
-const withIdentityStore = (run: (env: NodeJS.ProcessEnv, dir: string) => void) =>
+const withIdentityStore = (run: (env: NodeJS.ProcessEnv, dir: string) => void | Promise<void>) =>
   withTempDir("openclaw-identity-", async (dir) => run({ OPENCLAW_STATE_DIR: dir }, dir));
 
 describe("local device identity owner", () => {
@@ -71,7 +68,7 @@ describe("local device identity owner", () => {
   });
 
   it("fails closed on corrupt persisted identity and lets Doctor preserve matching keys", async () => {
-    await withIdentityStore((env) => {
+    await withIdentityStore(async (env) => {
       const original = loadOrCreateDeviceIdentity({ env });
       withClientCredentialStore(env, false, (db) => {
         db.prepare("UPDATE device_identities SET device_id = ? WHERE identity_key = ?").run(
@@ -82,8 +79,12 @@ describe("local device identity owner", () => {
       for (const load of [loadDeviceIdentityIfPresent, loadOrCreateDeviceIdentity]) {
         expect(() => load({ env })).toThrow("invalid persisted device identity");
       }
-      const repaired = repairInvalidStoredDeviceIdentity(generateStoredDeviceIdentity(), { env });
-      expect(repaired).toMatchObject({ repaired: true, rotated: false });
+      const repaired = await repairInvalidCanonicalIdentity(env, "primary");
+      expect(repaired.changes).toEqual([
+        "Repaired invalid primary device identity metadata in SQLite.",
+      ]);
+      expect(repaired.warnings).toEqual([]);
+      expect(repaired.notices ?? []).toEqual([]);
       expect(loadDeviceIdentityIfPresent({ env })).toEqual(original);
     });
   });

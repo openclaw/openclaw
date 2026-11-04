@@ -8,10 +8,12 @@ export function MarkdownHtml(props: {
   style?: JSX.CSSProperties | string;
   as?: "div" | "p" | "article";
   options?: Parameters<typeof toSanitizedMarkdownHtml>[1];
+  ref?: (element: HTMLElement) => void;
 }) {
   const Tag = dynamic(() => props.as ?? "div");
   return (
     <Tag
+      ref={props.ref}
       class={props.class}
       dir={props.dir}
       style={props.style}

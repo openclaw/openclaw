@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
@@ -26,6 +27,7 @@ import {
 } from "./session-organizer-batch-mutations.ts";
 import { patchSession } from "./session-organizer-patch.runtime.ts";
 
+registerSessionMenuEnglish();
 registerSessionOrganizationEnglish();
 
 export async function snoozeSessionWithUndo(
@@ -271,10 +273,13 @@ export async function confirmRunningSessionsArchive(
   const running = sessions.some(hasActiveArchiveWork);
   const single = sessions.length === 1 ? sessions[0] : undefined;
   const options = {
+    title: single
+      ? t("sessionsView.archiveSessionPrompt", { session: single.label })
+      : t("sessionsView.archiveSessionsPrompt", { count: String(sessions.length) }),
     message: !running
       ? ""
       : single
-        ? t("sessionsView.archiveRunningSessionConfirm", { session: single.label })
+        ? t("sessionsView.archiveRunningSessionConfirm")
         : t("sessionsView.archiveRunningSessions"),
     confirmLabel: single
       ? t("sessionsView.archiveSession")
@@ -423,8 +428,6 @@ export async function archiveConfirmedSessionsWithUndo(
         : t("sessionsView.sessionsArchived", { count: String(archived.length) }),
     actionLabel: t("common.undo"),
     onAction: archiveUndoAction(outcomeHost, archived, scope, undoPins),
-    // Keep a partial-failure notice readable before presenting successful-only Undo.
-    fifo: true,
   });
   return failure ?? "completed";
 }
@@ -534,7 +537,7 @@ function sessionUndoHost(
         if (host.sessionData.isSessionMutationScopeCurrent(candidate)) {
           host.sessionData.publishSessionMutationError(candidate, error);
         } else if (isCurrent()) {
-          showToast({ message: formatUiError(error) });
+          showToast({ severity: "error", message: formatUiError(error) });
         }
       },
     },

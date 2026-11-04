@@ -617,7 +617,7 @@ describe("Models provider login", () => {
             {
               id: "plugin/alpha-key",
               brandId: "alpha",
-              groupLabel: "Alpha",
+              groupLabel: "A\u0308lpha",
               label: "Account key",
               kind: "secret",
               featured: false,
@@ -635,8 +635,8 @@ describe("Models provider login", () => {
     expect(page.querySelector("[data-models-login-discover]")).not.toBeNull();
     expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
 
-    await searchProviders(page, "  EXAMPLE  ");
-    expect(providerChoices(page)).toEqual(["example"]);
+    await searchProviders(page, "  ÄLPHA  ");
+    expect(providerChoices(page)).toEqual(["alpha"]);
     await searchProviders(page, "browser sign-in");
     expect(providerChoices(page)).toEqual(["example"]);
     await searchProviders(page, "your Example account key");
@@ -666,11 +666,12 @@ describe("Models provider login", () => {
     await searchProviders(page, "");
     expect(providerChoices(page)).toEqual(["alpha", "example", "quick-key-only", "zebra"]);
     await selectProvider(page, "quick-key-only");
-    expect(page.querySelector("[data-models-login-choice] button")).toBeNull();
-    expect(document.activeElement).toBe(page.querySelector("[data-models-login-api-key]"));
-    page.querySelector<HTMLButtonElement>("[data-models-login-back]")!.click();
+    // One way in and nothing saved: the key form opens without a method step.
+    expect(page.querySelector("[data-models-login-choice]")).toBeNull();
+    expect(page.querySelector("[data-models-key-dialog]")).not.toBeNull();
+    page.querySelector<HTMLButtonElement>("[data-models-key-dialog] .oc-dialog__close")!.click();
     await page.updateComplete;
-    expect(document.activeElement).toBe(page.querySelector("[data-models-login-search]"));
+    await openPicker(page);
     await selectProvider(page, "zebra");
     expect(document.activeElement).toBe(page.querySelector("[data-models-login-choice] button"));
     await startSelectedLogin(page, "Device sign-in");
@@ -753,7 +754,7 @@ describe("Models provider login", () => {
     addAccount!.click();
     await page.updateComplete;
     expect(page.querySelector("[data-models-login-search]")).toBeNull();
-    expect(page.querySelector(".model-provider-login__provider")?.textContent).toContain(
+    expect(page.querySelector(".model-provider-login .oc-dialog__title")?.textContent).toContain(
       "Example provider",
     );
     const dialog = page.querySelector("openclaw-modal-dialog")!;
@@ -905,7 +906,9 @@ describe("Models provider login", () => {
         view.container.querySelector('.model-provider-login [role="status"]')?.textContent,
       ).toBe("Loading…"),
     );
-    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions .btn")!.click();
+    view.container
+      .querySelector<HTMLButtonElement>(".model-provider-login .oc-dialog__close")!
+      .click();
     expect(controller.busy).toBe(false);
     agentId = "reviewer";
     await controller.open();
@@ -948,7 +951,9 @@ describe("Models provider login", () => {
         "Inventory unavailable",
       ),
     );
-    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions .btn")!.click();
+    view.container
+      .querySelector<HTMLButtonElement>(".model-provider-login .oc-dialog__close")!
+      .click();
     if (cached) {
       authStatus = ready;
     }

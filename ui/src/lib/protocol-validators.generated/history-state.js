@@ -41,7 +41,7 @@ var isChatHistoryState = (() => {
       /(^pendingInputs$|^sessionInfo$|^commands$)/u,
       /(^items$|^total$|^queuedCount$|^nextBefore$)/u,
       /(^id$|^runId$|^message$|^acceptedAt$|^state$|^queued$)/u,
-      /(^key$|^rowMode$|^sharedFacts$|^sessionId$|^lifecycleRevision$|^sessionModelRevision$|^incognito$|^kind$|^label$|^autoLabel$|^icon$|^color$|^channelAvatarUrl$|^boardFace$|^hasBoard$|^boardPresentation$|^displayName$|^titlePending$|^derivedTitle$|^lastMessagePreview$|^lastAssistantMessage$|^channel$|^classification$|^agentId$|^accountId$|^peerKind$|^isMain$|^isBackground$|^isDock$|^chatType$|^activitySummary$|^updatedAt$|^snapshotAt$|^ancestorRevision$|^hiddenFromInvolvingMe$|^archived$|^archivedAt$|^archivedBy$|^archiveReason$|^pinned$|^sidebarRoot$|^pinnedAt$|^snoozedUntil$|^snoozedAt$|^unread$|^lastReadAt$|^markedUnreadAt$|^lastActivityAt$|^lastInteractionAt$|^status$|^lastRunError$|^suppressErrorNotice$|^providerReview$|^lastRunId$|^activeLeafEntryId$|^spawnedBy$|^parentSessionKey$|^parentSessionId$|^controlOwnerSessionKey$|^childOwnerSessionKeys$|^childSessions$|^forkedFromParent$|^spawnDepth$|^subagentRole$|^subagentControlScope$|^swarmGroupId$|^swarm$|^deviceFolder$|^worktree$|^repositoryWorkspaceId$|^repository$|^execNode$|^execCwd$|^spawnedWorkspaceDir$|^spawnedCwd$|^projectId$|^workspaceDir$|^cyberAccessProgram$|^permissionMode$|^communication$|^effectiveCommunication$|^sandboxMode$|^nativeRuntimeConsent$|^permissionModePending$|^sessionRoot$|^createdVia$|^createdSurface$|^createdActor$|^owner$|^participants$|^expandedParticipants$|^participantCount$|^visibility$|^sharingRole$|^sendDisabledReason$|^createdAt$|^forkSource$|^previousSessionId$|^inputTokens$|^outputTokens$|^usageReport$|^totalTokens$|^totalTokensFresh$|^contextTokens$|^estimatedCostUsd$|^model$|^modelProvider$|^activeModel$|^activeModelProvider$|^modelOverrideSource$|^toolOverrides$)/u,
+      /(^key$|^rowMode$|^sharedFacts$|^sessionId$|^lifecycleRevision$|^sessionModelRevision$|^incognito$|^kind$|^label$|^autoLabel$|^icon$|^color$|^channelAvatarUrl$|^boardFace$|^hasBoard$|^boardPresentation$|^displayName$|^titlePending$|^derivedTitle$|^lastMessagePreview$|^lastAssistantMessage$|^channel$|^classification$|^agentId$|^accountId$|^peerKind$|^isMain$|^isBackground$|^isDock$|^chatType$|^activitySummary$|^updatedAt$|^snapshotAt$|^ancestorRevision$|^hiddenFromInvolvingMe$|^archived$|^archivedAt$|^archivedBy$|^archiveReason$|^pinned$|^sidebarRoot$|^pinnedAt$|^snoozedUntil$|^snoozedAt$|^unread$|^lastReadAt$|^markedUnreadAt$|^lastActivityAt$|^lastInteractionAt$|^status$|^backgroundProcessCount$|^lastRunError$|^suppressErrorNotice$|^providerReview$|^lastRunId$|^activeLeafEntryId$|^spawnedBy$|^parentSessionKey$|^parentSessionId$|^controlOwnerSessionKey$|^childOwnerSessionKeys$|^childSessions$|^forkedFromParent$|^spawnDepth$|^subagentRole$|^subagentControlScope$|^swarmGroupId$|^swarm$|^deviceFolder$|^worktree$|^repositoryWorkspaceId$|^repository$|^execNode$|^execCwd$|^spawnedWorkspaceDir$|^spawnedCwd$|^projectId$|^workspaceDir$|^cyberAccessProgram$|^permissionMode$|^communication$|^effectiveCommunication$|^sandboxMode$|^nativeRuntimeConsent$|^permissionModePending$|^sessionRoot$|^createdVia$|^createdSurface$|^createdActor$|^owner$|^participants$|^expandedParticipants$|^participantCount$|^visibility$|^sharingRole$|^sendDisabledReason$|^workspaceReadDisabledReason$|^createdAt$|^forkSource$|^previousSessionId$|^inputTokens$|^outputTokens$|^usageReport$|^totalTokens$|^totalTokensFresh$|^contextTokens$|^estimatedCostUsd$|^model$|^modelProvider$|^activeModel$|^activeModelProvider$|^modelOverrideSource$|^toolOverrides$)/u,
       /(^text$|^timestamp$)/u,
       /(^canEnsure$|^text$|^updatedAt$|^state$)/u,
       /(^type$|^id$|^label$|^avatarUrl$|^identity$)/u,
@@ -253,6 +253,9 @@ var isChatHistoryState = (() => {
         !("lastInteractionAt" in value) ||
         check_50(value.lastInteractionAt)) &&
       (value.status === void 0 || !("status" in value) || check_76(value.status)) &&
+      (value.backgroundProcessCount === void 0 ||
+        !("backgroundProcessCount" in value) ||
+        check_16(value.backgroundProcessCount)) &&
       (value.lastRunError === void 0 ||
         !("lastRunError" in value) ||
         check_25(value.lastRunError)) &&
@@ -356,6 +359,9 @@ var isChatHistoryState = (() => {
       (value.sendDisabledReason === void 0 ||
         !("sendDisabledReason" in value) ||
         check_88(value.sendDisabledReason)) &&
+      (value.workspaceReadDisabledReason === void 0 ||
+        !("workspaceReadDisabledReason" in value) ||
+        check_88(value.workspaceReadDisabledReason)) &&
       (value.createdAt === void 0 || !("createdAt" in value) || check_50(value.createdAt)) &&
       (value.forkSource === void 0 || !("forkSource" in value) || check_152(value.forkSource)) &&
       (value.previousSessionId === void 0 ||

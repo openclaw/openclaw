@@ -266,7 +266,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       expect(await gateway.getRequests("templates.catalog.preview")).toHaveLength(0);
       await page.keyboard.press("Escape");
       await detail.getByRole("heading", { name: "Workspace files" }).click();
-      const fileDescriptions = workspace.locator(".plugin-capability__copy > span");
+      const fileDescriptions = workspace.locator(".settings-row__desc");
       expect(await fileDescriptions.allTextContents()).toEqual([soulExcerpt]);
       await expectClamped(fileDescriptions.first());
       expect(await detail.getByText("Research trips.", { exact: true }).count()).toBe(1);

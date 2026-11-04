@@ -8,6 +8,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.tsx";
 import * as sessionMenuWork from "../../components/session-menu-work.ts";
 import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import type { SessionCapability, SessionListOptions } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -123,6 +124,78 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("sessions page lifecycle", () => {
+  it("keeps held row work idle on unchanged status while sort, identity, rows and locale stay live", async () => {
+    let name = "Before";
+    const connection = createGateway(
+      createTestGatewayClient(async () => ({ agentId: "main", name, avatar: "" })),
+    );
+    const agentIdentity = createAgentIdentityCapability(connection.gateway);
+    const managed = createManagedSessions();
+    const context = { ...createContext(connection.gateway, managed.sessions), agentIdentity };
+    const rows = [
+      sessionRow("webchat:a", { updatedAt: 1 }),
+      sessionRow("webchat:b", { updatedAt: 2 }),
+    ];
+    const page = await createRenderedPage(context, sessionsResult(rows, 1));
+    await agentIdentity.ensure(["main"]);
+    await page.updateComplete;
+    const held = [...page.querySelectorAll(".session-data-row")];
+    const heldRows = page.result?.sessions;
+    const sort = vi.spyOn(Array.prototype, "toSorted");
+    const identity = vi.spyOn(agentIdentity, "get");
+    const translate = vi.spyOn(i18n, "t");
+    for (let i = 0; i < 5; i++) {
+      connection.emit({});
+      await page.updateComplete;
+    }
+    expect.soft(sort.mock.contexts.filter((input) => input === heldRows)).toHaveLength(0);
+    expect.soft(identity).not.toHaveBeenCalled();
+    expect
+      .soft(
+        translate.mock.calls.filter(([key]) =>
+          [
+            "sessionsView.selectSession",
+            "sessionsView.showSessionDetails",
+            "chat.sidebar.openSessionMenu",
+          ].includes(key),
+        ),
+      )
+      .toHaveLength(0);
+    expect([...page.querySelectorAll(".session-data-row")]).toEqual(held);
+    const keys = () =>
+      [...page.querySelectorAll(".session-link")].map((link) => link.getAttribute("href"));
+    const first = keys();
+    page.querySelector<HTMLButtonElement>('th[data-sort-dir="desc"] button')!.click();
+    await page.updateComplete;
+    expect(keys()).toEqual(first.toReversed());
+    page.querySelector<HTMLButtonElement>("th.data-table-key-col button")!.click();
+    await page.updateComplete;
+    expect(keys()).toEqual(first);
+    page.onSortChange("updated", "desc");
+    publishRows(managed, [{ ...rows[0]!, updatedAt: 3, displayName: "Changed row" }, rows[1]!]);
+    await page.updateComplete;
+    expect(keys()).toEqual(first.toReversed());
+    expect(page.textContent).toContain("Changed row");
+    expect(page.querySelectorAll(".session-data-row")[0]).toBe(held[1]);
+    name = "After";
+    agentIdentity.invalidate(["main"]);
+    await agentIdentity.ensure(["main"]);
+    await page.updateComplete;
+    expect(page.querySelector(".session-link")?.textContent).toContain("After");
+    const checkbox = page.querySelector<HTMLInputElement>(".session-data-row input")!;
+    const menu = page.querySelector<HTMLButtonElement>(".session-actions .icon-btn")!;
+    const english = [checkbox.getAttribute("aria-label"), menu.title];
+    try {
+      await i18n.setLocale("de");
+      await i18n.prepareLocale();
+      await page.updateComplete;
+      expect(checkbox.getAttribute("aria-label")).not.toBe(english[0]);
+      expect(menu.title).not.toBe(english[1]);
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
   it.each(["pending", "completed"] as const)(
     "adopts the entering route's %s list without another request",
     async (completion) => {
@@ -654,14 +727,14 @@ describe("sessions page lifecycle", () => {
         createGateway({ request } as unknown as GatewayBrowserClient).gateway,
         managed.sessions,
       );
-      const placement = createActiveSessionPlacement({ environmentId: "environment-1" });
       const target = sessionRow("cloud", {
         label: "Cloud task",
         hasActiveRun: state === "provisioning",
-        placement: state === "active" ? placement : { ...placement, state },
+        placement: { ...createActiveSessionPlacement({ environmentId: "cloud" }), state },
       });
       const page = await createRenderedPage(context, sessionsResult([target], 1));
-      expect((await openRowMenu(page, target)).textContent).toContain("Stop cloud worker…");
+      const label = state === "active" ? "Stop cloud device…" : "Stop session on device…";
+      expect((await openRowMenu(page, target)).textContent).toContain(label);
       const [query] = managed.subscribeList.mock.calls[0]!;
       managed.refreshList.mockClear();
       vi.mocked(showConfirmDialog).mockResolvedValue(true);
@@ -815,9 +888,7 @@ describe("sessions page new group", () => {
     pending.resolve("completed");
     await created;
     expect(sessions.patch).not.toHaveBeenCalled();
-    expect(messages).toEqual([
-      "Gateway connection replaced before the group was saved. Try again.",
-    ]);
+    expect(messages).toEqual(["The connection changed before the group was saved. Try again."]);
     page.result = sessionsResult([row], 1);
     await page.requestNewCategory(key);
     expect(messages[1]).toBeNull();
@@ -988,7 +1059,9 @@ describe("sessions page plugin actions", () => {
     menu.querySelector<HTMLElement>(actionSelector)!.click();
     await settleSessionMenu(menu);
     expect(run.mock.calls.length).toBe(1);
-    await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
+    await waitForFast(() =>
+      expect(page.textContent).toContain(i18n.t("pluginUi.actionUnavailableSession")),
+    );
 
     publish([{ ...current, archived: true }]);
     await page.updateComplete;
@@ -1007,7 +1080,9 @@ describe("sessions page plugin actions", () => {
       menu.querySelector<HTMLElement>(actionSelector)!.click();
       await settleSessionMenu(menu);
       expect(run.mock.calls.length).toBe(0);
-      await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
+      await waitForFast(() =>
+        expect(page.textContent).toContain(i18n.t("pluginUi.actionSessionUnavailable")),
+      );
     }
 
     expect(page.querySelector(actionSelector)).toBeNull();

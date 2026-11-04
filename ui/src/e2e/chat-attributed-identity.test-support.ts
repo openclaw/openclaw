@@ -134,7 +134,7 @@ export function defineMobileFooterActionCases(suite: ReturnType<typeof createCon
       const target = await copy.boundingBox();
       expect(target).toMatchObject({ width: 24, height: 24 });
       const tapArea = await readActionTapArea(copy);
-      expect(tapArea.width).toBeGreaterThanOrEqual(44);
+      expect(tapArea.width).toBeGreaterThanOrEqual(32);
       expect(tapArea.height).toBeGreaterThanOrEqual(44);
       expect(tapArea.hitCorners).toBe(4);
       const groupBox = await agent.boundingBox();

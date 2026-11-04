@@ -102,7 +102,7 @@ describe("canonical session numeric metadata", () => {
       lifecycleRevision: "incarnation",
       updatedAt: 1,
       resumeAfterRestart,
-      mainRestartRecovery: { tombstone: { reason: "retired" } },
+      mainRestartRecovery: { cycleId: "upgrade", revision: 1, executionIdentity: "retired" },
       restartRecoveryOperatorSource: { snapshot: { obsolete: true } },
       pendingExecNotifications: { obsolete: {} },
     });
@@ -111,9 +111,11 @@ describe("canonical session numeric metadata", () => {
       lifecycleRevision: "incarnation",
       updatedAt: 1,
       resumeAfterRestart,
+      mainRestartRecovery: { cycleId: "upgrade" },
     });
     const publicEntry = projectPublicSessionEntry(entry);
     expect(publicEntry).not.toHaveProperty("resumeAfterRestart");
+    expect(publicEntry).not.toHaveProperty("mainRestartRecovery");
     expect(preserveGenerationPrivateFields(entry, { label: "Renamed" })).toMatchObject({
       label: "Renamed",
       resumeAfterRestart,
@@ -121,9 +123,9 @@ describe("canonical session numeric metadata", () => {
     for (const next of [
       publicEntry,
       { ...publicEntry, resumeAfterRestart: undefined },
-      { ...publicEntry, sessionId: "replacement" },
-      { ...publicEntry, lifecycleRevision: "replacement" },
-      { ...publicEntry, archivedAt: 2 },
+      { ...entry, sessionId: "replacement" },
+      { ...entry, lifecycleRevision: "replacement" },
+      { ...entry, archivedAt: 2 },
     ]) {
       const written = applySessionEntryWritePolicy(
         "main",
@@ -133,6 +135,7 @@ describe("canonical session numeric metadata", () => {
         entry,
         {},
       ).entry;
+      expect(written.mainRestartRecovery).toBeUndefined();
       expect(written.resumeAfterRestart).toEqual(
         next === publicEntry ? resumeAfterRestart : undefined,
       );

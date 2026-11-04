@@ -210,6 +210,9 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     // candidates, while a newer config epoch stops every remaining build in this publication.
     isBuildCurrent: isPublicationCurrent,
     onBuildStats: options.onBuildStats,
+    selectPluginGeneration: options.preservePluginGenerations
+      ? (owner) => owner.pluginGeneration
+      : undefined,
     pluginMetadataSnapshot: options.pluginMetadataSnapshot,
     registerEntriesAfterBuildStart: true,
     progress,

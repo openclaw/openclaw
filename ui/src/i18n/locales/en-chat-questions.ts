@@ -27,6 +27,7 @@ const enChatQuestions = {
       summaryLabel: "Question outcome",
       ownAnswerFor: "Your own answer for {header}",
       storeRequestedBy: "Requested by {agent} · {session}",
+      requestedBySession: "Asked by",
       storeEntry: "Stores {name} as {kind}",
       storeReplacement: "Replaces {name} — last updated {updated}",
       storeReplacementBy: "Replaces {name} — last updated {updated} by {updatedBy}",
@@ -36,8 +37,8 @@ const enChatQuestions = {
       answeredElsewhere: "Answered elsewhere",
       unavailable: "Unavailable",
       expired: "Expired",
-      disconnected: "Not connected. Try again after reconnecting.",
-      loadFailed: "Could not load this question. Try again.",
+      disconnected: "Reconnect to answer this question.",
+      loadFailed: "Couldn’t load this question. Try again.",
     },
   },
 } satisfies TranslationMap;

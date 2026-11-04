@@ -71,6 +71,27 @@ you only need an issued ClawRouter key.
   </Step>
 </Steps>
 
+## Vercel native Messages
+
+The frozen `vercel-ai-gateway/anthropic/claude-sonnet-4.6` row uses OpenClaw's
+native Anthropic SDK and replay handling when the current key's catalog grants
+the exact native Messages offer. A simultaneous Chat offer does not change that
+model's protocol. Other rows and mixed providers keep their existing selection behavior.
+
+This requires a deployment that advertises
+`POST /v1/native/vercel-ai-gateway/v1/messages` with matching
+`anthropic.messages` request and response formats. The SDK base is
+`/v1/native/vercel-ai-gateway`; it appends `/v1/messages`. The router must map
+that public path to upstream `/messages` under its configured Vercel `/v1` base.
+The older public `/messages` route is not SDK-compatible and is not substituted.
+The [published path-mapping contract](https://github.com/openclaw/clawrouter/pull/583)
+does not activate this provider declaration by itself.
+
+Only the ClawRouter credential is used. For this model, missing or ineligible
+native offers, mismatched upstream identities and unsupported formats do not
+fall back to Chat or local Anthropic/Vercel credentials. This client support does not establish live
+Vercel entitlement or an upstream tariff.
+
 ## Utility model
 
 When `agents.defaults.utilityModel` is unset, a ClawRouter primary model uses a
@@ -471,6 +492,56 @@ cover catalog lookup, generation, and result downloads. Prompt, image-count, and
 explicit size bounds come from that model’s current catalog generation limits;
 unknown limits do not authorize generation.
 
+## Native Gradium speech
+
+ClawRouter speech can consume a qualified, model-less Gradium offer for
+`gradium.speech` → `audio.binary` at `POST /api/post/speech/tts`. This requires an
+active Worker implementation and an eligible offer in the selected proxy key's
+current catalog. Client support alone does not activate the route.
+
+Select Gradium in the ClawRouter speech settings, rather than inventing a model
+ID or configuring a direct Gradium key:
+
+```json5
+{
+  tts: {
+    provider: "clawrouter",
+    providers: {
+      clawrouter: {
+        upstreamProvider: "gradium",
+        voiceId: "your-gradium-voice",
+      },
+    },
+  },
+  talk: {
+    provider: "clawrouter",
+    providers: {
+      clawrouter: {
+        upstreamProvider: "gradium",
+        speakerVoiceId: "your-gradium-voice",
+      },
+    },
+  },
+}
+```
+
+Keep `models.providers.clawrouter` configured with the router base URL and proxy
+credential. An explicit speech `profileId` remains bound to a ClawRouter profile.
+Missing or rejected proxy credentials never fall back to `GRADIUM_API_KEY`.
+Do not set a speech `model`/`modelId` or an agent `voiceModel` for this model-less
+route. Speed and instruction overrides are unsupported and rejected.
+
+Audio files use WAV and voice notes use Opus. Proxy telephony is not qualified
+and fails before submission; direct Gradium telephony behavior is unchanged.
+Talk voice overrides select native `voice_id`; unary requests retain
+`only_audio: true` and `json_config: '{"padding_bonus":0}'`. Native and manifest
+offers are supported. Each synthesis refreshes the credential-scoped catalog;
+stale observations, foreign routes, unknown formats, and revoked offers fail
+closed. Only HTTP 200 with WAV/`audio/wav` or Opus/`audio/ogg` is accepted.
+Synthesis redirects are rejected, and complete binary reads retain the caller's
+deadline and the smaller of its configured audio cap and 16 MiB. No streaming, WebSocket, or live billing
+qualification is implied.
+
 ## Quotas and usage
 
 ClawRouter's `/v1/usage` response feeds the normal OpenClaw provider-usage
@@ -524,6 +595,15 @@ connection failures have separate next-step messages. These states do not
 prevent model calls or the existing `/v1/usage` snapshot.
 
 ## Troubleshooting
+
+An upstream Anthropic `400` reporting `credit balance is too low` is a
+ClawRouter upstream-service failure, not a rejected ClawRouter key. OpenClaw
+keeps that key available to other requests and permits configured model
+fallbacks. Ask the ClawRouter operator to repair the upstream account, or retry
+with another available model. An explicit chat model pin still prevents silent
+model switching; a cron job's own model and fallback list remain independent of
+that pin. Router-key authentication failures and router budget denials retain
+their normal credential cooldown behavior.
 
 | Symptom                                  | Check                                                                                                                                              |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |

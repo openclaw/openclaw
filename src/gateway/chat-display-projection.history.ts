@@ -377,6 +377,18 @@ function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): bool
   return isOpenClawRuntimeContextCustomMessage(message);
 }
 
+function isDisplayHeartbeatAcknowledgement(
+  message: RoleContentMessage,
+  allowTruncated = false,
+): boolean {
+  // Model history ignores reasoning when classifying no-op heartbeats. Chat
+  // displays reasoning-only items, so empty answer text cannot hide those rows.
+  return (
+    (!hasAssistantNonTextContent(message) || Boolean(extractAssistantPhaseText(message))) &&
+    isHeartbeatOkResponse(message, undefined, allowTruncated)
+  );
+}
+
 function shouldHideProjectedHistoryMessage(
   message: Record<string, unknown>,
   roleContent: RoleContentMessage | null,
@@ -423,7 +435,7 @@ function shouldHideProjectedHistoryMessage(
   if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {
     return false;
   }
-  return heartbeatUser || isHeartbeatOkResponse(roleContent);
+  return heartbeatUser || isDisplayHeartbeatAcknowledgement(roleContent);
 }
 
 /** Identifies the hidden native input that starts a heartbeat-driven turn. */
@@ -569,9 +581,8 @@ export function filterVisibleProjectedHistoryMessages(
     if (
       next &&
       nextRoleContent &&
-      isHeartbeatOkResponse(
+      isDisplayHeartbeatAcknowledgement(
         nextRoleContent,
-        undefined,
         Boolean(
           currentRoleContent &&
           isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT, { heartbeatOnly: true }),

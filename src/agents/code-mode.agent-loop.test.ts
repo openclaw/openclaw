@@ -41,6 +41,9 @@ import { isToolResultError, readToolResultDetails } from "./tool-result-error.js
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 const model: typeof agentLoopModel = { ...agentLoopModel, api: "openai-responses" };
+const storeEnv = { preparedStoreEnvironment: { env: { NODE_OPTIONS: "--no-warnings" } } };
+const storeEnvWarning =
+  "Warning: secret store environment entries were not applied for host=gateway: NODE_OPTIONS.";
 
 type RecoveryProgram = string | { wait: true; runId?: string };
 
@@ -248,7 +251,7 @@ describe("Code Mode agent-loop error recovery", () => {
   });
 
   it("preserves native exec refusal diagnostics", async ({ onTestFinished }) => {
-    const { state, shell } = await nativeExecFixture("exec-cwd-recovery", onTestFinished);
+    const { state, shell } = await nativeExecFixture("exec-cwd-recovery", onTestFinished, storeEnv);
     await writeFile(join(state.workspaceDir, "input.txt"), "review-ready");
     const execute = vi.spyOn(shell, "execute");
     const command = `${JSON.stringify(globalThis.process.execPath)} -e "require('node:fs').appendFileSync('executions.txt', 'run\\n'); process.stdout.write(require('node:fs').readFileSync('input.txt', 'utf8'))"`;
@@ -297,6 +300,7 @@ describe("Code Mode agent-loop error recovery", () => {
     });
     for (const result of results.slice(1)) {
       expect(resultDetails({ details: result?.value })).not.toHaveProperty("message");
+      expect(resultDetails({ details: result?.value }).warningText).toBe(storeEnvWarning);
     }
     expectRecovered(agent);
     expectToolCalls(3, shell);
@@ -324,7 +328,7 @@ describe("Code Mode agent-loop error recovery", () => {
       const { state, scopeKey, shell } = await nativeExecFixture(
         "wrong-wait-recovery",
         onTestFinished,
-        withWarning ? { preparedStoreEnvironment: { env: { NODE_OPTIONS: "--no-warnings" } } } : {},
+        withWarning ? storeEnv : {},
       );
       // Noninteractive exec closes stdin; a parent-owned file releases this same child.
       const releasePath = join(state.workspaceDir, "release-held-process");
@@ -348,16 +352,9 @@ describe("Code Mode agent-loop error recovery", () => {
             if (withWarning) {
               const native = await nativeExec.mock.results[0]!.value;
               expect(native.content).toEqual([
-                {
-                  type: "text",
-                  text: expect.stringContaining(
-                    "Warning: secret store environment entries were not applied for host=gateway: NODE_OPTIONS.",
-                  ),
-                },
+                { type: "text", text: expect.stringContaining(storeEnvWarning) },
               ]);
-              expect(nested.warningText).toBe(
-                "Warning: secret store environment entries were not applied for host=gateway: NODE_OPTIONS.",
-              );
+              expect(nested.warningText).toBe(storeEnvWarning);
             } else {
               expect(nested).not.toHaveProperty("warningText");
             }

@@ -734,35 +734,83 @@ jobs:
             const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
               owner, repo, run_id, filter: "all", per_page: 100,
             });
-            // A partial rerun retains successful producers. Bind each report to
-            // its actual job attempt, never the result job or enclosing attempt.
+            // Keep this selector identical at the trusted workflow_run comment boundary.
+            const producerAttempt = (name) => {
+              const normalizeName = (value) => typeof value === "string" ? value.replace(/^scan \/ /, "") : value;
+              const candidates = jobs.filter((job) => normalizeName(job.name) === name);
+              const attempts = new Set();
+              for (const job of candidates) {
+                if (!Number.isSafeInteger(job.run_attempt) || job.run_attempt < 1 || attempts.has(job.run_attempt)) {
+                  throw new Error(`Missing or ambiguous Periphery producer attempt for ${name}`);
+                }
+                attempts.add(job.run_attempt);
+              }
+              const timestamp = (value, nullable = false) => {
+                if (value === null && nullable) return null;
+                if (typeof value !== "string" || !value.trim() || !Number.isFinite(Date.parse(value))) return;
+                return new Date(value).toISOString();
+              };
+              const executionKey = (job) => {
+                const started = timestamp(job.started_at);
+                const completed = timestamp(job.completed_at);
+                if (job.run_id !== run_id || job.head_sha !== run.head_sha || job.status !== "completed" ||
+                    typeof job.conclusion !== "string" || !job.conclusion || !started || !completed ||
+                    !Array.isArray(job.steps) || !job.steps.length) return;
+                const steps = [];
+                let previousNumber = 0;
+                for (const step of job.steps) {
+                  const skipped = step.conclusion === "skipped";
+                  const start = timestamp(step.started_at, skipped);
+                  const end = timestamp(step.completed_at, skipped);
+                  if (!Number.isSafeInteger(step.number) || step.number <= previousNumber ||
+                      typeof step.name !== "string" || !step.name || step.status !== "completed" ||
+                      typeof step.conclusion !== "string" || !step.conclusion ||
+                      start === undefined || end === undefined) return;
+                  previousNumber = step.number;
+                  steps.push([step.number, step.name, step.status, step.conclusion, start, end]);
+                }
+                return JSON.stringify([job.run_id, job.head_sha, normalizeName(job.name),
+                  job.status, job.conclusion, started, completed, steps]);
+              };
+              const latest = candidates.reduce((selected, job) =>
+                !selected || job.run_attempt > selected.run_attempt ? job : selected, undefined);
+              const key = latest && executionKey(latest);
+              if (!key) throw new Error(`Missing or invalid Periphery producer execution for ${name}`);
+              // Reruns can project one physical execution into several logical attempts.
+              // Only its earliest identical, complete execution owns the artifact suffix.
+              return Math.min(...candidates.filter((job) => executionKey(job) === key).map((job) => job.run_attempt));
+            };
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner, repo, run_id, per_page: 100,
+            });
             for (const [platform, name] of [
               ["ios", "Build iOS Periphery reports"],
               ["macos", "Build macOS Periphery reports"],
             ]) {
-              const candidates = jobs.filter((job) => job.name === name || job.name === `scan / ${name}`);
-              if (!candidates.length || candidates.some((job) => !Number.isSafeInteger(job.run_attempt) || job.run_attempt < 1)) {
-                throw new Error(`Missing or invalid ${platform} Periphery producer attempt`);
+              const attempt = producerAttempt(name);
+              const artifactName = `shared-periphery-${platform}-${run_id}-${attempt}`;
+              const matches = artifacts.filter((item) => item.name === artifactName);
+              const artifact = matches[0];
+              if (matches.length !== 1 || !Number.isSafeInteger(artifact.id) || artifact.id < 1 ||
+                  artifacts.filter((item) => item.id === artifact.id).length !== 1 ||
+                  artifact.workflow_run?.id !== run_id || artifact.workflow_run?.head_sha !== run.head_sha ||
+                  artifact.expired !== false) {
+                throw new Error(`Missing or invalid ${artifactName} artifact`);
               }
-              const attempt = Math.max(...candidates.map((job) => job.run_attempt));
-              const matches = candidates.filter((job) => job.run_attempt === attempt);
-              const job = matches[0];
-              if (matches.length !== 1 || job.status !== "completed" || job.run_id !== run_id || job.head_sha !== run.head_sha) {
-                throw new Error(`Missing or ambiguous ${platform} Periphery producer`);
-              }
-              core.setOutput(`${platform}-attempt`, String(job.run_attempt));
+              core.setOutput(`${platform}-attempt`, String(attempt));
+              core.setOutput(`${platform}-artifact-id`, String(artifact.id));
             }
 
       - name: Download iOS consumer report
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: shared-periphery-ios-${{ github.run_id }}-${{ steps.producers.outputs.ios-attempt }}
+          artifact-ids: ${{ steps.producers.outputs.ios-artifact-id }}
           path: ${{ runner.temp }}/shared-periphery-ios
 
       - name: Download macOS consumer report
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: shared-periphery-macos-${{ github.run_id }}-${{ steps.producers.outputs.macos-attempt }}
+          artifact-ids: ${{ steps.producers.outputs.macos-artifact-id }}
           path: ${{ runner.temp }}/shared-periphery-macos
 
       - name: Setup supported Node runtime

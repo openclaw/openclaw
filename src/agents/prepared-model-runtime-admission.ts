@@ -16,7 +16,7 @@ import {
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.types.js";
 
-export type PreparedRuntimeSelfHold = Readonly<{
+type PreparedRuntimeSelfHold = Readonly<{
   held: readonly Readonly<{
     instance: Pick<PluginInvocationInstance, "pluginId">;
     pluginId: string;

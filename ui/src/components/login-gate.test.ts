@@ -198,7 +198,7 @@ describe("login gate failure recovery", () => {
     );
     expect(failure.textContent).not.toMatch(/openclaw gateway run|Gateway unreachable/u);
     expectText(failure, "failure-steps").toContain(
-      "This page reconnects on its own once access is granted.",
+      "Sign in as a different user, or choose Connect after an administrator grants access.",
     );
     expectText(failure, "failure-steps").not.toMatch(
       /Gateway is running|Gateway URL|token|password/iu,
@@ -311,7 +311,7 @@ describe("login gate failure recovery", () => {
       part(element, "failure-refresh").click();
       expect(reload).not.toHaveBeenCalled();
       await vi.waitFor(() => {
-        expectText(element, ".app-toast__message").toContain("Unsaved starts will be lost.");
+        expectText(element, ".app-toast__description").toContain("Unsaved starts will be lost.");
       });
       const action = element.querySelector<HTMLButtonElement>(".app-toast__action");
       expect(action?.textContent?.trim()).toBe("Discard unsaved starts and reload");

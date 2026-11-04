@@ -352,8 +352,11 @@ export async function invokeNodeClaudeSkillRuntime(params: {
       );
     }
     calls.add(message.id);
+    // The node's "workshop" slot forwards to whichever tool the Gateway projected
+    // into it; the node-side tool name is local to the node and never trusted here.
+    const workshop = runtime.workshop;
     const result = await withGatewayToolCallerIdentity(identity, () =>
-      handlers.callTool({ name: "skill_workshop", arguments: message.arguments }, signal),
+      handlers.callTool({ name: workshop.name, arguments: message.arguments }, signal),
     );
     await runWithSessionSourceScope(
       assertCurrent,

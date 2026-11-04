@@ -1,5 +1,6 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -14,6 +15,21 @@ import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-f
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { prepareHarnessContextMedia } from "./context-media-runtime.js";
 import { bindHarnessMedia } from "./host-media.js";
+
+const extractionSignals = vi.hoisted(() => [] as Array<AbortSignal | undefined>);
+// mock-isolation: Records the cancellation handed to the real document extractor.
+vi.mock("../../media/input-files.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../media/input-files.js")>();
+  return {
+    ...actual,
+    extractFileContentFromBuffer: (
+      params: Parameters<typeof actual.extractFileContentFromBuffer>[0],
+    ) => {
+      extractionSignals.push(params.signal);
+      return actual.extractFileContentFromBuffer(params);
+    },
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -117,6 +133,42 @@ describe("prepareHarnessContextMedia", () => {
       active = false;
       await expect(prepare(request)).rejects.toThrow("host closed");
     }));
+
+  it("hands the run's cancellation to retained document extraction", async () => {
+    const workspaceDir = tempDirs.make("openclaw-context-document-");
+    const notePath = path.join(workspaceDir, "notes.txt");
+    await fs.writeFile(notePath, "retained document body");
+    const run = new AbortController();
+    const prepare = bindHarnessMedia({
+      attempt: {
+        workspaceDir,
+        abortSignal: run.signal,
+        model: makeProviderModelFixture({
+          id: "context-model",
+          provider: "fixture",
+          api: "openai-responses",
+          baseUrl: "https://model.example/v1",
+          input: ["text"],
+        }),
+      },
+      signal: new AbortController().signal,
+      assertActive: () => {},
+    }).capabilities.prepareContextMedia!;
+    extractionSignals.length = 0;
+
+    const result = await prepare({
+      message: {
+        role: "user",
+        content: "summarize",
+        timestamp: 1,
+        __openclaw: { media: [{ path: notePath, contentType: "text/plain" }] },
+      } as never,
+      maxChars: 10_000,
+    });
+
+    expect(result.text).toContain("retained document body");
+    expect(extractionSignals).toEqual([run.signal]);
+  });
 
   it("marks an unrestorable historical image neutrally instead of asking for a resend", async () => {
     const workspaceDir = tempDirs.make("openclaw-context-media-");

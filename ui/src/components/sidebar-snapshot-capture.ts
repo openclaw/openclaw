@@ -41,7 +41,7 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   const sessions = context.sessions;
   const rootsSettled =
     !sessions.state.loading &&
-    (Boolean(host.sessionData.sessionMutationError ?? sessions.state.error) ||
+    (Boolean(host.sessionData.sessionListError ?? sessions.state.error) ||
       (sessions.canonicalListReady &&
         Boolean(sessions.presentation.result) &&
         !sessions.presentation.resultCached));
@@ -100,7 +100,7 @@ export function captureSidebarSnapshotModel(
     host.sidebarSnapshot ||
     (host.navigationView === "pages" &&
       host.navigationCatalog.dashboards?.readSucceeded !== true) ||
-    host.sessionData.sessionMutationError !== null ||
+    host.sessionData.sessionListError !== null ||
     context.sessions.state.error !== null ||
     host.sessionData.ownerCounts.error !== null ||
     (host.sidebarAgentsMode === "roster" && roster.error !== null) ||
@@ -124,18 +124,15 @@ export function captureSidebarSnapshotModel(
     snapshotSubtitle: row.snapshot
       ? row.snapshotSubtitle
       : resolveSidebarSessionRowSubtitle(host, row),
-    state: sidebarSessionBadgeFacts(
-      host.sessionPullRequests,
-      row,
-      host.sidebarAgentsMode === "roster",
-    ),
+    state: sidebarSessionBadgeFacts(host.sessionPullRequests, row),
   });
   return parseSidebarSnapshot({
     routingDefaults: {
       mainKey: agents.mainKey,
       scope: agents.scope,
     },
-    roster: bootRoster,
+    // The read receipt is not a display change.
+    roster: { ...bootRoster, result: { ...bootRoster.result, ts: 0 } },
     mode: host.sidebarAgentsMode,
     grouping: host.effectiveSessionsGrouping(),
     navigationView: host.navigationView,
@@ -156,7 +153,10 @@ export function captureSidebarSnapshotModel(
     ),
     entries: zone.sidebarEntries.filter((value) => {
       const entry = parseSidebarEntry(value);
-      return entry?.type !== "session" || !isIncognitoSessionKey(entry.key);
+      return (
+        entry?.type !== "session" ||
+        (!isIncognitoSessionKey(entry.key) && !context.sessions.deletionState(entry.key))
+      );
     }),
     issuesCount: snapshotIssuesCount(context.sidebarAttention.entries),
     ...snapshotSections(sections, host.collapsedSessionSections, presentation),

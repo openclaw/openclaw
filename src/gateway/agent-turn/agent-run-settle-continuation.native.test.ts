@@ -24,7 +24,7 @@ import {
   setCanonicalUserProfileDisplayName,
 } from "../../state/user-profile-writes.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
-import { withSessionSendDelivery, type SessionSendDelivery } from "../session-send-delivery.js";
+import { withSessionSendDelivery } from "../session-send-delivery.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { createAgentTurnTestContext } from "./agent-run-dispatch.test-support.js";
 import {
@@ -257,7 +257,7 @@ describe("requester-settle processing survives later user turns", () => {
 
   it("reconciles one completed yielded input after two newer finished turns without reopening it", async () => {
     const original = await prepare();
-    await original.recorder!.persistApproved();
+    const persisted = await original.recorder!.persistApproved();
     const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
     await manager.appendMessageAsync(assistant("toolUse"));
     await manager.appendCustomMessageEntryAsync("openclaw.sessions_yield", "", false, { runId });
@@ -274,9 +274,11 @@ describe("requester-settle processing survives later user turns", () => {
       await appendNewerTurn(manager, key, "New user request");
     }
     const before = await loadTranscriptEvents(scope());
-    await expect(
-      manager.appendMessageAsync(original.recorder!.getPendingInputMessage!()!),
-    ).rejects.toThrow("outside the current turn");
+    expect(
+      await manager.appendMessageWithTranscriptAnchorAsync(
+        original.recorder!.getPendingInputMessage!()!,
+      ),
+    ).toMatchObject({ entryId: persisted?.messageId, appended: false });
     expect(completed).toMatchObject({ reason: "completed", status: "ok" });
     await expectCompletedReplay(before, prepare, 2);
     expect(reads.command).toHaveBeenCalledOnce();
@@ -403,7 +405,7 @@ describe("requester-settle processing survives later user turns", () => {
   );
 
   it("preserves live peer-delivery success and duplicate reconciliation", async () => {
-    const delivery: SessionSendDelivery = {
+    const delivery: Parameters<typeof withSessionSendDelivery>[0]["delivery"] = {
       version: 1,
       runId,
       source: { agentId: "main", sessionId: "peer-source", sessionKey: sourceSessionKey },

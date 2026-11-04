@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { hasNonEmptyString, readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload as InternalReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 
@@ -26,11 +26,9 @@ export function normalizeOutboundReplyPayloadCore(
   const result: OutboundReplyPayload = {
     text: readStringValue(payload.text),
     mediaUrls: Array.isArray(payload.mediaUrls)
-      ? payload.mediaUrls.filter(
-          (entry): entry is string => typeof entry === "string" && entry.length > 0,
-        )
+      ? payload.mediaUrls.filter(hasNonEmptyString)
       : undefined,
-    mediaUrl: readStringValue(payload.mediaUrl),
+    mediaUrl: hasNonEmptyString(payload.mediaUrl) ? payload.mediaUrl : undefined,
     presentation: asOptionalRecord(payload.presentation) as OutboundReplyPayload["presentation"],
     ...(payload.presentationTextMode === "fallback" ? { presentationTextMode: "fallback" } : {}),
     interactive: asOptionalRecord(payload.interactive) as OutboundReplyPayload["interactive"],
