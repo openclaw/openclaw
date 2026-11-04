@@ -1,0 +1,5 @@
+30
+# LOCAL 2026.11.8 row177; source328ae652dee1a64c9e7929b63fb5e092b1e6c283.
+# Host-keyed cache work-count regression retains prior no-backup observation.
+# Exact net LF30 measured after combining both already-reviewed invariants.
+# Scalar baseline unchanged.
