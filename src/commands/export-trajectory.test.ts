@@ -103,7 +103,8 @@ it("points missing session key users at the sessions command", async () => {
   expectNoSessionLookup();
 });
 
-it.each([false, true])(
+// Control-bearing filenames are POSIX-only; Windows cannot create this output target.
+it.skipIf(process.platform === "win32").each([false, true])(
   "renders the exported path without changing its bytes (json: %s)",
   async (json) => {
     const output = "café\nFORGED\u001b[2J\u0007\u0085\u202e🦀";
