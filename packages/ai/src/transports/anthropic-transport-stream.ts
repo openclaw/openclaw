@@ -11,6 +11,7 @@ import { racePromiseWithAbortSignal } from "../../../retry/src/index.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import {
+  ANTHROPIC_API_VERSION,
   isAnthropicOAuthApiKey,
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
@@ -271,7 +272,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 mergeTransportHeaders(
                   {
                     "content-type": "application/json",
-                    "anthropic-version": "2023-06-01",
+                    "anthropic-version": ANTHROPIC_API_VERSION,
                     ...(bearerAuth || isOAuthToken
                       ? { authorization: `Bearer ${apiKey}` }
                       : { "x-api-key": apiKey }),

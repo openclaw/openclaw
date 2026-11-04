@@ -21,6 +21,9 @@ import { resolveAnthropicVertexClientRegion } from "./region-endpoint.js";
 import { resolveAnthropicVertexAdcCredentials, resolveAnthropicVertexProjectId } from "./region.js";
 
 const GOOGLE_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
+// Vertex SDK 1.x copies this header into the body's `anthropic_version` and strips it.
+// Its 2026-10-21 default rejects sampling parameters that older Claude models accept.
+const VERTEX_ANTHROPIC_VERSION = "vertex-2023-10-16";
 
 // Proxy settings are process-stable. Reuse one dispatcher so auth requests do
 // not leak sockets while avoiding gaxios's broken node-fetch dynamic import.
@@ -42,6 +45,7 @@ type AnthropicVertexTransportOptions = ProviderStreamOptions &
 
 type AnthropicVertexClientOptions = {
   baseURL?: string;
+  defaultHeaders: Record<string, string>;
   googleAuth: GoogleAuth;
   projectId?: string;
   region: string;
@@ -84,6 +88,7 @@ export function createAnthropicVertexStreamFn(
     },
   });
   const client = new deps.AnthropicVertex({
+    defaultHeaders: { "anthropic-version": VERTEX_ANTHROPIC_VERSION },
     googleAuth,
     region,
     ...(baseURL ? { baseURL } : {}),

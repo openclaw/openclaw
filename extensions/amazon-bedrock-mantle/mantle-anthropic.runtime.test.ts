@@ -1,6 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
-import { stream, type Model, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
+import {
+  createAssistantMessageEventStream,
+  stream,
+  type Model,
+  type SimpleStreamOptions,
+} from "openclaw/plugin-sdk/llm";
 import {
   notifyProviderStreamOpened,
   withProviderAcceptanceObserver,
@@ -125,7 +130,7 @@ describe("createMantleAnthropicStreamFn", () => {
       fetch: expect.any(Function),
     });
     expect(JSON.stringify(clientOptions.defaultHeaders)).toBe(
-      '{"accept":"application/json","anthropic-dangerous-direct-browser-access":"true","anthropic-beta":"fine-grained-tool-streaming-2025-05-14","X-Test":"model-header","X-Caller":"caller-header"}',
+      '{"accept":"application/json","anthropic-dangerous-direct-browser-access":"true","anthropic-beta":"fine-grained-tool-streaming-2025-05-14","anthropic-version":"2023-06-01","X-Test":"model-header","X-Caller":"caller-header"}',
     );
     const streamOptions = firstStreamOptions(model, context);
     const client = requireRecord(streamOptions.client, "stream client");
@@ -136,6 +141,48 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(streamOptions.onResponse).toBe(onResponse);
     await notifyProviderStreamOpened({ options: streamOptions, cancelStream: vi.fn() });
     expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
+  });
+
+  it("sends bearer auth on API version 2023-06-01 through the SDK client", async () => {
+    mockTransport();
+    streamMock.mockReturnValue(createAssistantMessageEventStream());
+    void createMantleAnthropicStreamFn()(
+      createTestModel(),
+      { messages: [] },
+      {
+        apiKey: "bedrock-bearer-token",
+      },
+    );
+    const options = clientMock.mock.calls[0]?.[0];
+    const requests: Request[] = [];
+    const { default: RealAnthropic } =
+      await vi.importActual<typeof import("@anthropic-ai/sdk")>("@anthropic-ai/sdk");
+    const client = new RealAnthropic({
+      ...options,
+      fetch: async (input, init) => {
+        requests.push(new Request(input, init));
+        return Response.json({
+          id: "msg_mantle",
+          type: "message",
+          role: "assistant",
+          model: "anthropic.claude-opus-4-7",
+          content: [],
+          stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 },
+        });
+      },
+    });
+    await client.messages.create({
+      model: "anthropic.claude-opus-4-7",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hello" }],
+    });
+    const headers = requests[0]?.headers;
+    expect(requests[0]?.url).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages");
+    expect(headers?.get("anthropic-version")).toBe("2023-06-01");
+    expect(headers?.get("authorization")).toBe("Bearer bedrock-bearer-token");
+    expect(headers?.get("x-api-key")).toBeNull();
+    expect(headers?.get("x-test")).toBe("model-header");
   });
 
   it.each([
