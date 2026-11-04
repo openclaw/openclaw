@@ -1,0 +1,2 @@
+# Require preserved text, URL targets, and ordered rows through Telegram rich-block splitting.
+12

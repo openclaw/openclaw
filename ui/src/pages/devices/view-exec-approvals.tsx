@@ -1,10 +1,10 @@
 import { createMemo, For } from "solid-js";
-import "../../components/agent-select-registration.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsSection,
   SettingsRow,
-  SettingsEmpty,
+  SettingsStatus,
   SettingsToggle,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
@@ -19,7 +19,15 @@ import {
   type NativeExecApprovalsSnapshot,
 } from "../../lib/nodes/page-operations.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { resolveConfigAgents, resolveNodeTargets } from "./view-shared.tsx";
+import {
+  agentDisplayName,
+  DeviceDisclosure,
+  MetaLine,
+  PolicyActionRow,
+  PolicyFailure,
+  resolveConfigAgents,
+  resolveNodeTargets,
+} from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
@@ -32,7 +40,8 @@ type ExecApprovalsAgentOption = {
 
 type ExecApprovalsState = ReturnType<typeof resolveExecApprovalsState>;
 
-const EXEC_APPROVALS_DEFAULT_SCOPE = "__defaults__";
+const GATEWAY_HOST = "__gateway__";
+const USE_DEFAULT = "__default__";
 
 const SECURITY_OPTIONS: Array<{ value: ExecSecurity; labelKey: string }> = [
   { value: "deny", labelKey: "devices.execApprovals.options.deny" },
@@ -45,6 +54,18 @@ const ASK_OPTIONS: Array<{ value: ExecAsk; labelKey: string }> = [
   { value: "on-miss", labelKey: "devices.execApprovals.options.onMiss" },
   { value: "always", labelKey: "devices.execApprovals.options.always" },
 ];
+
+const POLICY_FIELDS = [
+  { key: "security", values: SECURITY_OPTIONS },
+  { key: "ask", values: ASK_OPTIONS },
+  {
+    key: "askFallback",
+    hintKey: "devices.execApprovals.promptUnavailable",
+    values: SECURITY_OPTIONS,
+  },
+] as const;
+
+type PolicyField = (typeof POLICY_FIELDS)[number];
 
 function normalizeSecurity(value?: string): ExecSecurity {
   return SECURITY_OPTIONS.find((option) => option.value === value)?.value ?? "deny";
@@ -100,8 +121,6 @@ export function resolveExecApprovalsState(input: DevicesProps) {
   const nativePolicy = isNativeExecApprovalsSnapshot(snapshot) ? snapshot : null;
   const fileSnapshot = snapshot && !isNativeExecApprovalsSnapshot(snapshot) ? snapshot : null;
   const form = nativePolicy ? null : (input.execApprovalsForm ?? fileSnapshot?.file ?? null);
-  const ready = Boolean(form || nativePolicy);
-  const agents = resolveExecApprovalsAgents(input.configForm, form);
   const targetNodes = resolveNodeTargets(input.nodes, [
     "system.execApprovals.get",
     "system.execApprovals.set",
@@ -112,39 +131,25 @@ export function resolveExecApprovalsState(input: DevicesProps) {
   if (target === "node" && targetNodeId && !targetNodes.some((node) => node.id === targetNodeId)) {
     targetNodeId = null;
   }
-  const selected = input.execApprovalsSelectedAgent;
-  const selectedScope =
-    selected && agents.some((agent) => agent.id === selected)
-      ? selected
-      : EXEC_APPROVALS_DEFAULT_SCOPE;
-  const defaults = resolveExecApprovalsDefaults(
-    form,
-    fileSnapshot?.resolvedDefaults,
-    selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE,
-  );
-  const selectedAgent =
-    selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE ? (form?.agents?.[selectedScope] ?? null) : null;
-  const allowlist = selectedAgent?.allowlist;
   return {
-    ready,
+    ready: Boolean(form),
     disabled:
       !input.connected ||
       !input.canAdmin ||
       input.execApprovalsSaving ||
       input.execApprovalsLoading,
     dirty: input.execApprovalsDirty,
+    error: input.execApprovalsError,
+    savedNotice: input.execApprovalsSavedNotice,
     loading: input.execApprovalsLoading,
     saving: input.execApprovalsSaving,
     nativePolicy,
-    defaults,
-    selectedScope,
-    selectedAgent,
-    agents,
-    allowlist: allowlist ?? [],
+    form,
+    reported: fileSnapshot?.resolvedDefaults,
+    agents: resolveExecApprovalsAgents(input.configForm, form),
     target,
     targetNodeId,
     targetNodes,
-    onSelectScope: input.onExecApprovalsSelectAgent,
     onSelectTarget: input.onExecApprovalsTargetChange,
     onPatch: input.onExecApprovalsPatch,
     onRemove: input.onExecApprovalsRemove,
@@ -155,72 +160,49 @@ export function resolveExecApprovalsState(input: DevicesProps) {
   };
 }
 
+/** A host holds one policy: defaults plus each agent's overrides, read and edited in place. */
 export function ExecApprovals(props: ExecApprovalsState) {
-  const ready = () => props.ready;
   const targetReady = () => props.target !== "node" || Boolean(props.targetNodeId);
-  const saveButton = (
-    <button
-      class="btn"
-      disabled={props.disabled || !props.dirty || !targetReady() || Boolean(props.nativePolicy)}
-      onClick={() => props.onSave()}
-    >
-      {props.saving ? t("common.saving") : t("common.save")}
-    </button>
-  );
-  const rows = (
-    <>
-      {!props.canAdmin ? (
-        props.connected ? (
-          <SettingsRow title={t("devices.readOnly.adminRequired")} />
-        ) : undefined
-      ) : (
-        <>
-          <ExecApprovalsTarget {...props} />
-          {!ready() ? (
-            <SettingsRow
-              title={t("devices.execApprovals.loadHint")}
-              control={
-                <button
-                  class="btn"
-                  disabled={props.loading || !targetReady()}
-                  onClick={() => props.onLoad()}
-                >
-                  {props.loading ? t("common.loading") : t("common.loadApprovals")}
-                </button>
-              }
-            />
-          ) : props.nativePolicy ? (
-            <NativeExecApprovals snapshot={props.nativePolicy} />
-          ) : (
-            <>
-              <ExecApprovalsScope {...props} /> <ExecApprovalsPolicy {...props} />
-            </>
-          )}
-        </>
-      )}
-    </>
-  );
+  const reloadFailed = () => props.ready && !props.dirty && !props.saving && Boolean(props.error);
   return (
     <>
-      <SettingsSection
-        title={t("devices.execApprovals.title")}
-        description={
-          <>
-            {t("devices.execApprovals.subtitlePrefix")}{" "}
-            <span class="mono">exec host=gateway/node</span>.
-          </>
-        }
-        actions={saveButton}
-      >
-        {rows}
-      </SettingsSection>
-      {props.canAdmin &&
-      ready() &&
-      !props.nativePolicy &&
-      props.selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE ? (
-        <ExecApprovalsAllowlist {...props} />
+      {props.canAdmin ? (
+        <SettingsSection
+          title={t("devices.execApprovals.title")}
+          description={t("devices.execApprovals.subtitlePrefix")}
+        >
+          <HostRow {...props} />
+          {props.nativePolicy ? (
+            <NativeExecApprovals snapshot={props.nativePolicy} />
+          ) : props.ready ? (
+            <PolicyScopes {...props} />
+          ) : props.error ? (
+            <LoadFailure {...props} />
+          ) : props.loading ? (
+            <PolicyActionRow description={t("common.loading")} />
+          ) : targetReady() ? (
+            <PolicyActionRow description={t("devices.execApprovals.loadHint")}>
+              <button class="btn" disabled={!props.connected} onClick={() => props.onLoad()}>
+                {t("common.loadApprovals")}
+              </button>
+            </PolicyActionRow>
+          ) : undefined}
+          {reloadFailed() ? <LoadFailure {...props} /> : undefined}
+          {props.nativePolicy ? undefined : <SaveRow {...props} targetReady={targetReady()} />}
+        </SettingsSection>
       ) : undefined}
     </>
+  );
+}
+
+function LoadFailure(props: ExecApprovalsState) {
+  return (
+    <PolicyFailure
+      title={t("devices.execApprovals.loadFailed")}
+      message={props.error ?? ""}
+      busy={props.loading}
+      onRetry={props.onLoad}
+    />
   );
 }
 
@@ -231,42 +213,35 @@ function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
       <SettingsRow
         title={t("devices.execApprovals.hostNativePolicy")}
         description={t("devices.execApprovals.hostNativeHint")}
-        control={<SettingsValue value={t("devices.execApprovals.native")} />}
       />
       <SettingsRow
         title={t("devices.execApprovals.defaultAction")}
-        description={
-          props.snapshot.enabled
-            ? props.snapshot.defaultAction
-            : (props.snapshot.message ?? "unavailable")
-        }
+        description={props.snapshot.enabled ? undefined : (props.snapshot.message ?? "unavailable")}
         control={
-          <SettingsValue
-            value={t(
-              rules().length === 1 ? "devices.execApprovals.rule" : "devices.execApprovals.rules",
-              {
-                count: String(rules().length),
-              },
-            )}
-          />
+          props.snapshot.enabled ? (
+            <SettingsValue value={props.snapshot.defaultAction} />
+          ) : undefined
         }
       />
       <For each={rules()}>
         {(rule) => (
           <SettingsRow
-            title={rule.pattern}
+            title={<span class="mono">{rule.pattern}</span>}
             description={
               <>
-                {rule.action} · {rule.shells?.join(", ") || t("devices.execApprovals.allShells")} ·
-                {rule.enabled === false
-                  ? t("devices.execApprovals.off")
-                  : t("devices.execApprovals.on")}
-                {rule.description ? (
-                  <>
-                    <br />
-                    {clampText(rule.description ?? "", 120)}
-                  </>
-                ) : undefined}
+                <MetaLine
+                  plain
+                  parts={[
+                    rule.action,
+                    rule.shells?.join(", ") || t("devices.execApprovals.allShells"),
+                    t(
+                      rule.enabled === false
+                        ? "devices.execApprovals.options.off"
+                        : "devices.execApprovals.options.on",
+                    ),
+                  ]}
+                />
+                {rule.description ? clampText(rule.description, 120) : undefined}
               </>
             }
           />
@@ -276,304 +251,386 @@ function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
   );
 }
 
-function ExecApprovalsTarget(props: ExecApprovalsState) {
-  const hasNodes = createMemo(() => props.targetNodes.length > 0);
-  const nodeValue = createMemo(() => props.targetNodeId ?? "");
+/** Gateway and each node are one choice: the host whose policy this is. */
+function HostRow(props: ExecApprovalsState) {
+  const value = createMemo(() =>
+    props.target === "node" ? (props.targetNodeId ?? "") : GATEWAY_HOST,
+  );
+  const canChoose = () => props.targetNodes.length > 0 || props.target === "node";
   return (
-    <>
-      <SettingsRow
-        title={t("devices.execApprovals.target")}
-        description={t("devices.execApprovals.targetHint")}
-        control={
+    <SettingsRow
+      title={t("devices.execApprovals.host")}
+      description={props.targetNodes.length > 0 ? undefined : t("devices.execApprovals.noNodes")}
+      control={
+        canChoose() ? (
           <SettingsSelect
             aria-label={t("devices.execApprovals.host")}
-            value={props.target}
+            value={value()}
             disabled={props.disabled}
             onChange={(event) => {
-              const target = event.currentTarget;
-              const value = target.value;
-              if (value === "node") {
-                const first = props.targetNodes[0]?.id ?? null;
-                props.onSelectTarget("node", nodeValue() || first);
-              } else {
+              const select = event.currentTarget;
+              const next = select.value;
+              if (next === GATEWAY_HOST) {
                 props.onSelectTarget("gateway", null);
+              } else if (next) {
+                props.onSelectTarget("node", next);
               }
-              target.value = props.target;
+              // The owner may keep the host while it asks about a draft.
+              select.value = value();
             }}
             options={[
-              { value: "gateway", label: t("devices.execApprovals.gateway") },
-              { value: "node", label: t("devices.execApprovals.node") },
+              { value: GATEWAY_HOST, label: t("devices.execApprovals.gateway") },
+              ...(value()
+                ? []
+                : [{ value: "", label: t("devices.execApprovals.selectNode"), disabled: true }]),
+              ...props.targetNodes.map((node) => ({ value: node.id, label: node.label })),
             ]}
           />
-        }
-      />
-      {props.target === "node" ? (
-        <SettingsRow
-          title={t("devices.execApprovals.node")}
-          description={hasNodes() ? undefined : t("devices.execApprovals.noNodes")}
-          control={
-            <SettingsSelect
-              aria-label={t("devices.execApprovals.node")}
-              value={nodeValue()}
-              disabled={props.disabled || !hasNodes()}
-              onChange={(event) => {
-                const target = event.currentTarget;
-                const value = target.value.trim();
-                props.onSelectTarget("node", value ? value : null);
-                target.value = nodeValue();
-              }}
-              options={[
-                { value: "", label: t("devices.execApprovals.selectNode") },
-                ...props.targetNodes.map((node) => ({ value: node.id, label: node.label })),
-              ]}
-            />
-          }
-        />
-      ) : undefined}
+        ) : (
+          <SettingsValue value={t("devices.execApprovals.gateway")} />
+        )
+      }
+    />
+  );
+}
+
+function optionLabel(field: PolicyField, value: string): string {
+  const option = field.values.find((candidate) => candidate.value === value);
+  return option ? t(option.labelKey) : value;
+}
+
+function toggleLabel(value: boolean): string {
+  return t(value ? "devices.execApprovals.options.on" : "devices.execApprovals.options.off");
+}
+
+function fieldSummary(title: string, value: string): string {
+  return t("devices.execApprovals.fieldValue", { field: title, value });
+}
+
+function fieldTitle(field: PolicyField): string {
+  return t(`devices.execApprovals.${field.key}`);
+}
+
+function PolicyScopes(props: ExecApprovalsState) {
+  const fileDefaults = createMemo(() =>
+    resolveExecApprovalsDefaults(props.form, props.reported, false),
+  );
+  const inherited = createMemo(() =>
+    resolveExecApprovalsDefaults(props.form, props.reported, true),
+  );
+  return (
+    <>
+      <DeviceDisclosure
+        name={t("devices.execApprovals.defaults")}
+        meta={POLICY_FIELDS.slice(0, 2).map((field) =>
+          fieldSummary(fieldTitle(field), optionLabel(field, fileDefaults()[field.key])),
+        )}
+      >
+        <div class="device-policy__fields">
+          <For each={POLICY_FIELDS}>
+            {(field) => <DefaultsField state={props} field={field} values={fileDefaults()} />}
+          </For>
+          <AutoAllowField state={props} basePath={["defaults"]} effective={fileDefaults()} />
+        </div>
+      </DeviceDisclosure>
+      <For each={props.agents} keyed={(agent) => agent.id}>
+        {(agent) => <AgentPolicy state={props} agent={agent()} inherited={inherited()} />}
+      </For>
     </>
   );
 }
 
-function ExecApprovalsScope(props: ExecApprovalsState) {
-  const options = createMemo(() => [
-    {
-      value: EXEC_APPROVALS_DEFAULT_SCOPE,
-      label: t("devices.execApprovals.defaults"),
-      icon: "settings" as const,
-    },
-    ...props.agents.map((agent) => ({
-      value: agent.id,
-      label: agent.name?.trim() ? `${agent.name} (${agent.id})` : agent.id,
-      agent: { id: agent.id, ...(agent.name ? { name: agent.name } : {}) },
-      badge: agent.isDefault ? t("agents.default") : undefined,
-    })),
-  ]);
+function DefaultsField(props: {
+  state: ExecApprovalsState;
+  field: PolicyField;
+  values: ExecApprovalsResolvedDefaults;
+}) {
   return (
     <SettingsRow
-      title={t("devices.execApprovals.scope")}
-      stacked={true}
+      title={fieldTitle(props.field)}
+      description={"hintKey" in props.field ? t(props.field.hintKey) : undefined}
       control={
-        <openclaw-agent-select
-          class="agent-select--settings"
-          prop:options={options()}
-          prop:value={props.selectedScope}
-          prop:accessibleLabel={t("devices.execApprovals.scope")}
-          prop:disabled={props.disabled}
-          prop:onSelect={props.onSelectScope}
+        <SettingsSelect
+          aria-label={fieldTitle(props.field)}
+          value={props.values[props.field.key]}
+          disabled={props.state.disabled}
+          onChange={(event) =>
+            props.state.onPatch(["defaults", props.field.key], event.currentTarget.value)
+          }
+          options={props.field.values.map((option) => ({
+            value: option.value,
+            label: t(option.labelKey),
+          }))}
         />
       }
     />
   );
 }
 
-function ExecApprovalsPolicy(props: ExecApprovalsState) {
-  const isDefaults = createMemo(() => props.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE);
-  const defaults = createMemo(() => props.defaults);
-  const agent = createMemo(() => props.selectedAgent ?? {});
-  const basePath = () => (isDefaults() ? ["defaults"] : ["agents", props.selectedScope]);
-  const autoOverride = createMemo(() =>
-    typeof agent().autoAllowSkills === "boolean" ? agent().autoAllowSkills : undefined,
-  );
-  const autoEffective = createMemo(() => autoOverride() ?? defaults().autoAllowSkills);
-  const autoIsDefault = () => autoOverride() == null;
-
-  return (
-    <>
-      <For
-        each={
-          [
-            {
-              key: "security",
-              descriptionKey: "devices.execApprovals.defaultSecurity",
-              ariaLabelKey: "devices.execApprovals.mode",
-              values: SECURITY_OPTIONS,
-            },
-            {
-              key: "ask",
-              descriptionKey: "devices.execApprovals.defaultPrompt",
-              ariaLabelKey: "devices.execApprovals.mode",
-              values: ASK_OPTIONS,
-            },
-            {
-              key: "askFallback",
-              descriptionKey: "devices.execApprovals.promptUnavailable",
-              ariaLabelKey: "devices.execApprovals.fallback",
-              values: SECURITY_OPTIONS,
-            },
-          ] as const
-        }
-      >
-        {(field) => {
-          const override = createMemo(() =>
-            typeof agent()[field.key] === "string" ? agent()[field.key] : undefined,
-          );
-          const currentValue = () =>
-            isDefaults() ? defaults()[field.key] : (override() ?? "__default__");
-          return (
-            <SettingsRow
-              title={t(`devices.execApprovals.${field.key}`)}
-              description={
-                isDefaults()
-                  ? t(field.descriptionKey)
-                  : override() !== undefined
-                    ? t("devices.execApprovals.defaultValue", { value: defaults()[field.key] })
-                    : undefined
-              }
-              control={
-                <SettingsSelect
-                  aria-label={t(field.ariaLabelKey)}
-                  value={currentValue()}
-                  disabled={props.disabled}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    if (!isDefaults() && value === "__default__") {
-                      props.onRemove([...basePath(), field.key]);
-                    } else {
-                      props.onPatch([...basePath(), field.key], value);
-                    }
-                  }}
-                  options={[
-                    ...(!isDefaults()
-                      ? [
-                          {
-                            value: "__default__",
-                            label: t("devices.execApprovals.useDefaultValue", {
-                              value: defaults()[field.key],
-                            }),
-                          },
-                        ]
-                      : []),
-                    ...field.values.map((option) => ({
-                      value: option.value,
-                      label: t(option.labelKey),
-                    })),
-                  ]}
-                />
-              }
-            />
-          );
-        }}
-      </For>
-      <SettingsRow
-        title={t("devices.execApprovals.autoAllowSkills")}
-        description={
-          isDefaults()
-            ? t("devices.execApprovals.autoAllowSkillsHint")
-            : autoIsDefault()
-              ? undefined
-              : t("devices.execApprovals.override", {
-                  value: autoEffective()
-                    ? t("devices.execApprovals.on")
-                    : t("devices.execApprovals.off"),
-                })
-        }
-        control={
-          <>
-            {!isDefaults() && !autoIsDefault() ? (
-              <button
-                class="btn btn--sm"
-                disabled={props.disabled}
-                onClick={() => props.onRemove([...basePath(), "autoAllowSkills"])}
-              >
-                {t("devices.execApprovals.useDefault")}
-              </button>
-            ) : undefined}
-            <SettingsToggle
-              checked={autoEffective()}
-              disabled={props.disabled}
-              ariaLabel={t("devices.execApprovals.autoAllowSkills")}
-              onChange={(checked) => props.onPatch([...basePath(), "autoAllowSkills"], checked)}
-            />
-          </>
-        }
-      />
-    </>
-  );
+/** An agent reads as what it changes from the defaults, so a plain row means nothing does. */
+function agentSummary(
+  agent: ExecApprovalsAgentOption,
+  stored: NonNullable<ExecApprovalsFile["agents"]>[string] | undefined,
+): string[] {
+  const changes = POLICY_FIELDS.flatMap((field) => {
+    const value = stored?.[field.key];
+    return typeof value === "string"
+      ? [fieldSummary(fieldTitle(field), optionLabel(field, value))]
+      : [];
+  });
+  if (typeof stored?.autoAllowSkills === "boolean") {
+    changes.push(
+      fieldSummary(t("devices.execApprovals.autoAllowSkills"), toggleLabel(stored.autoAllowSkills)),
+    );
+  }
+  const patterns = stored?.allowlist?.length ?? 0;
+  if (patterns > 0) {
+    changes.push(
+      patterns === 1
+        ? t("devices.execApprovals.onePattern")
+        : t("devices.execApprovals.patterns", { count: String(patterns) }),
+    );
+  }
+  return [
+    ...(agent.isDefault ? [t("devices.binding.defaultAgent")] : []),
+    ...(changes.length > 0 ? changes : [t("devices.execApprovals.usesDefaults")]),
+  ];
 }
 
-function ExecApprovalsAllowlist(props: ExecApprovalsState) {
-  const allowlistPath = () => ["agents", props.selectedScope, "allowlist"];
-  const entries = createMemo(() => props.allowlist);
+function AgentPolicy(props: {
+  state: ExecApprovalsState;
+  agent: ExecApprovalsAgentOption;
+  inherited: ExecApprovalsResolvedDefaults;
+}) {
+  const stored = createMemo(() => props.state.form?.agents?.[props.agent.id]);
+  const basePath = () => ["agents", props.agent.id];
   return (
-    <SettingsSection
-      title={t("devices.execApprovals.allowlist")}
-      description={t("devices.execApprovals.allowlistHint")}
-      actions={
-        <button
-          class="btn btn--sm"
-          disabled={props.disabled}
-          onClick={() => props.onPatch(allowlistPath(), [...entries(), { pattern: "" }])}
-        >
-          {t("devices.execApprovals.addPattern")}
-        </button>
-      }
+    <DeviceDisclosure
+      name={agentDisplayName(props.agent)}
+      meta={agentSummary(props.agent, stored())}
     >
-      {entries().length === 0 ? (
-        <SettingsEmpty message={t("devices.execApprovals.emptyAllowlist")} />
-      ) : (
-        <For each={entries()} keyed={false}>
-          {(entry, index) => {
-            const lastUsed = () =>
-              entry().lastUsedAt ? formatRelativeTimestamp(entry().lastUsedAt) : t("common.never");
-            const lastCommand = () =>
-              entry().lastUsedCommand ? clampText(entry().lastUsedCommand ?? "", 120) : null;
-            const lastPath = () =>
-              entry().lastResolvedPath ? clampText(entry().lastResolvedPath ?? "", 120) : null;
+      <div class="device-policy__fields">
+        <For each={POLICY_FIELDS}>
+          {(field) => {
+            const override = () => {
+              const value = stored()?.[field.key];
+              return typeof value === "string" ? value : undefined;
+            };
+            const defaultLabel = () => optionLabel(field, props.inherited[field.key]);
             return (
               <SettingsRow
-                title={
-                  entry().pattern?.trim() ? entry().pattern : t("devices.execApprovals.newPattern")
-                }
-                description={
-                  <>
-                    {t("devices.execApprovals.lastUsed", { time: lastUsed() })}
-                    {lastCommand() ? (
-                      <>
-                        <br />
-                        <span class="mono">{lastCommand()}</span>
-                      </>
-                    ) : undefined}
-                    {lastPath() ? (
-                      <>
-                        <br />
-                        <span class="mono">{lastPath()}</span>
-                      </>
-                    ) : undefined}
-                  </>
-                }
+                title={fieldTitle(field)}
+                description={"hintKey" in field ? t(field.hintKey) : undefined}
                 control={
-                  <>
-                    <input
-                      class="settings-input"
-                      type="text"
-                      aria-label={t("devices.execApprovals.pattern")}
-                      value={entry().pattern ?? ""}
-                      disabled={props.disabled}
-                      onInput={(event) => {
-                        const target = event.currentTarget;
-                        props.onPatch([...allowlistPath(), index, "pattern"], target.value);
-                      }}
-                    />
-                    <button
-                      class="btn btn--sm danger"
-                      disabled={props.disabled}
-                      onClick={() =>
-                        props.onRemove(
-                          props.allowlist.length <= 1
-                            ? allowlistPath()
-                            : [...allowlistPath(), index],
-                        )
+                  <SettingsSelect
+                    aria-label={fieldTitle(field)}
+                    value={override() ?? USE_DEFAULT}
+                    disabled={props.state.disabled}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      if (value === USE_DEFAULT) {
+                        props.state.onRemove([...basePath(), field.key]);
+                      } else {
+                        props.state.onPatch([...basePath(), field.key], value);
                       }
-                    >
-                      {t("devices.execApprovals.remove")}
-                    </button>
-                  </>
+                    }}
+                    options={[
+                      {
+                        value: USE_DEFAULT,
+                        label: t("devices.execApprovals.useDefaultValue", {
+                          value: defaultLabel(),
+                        }),
+                      },
+                      ...field.values.map((option) => ({
+                        value: option.value,
+                        label: t(option.labelKey),
+                      })),
+                    ]}
+                  />
                 }
               />
             );
           }}
         </For>
-      )}
-    </SettingsSection>
+        <AutoAllowField
+          state={props.state}
+          basePath={basePath()}
+          override={stored()?.autoAllowSkills}
+          effective={props.inherited}
+        />
+      </div>
+      <Allowlist
+        state={props.state}
+        agentId={props.agent.id}
+        entries={stored()?.allowlist ?? []}
+        inactive={(stored()?.security ?? props.inherited.security) === "deny"}
+      />
+    </DeviceDisclosure>
+  );
+}
+
+function AutoAllowField(props: {
+  state: ExecApprovalsState;
+  basePath: string[];
+  override?: boolean;
+  effective: ExecApprovalsResolvedDefaults;
+}) {
+  const overridden = () => typeof props.override === "boolean";
+  return (
+    <SettingsRow
+      title={t("devices.execApprovals.autoAllowSkills")}
+      description={t("devices.execApprovals.autoAllowSkillsHint")}
+      control={
+        <>
+          {overridden() ? (
+            <button
+              class="btn btn--sm"
+              disabled={props.state.disabled}
+              onClick={() => props.state.onRemove([...props.basePath, "autoAllowSkills"])}
+            >
+              {t("devices.execApprovals.useDefaultValue", {
+                value: toggleLabel(props.effective.autoAllowSkills),
+              })}
+            </button>
+          ) : undefined}
+          <SettingsToggle
+            checked={props.override ?? props.effective.autoAllowSkills}
+            disabled={props.state.disabled}
+            ariaLabel={t("devices.execApprovals.autoAllowSkills")}
+            onChange={(checked) =>
+              props.state.onPatch([...props.basePath, "autoAllowSkills"], checked)
+            }
+          />
+        </>
+      }
+    />
+  );
+}
+
+type AllowlistEntry = NonNullable<
+  NonNullable<NonNullable<ExecApprovalsFile["agents"]>[string]["allowlist"]>
+>[number];
+
+function allowlistEntryMeta(entry: AllowlistEntry): string[] {
+  return [
+    ...(entry.lastUsedAt
+      ? [t("devices.execApprovals.lastUsed", { time: formatRelativeTimestamp(entry.lastUsedAt) })]
+      : []),
+    ...(entry.lastUsedCommand ? [clampText(entry.lastUsedCommand, 120)] : []),
+    ...(entry.lastResolvedPath ? [clampText(entry.lastResolvedPath, 120)] : []),
+  ];
+}
+
+/** The pattern is the row: edit it where it reads, with its last use right under it. */
+function Allowlist(props: {
+  state: ExecApprovalsState;
+  agentId: string;
+  entries: readonly AllowlistEntry[];
+  /** Deny stops a command before any pattern is read; edits still wait for a later change. */
+  inactive: boolean;
+}) {
+  // Rows only ever join at the end, so the newest ref is the field Add pattern just made.
+  let newestField: HTMLTextAreaElement | undefined;
+  const path = () => ["agents", props.agentId, "allowlist"];
+  return (
+    <div class={["device-allowlist", { "device-allowlist--inactive": props.inactive }]}>
+      <div class="settings-row__text">
+        <span class="settings-row__title">{t("devices.execApprovals.allowlist")}</span>
+        <span class="settings-row__desc">{t("devices.execApprovals.allowlistHint")}</span>
+      </div>
+      <For each={props.entries} keyed={false}>
+        {(entry, index) => (
+          <div class="device-allowlist__entry">
+            <div class="device-allowlist__line">
+              {/* A long path has to read whole on a phone, so the field wraps instead of scrolling. */}
+              <textarea
+                ref={(element) => (newestField = element)}
+                class="settings-input device-allowlist__input"
+                rows={1}
+                spellcheck="false"
+                autocapitalize="off"
+                aria-label={t("devices.execApprovals.pattern")}
+                placeholder={t("devices.execApprovals.newPattern")}
+                value={entry().pattern ?? ""}
+                disabled={props.state.disabled}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                  }
+                }}
+                onInput={(event) =>
+                  props.state.onPatch(
+                    [...path(), index, "pattern"],
+                    event.currentTarget.value.replace(/[\r\n]+/gu, ""),
+                  )
+                }
+              />
+              <button
+                class="btn btn--icon btn--ghost"
+                type="button"
+                aria-label={t("devices.execApprovals.remove")}
+                title={t("devices.execApprovals.remove")}
+                disabled={props.state.disabled}
+                onClick={() =>
+                  props.state.onRemove(props.entries.length <= 1 ? path() : [...path(), index])
+                }
+              >
+                <Icon name="x" />
+              </button>
+            </div>
+            <MetaLine parts={allowlistEntryMeta(entry())} />
+          </div>
+        )}
+      </For>
+      <div>
+        <button
+          class="btn btn--sm"
+          type="button"
+          disabled={props.state.disabled}
+          onClick={() => {
+            props.state.onPatch(path(), [...props.entries, { pattern: "" }]);
+            requestAnimationFrame(() => newestField?.focus());
+          }}
+        >
+          {t("devices.execApprovals.addPattern")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Only a draft needs saving, so the action comes with it and stays in reach while editing. */
+function SaveRow(props: ExecApprovalsState & { targetReady: boolean }) {
+  const saved = () => props.savedNotice && !props.dirty && !props.saving && !props.error;
+  return (
+    <>
+      {props.dirty || props.saving || saved() ? (
+        <PolicyActionRow
+          class="device-policy__save"
+          description={
+            saved() ? (
+              <SettingsStatus kind="ok" label={t("devices.execApprovals.saved")} />
+            ) : (
+              <>
+                {t("common.unsavedChanges")}
+                {props.error ? (
+                  <span class="device-policy__error" role="alert">
+                    <SettingsStatus kind="danger" label={props.error} />
+                  </span>
+                ) : undefined}
+              </>
+            )
+          }
+        >
+          <button
+            class="btn primary"
+            disabled={props.disabled || !props.dirty || !props.targetReady}
+            onClick={() => props.onSave()}
+          >
+            {props.saving ? t("common.saving") : t("common.save")}
+          </button>
+        </PolicyActionRow>
+      ) : undefined}
+    </>
   );
 }

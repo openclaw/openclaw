@@ -39,6 +39,8 @@ export function workspaceSizeRecoveryPaths(error: Error): string[] {
 export type WorkspaceNode = ManifestNode | { path: string; type: "unsupported" } | undefined;
 
 type ManifestNodes = ReturnType<typeof manifestNodes>;
+type ComparisonNodes = { baseNodes: ManifestNodes; currentNodes: ManifestNodes };
+export type WorkspaceReconciliationPreparation = ReturnType<typeof prepareWorkspaceReconciliation>;
 export type WorkspacePreflightInput = {
   baseNodes: Array<[string, ManifestNode]>;
   currentNodes: WorkspacePreflightInput["baseNodes"];
@@ -135,9 +137,11 @@ export function diffNodePaths(baseNodes: ManifestNodes, currentNodes: ManifestNo
 export function prepareWorkspaceReconciliation(
   base: WorkerWorkspaceManifest,
   current: WorkerWorkspaceManifest,
+  { baseNodes, currentNodes }: ComparisonNodes = {
+    baseNodes: manifestNodes(base),
+    currentNodes: manifestNodes(current),
+  },
 ) {
-  const baseNodes = manifestNodes(base);
-  const currentNodes = manifestNodes(current);
   const changed = diffNodePaths(baseNodes, currentNodes);
   const inspected = new Set(changed);
   for (const entryPath of changed) {
@@ -169,20 +173,28 @@ export function prepareWorkspaceReconciliation(
       preflight.currentNodes.push([entryPath, next]);
     }
   }
-  return { baseNodes, currentNodes, changed, preflight };
+  return {
+    preflight,
+    includePaths: current.baseCommit
+      ? new Set([...baseNodes.keys(), ...currentNodes.keys()])
+      : undefined,
+  };
 }
 
 export function parseChangedWorkspaceResult(
   base: WorkerWorkspaceManifest,
   current: WorkerWorkspaceManifest,
   enforceRecordLimit = true,
+  { baseNodes, currentNodes }: ComparisonNodes = {
+    baseNodes: manifestNodes(base),
+    currentNodes: manifestNodes(current),
+  },
 ): { changed: boolean; entries: WorkerWorkspaceManifestEntry[] } {
-  const remainingBase = manifestNodes(base);
   let recordCount = 0;
   const entries: WorkerWorkspaceManifestEntry[] = [];
   const newFiles: Array<Extract<WorkerWorkspaceManifestEntry, { type: "file" }>> = [];
-  for (const entry of manifestNodes(current).values()) {
-    const previous = remainingBase.get(entry.path);
+  for (const entry of currentNodes.values()) {
+    const previous = baseNodes.get(entry.path);
     if (!sameEntry(previous, entry)) {
       recordCount += previous ? 2 : 1;
       if (entry.type !== "directory") {
@@ -192,9 +204,12 @@ export function parseChangedWorkspaceResult(
         }
       }
     }
-    remainingBase.delete(entry.path);
   }
-  recordCount += remainingBase.size;
+  for (const entryPath of baseNodes.keys()) {
+    if (!currentNodes.has(entryPath)) {
+      recordCount++;
+    }
+  }
   if (enforceRecordLimit && recordCount > MAX_RECONCILIATION_ENTRIES) {
     throw new Error(
       `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,

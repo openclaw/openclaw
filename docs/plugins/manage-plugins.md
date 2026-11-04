@@ -314,7 +314,9 @@ of a loaded, enabled bundled plugin refreshes registrations and reports
 `restartRequired: true`, even when its files are unchanged. Restart the Gateway to
 load updated bundled code; rebuild compiled output first, and install a new
 executable for embedded code changes. Replacing captured external code returns
-`restartRequired: false`. Explicit actions also work with `gateway.reload.mode: "off"`.
+`restartRequired: false`. For bundled plugin development, see
+[Development: reload edited bundled code](/cli/plugins/uninstall-and-update#development-reload-edited-bundled-code).
+Explicit actions also work with `gateway.reload.mode: "off"`.
 See [Plugin management RPCs](/gateway/protocol).
 
 Cleanup is best effort: disabling removes the plugin's registered capabilities
@@ -366,6 +368,11 @@ Inventory and result output are bounded. Narrow `list` with `query`, inspect a
 specific plugin, or use the Control UI Plugins page for omitted details and
 capability reviews. A saved install can outlive a failed runtime activation:
 inspect that result before retrying activation, rather than reinstalling it.
+
+Local plugin search lowercases text before NFC normalization, so canonically
+equivalent Unicode names match in inventory queries and the Installed plugins
+view. It does not remove accents or fold compatibility characters, and it does
+not change plugin identities or installation matching.
 
 ## Update plugins
 

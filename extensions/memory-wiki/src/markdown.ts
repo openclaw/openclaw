@@ -157,8 +157,17 @@ export function renderWikiMarkdown(params: {
 }
 
 function extractTitleFromMarkdown(body: string): string | undefined {
-  const match = body.match(/^#\s+(.+?)\s*$/m);
-  return normalizeOptionalString(match?.[1]);
+  // Masking keeps offsets: "# comment" lines in code cannot match, and the title is
+  // read from the unmasked line so inline code in a real heading survives.
+  for (const heading of maskMarkdownCode(body).matchAll(/^#[ \t].*$/gm)) {
+    const title = normalizeOptionalString(
+      body.slice(heading.index + 1, heading.index + heading[0].length),
+    );
+    if (title) {
+      return title;
+    }
+  }
+  return undefined;
 }
 
 function normalizeOptionalStringFields<K extends string>(
@@ -454,7 +463,9 @@ export function formatWikiLink(params: {
   const destination = /[\s()<>]/.test(linkTarget)
     ? `<${linkTarget.replace(/[<>]/g, "\\$&")}>`
     : linkTarget;
-  return `[${params.title}](${destination})`;
+  // Titles are metadata: unmatched brackets or a trailing backslash must not break the link.
+  const label = params.title.replace(/[\\[\]`]/g, "\\$&");
+  return `[${label}](${destination})`;
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {

@@ -87,6 +87,10 @@ reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
 and per-agent GitHub changes remain `operator.admin`.
 
+Session-scoped readers can load agent avatar images from the Control UI
+`/avatar/<agentId>` route, which serves the avatar URL that `agent.identity.get`
+already returns to them. Assistant media file reads still require `operator.read`.
+
 Session-scoped readers can read shared GitHub publication options and receipts
 for sessions they can view through `sessions.github.options` and
 `sessions.github.status`. For these narrow callers, the shared publication option
@@ -117,6 +121,17 @@ configuration changes, Gateway-wide tool invocation, or publication outside
 the own-session shared-account path described above.
 
 Session readers can browse visible conversations and receive their updates.
+Session-only callers cannot open another person's Activity timeline or request
+their per-person activity counts. The Gateway returns `FORBIDDEN`; the Control UI
+shows the restriction and removes previously loaded activity. People and owner
+facets contain only the caller's own profile. Visible shared-session rows and
+their attribution remain available under the existing sharing policy.
+Presence stays visible as a person-only view: who is online, their last activity
+time, and watched sessions the caller can read. Device, network, connection, and
+email details remain `operator.read` only, as does `presence.query`
+([presence](/gateway/protocol/presence#broadcast-event-scoping)).
+Named roles with `operator.read` retain access to other people's activity even
+when a connection requests only session scopes.
 They can inspect a visible session's effective tool names with `tools.effective`.
 The session-only response includes core summaries and preserves policy-filtered
 GitHub action descriptions. It omits other runtime descriptions, configuration
@@ -334,9 +349,11 @@ For sessions created by other people, `sessions.others` supports these values:
 - `"write"`: allows participation in foreign sessions. Draft and incognito
   restrictions remain in force.
 
-A person always owns their own sessions. Explicit session membership can raise
-`"view"` or `"suggest"` access for a specific session, and connections already
-holding `operator.admin` retain their administrative session access.
+A person always owns their own sessions. At `"none"`, explicit session membership
+does not grant access to another person's sessions. Membership can raise `"view"`
+or `"suggest"` access for a specific session; `"write"` already permits participation
+without membership. Connections holding `operator.admin` retain their
+administrative session access.
 
 Set `agents: "*"` to allow session creation and agent runs on every agent, list
 agent IDs to allow only those agents, or use an empty array to disallow both.
@@ -704,12 +721,17 @@ dispatch so authorization failures have one standard structured response:
 
 Project RPCs use these scopes:
 
-| Method                                 | Required scope and additional gate                                                                                            |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `projects.list`                        | `operator.sessions.read` or broader read access; only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
-| `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                                                     |
-| `projects.register`, `projects.remove` | `operator.admin`.                                                                                                             |
-| `projects.searchRemote`                | `operator.read`.                                                                                                              |
+| Method                                 | Required scope and additional gate                                                                                                                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projects.list`                        | `operator.sessions.read` or broader read access receives project names and optional read-safe `repositoryIdentity` (`org/repo`); only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
+| `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                                                                                                                                     |
+| `projects.register`, `projects.remove` | `operator.admin`.                                                                                                                                                                                             |
+| `projects.searchRemote`                | `operator.read`.                                                                                                                                                                                              |
+
+`repositoryIdentity` describes only an already discoverable project, not a clone
+URL or permission to read private repository content. Origins outside the
+configured GitHub host or unsupported clone forms omit it. Remote search,
+repository reads, and publication retain their existing access checks.
 
 Some handlers then apply stricter checks based on the concrete thing being
 approved or mutated:

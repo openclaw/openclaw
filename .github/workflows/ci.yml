@@ -781,6 +781,8 @@ jobs:
               # Preflight imports these siblings by file-relative paths.
               preflight_scripts = (
                   "scripts/ci-build-manifest.mjs",
+                  "scripts/ci-adaptive-priors.mjs",
+                  "scripts/lib/actions-artifact-archive.mjs",
                   "scripts/lib/ci-ios-smoke-plan.mjs",
                   "scripts/lib/release-context.mjs",
                   "scripts/lib/release-version.mjs",
@@ -1562,6 +1564,23 @@ jobs:
           fi
           node "${manifest_node_args[@]}" .ci-harness/scripts/ci-build-manifest.mjs
 
+      - name: Restore adaptive CI priors
+        if: ${{ github.repository == 'openclaw/openclaw' && steps.manifest.outputs.frozen_target == 'false' && steps.manifest.outputs.run_checks_node_core_nondist == 'true' && (github.event_name == 'schedule' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && endsWith(github.run_id, '0'))) }}
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .ci-harness/scripts/ci-adaptive-priors.mjs
+
+      - name: Share adaptive CI priors
+        if: ${{ steps.manifest.outputs.frozen_target == 'false' && hashFiles('.artifacts/ci-adaptive-priors.json') != '' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-adaptive-priors-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/ci-adaptive-priors.json
+          include-hidden-files: true
+          retention-days: 7
+
       - name: Restore exact dependency cache
         if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.repository == 'openclaw/openclaw' && steps.manifest.outputs.run_node == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
         uses: ./.ci-harness/.github/actions/setup-node-env
@@ -1700,6 +1719,12 @@ jobs:
           source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
+      - name: Check release fast lane test-line budget
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && github.event_name == 'pull_request' && needs.preflight.outputs.release_fast_lane == 'true' }}
+        env:
+          BASE_SHA: *diff_base
+        run: node scripts/check-test-lines-ratchet.mts --base "$BASE_SHA" --no-merge-base
+
       - name: Setup protocol coverage compatibility dependencies
         id: protocol_dependencies
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_protocol_event_coverage == 'true' && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.checkout_revision != github.workflow_sha }}
@@ -1780,8 +1805,13 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
-      - name: Check main push ratchets and protocol additions
+      - name: Setup ripgrep for differential guards
+        id: guard_ripgrep
         if: ${{ !cancelled() && steps.guard_setup.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true' }}
+        uses: ./.ci-harness/.github/actions/setup-ripgrep
+
+      - name: Check main push ratchets and protocol additions
+        if: ${{ !cancelled() && steps.guard_setup.outcome == 'success' && steps.guard_ripgrep.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true' }}
         env:
           BASE_SHA: *diff_base
           PROTOCOL_SINCE_BASE_SHA: *diff_base
@@ -3816,9 +3846,19 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `groups_gzip_base64=${encodeNodeTestGroups(groups)}\n`);
           JS
 
+      - name: Download adaptive CI priors
+        if: ${{ github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target == 'false' && matrix.adaptive_observations == true && (github.event_name == 'schedule' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && endsWith(github.run_id, '0'))) }}
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ci-adaptive-priors-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts
+
       - name: Run Node test shard
         env:
+          CHECKOUT_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
           NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_CI_TEST_OBSERVATIONS_DIR: ${{ github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target == 'false' && (github.event_name == 'schedule' || (github.event_name == 'pull_request' && endsWith(github.run_id, '0'))) && format('{0}/ci-test-observations', runner.temp) || '' }}
           OPENCLAW_E2E_USE_PREBUILT_DIST: ${{ steps.node-test-runtime.outcome == 'success' && matrix.pretest_build_mode == 'private-qa' && '1' || '' }}
           OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ matrix.test_runtime_policy || 'node' }}
           FROZEN_TARGET: *frozen_target
@@ -3843,6 +3883,18 @@ jobs:
             [[ -f "$runner" ]]
           fi
           time -p node --import tsx "$runner"
+
+      - name: Upload adaptive CI observations
+        if: ${{ always() && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target == 'false' && (github.event_name == 'schedule' || (github.event_name == 'pull_request' && endsWith(github.run_id, '0'))) }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-test-observations-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/ci-test-observations/*/observations.json
+            ${{ runner.temp }}/ci-test-observations/*/launch.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - &runner_memory_peak_step
         name: Record runner memory peak
@@ -3971,38 +4023,6 @@ jobs:
         with: &sdk_main_restore_inputs
           mode: restore-main
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
-
-      - name: Mount extension boundary sticky disk
-        if: &lint_boundary_sticky_disk_gate matrix.task == 'lint' && steps.extension-boundary-inputs.outputs.enabled == 'true' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
-        with:
-          # One stable disk; in-job markers validate snapshots without exhausting disk quota.
-          key: ${{ github.repository }}-ext-boundary-v2
-          path: /var/tmp/openclaw-ext-boundary
-          commit: "false"
-
-      - name: Restore extension boundary artifacts from sticky disk
-        if: *lint_boundary_sticky_disk_gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          sticky_root=/var/tmp/openclaw-ext-boundary
-          if [ ! -f "$sticky_root/.snapshot-ready" ]; then
-            echo "boundary artifact snapshot not seeded yet; lint prepares cold"
-            exit 0
-          fi
-          # The commit keys transport reuse only. The preparer validates each
-          # owner against its consumed input bytes and complete native inventory.
-          current_fingerprint="${{ steps.extension-boundary-inputs.outputs.fingerprint }}"
-          if [ ! -f "$sticky_root/.source-fingerprint" ] || [ "$current_fingerprint" != "$(cat "$sticky_root/.source-fingerprint")" ]; then
-            echo "boundary source trees changed since snapshot; lint prepares cold"
-            exit 0
-          fi
-          for payload in packages .artifacts; do
-            if [ -d "$sticky_root/$payload" ]; then
-              rsync -a "$sticky_root/$payload/" "$payload/"
-            fi
-          done
 
       - name: Run changed lint
         if: ${{ !cancelled() && steps.check_setup.outcome == 'success' && matrix.task == 'lint' && (needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json) }}
@@ -4569,7 +4589,8 @@ jobs:
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true' && contains(fromJSON('["runtime-topology-architecture","dependencies"]'), matrix.group)) && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && (github.run_attempt > 1 || !contains(fromJSON('["extension-package-boundary","runtime-topology-architecture","plugin-sdk-api-diff","dependencies"]'), matrix.group))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && needs.preflight.outputs.hybrid_hosted_checks == 'true' && contains(fromJSON('["runtime-topology-architecture","dependencies"]'), matrix.group)) && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && (github.run_attempt > 1 || !contains(fromJSON('["extension-package-boundary","runtime-topology-architecture","plugin-sdk-api-diff","dependencies"]'), matrix.group))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
-    timeout-minutes: ${{ matrix.group == 'extension-package-boundary' && 40 || matrix.group == 'plugin-sdk-api-diff' && 30 || 20 }}
+    # Constrained runners render the base and head serially; each can take over 20 minutes.
+    timeout-minutes: ${{ matrix.group == 'extension-package-boundary' && 40 || matrix.group == 'plugin-sdk-api-diff' && 60 || 20 }}
     env:
       CHECKOUT_BASE_SHA: ${{ matrix.group == 'guards' && (github.event_name == 'pull_request' || needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && needs.preflight.outputs.diff_base_revision || '' }}
     strategy:
@@ -4597,38 +4618,6 @@ jobs:
         if: matrix.group == 'extension-package-boundary'
         shell: bash
         run: *extension_boundary_fingerprint_run
-
-      - name: Mount extension boundary sticky disk
-        if: &additional_boundary_sticky_disk_gate matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
-        with:
-          key: ${{ github.repository }}-ext-boundary-v2
-          path: /var/tmp/openclaw-ext-boundary
-          commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
-
-      - name: Restore extension boundary artifacts from sticky disk
-        id: boundary-sticky-restore
-        if: *additional_boundary_sticky_disk_gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          sticky_root=/var/tmp/openclaw-ext-boundary
-          if [ ! -f "$sticky_root/.snapshot-ready" ]; then
-            echo "restored=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          current_fingerprint="${{ steps.extension-boundary-inputs.outputs.fingerprint }}"
-          if [ ! -f "$sticky_root/.source-fingerprint" ] || [ "$current_fingerprint" != "$(cat "$sticky_root/.source-fingerprint")" ]; then
-            echo "boundary source trees changed since snapshot; building cold"
-            echo "restored=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          for payload in packages .artifacts; do
-            if [ -d "$sticky_root/$payload" ]; then
-              rsync -a "$sticky_root/$payload/" "$payload/"
-            fi
-          done
-          echo "restored=true" >> "$GITHUB_OUTPUT"
 
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
@@ -4704,19 +4693,6 @@ jobs:
           name: plugin-sdk-api-diff-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/plugin-sdk-api-diff.json
           retention-days: 14
-
-      - name: Seed extension boundary sticky disk
-        if: success() && steps.extension-boundary-inputs.outputs.enabled == 'true' && steps.boundary-sticky-restore.outputs.restored == 'false' && matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.event_name != 'workflow_dispatch' && github.event_name != 'pull_request' && github.repository == 'openclaw/openclaw'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sticky_root=/var/tmp/openclaw-ext-boundary
-          # Clear readiness; partial seeds are invalid.
-          rm -rf "$sticky_root/.snapshot-ready" "$sticky_root/.source-trees" "$sticky_root/.source-fingerprint" "$sticky_root/dist" "$sticky_root/packages" "$sticky_root/extensions" "$sticky_root/.artifacts"
-          rsync -aR packages/plugin-sdk/dist "$sticky_root/"
-          rsync -aR --exclude='*.lock*' .artifacts/extension-package-boundary "$sticky_root/"
-          echo "${{ steps.extension-boundary-inputs.outputs.fingerprint }}" > "$sticky_root/.source-fingerprint"
-          touch "$sticky_root/.snapshot-ready"
 
   check-extension-package-boundary:
     permissions:
@@ -5961,6 +5937,7 @@ jobs:
             -only-testing:OpenClawTests/OpenClawTypographyTests
             -only-testing:OpenClawTests/GatewayConnectionSecurityTests
             -only-testing:OpenClawTests/GatewaySettingsStoreTests
+            -only-testing:OpenClawTests/QRScannerResultHandoffTests
           )
           if [[ "$IOS_CI_PHASE" == "tests" ]]; then
             test_args+=(
@@ -6163,9 +6140,21 @@ jobs:
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: *cache_mode
+          cache-mode: "off"
           install-bun: "false"
+          install-deps: "false"
           node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}
+
+      - name: Install iOS screenshot asset dependencies
+        env:
+          CI: "true"
+        run: |
+          pnpm install --frozen-lockfile --prefer-offline --optional \
+            --filter '@openclaw/mermaid-renderer...' \
+            --config.ignore-scripts=false \
+            --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true \
+            --config.side-effects-cache=true
 
       - name: Install iOS screenshot tooling
         run: |
@@ -6222,7 +6211,11 @@ jobs:
             run_ios_fastlane --version 2>&1 | awk 'match($0, /^fastlane [0-9]+\.[0-9]+\.[0-9]+$/) { print substr($0, RSTART + 9, RLENGTH - 9); exit }'
           )"
           xcode_version="$(xcodebuild -version | paste -sd ' ' -)"
-          test "$xcode_version" = "$IOS_SCREENSHOT_XCODE_VERSION"
+          if [[ "$xcode_version" != "$IOS_SCREENSHOT_XCODE_VERSION" ]]; then
+            printf '::error title=iOS screenshot Xcode mismatch::Expected %s, found %s\n' \
+              "$IOS_SCREENSHOT_XCODE_VERSION" "$xcode_version" >&2
+            exit 1
+          fi
           collect_args=(
             collect
             --screenshots apps/ios/fastlane/screenshots/en-US
@@ -6407,25 +6400,6 @@ jobs:
         with:
           cache-mode: ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
           install-native-deps: ${{ needs.preflight.outputs.use_compatible_android_ci != 'true' && 'true' || 'false' }}
-
-      - name: Mount Gradle sticky disk
-        if: &android_gradle_sticky_disk_gate vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
-        with:
-          # One disk per matrix task keeps thin dependency sets off heavier lanes. Gradle owns invalidation.
-          key: ${{ github.repository }}-gradle-v2-${{ matrix.task }}
-          path: /var/tmp/openclaw-gradle
-          # Only successful protected pushes publish. Explicit commit:true refreshes same-size changes.
-          commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
-
-      - name: Point Gradle at the sticky disk
-        if: *android_gradle_sticky_disk_gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          sticky_root=/var/tmp/openclaw-gradle
-          mkdir -p "$sticky_root/gradle-user-home"
-          echo "GRADLE_USER_HOME=$sticky_root/gradle-user-home" >> "$GITHUB_ENV"
 
       - name: Restore Robolectric Maven cache
         id: robolectric-cache
@@ -6706,13 +6680,15 @@ jobs:
           printf '%s\n' "$acceleration"
           grep -Eiq '\bKVM\b.*\b(available|usable)\b' <<<"$acceleration"
           printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
-          emulator -avd openclaw-access -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
+          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
           emulator_pid=$!
           trust_evidence="$RUNNER_TEMP/android-native-tls-trust"
           mkdir -p "$trust_evidence"
           cleanup() {
             status=$?
             trap - EXIT
+            cp "$RUNNER_TEMP/access-emulator.log" "$trust_evidence/access-emulator.log" || status=1
+            tail -n 100 "$trust_evidence/access-emulator.log" || status=1
             # Preserve actual app/test output metadata and hashes even on native failure.
             if [[ -d apps/android/app/build/outputs/apk ]]; then
               find apps/android/app/build/outputs/apk -type f -name '*.apk' -print0 | sort -z | xargs -0 -r sha256sum > "$trust_evidence/APK.sha256" || status=1
@@ -6723,14 +6699,16 @@ jobs:
                 cp --parents "$metadata" "$trust_evidence" || status=1
               done < <(find apps/android/app/build/outputs/apk -type f -name output-metadata.json -print0)
             fi
-            adb -s emulator-5554 logcat -d -v threadtime > "$trust_evidence/logcat.txt" || status=1
-            if ! bash scripts/android-native-tls-trust.sh cleanup "$trust_evidence"; then
+            /usr/bin/timeout --signal=TERM --kill-after=2s 10s adb -s emulator-5554 logcat -d -v threadtime > "$trust_evidence/logcat.txt" || status=1
+            if ! /usr/bin/timeout --signal=TERM --kill-after=2s 60s bash scripts/android-native-tls-trust.sh cleanup "$trust_evidence"; then
               echo 'FAILED: trust cleanup; emulator is contaminated and must not be reused.' | tee "$trust_evidence/CLEANUP-FAILED.txt"
               status=1
             fi
-            adb -s emulator-5554 emu kill >"$trust_evidence/emulator-disposal.txt" 2>&1 || status=1
+            /usr/bin/timeout --signal=TERM --kill-after=2s 10s adb -s emulator-5554 emu kill >"$trust_evidence/emulator-disposal.txt" 2>&1 || status=1
+            # The owned timeout forwards TERM, then kills its emulator group after 5s.
+            kill -TERM "$emulator_pid" 2>/dev/null || true
             wait "$emulator_pid" || true
-            if avdmanager delete avd --name openclaw-access >>"$trust_evidence/emulator-disposal.txt" 2>&1; then
+            if /usr/bin/timeout --signal=TERM --kill-after=2s 15s avdmanager delete avd --name openclaw-access >>"$trust_evidence/emulator-disposal.txt" 2>&1; then
               echo 'Owned emulator process exited and AVD deleted; no snapshot or reuse.' >> "$trust_evidence/emulator-disposal.txt"
             else
               echo 'FAILED: owned AVD deletion; do not reuse runner.' >> "$trust_evidence/emulator-disposal.txt"
@@ -6985,7 +6963,7 @@ jobs:
       - docker-seed-e2e
       - published-driver-update
       - postgres-conformance
-    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft }}
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || github.event.pull_request.head.repo.full_name != github.repository || needs.preflight.outputs.runner_profile == 'github') && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
@@ -7135,7 +7113,7 @@ jobs:
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
             published-driver-update=${{ needs.published-driver-update.result }}|${{ needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
             postgres-conformance=${{ needs.postgres-conformance.result }}|${{ needs.preflight.outputs.run_postgres_conformance }}
-            pr-failure-report=${{ (github.run_attempt != 1 || needs.preflight.outputs.run_checks_node_core_nondist != 'true') && 'skipped' || needs.pr-failure-report.result }}|${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' }}
+            pr-failure-report=${{ (github.run_attempt != 1 || needs.preflight.outputs.run_checks_node_core_nondist != 'true') && 'skipped' || needs.pr-failure-report.result }}|${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
         run: |
           set -euo pipefail
           echo "release fast lane: ${RELEASE_FAST_LANE:-false}"

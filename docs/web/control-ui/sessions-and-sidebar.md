@@ -140,7 +140,7 @@ The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
 without a saved choice starts with **My sessions**, except guests: a role that can
 only view other people's sessions and has no general read access (the role
-[Visitor Access](/gateway/team-server#invite-guests) requires) starts with **Involving me**.
+[Visitor Access](/start/multiplayer#invite-guests) requires) starts with **Involving me**.
 A saved choice always wins. Before a profile is identified,
 or when the connection has no durable profile, the list shows **All owners**.
 Identifying the profile restores its saved choice or the default for that role.
@@ -340,44 +340,44 @@ reordering and steering retain their normal behavior.
 
 ## Systems workspace
 
-Open **Pages → Systems**, or visit `/systems`, to inspect the Gateway, worker
-environments, and paired devices available to your connection. Use the pin button
+Open **Pages → Systems**, or visit `/systems`, to inspect this computer, cloud
+devices, and paired devices available to your connection. Use the pin button
 beside Systems in Pages, or drag it into the rail, to keep a personal shortcut.
 
 While Systems is open, select **Sessions** in the rail to show its contextual
-machine list in place of conversations. Pages and Users remain separate views.
+device list in place of conversations. Pages and Users remain separate views.
 The middle list scrolls independently of the rail; the sidebar header and the
 rail’s bottom controls stay fixed. Returning to conversations restores their
-sidebar scroll position. Navigation changes this context; background machine or
+sidebar scroll position. Navigation changes this context; background device or
 session activity does not switch your workspace.
 
-Use **Filter & sort machines** beside the search field to sort each group
+Use **Filter & sort devices** beside the search field to sort each group
 alphabetically, online first (the default), or offline first. Choose **All**,
 **Online**, or **Offline** to filter by reported status; search narrows that
 selection further. Starting, stopping, and error states remain visible under
-**All**. Filtering does not change the machine open in the workspace. These
+**All**. Filtering does not change the device open in the workspace. These
 choices stay in place when you leave Systems and return on the same connection.
 
-The machine list excludes cloud workers whose teardown is complete, including
+The device list excludes cloud workers whose teardown is complete, including
 retained records from archived sessions and failed starts with no allocated
-machine. Workers awaiting cleanup remain visible. Archiving stops running cloud
+device. Workers awaiting cleanup remain visible. Archiving stops running cloud
 workers through the normal workspace-reconciliation flow; failed placements keep
 their existing cleanup retries and recovery history.
 
 Select a desktop-capable system to open the existing Desktop viewer in the main
 workspace. It uses the same connection, control, sizing, and fullscreen behavior
 as the Desktop panel. Headless and offline entries remain inspectable instead
-of opening an empty desktop. Pairing, desktop enablement, and operator permissions
+of opening an empty desktop. Pairing, desktop enablement, and access permissions
 still apply; opening Systems does not grant additional access.
 
 System details use reported facts. A connected device is not necessarily the
-machine running a session, and unavailable measurements are not shown as zero.
+device running a session, and unavailable measurements are not shown as zero.
 The telemetry and backup overview reserves its space while those readings load,
 so the desktop and Backups stay in place. It summarizes the three volumes with
-the highest used percentage and reserves unused rows for machines with fewer
+the highest used percentage and reserves unused rows for devices with fewer
 volumes. **+N more volumes in Details** opens every volume and its history.
 **Backup details** opens the complete backup outcomes, schedules, and storage
-locations, even when no machine is selected. The overview does not scroll;
+locations, even when no device is selected. The overview does not scroll;
 turning off statistics keeps a compact backup area.
 See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for worker desktop
 enablement and sizing.
@@ -643,6 +643,8 @@ The root menu keeps everyday actions together: **Pin/Unpin**, **Rename**, **Mark
 - In the sidebar session menu, **Snooze** offers **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), and **Next week** (next Monday at 09:00 local). On Sundays, Next week is omitted because it matches Tomorrow. Each preset shows its wake time in your locale. Active sessions eligible for pinning can be snoozed, except protected main and sentinel sessions; archived and nested child sessions cannot. A child moved to the top level can be snoozed. A snoozed session offers **Wake session** instead.
 - **Icon & color** opens one picker with color swatches, an icon grid, and **Reset to default**. It stays open while you change both; the sidebar reflects your changes.
 - **Move to group** includes **New group** and **Remove from group**. **Assign to** stays on the root menu when more than one eligible owner is available ([session ownership](/concepts/multi-user#assigning-an-owner)).
+  On phones, **Search groups** matches canonically equivalent accented names
+  without changing the stored group name; an unaccented query remains distinct.
 - **Fork conversation** creates a separate conversation; while a run is active, it forks from the last completed message. Forks of local folder and project sessions keep that workspace, so existing file references continue to open. **Fork from here** keeps the same local workspace as well.
 - **Copy link** copies the session link in one step. **Advanced → Copy details** offers the preview link, conversation text as Markdown, and the session ID, without duplicating the common session link. The link requires normal Gateway authentication and session access; copying it does not grant access. Markdown loads the available conversation history, not just the messages currently visible. Both copied Markdown and `/export` downloads retain the conversation's sender labels, so messages from different participants remain distinguishable. Records without exportable text, such as tool calls without text output, are omitted.
 - In the Control UI, `/export` and `/export-session` load the available conversation history before downloading Markdown through your browser, even when older messages have not been scrolled into view. If history cannot be read completely or the conversation changes while paging, the export fails instead of downloading a partial file; retry the command. These commands take no file path. An argument leaves the draft intact and shows how to retry. The server-side HTML export available through other clients keeps its separate workspace-path behavior.
@@ -877,13 +879,13 @@ For device and cloud sessions, the submitted prompt also starts background namin
 
 For a remote target, the Control UI creates the repository or managed-worktree session with an empty initial message and no `execNode`, dispatches it by exact `deviceId`, `autoDevice: true`, or `profileId` (plus an optional cloud machine class), waits for active placement, and then sends the first message and attachments with the same request key used by recovery to prevent duplicate sends. Explicit and automatic device dispatch require `operator.write`; cloud profile dispatch requires `operator.admin`. The composer footer chooses the new session's model and reasoning level.
 
-Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Fast-mode controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the open picker and accessible label. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast mode is active. In chat, Fast mode stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
+Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Speed controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the open picker and accessible label. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. The Effort control and its menu show the effective level without a default badge. While the chat inherits that level, the control's accessible name reads, for example, "Effort: Default (High)". Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast or Ultrafast speed is active. In chat, **Speed** stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
 
 The model picker initially opens with the selected model’s provider section expanded and other provider sections collapsed. Closing and reopening the same picker preserves your provider expansion choices and clears the search. Reloading the page initializes provider sections from the selected model again. Search the model picker by model name, model ID, provider, or provider/model reference. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
 
 When you switch sessions, the composer keeps the session's known model name visible while refreshing the model options available for that session. If the model is not yet known, the control shows a loading placeholder. Locked chats also show the selected model, or **Session model** when it is not known. The lock prevents model selection changes; it does not indicate that a native runtime owns the model.
 
-If you select **Draft** and an administrator disables new Draft creation while the form is open, your selection, message, and attachments stay in place. The form explains that Draft creation is disabled. Turn off **Draft** only if you want to create a Shared session, or ask an administrator to enable Draft creation. Existing Draft conversations remain usable.
+When Draft sessions are available, the **Draft** toggle sits beside **Incognito** in the new-session page's top-right control rail (in the header on phones); it keeps the new session to yourself until you publish it. The attachment (**+**) menu offers the same choice. If you select **Draft** and an administrator disables new Draft creation while the form is open, your selection, message, and attachments stay in place. The form explains that Draft creation is disabled. Turn off **Draft** only if you want to create a Shared session, or ask an administrator to enable Draft creation. Existing Draft conversations remain usable.
 
 Once the session is created, chat opens immediately. Remote startup uses the same transcript progress indicator and elapsed timer as GitHub workspace preparation, showing provisioning, workspace preparation, startup, and first-message delivery as they happen. The composer remains editable, and ordinary follow-up messages can enter the local queue while the first message is unresolved. Their delivery waits until the initial message is resolved. Normal startup is not an error. Startup failures remain visible in the session, with **Retry** when recovery is available.
 
@@ -902,7 +904,7 @@ browser draft and restored after a reload. **Default** remains the agent's curre
 configured default, rather than a saved permission override. Successful creation
 clears the draft's choice; it does not become a default for unrelated new tasks.
 Restoring a choice does not grant access: creation still checks the current user's
-permissions, including the admin requirement for an explicit **Full Access** choice.
+permissions, including the admin requirement for an explicit **Full access** choice.
 
 <a id="register-an-existing-repository" />
 
@@ -943,6 +945,10 @@ Listings retain a session snapshot during discovery and recheck the contributing
 sessions before replying. Unrelated session creation and activity do not invalidate
 an in-flight listing; changed access to a contributing session still requires a retry.
 
+Host-session discovery uses the session's explicit task working directory.
+Repeated sessions in one checkout retain only its newest representative before
+the candidate limit, so they do not crowd out other visible checkouts.
+
 **Projects from GitHub.** Search the same picker or paste a GitHub HTTPS or `git@github.com` repository URL. For a remote destination, creation records that source and the runner fetches it during dispatch; no Gateway project clone is required. For Gateway execution, the picker clones into the Gateway-managed projects area. Recent repository sources retain their URL without inventing a local path. Public repository search and cloning work anonymously. Private remote checkout uses the effective shared `tools.github` identity; the discovery credential below only grants picker access. For affiliated and private repositories, prefer the explicit `gateway.controlUi.github.token` SecretRef so this service access has a clear runtime owner. Set `gateway.controlUi.github.host` to the selected Enterprise host; an omitted credential host means `github.com`. The shipped `GH_TOKEN` then `GITHUB_TOKEN` fallback applies only to `github.com`. A trusted host that sets `gateway.projects.nativeGitHubSearch: true` instead prepares the current native system GitHub identity for each search; this is intended for a protected `gh` wrapper or host login and retains the native identity's 60-second cache and rotation fences. Ambient `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` requires `GH_HOST` to match the selected Enterprise host; host-specific native login remains supported. When a Control UI SecretRef is explicit, its exact environment or store name is excluded from agent execution without clearing unrelated native GitHub CLI variables. Search caches GitHub response pages for 60 seconds, sharing affiliated repositories across queries for the same credential. Expired pages return with `stale: true` while one bounded background refresh per page runs, using ETags when GitHub supplies them. Every response rechecks the requesting connection and current GitHub identity; revocation or cancellation stops delivery. Each outbound request also rechecks the initiating requester’s authority. Refreshes belong to the Gateway and stop with its lifetime. Search requires `operator.read`, cloning requires `operator.write`, and deleting a Gateway-managed cloned checkout requires `operator.admin`. Clone deletion refuses while a live session or managed worktree still references the checkout. SecretRef ownership is not an OS-user security boundary; use a sandbox, dedicated host, or dedicated OS user when same-account processes are not trusted.
 
 For a GitHub Enterprise deployment, configure `gateway.github.host` and `gateway.github.apiBaseUrl`. GitHub Enterprise Server uses `https://HOSTNAME/api/v3`; its GraphQL requests use `/api/graphql`. To preselect a repository on New Session, set `gateway.projects.defaultRepository.url` and optionally its `ref`. OpenClaw derives the repository identity from the URL and selects a worker profile through the existing `cloudWorkers.projectProfiles` mapping. The profile can use any configured provider, including Azure through the Crabbox plugin. The default is returned only to clients authorized for `sessions.create`, and applies only while the user has no saved project choice; selecting a folder or another project overrides it.
@@ -967,7 +973,7 @@ For a GitHub Enterprise deployment, configure `gateway.github.host` and `gateway
 }
 ```
 
-Use the Effort menu to choose Fast Mode before creating a session. New Session persists that choice before the first local or remote turn starts.
+Use the Effort menu to choose a **Speed** before creating a session. New Session persists that choice before the first local or remote turn starts.
 
 Refreshing sessions after an initial `/think` command finishes updates chat's Effort setting.
 

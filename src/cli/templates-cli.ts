@@ -71,7 +71,7 @@ export function registerTemplatesCli(program: Command) {
     .description("Validate a Template package or local development manifest")
     .argument(
       "<source>",
-      "Path to a Template package directory, .tgz/.tar.gz archive, or grouped manifest",
+      "Path to a canonical Template package directory, .tgz/.tar.gz archive, or CLAW.md",
     )
     .option("--json", "Print JSON", false)
     .action(async (source: string, opts: TemplatesInspectOptions) => {
@@ -84,7 +84,7 @@ export function registerTemplatesCli(program: Command) {
     .description("Add a new agent and its requirements from a Template")
     .argument(
       "<source>",
-      "Path to a Template package directory, .tgz/.tar.gz archive, or grouped manifest",
+      "Path to a canonical Template package directory, .tgz/.tar.gz archive, or CLAW.md",
     )
     .option("--dry-run", "Preview all actions without mutating state", false)
     .option("--accept-capabilities", "Accept required plugin capabilities", false)

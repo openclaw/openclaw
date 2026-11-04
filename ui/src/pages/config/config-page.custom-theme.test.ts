@@ -84,7 +84,7 @@ function mountCustomThemeImporter() {
   flush();
   const input = container.querySelector<HTMLInputElement>("[data-custom-theme-import-input]")!;
   const submit = container.querySelector<HTMLButtonElement>(
-    ".settings-theme-import__actions .primary",
+    ".settings-theme-import__field .primary",
   )!;
   const start = async (url: string) => {
     input.value = url;

@@ -69,7 +69,7 @@ function fallbackCase(route: string, href: string, reader = false, input = "poin
   return {
     route,
     routeId: route === "chat" ? "chat" : "about",
-    selector: `${route === "chat" ? ".chat-group.assistant a" : "openclaw-about-page .about-hero__link"}[href="${href}"]`,
+    selector: `${route === "chat" ? ".chat-group.assistant a" : "openclaw-about-page nav a"}[href="${href}"]`,
     reader,
     input,
   };

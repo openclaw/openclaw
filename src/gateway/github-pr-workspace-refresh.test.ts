@@ -145,6 +145,45 @@ describe("imported PR source refresh", () => {
     f.pr.head.sha = f.branch.commit.sha = published.headCommit;
     return { f, published, upstreamGit };
   }
+  it.each([false, true])(
+    "refreshes the live target when PR metadata stays stale (own publication=%s)",
+    async (ownPublication) => {
+      const f = ownPublication ? (await ownBotPublishedPr(false)).f : await fixture();
+      await f.invoke();
+      const refresh = () => f.invoke({ action: "refresh_base", pullRequestUrl: undefined });
+      await refresh();
+      const acceptedHead = f.readSession().worktree!.githubPullRequest!.head.commit;
+      const staleBase = f.pr.base.sha;
+      const upstreamGit = (...args: string[]) => f.local!.git("-C", f.upstream, ...args);
+      await upstreamGit("checkout", f.pr.base.ref);
+      await fs.writeFile(path.join(f.upstream, "live-base.txt"), "new live target contents\n");
+      await upstreamGit("add", "live-base.txt");
+      await upstreamGit("commit", "-m", "Advance the unchanged target branch");
+      const liveBase = await upstreamGit("rev-parse", "HEAD");
+      expect(liveBase).not.toBe(staleBase);
+      expect(await refresh()).toMatchObject({ status: "refreshed", baseCommit: liveBase });
+      expect(await fs.readFile(path.join(f.projection, "live-base.txt"), "utf8")).toBe(
+        "new live target contents\n",
+      );
+      expect(f.readSession().worktree!.githubPullRequest).toMatchObject({
+        head: { commit: acceptedHead },
+        base: { branch: f.pr.base.ref, commit: liveBase },
+      });
+      expect(f.pr.base.sha).toBe(staleBase);
+      expect(f.writes).toEqual([]);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(await f.invoke()).toMatchObject({
+          status: "prepared",
+          review: { mode: "local", base: liveBase },
+        });
+        expect(f.readSession().worktree!.githubPullRequest!.base.commit).toBe(liveBase);
+        expect(await f.guestGit("rev-parse", "refs/openclaw/review-base")).toBe(liveBase);
+        expect(
+          await f.guestGit("diff", "--cached", "--name-only", "refs/openclaw/review-base"),
+        ).not.toContain("live-base.txt");
+      }
+    },
+  );
   it("still refuses a bot-authored PR this session did not publish", async () => {
     const f = await fixture({ priorPublication: true });
     f.pr.user = { id: 42, login: "roboclaw-bot" };
@@ -362,6 +401,12 @@ describe("imported PR source refresh", () => {
         baseCommit,
         conflictPaths: ["artifact.txt"],
       });
+      await upstreamGit("checkout", f.pr.base.ref);
+      await fs.writeFile(path.join(f.upstream, "later-target.txt"), "advanced during conflict\n");
+      await upstreamGit("add", "later-target.txt");
+      await upstreamGit("commit", "-m", "Advance target while resolution is pending");
+      const laterBase = await upstreamGit("rev-parse", "HEAD");
+      expect(await refresh()).toMatchObject({ status: "conflicts", baseCommit });
       await expect(f.invoke()).rejects.toThrow("Finish refresh_base");
       await expect(
         refresh({ conflictsResolved: true, baseCommit: "a".repeat(40) }),
@@ -395,6 +440,10 @@ describe("imported PR source refresh", () => {
       expect(await f.invoke()).toMatchObject({ review: { mode: "local", base: baseCommit } });
       expect(await f.invoke()).toMatchObject({ review: { mode: "local", base: baseCommit } });
       expect(await f.guestGit("rev-parse", "refs/openclaw/review-base")).toBe(baseCommit);
+      expect(await refresh()).toMatchObject({ status: "refreshed", baseCommit: laterBase });
+      expect(await fs.readFile(path.join(f.projection, "later-target.txt"), "utf8")).toBe(
+        "advanced during conflict\n",
+      );
     },
   );
   it.each(["requester revocation", "private repository"])(

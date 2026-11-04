@@ -244,11 +244,20 @@ export function CheckoutPickerContent(props: {
   onConfirm: () => void;
 }) {
   const worktreeAvailable = () => props.params.place.worktreeAvailable();
+  const repositoryNotice = () =>
+    props.params.place.repositoryState.refreshing
+      ? t("common.refreshing")
+      : repositoryIssueText(props.params.place.repository);
   const branches = () =>
     props.params.place.repository.kind === "git" ? props.params.place.repository : null;
   return (
     <div class="new-session-page__picker-root">
       <div class="new-session-page__menu-title">{t("newSession.checkout")}</div>
+      {repositoryNotice() ? (
+        <div class="new-session-page__menu-note" role="status">
+          {repositoryNotice()}
+        </div>
+      ) : undefined}
       {props.params.place.remoteRepository ? undefined : (
         <RepositoryRead read={props.params.place.repositoryState.checkoutRead}>
           {() => (

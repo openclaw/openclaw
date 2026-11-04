@@ -567,10 +567,37 @@
   height: 28px;
 }
 
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .sw-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    /* Holds the mode row's space until the first read returns it. */
+    min-height: 84px;
+    align-content: start;
+  }
+
+  .sw-toolbar__end {
+    display: contents;
+  }
+
+  .sw-learning {
+    grid-area: 2 / 1 / auto / -1;
+    justify-content: space-between;
+  }
+
+  .sw-tabs {
+    border-bottom: 0;
+  }
+}
+
 @media (max-width: 900px) {
   .sw-layout,
   .sw-files {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sw-layout > .sw-detail {
+    scroll-margin-top: var(--space-3);
   }
 
   .sw-detail__body {

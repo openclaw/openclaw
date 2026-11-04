@@ -1,11 +1,48 @@
 import { expect, it } from "vitest";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../../config/resolution-facts.js";
 import { captureRuntimeConfigWithSource } from "../../config/runtime-config-capture-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { captureScheduledSessionEventConfigPolicy } from "./session-event-policy.js";
+
+it.each([
+  ["openclaw", false, true],
+  ["openclaw", true, false],
+  ["codex", false, false],
+  [undefined, undefined, false],
+] as const)(
+  "delegates MCP authority only to its owning runtime: %s/%s",
+  (agentRuntime, cliExecution, retained) => {
+    const config = (command: string): OpenClawConfig => ({
+      mcp: { servers: { sentry: { command } } },
+    });
+    const before = config("before");
+    const after = config("after");
+    setConfigResolutionFacts(before, createConfigResolutionFacts([]));
+    setConfigResolutionFacts(
+      after,
+      createConfigResolutionFacts(
+        [],
+        new Map([["mcp.servers.sentry.env.TOKEN", "SYNTHETIC_MCP_TOKEN"]]),
+      ),
+    );
+    const check = captureScheduledSessionEventConfigPolicy(
+      captureRuntimeConfigWithSource(before, config("${BEFORE_COMMAND}")),
+      "main",
+      makeCronJob({}),
+      { provider: "openai", model: "model", agentRuntime, cliExecution },
+    );
+    expect(check(captureRuntimeConfigWithSource(after, config("${AFTER_COMMAND}")), [])).toBe(
+      retained,
+    );
+  },
+);
 
 it.each([
   ["profile binding", false],
