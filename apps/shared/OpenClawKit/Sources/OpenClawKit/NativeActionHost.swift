@@ -149,6 +149,7 @@ public protocol OpenClawNativeActionHost: OpenClawNativeActionCatalog, OpenClawN
     func prepareSend(
         to session: OpenClawNativeSessionRef,
         message: String) async throws -> (send: OpenClawNativePreparedSend, presentationContinuationID: UUID)
+    func sessionStatus(_ session: OpenClawNativeSessionRef) async throws -> String
     func inspect(_ run: OpenClawNativeRunRef) async throws
         -> (inspection: OpenClawNativeRunInspection, presentationContinuationID: UUID)
     func openRun(_ run: OpenClawNativeRunRef, continuing id: UUID) async throws -> OpenClawNativeRunOpenOutcome

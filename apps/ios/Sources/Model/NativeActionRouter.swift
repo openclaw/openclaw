@@ -340,6 +340,11 @@ final class NativeActionRouter: OpenClawNativeActionHost {
         return (send, continuationID)
     }
 
+    func sessionStatus(_ session: OpenClawNativeSessionRef) async throws -> String {
+        let captured = try await self.captureCurrentGateway()
+        return try await captured.gateway.sessionStatus(session)
+    }
+
     func inspect(_ run: OpenClawNativeRunRef) async throws
         -> (inspection: OpenClawNativeRunInspection, presentationContinuationID: UUID)
     {

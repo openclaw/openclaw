@@ -12,6 +12,11 @@ extension OpenClawApp: AppIntentsPackage {
 struct OpenClawShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
+            intent: CheckSessionStatusIntent(),
+            phrases: ["Check status in \(.applicationName)"],
+            shortTitle: "Check Status",
+            systemImageName: "clock.badge.checkmark")
+        AppShortcut(
             intent: AskOpenClawIntent(),
             phrases: ["Ask \(.applicationName)"],
             shortTitle: "Ask OpenClaw",
@@ -125,6 +130,12 @@ final class NativeActionRouter: OpenClawNativeActionHost {
                     controller.hasPresentedNative(.session(session))
             })
         return (prepared, continuation.id)
+    }
+
+    func sessionStatus(_ session: OpenClawNativeSessionRef) async throws -> String {
+        try self.requireAvailable()
+        let gateway = try await self.windows.captureNativeGateway(gatewayID: session.owner.gatewayID)
+        return try await gateway.actions.sessionStatus(session)
     }
 
     func inspect(_ run: OpenClawNativeRunRef) async throws
