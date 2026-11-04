@@ -214,6 +214,7 @@ describe("Gateway config selection before migration admission", () => {
     { name: "future service-mode backup", code: 78 },
     { name: "future backup after config selection changes", code: 1 },
     { name: "discarded clobbered environment", code: 0 },
+    { name: "valid local environment", code: 0 },
   ])(
     "prepares recovery safely for $name",
     async ({ name, code }) => {
@@ -241,9 +242,11 @@ describe("Gateway config selection before migration admission", () => {
         backup = { ...healthy, env: { vars: { OPENCLAW_CONFIG_PATH: selectedPath } } };
         fs.writeFileSync(selectedPath, JSON.stringify(clobbered));
         fs.writeFileSync(`${selectedPath}.bak`, JSON.stringify(future));
-      } else if (name === "discarded clobbered environment") {
+      } else if (name === "discarded clobbered environment" || name === "valid local environment") {
+        // Missing gateway mode makes this config suspicious against the healthy backup.
+        // A small valid local config is not clobbered and must retain its own env.
         current = {
-          gateway: { mode: "local" },
+          ...(name === "valid local environment" ? { gateway: { mode: "local" } } : {}),
           env: { vars: { OPENCLAW_GATEWAY_TOKEN: "discarded-test-token" } },
         };
         backup = healthy;
@@ -296,7 +299,7 @@ describe("Gateway config selection before migration admission", () => {
       expect(line, output).toBeDefined();
       expect(JSON.parse(line!.slice("__RESULT__".length)), output).toEqual({
         code,
-        tokenPresent: false,
+        tokenPresent: name === "valid local environment",
         proxyRetained: true,
       });
       expect(stateManifest(stateDir)).toEqual(before);

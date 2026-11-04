@@ -654,7 +654,8 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         const stats = (await readFallbackUsageStats(agentDir))["openai:p1"];
         expect(stats?.cooldownReason).toBe("rate_limit");
         expect(stats?.cooldownModel).toBe("mock-1");
-        expect((stats?.cooldownUntil ?? 0) - (stats?.lastFailureAt ?? 0)).toBe(30_000);
+        expect(stats?.lastFailureAt).toBeUndefined();
+        expect((stats?.cooldownUntil ?? 0) - (stats?.lastRateLimitAt ?? 0)).toBe(90_000);
 
         runEmbeddedAttemptMock.mockClear();
         const next = await run("during-cooldown");

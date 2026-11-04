@@ -2,6 +2,25 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { resolveVitestNodeArgs } from "../scripts/lib/vitest-process-env.mts";
 
+/** Serve fixed HTTP bytes through the real guarded transport in the CLI process. */
+export function clawHubResponsePreload(body: string, status: number | "disconnect"): string {
+  return `
+    import http from "node:http";
+    const server = http.createServer((_request, response) => {
+      ${
+        status === "disconnect"
+          ? "_request.socket.destroy();"
+          : `response.writeHead(${status}, { "content-type": "application/json" });
+      response.end(${JSON.stringify(body)});`
+      }
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    process.env.OPENCLAW_CLAWHUB_URL = "http://127.0.0.1:" + server.address().port;
+    process.env.NO_PROXY = process.env.no_proxy = "127.0.0.1";
+    server.unref();
+  `;
+}
+
 export function runBuiltCli(
   tempHome: string,
   args: string[],

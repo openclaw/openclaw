@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { assert, describe, expect, it } from "vitest";
-import { runBuiltCli } from "./cli-json-stdout.test-support.js";
+import { clawHubResponsePreload, runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 describe("cli json stdout contract", () => {
   it.each([
@@ -98,7 +98,7 @@ describe("cli json stdout contract", () => {
         }
         const preload = `data:text/javascript,${encodeURIComponent(
           [
-            'globalThis.fetch = async () => new Response("offline fixture", { status: 400 });',
+            clawHubResponsePreload("offline fixture", 400),
             ...("explicitGateway" in testCase
               ? [
                   'import net from "node:net";',
@@ -163,7 +163,7 @@ describe("cli json stdout contract", () => {
         }
         assert(syntaxError instanceof SyntaxError);
         const preload = `data:text/javascript,${encodeURIComponent(
-          'globalThis.fetch = async () => new Response("not-json", { status: 200 });',
+          clawHubResponsePreload("not-json", 200),
         )}`;
         const result = runBuiltCli(
           tempHome,

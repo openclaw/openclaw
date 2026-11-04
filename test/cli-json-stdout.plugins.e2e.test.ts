@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { runBuiltCli } from "./cli-json-stdout.test-support.js";
+import { clawHubResponsePreload, runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 describe("cli json stdout contract", () => {
   it.each([
@@ -89,16 +89,24 @@ describe("cli json stdout contract", () => {
       message: "Usage: openclaw plugins search <query>",
     },
     {
+      name: "ClawHub rejects the request with an inherited proxy",
+      args: ["plugins", "search", "fixture", "--json"],
+      message: "ClawHub /api/v1/packages/search failed (400): offline fixture",
+      genericStderr: true,
+      proxy: true,
+    },
+    {
       name: "ClawHub transport fails",
       args: ["plugins", "search", "fixture", "--json"],
-      message: "offline fixture",
+      message: "fetch failed",
       genericStderr: true,
+      disconnect: true,
     },
   ])("returns one canonical JSON document when plugins $name", async (testCase) => {
     await withTempHome(
       async (tempHome) => {
         const preload = `data:text/javascript,${encodeURIComponent(
-          'globalThis.fetch = async () => { throw new Error("offline fixture"); };',
+          clawHubResponsePreload("offline fixture", "disconnect" in testCase ? "disconnect" : 400),
         )}`;
         const result = runBuiltCli(
           tempHome,
@@ -109,6 +117,14 @@ describe("cli json stdout contract", () => {
             CLAWHUB_CONFIG_PATH: path.join(tempHome, "missing-clawhub.json"),
             CLAWHUB_TOKEN: "",
             CLAWHUB_AUTH_TOKEN: "",
+            ...("proxy" in testCase
+              ? {
+                  HTTP_PROXY: "http://127.0.0.1:1",
+                  http_proxy: "http://127.0.0.1:1",
+                  NO_PROXY: "",
+                  no_proxy: "",
+                }
+              : {}),
           },
           { execArgv: [`--import=${preload}`] },
         );
