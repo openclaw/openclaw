@@ -1,0 +1,2 @@
+41
+# Installed-publisher readiness regression: wrong plugin, unrelated method, and retired-provider denial.
