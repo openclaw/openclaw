@@ -30,6 +30,7 @@ import {
   encodeNodeTestGroups,
 } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
+import { NODE_WORKER_E2E_TEST_FILES } from "../../scripts/lib/ci-node-worker-e2e-inventory.mts";
 import { createWindowsTestShards } from "../../scripts/lib/ci-windows-test-plan.mts";
 import {
   BOUNDARY_CHECKS,
@@ -5616,6 +5617,51 @@ describe("ci workflow guards", () => {
       );
     }
   });
+
+  it.each(["push", "workflow_dispatch"] as const)(
+    "preserves appended worker capacity in the final Boat %s manifest",
+    (eventName) => {
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        historicalCompatibility: false,
+        eventName,
+        releaseGate: eventName === "workflow_dispatch",
+        runnerBackend: "hybrid",
+        nodeRunnerBackend: "hybrid",
+        changedPlannerSource: `export { createNodeWorkerE2eTestShards } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href)};`,
+        targetFiles: [...NODE_WORKER_E2E_TEST_FILES],
+        scopeEnv: {
+          OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND: "boat",
+          OPENCLAW_CI_QUALIFICATION: String(eventName === "workflow_dispatch"),
+          ...(eventName === "workflow_dispatch" ? { OPENCLAW_CI_SHAPE: "main" } : {}),
+        },
+      });
+      expect(result.status, result.output).toBe(0);
+      const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
+      const workers = rows.filter((row: { check_name: string }) =>
+        row.check_name.startsWith("checks-node-worker-e2e-"),
+      );
+      expect(workers).toHaveLength(2);
+      expect(workers.flatMap((row: { targets: string[] }) => row.targets).toSorted()).toEqual(
+        [...NODE_WORKER_E2E_TEST_FILES].toSorted(),
+      );
+      const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
+      const resources = requiredWorkflowStep(job.steps, "Configure Node test resources");
+      for (const matrix of workers) {
+        expect(matrix).toMatchObject({ runner: "boat", cpu_budget: 2, plan_concurrency: 1 });
+        expect(
+          evaluateWorkflowExpression(resources.env.OPENCLAW_NODE_TEST_CPU_BUDGET, {
+            eventName,
+            repository: "openclaw/openclaw",
+            runAttempt: 2,
+            runnerBackend: "boat",
+            preflightOutputs: { effective_runner_backend: "boat" },
+            matrix,
+          }),
+        ).toBe("");
+      }
+    },
+  );
 
   it("keeps the Boat failure reporter hosted when preflight emits no backend outputs", () => {
     const reporter = readCiWorkflow().jobs["pr-failure-report"];

@@ -1335,6 +1335,10 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
+    const capacity =
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+        ? resolveBoatNodeTestCapacity(shard.runner, shard.checkName)
+        : undefined;
     const row = {
       check_name: shard.checkName,
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
@@ -1358,13 +1362,13 @@ const nodeTestShards = targetNodeTestShards
       pretest_build_mode: shard.pretestBuildMode,
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
-      runner: shard.runner,
+      runner: capacity?.runner ?? shard.runner,
       timeout_minutes:
         !shard.requiresDist && testRuntimeMode === "dual-all"
           ? 2 * (shard.timeoutMinutes ?? 60)
           : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
-      cpu_budget: shard.cpuBudget,
+      cpu_budget: capacity?.cpuBudget ?? shard.cpuBudget,
       predicted_seconds: shard.predictedTestSeconds ?? shard.predictedSeconds,
       targets: shard.targets,
       requires_go: shardRequiresTests(shard, ["test/scripts/docs-i18n.test.ts"], (plan) => {
