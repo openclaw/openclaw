@@ -671,7 +671,7 @@ their agent's avatar as the icon.
 Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
-The accented rail **+** below the workspace mark, labeled **New conversation**, opens the New session composer directly with your last-selected agent.
+The accented rail **+** below the workspace mark, labeled **New session**, opens the New session composer directly with your last-selected agent.
 The selection is remembered in this browser for each Gateway; you can choose a
 different agent inside the composer.
 Each group's **+** opens a composer for that specific agent, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
@@ -824,7 +824,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="side-panel-keyboard-shortcuts" />[Side panel keyboard shortcuts](/web/control-ui/settings#side-panel-keyboard-shortcuts)
 - <a id="this-mac-(macos-app)" />[This device (macOS and iOS apps)](/web/control-ui/settings#this-mac-macos-app)
 - <a id="custom-plugin-ui" />[Custom plugin UI](/web/control-ui/settings#custom-plugin-ui)
-- <a id="import-assistant-memory" />[Import assistant memory](/web/control-ui/settings#import-assistant-memory)
+- <a id="import-assistant-memory" />[Import agent memory](/web/control-ui/settings#import-assistant-memory)
 - <a id="mcp-page" />[MCP page](/web/control-ui/settings#mcp-page)
 - <a id="activity-tab" />[Activity tab](/web/control-ui/settings#activity-tab)
 - <a id="meetings-page" />[Meetings page](/web/control-ui/settings#meetings-page)

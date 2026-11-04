@@ -906,7 +906,10 @@ describe("openSessionWorkspaceFile", () => {
         title: "result.png",
       });
     } else {
-      await expectUnavailable(state, `Failed to load ${file.path}`);
+      await expectUnavailable(
+        state,
+        `Couldn’t load ${file.path}. Check that the file still exists.`,
+      );
       if (kind === "unencoded text") {
         const diff = resolveSessionDiffSidebarContent(state);
         expect(diff?.kind).toBe("session-diff");

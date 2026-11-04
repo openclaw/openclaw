@@ -95,9 +95,19 @@ describeControlUiE2e("plugin install button progress", () => {
 
   it.each([
     ["success", "", "", 0],
-    ["failure", "Download failed", "Dependency installation failed", 4],
-    ["runtime-failure", "Startup failed", "Plugin could not be applied to Gateway", 5],
-    ["finalization-failure", "Refresh failed", "Installation failed", 6],
+    [
+      "failure",
+      "Download failed",
+      "Couldn’t install dependencies. Check the installation details.",
+      4,
+    ],
+    [
+      "runtime-failure",
+      "Startup failed",
+      "Couldn’t apply the plugin. Check the installation details.",
+      5,
+    ],
+    ["finalization-failure", "Refresh failed", "Couldn’t install the plugin", 6],
   ] as const)(
     "keeps truthful progress through the final %s response",
     async (outcome, message, label, completed) => {
@@ -132,7 +142,7 @@ describeControlUiE2e("plugin install button progress", () => {
         const pluginButton = (action: string) =>
           page.getByRole("button", { name: `${action} Calendar Plus`, exact: true });
         const disable = pluginButton("Disable");
-        const applying = card.getByText("Applying plugin to Gateway", { exact: true });
+        const applying = card.getByText("Applying plugin…", { exact: true });
         const expectFocused = async (control: Locator) =>
           expect(await control.evaluate((el) => el === document.activeElement)).toBe(true);
         const expectText = async (control: Locator, text: string) =>
@@ -203,7 +213,7 @@ describeControlUiE2e("plugin install button progress", () => {
         await card.waitFor({ state: "visible" });
         expect(await countActivities("completed")).toBe(4);
         await expectTick();
-        await expectText(card, "Installing plugin dependencies");
+        await expectText(card, "Installing plugin dependencies…");
         const buttonBounds = (await button.boundingBox())!;
         const cardBounds = (await card.boundingBox())!;
         const gapY =

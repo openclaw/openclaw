@@ -189,7 +189,7 @@ describe("MemoryImportPage", () => {
 
     expect(page.textContent).toContain("Reconnect to import memory.");
     expect(page.querySelector(".memory-import")).toBeNull();
-    expect(page.textContent).not.toContain("Memory import requires operator.admin access.");
+    expect(page.textContent).not.toContain("You need admin access to import memory.");
     expect(request).not.toHaveBeenCalled();
 
     context.gateway.snapshot.phase = "connected";
@@ -322,7 +322,7 @@ describe("MemoryImportPage", () => {
 
     flush();
     expect(request).not.toHaveBeenCalled();
-    expect(page.textContent).toContain("Memory import requires operator.admin access.");
+    expect(page.textContent).toContain("You need admin access to import memory.");
   });
 
   it("keeps a failed plan stable until the operator explicitly refreshes", async () => {
@@ -430,7 +430,7 @@ describe("MemoryImportPage", () => {
     await openImportConfirmation(page);
     findButton(page, "import-confirm")?.click();
     await waitForMemoryImport(() =>
-      expect(page.querySelector(".memory-import__confirm [role='alert']")?.textContent).toBe(
+      expect(page.querySelector(".memory-import__confirm [role='alert']")?.textContent).toContain(
         "response lost",
       ),
     );

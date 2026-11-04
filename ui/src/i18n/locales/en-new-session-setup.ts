@@ -244,7 +244,7 @@ const enNewSessionSetup = {
     connectMachineTitle: "Connect a device",
     connectMachineDescription: "Run this command on the device you want to connect.",
     connectMachineGenerating: "Creating a secure connection link…",
-    connectMachineFailed: "Couldn’t create a connection link. Try again.",
+    connectMachineFailed: "Couldn’t create the device connection link. Try again.",
     connectMachineMissingUrl:
       "The Gateway didn’t return a connection link. Update it and try again.",
     connectMachineUnavailable: "Reconnect to create a connection link.",

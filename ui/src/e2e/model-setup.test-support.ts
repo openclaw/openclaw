@@ -29,7 +29,7 @@ export async function openModelSetup(page: Page, baseUrl?: string) {
     await page.locator("[data-models-connect]").click();
   }
   await page.locator("[data-models-login-discover]").click();
-  await page.getByRole("heading", { name: "On this Gateway", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Available models", exact: true }).waitFor();
   expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
   return response;
 }

@@ -466,7 +466,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}meetings`);
       const view = page.locator("openclaw-meetings-page");
-      await view.getByRole("heading", { name: "Your meeting notes, together" }).waitFor();
+      await view.getByRole("heading", { name: "No meetings yet." }).waitFor();
       expect(
         await view.getByRole("link", { name: "Set up meeting transcripts" }).getAttribute("href"),
       ).toBe("https://docs.openclaw.ai/cli/transcripts");
@@ -478,6 +478,6 @@ suite.define(() => {
       expect(await view.getByRole("alert").textContent()).toContain(
         "Meetings temporarily unavailable",
       );
-      await expectAbsent(view.getByRole("heading", { name: "Your meeting notes, together" }));
+      await expectAbsent(view.getByRole("heading", { name: "No meetings yet." }));
     }));
 });
