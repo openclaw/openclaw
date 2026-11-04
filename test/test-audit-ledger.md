@@ -201,15 +201,26 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `0a995f7bbcf7`: qualify setup-failure server custody in
+Pinned main `0a995f7bbcf7`: release setup-failure server custody in
 `test/e2e/qa-lab/media/audio-proxy-and-limit-handling.e2e.test.ts`.
-The unchanged original case acquires its loopback provider and CONNECT proxy
-before filesystem setup enters the explicit cleanup block. Source review finds
-that a setup rejection can bypass both stops; no observed listener retention is
-claimed yet. The one declaration/case, four behavior assertions and all production
-bytes remain unchanged for the official baseline. Runtime qualification, the
-minimal per-acquisition cleanup repair and fresh review remain pending. This
-ledger-only prerequisite enables the native isolated dependency route.
+Each acquired loopback provider/proxy now registers its existing stop operation
+with the test-finished owner before later setup can reject. The redundant late
+cleanup block is removed. The sole declaration/case, all four behavior assertions
+and production bytes remain; three fewer test lines need no allocation or shared
+ceiling change. Historical source classification is unchanged.
+
+The untouched official baseline and restored candidate each pass the same case.
+Identical temporary faults reject the actual filesystem realpath call once after
+both listeners start. The same installed runner preserves test-finished, afterAll
+and superclass cleanup before inspecting the exact owned ports. Both original
+listeners still accept connections; both candidate listeners already refuse them.
+Each fault run retains only the same intentional setup failure. Diagnostic cleanup
+runs after observation, stops only the original's retained listeners, and joins
+its probe sockets. Candidate diagnostics need no stops. All four actual inventories
+match; temporary instrumentation and every production owner are restored exactly.
+This qualifies bounded fixture custody before worker retirement, not a persistent
+process leak or live provider/Gateway behavior. Scoped E2E types, typed lint,
+format, ledger MDX, whitespace and the test-line ratchet pass.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
