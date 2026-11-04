@@ -421,7 +421,7 @@ const pluginCapabilityPaths = {
   embeddingProviders:
     "M7 5h10M6 7l5 9m7-9-5 9M8 5a3 3 0 1 1-6 0 3 3 0 1 1 6 0m14 0a3 3 0 1 1-6 0 3 3 0 1 1 6 0m-7 14a3 3 0 1 1-6 0 3 3 0 1 1 6 0m-6-8h6",
   webSearchProviders:
-    "M15 3a8 8 0 1 0-5 16m-8-8h13m-5-8a17 17 0 0 0 0 16m0-16a17 17 0 0 1 2 10m8 3a4 4 0 1 1-8 0 4 4 0 1 1 8 0m-1 3 3 3",
+    "M14 8a6 6 0 1 1-12 0 6 6 0 1 1 12 0Z M8 2c-3 3-3 9 0 12 3-3 3-9 0-12Z M2 8h12 M21 17.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 1 1 7 0Z M20 20l2.5 2.5",
   webFetchProviders:
     "M4 3h16a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2M2 8h20M6 5.5h.01M12 11v7m-3-3 3 3 3-3",
   webContentExtractors:
