@@ -211,6 +211,43 @@ describe("sidebar owner filter", () => {
       },
     );
 
+    it("keeps a saved choice when a delivered hello has no auth projection", () => {
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("owner-bob"));
+      const { filter, host, update } = fixture({
+        // Shipped hellos without auth remain review-only; absence grants no viewer authority.
+        hello: { type: "hello-ok", protocol: 4 } as NonNullable<
+          ApplicationGatewaySnapshot["hello"]
+        >,
+      });
+      update();
+      expectOwner(host, "owner-bob");
+      expect(filter.selfUserId).toBe("profile-ada");
+      expect(saved()).toEqual(choice("owner-bob"));
+    });
+
+    it.each([false, true])(
+      "retires prior intent and facets when an equal choice changes profile (new hello=%s)",
+      (replaceHello) => {
+        storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice(null));
+        storeSidebarSessionOwnerFilter(gatewayUrl, "profile-bob", choice(null));
+        const { filter, gateway } = fixture({ hello: hello() });
+        const previous = filter.read();
+        filter.observeOwnerFacet("main", [{ type: "human", id: "owner-foreign" }]);
+        filter.set(null);
+        expect(filter.hasMultipleOwners("main")).toBe(true);
+        gateway.snapshot.selfUser = { id: "profile-bob" };
+        if (replaceHello) {
+          gateway.snapshot.hello = hello();
+        }
+        expect(filter.read()).toMatchObject(choice(null));
+        expect(filter.read().scope).not.toBe(previous.scope);
+        expect(filter.takeUserIntent()).toBe(false);
+        expect(filter.hasMultipleOwners("main")).toBe(false);
+        expect(saved("profile-ada")).toEqual(choice(null));
+        expect(saved("profile-bob")).toEqual(choice(null));
+      },
+    );
+
     it("keeps a broad role's foreign choice despite a reduced socket grant", () => {
       storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("owner-bob"));
       const { host, update } = fixture({ hello: hello() });

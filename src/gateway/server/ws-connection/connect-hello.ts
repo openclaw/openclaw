@@ -62,8 +62,8 @@ import {
   TICK_INTERVAL_MS,
   WEBSOCKET_OPEN_READY_STATE,
 } from "../../server-constants.js";
-import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { resolveProfileActivityViewerId } from "../../session-profile-activity-policy.js";
+import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { shouldScheduleBackgroundHealthRefresh } from "../health-refresh-admission.js";

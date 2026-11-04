@@ -41,7 +41,10 @@ export function makeContextParams(
       deps: {} as never,
       runtimeState: {
         cronState: makeCronState(),
-        configReloader: { isConfigReloadSettled: vi.fn(() => true) },
+        configReloader: {
+          getCommittedRuntimeConfig: vi.fn(() => config),
+          isConfigReloadSettled: vi.fn(() => true),
+        },
       },
       lifecycle: { closePreludeStarted: false },
       getAttachedGatewayMethodRegistry: vi.fn(() => ({}) as never),

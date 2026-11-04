@@ -114,7 +114,7 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: false,
       });
       const params = makePresenceContextParams({
-        clients: new Set([...clients, unrelated]) as never,
+        clients: new GatewayClientRegistry([...clients, unrelated] as never),
       });
       const context = createGatewayRequestContext(params);
       const first = clients[0]!;
@@ -185,7 +185,7 @@ describe("createGatewayRequestContext presence", () => {
       });
       const capturedProfile = sourceClient.authenticatedUserProfile;
       const params = makePresenceContextParams({
-        clients: new Set([sourceClient, targetClient, unrelatedClient]) as never,
+        clients: new GatewayClientRegistry([sourceClient, targetClient, unrelatedClient] as never),
       });
       const context = createGatewayRequestContext(params);
 

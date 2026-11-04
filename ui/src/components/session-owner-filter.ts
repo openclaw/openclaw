@@ -29,7 +29,7 @@ export class SessionOwnerFilter {
   get selfUserId(): string | undefined {
     const gateway = this.getGateway();
     if (gateway?.snapshot.phase === "connected") {
-      const viewerId = gateway.snapshot.hello?.auth.profileActivityViewerId;
+      const viewerId = gateway.snapshot.hello?.auth?.profileActivityViewerId;
       if (viewerId !== undefined) {
         return viewerId ?? undefined;
       }
@@ -41,14 +41,13 @@ export class SessionOwnerFilter {
     const gateway = this.getGateway();
     const selfUserId = this.selfUserId;
     const hello = gateway?.snapshot.phase === "connected" ? gateway.snapshot.hello : undefined;
-    const viewerId = hello?.auth.profileActivityViewerId;
+    const viewerId = hello?.auth?.profileActivityViewerId;
     const scope =
       gateway && selfUserId ? JSON.stringify([gateway.connection.gatewayUrl, selfUserId]) : null;
     const scopeChanged = scope !== this.value.scope;
+    let value = this.value;
     if (scopeChanged) {
-      this.userIntent = false;
-      this.ownerFacet = null;
-      this.value = {
+      value = {
         ...(gateway && selfUserId
           ? loadStoredSidebarSessionOwnerFilter(gateway.connection.gatewayUrl, selfUserId, {
               guest: typeof viewerId === "string" || isRestrictedSessionGuest(hello?.auth ?? null),
@@ -61,14 +60,17 @@ export class SessionOwnerFilter {
     // choices within that hello retain their visible server denial instead of resetting.
     if (gateway && hello && (scopeChanged || hello !== this.admittedHello)) {
       this.admittedHello = hello;
-      if (typeof viewerId === "string" && this.value.ownerId && this.value.ownerId !== viewerId) {
-        this.value = { ownerId: null, involvingMe: true, scope };
-        this.userIntent = false;
-        this.ownerFacet = null;
-        storeSidebarSessionOwnerFilter(gateway.connection.gatewayUrl, viewerId, this.value);
+      if (typeof viewerId === "string" && value.ownerId && value.ownerId !== viewerId) {
+        value = { ownerId: null, involvingMe: true, scope };
+        storeSidebarSessionOwnerFilter(gateway.connection.gatewayUrl, viewerId, value);
       }
     }
-    return this.value;
+    if (value !== this.value) {
+      this.userIntent = false;
+      this.ownerFacet = null;
+      this.value = value;
+    }
+    return value;
   }
 
   hasMultipleOwners(agentId: string): boolean {
