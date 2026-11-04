@@ -115,8 +115,8 @@ on the server.
 
 `hy4` is the GA follow-up and the first Hy model that accepts image input (JPEG,
 PNG, WebP, GIF; text output). Its window is 1,024,000 tokens with a 960,000-token
-input ceiling. Like `hy4-preview`, its `reasoning_effort` accepts `none` and
-`high` only; other thinking levels collapse onto `high`.
+input ceiling. Like `hy4-preview`, OpenClaw sends `reasoning_effort` as `none`
+or `high`; other thinking levels map to `high`, which is also its default.
 
 ## Existing TokenHub configurations
 

@@ -99,7 +99,8 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "high"]
+              "supportedReasoningEfforts": ["none", "high"],
+              "defaultThinkingLevel": "high"
             }
           },
           {
@@ -159,7 +160,8 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "high"]
+              "supportedReasoningEfforts": ["none", "high"],
+              "defaultThinkingLevel": "high"
             }
           },
           {
@@ -206,8 +208,7 @@
       "models.providers.tencent-tokenhub",
       "agents.defaults.models.tencent-tokenhub/hy3",
       "agents.defaults.models.tencent-tokenhub/hy3-preview",
-      "agents.defaults.models.tencent-tokenhub/hy4-preview",
-      "agents.defaults.models.tencent-tokenhub/hy4"
+      "agents.defaults.models.tencent-tokenhub/hy4-preview"
     ]
   },
   "providerAuthChoices": [
