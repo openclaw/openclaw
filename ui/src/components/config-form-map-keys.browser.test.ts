@@ -25,7 +25,7 @@ function formFixture(
     root.querySelector<HTMLInputElement>(selector)!;
   const add = (root: ParentNode = container) =>
     [...root.querySelectorAll("button")]
-      .find((button) => button.textContent?.trim() === "Add Entry")!
+      .find((button) => button.textContent?.trim() === (root === container ? "Add" : "Add entry"))!
       .click();
   renderValue();
   return { state, container, renderValue, input, add };

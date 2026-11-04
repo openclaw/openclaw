@@ -1,5 +1,6 @@
 import path from "node:path";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { timeWorktreePreparationPhase } from "../worktrees/preparation-timing.js";
 import {
@@ -36,7 +37,16 @@ function dependencyDockerConfig(cfg: SandboxConfig, image: string): SandboxDocke
     ...cfg.docker,
     image,
     containerPrefix: CONTAINER_PREFIX,
-    env: { CI: "1" },
+    // Builder state must be writable even with a missing image HOME, and never staged.
+    tmpfs: [...cfg.docker.tmpfs, "/tmp/openclaw-deps:mode=1777"],
+    env: {
+      CI: "1",
+      HOME: "/tmp/openclaw-deps",
+      XDG_CONFIG_HOME: "/tmp/openclaw-deps/config",
+      XDG_DATA_HOME: "/tmp/openclaw-deps/data",
+      XDG_STATE_HOME: "/tmp/openclaw-deps/state",
+      XDG_CACHE_HOME: "/tmp/openclaw-deps/cache",
+    },
     setupCommand: undefined,
     binds: undefined,
   };
@@ -92,6 +102,7 @@ export async function retireSandboxDependencyTemplate(
   directory: string,
   rollbackGuard: () => void,
 ): Promise<void> {
+  using phases = observeDiagnosticsTimelinePhases(`${DEPENDENCY_PHASE}.retire.registry`);
   const context = captureOpenClawStateWorkerContext();
   const assertOwner = () => {
     context.admission.assertCurrent();
@@ -103,6 +114,7 @@ export async function retireSandboxDependencyTemplate(
     workspaceDir: directory,
   });
   assertOwner();
+  phases.mark(`${DEPENDENCY_PHASE}.retire.builders`);
   for (const entry of entries) {
     if (entry.sessionKey.startsWith(SCOPE_PREFIX)) {
       await retireSandboxDependencyBuilder(entry, assertOwner);
@@ -116,10 +128,12 @@ export async function retireSandboxDependencyBuilder(
   assertOwner: () => void,
   remove = false,
 ): Promise<void> {
+  using phases = observeDiagnosticsTimelinePhases(`${DEPENDENCY_PHASE}.retire.lock`);
   const context = captureOpenClawStateWorkerContext();
   await withSandboxRegistryEntryLock(
     candidate,
     async () => {
+      phases.mark(`${DEPENDENCY_PHASE}.retire.claim`);
       assertOwner();
       const entry = await beginSandboxRegistryRemoval(candidate, {
         beforeLegacyApply: assertOwner,
@@ -142,9 +156,11 @@ export async function retireSandboxDependencyBuilder(
         entry.backendId === "podman"
           ? bindPodmanSandboxEngine(entry.backendTarget!)
           : DOCKER_SANDBOX_ENGINE;
+      phases.mark(`${DEPENDENCY_PHASE}.retire.target`);
       await validateSandboxContainerEngineTarget(engine, entry.backendTarget);
       assertCurrent();
       const signal = AbortSignal.timeout(120_000);
+      phases.mark(`${DEPENDENCY_PHASE}.retire.inspect`);
       const inspected = await execContainer(
         engine,
         ["inspect", "--format", "{{.Id}}", entry.containerName],
@@ -162,6 +178,7 @@ export async function retireSandboxDependencyBuilder(
         throw new Error("Dependency template builder removal is unconfirmed; template retained");
       }
       if (remove) {
+        phases.mark(`${DEPENDENCY_PHASE}.retire.remove`);
         const { removeSandboxRuntimeGeneration } = await import("./manage.js");
         await removeSandboxRuntimeGeneration({
           runtime: { kind: "container", entry },
@@ -179,6 +196,7 @@ export async function retireSandboxDependencyBuilder(
       } else if (id !== null) {
         // A finished installer may leave descendants. Fence restart first, then prove
         // the entire container stopped before the host validates or clones its bytes.
+        phases.mark(`${DEPENDENCY_PHASE}.retire.kill`);
         const killed = await execContainer(engine, ["kill", id], {
           allowFailure: true,
           signal,
@@ -186,9 +204,11 @@ export async function retireSandboxDependencyBuilder(
         });
         assertCurrent();
         if (killed.code === 0) {
+          phases.mark(`${DEPENDENCY_PHASE}.retire.wait`);
           await execContainer(engine, ["wait", id], { signal, assertCurrent });
         }
         assertCurrent();
+        phases.mark(`${DEPENDENCY_PHASE}.retire.verify`);
         if (!(await containerHasTerminated(engine, id, signal))) {
           throw new Error("Dependency template builder is still running; template retained");
         }
@@ -268,9 +288,7 @@ export async function prepareSandboxDependencyTemplate(params: {
             containerId,
             "/bin/sh",
             "-c",
-            docker.network === "none"
-              ? "exec pnpm install --offline --frozen-lockfile"
-              : "exec pnpm install --frozen-lockfile",
+            `exec pnpm install ${docker.network === "none" ? "--offline " : ""}--frozen-lockfile --store-dir "$XDG_DATA_HOME/pnpm/store"`,
           ],
           {
             allowFailure: true,
@@ -281,11 +299,21 @@ export async function prepareSandboxDependencyTemplate(params: {
         ),
       );
       assertCurrent();
-      return installed.code === 0
-        ? { installed: true }
-        : { installed: false, reason: `pnpm install failed (exit ${installed.code})` };
+      if (installed.code === 0) {
+        return { installed: true };
+      }
+      // pnpm reports some failures on stdout. Redact before truncating secret context.
+      const tail = redactSensitiveText(`${installed.stdout}\n${installed.stderr}`, {
+        mode: "tools",
+      })
+        .trim()
+        .slice(-2048);
+      return {
+        installed: false,
+        reason: `pnpm install failed (exit ${installed.code})${tail ? `: ${tail}` : ""}`,
+      };
     } catch {
-      // Installer output can contain registry credentials; retain only the failure category.
+      // Exceptions may include engine invocation details; retain only the failure category.
       assertCurrent();
       return {
         installed: false,

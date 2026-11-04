@@ -209,7 +209,7 @@ function AgentSkillsContent(
         title={t("agents.skillsPanel.title")}
         description={
           <>
-            {t("agents.skillsPanel.subtitle")}
+            {t("agents.skillsPanel.subtitle")}{" "}
             {rawSkills().length > 0 ? (
               <span class="mono">
                 {enabledCount()}/{rawSkills().length}
@@ -230,7 +230,7 @@ function AgentSkillsContent(
               onClick={() => params.onClear()}
             />
             <AgentPanelAction
-              label={params.pending ? t("common.loading") : t("common.refresh")}
+              label={params.pending ? t("common.refreshing") : t("common.refresh")}
               disabled={params.pending}
               onClick={params.onRefresh}
             />

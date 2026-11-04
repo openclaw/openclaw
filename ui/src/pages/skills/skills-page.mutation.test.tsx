@@ -242,7 +242,7 @@ describe("Skills mutation presentation", () => {
         report = createReport([skill]);
         connection.publishEvent({ type: "event", event: "skills.changed" });
         await waitForFast(() =>
-          expect(page.querySelectorAll(".settings-count")[3]?.textContent).toBe("0"),
+          expect(page.querySelector('option[value="disabled"]')?.textContent).toBe("Disabled 0"),
         );
       }
     },
