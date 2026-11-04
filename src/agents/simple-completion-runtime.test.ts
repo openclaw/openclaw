@@ -89,10 +89,8 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshotMock,
 }));
 
-vi.mock("./model-auth.js", async () => ({
-  applyAuthHeaderOverride: (
-    await vi.importActual<typeof import("./model-auth-model.js")>("./model-auth-model.js")
-  ).applyAuthHeaderOverride,
+vi.mock("./model-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth.js")>()),
   formatMissingAuthError: vi.fn(
     (auth: { source: string; mode: string }, provider: string) =>
       `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
@@ -483,77 +481,48 @@ describe("prepareSimpleCompletionModel", () => {
     expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("bedrock-runtime-token");
   });
 
-  const bearerGatewayConfig: OpenClawConfig = {
-    models: {
-      providers: {
-        "bearer-gateway": {
-          baseUrl: "https://gateway.example.test/ai",
-          api: "anthropic-messages",
-          authHeader: true,
-          models: [],
-        },
-      },
-    },
-  };
-
-  function mockBearerGatewayModel() {
+  // Same header contract as agent runs: Bearer for authHeader providers, unless
+  // runtime auth exchanged the credential (the SDK then reads it from authStorage).
+  it.each([
+    { exchangedKey: undefined, authorization: "Bearer gateway-token" },
+    { exchangedKey: "exchanged-token", authorization: undefined },
+  ])("applies the authHeader Bearer header (exchanged: $exchangedKey)", async (testCase) => {
+    const baseUrl = "https://gateway.example.test/ai";
     hoisted.resolveModelMock.mockReturnValueOnce({
-      model: {
-        provider: "bearer-gateway",
-        id: "anthropic/claude-haiku-5-5",
-        api: "anthropic-messages",
-        baseUrl: "https://gateway.example.test/ai",
-      },
+      model: { provider: "gw", id: "claude-haiku-5-5", api: "anthropic-messages", baseUrl },
       ...modelStores(),
     });
-  }
-
-  it("sends the Bearer header for authHeader providers, like agent runs", async () => {
-    mockBearerGatewayModel();
     hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
       apiKey: "gateway-token",
-      source: "models.providers.bearer-gateway.apiKey",
+      source: "models.providers.gw.apiKey",
       mode: "api-key",
     });
+    if (testCase.exchangedKey) {
+      hoisted.prepareProviderRuntimeAuthMock.mockResolvedValueOnce({
+        apiKey: testCase.exchangedKey,
+      });
+    }
 
     const result = await prepareSimpleCompletionModel({
       preparedModelRuntime,
-      cfg: bearerGatewayConfig,
-      provider: "bearer-gateway",
-      modelId: "anthropic/claude-haiku-5-5",
+      cfg: {
+        models: {
+          providers: {
+            gw: { baseUrl, api: "anthropic-messages", authHeader: true, models: [] },
+          },
+        },
+      },
+      provider: "gw",
+      modelId: "claude-haiku-5-5",
       agentDir: "/tmp/openclaw-agent",
     });
 
     expectPreparedModelResult(result);
-    const authorization = result.model.headers?.Authorization ?? "";
-    expect(authorization.startsWith("Bearer ")).toBe(true);
-    const token = authorization.slice("Bearer ".length);
-    expect(looksLikeSecretSentinel(token) ? resolveSecretSentinel(token) : token).toBe(
-      "gateway-token",
-    );
-  });
-
-  it("leaves auth to the exchanged runtime credential for authHeader providers", async () => {
-    mockBearerGatewayModel();
-    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
-      apiKey: "configured-token",
-      source: "models.providers.bearer-gateway.apiKey",
-      mode: "api-key",
-    });
-    hoisted.prepareProviderRuntimeAuthMock.mockResolvedValueOnce({
-      apiKey: "exchanged-token",
-    });
-
-    const result = await prepareSimpleCompletionModel({
-      preparedModelRuntime,
-      cfg: bearerGatewayConfig,
-      provider: "bearer-gateway",
-      modelId: "anthropic/claude-haiku-5-5",
-      agentDir: "/tmp/openclaw-agent",
-    });
-
-    expectPreparedModelResult(result);
-    expect(result.model.headers?.Authorization).toBeUndefined();
+    const header = result.model.headers?.Authorization;
+    const token = header?.replace(/^Bearer /, "") ?? "";
+    expect(
+      header && `Bearer ${looksLikeSecretSentinel(token) ? resolveSecretSentinel(token) : token}`,
+    ).toBe(testCase.authorization);
   });
 });
 
