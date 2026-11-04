@@ -26,6 +26,19 @@ const cfgWith = (state: OpenClawTestState, auth?: "aws-sdk"): OpenClawConfig => 
   },
 });
 
+/** The shipped multi-agent shape: explicit ownership, several agents, a system agent. */
+const explicitFleetCfg = (state: OpenClawTestState): OpenClawConfig => ({
+  ...cfgWith(state, "aws-sdk"),
+  agents: {
+    ownership: "explicit",
+    entries: {
+      main: { agentDir: state.agentDir("main") },
+      worker: { agentDir: state.agentDir("worker") },
+    },
+    defaults: { systemAgent: { agentId: "main" } },
+  },
+});
+
 function withState(
   run: (params: {
     state: OpenClawTestState;
@@ -72,17 +85,30 @@ it("creates the marker account a configured AWS SDK route needs, once", async ()
   });
 });
 
-it("preserves a different account already holding the id and reports the conflict", async () => {
+it("creates the fleet's account without displacing another account", async () => {
   await withState(async ({ state, create, readProfiles }) => {
+    const cfg = explicitFleetCfg(state);
     const occupant: AuthProfileCredential = { type: "api_key", provider: "openai", key: "sk-live" };
     await state.writeAuthProfiles({ version: 1, profiles: { [PROFILE_ID]: occupant } }, "main");
 
-    const result = await create(cfgWith(state, "aws-sdk"), true);
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain(
+    // An occupied id belongs to a real account, so repair reports it and stops.
+    const conflicted = await create(cfg, true);
+    expect(conflicted.changes).toEqual([]);
+    expect(conflicted.warnings.join("\n")).toContain(
       `Auth profile ${PROFILE_ID} already holds a api_key credential for openai`,
     );
     expect(await readProfiles()).toEqual({ [PROFILE_ID]: occupant });
+
+    // Preview and repair both have to work without a sole or legacy default agent.
+    await state.writeAuthProfiles({ version: 1, profiles: {} }, "main");
+    expect((await create(cfg, false)).warnings.join("\n")).toContain(`no ${PROFILE_ID} account`);
+    expect((await create(cfg, true)).changes.join("\n")).toContain(
+      `Created auth profile ${PROFILE_ID}`,
+    );
+    // The record lands in the shared store every agent inherits, not in one agent's store.
+    expect(await readProfiles()).toEqual({ [PROFILE_ID]: MARKER });
+    expect(
+      (await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir("worker"))).profiles,
+    ).toEqual({ [PROFILE_ID]: MARKER });
   });
 });

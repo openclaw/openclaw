@@ -1,11 +1,11 @@
 // Doctor creation of the stored account behind a configured AWS SDK provider route.
-import { resolveAgentDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import {
   buildAwsSdkAuthProfileCredential,
   isAwsSdkAuthProfileCredential,
   resolveAwsSdkAuthProfileId,
 } from "../../../agents/auth-profiles/aws-sdk-account.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../../agents/auth-profiles/order.js";
+import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
 import {
   loadAuthProfileStoreWithoutExternalProfilesAsync,
   updateAuthProfileStoreWithLock,
@@ -42,7 +42,10 @@ export async function maybeCreateAwsSdkAuthProfileAccounts(params: {
   }
   const changes: string[] = [];
   const warnings: string[] = [];
-  const agentDir = resolveAgentDir(params.cfg, resolveDefaultAgentId(params.cfg), env);
+  // The account is a shared credential, so it belongs to the shared store's own owner.
+  // Deriving it from a default agent would refuse every explicit multi-agent fleet, and
+  // each agent's store inherits this record anyway.
+  const agentDir = resolveSharedMainAuthAgentDir(env);
   const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
   for (const provider of providers) {
     const profileId = resolveAwsSdkAuthProfileId(provider);

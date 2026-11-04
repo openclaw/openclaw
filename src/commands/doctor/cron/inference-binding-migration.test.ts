@@ -748,10 +748,18 @@ it.each(["job edit", "account replacement", "backup failure"] as const)(
 );
 
 const bedrockModelId = "anthropic.claude-sonnet-4-20250514-v1:0";
+/** The shipped fleet shape: explicit ownership, several agents, a system agent. */
 const bedrockConfig = (state: OpenClawTestState): OpenClawConfig => ({
   agents: {
-    entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
-    defaults: { model: `amazon-bedrock/${bedrockModelId}` },
+    ownership: "explicit",
+    entries: {
+      main: { agentDir: state.agentDir("main"), workspace: state.workspaceDir },
+      worker: { agentDir: state.agentDir("worker"), workspace: state.workspaceDir },
+    },
+    defaults: {
+      model: `amazon-bedrock/${bedrockModelId}`,
+      systemAgent: { agentId: "main" },
+    },
   },
   models: {
     providers: {
@@ -761,12 +769,13 @@ const bedrockConfig = (state: OpenClawTestState): OpenClawConfig => ({
         baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
         models: [createTestModelDefinition(bedrockModelId)],
       } satisfies ModelProviderConfig,
+      direct: provider("synthetic-direct-key", "https://direct.invalid.test/v1"),
     },
   },
 });
 
 it.each([true, false])(
-  "adopts a stored AWS SDK account for a legacy Bedrock automation: %s",
+  "adopts a stored AWS SDK account for each agent's legacy Bedrock automation: %s",
   async (stored) => {
     await withAccounts(async (state) => {
       const cfg = await configure(state, bedrockConfig(state));
@@ -774,21 +783,37 @@ it.each([true, false])(
         await saveProfiles(apiProfile("amazon-bedrock:aws-sdk", "aws-sdk-credentials"));
       }
       const storePath = state.statePath("cron", "jobs.json");
-      const job: CronStoredJob = { ...makeAccountJob("bedrock-legacy"), enabled: true };
-      await saveJobs(storePath, job);
+      // One automation per agent, plus one on another provider's configured key.
+      const jobs: CronStoredJob[] = [
+        { ...makeAccountJob("bedrock-main"), enabled: true },
+        { ...makeAccountJob("bedrock-worker"), agentId: "worker", enabled: true },
+        { ...makeAccountJob("direct-key", "direct/model"), enabled: true },
+      ];
+      await saveJobs(storePath, ...jobs);
       await doctor.withDoctorConfigMaintenance(async () => {
         const result = await migrate(cfg);
-        const [migrated] = await readJobs(storePath);
+        const migrated = await readJobs(storePath);
         if (!stored) {
           // Without a stored account the route is ambient, so nothing is recorded.
           expect(result.changes).toEqual([]);
           contains(result.warnings.join("\n"), "ambient credential");
-          expect(migrated).toEqual(job);
+          expect(migrated).toEqual(jobs);
           return;
         }
-        contains(result.changes.join("\n"), "retain amazon-bedrock:aws-sdk");
+        // Every agent's store inherits the shared record, so each agent's job adopts it.
+        contains(
+          result.changes.join("\n"),
+          "Automation bedrock-main (bedrock-main): retain amazon-bedrock:aws-sdk",
+          "Automation bedrock-worker (bedrock-worker): retain amazon-bedrock:aws-sdk",
+        );
         expect(result.warnings).toEqual([]);
-        expect(migrated?.inferenceBinding).toEqual({
+        expect(migrated.map((job) => job.inferenceBinding?.profileId)).toEqual([
+          "amazon-bedrock:aws-sdk",
+          "amazon-bedrock:aws-sdk",
+          // A job on another provider's configured key needs no account.
+          undefined,
+        ]);
+        expect(migrated[1]?.inferenceBinding).toEqual({
           version: 1,
           provider: "amazon-bedrock",
           profileId: "amazon-bedrock:aws-sdk",
@@ -796,9 +821,9 @@ it.each([true, false])(
           authRequirement: "api-key",
           source: "auto",
         });
-        // Re-running Doctor keeps the recorded account untouched.
+        // Re-running Doctor keeps the recorded accounts untouched.
         await migrate(cfg);
-        expect(await readJobs(storePath)).toEqual([migrated]);
+        expect(await readJobs(storePath)).toEqual(migrated);
       });
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });
