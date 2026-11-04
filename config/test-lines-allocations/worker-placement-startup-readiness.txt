@@ -1,0 +1,2 @@
+# Provider recovery cannot block startup readiness; registered shutdown still drains provisioning and active reconciliation.
+10
