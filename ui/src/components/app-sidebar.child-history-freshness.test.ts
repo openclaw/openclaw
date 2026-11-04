@@ -340,7 +340,9 @@ it.each([
       expect(data.childSessionRowsByParent[parentKey]?.map((row) => row.key)).toEqual(childKeys);
       expect.soft(rowElement(sidebar, child.key)?.textContent).toContain(fresh.label);
       expect.soft(sidebar.findSidebarHovercardRowByKey(child.key)).toMatchObject(fresh);
-      expect(sidebar.findSidebarHovercardRowByKey(parentKey)?.runningChildCount).toBe(1);
+      expect(
+        rowElement(sidebar, child.key)?.querySelector(".session-glyph--running"),
+      ).not.toBeNull();
       expect(sessions.state.result).toBe(primary);
     } finally {
       unsubscribe();
