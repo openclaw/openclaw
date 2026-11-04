@@ -1,8 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { For } from "solid-js";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatDateTimeRangeMs, formatMs } from "../../lib/reactive/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { ParsedSessionLog } from "./helpers.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import type { UsageSessionEntry } from "./types.ts";
@@ -96,7 +95,10 @@ export function renderSessionSummary(
           {" "}
           {hasInterval && !messageCounts
             ? t("usage.common.emptyValue")
-            : `${(messageCounts?.user ?? 0).toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${(messageCounts?.assistant ?? 0).toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`}
+            : t("usage.overview.messageCounts", {
+                user: (messageCounts?.user ?? 0).toLocaleString(getLocale()),
+                assistant: (messageCounts?.assistant ?? 0).toLocaleString(getLocale()),
+              })}
           {hasInterval ? (
             <>
               {" "}
@@ -110,12 +112,7 @@ export function renderSessionSummary(
     {
       labelKey: "usage.overview.toolCalls",
       value: toolCallCount,
-      meta: (
-        <>
-          {" "}
-          {uniqueToolCount} {t("usage.overview.toolsUsed")}{" "}
-        </>
-      ),
+      meta: <> {t("usage.overview.uniqueToolsCount", { count: String(uniqueToolCount) })} </>,
     },
     {
       labelKey: "usage.overview.errors",

@@ -30,7 +30,9 @@ export function formatCountdown(deadlineMs: number, nowMs: number, padMinutes = 
 let localeFormatters:
   | {
       locale: string;
-      units: Partial<Record<`${DurationPart["unit"]}:${"narrow" | "long"}`, Intl.NumberFormat>>;
+      units: Partial<
+        Record<`${DurationPart["unit"] | "byte"}:${"narrow" | "long"}`, Intl.NumberFormat>
+      >;
       relative?: Intl.RelativeTimeFormat;
       numbers: Map<string, Intl.NumberFormat>;
     }
@@ -50,7 +52,7 @@ export function formatUnit({
   value,
   unit,
   unitDisplay = "narrow",
-}: DurationPart & { unitDisplay?: "narrow" | "long" }): string {
+}: (DurationPart | { value: number; unit: "byte" }) & { unitDisplay?: "narrow" | "long" }): string {
   const formatters = getLocaleFormatters();
   const key = `${unit}:${unitDisplay}` as const;
   return (formatters.units[key] ??= new Intl.NumberFormat(formatters.locale, {
