@@ -666,13 +666,15 @@ In a build that includes the actions:
 2. In **Shortcuts > Apps > OpenClaw**, choose an action and select its **Session**
    or **Run**. Session suggestions come from the currently connected Gateway.
 3. Unlock when prompted and keep OpenClaw in the foreground while it opens the
-   selected chat. **Send Message** asks for confirmation before sending.
+   selected chat. **Send Message** and **Ask OpenClaw** ask for confirmation before sending.
 
 - **Open Session** opens the selected chat.
 - **Compose Message** opens that chat with an optional draft, without sending.
   An existing draft is not overwritten.
 - **Send Message** sends the supplied text after confirmation and returns a
   **Run** with a continuation to that exact chat.
+- **Ask OpenClaw** sends a question and returns its recorded reply preview as
+  text, with a spoken summary and a continuation to the exact run's chat.
 - **Inspect Run** reads facts for the selected run and can open its chat.
 
 A saved Session selection includes the Gateway, canonical account ID, agent,
@@ -686,6 +688,12 @@ answer approvals. **Inspect Run** reports active or terminal status only when
 the Gateway provides a matching fact for that exact run. An input receipt or
 reply alone does not prove completion. Its history read is bounded, so an older
 run can be unobserved or have unknown status without proving that nothing ran.
+
+**Ask OpenClaw** waits up to 25 seconds for a completed reply. Its text is a
+preview capped by the Gateway at 4,096 UTF-16 characters; open the returned chat
+for the full response. Longer tasks, silent replies, missing output, and failures
+return an explicit status instead. A wait deadline or cancelled shortcut does
+not abort the accepted run or send the question again.
 
 Native sends do **not** enter the durable offline chat outbox. An uncertain
 send is never automatically repeated. The same in-flight submission is
