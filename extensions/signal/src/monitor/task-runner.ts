@@ -38,25 +38,11 @@ export function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
       void trackedTask.finally(() => inFlight.delete(trackedTask)).catch(() => undefined);
       return trackedTask;
     },
-    async waitForIdle(extras: Iterable<Promise<unknown>> = []): Promise<void> {
+    async waitForIdle(): Promise<void> {
       // Must not block gateway stop on a hung attachment fetch or inbound turn.
-      // Idle window, not wall-clock: keep waiting while tasks or extras settle.
-      const pendingExtras = new Set(
-        [...extras].map((extra) =>
-          Promise.resolve(extra).then(
-            () => undefined,
-            () => undefined,
-          ),
-        ),
-      );
-      for (const extra of pendingExtras) {
-        void extra.finally(() => {
-          pendingExtras.delete(extra);
-        });
-      }
-      while (inFlight.size > 0 || pendingExtras.size > 0) {
+      // Idle window, not wall-clock: keep waiting while tasks settle.
+      while (inFlight.size > 0) {
         const snapshot = Array.from(inFlight);
-        const extraSnapshot = Array.from(pendingExtras);
         const timeout = createIdleTimeoutPromise(SIGNAL_MONITOR_IDLE_TIMEOUT_MS);
         const outcome = await Promise.race<"timeout" | "settled">([
           timeout.promise,
@@ -66,19 +52,14 @@ export function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
               () => "settled" as const,
             ),
           ),
-          ...extraSnapshot.map((extra) => extra.then(() => "settled" as const)),
         ]);
         timeout.clear();
         if (outcome === "timeout") {
           // The replacement monitor can recover this claim. Do not let the
           // abandoned callback send after teardown gives up the drain.
           deliveryRetired = true;
-          const remaining = inFlight.size;
-          const ingressPending = pendingExtras.size > 0;
           runtime.error?.(
-            ingressPending
-              ? `signal waitForIdle made no progress within ${SIGNAL_MONITOR_IDLE_TIMEOUT_MS}ms; continuing teardown with ${remaining} task(s) still in flight and ingress stop pending`
-              : `signal waitForIdle made no progress within ${SIGNAL_MONITOR_IDLE_TIMEOUT_MS}ms; continuing teardown with ${remaining} task(s) still in flight`,
+            `signal waitForIdle made no progress within ${SIGNAL_MONITOR_IDLE_TIMEOUT_MS}ms; continuing teardown with ${inFlight.size} task(s) still in flight`,
           );
           return;
         }
@@ -91,13 +72,19 @@ export async function waitForSignalMonitorTeardown(params: {
   runtime: RuntimeEnv;
   stopIngress?: () => Promise<void>;
   stopDaemon: () => Promise<void>;
-  waitForIdle: (extras?: Iterable<Promise<unknown>>) => Promise<void>;
+  waitForIdle: () => Promise<void>;
 }): Promise<void> {
   // Bound receive/reply drain with a progress-aware idle window. Do not put
   // observed daemon exit inside that window: a stuck signal-cli must keep the
-  // monitor from reporting completion. Drain before stopping the transport so
-  // accepted sends can finish unless the operator already aborted.
-  const ingressStop = params.stopIngress?.() ?? Promise.resolve();
-  await params.waitForIdle([ingressStop]);
+  // monitor from reporting completion.
+  //
+  // Always join ingress-owner retirement after the task drain (or its idle
+  // timeout). stop() awaits settlement-safe disposal; abandoning it leaves
+  // claims owned by this instance and blocks same-process replacement recovery.
+  // Propagate ingress-stop failures so settlement failures remain visible.
+  await params.waitForIdle();
+  if (params.stopIngress) {
+    await params.stopIngress();
+  }
   await params.stopDaemon();
 }

@@ -5,13 +5,15 @@ import { createSignalMonitorTaskRunner, waitForSignalMonitorTeardown } from "./t
 
 function deferredTask() {
   let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((res) => {
+  let reject: ((error?: unknown) => void) | undefined;
+  const promise = new Promise<void>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  if (!resolve) {
+  if (!resolve || !reject) {
     throw new Error("Expected deferred task resolver to be initialized");
   }
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
@@ -102,25 +104,78 @@ describe("waitForSignalMonitorTeardown", () => {
     vi.useRealTimers();
   });
 
-  it("returns when ingress stop never settles", async () => {
+  it("does not return while ingress stop is still unresolved", async () => {
     vi.useFakeTimers();
     const { runtime, runner } = createHarness();
-
-    let resolved = false;
+    const ingress = deferredTask();
+    let returned = false;
     const teardown = waitForSignalMonitorTeardown({
       runtime,
-      stopIngress: () => new Promise(() => {}),
+      stopIngress: () => ingress.promise,
       stopDaemon: async () => {},
-      waitForIdle: (extras) => runner.waitForIdle(extras),
+      waitForIdle: () => runner.waitForIdle(),
     }).then(() => {
-      resolved = true;
+      returned = true;
     });
+
     await vi.advanceTimersByTimeAsync(WAIT_FOR_IDLE_TIMEOUT_MS);
-    expect(resolved).toBe(true);
+    await Promise.resolve();
+    expect(returned).toBe(false);
+    expect(runtime.error).not.toHaveBeenCalled();
+
+    ingress.resolve();
     await expect(teardown).resolves.toBeUndefined();
+    expect(returned).toBe(true);
+  });
+
+  it("propagates ingress-stop failures after the task drain", async () => {
+    const { runtime, runner } = createHarness();
+    const failure = new Error("settlement write failed");
+    await expect(
+      waitForSignalMonitorTeardown({
+        runtime,
+        stopIngress: async () => {
+          throw failure;
+        },
+        stopDaemon: async () => {
+          throw new Error("daemon should not stop after ingress failure");
+        },
+        waitForIdle: () => runner.waitForIdle(),
+      }),
+    ).rejects.toBe(failure);
+  });
+
+  it("joins ingress stop after an idle-window task timeout before stopping the daemon", async () => {
+    vi.useFakeTimers();
+    const { runtime, runner } = createHarness();
+    void runner.runTask(() => new Promise(() => {}));
+    const ingress = deferredTask();
+    let daemonStopped = false;
+    let returned = false;
+    const teardown = waitForSignalMonitorTeardown({
+      runtime,
+      stopIngress: () => ingress.promise,
+      stopDaemon: async () => {
+        daemonStopped = true;
+      },
+      waitForIdle: () => runner.waitForIdle(),
+    }).then(() => {
+      returned = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(WAIT_FOR_IDLE_TIMEOUT_MS);
+    await Promise.resolve();
+    expect(returned).toBe(false);
+    expect(daemonStopped).toBe(false);
+    expect(runner.isDeliveryRetired()).toBe(true);
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining(`${WAIT_FOR_IDLE_TIMEOUT_MS}ms`),
     );
+
+    ingress.resolve();
+    await expect(teardown).resolves.toBeUndefined();
+    expect(daemonStopped).toBe(true);
+    expect(returned).toBe(true);
   });
 
   it("does not return while daemon stop is still unresolved", async () => {
@@ -131,7 +186,7 @@ describe("waitForSignalMonitorTeardown", () => {
     const teardown = waitForSignalMonitorTeardown({
       runtime,
       stopDaemon: () => daemon.promise,
-      waitForIdle: (extras) => runner.waitForIdle(extras),
+      waitForIdle: () => runner.waitForIdle(),
     }).then(() => {
       returned = true;
     });
@@ -158,7 +213,7 @@ describe("waitForSignalMonitorTeardown", () => {
     const teardown = waitForSignalMonitorTeardown({
       runtime,
       stopDaemon: async () => {},
-      waitForIdle: (extras) => runner.waitForIdle(extras),
+      waitForIdle: () => runner.waitForIdle(),
     }).then(() => {
       returned = true;
     });
@@ -178,14 +233,14 @@ describe("waitForSignalMonitorTeardown", () => {
   it("does not stop the daemon until receive-work drain finishes or times out", async () => {
     vi.useFakeTimers();
     const { runtime, runner } = createHarness();
+    void runner.runTask(() => new Promise(() => {}));
     let daemonStopped = false;
     const teardown = waitForSignalMonitorTeardown({
       runtime,
-      stopIngress: () => new Promise(() => {}),
       stopDaemon: async () => {
         daemonStopped = true;
       },
-      waitForIdle: (extras) => runner.waitForIdle(extras),
+      waitForIdle: () => runner.waitForIdle(),
     });
 
     await Promise.resolve();

@@ -509,7 +509,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       runtime,
       stopIngress: shuttingDownIngress ? () => shuttingDownIngress.stop() : undefined,
       stopDaemon: () => stopDaemon(),
-      waitForIdle: (extras) => monitorTaskRunner.waitForIdle(extras),
+      waitForIdle: () => monitorTaskRunner.waitForIdle(),
     });
     opts.abortSignal?.removeEventListener("abort", onAbort);
   }
