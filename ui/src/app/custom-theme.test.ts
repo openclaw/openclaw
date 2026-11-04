@@ -33,8 +33,17 @@ describe("custom theme localized validation", () => {
       );
     }
     const payload = createTweakcnPayload();
-    payload.cssVars.light["font-sans"] = "font!";
-    vi.mocked(fetch).mockResolvedValue(createResponse(JSON.stringify(payload)));
+    vi.mocked(fetch).mockResolvedValue(
+      createResponse(
+        JSON.stringify({
+          ...payload,
+          cssVars: {
+            ...payload.cssVars,
+            light: { ...payload.cssVars.light, "font-sans": "font!" },
+          },
+        }),
+      ),
+    );
     await expect(importCustomThemeFromUrl("test-theme")).rejects.toThrow(
       "configView.appearance.themeImport.invalidToken:font-sans",
     );

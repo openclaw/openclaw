@@ -667,7 +667,9 @@ it("preserves startup palette validation errors until Settings can localize them
   const { gateway, current } = createGatewayStoreTestStore();
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
   gateway.start();
-  const malformed = { ...definition, light: { ...definition.light, background: "" } };
+  const malformed = createThemeDefinitionFixture({
+    light: createThemePaletteFixture({ background: "" }),
+  });
   current().request.mockResolvedValue(catalog(malformed));
   current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
   try {

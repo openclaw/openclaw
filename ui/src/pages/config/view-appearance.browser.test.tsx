@@ -40,7 +40,6 @@ it("localizes unnamed themes and the system typeface inside the default option",
   onTestFinished(() => translate.mockRestore());
   const { container } = renderAppearance({
     theme: "custom",
-    resolvedTheme: "custom",
     hasCustomTheme: true,
     customThemeLabel: "",
     fontUi: undefined,

@@ -31,7 +31,7 @@ describe("config gateway operations", () => {
         .spyOn(i18n, "t")
         .mockImplementation((key, params) => key + ":" + (params?.path ?? ""));
       vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(copied);
-      const showToast = vi.spyOn(toast, "showToast").mockImplementation(() => {});
+      const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
       const path = "/user/config.json";
       const { state } = createConfigCapabilityHarness(
         vi.fn().mockResolvedValue({ ok: false, path }),
