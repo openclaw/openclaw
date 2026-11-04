@@ -28,6 +28,7 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
     request: Record<string, unknown>;
     respond: Mock;
     context: GatewayRequestContext;
+    signal?: AbortSignal;
     sessionMutationCommitGuard?: () => void;
   }) {
     const handler = expectDefined(getHandlers()[params.method], params.method);
@@ -35,11 +36,29 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
       params: params.request as never,
       respond: params.respond as never,
       context: params.context,
+      signal: params.signal,
       sessionMutationCommitGuard: params.sessionMutationCommitGuard,
       req: { type: "req", id: params.requestId ?? "1", method: params.method },
       client: params.client ?? null,
       isWebchatConnect: () => false,
     });
+  }
+
+  function startRequest(
+    request: Record<string, unknown>,
+    options: Partial<
+      Omit<Parameters<typeof invokeGatewayMessageMethod>[0], "request" | "respond">
+    > = {},
+  ) {
+    const respond = vi.fn();
+    const promise = invokeGatewayMessageMethod({
+      method: "message.action",
+      ...options,
+      context: options.context ?? makeContext(),
+      request,
+      respond,
+    });
+    return { respond, promise };
   }
 
   async function runMethod(
@@ -120,6 +139,7 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
   }
 
   return {
+    startRequest,
     invokeGatewayMessageMethod,
     runTelegramTerminalAction,
     runSend: runSendWithClient,

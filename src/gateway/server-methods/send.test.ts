@@ -173,6 +173,7 @@ vi.mock("../session-utils-store-worker.js", () => ({
 
 const {
   invokeGatewayMessageMethod,
+  startRequest,
   runSendWithClient: sendWithClient,
   runPoll,
   runMessageActionRequest: actionWithClient,
@@ -208,23 +209,6 @@ function runMessageActionRequest(...[params, ...args]: Parameters<typeof actionW
     { channel: "slack", action: "send", idempotencyKey: "action-test", ...params },
     ...args,
   );
-}
-
-function startRequest(
-  request: Record<string, unknown>,
-  options: Partial<
-    Omit<Parameters<typeof invokeGatewayMessageMethod>[0], "request" | "respond">
-  > = {},
-) {
-  const respond = vi.fn();
-  const promise = invokeGatewayMessageMethod({
-    method: "message.action",
-    ...options,
-    context: options.context ?? makeContext(),
-    request,
-    respond,
-  });
-  return { respond, promise };
 }
 
 async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
@@ -521,6 +505,7 @@ describe("gateway send conversation ownership", () => {
 
   it("does not share message.action idempotency results across authority origins", async () => {
     const context = makeContext();
+    const controller = new AbortController();
     const firstDeferred = createDeferred<{ details: { action: string } }>();
     const secondDeferred = createDeferred<{ details: { action: string } }>();
     mocks.dispatchChannelMessageAction
@@ -538,6 +523,7 @@ describe("gateway send conversation ownership", () => {
       { ...params, conversationReadOrigin: "direct-operator" },
       {
         context,
+        signal: controller.signal,
         requestId: "direct",
       },
     );
@@ -553,6 +539,7 @@ describe("gateway send conversation ownership", () => {
     await waitForCalls(mocks.dispatchChannelMessageAction, 2);
     expect(mocks.dispatchChannelMessageAction.mock.calls[0]?.[0]).toMatchObject({
       conversationReadOrigin: "direct-operator",
+      abortSignal: controller.signal,
     });
     expect(mocks.dispatchChannelMessageAction.mock.calls[1]?.[0]).toMatchObject({
       conversationReadOrigin: "delegated",
