@@ -136,7 +136,9 @@ export async function dispatchDiscordNativeAgentReply(params: {
     params.suppressReplies ||
     finalReplyOutcome === "suppressed" ||
     (turnResult.dispatched &&
-      (turnResult.dispatchResult.deliberateSilentTerminalReply === true ||
+      (turnResult.dispatchResult.replyDelivery === "delivered" ||
+        turnResult.dispatchResult.replyDelivery === "pending" ||
+        turnResult.dispatchResult.deliberateSilentTerminalReply === true ||
         turnResult.dispatchResult.deferredToActiveRun !== undefined));
   const dispatchResult = {
     dispatched: turnResult.dispatched,

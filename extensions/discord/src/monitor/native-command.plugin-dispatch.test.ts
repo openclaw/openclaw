@@ -613,6 +613,15 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
+  it.each(["delivered", "pending"] as const)(
+    "settles externally owned %s command custody without an empty warning",
+    async (replyDelivery) => {
+      dispatchReply.mockResolvedValue({ ...emptyDispatchResult, replyDelivery });
+      await runNativeCommand();
+      expectSilentSettlement(interaction);
+    },
+  );
+
   it("settles an accepted active-run steer without an empty warning", async () => {
     dispatchReply.mockResolvedValue({
       ...emptyDispatchResult,

@@ -1,5 +1,5 @@
 // Shared fixtures for dispatch runtime selection, hooks, and provider handoff.
-import { vi, type Mock } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
   AcpSessionResolution,
@@ -56,6 +56,7 @@ import {
   ttsMocks,
   emptyConfig,
 } from "./dispatch-from-config.shared.test-harness.js";
+import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestObservabilitySnapshot } from "./test-fixtures/acp-runtime.js";
@@ -654,3 +655,10 @@ export const describe2BeforeEach0 = () => {
   threadInfoMocks.parseSessionThreadInfo.mockReset();
   threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
 };
+
+export function expectEmptyDispatch(
+  result: DispatchFromConfigResult,
+  expected: Omit<DispatchFromConfigResult, "counts">,
+) {
+  expect(result).toEqual({ ...expected, counts: { tool: 0, block: 0, final: 0 } });
+}

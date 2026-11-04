@@ -237,3 +237,14 @@ it.each([
     expect(dispatch).toHaveBeenCalledTimes(1);
   },
 );
+
+it("keeps unacknowledged updates visible without claiming custody", async () => {
+  const runState: ReplyOperationRunState = {
+    replyCompletion: { expectation: "required", outcome: "missing" },
+  };
+  params.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
+  dispatch.mockResolvedValueOnce(startedHandoff({ ackDelivered: false, ackQueued: false }));
+  const result = await run();
+  expect(result?.reply?.text).toBeTruthy();
+  expect(runState.replyCompletion?.outcome).toBe("missing");
+});

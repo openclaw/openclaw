@@ -123,6 +123,28 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     clearAgentHarnesses();
   });
 
+  it.each(["delivered", "pending"] as const)(
+    "exposes externally owned %s reply custody without inventing dispatch counts",
+    async (outcome) => {
+      const dispatcher = createDispatcher();
+      const result = await dispatchOwned({
+        dispatcher,
+        replyResolver: async (_ctx, opts) => {
+          const state = resolveReplyOperationRunState(opts);
+          if (!state) {
+            throw new Error("expected reply operation run state");
+          }
+          state.replyCompletion = resolveReplyCompletion("required", outcome);
+          return undefined;
+        },
+      });
+      expect(result.replyDelivery).toBe(outcome);
+      expect(result.counts).toEqual({ tool: 0, block: 0, final: 0 });
+      expect(result.observedReplyDelivery).toBeUndefined();
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
+
   it("allows final delivery to await a visible successor after producer handoff", async ({
     signal,
   }) => {

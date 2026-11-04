@@ -30,6 +30,8 @@ export type DispatchFromConfigResult = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sendPolicyDenied?: boolean;
   observedReplyDelivery?: boolean;
+  /** Resolved reply custody, including lifecycle notices outside this dispatcher. */
+  replyDelivery?: "delivered" | "pending";
   deferredToActiveRun?: "steer" | "followup";
   noVisibleReplyFallbackEligible?: boolean;
   noVisibleReplyFallbackDelivered?: boolean;
