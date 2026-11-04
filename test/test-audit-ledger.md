@@ -177,31 +177,35 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [192290](https://github.com/openclaw/openclaw/pull/192290): Include mandatory deny in the existing duplicate approval-decision fixture so it reaches uniqueness. All four declarations/28 cases and assertions remain. Actual consumed uniqueness omission passes the original28 and fails only the repaired replay rejection, with27 passes; owner/test bytes restore exactly. Baseline/clean/published28, related21, generated freshness, scoped checks and fresh review pass. CI41725885879 retains31 successes/27 skips and failed test-lines/downstream aggregate: exact CI base and merge retain294 lines of inherited debt, distinct from local296. Exact+3/+3 allocation adds no debt. Native attributed-failure squash receipt and both checkout closeouts complete; failed CI remains failed.
 
+- [192351](https://github.com/openclaw/openclaw/pull/192351): Observe actual session CLI module evaluation before and after the deferred metadata callback. The single case, descriptors, forwarding and original assertions remain. Actual eager-owner import passes the original and fails the repaired observer; owner/test restore exactly. Baseline/clean/published1, related19, scoped checks and fresh review pass. Initial PR-caused mock fingerprint failure is repaired with supported isolation annotation and exact obsolete baseline retirement. Repaired CI41737007881 retains29 successes/28 skips and failed test-lines/downstream aggregate; exact CI base and actual merge preserve53 lines of inherited debt with+5/+5 credit. Native attributed-failure squash receipt and both checkout closeouts complete; failed CI remains failed.
+
 ## Current qualification
 
-Pinned main `a12e3ae8d85d`: retain the single existing case and every original
-assertion in `extensions/codex/cli-metadata.test.ts`. Its not-called function
-assertion cannot observe eager evaluation of the session CLI module. Record the
-actual mocked module factory's evaluation before and after invoking the captured
-CLI registrar. Preserve exact descriptors and Commander forwarding.
+Pinned main `70f04d86b7c5`: retain the existing computer-control exclusion case in
+`extensions/codex/harness.test.ts` and its independent `image_generate` positive
+assertion. Negating a five-element `arrayContaining` permits a proper subset of
+those prohibited tools to enter the exemption. Require every listed tool to be
+absent in the same case.
 
-Source qualification covers metadata registration, the session CLI owner, SDK
-entry/lazy-value behavior, host selection/registration callers and causal history.
-The independent static import-closure test excludes dynamic imports and does not
-prove module evaluation. Untouched native main and the clean candidate each pass
-the existing case. An actual metadata-owner eager import passes the original and
-fails only the repaired pre-callback module-evaluation check. Owner and test bytes
-restore exactly. Both related suites pass all19 cases; focused typecheck, lint,
-format, MDX and test-line checks pass. Initial CI caught a changed mock-factory
-fingerprint. Add the supported isolation annotation and retire only that factory's
-obsolete baseline entry; the guard now passes. Repeat eager-import controls still
-pass the original and fail the repair, with exact byte restoration and a clean
-candidate pass. Fresh review and repaired-head CI remain pending.
+Source qualification covers the complete harness and native-tool-policy owners,
+host safe-deny consumption and causal history. Each actual producer fault adds
+one of the five prohibited names: the original selected case passes each fault,
+and the repair fails at that name's exclusion keeper. Owner and test bytes restore
+exactly after every control. Untouched baseline and clean candidate each pass all37
+cases. The two selected host-policy cases pass;91 other cases remain outside that
+filter. Formatting, MDX and whitespace checks pass. The local test-line ratchet
+passes with zero growth while its tree retains47 lines of existing debt.
 
-Production, shared scalar, imports, helpers and exports are unchanged. Five
-additional test lines receive exact separate allocation credit. No declaration,
-case or original assertion is removed. This proves local metadata loading only;
-no Gateway, native Codex execution or authorization behavior is claimed.
+Focused typecheck fails with five diagnostics in unchanged MCP owners; the original
+test reproduces the same five. Typed lint stops before analysis because SDK
+boundary declaration preparation fails in those same owners. These are recorded
+baseline failures, not passing checks. Fresh review, published-head proof and CI
+remain pending.
+
+Production, imports, helpers, APIs, configuration, shared scalar and allocations
+are unchanged. No declaration or case is removed. This proves the declared
+exemption contract only; native Codex execution and live authorization behavior
+are outside this test.
 
 ## Completed source review
 

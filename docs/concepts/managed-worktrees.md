@@ -141,6 +141,11 @@ renames. Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
 open does not rewrite their inventories.
 
+Archive preparation compares live sandbox files with that accepted tree in the
+filesystem worker. If Git already preserves every accepted file and directory,
+cleanup needs no separate workspace overlay. Ignored files and empty directories
+still retain their restore receipt, and owner protection gates removal.
+
 This storage format requires [shared-state schema 35](/reference/database-schemas/state-schema-history#state-schema-35).
 Let pending workspace operations settle before downgrading. Older builds refuse
 the newer schema; rollback requires the verified pre-upgrade backup and its
