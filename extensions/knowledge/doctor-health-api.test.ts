@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { registerKnowledgeDoctorChecks } from "./doctor-health-api.js";
 
 const runtime = { log() {}, error() {}, exit() {} };
-const agents = { list: [{ id: "main" }, { id: "work" }, { id: "big" }] };
+const agents = { entries: { main: {}, work: {}, big: {} } };
 
 /** The check as core registers it, with per-agent output limits standing in for config. */
 function detect(cfg: OpenClawConfig, limits: Record<string, number | undefined>) {

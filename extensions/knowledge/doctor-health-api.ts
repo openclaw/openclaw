@@ -1,6 +1,7 @@
 import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 // Light Doctor artifact: core registers it only while Knowledge holds the memory slot.
 const OUTPUT_LIMIT_CHECK_ID = "knowledge/model-output-limit";
@@ -16,8 +17,7 @@ type ResolveModelOutputLimit = (params: {
 }) => Promise<ModelOutputLimit | undefined>;
 
 function writesDisabled(cfg: OpenClawConfig): boolean {
-  const config = cfg.plugins?.entries?.knowledge?.config as { writesEnabled?: unknown } | undefined;
-  return config?.writesEnabled === false;
+  return asObjectRecord(cfg.plugins?.entries?.knowledge?.config)?.writesEnabled === false;
 }
 
 /** Knowledge scribes save with each agent's default model; warn when its output limit is low. */

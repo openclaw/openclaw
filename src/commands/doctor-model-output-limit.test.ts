@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentModelOutputLimit } from "./doctor-model-output-limit.js";
 
+// mock-isolation: the resolver must not scan installed plugin manifests in tests.
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => ({ plugins: [] }),
 }));
@@ -14,7 +15,7 @@ const withLocal = (provider: Record<string, unknown>, primary = "Local/m"): Open
         local: { baseUrl: "http://local.test/v1", models: [{ id: "m", name: "m" }], ...provider },
       },
     },
-  }) as OpenClawConfig;
+  }) as unknown as OpenClawConfig;
 
 it.each<[string, Record<string, unknown>, number]>([
   ["the 8192 default", {}, 8192],
