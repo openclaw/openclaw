@@ -88,6 +88,7 @@ on:
           - windows-node
           - live-e2e
           - package
+          - qualified-package
           - qa
           - qa-parity
           - qa-live
