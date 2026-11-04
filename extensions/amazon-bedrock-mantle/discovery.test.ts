@@ -64,6 +64,7 @@ describe("bedrock mantle discovery", () => {
   let testRegionIndex = 0;
   let testRegion = "";
   let now = 0;
+  let perfNow = 0;
   const fetchMock = vi.fn<typeof fetch>();
   const tokenProvider = vi.fn(async () => "synthetic-runtime-token");
   const discover = (overrides: Partial<Parameters<typeof discoverMantleModels>[0]> = {}) =>
@@ -79,7 +80,9 @@ describe("bedrock mantle discovery", () => {
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
     now = Date.UTC(2026, 7, 31);
+    perfNow = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => perfNow);
     discoveryDebugSpy.mockClear();
     testRegion = `test-region-${++testRegionIndex}`;
   });
@@ -180,12 +183,32 @@ describe("bedrock mantle discovery", () => {
 
       await discover();
 
-      now += 7200_000;
+      perfNow += 7200_000;
       const refresh = () => discover({ discoveryMode: "strict" });
       await expect(refresh()).rejects.toThrow();
       await expect(refresh()).resolves.toMatchObject([{ id: "openai.gpt-oss-120b" }]);
     },
   );
+
+  it("refreshes the cached catalog on elapsed time even when the wall clock is stepped back", async () => {
+    fetchMock
+      .mockResolvedValueOnce(modelResponse("openai.gpt-oss-120b"))
+      .mockResolvedValueOnce(modelResponse("openai.gpt-oss-120b", "openai.gpt-5.6-luna"));
+
+    await discover();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The host clock is adjusted backward while the process keeps running, so the
+    // discovery window (elapsed time) still expires and refetches the catalog.
+    now -= 7_200_000;
+    perfNow += 7_200_000;
+    await discover({ discoveryMode: "strict" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(discover()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "openai.gpt-5.6-luna" })]),
+    );
+  });
 
   it("scopes fresh catalogs to the region and actual bearer credential", async () => {
     fetchMock
@@ -224,7 +247,7 @@ describe("bedrock mantle discovery", () => {
       .mockResolvedValueOnce(modelResponse("public-model"))
       .mockRejectedValue(new Error("offline"));
     const first = await discover({ bearerToken: "first" });
-    now += 7200_000;
+    perfNow += 7200_000;
     await expect(discover({ bearerToken: "first" })).resolves.toEqual(first);
     await expect(discover({ bearerToken: "first", discoveryMode: "strict" })).rejects.toThrow(
       "offline",
