@@ -44,6 +44,16 @@ function fixture(initial: Record<string, string>) {
   };
 }
 
+it("does not require test-line allocations on release branches", () => {
+  const f = fixture({ [baseline]: "1\n", "a.test.ts": "one\n" });
+  f.write("a.test.ts", "one\ntwo\n");
+  f.git("branch", "-m", "release/2026.11.4");
+  expect(f.check()).toBe(0);
+  expect(f.read(baseline)).toBe("1\n");
+  f.git("branch", "-m", "main");
+  expect(f.check()).toBe(1);
+});
+
 it("counts tracked test lines, gates net growth, and only prunes the ceiling downward", () => {
   const files = [
     ...["ts", "tsx", "mts", "mjs", "js", "cjs"].map((extension) => `a.test.${extension}`),

@@ -266,7 +266,21 @@ pre-commit run zizmor --all-files
 
 ## Surface ratchets
 
-Size, length, count, and measured performance limits are errors locally and
+Release branches (`release/YYYY.M.PATCH`, including correction branches, and
+`extended-stable/YYYY.M.33`) are exempt from source-file and function line limits,
+the max-lines suppression baseline, and the total test-line budget. This applies
+to local checks, PRs targeting these branches, and dispatched CI checks.
+Oxlint disables `max-lines` and `max-lines-per-function`; SwiftLint ignores file,
+function, type-body, and line-length violations. Backports do not need size-only
+refactors or baseline/allocation updates. Explicit `--prune` operations still
+validate and maintain baselines.
+
+The exemption follows the checked-out branch locally and the destination branch
+in CI, not a PR source branch. Dispatched CI uses the release target context. Other lint,
+types, blanket-disable guards, environment-variable budgets, non-size ratchets,
+artifact/performance budgets, and hard platform limits remain unchanged.
+
+Outside that release exemption, size, length, count, and measured performance limits are errors locally and
 warnings in GitHub Actions. `scripts/lib/check-limits.mts` owns this decision
 using GitHub's `GITHUB_ACTIONS=true` signal. `CI=1` alone does not soften checks:
 local test runners and delegated local checks also set it. Each CI violation
