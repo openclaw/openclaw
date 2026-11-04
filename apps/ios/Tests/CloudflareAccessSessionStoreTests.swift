@@ -8,12 +8,16 @@ struct CloudflareAccessSessionStoreTests {
     private final class MemoryStore {
         var values: [CloudflareAccessOrigin: String] = [:]
         var events: [String] = []
+        var canLoad = true
         var canSave = true
         var canDelete = true
 
         var persistence: CloudflareAccessSessionStore.Persistence {
             .init(
-                load: { self.values[$0] },
+                load: {
+                    guard self.canLoad else { throw CloudflareAccessError.storageFailed }
+                    return self.values[$0]
+                },
                 save: {
                     self.events.append("save")
                     guard self.canSave else { return false }
@@ -132,7 +136,8 @@ struct CloudflareAccessSessionStoreTests {
         #expect(store.state(for: secondApplication.origin) == .authenticated)
         #expect(memory.events == ["retire", "delete", "save"])
         let encoded = try #require(memory.values[secondApplication.origin]?.data(using: .utf8))
-        let persisted = try JSONDecoder().decode(CloudflareAccessSession.self, from: encoded)
+        struct Saved: Decodable { let session: CloudflareAccessSession }
+        let persisted = try JSONDecoder().decode(Saved.self, from: encoded).session
         #expect(persisted.issuer == secondApplication.issuer)
         #expect(persisted.audience == secondApplication.audience)
         #expect(persisted.subject == secondSession.subject)
@@ -184,15 +189,15 @@ struct CloudflareAccessSessionStoreTests {
         let store = CloudflareAccessSessionStore(
             persistence: memory.persistence, authenticate: { _, _ in next }, retireTransports: { _ in })
         let old = try await store.signIn(application: application, openBrowser: { _ in }).value
-        next = try tokens.session(subject: "another-subject")
+        next = try tokens.session()
         let renewed = try await store.signIn(application: application, openBrowser: { _ in }).value
         try await store.requireReauthentication(for: application.origin, revision: old.revision)
         #expect(store.snapshot(for: application.origin)?.revision == renewed.revision)
-        #expect(store.snapshot(for: application.origin)?.session.subject == "another-subject")
+        #expect(store.snapshot(for: application.origin)?.session.subject == "test-subject")
         try await store.requireReauthentication(for: application.origin, revision: renewed.revision)
         #expect(store.snapshot(for: application.origin) == nil)
         #expect(store.state(for: application.origin) == .reauthenticationRequired)
-        #expect(memory.values.isEmpty)
+        #expect(memory.values[application.origin] != nil)
     }
 
     @Test func `reauthentication revokes completed shared grants before retirement can suspend`() async throws {
@@ -241,7 +246,7 @@ struct CloudflareAccessSessionStoreTests {
             #expect(memory.values[application.origin] != nil)
             retirement.continuation.finish()
             try await receipt?.task.value
-            #expect(memory.values[application.origin] == nil)
+            #expect(memory.values[application.origin] != nil)
             #expect(store.state(for: application.origin) == .reauthenticationRequired)
         } catch {
             await drain()
@@ -409,6 +414,225 @@ struct CloudflareAccessSessionStoreTests {
         #expect(!memory.events.contains("save"))
         #expect(store.state(for: application.origin) == .reauthenticationRequired)
         #expect(store.snapshot(for: application.origin) == nil)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `distinct origins keep A and B through expiry restart renewal and explicit logout`(
+        legacy: Bool, loadBeforeExpiry: Bool) async throws
+    {
+        let memory = MemoryStore()
+        let tokens = try CloudflareAccessTestTokens()
+        let a = try CloudflareAccessTestTokens.application()
+        let b = try CloudflareAccessApplication(
+            origin: CloudflareAccessOrigin(#require(URL(string: "https://other.example.test"))),
+            issuer: a.issuer, audience: a.audience)
+        let expiry = Date(timeIntervalSince1970: 2_000_000_000)
+        var now = expiry.addingTimeInterval(-60)
+        func session(_ app: CloudflareAccessApplication, _ subject: String, expires: Date) throws
+            -> CloudflareAccessSession
+        {
+            let token = try tokens.token([
+                "iss": app.issuer.absoluteString, "aud": [app.audience],
+                "type": "app", "sub": subject, "exp": expires.timeIntervalSince1970,
+            ])
+            return CloudflareAccessSession(application: app, subject: subject, token: token, expiresAt: expires)
+        }
+        var next = try session(a, "A", expires: expiry)
+        func owner() -> CloudflareAccessSessionStore {
+            CloudflareAccessSessionStore(
+                persistence: memory.persistence, authenticate: { _, _ in next },
+                now: { now }, retireTransports: { _ in })
+        }
+        let initial = owner()
+        _ = try await initial.signIn(application: a, openBrowser: { _ in }).value
+        if legacy {
+            memory.values[a.origin] = try String(data: JSONEncoder().encode(next), encoding: .utf8)
+        }
+        next = try session(b, "B", expires: expiry.addingTimeInterval(3600))
+        _ = try await initial.signIn(application: b, openBrowser: { _ in }).value
+        // Reconstruct before A is read: restoration must retain an already expired account.
+        let restarted = owner()
+        if loadBeforeExpiry {
+            #expect(restarted.snapshot(for: a.origin)?.session.subject == "A")
+        }
+        now = expiry
+        #expect(restarted.snapshot(for: a.origin) == nil)
+        try await restarted.waitForRetirement(of: a.origin)
+        #expect(restarted.snapshot(for: b.origin)?.session.subject == "B")
+        next = try session(a, "B", expires: expiry.addingTimeInterval(3600))
+        await #expect(throws: CloudflareAccessError.accountMismatch) {
+            try await restarted.signIn(application: a, openBrowser: { _ in }).value
+        }
+        let otherIssuer = try CloudflareAccessApplication(
+            origin: a.origin, issuer: #require(URL(string: "https://other.cloudflareaccess.com")), audience: a.audience)
+        next = try session(otherIssuer, "A", expires: expiry.addingTimeInterval(3600))
+        await #expect(throws: CloudflareAccessError.accountMismatch) {
+            try await restarted.signIn(application: otherIssuer, openBrowser: { _ in }).value
+        }
+        next = try session(a, "A", expires: expiry.addingTimeInterval(3600))
+        let renewed = try await restarted.signIn(application: a, openBrowser: { _ in }).value
+        try await restarted.requireReauthentication(for: a.origin, revision: renewed.revision)
+        let afterRevocation = owner()
+        next = try session(a, "B", expires: expiry.addingTimeInterval(3600))
+        await #expect(throws: CloudflareAccessError.accountMismatch) {
+            try await afterRevocation.signIn(application: a, openBrowser: { _ in }).value
+        }
+        #expect(afterRevocation.snapshot(for: b.origin)?.session.subject == "B")
+        try await afterRevocation.forget(a.origin).task.value
+        let afterLogout = owner()
+        _ = try await afterLogout.signIn(application: a, openBrowser: { _ in }).value
+        let final = owner()
+        #expect(final.snapshot(for: a.origin)?.session.subject == "B")
+        #expect(final.snapshot(for: b.origin)?.session.subject == "B")
+    }
+
+    @Test func `read save and delete failures cannot release the expected principal`() async throws {
+        let memory = MemoryStore()
+        let tokens = try CloudflareAccessTestTokens()
+        let app = try CloudflareAccessTestTokens.application()
+        var next = try tokens.session(subject: "A")
+        func owner() -> CloudflareAccessSessionStore {
+            CloudflareAccessSessionStore(
+                persistence: memory.persistence, authenticate: { _, _ in next }, retireTransports: { _ in })
+        }
+        let initial = owner()
+        let original = try await initial.signIn(application: app, openBrowser: { _ in }).value
+        memory.canSave = false
+        await #expect(throws: CloudflareAccessError.storageFailed) {
+            try await initial.requireReauthentication(for: app.origin, revision: original.revision)
+        }
+        next = try tokens.session(subject: "B")
+        let restarted = owner()
+        memory.canLoad = false
+        await #expect(throws: CloudflareAccessError.storageFailed) {
+            try await restarted.signIn(application: app, openBrowser: { _ in }).value
+        }
+        memory.canLoad = true
+        memory.canSave = true
+        await #expect(throws: CloudflareAccessError.accountMismatch) {
+            try await restarted.signIn(application: app, openBrowser: { _ in }).value
+        }
+        memory.canDelete = false
+        await #expect(throws: CloudflareAccessError.storageFailed) {
+            try await restarted.forget(app.origin).task.value
+        }
+        await #expect(throws: CloudflareAccessError.accountMismatch) {
+            try await restarted.signIn(application: app, openBrowser: { _ in }).value
+        }
+        #expect(owner().snapshot(for: app.origin)?.session.subject == "A")
+    }
+
+    @Test(arguments: [false, true])
+    func `cold forget cannot restore credentials while secure deletion is pending or failed`(
+        succeeds: Bool) async throws
+    {
+        let memory = MemoryStore()
+        let a = try CloudflareAccessTestTokens().session(subject: "A")
+        memory.values[a.origin] = try String(data: JSONEncoder().encode(a), encoding: .utf8)
+        memory.canDelete = succeeds
+        let gate = LoginGate()
+        let owner = CloudflareAccessSessionStore(
+            persistence: memory.persistence, retireTransports: { _ in _ = try? await gate.login() })
+        let retirement = owner.forget(a.origin)
+        #expect(owner.snapshot(for: a.origin) == nil)
+        await gate.waitUntilStarted()
+        #expect(owner.snapshot(for: a.origin) == nil)
+        gate.complete(a)
+        if succeeds { try await retirement.task.value }
+        else { await #expect(throws: CloudflareAccessError.storageFailed) { try await retirement.task.value } }
+        #expect(owner.snapshot(for: a.origin) == nil)
+        #expect((memory.values[a.origin] == nil) == succeeds)
+    }
+
+    @Test(arguments: [false, true])
+    func `failed cold forget cannot readmit its saved grant on a failed sign in`(cancel: Bool) async throws {
+        let memory = MemoryStore()
+        let tokens = try CloudflareAccessTestTokens()
+        let application = try CloudflareAccessTestTokens.application()
+        let original = try tokens.session(subject: "A")
+        memory.values[application.origin] = try String(data: JSONEncoder().encode(original), encoding: .utf8)
+        memory.canDelete = false
+        var failAuthentication = true
+        var next = try tokens.session(subject: "B")
+        let owner = CloudflareAccessSessionStore(
+            persistence: memory.persistence,
+            authenticate: { _, _ in
+                if failAuthentication {
+                    if cancel { throw CancellationError() }
+                    throw CloudflareAccessError.loginFailed
+                }
+                return next
+            },
+            retireTransports: { _ in })
+        await #expect(throws: CloudflareAccessError.storageFailed) {
+            try await owner.forget(application.origin).task.value
+        }
+        #expect(owner.snapshot(for: application.origin) == nil)
+        let failed = owner.signIn(application: application, openBrowser: { _ in })
+        if cancel { await #expect(throws: CancellationError.self) { try await failed.value } }
+        else { await #expect(throws: CloudflareAccessError.loginFailed) { try await failed.value } }
+        #expect(owner.snapshot(for: application.origin) == nil)
+        #expect(owner.currentRevision(for: application.origin) == 0)
+
+        failAuthentication = false
+        await #expect(throws: CloudflareAccessError.accountMismatch) {
+            try await owner.signIn(application: application, openBrowser: { _ in }).value
+        }
+        #expect(owner.snapshot(for: application.origin) == nil)
+        next = try tokens.session(subject: "A")
+        memory.canSave = false
+        await #expect(throws: CloudflareAccessError.storageFailed) {
+            try await owner.signIn(application: application, openBrowser: { _ in }).value
+        }
+        #expect(owner.snapshot(for: application.origin) == nil)
+        memory.canSave = true
+        let fresh = try await owner.signIn(application: application, openBrowser: { _ in }).value
+        #expect(owner.snapshot(for: application.origin)?.revision == fresh.revision)
+        #expect(fresh.session.subject == "A")
+    }
+
+    @Test(arguments: [false, true])
+    func `canceling renewal retains A and the other origin B across restart`(
+        duringRetirement: Bool) async throws
+    {
+        let memory = MemoryStore()
+        let tokens = try CloudflareAccessTestTokens()
+        let app = try CloudflareAccessTestTokens.application()
+        let a = try tokens.session(subject: "A")
+        let initial = CloudflareAccessSessionStore(
+            persistence: memory.persistence, authenticate: { _, _ in a }, retireTransports: { _ in })
+        let first = try await initial.signIn(application: app, openBrowser: { _ in }).value
+        let bOrigin = try CloudflareAccessOrigin(#require(URL(string: "https://other.example.test")))
+        let bApplication = CloudflareAccessApplication(origin: bOrigin, issuer: app.issuer, audience: app.audience)
+        let bToken = try tokens.token([
+            "iss": app.issuer.absoluteString, "aud": [app.audience],
+            "type": "app", "sub": "B", "exp": a.expiresAt.timeIntervalSince1970,
+        ])
+        let b = CloudflareAccessSession(
+            application: bApplication, subject: "B", token: bToken, expiresAt: a.expiresAt)
+        let other = CloudflareAccessSessionStore(
+            persistence: memory.persistence, authenticate: { _, _ in b }, retireTransports: { _ in })
+        _ = try await other.signIn(application: bApplication, openBrowser: { _ in }).value
+        try await initial.requireReauthentication(for: app.origin, revision: first.revision)
+        let gate = LoginGate()
+        let renewing = CloudflareAccessSessionStore(
+            persistence: memory.persistence,
+            authenticate: { _, _ in duringRetirement ? a : try await gate.login() },
+            retireTransports: { _ in
+                if duringRetirement { _ = try? await gate.login() }
+            })
+        let attempt = renewing.signIn(application: app, openBrowser: { _ in })
+        await gate.waitUntilStarted()
+        renewing.cancelSignIn(for: app.origin)
+        gate.complete(try tokens.session(subject: "B"))
+        await #expect(throws: CancellationError.self) { try await attempt.value }
+        let restarted = CloudflareAccessSessionStore(
+            persistence: memory.persistence,
+            authenticate: { _, _ in try tokens.session(subject: "B") }, retireTransports: { _ in })
+        await #expect(throws: CloudflareAccessError.accountMismatch) {
+            try await restarted.signIn(application: app, openBrowser: { _ in }).value
+        }
+        #expect(restarted.snapshot(for: bOrigin)?.session.subject == "B")
     }
 
     @Test func `default Keychain restores new owners and awaits isolated deletion`() async throws {
