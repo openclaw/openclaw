@@ -14,7 +14,7 @@ const catalog = {
       predictionShortcut: "Tab",
       dismissPrediction: "Dismiss suggestion",
       predictionAvailable:
-        "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It will not be sent automatically.",
+        "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Type a message first.",
@@ -60,16 +60,16 @@ const catalog = {
       attachFileOption: "File",
       menu: {
         toolAccess: {
-          loadFailed: "Couldn’t load tools.",
+          loadFailed: "Couldn’t load tools. Try again.",
         },
-        offlineBlocked: "Reconnect to change tools for this chat.",
+        offlineBlocked: "Reconnect to change tools for this session.",
         adminBlocked: "Admin access is required to manage MCP servers.",
-        savingBlocked: "Saving… try again in a moment.",
+        savingBlocked: "Saving… Try again in a moment.",
       },
       overrides: {
         count: "{count} overrides",
         countOne: "{count} override",
-        clear: "Reset this chat’s changes",
+        clear: "Reset this session’s changes",
       },
       contextUsage: {
         title: "Context usage details",
@@ -208,7 +208,7 @@ const catalog = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
-        applyingSettings: "Applying chat settings",
+        applyingSettings: "Applying session settings",
         blockedByReview:
           "Queue paused. Review or discard the earlier held message in the conversation.",
         runningCommand: "Running command",

@@ -299,7 +299,7 @@ suite.define(() => {
       });
       await pane
         .locator(".chat-error")
-        .getByText("Couldn't change permissions", { exact: false })
+        .getByText("Couldn’t change permissions", { exact: false })
         .waitFor();
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
