@@ -173,7 +173,7 @@ iOS screenshot capture, Store Release, and its screenshot-only operation use `xc
 
 Before checkout, the screenshot capture and release jobs disable host Spotlight indexing on their disposable runners, matching release qualification. This reduces contention while retaining the existing simulator headroom checks. The optional `startup_probe` diagnostic keeps indexing enabled for its Spotlight positive controls. Local screenshot commands leave host indexing unchanged.
 
-Screenshot-only runs retain the full build and XCTest logs and archived `.xcresult` bundles alongside phase and resource diagnostics, including when capture fails. These runs use synthetic screenshot fixtures without release credentials; the console keeps only the final 8 KiB of each native command's output.
+Screenshot-only runs retain the full build and XCTest logs and archived `.xcresult` bundles alongside phase and resource diagnostics, including when capture fails. Main CI also retains the full command logs in its screenshot timing diagnostics artifact. These captures use synthetic screenshot fixtures; the console keeps only the final 8 KiB of each native command's output.
 
 The shared screenshot wrapper scans and mounts installed runtimes, ensures CI has the watchOS simulator runtime matching the selected Xcode SDK, downloading it only when unavailable, and logs the image, Xcode, and runtime inventory. Watch capture selects a supported device type from the latest available watchOS runtime, so an image without pre-created Watch devices still works. If CI device creation reports a missing Watch runtime path, the capture owner logs the disk-image inventory, deletes only that runtime's image, downloads the version matching the selected Xcode SDK, and verifies its mounted bundle path before retrying creation once. Runtime replacement waits up to 120 seconds for deleting registrations and every observed MobileAsset path to disappear before downloading or importing a replacement; a successful delete command alone does not establish completion. Ambiguous image registrations, cleanup timeouts, failed downloads, and failed retries stop capture with an error. The existing capture lifecycle still owns simulator creation and cleanup; the existing phone-only mode does not provision Watch runtimes.
 
@@ -444,6 +444,12 @@ this pilot does not change defaults, fork admission, or worker limits. The Boat
 GitHub integration, repository access, and account capacity must be configured
 before dispatch. Resource, cache, and artifact behavior still require live
 qualification before expanding the cutover.
+
+For artifact consumer qualification, set `ci_shape=main`. The Boat build keeps
+the 35-minute dispatch budget, and the plan selects the existing macOS runtime
+and published-driver artifact consumers even for a CI-only change. Those
+consumers remain selected on hosted retries. The macOS scope retains its native
+Node, Swift, and shared-package checks; no platform proof moves to Boat.
 
 ### RunsOn qualification
 

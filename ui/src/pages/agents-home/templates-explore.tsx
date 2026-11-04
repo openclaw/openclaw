@@ -294,7 +294,13 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                             result().sections.length === 0
                           }
                         >
-                          <p class="agents-home__template-empty">{t("templatesCatalog.empty")}</p>
+                          <p class="agents-home__template-empty">
+                            {t(
+                              view.query.trim() || view.category
+                                ? "templatesCatalog.empty"
+                                : "templatesCatalog.emptyUnfiltered",
+                            )}
+                          </p>
                         </Show>
                         <Show when={overview && result().featured.length > 0}>
                           <CatalogDiscoverySection

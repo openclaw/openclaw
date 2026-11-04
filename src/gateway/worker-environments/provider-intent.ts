@@ -331,6 +331,8 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           : undefined;
         assertEnvironmentRecipeSecretsMapped(recipe, profile.setupSecrets);
         const setupRecipe = recipe?.identity;
+        const runSetupScript =
+          profile.runSetupScript === false ? false : createOptions.runSetupScript;
         signal?.throwIfAborted();
         // An executable recipe does not authorize itself. Non-admin callers retain
         // ordinary checkout preparation without executing it or filling a reserve.
@@ -338,9 +340,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           target &&
           provider.requiresNodeEnrollment &&
           options.prepareNodeArtifacts &&
-          (!setupRecipe ||
-            createOptions.runSetupScript === false ||
-            createOptions.setupAuthorized === true)
+          (!setupRecipe || runSetupScript === false || createOptions.setupAuthorized === true)
         ) {
           if (createOptions.imageReserve) {
             const admittedTarget = structuredClone(target);
@@ -366,7 +366,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
             artifacts: prepared.artifacts,
             setupRecipe,
             recipe,
-            runSetupScript: createOptions.runSetupScript,
+            runSetupScript,
           });
           profileSnapshot = project
             ? { ...resolved.profileSnapshot, project: { ...project, preparation } }

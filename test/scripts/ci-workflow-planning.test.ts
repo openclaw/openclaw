@@ -5583,6 +5583,74 @@ describe("ci workflow guards", () => {
     ).not.toBe(0);
   });
 
+  it.each([1, 2])("keeps Boat artifact consumers and build budget on attempt %s", (runAttempt) => {
+    const admitted = runRunnerProfileFixture({
+      configuredProfile: "hybrid",
+      eventName: "workflow_dispatch",
+      requestedProfile: "boat",
+      ciShape: "main",
+      qualificationDispatch: true,
+      targetSupportsContract: true,
+      runAttempt,
+    });
+    expect(admitted.status, admitted.output).toBe(0);
+    const workflow = readCiWorkflow();
+    const manifest = requiredWorkflowStep(workflow.jobs.preflight.steps, "Build CI manifest");
+    const context = {
+      eventName: "workflow_dispatch" as const,
+      repository: "openclaw/openclaw",
+      runnerBackend: "hybrid" as const,
+      requestedRunnerBackend: "boat" as const,
+      ciShape: "main" as const,
+      releaseGate: true,
+      runAttempt,
+      preflightOutputs: admitted.outputs,
+      steps: {
+        qualification_dispatch: { outputs: { eligible: "true" } },
+        changed_scope: { outputs: { run_macos: "false" } },
+      },
+    };
+    const appleScope = evaluateWorkflowExpression(manifest.env.OPENCLAW_CI_RUN_MACOS, context);
+    expect(appleScope).toBe("true");
+    expect(
+      evaluateWorkflowExpression(workflow.jobs["build-artifacts"]["timeout-minutes"], context),
+    ).toBe(35);
+    for (const control of [
+      { requestedRunnerBackend: "hybrid" as const },
+      { ciShape: "default" as const },
+      { steps: { ...context.steps, qualification_dispatch: { outputs: { eligible: "false" } } } },
+    ]) {
+      expect(
+        evaluateWorkflowExpression(manifest.env.OPENCLAW_CI_RUN_MACOS, { ...context, ...control }),
+      ).toBe("false");
+    }
+    const backend = runAttempt === 1 ? "hybrid" : "github";
+    expect(admitted.outputs.runner_profile).toBe(backend);
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "workflow_dispatch",
+      releaseGate: true,
+      runnerBackend: backend,
+      nodeRunnerBackend: backend,
+      changedPaths: [".github/workflows/ci.yml"],
+      targetFiles: ["apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift"],
+      publishedDriverUpdateCapability: true,
+      scopeEnv: {
+        OPENCLAW_CI_QUALIFICATION: "true",
+        OPENCLAW_CI_SHAPE: "main",
+        OPENCLAW_CI_RUN_MACOS: String(appleScope),
+        GITHUB_RUN_ATTEMPT: String(runAttempt),
+      },
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs).toMatchObject({
+      run_build_artifacts: "true",
+      run_macos_swift: "true",
+      run_published_driver_update: "true",
+    });
+  });
+
   it("resolves admitted main qualification profiles without changing ordinary main routing", () => {
     for (const [configuredProfile, backend] of (
       ["", "github", "blacksmith", "hybrid"] as const
@@ -6138,7 +6206,7 @@ describe("ci workflow guards", () => {
       }
     }
     expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
-      "${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
+      "${{ (needs.preflight.outputs.boat_build_qualification == 'true' || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))) && 35 || 20 }}",
     );
     // PR events validate the artifact build on hosted runners (landing gate
     // stays satisfiable during Blacksmith outages); Testbox leases are
@@ -12645,6 +12713,7 @@ describe("ci workflow guards", () => {
     );
     expect(diagnostics.if).toBe("always()");
     expect(diagnostics.with.path.trim().split("\n")).toEqual([
+      "apps/ios/build/SnapshotLogs/*.log",
       "apps/ios/build/screenshot-diagnostics.json",
       "${{ runner.temp }}/ios-resource-timeline.jsonl",
     ]);

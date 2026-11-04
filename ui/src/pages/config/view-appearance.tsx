@@ -143,7 +143,8 @@ export function AppearanceSection(props: ConfigProps) {
   }
   const importMessage = () => {
     importResult();
-    return props.customThemeImportMessage;
+    const message = props.customThemeImportMessage;
+    return message?.kind === "error" ? message : null;
   };
   let focusFrame = 0;
   const showCustomThemeImport = () =>
@@ -446,7 +447,8 @@ export function AppearanceSection(props: ConfigProps) {
                       class="settings-theme-import__message settings-theme-import__message--error"
                       role="alert"
                     >
-                      {formatThemeValidationError(error())}
+                      <div>{t("configView.appearance.importFailed")}</div>
+                      <div>{formatThemeValidationError(error())}</div>
                     </div>
                   )}
                 >

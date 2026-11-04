@@ -694,7 +694,7 @@ suite.define(() => {
     const threads = page.locator('[data-session-section="ungrouped"]');
     await expect.poll(() => threads.locator(".sidebar-recent-session").count()).toBe(2);
 
-    const newThread = page.locator(".sidebar-rail").getByRole("link", { name: "New conversation" });
+    const newThread = page.locator(".sidebar-rail").getByRole("link", { name: "New session" });
     await newThread.focus();
     await page.keyboard.press("Enter");
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
