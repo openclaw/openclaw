@@ -5,9 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { sanitizeSessionHistory } from "./replay-history.js";
+import { xaiGifReplayMimes } from "./xai-gif-replay.fixture.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
-  // mock-isolation: Replay sanitization precedes provider-specific behavior.
   resolveProviderRuntimePlugin: () => undefined,
   sanitizeProviderReplayHistoryWithPluginAsync: () => undefined,
   validateProviderReplayTurnsWithPlugin: () => undefined,
@@ -33,6 +33,10 @@ function replay(
 }
 
 describe("sanitizeSessionHistory", () => {
+  it("rewrites a stored GIF to JPEG before an xAI replay and leaves it for Anthropic", async () => {
+    await expect(xaiGifReplayMimes(replay)).resolves.toEqual(["image/gif", "image/jpeg"]);
+  });
+
   it("preserves multiple signed Haiku 5.5 turns after an appended context update", async () => {
     const modelId = "claude-haiku-5-5";
     const messages: AgentMessage[] = [makeUserMessage("first", 0)];
@@ -82,13 +86,9 @@ describe("sanitizeSessionHistory", () => {
     ];
 
     const sanitized = await replay(messages);
-    const toolResult = sanitized.find((m) => m && typeof m === "object" && m.role === "toolResult");
-    expect(toolResult).toMatchObject({
-      role: "toolResult",
-      toolCallId: "call1",
-      toolName: "web_fetch",
-    });
-    expect(toolResult).not.toHaveProperty("details");
+    const found = sanitized.find((m) => m && typeof m === "object" && m.role === "toolResult");
+    expect(found).toMatchObject({ role: "toolResult", toolCallId: "call1", toolName: "web_fetch" });
+    expect(found).not.toHaveProperty("details");
     expect(JSON.stringify(sanitized)).not.toContain("Ignore previous instructions");
   });
 

@@ -4,6 +4,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 export type ImageSanitizationLimits = {
   maxDimensionPx?: number;
   maxBytes?: number;
+  // xAI Responses accepts JPG, PNG, WebP, and ICO. A stored GIF that is already
+  // inside the size cap is still rejected, and the same bytes are replayed on
+  // every later turn. Rewrite that GIF to a JPEG still before the request.
+  transcodeGifToJpeg?: boolean;
 };
 
 export const DEFAULT_IMAGE_MAX_DIMENSION_PX = 1200;

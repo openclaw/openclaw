@@ -222,8 +222,9 @@ export async function sanitizeContentBlocksImages(
       const verifyDecodability = opts.verifyDecodability;
       const resized = await (async (): Promise<{ base64: string; mimeType: string }> => {
         // Only callers sanitizing persisted bytes verify them, and only those bytes repeat.
+        const transcodeGifToJpeg = opts.transcodeGifToJpeg === true && mimeType === "image/gif";
         const cacheKey = verifyDecodability
-          ? `${(prepared.digest ??= createHash("sha256").update(canonicalData).digest("base64url"))}:${maxDimensionPx}:${maxBytes}`
+          ? `${(prepared.digest ??= createHash("sha256").update(canonicalData).digest("base64url"))}:${maxDimensionPx}:${maxBytes}${transcodeGifToJpeg ? ":jpeg" : ""}`
           : undefined;
         const cached = cacheKey === undefined ? undefined : verifiedImageOutcomes.get(cacheKey);
         if (cached !== undefined) {
@@ -236,7 +237,7 @@ export async function sanitizeContentBlocksImages(
         const overBytes = buf.byteLength > maxBytes;
         const overDimensions =
           meta !== null && (meta.width > maxDimensionPx || meta.height > maxDimensionPx);
-        if (imageWithinLimits(buf, meta, maxDimensionPx, maxBytes)) {
+        if (!transcodeGifToJpeg && imageWithinLimits(buf, meta, maxDimensionPx, maxBytes)) {
           // An unavailable backend passes images through unverified; never record that.
           if (cacheKey !== undefined && (await verifyImageDecodability(buf))) {
             verifiedImageOutcomes.set(cacheKey, null);
