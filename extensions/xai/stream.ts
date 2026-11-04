@@ -71,8 +71,9 @@ async function transcodeForXai(block: XaiImageBlock) {
     jpeg = await resizeToJpeg({ buffer, maxSide: 4096, quality: 85, withoutEnlargement: true })
       .then((out) => out.toString("base64"))
       .catch(() => null);
-    if (xaiJpegCache.size >= 64) {
-      xaiJpegCache.delete(xaiJpegCache.keys().next().value as string);
+    const oldest = xaiJpegCache.size >= 64 ? xaiJpegCache.keys().next().value : undefined;
+    if (oldest !== undefined) {
+      xaiJpegCache.delete(oldest);
     }
     xaiJpegCache.set(block.data, jpeg);
   }
@@ -102,13 +103,14 @@ function createXaiImageFormatWrapper(baseStreamFn: StreamFn | undefined): Stream
               ...msg,
               content: await Promise.all(
                 msg.content.map((block) =>
-                  needsXaiImageTranscode(block) ? transcodeForXai(block) : block,
+                  needsXaiImageTranscode(block) ? transcodeForXai(block) : Promise.resolve(block),
                 ),
               ),
             }
           : msg,
       ),
     ).then((messages) =>
+      // SAFETY: only image blocks change, into image or text blocks every message role accepts.
       underlying(model, { ...context, messages: messages as typeof context.messages }, options),
     );
   };

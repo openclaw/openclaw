@@ -114,14 +114,14 @@ describe("xai stream wrappers", () => {
     const messages = [
       { role: "toolResult", content: [gif] },
       { role: "user", content: [gif] },
-    ] as unknown as Parameters<StreamFn>[1]["messages"];
+    ] as unknown as Parameters<StreamFn>[1]["messages"]; // SAFETY: minimal message fixtures.
     const send = async (provider: string) => {
       let seen: unknown[] = [];
       const streamFn: StreamFn = (_model, ctx) => {
         seen = ctx.messages.flatMap((msg): unknown[] =>
           Array.isArray(msg.content) ? msg.content : [],
         );
-        return {} as ReturnType<StreamFn>;
+        return {} as ReturnType<StreamFn>; // SAFETY: wrapper result is unused.
       };
       await wrapXaiProviderStream({ provider: "xai", modelId: "grok-4", streamFn })?.(
         xaiModel({ provider }),
