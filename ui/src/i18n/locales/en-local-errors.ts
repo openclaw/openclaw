@@ -23,7 +23,7 @@ const enLocalErrors = {
       "Web Push is unavailable in this browser. On iPhone or iPad, add OpenClaw to the Home Screen and open the installed app.",
     enableFirst: "Enable notifications before changing notification preferences.",
     vapidMismatch:
-      "This browser push subscription belongs to another Gateway. Open this Gateway's own Control UI, or configure every mutually trusted Gateway behind this PWA with the same VAPID keypair.",
+      "This browser push subscription belongs to another Gateway. Open this Gateway’s own Control UI, or configure every mutually trusted Gateway behind this PWA with the same VAPID keypair.",
     permission: "Notification permission {permission}",
   },
   nativeDeviceEditError: "Native settings returned an invalid edit result",
