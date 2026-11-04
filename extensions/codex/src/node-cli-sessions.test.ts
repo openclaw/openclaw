@@ -70,16 +70,6 @@ function resumeRequest(
   return JSON.stringify({ sessionId, prompt: "continue", ...overrides });
 }
 
-function summary(
-  sessionId: string,
-  sessionFile: string,
-  cwd: string,
-  lastMessage: string,
-  updatedAt = "2026-05-14T00:10:24.000Z",
-) {
-  return { sessionId, sessionFile, cwd, lastMessage, updatedAt, messageCount: 1 };
-}
-
 async function scriptProcess(scriptArgs: string[]): Promise<RunCommandBuffered> {
   const { runCommandBuffered } = await vi.importActual<
     typeof import("openclaw/plugin-sdk/process-runtime")
