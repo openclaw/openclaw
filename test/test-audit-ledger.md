@@ -183,23 +183,28 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `bf10667561bf`: qualify ambient Computer Use interference in
-`extensions/codex/src/app-server/attempt-startup-lifetime.test.ts`. Its two
-fixture configurations omit the disabled setting even though their fake clients
-do not answer Computer Use discovery. The production resolver permits ambient
-activation before the peer-lifetime or monitor-cleanup keepers run.
+Pinned main `bf10667561bf`: isolate the two fixture configurations in
+`extensions/codex/src/app-server/attempt-startup-lifetime.test.ts` from ambient
+Computer Use activation. Their fake clients do not answer discovery, which
+otherwise preempts the intended peer-lifetime or monitor-cleanup keepers.
 
 The source closure retains both declarations and all three registrations:
 healthy-peer completion, replacement binding/current-route authority, and
-capture-failure/abort resource release. Local fixture configuration is the repair
-candidate; the shared startup helper and intentional Computer Use fixtures remain
-separate owners. Native Codex's plugin-list protocol requires a marketplace
-inventory; this source inspection makes no native execution claim.
+capture-failure/abort resource release. Both configurations explicitly disable
+Computer Use; the shared startup helper and intentional-enabled fixtures remain
+unchanged. Native Codex's plugin-list protocol requires a marketplace inventory;
+this source inspection makes no native execution claim.
 
-The test is unchanged. Untouched baseline, ambient failing control, repaired
-normal/ambient proof, intentional-enabled sibling proof, focused checks, fresh
-review and CI remain pending. No runtime defect, passing check or applied repair
-is claimed by this qualification checkpoint.
+The untouched three-case baseline and matched disabled control pass through the
+actual DB-worker runner. Enabling ambient Computer Use on the original makes all
+three cases fail after readiness errors preempt their expected startup/monitor
+errors. The repaired three cases pass with ambient activation both on and off;
+all four intentional-enabled sibling cases also pass. Every original assertion
+remains. Six added test lines have an exact separate allocation; production and
+the shared scalar are unchanged. Focused typecheck, typed lint, format, MDX and
+whitespace pass. The local ratchet fails with137 inherited lines of debt: the
+untouched baseline has the same137, and this repair adds six lines with six lines
+of credit. Fresh review and CI remain pending; failed checks stay failed.
 
 ## Completed source review
 
