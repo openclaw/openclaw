@@ -63,9 +63,12 @@ import { systemHandlers } from "./system.js";
 
 describe("system.info", () => {
   let sampleTime = Date.now();
+  let sampleElapsed = performance.now();
   beforeEach(() => {
     sampleTime += 30_001;
+    sampleElapsed += 30_001;
     vi.spyOn(Date, "now").mockReturnValue(sampleTime);
+    vi.spyOn(performance, "now").mockReturnValue(sampleElapsed);
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     vi.spyOn(os, "platform").mockReturnValue("darwin");
     mocks.runCommandWithTimeout.mockReset().mockImplementation(mountedVolumeOutput);
@@ -77,6 +80,7 @@ describe("system.info", () => {
   });
   afterEach(() => {
     sampleTime = Math.max(sampleTime, Date.now());
+    sampleElapsed = Math.max(sampleElapsed, performance.now());
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -125,6 +129,7 @@ describe("system.info", () => {
     eventLoop.cpuCoreRatio = 0.6;
     readCpus.mockReturnValue([]);
     vi.mocked(Date.now).mockReturnValue(sampleTime + 1_999);
+    vi.mocked(performance.now).mockReturnValue(sampleElapsed + 1_999);
     await handler(request);
 
     expect(respond).toHaveBeenCalledTimes(2);
@@ -162,7 +167,9 @@ describe("system.info", () => {
     ]);
 
     sampleTime += 24 * 60 * 60_000;
+    sampleElapsed += 24 * 60 * 60_000;
     vi.mocked(Date.now).mockReturnValue(sampleTime);
+    vi.mocked(performance.now).mockReturnValue(sampleElapsed);
     await handler(request);
     expect(readCpus).not.toHaveBeenCalled();
     expect(respond.mock.calls[2]?.[1]).toMatchObject({
@@ -227,9 +234,14 @@ describe("system.info", () => {
     }
   });
 
-  it.each([false, true])(
-    "bounds state-volume reads, keeps live counters and invalidates on expiry or path change (unavailable=%s)",
-    async (unavailable) => {
+  it.each([
+    { unavailable: false, wallClockStep: -3_600_000 },
+    { unavailable: false, wallClockStep: 3_600_000 },
+    { unavailable: true, wallClockStep: -3_600_000 },
+    { unavailable: true, wallClockStep: 3_600_000 },
+  ])(
+    "bounds state-volume reads across clock steps and path changes ($unavailable, $wallClockStep)",
+    async ({ unavailable, wallClockStep }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", "/system-info-first");
       vi.spyOn(process, "uptime").mockReturnValue(123);
       vi.spyOn(process, "memoryUsage").mockReturnValue(process.memoryUsage());
@@ -261,7 +273,8 @@ describe("system.info", () => {
         totalBytes: 2048,
         availableBytes: 256,
       }));
-      vi.mocked(Date.now).mockReturnValue(sampleTime + 29_999);
+      vi.mocked(Date.now).mockReturnValue(sampleTime + wallClockStep + 29_999);
+      vi.mocked(performance.now).mockReturnValue(sampleElapsed + 29_999);
       await handler(request);
       expect(readDisk).toHaveBeenCalledTimes(1);
       expect(respond.mock.calls[1]?.[1]).toEqual({
@@ -269,7 +282,8 @@ describe("system.info", () => {
         memoryFreeBytes: 512,
         loadAverage: [4, 5, 6],
       });
-      vi.mocked(Date.now).mockReturnValue(sampleTime + 30_000);
+      vi.mocked(Date.now).mockReturnValue(sampleTime + wallClockStep + 30_000);
+      vi.mocked(performance.now).mockReturnValue(sampleElapsed + 30_000);
       await handler(request);
       expect(readDisk).toHaveBeenCalledTimes(2);
       expect(respond.mock.calls[2]?.[1]).toMatchObject({
