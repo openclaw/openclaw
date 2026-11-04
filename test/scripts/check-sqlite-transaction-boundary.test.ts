@@ -102,13 +102,13 @@ it("rejects async commit hooks without forbidding async preparation or unrelated
   check(`
         import { runSqliteImmediateTransactionSync as transact } from "./sqlite-transaction.js";
         async function commitLater() {}
-        transact(db, () => 42, { async withCommit(commit) { commit(); } });
+        transact(db, () => 42, { ...options, async withCommit(commit) { commit(); } });
         runPostgresTransactionSync(db, () => 42, { withCommit: commitLater });
         runSqliteImmediateTransaction(db, async () => () => 42, { withCommit: async (commit) => commit() });
         const withCommit = async () => undefined;
         transact(db, () => 42, { withCommit });
         transact(db, () => 42, { "withCommit": async function (commit) { commit(); } });
-        transact(db, () => 42, { withCommit(commit) { commit(); } });
+        transact(db, () => 42, { ...options, withCommit(commit) { commit(); } });
         createSession({ withCommit: async (commit) => await commit() });
       `).toEqual(
     [4, 5, 6, 8, 9].map((line) => ({

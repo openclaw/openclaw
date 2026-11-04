@@ -161,7 +161,7 @@ export function findSqliteTransactionBoundaryViolations(
       const literal = options && unwrapExpression(options);
       if (literal && ts.isObjectLiteralExpression(literal)) {
         for (const property of literal.properties) {
-          const name = property.name;
+          const name = "name" in property ? property.name : undefined;
           if (
             !name ||
             !(ts.isIdentifier(name) || ts.isStringLiteral(name)) ||
