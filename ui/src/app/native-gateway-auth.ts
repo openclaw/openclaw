@@ -48,24 +48,24 @@ type NativeAuthHost = Window & {
   };
 };
 
-function readNativeCredential(value: unknown): NativeGatewayAuthorization["auth"] {
+function readNativeCredential(value: Record<string, unknown>): NativeGatewayAuthorization["auth"] {
   // Preserve the accepted native method. In particular, role-configured Gateways
   // distinguish shared-owner token/password auth from device-token authentication.
-  if (isRecord(value)) {
-    const fields = Object.keys(value);
-    // Ingress-authenticated sessions sign device proof without a reusable Gateway credential.
-    if (fields.length === 0) {
-      return {};
-    }
-    if (fields.length === 1) {
-      if (typeof value.deviceToken === "string" && value.deviceToken) {
-        return { deviceToken: value.deviceToken };
-      }
-      if (typeof value.token === "string" && value.token) {
-        return { token: value.token };
-      }
-      if (typeof value.password === "string" && value.password) {
-        return { password: value.password };
+  const keys = Object.keys(value);
+  // Ingress-authenticated sessions sign device proof without a reusable Gateway credential.
+  if (keys.length === 0) {
+    return {};
+  }
+  if (keys.length === 1) {
+    const credential = value[keys[0]!];
+    if (typeof credential === "string" && credential) {
+      switch (keys[0]) {
+        case "deviceToken":
+          return { deviceToken: credential };
+        case "token":
+          return { token: credential };
+        case "password":
+          return { password: credential };
       }
     }
   }
@@ -88,6 +88,7 @@ function readAuthorization(
     !mode ||
     typeof client.version !== "string" ||
     typeof client.platform !== "string" ||
+    !isRecord(result.auth) ||
     !isStringArray(result.scopes) ||
     typeof device.id !== "string" ||
     typeof device.publicKey !== "string" ||
