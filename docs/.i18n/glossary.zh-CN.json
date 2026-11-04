@@ -808,6 +808,10 @@
     "target": "Anthropic（API + Claude CLI）"
   },
   {
+    "source": "Anthropic API-key setup",
+    "target": "Anthropic API 密钥设置"
+  },
+  {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
   },
@@ -1174,6 +1178,10 @@
   {
     "source": "Slack",
     "target": "Slack"
+  },
+  {
+    "source": "Slack relay connections",
+    "target": "Slack 中继连接"
   },
   {
     "source": "Synthetic",
