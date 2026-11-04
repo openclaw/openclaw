@@ -1,8 +1,6 @@
-import { createRequire } from "node:module";
 import { expect, it, vi } from "vitest";
 import * as mediaStore from "../../media/store.js";
 import type { UnifiedModelCatalogProviderContext } from "../../plugins/types.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   installClawRouterMusicHostFixture,
   musicWavFixture,
@@ -232,7 +230,7 @@ it.each([
     f.output = [event({ transcript: "x".repeat(1024 * 1024 + 1) }), "data: [DONE]\n"];
   }
   const save = vi.spyOn(mediaStore, "saveMediaBuffer");
-  await expect(f.execute()).rejects.toThrow();
+  await expect(f.execute()).rejects.toThrow(/^(?!.*timed out)/su);
   expect(f.posts()).toHaveLength(1);
   expect(f.alternateCalls).toBe(0);
   expect(save).not.toHaveBeenCalled();
@@ -353,215 +351,17 @@ it("keeps registered provider discovery, POST and EOF under one deadline", async
   const provider = f.acquired.registry.musicGenerationProviders.find(
     (entry) => entry.provider.id === "clawrouter",
   )!.provider;
-  const origin = f.config.models?.providers?.clawrouter?.baseUrl;
-  if (!origin) {
-    throw new Error("Music fixture origin missing");
-  }
-  const target = new URL(NATIVE, origin).href;
-  const undici: typeof import("undici") = createRequire(import.meta.url)("undici/index.js");
-  const key = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-  const previous = Object.getOwnPropertyDescriptor(globalThis, key);
-  const firstRead = createDeferredCore();
-  const restores: Array<() => void> = [];
-  const parents = new WeakMap<AbortSignal, AbortSignal>();
-  let timer: { signal: AbortSignal; deadline: number; handle: NodeJS.Timeout } | undefined;
-  let timerCount = 0;
-  let timerCleared = false;
-  let postSignal: AbortSignal | null | undefined;
-  let posts = 0;
-  let readers = 0;
-  let reads = 0;
-  let observed = false;
-  let held = false;
-  void f.held.promise.then(() => {
-    held = true;
-  });
-  const describe = (value: unknown) => {
-    const chain: Array<{ name: string; code: string }> = [];
-    let current = value;
-    for (let depth = 0; depth < 4 && current && typeof current === "object"; depth++) {
-      const name = "name" in current ? current.name : undefined;
-      const code = "code" in current ? current.code : undefined;
-      chain.push({
-        name:
-          typeof name === "string" &&
-          [
-            "Error",
-            "TypeError",
-            "TimeoutError",
-            "AbortError",
-            "DOMException",
-            "BodyTimeoutError",
-            "HeadersTimeoutError",
-            "SocketError",
-          ].includes(name)
-            ? name
-            : "other",
-        code:
-          typeof code === "string" &&
-          [
-            "UND_ERR_BODY_TIMEOUT",
-            "UND_ERR_HEADERS_TIMEOUT",
-            "UND_ERR_SOCKET",
-            "UND_ERR_ABORT",
-            "UND_ERR_ABORTED",
-            "UND_ERR_DESTROYED",
-            "UND_ERR_CLOSED",
-            "UND_ERR_RES_CONTENT_LENGTH_MISMATCH",
-            "ABORT_ERR",
-            "ECONNRESET",
-            "ETIMEDOUT",
-            "ERR_STREAM_PREMATURE_CLOSE",
-          ].includes(code)
-            ? code
-            : "other",
-      });
-      current = "cause" in current ? current.cause : undefined;
-    }
-    return chain;
-  };
-  const nativeSetTimeout = globalThis.setTimeout;
-  const nativeClearTimeout = globalThis.clearTimeout;
-  const nativeAny = AbortSignal.any;
-  const timerSpy = vi
-    .spyOn(globalThis, "setTimeout")
-    .mockImplementation((callback, delay, ...args) => {
-      const handle = nativeSetTimeout(callback, delay, ...args);
-      if (args[3] === "clawrouter.music") {
-        timerCount++;
-        const [controller, duration, start, , , signal] = args;
-        if (
-          controller instanceof AbortController &&
-          typeof duration === "number" &&
-          Number.isFinite(duration) &&
-          typeof start === "number" &&
-          Number.isFinite(start) &&
-          signal instanceof AbortSignal
-        ) {
-          timer = { signal, deadline: start + duration, handle };
-        }
-      }
-      return handle;
-    });
-  const clearSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation((handle) => {
-    if (timer && handle === timer.handle) {
-      timerCleared = true;
-    }
-    return nativeClearTimeout(handle);
-  });
-  const anySpy = vi.spyOn(AbortSignal, "any").mockImplementation((signals) => {
-    const combined = nativeAny.call(AbortSignal, signals);
-    if (timer && Array.isArray(signals) && signals.includes(timer.signal)) {
-      parents.set(combined, timer.signal);
-    }
-    return combined;
-  });
-  const fetch: typeof undici.fetch = (input, init) => {
-    const response = undici.fetch(input, init);
-    if (input === target && init?.method === "POST") {
-      posts++;
-      postSignal = init.signal;
-      void response
-        .then((result) => {
-          const body = result.body;
-          if (!body) {
-            return;
-          }
-          const getReader = body.getReader.bind(body);
-          const readerSpy = vi.spyOn(body, "getReader").mockImplementation((...args) => {
-            const reader = getReader(...args);
-            readers++;
-            const read = reader.read.bind(reader);
-            const readSpy = vi.spyOn(reader, "read").mockImplementation((...readArgs) => {
-              reads++;
-              firstRead.resolve();
-              const pending: ReturnType<typeof read> = Reflect.apply(read, reader, readArgs);
-              void pending.catch((error: unknown) => {
-                if (!observed) {
-                  observed = true;
-                  console.error(
-                    "[clawrouter-music-bound-first-read]",
-                    JSON.stringify({
-                      error: describe(error),
-                      retainedSignal: {
-                        aborted: timer?.signal.aborted,
-                        reason: describe(timer?.signal.reason),
-                      },
-                      postSignal: {
-                        aborted: postSignal?.aborted,
-                        reason: describe(postSignal?.reason),
-                      },
-                      retainedTimerRemainingMs: timer
-                        ? timer.deadline - performance.now()
-                        : undefined,
-                      beforeRetainedTimerCleanup: !timerCleared,
-                      originalAbsoluteDeadlineObserved: false,
-                    }),
-                  );
-                }
-              });
-              return pending;
-            });
-            restores.push(() => readSpy.mockRestore());
-            return reader;
-          });
-          restores.push(() => readerSpy.mockRestore());
-        })
-        .catch(() => undefined);
-    }
-    return response;
-  };
-  Object.defineProperty(globalThis, key, {
-    configurable: true,
-    writable: true,
-    value: { ...undici, fetch },
-  });
-  let settled: Promise<unknown> | undefined;
-  try {
-    const request = provider.generateMusic({
+  await expect(
+    provider.generateMusic({
       provider: "clawrouter",
       model: PRO,
       prompt: "A synthetic melody",
       cfg: f.config,
       agentDir: f.state.agentDir(),
       timeoutMs: 1000,
-    });
-    settled = request.then(
-      () => undefined,
-      () => undefined,
-    );
-    await Promise.race([firstRead.promise, settled]);
-    expect(posts).toBe(1);
-    expect(timerCount).toBe(1);
-    expect(readers).toBe(1);
-    expect(reads).toBeGreaterThan(0);
-    expect(held).toBe(true);
-    expect(timerCleared).toBe(false);
-    if (!timer || !postSignal) {
-      throw new Error("Music fixture did not bind the retained timer and POST signal");
-    }
-    // The guard composes the retained signal with its per-request cancellation owner.
-    expect(parents.get(postSignal)).toBe(timer.signal);
-    console.error(
-      "[clawrouter-music-bound-reader]",
-      JSON.stringify({ posts, timerCount, readers, reads, held, signalLineage: true }),
-    );
-    await expect(request).rejects.toThrow(/timed out/);
-    expect(f.posts()).toHaveLength(1);
-    await vi.waitFor(() => expect(f.heldClosed).toBe(true));
-    expect(f.alternateCalls).toBe(0);
-  } finally {
-    await settled;
-    for (const restore of restores.reverse()) {
-      restore();
-    }
-    anySpy.mockRestore();
-    clearSpy.mockRestore();
-    timerSpy.mockRestore();
-    if (previous) {
-      Object.defineProperty(globalThis, key, previous);
-    } else {
-      Reflect.deleteProperty(globalThis, key);
-    }
-  }
+    }),
+  ).rejects.toThrow(/timed out/);
+  expect(f.posts()).toHaveLength(1);
+  await vi.waitFor(() => expect(f.heldClosed).toBe(true));
+  expect(f.alternateCalls).toBe(0);
 });

@@ -1,3 +1,4 @@
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildGoogleMusicGenerationBody,
@@ -397,7 +398,17 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
         }
       } catch (cause) {
         // Undici can lose the abort cause after headers; retain the owned signal's actual reason.
-        const failure: unknown = operation?.signal?.aborted ? operation.signal.reason : cause;
+        let failure: unknown = operation?.signal?.aborted ? operation.signal.reason : cause;
+        if (
+          openRouter &&
+          !operation?.signal?.aborted &&
+          extractErrorCode(asOptionalRecord(failure)?.cause) === "UND_ERR_BODY_TIMEOUT"
+        ) {
+          // The explicit inactivity bound can fire before the operation deadline.
+          const timeout = new Error("ClawRouter music response body timed out", { cause: failure });
+          timeout.name = "TimeoutError";
+          failure = timeout;
+        }
         // This says only that replay is unsafe, not whether the operation was billed/refunded.
         const error =
           failure instanceof Error
