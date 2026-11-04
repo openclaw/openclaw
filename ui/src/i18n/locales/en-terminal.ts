@@ -27,7 +27,6 @@ const enTerminal = {
     insertUploadedPaths: "Insert uploaded paths",
     uploadExpired: "Uploaded files may have expired. Cancel this batch and choose the files again.",
     closeSession: "Close terminal session",
-    closeSessionTitle: "Close this terminal session?",
     sessions: "Terminal sessions",
     refreshSessions: "Refresh",
     loadingSessions: "Loading sessions…",
