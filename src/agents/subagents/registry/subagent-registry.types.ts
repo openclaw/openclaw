@@ -292,6 +292,7 @@ export type SubagentRunMaintenanceRecord = Pick<
   | "expectsCompletionMessage"
   | "killIntent"
   | "killReconciliation"
+  | "continuationRecipientAuthorityBinding"
 > & {
   execution: Pick<SubagentExecutionState, "status" | "endedAt">;
   delivery?: Pick<SubagentCompletionDeliveryState, "status" | "suspendedAt">;

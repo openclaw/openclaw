@@ -788,24 +788,42 @@ export async function hasPendingIdleRetryWork(
 }
 
 /**
- * Authoritative (async) cleanup guard: does the session still own live
- * continuation custody that needs it? Live work that is not durably delivered,
- * or a live pending delegate. Staged post-compaction delegates are excluded:
- * cleanup fails them when it deletes the session.
+ * Live work that is not durably delivered, or a live pending delegate. Staged post-compaction
+ * delegates are excluded: cleanup fails them when it deletes the session.
  */
-export async function hasLiveContinuationCustody(sessionKey: string): Promise<boolean> {
-  const live = await listContinuationRecords({
-    ownerSessionKey: sessionKey,
+function isLiveCustodyRecord(record: ContinuationRecord): boolean {
+  if (record.kind === "delegate") {
+    return record.cancelRequestedAt === undefined;
+  }
+  // A durably delivered record left `running` by a crash is done, not live.
+  return decodeWorkState(record)?.succeeded === undefined;
+}
+
+async function listLiveCustodyRecords(ownerSessionKey?: string): Promise<ContinuationRecord[]> {
+  return await listContinuationRecords({
+    ...(ownerSessionKey !== undefined ? { ownerSessionKey } : {}),
     kinds: ["work", "delegate"],
     statuses: ["queued", "running"],
   });
-  return live.some((record) => {
-    if (record.kind === "delegate") {
-      return record.cancelRequestedAt === undefined;
+}
+
+/**
+ * Authoritative (async) cleanup guard: does the session still own live
+ * continuation custody that needs it?
+ */
+export async function hasLiveContinuationCustody(sessionKey: string): Promise<boolean> {
+  return (await listLiveCustodyRecords(sessionKey)).some(isLiveCustodyRecord);
+}
+
+/** Every session that owns live continuation custody, by the cleanup guard's rule. */
+export async function listLiveContinuationCustodyOwners(): Promise<string[]> {
+  const owners = new Set<string>();
+  for (const record of await listLiveCustodyRecords()) {
+    if (isLiveCustodyRecord(record)) {
+      owners.add(record.ownerSessionKey);
     }
-    // A durably delivered record left `running` by a crash is done, not live.
-    return decodeWorkState(record)?.succeeded === undefined;
-  });
+  }
+  return [...owners];
 }
 
 /** Has this run already elected work for the session, in any status, including work that ran? */

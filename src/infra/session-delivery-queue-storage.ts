@@ -42,6 +42,7 @@ import {
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   SessionDeliverySafeRetryError,
+  isContinuationSessionDelivery,
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
 } from "./session-delivery-queue.records.js";
@@ -676,6 +677,27 @@ export async function loadPendingSessionDeliveries(
   }
   context.admission.assertCurrent();
   return entries;
+}
+
+/**
+ * The sessions pending continuation-owned rows are addressed to. A read only: a row that does not
+ * decode is left for the load that owns failing it.
+ */
+export async function listPendingContinuationSessionDeliveryKeys(
+  context: OpenClawStateWorkerContext,
+): Promise<string[]> {
+  const results = await executeSessionDelivery(context, {
+    type: "sessionDelivery.list",
+    input: undefined,
+  });
+  const sessionKeys = new Set<string>();
+  for (const result of results) {
+    const decoded = decodeStoredSessionDeliveryResult(result);
+    if (decoded.status === "loaded" && isContinuationSessionDelivery(decoded.entry)) {
+      sessionKeys.add(decoded.entry.sessionKey);
+    }
+  }
+  return [...sessionKeys];
 }
 
 /**

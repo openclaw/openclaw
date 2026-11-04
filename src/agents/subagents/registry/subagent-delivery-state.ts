@@ -132,6 +132,9 @@ export function projectSubagentRunForMaintenance(
     delivery: entry.delivery
       ? { status: entry.delivery.status, suspendedAt: entry.delivery.suspendedAt }
       : undefined,
+    ...(entry.continuationRecipientAuthorityBinding
+      ? { continuationRecipientAuthorityBinding: entry.continuationRecipientAuthorityBinding }
+      : {}),
   };
 }
 
