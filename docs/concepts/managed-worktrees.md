@@ -141,6 +141,11 @@ renames. Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
 open does not rewrite their inventories.
 
+Archive preparation compares live sandbox files with that accepted tree in the
+filesystem worker. If Git already preserves every accepted file and directory,
+cleanup needs no separate workspace overlay. Ignored files and empty directories
+still retain their restore receipt, and owner protection gates removal.
+
 This storage format requires [shared-state schema 35](/reference/database-schemas/state-schema-history#state-schema-35).
 Let pending workspace operations settle before downgrading. Older builds refuse
 the newer schema; rollback requires the verified pre-upgrade backup and its
@@ -244,7 +249,7 @@ Preparation logs include `templateDetails` with the backend, selection or failur
 
 The `checkout` phase includes its child phases; do not add it to `templateApply`. Sub-phases separate registration metadata and inspection, commit preparation, clone admission estimates, destination preparation, marker replacement, index location/copy/refresh, prompt publication, template release, and warm-slot acquisition/application. The clone-byte estimate is a disk-admission allowance, not measured bytes written.
 
-The `provision` phase includes ignored-file selection (`provisionInspect`), safe file copying (`provisionCopy`), and repository script execution (`setup`). Selection includes the Git worker queue; copying includes per-file eligibility and mutation safety checks. Copying runs in a filesystem worker so other sessions remain responsive; the new worktree waits for copying to finish before becoming ready. `provisionCopy` is absent when selection finds no files. Source custody waits and disk admission also occur inside `provision`; `diskAdmission` accumulates space checks across the entire preparation, so it is not exclusively a provisioning sub-phase. These timings do not log paths or setup output.
+The `provision` phase includes ignored-file selection (`provisionInspect`), copy admission and worker preparation (`provisionCopyWait`), safe file copying (`provisionCopy`), and repository script execution (`setup`). Selection includes the Git worker queue. `provisionCopyWait` includes filesystem worker queueing, startup, and eligibility checks before the first authorized mutation; `provisionCopy` covers the remaining copy work and safety checks. Copying runs in a filesystem worker so other sessions remain responsive; the new worktree waits for copying to finish before becoming ready. `provisionCopy` is absent when no file reaches an authorized mutation. Safe copying requests copy-on-write cloning when supported and falls back to ordinary copying otherwise; destination files remain independent of their source. Source custody waits and disk admission also occur inside `provision`; `diskAdmission` accumulates space checks across the entire preparation, so it is not exclusively a provisioning sub-phase. These timings do not log paths or setup output.
 
 Private Git index copies for template checkouts prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Safety snapshots use Git's read-only status and cached file metadata to identify changes. Clean checkouts reuse the committed tree without building a private snapshot index; changed checkouts hash only selected paths. Hidden index flags do not exclude edits from snapshots.
 
@@ -426,6 +431,14 @@ The manifest is read from the actual source checkout and does not need to be com
 
 Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes and access/modification times at the filesystem’s supported precision. This keeps the timestamp ordering of prepared build inputs and outputs instead of making every copied file look newly written. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
 
+Ordinary removal snapshots omit provisioned files inside `node_modules` directories,
+including nested package dependencies. Reinstall those dependencies after restoring
+the worktree. Other provisioned files, including edited local configuration, remain
+recoverable. Tracked files and non-ignored untracked files keep their normal snapshot
+protection, including files inside `node_modules`. Existing snapshots still restore
+their recorded dependencies; explicit exact-state retirement retains its complete
+provisioned-file capture.
+
 ## Run repository setup
 
 Git source materialization leaves submodules unpopulated, matching native worktree creation even when `submodule.recurse` is enabled. A repository setup script can initialize the submodules it needs.
@@ -541,7 +554,7 @@ workers so they do not wait in the shared SQLite writer queue. Creation, activit
 and removal still await their durable writes; an unchanged registry update does
 not rewrite the row. Inspecting an empty registry does not create its database.
 
-Ordinary removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Host-provisioned ignored files do not enter the Git snapshot or repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Idle cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, ordinary removal stops unless `--force` explicitly permits snapshot loss. Cap eviction is best effort and can purge the checkout without a snapshot.
+Ordinary removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Host-provisioned ignored files do not enter the Git snapshot or repository object database. OpenClaw stores the ignored files it actually provisioned, except files inside `node_modules` directories, in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Idle cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, ordinary removal stops unless `--force` explicitly permits snapshot loss. Cap eviction is best effort and can purge the checkout without a snapshot.
 
 For an ordinary clean checkout, the snapshot reuses the original HEAD tree after checking working files with a private index that clears hidden status flags. It checks object availability in one batch before creating the same recovery commit and snapshot ref. Missing objects preserve the checkout with a repository-repair error, including in partial clones. Exact-state snapshots continue capturing their complete recorded state.
 

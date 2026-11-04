@@ -534,7 +534,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
       }
       props.callbacks?.newTab?.finishCloseAll();
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     } finally {
       if (activeClose === view) {
         activeClose = undefined;
