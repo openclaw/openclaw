@@ -1,2 +1,2 @@
-# xAI-only GIF->JPEG regression: fresh, replayed, and non-xAI passthrough in one test.
-36
+# xAI-only GIF->JPEG regression plus one-shot image-format 400 recovery (retry, non-image 400, no loop).
+92

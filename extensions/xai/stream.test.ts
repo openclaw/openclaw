@@ -1,5 +1,10 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { streamSimple, type Model, type ModelThinkingLevel } from "openclaw/plugin-sdk/llm";
+import {
+  createAssistantMessageEventStream,
+  streamSimple,
+  type Model,
+  type ModelThinkingLevel,
+} from "openclaw/plugin-sdk/llm";
 import { resizeToJpeg } from "openclaw/plugin-sdk/media-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
@@ -127,7 +132,9 @@ describe("xai stream wrappers", () => {
         seen = ctx.messages.flatMap((msg): unknown[] =>
           Array.isArray(msg.content) ? msg.content : [],
         );
-        return {} as ReturnType<StreamFn>; // SAFETY: wrapper result is unused.
+        const out = createAssistantMessageEventStream();
+        out.end();
+        return out;
       };
       await wrapXaiProviderStream({ provider: "xai", modelId: "grok-4", streamFn })?.(
         xaiModel({ provider }),
@@ -141,6 +148,55 @@ describe("xai stream wrappers", () => {
     expect(await send("xai", messages.slice(1))).toEqual([{ type: "text", text: resend }]);
     expect(await send("xai")).toEqual([jpeg, jpeg]);
     expect(await send("openai")).toEqual([gif, gif]);
+  });
+
+  it("retries an xAI image-format 400 once with images omitted", async () => {
+    const png = { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" };
+    const run = async (errors: string[]) => {
+      const calls: unknown[][] = [];
+      const streamFn: StreamFn = (model, ctx) => {
+        calls.push(
+          ctx.messages.flatMap((m): unknown[] => (Array.isArray(m.content) ? m.content : [])),
+        );
+        const out = createAssistantMessageEventStream();
+        const msg = errors[calls.length - 1];
+        const base = {
+          role: "assistant",
+          content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: {},
+          timestamp: 0,
+        };
+        // SAFETY: minimal assistant reply fixtures.
+        const reply = { ...base, stopReason: msg ? "error" : "stop", errorMessage: msg } as never;
+        out.push({ type: "start", partial: reply });
+        out.push(
+          msg
+            ? { type: "error", reason: "error", error: reply }
+            : { type: "done", reason: "stop", message: reply },
+        );
+        out.end();
+        return out;
+      };
+      const wrapped = wrapXaiProviderStream({ provider: "xai", modelId: "grok-4", streamFn });
+      const messages = [
+        { role: "user", content: [png] },
+      ] as unknown as Parameters<StreamFn>[1]["messages"]; // SAFETY: fixture.
+      const result = await (await wrapped!(xaiModel({}), { messages })).result();
+      return { calls, error: result.errorMessage };
+    };
+    const bad = "400 Image must be a valid JPG, PNG, WebP, or ICO image";
+    const omitted = [
+      { type: "text", text: expect.stringContaining("xAI rejected this image format") },
+    ];
+    expect(await run([bad])).toEqual({ calls: [[png], omitted], error: undefined });
+    expect(await run(["400 context too long"])).toEqual({
+      calls: [[png]],
+      error: "400 context too long",
+    });
+    expect(await run([bad, bad])).toEqual({ calls: [[png], omitted], error: bad });
   });
 
   it("does not add Grok OAuth headers for a lookalike host", () => {

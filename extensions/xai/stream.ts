@@ -1,5 +1,9 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { streamSimple } from "openclaw/plugin-sdk/llm";
+import {
+  createAssistantMessageEventStream,
+  streamSimple,
+  type AssistantMessageEvent,
+} from "openclaw/plugin-sdk/llm";
 import { resizeToJpeg } from "openclaw/plugin-sdk/media-runtime";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
@@ -88,8 +92,67 @@ async function transcodeForXai(block: XaiImageBlock) {
     : { ...block, data: jpeg, mimeType: "image/jpeg" };
 }
 
-function createXaiImageFormatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+const XAI_IMAGE_FORMAT_400 =
+  /\b400\b[\s\S]*(valid JPG, PNG, WebP, or ICO image|image[\s\S]*(format|mime|type))/iu;
+const omittedImage = {
+  type: "text" as const,
+  text: "[omitted image: xAI rejected this image format; ask the user to resend it as PNG or JPEG]",
+};
+
+// A format 400 that slips past conversion would poison every later turn; retry once with images omitted.
+function createXaiImageFormatRetryWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const strip = (msg: (typeof context.messages)[number]) =>
+      Array.isArray(msg.content) && msg.content.some((b) => b.type === "image")
+        ? { ...msg, content: msg.content.map((b) => (b.type === "image" ? omittedImage : b)) }
+        : msg;
+    const messages = context.messages.map(strip);
+    if (
+      !isXaiProviderId(model.provider) ||
+      messages.every((msg, i) => msg === context.messages[i])
+    ) {
+      return underlying(model, context, options);
+    }
+    const output = createAssistantMessageEventStream();
+    void (async () => {
+      // Hold "start" so a 400 before any content can be retried without the consumer seeing it.
+      let start: AssistantMessageEvent | undefined;
+      let sent = false;
+      for await (const event of await underlying(model, context, options)) {
+        if (!sent && event.type === "start") {
+          start = event;
+        } else if (
+          !sent &&
+          event.type === "error" &&
+          XAI_IMAGE_FORMAT_400.test(event.error.errorMessage ?? "")
+        ) {
+          // SAFETY: only image blocks change, into text blocks every message role accepts.
+          const retry = { ...context, messages: messages as typeof context.messages };
+          for await (const retried of await underlying(model, retry, options)) {
+            output.push(retried);
+          }
+          sent = true;
+          break;
+        } else {
+          if (!sent && start) {
+            output.push(start);
+          }
+          sent = true;
+          output.push(event);
+        }
+      }
+      if (!sent && start) {
+        output.push(start);
+      }
+      output.end();
+    })();
+    return output;
+  };
+}
+
+function createXaiImageFormatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = createXaiImageFormatRetryWrapper(baseStreamFn);
   return (model, context, options) => {
     const hasUnsupported =
       isXaiProviderId(model.provider) &&
