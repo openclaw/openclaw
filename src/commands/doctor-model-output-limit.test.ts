@@ -33,12 +33,15 @@ it.each<[string, Record<string, unknown>, number, string]>([
   });
 });
 
-it("lets an agent request budget override the model limit, as at runtime", () => {
-  const cfg = withLocal({ models: [{ id: "m", name: "m", maxTokens: 131_072 }] });
-  cfg.agents!.entries = { main: { params: { max_tokens: 8192 } } };
+it.each([
+  [8192, 131_072, 8192, "agents.entries.main.params.maxTokens"],
+  [131_072, 8192, 8192, rowPath],
+])("binds the lower of request budget %i and model ceiling %i", (budget, ceiling, max, path) => {
+  const cfg = withLocal({ models: [{ id: "m", name: "m", maxTokens: ceiling }] });
+  cfg.agents!.entries = { main: { params: { max_tokens: budget } } };
   expect(resolveAgentModelOutputLimit({ cfg, agentId: "main" })).toMatchObject({
-    maxTokens: 8192,
-    path: "agents.entries.main.params.maxTokens",
+    maxTokens: max,
+    path,
   });
 });
 

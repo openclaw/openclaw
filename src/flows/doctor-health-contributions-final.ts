@@ -267,6 +267,14 @@ export function resolveFinalDoctorHealthContributions(params: {
         run: (ctx) => runBundledHealthFindingNote(ctx, "skill-workshop/tool-policy"),
       },
     ),
+    createDoctorHealthContribution(
+      "doctor:knowledge-model-output-limit",
+      "Knowledge output limit",
+      {
+        updateWork: { kind: "inspection", scope: "agent" },
+        run: (ctx) => runBundledHealthFindingNote(ctx, "knowledge/model-output-limit"),
+      },
+    ),
     createDoctorHealthContribution("doctor:systemd-linger", "systemd linger", {
       healthChecks: {
         description: "Disabled systemd user lingering is reported as a finding.",

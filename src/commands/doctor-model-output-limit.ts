@@ -25,9 +25,9 @@ export type AgentModelOutputLimitParams = {
 
 /**
  * Output token limit the agent's default model runs with when it is a configured
- * provider model. A request budget from agent or model params wins, as at runtime;
- * otherwise config defaults apply (8192 unless the model, provider, or catalog says
- * otherwise). Catalog-only models return undefined: their limit is not ours to judge.
+ * provider model: the lower of its ceiling (config defaults: 8192 unless the model,
+ * provider, or catalog says otherwise) and any request budget from agent or model
+ * params. Catalog-only models return undefined: their limit is not ours to judge.
  */
 export function resolveAgentModelOutputLimit(
   params: AgentModelOutputLimitParams,
@@ -59,9 +59,6 @@ export function resolveAgentModelOutputLimit(
       budget = { maxTokens, path: `${path}.maxTokens` };
     }
   }
-  if (budget) {
-    return { providerKey, model: ref.model, ...budget };
-  }
   const materialized = applyModelDefaults(cfg, {
     loadManifestRegistry: () =>
       loadPluginManifestRegistryForPluginRegistry({
@@ -77,15 +74,18 @@ export function resolveAgentModelOutputLimit(
   const row = materialized.models?.providers?.[providerKey]?.models?.[index];
   // A limit authored on the row wins over the provider fallback, so point at the row.
   const rowAuthored = cfg.models?.providers?.[providerKey]?.models?.[index]?.maxTokens;
-  return typeof row?.maxTokens === "number"
-    ? {
-        providerKey,
-        model: ref.model,
-        maxTokens: row.maxTokens,
-        path:
-          rowAuthored === undefined
-            ? `models.providers.${providerKey}.maxTokens`
-            : `models.providers.${providerKey}.models[${index}].maxTokens`,
-      }
-    : undefined;
+  const ceiling =
+    typeof row?.maxTokens === "number"
+      ? {
+          maxTokens: row.maxTokens,
+          path:
+            rowAuthored === undefined
+              ? `models.providers.${providerKey}.maxTokens`
+              : `models.providers.${providerKey}.models[${index}].maxTokens`,
+        }
+      : undefined;
+  // Transports clamp a larger request budget to the model ceiling; the lower one binds.
+  const limit =
+    budget && ceiling ? (budget.maxTokens < ceiling.maxTokens ? budget : ceiling) : ceiling;
+  return limit ? { providerKey, model: ref.model, ...limit } : undefined;
 }

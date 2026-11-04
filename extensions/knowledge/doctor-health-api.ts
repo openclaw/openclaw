@@ -49,7 +49,8 @@ function createOutputLimitCheck(resolveLimit: ResolveModelOutputLimit): HealthCh
         findings.set(`${model} ${limit.path}`, {
           checkId: OUTPUT_LIMIT_CHECK_ID,
           severity: "warning",
-          category: "recommended",
+          // Truncated saves lose knowledge silently, and plain Doctor lists only fix-now warnings.
+          category: "fix-now",
           docsUrl: "https://docs.openclaw.ai/plugins/knowledge/scribes#limits",
           message: `Knowledge saves with ${model}, which can write only ${limit.maxTokens} tokens per reply. Long saves can get cut off.`,
           path: limit.path,
