@@ -173,14 +173,23 @@ struct ChatNativeActionGatewayTests {
         var expectedProfiles: [String?] = []
         var current = true
         var profileID: String
+        let statusRead: Bool
+        let hasActiveRun: Bool?
+        let activeRunIDs: [String]?
         let retireAfterHistory: Bool
         let replaceProfileAfterOwner: String?
 
         init(
             profileID: String = "profile-a",
+            statusRead: Bool = false,
+            hasActiveRun: Bool? = nil,
+            activeRunIDs: [String]? = nil,
             retireAfterHistory: Bool = false,
             replaceProfileAfterOwner: String? = nil)
         {
+            self.statusRead = statusRead
+            self.hasActiveRun = hasActiveRun
+            self.activeRunIDs = activeRunIDs
             self.profileID = profileID
             self.retireAfterHistory = retireAfterHistory
             self.replaceProfileAfterOwner = replaceProfileAfterOwner
@@ -219,14 +228,18 @@ struct ChatNativeActionGatewayTests {
                 #expect(request.params["agentId"]?.value as? String == "reviewer")
                 #expect(request.params["limit"]?.value as? Int == 100)
                 #expect(request.params["maxChars"]?.value as? Int == 2000)
-                #expect(request.params["inputRunIds"]?.value as? [String] == ["client-run"])
+                #expect(request.params["inputRunIds"]?.value as? [String] == (self.statusRead ? nil : ["client-run"]))
                 #expect(request.timeoutMs == 10000)
                 self.current = !self.retireAfterHistory
-                return Data(#"""
-                {"sessionKey":"agent:reviewer:main",\#
-                "sessionInfo":{"key":"agent:reviewer:main","agentId":"reviewer",\#
-                "lastRunId":"client-run","status":"done"}}
-                """#.utf8)
+                var info: [String: Any] = [
+                    "key": "agent:reviewer:main", "agentId": "reviewer",
+                    "lastRunId": "client-run", "status": "done",
+                ]
+                if let hasActiveRun { info["hasActiveRun"] = hasActiveRun }
+                if let activeRunIDs { info["activeRunIds"] = activeRunIDs }
+                return try JSONSerialization.data(withJSONObject: [
+                    "sessionKey": "agent:reviewer:main", "sessionInfo": info,
+                ])
             default:
                 Issue.record("Unexpected request: \(request.method)")
                 throw CancellationError()
@@ -248,6 +261,87 @@ struct ChatNativeActionGatewayTests {
         func retire() {
             self.current = false
         }
+    }
+
+    @Test(arguments: [true, false, nil] as [Bool?], [true, false])
+    func `session status uses authenticated reads and rejects retired routes`(
+        active: Bool?, retired: Bool) async throws
+    {
+        let requests = Requests(statusRead: true, hasActiveRun: active, retireAfterHistory: retired)
+        let gateway = OpenClawChatNativeActionGateway(
+            gatewayID: "gateway-a",
+            gatewayName: "Gateway",
+            supportsProfileBinding: { true },
+            request: { try await requests.respond($0, expectedProfileId: $1) },
+            isCurrent: { await requests.isCurrent() })
+        let session = OpenClawNativeSessionRef(
+            owner: .init(gatewayID: "gateway-a", profileID: "profile-a"),
+            agentID: "reviewer",
+            sessionKey: "agent:reviewer:main")
+        if retired {
+            await #expect(throws: CancellationError.self) { try await gateway.sessionStatus(session) }
+        } else {
+            let result = try await gateway.sessionStatus(session)
+            let expected = switch active {
+            case true?: "The selected session has active work."
+            case false?: "The selected session has no active work."
+            case nil: "The selected session's activity is unknown. Open its chat to check."
+            }
+            #expect(result == expected)
+        }
+        #expect(await requests.snapshot() == ["users.self", "chat.history"])
+        #expect(await requests.profileSnapshot() == ["profile-a", "profile-a"])
+    }
+
+    @Test(arguments: [false, nil] as [Bool?], [[], ["active-run"]])
+    func `session activity preserves active ID evidence`(active: Bool?, ids: [String]) async throws {
+        let requests = Requests(statusRead: true, hasActiveRun: active, activeRunIDs: ids)
+        let gateway = OpenClawChatNativeActionGateway(
+            gatewayID: "gateway-a",
+            gatewayName: "Gateway",
+            supportsProfileBinding: { true },
+            request: { try await requests.respond($0, expectedProfileId: $1) },
+            isCurrent: { await requests.isCurrent() })
+        let session = OpenClawNativeSessionRef(
+            owner: .init(gatewayID: "gateway-a", profileID: "profile-a"),
+            agentID: "reviewer",
+            sessionKey: "agent:reviewer:main")
+        let result = try await gateway.sessionStatus(session)
+        let expected = if !ids.isEmpty {
+            "The selected session has active work."
+        } else if active == false {
+            "The selected session has no active work."
+        } else {
+            "The selected session's activity is unknown. Open its chat to check."
+        }
+        #expect(result == expected)
+        #expect(await requests.snapshot() == ["users.self", "chat.history"])
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `presentation validation shares exact run and route checks`(inspect: Bool, retired: Bool) async throws {
+        let requests = Requests(statusRead: !inspect, retireAfterHistory: retired)
+        let gateway = OpenClawChatNativeActionGateway(
+            gatewayID: "gateway-a",
+            gatewayName: "Gateway",
+            supportsProfileBinding: { true },
+            request: { try await requests.respond($0, expectedProfileId: $1) },
+            isCurrent: { await requests.isCurrent() })
+        let session = OpenClawNativeSessionRef(
+            owner: .init(gatewayID: "gateway-a", profileID: "profile-a"),
+            agentID: "reviewer",
+            sessionKey: "agent:reviewer:main")
+        let run = OpenClawNativeRunRef(session: session, runID: "client-run")
+        let request: OpenClawNativeOpenRequest = inspect ? .inspect(run) : .session(session)
+        if retired {
+            await #expect(throws: CancellationError.self) { try await gateway.validatePresentation(request) }
+        } else {
+            let result = try await gateway.validatePresentation(request)
+            #expect(result?.run == (inspect ? run : nil))
+            #expect(result?.outcome == (inspect ? .done : nil))
+        }
+        #expect(await requests.snapshot() == ["users.self", "chat.history"])
+        #expect(await requests.profileSnapshot() == ["profile-a", "profile-a"])
     }
 
     @Test func `discovery uses only visible session run I ds without history reads`() async throws {

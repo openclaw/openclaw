@@ -730,3 +730,12 @@ with identical text. There is no cross-launch deduplication guarantee.
 - [Discovery](/gateway/discovery)
 - [Bonjour](/gateway/bonjour)
 - [Stable HTTPS URL](/gateway/stable-https-url) — give a loopback-only Gateway a stable, tailnet-only HTTPS URL with Tailscale Serve
+
+### Read-only session status
+
+Use **Check OpenClaw Status** in Shortcuts to read a selected session's activity.
+The action requires local-device authentication and the selected Gateway account.
+It does not send a message, select a different chat, or speak transcript content.
+Active work, no active work, and unknown activity are distinct outcomes; an unknown
+result is not evidence that a session is idle. Open OpenClaw and connect the
+selected Gateway first. Saved selections are checked against the current account.

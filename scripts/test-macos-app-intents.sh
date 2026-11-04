@@ -85,9 +85,10 @@ const contracts = {
   OpenRunIntent: { target: entity("OpenClawRunEntity") },
   SendMessageIntent: { session: entity("OpenClawSessionEntity"), message: string() },
   AskOpenClawIntent: { session: entity("OpenClawSessionEntity"), question: string() },
+  CheckSessionStatusIntent: { session: entity("OpenClawSessionEntity") },
   InspectRunIntent: { run: entity("OpenClawRunEntity") },
 };
-const shortcutNames = ["OpenSessionIntent", "OpenComposeIntent", "SendMessageIntent", "AskOpenClawIntent", "InspectRunIntent"];
+const shortcutNames = ["OpenSessionIntent", "OpenComposeIntent", "SendMessageIntent", "AskOpenClawIntent", "CheckSessionStatusIntent", "InspectRunIntent"];
 const select = (values, name) => {
   const matches = Object.values(values).filter(
     (value) => value.fullyQualifiedTypeName === `OpenClawKit.${name}`,
@@ -154,6 +155,11 @@ function validate(file, expectShortcuts) {
     }
     actions[name] = action;
   }
+  const status = actions.CheckSessionStatusIntent;
+  assert.equal(status.outputType.primitive?.wrapper.typeIdentifier, 0, "Status must return String");
+  assert.equal(status.authenticationPolicy, 2, "Status must require local device authentication");
+  assert.equal(status.isAuthPolExplicit, true, "Status authentication must be explicit");
+  assert.equal(status.openAppWhenRun, true, "Status must start its app host");
   const ask = actions.AskOpenClawIntent;
   assert.equal(ask.outputType.primitive?.wrapper.typeIdentifier, 0, "Ask must return String");
   // Xcode 26.6 emits 2 for requiresLocalDeviceAuthentication. Check the
@@ -211,5 +217,5 @@ const report = {
   installedDiscoveryVerified: false,
 };
 fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-console.log("App Intents metadata passed: 6 intents, 2 entities/queries, 1 enum, 5 app Shortcuts.");
+console.log(`App Intents metadata passed: ${Object.keys(contracts).length} intents, ${entityNames.length} entities/queries, 1 enum, ${shortcutNames.length} app Shortcuts.`);
 NODE

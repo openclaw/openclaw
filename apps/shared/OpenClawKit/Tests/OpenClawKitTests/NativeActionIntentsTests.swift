@@ -94,6 +94,13 @@ struct NativeActionIntentsTests {
         let host = ObservingNativeActionHost()
         OpenClawNativeActionServices.install(host: host)
 
+        var status = CheckSessionStatusIntent()
+        status.session = target
+        let result = try await status.perform()
+        try #require(result.value == "The selected session has no active work.")
+        try #require(host.statusSessions == [session])
+        try #require(host.requests.isEmpty)
+
         var defaultOpen = OpenSessionIntent()
         defaultOpen.target = target
         defaultOpen.draft = draft
@@ -163,6 +170,7 @@ private final class ObservingNativeActionHost: OpenClawNativeActionHost {
         if self.failContinuation { throw OpenClawNativeActionError("The selected Gateway refused this read.") }
         return self.continuationOutcome
     }
+    var statusSessions: [OpenClawNativeSessionRef] = []
 
     func open(_ request: OpenClawNativeOpenRequest) async -> OpenClawNativeOpenOutcome {
         self.requests.append(request)
@@ -182,6 +190,11 @@ private final class ObservingNativeActionHost: OpenClawNativeActionHost {
         message: String) async throws -> (send: OpenClawNativePreparedSend, presentationContinuationID: UUID)
     {
         throw OpenClawNativeActionError("Opening or composing must not submit a message.")
+    }
+
+    func sessionStatus(_ session: OpenClawNativeSessionRef) async throws -> String {
+        self.statusSessions.append(session)
+        return "The selected session has no active work."
     }
 
     func inspect(_ run: OpenClawNativeRunRef) async throws

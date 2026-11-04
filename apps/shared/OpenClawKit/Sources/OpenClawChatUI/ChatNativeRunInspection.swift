@@ -172,6 +172,19 @@ public struct OpenClawChatNativeActionGateway: Sendable {
         return try run.map { try OpenClawChatNativeRunInspection.reduce(history, run: $0) }
     }
 
+    public func sessionStatus(_ session: OpenClawNativeSessionRef) async throws -> String {
+        let history = try await self.history(session: session)
+        // This is a session snapshot, not evidence about any selected run or its reply.
+        let info = history.sessionInfo
+        if info?.hasActiveRun == true || info?.activeRunIds?.isEmpty == false {
+            return "The selected session has active work."
+        }
+        if info?.hasActiveRun == false {
+            return "The selected session has no active work."
+        }
+        return "The selected session's activity is unknown. Open its chat to check."
+    }
+
     public func runs(matching query: String?) async throws -> [OpenClawNativeRunRef] {
         let (owner, entries) = try await self.sessionEntries(matching: nil)
         var runs: [OpenClawNativeRunRef] = []

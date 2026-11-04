@@ -361,6 +361,27 @@ public struct AskOpenClawIntent: AppIntent {
     }
 }
 
+/// Reads the selected session without sending a message or changing the visible chat.
+public struct CheckSessionStatusIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Check OpenClaw Status"
+    public static let description: IntentDescription? = IntentDescription(
+        "Read a selected session's activity without sending a message. Unknown state is reported explicitly.")
+    public static let openAppWhenRun = true
+    public static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
+    @Parameter(title: "Session") public var session: OpenClawSessionEntity
+    public static var parameterSummary: some ParameterSummary {
+        Summary("Check status of \(\.$session)")
+    }
+
+    public init() {}
+
+    @MainActor
+    public func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
+        let status = try await OpenClawNativeActionServices.host().sessionStatus(self.session.session)
+        return .result(value: status, dialog: "\(status)")
+    }
+}
+
 public struct InspectRunIntent: AppIntent {
     public static let title: LocalizedStringResource = "Inspect Run"
     public static let openAppWhenRun = true

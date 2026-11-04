@@ -61,6 +61,10 @@ final class InstalledNativeActionProofHost: OpenClawNativeActionHost {
         try await self.router.runs(matching: query)
     }
 
+    func sessionStatus(_ session: OpenClawNativeSessionRef) async throws -> String {
+        try await self.router.sessionStatus(session)
+    }
+
     private func begin(_ kind: String) -> Int {
         self.snapshot.misattributed = self.snapshot.misattributed ||
             self.snapshot.producers != self.snapshot.prepared ||
