@@ -103,7 +103,7 @@ it.each(["native", "manifest"] as const)(
       expect(call.headers["x-goog-api-key"]).toBeUndefined();
       expect(call.headers["x-api-key"]).toBeUndefined();
     }
-    expect(save.mock.f.calls[0]?.[0]).toEqual(f.mp3);
+    expect(save.mock.calls[0]?.[0]).toEqual(f.mp3);
     expect(f.alternateCalls).toBe(0);
   },
 );
@@ -114,7 +114,7 @@ it("returns Pro WAV bytes without promising or serializing an output format", as
   const save = vi.spyOn(mediaStore, "saveMediaBuffer");
   await f.execute({ model: `clawrouter/${PRO}`, format: "wav" });
   expect(f.posts()[0]?.path).toBe(nativePath(PRO));
-  expect(save.mock.f.calls[0]?.[0]).toEqual(audio);
+  expect(save.mock.calls[0]?.[0]).toEqual(audio);
   expect(JSON.stringify(f.posts()[0]?.body)).not.toContain("wav");
 });
 

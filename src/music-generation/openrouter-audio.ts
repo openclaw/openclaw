@@ -122,13 +122,15 @@ export async function readOpenRouterAudioStream(
       return true;
     }
     let payload: unknown;
-    try {
+    if (!options?.requireEof) {
       payload = JSON.parse(data);
-    } catch (error) {
-      if (!options?.requireEof) {
-        throw error;
+    } else {
+      try {
+        payload = JSON.parse(data);
+      } catch {
+        // Parser diagnostics may contain generated content; keep proxy failures sanitized.
+        throw new Error("OpenRouter music generation returned malformed stream JSON");
       }
-      throw new Error("OpenRouter music generation returned malformed stream JSON");
     }
     if (options?.requireEof) {
       const object = asOptionalRecord(payload);
