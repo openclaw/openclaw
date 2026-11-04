@@ -92,7 +92,10 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
           ? job
           : undefined;
       // Operator history survives deletion; scoped reads need a live matching owner.
-      if ((callerScope || p.agentId || visibility) && !matchedJob) {
+      if (
+        !matchedJob &&
+        (job || callerScope || p.agentId || (visibility && !visibility.allowUnbound))
+      ) {
         respondCronJobNotFound(respond, jobId!);
         return undefined;
       }
@@ -104,8 +107,13 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
           matchedJob && typeof matchedJob.name === "string"
             ? { [jobId!]: matchedJob.name }
             : undefined,
+        // Deleted jobs no longer prove the owner of unkeyed records. Keep only
+        // independently authorized keyed history for session-filtered callers.
         entryFilter: visibility
-          ? (entry) => !entry.sessionKey || visibility(entry.sessionKey, matchedJob?.agentId)
+          ? (entry) =>
+              entry.sessionKey
+                ? visibility(entry.sessionKey, matchedJob?.agentId)
+                : Boolean(matchedJob)
           : undefined,
       };
     };

@@ -9,8 +9,13 @@ import type { SessionEntry } from "./types.js";
 export function resolveSessionCreationVisibility(
   cfg: OpenClawConfig,
   sessionKey: string,
+  parent?: Pick<SessionEntry, "access" | "visibility">,
 ): Pick<SessionEntry, "visibility" | "access"> {
-  const access = cfg.session?.sharing?.accessPolicy ? { mode: "source" as const } : undefined;
+  const access = cfg.session?.sharing?.accessPolicy
+    ? { mode: "source" as const }
+    : parent?.visibility === "draft" || (parent?.access && parent.access.mode !== "unrestricted")
+      ? { mode: "creator" as const }
+      : undefined;
   const defaults = cfg.session?.sharing?.creationDefaults;
   if (!defaults) {
     return access ? { access } : {};

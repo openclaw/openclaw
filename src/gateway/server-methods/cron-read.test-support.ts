@@ -10,6 +10,7 @@ import type { CronRunHistoryWrite } from "../../cron/store/run-history.types.js"
 import type { CronJobCreate } from "../../cron/types.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -85,10 +86,14 @@ export async function callCron(
     req: { type: "req", id: method, method, params },
     params,
     context,
-    client: null,
     respond,
     isWebchatConnect: () => false,
     ...options,
+    // Null represents the trusted host in this fixture; human ACL tests pass an identified client.
+    client: options.client ?? {
+      connect: gatewayConnect(["operator.admin"]),
+      internal: { operatorRoleActor: { kind: "system" } },
+    },
   });
   return respond;
 }

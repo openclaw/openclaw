@@ -103,7 +103,7 @@ describe("session sharing policy", () => {
         (await authorize({ ...admin, internal: { syntheticClient: true } })).error,
       ).toMatchObject({
         code: "FORBIDDEN",
-        message: "Session communication settings require a direct human request.",
+        message: "Session communication and access settings require a direct human request.",
       });
       const admitted = await authorize(creator);
       creator.authenticatedUserProfile = peer.authenticatedUserProfile;

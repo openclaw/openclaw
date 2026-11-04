@@ -291,8 +291,11 @@ export async function createInitialSubagentSession(input: {
                       }
                     : {}),
                   ...childSessionIdentity,
-                  access: { mode: "creator" },
-                  ...resolveSessionCreationVisibility(params.cfg, params.childSessionKey),
+                  ...resolveSessionCreationVisibility(
+                    params.cfg,
+                    params.childSessionKey,
+                    parentEntry,
+                  ),
                   // Stamp after all request patches so model input cannot create a grant.
                   ...parentLineage,
                   ...(parentEntry?.skillLibrarySelections

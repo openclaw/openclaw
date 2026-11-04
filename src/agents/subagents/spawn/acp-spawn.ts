@@ -500,8 +500,7 @@ export async function spawnAcpDirect(
           { storePath, sessionKey, agentId: ownerAgentId },
           {
             ...creationStamp,
-            access: { mode: "creator" },
-            ...resolveSessionCreationVisibility(cfg, sessionKey),
+            ...resolveSessionCreationVisibility(cfg, sessionKey, parentEntry),
             spawnedBy: requesterInternalKey,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
             // Navigation parent is stamped at creation so the durable tree edge

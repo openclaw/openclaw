@@ -5,7 +5,13 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import * as modelRuntime from "../auto-reply/reply/model-runtime-normalization.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { canReadSessionAccess } from "../config/sessions/session-access.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  loadTranscriptEventsSync,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
@@ -25,12 +31,14 @@ import {
   chatSendOwner,
 } from "./server.sessions.create.test-support.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
   directSessionReq,
   sessionHookMocks,
   sessionLifecycleHookMocks,
+  getGatewayConfigModule,
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 const { createSessionStoreDir, openClient } = setupPersistentSessionCreateTestHarness();
@@ -624,5 +632,99 @@ test("sessions.create admits web DMs privately and preserves explicit sharing ov
   } finally {
     stop();
     testState.sessionConfig = undefined;
+  }
+});
+
+test.each(["disabled", "source", "private parent"] as const)(
+  "child confidentiality is opt-in for Gateway creation: %s",
+  async (mode) => {
+    testState.sessionConfig = {
+      sharing: mode === "source" ? { accessPolicy: { default: "creator" } } : undefined,
+    };
+    const configModule = await getGatewayConfigModule();
+    configModule.setRuntimeConfigSnapshot(loadGatewayTestConfig());
+    try {
+      expect(Boolean(getRuntimeConfig().session?.sharing?.accessPolicy)).toBe(mode === "source");
+      const parentSessionKey = "agent:main:main";
+      await seedMain(
+        "child-opt-in-parent",
+        {
+          visibility: "shared",
+          ...(mode === "private parent"
+            ? { access: { mode: "audience", profileIds: ["selected"] } }
+            : {}),
+        },
+        parentSessionKey,
+      );
+      const key = "agent:main:dashboard:opt-in-child";
+      const created = await createSession(
+        { key, parentSessionKey, visibility: "shared" },
+        adminClient(),
+      );
+      expect(created).toMatchObject({ ok: true });
+      const entry = readEntry(key);
+      expect(entry).toBeDefined();
+      expect(entry?.visibility).toBe("shared");
+      expect(entry?.access).toEqual(
+        mode === "disabled" ? undefined : { mode: mode === "source" ? "source" : "creator" },
+      );
+      expect(canReadSessionAccess(getRuntimeConfig(), key, entry!, () => false)).toBe(
+        mode === "disabled",
+      );
+      const overridden = await createSession(
+        {
+          key: key + "-override",
+          parentSessionKey,
+          visibility: "shared",
+          access: { mode: "unrestricted" },
+        },
+        adminClient(),
+      );
+      expect(overridden).toMatchObject({ ok: true });
+      expect(readEntry(key + "-override")?.access).toEqual({ mode: "unrestricted" });
+    } finally {
+      testState.sessionConfig = undefined;
+      configModule.clearRuntimeConfigSnapshot();
+    }
+  },
+);
+
+test("keeps an implicit Draft-parent fork confidential after copying its transcript", async () => {
+  testState.sessionConfig = { sharing: undefined };
+  const configModule = await getGatewayConfigModule();
+  configModule.setRuntimeConfigSnapshot(loadGatewayTestConfig());
+  try {
+    expect(getRuntimeConfig().session?.sharing?.accessPolicy).toBeUndefined();
+    const parentSessionKey = "agent:main:main";
+    await seedMain("draft-fork-parent", { visibility: "draft" }, parentSessionKey);
+    await appendTranscriptMessage(
+      { agentId: "main", sessionKey: parentSessionKey, sessionId: "draft-fork-parent", storePath },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "private draft fork context" }],
+        },
+      },
+    );
+    const key = "agent:main:dashboard:private-draft-fork";
+    const created = await createSession({ key, parentSessionKey, fork: true }, adminClient());
+    expect(created).toMatchObject({ ok: true });
+    const entry = readEntry(key);
+    expect(entry).toBeDefined();
+    expect(entry?.access).toEqual({ mode: "creator" });
+    expect(
+      JSON.stringify(
+        loadTranscriptEventsSync({
+          agentId: "main",
+          sessionKey: key,
+          sessionId: entry!.sessionId,
+          storePath,
+        }),
+      ),
+    ).toContain("private draft fork context");
+    expect(canReadSessionAccess(getRuntimeConfig(), key, entry!, () => false)).toBe(false);
+  } finally {
+    testState.sessionConfig = undefined;
+    configModule.clearRuntimeConfigSnapshot();
   }
 });

@@ -286,7 +286,8 @@ export function createCronCallerClient(
   }
   return {
     connect: {} as GatewayClient["connect"],
-    internal: { agentRuntimeIdentity: identity },
+    // This fixture models a host-owned runtime, not an authenticated human reader.
+    internal: { agentRuntimeIdentity: identity, operatorRoleActor: { kind: "system" } },
   };
 }
 

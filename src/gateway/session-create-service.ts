@@ -862,8 +862,11 @@ async function createGatewaySessionInScope(
             ? {
                 access:
                   params.access ??
-                  resolveSessionCreationVisibility(params.cfg, target.canonicalKey).access ??
-                  (params.parentSessionKey ? { mode: "creator" as const } : undefined),
+                  resolveSessionCreationVisibility(
+                    params.cfg,
+                    target.canonicalKey,
+                    currentParentSessionEntry,
+                  ).access,
               }
             : {}),
           ...(visibility.value && createdNewEntry ? { visibility: visibility.value } : {}),

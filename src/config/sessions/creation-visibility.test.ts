@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { SessionSchema } from "../zod-schema.session-config.js";
 import { resolveSessionCreationVisibility } from "./creation-visibility.js";
+import { canReadSessionAccess } from "./session-access.js";
 import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
 
 const cfg: OpenClawConfig = {
@@ -67,4 +68,34 @@ it("does not disclose Draft conversations when their transcript identity is repl
       {},
     ).entry.visibility,
   ).toBe("draft");
+});
+
+it.each([
+  undefined,
+  { mode: "unrestricted" as const },
+  { mode: "creator" as const },
+  { mode: "audience" as const, profileIds: ["selected"] },
+  { mode: "source" as const },
+])("keeps child confidentiality opt-in without copying a parent's audience: %j", (access) => {
+  const policy = resolveSessionCreationVisibility({}, "agent:main:subagent:child", { access });
+  const privateChild = access !== undefined && access.mode !== "unrestricted";
+  expect(policy.access).toEqual(privateChild ? { mode: "creator" } : undefined);
+  expect(canReadSessionAccess({}, "agent:main:subagent:child", policy, () => false)).toBe(
+    !privateChild,
+  );
+  expect(
+    resolveSessionCreationVisibility(
+      { session: { sharing: { accessPolicy: { default: "creator" } } } },
+      "agent:main:subagent:child",
+      { access },
+    ).access,
+  ).toEqual({ mode: "source" });
+});
+
+it("keeps a Draft parent's copied context confidential without a global access policy", () => {
+  const child = resolveSessionCreationVisibility({}, "agent:main:dashboard:fork", {
+    visibility: "draft",
+  });
+  expect(child.access).toEqual({ mode: "creator" });
+  expect(canReadSessionAccess({}, "agent:main:dashboard:fork", child, () => false)).toBe(false);
 });

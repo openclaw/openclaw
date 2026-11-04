@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { canReadSessionAccess } from "../../../config/sessions/session-access.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -384,3 +385,37 @@ it("creates a persistent child privately even when its parent is Shared", async 
     expect(readEntry(storePath, sessionKey)).toMatchObject({ visibility: "shared" });
   });
 });
+
+it.each(["disabled", "source", "private parent"] as const)(
+  "child confidentiality is opt-in for native spawn: %s",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey, storePath },
+        {
+          sessionId: "opt-in-parent",
+          updatedAt: 1,
+          visibility: "shared",
+          ...(mode === "private parent"
+            ? { access: { mode: "audience" as const, profileIds: ["selected"] } }
+            : {}),
+        },
+      );
+      const cfg =
+        mode === "source"
+          ? { session: { sharing: { accessPolicy: { default: "creator" as const } } } }
+          : {};
+      expect(await spawn({ cfg })).toMatchObject({ status: "ok" });
+      const child = readEntry(storePath, childSessionKey);
+      expect(child).toBeDefined();
+      expect(child?.visibility ?? "shared").toBe("shared");
+      expect(child?.access).toEqual(
+        mode === "disabled" ? undefined : { mode: mode === "source" ? "source" : "creator" },
+      );
+      expect(canReadSessionAccess(cfg, childSessionKey, child!, () => false)).toBe(
+        mode === "disabled",
+      );
+    });
+  },
+);

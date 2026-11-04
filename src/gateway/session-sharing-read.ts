@@ -422,7 +422,10 @@ export function createSessionListEntryFilter(
   if (!identity) {
     return params.cfg?.gateway?.roles
       ? () => false
-      : (key, entry) => canReadSessionAccess(params.cfg, key, entry, () => false);
+      : (key, entry) =>
+          (!params.client?.authenticatedGitHubIdentitySync ||
+            resolveSessionVisibility(entry) !== "draft") &&
+          canReadSessionAccess(params.cfg, key, entry, () => false);
   }
   const sessionCap = prepared
     ? prepared.sessionCap
