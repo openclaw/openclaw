@@ -676,7 +676,7 @@ it("renders a plain error detail when a failed tool has no output", async () => 
   expect(cardPart(container, "status-badge")).toBeNull();
   expect(cardPart(container, "block-label")).toMatchObject({ textContent: "Tool error" });
   expect(cardPart(container, "block-content")).toMatchObject({
-    textContent: "No output — tool failed.",
+    textContent: "The tool failed without output.",
   });
 });
 

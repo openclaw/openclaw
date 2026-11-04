@@ -636,3 +636,47 @@ it.each(["accept", "list"] as const)(
     expect(pane.tasks.suggestions).toEqual(action === "accept" ? [suggestion] : []);
   },
 );
+
+it.each([
+  {
+    name: "guest",
+    connected: true,
+    scopes: [],
+    methods: ["taskSuggestions.accept"],
+    reason: "You need admin access to start suggested tasks.",
+  },
+  {
+    name: "member",
+    connected: true,
+    scopes: ["operator.read", "operator.write"],
+    methods: ["taskSuggestions.accept"],
+    reason: "You need admin access to start suggested tasks.",
+  },
+  {
+    name: "restricted browser",
+    connected: true,
+    scopes: ["operator.read"],
+    methods: ["taskSuggestions.accept"],
+    reason: "You need admin access to start suggested tasks.",
+  },
+  {
+    name: "disconnected admin",
+    connected: false,
+    scopes: ["operator.admin"],
+    methods: ["taskSuggestions.accept"],
+    reason: "Reconnect to start suggested tasks.",
+  },
+  {
+    name: "unavailable action",
+    connected: true,
+    scopes: ["operator.admin"],
+    methods: [],
+    reason: "Starting suggested tasks isn’t available here.",
+  },
+])("explains denied suggested tasks for $name", ({ connected, scopes, methods, reason }) => {
+  const { pane } = createRequestPane(() => Promise.resolve({ suggestions: [] }));
+  pane.context.gateway.snapshot.hello = gatewayHelloForMethods(methods, scopes);
+  const view = pane.suggestionChatProps(connected, false, false);
+  expect(view.canAcceptTaskSuggestions).toBe(false);
+  expect(view.taskSuggestionBlockedReason).toBe(reason);
+});

@@ -243,7 +243,7 @@ suite.define(() => {
             expect.stringContaining("Plugins"),
           ]),
         );
-      const clearOverrides = dropdown.getByRole("menuitem", { name: /4 changes in this chat/ });
+      const clearOverrides = dropdown.getByRole("menuitem", { name: /4 changes in this session/ });
       await expect.poll(() => clearOverrides.isVisible()).toBe(true);
       await expect.poll(() => webSearchItem(dropdown).isVisible()).toBe(true);
       const skillsRoot = dropdown.getByRole("menuitem", { name: /^Skills/ });
@@ -969,7 +969,7 @@ suite.define(() => {
       await everywhereDialog.getByRole("radio", { name: "Everywhere", exact: true }).check();
       await everywhereDialog.getByLabel("Name").fill("global-docs");
       await everywhereDialog.getByLabel("URL or command").fill("docs-mcp --stdio");
-      await everywhereDialog.getByLabel("Transport").selectOption("stdio");
+      await everywhereDialog.getByText("Stdio", { exact: true }).click();
       const sessionPatchCount = (await gateway.getRequests("sessions.patch")).length;
       // Pin past the session-scoped config.patch above so a slow runner can't
       // return it stale for the everywhere-scoped save.

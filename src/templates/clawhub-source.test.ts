@@ -66,7 +66,7 @@ const digest = createHash("sha256").update(archiveBytes).digest("hex");
 const tempDirs = createTrackedTempDirs();
 let fixtureRoot: string;
 let fixtureStateDir: string;
-const packageJson = (name = packageName, selectedVersion = version, template = "template.json") =>
+const packageJson = (name = packageName, selectedVersion = version, template = "CLAW.md") =>
   JSON.stringify({ name, version: selectedVersion, openclaw: { template } });
 const writePackage = (name = packageName, selectedVersion = version) =>
   fs.writeFile(path.join(fixtureRoot, "package.json"), packageJson(name, selectedVersion));
@@ -200,8 +200,8 @@ async function useRealTrust(security = matchingSecurity) {
 
 async function prepareResolverFixture(packages: TemplateManifest["packages"] = []) {
   await fs.writeFile(
-    path.join(fixtureRoot, "template.json"),
-    JSON.stringify({ ...emptyManifest, packages }),
+    path.join(fixtureRoot, "CLAW.md"),
+    `---\n${JSON.stringify({ ...emptyManifest, packages })}\n---\n`,
   );
   return { stateDir: fixtureStateDir };
 }
@@ -239,7 +239,10 @@ beforeEach(async () => {
       },
     ],
   } satisfies TemplateManifest;
-  await fs.writeFile(path.join(extractedRoot, "template.json"), JSON.stringify(contentsManifest));
+  await fs.writeFile(
+    path.join(extractedRoot, "CLAW.md"),
+    `---\n${JSON.stringify(contentsManifest)}\n---\n`,
+  );
   const { readTemplateManifestFile } =
     await vi.importActual<typeof import("./reader.js")>("./reader.js");
   mocks.read.mockImplementation(readTemplateManifestFile);
@@ -637,6 +640,22 @@ describe("verified ClawHub Template source", () => {
       riskAcknowledgementRequired: true,
     });
   });
+
+  it.each([{ claw: "CLAW.md" }, { template: "template.json" }])(
+    "rejects an obsolete artifact before apply handoff or persistence: %j",
+    async (openclaw) => {
+      const { stateDir } = await prepareResolverFixture();
+      await fs.writeFile(
+        path.join(fixtureRoot, "package.json"),
+        JSON.stringify({ name: packageName, version, openclaw }),
+      );
+      await fs.writeFile(path.join(fixtureRoot, "template.json"), JSON.stringify(emptyManifest));
+      const run = vi.fn(async () => undefined);
+      await expectCode(resolveSource({ mode: "apply", stateDir, run }), "clawhub_manifest_invalid");
+      expect(run).not.toHaveBeenCalled();
+      await expectMissing(stateDir);
+    },
+  );
 
   it("rejects a valid archive when its embedded package identity differs", async () => {
     const { stateDir } = await prepareResolverFixture();

@@ -850,11 +850,13 @@ create_or_update_github_release() {
       return 1
     fi
     # Latest promotion is invalid while this existing release remains a draft.
+    verify_release_tag_target || return 1
     gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
       --title "${title}" \
       --notes-file "${prepared_release_notes_file}" \
       "${prerelease_arg}"
   else
+    verify_release_tag_target || return 1
     gh release create "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
       --verify-tag \
       --draft \
@@ -1017,6 +1019,8 @@ promote_windows_release_assets() {
     return 1
   fi
   windows_node_run_id="$(dispatch_workflow windows-node-release.yml \
+    -f release_publish_run_id="${RELEASE_PUBLISH_RUN_ID}" \
+    -f release_publish_run_attempt="${RELEASE_PUBLISH_RUN_ATTEMPT}" \
     -f tag="${RELEASE_TAG}" \
     -f windows_node_tag="${WINDOWS_NODE_TAG}" \
     -f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}")" || return 1
@@ -1121,6 +1125,7 @@ attach_or_verify_release_asset() {
     exit 1
   fi
 
+  verify_release_tag_target || return 1
   gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" --repo "${GITHUB_REPOSITORY}"
 }
 
@@ -1130,6 +1135,7 @@ replace_release_asset() {
   # Postpublish evidence embeds this run's id, so resumable retries
   # regenerate it; the newest verification replaces the asset while
   # prior copies persist as workflow artifacts.
+  verify_release_tag_target || return 1
   gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" \
     --repo "${GITHUB_REPOSITORY}" --clobber
 }
@@ -1464,6 +1470,7 @@ NODE
   # may have completed since the initial publication/resume guard ran.
   current_body="$(gh_read release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json body --jq '.body')" || return 1
   assert_initial_release_body "${current_body}" || return 1
+  verify_release_tag_target || return 1
   gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --notes-file "${notes_file}"
   if jq -e '.verificationIncluded == true' "${metadata_file}" >/dev/null; then
     echo "- Release proof: appended to GitHub release" >> "$GITHUB_STEP_SUMMARY"

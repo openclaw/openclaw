@@ -121,19 +121,18 @@ describe("Markdown table interactions", () => {
     restoreDialogPolyfill();
   });
 
-  it("tracks hidden columns in both scroll directions", () => {
+  it.each(["ltr", "rtl"])("tracks physical hidden edges in %s tables", (direction) => {
     const { shell, viewport } = interactiveOwner();
     const canScroll = (side: string) =>
       shell.classList.contains(`markdown-table--can-scroll-${side}`);
-    for (const [offset, left, right] of [
+    viewport.style.direction = direction;
+    for (const [position, left, right] of [
       [0, false, true],
       [100, true, true],
       [200, true, false],
     ] as const) {
-      viewport.scrollLeft = offset;
-      if (offset) {
-        viewport.dispatchEvent(new Event("scroll"));
-      }
+      viewport.scrollLeft = direction === "rtl" ? position - 200 : position;
+      viewport.dispatchEvent(new Event("scroll"));
       expect([canScroll("left"), canScroll("right")]).toEqual([left, right]);
     }
   });

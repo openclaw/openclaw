@@ -364,7 +364,7 @@ describe("chat session sharing menu", () => {
       onCopyPublicLink,
     });
     expect(root.textContent).toContain("Link sharing");
-    expect(root.textContent).toContain("The public link stays readable in Draft.");
+    expect(root.textContent).toContain("The public link stays readable in draft.");
     await select(root, "public:disable");
     expect(onPublicShareChange).toHaveBeenCalledWith(false);
     expect(onVisibilityChange).not.toHaveBeenCalled();

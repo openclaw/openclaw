@@ -16,7 +16,7 @@ const enChatMessageMetadata = {
         file: "File",
         selection: "Selection",
         restoreFailed:
-          "Attached context could not be restored. Edit this message to review and resend it without context.",
+          "Couldn’t restore the attached context. Edit this message to review and resend it without context.",
       },
       sourcePreviews: {
         label: "Sources",

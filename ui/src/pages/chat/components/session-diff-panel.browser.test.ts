@@ -233,7 +233,7 @@ describe.runIf(browserMode)("Review layout", () => {
     await userEvent.click(panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")!);
     await waitForSolid(() => expect(getFile).toHaveBeenCalledOnce());
     const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
-    const copy = surface.querySelector<HTMLButtonElement>('button[aria-label="Copy Path"]')!;
+    const copy = surface.querySelector<HTMLButtonElement>('button[aria-label="Copy path"]')!;
     const toggle = surface.querySelector<HTMLButtonElement>('button[value="toggle-file"]')!;
     await waitForSolid(() => expect(document.activeElement).toBe(copy));
     await userEvent.keyboard("{ArrowDown}{ArrowDown}");
@@ -441,7 +441,7 @@ describe.runIf(browserMode)("Review layout", () => {
     const fileSurface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
     await waitForSolid(() => expect(fileSurface.matches(":popover-open")).toBe(true));
     const copyPath = fileSurface.querySelector<HTMLButtonElement>(
-      'button[aria-label="Copy Path"]',
+      'button[aria-label="Copy path"]',
     )!;
     await waitForSolid(() => expect(document.activeElement).toBe(copyPath));
     for (const key of ["{Enter}", " "]) {

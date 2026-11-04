@@ -80,7 +80,7 @@ describe("workspace conflict copy actions", () => {
     );
 
     const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find((candidate) =>
-      candidate.textContent?.includes("Inspect the first cloud version"),
+      candidate.textContent?.includes("Review the first cloud version"),
     );
     button?.click();
 

@@ -89,6 +89,13 @@ commands shown below instead.
 
 By default, local container sandboxes run with **no network**. Override with `agents.defaults.sandbox.docker.network`.
 
+Dependency-template builders keep `HOME` and XDG configuration, data, state, and
+cache directories in a private writable tmpfs outside the workspace. Package-manager
+state is discarded with the builder and is not staged as workspace content. This
+does not supply registry metadata or packages for offline installs. Runtime tool
+containers retain the image and `sandbox.docker.env` settings; custom images with a
+missing or read-only home need writable HOME/XDG paths for tools that write there.
+
 The default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy) is Gateway-loopback only. Sandbox exec receives neither its proxy/CA environment nor protected sentinels. Sandbox/container proxy reachability is not implemented; do not enable sandbox networking expecting secret substitution to work in this release.
 
 <Note>

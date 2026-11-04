@@ -311,7 +311,7 @@ describe("login gate failure recovery", () => {
       part(element, "failure-refresh").click();
       expect(reload).not.toHaveBeenCalled();
       await vi.waitFor(() => {
-        expectText(element, ".app-toast__message").toContain("Unsaved starts will be lost.");
+        expectText(element, ".app-toast__description").toContain("Unsaved starts will be lost.");
       });
       const action = element.querySelector<HTMLButtonElement>(".app-toast__action");
       expect(action?.textContent?.trim()).toBe("Discard unsaved starts and reload");

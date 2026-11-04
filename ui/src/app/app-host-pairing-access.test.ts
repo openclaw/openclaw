@@ -476,7 +476,7 @@ describe("application shell pairing access", () => {
     await waitForSolid(() => expect(load).toHaveBeenCalledOnce());
     const message = settings
       ? "Settings navigation could not load."
-      : "Could not load the pairing dialog";
+      : "Couldn’t load the connection dialog";
     const target = () =>
       container.querySelector<HTMLElement>(settings ? ".settings-sidebar" : ".device-pair-setup");
     expect(target()?.getAttribute("aria-busy")).toBe("true");
