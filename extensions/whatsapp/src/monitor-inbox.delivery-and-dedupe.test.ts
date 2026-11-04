@@ -203,13 +203,12 @@ describe("web monitor inbox delivery and dedupe", () => {
         await waitForInboundWorkDrained();
         expect(await queue.listPending({ limit: "all" })).toMatchObject([{ attempts: 1 }]);
         for (let attempt = 2; attempt <= 8; attempt += 1) {
-          vi.setSystemTime(Date.now() + 3 * 60_000);
-          await vi.advanceTimersByTimeAsync(1_000);
+          await vi.advanceTimersByTimeAsync(1_000 * 2 ** (attempt - 2));
           await waitForInboundWorkDrained();
         }
         expect(await queue.listPending({ limit: "all" })).toMatchObject([{ attempts: 8 }]);
         vi.setSystemTime(receivedAt + 24 * 60 * 60_000);
-        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(3 * 60_000);
         await waitForInboundWorkDrained();
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(await queue.listFailed?.()).toMatchObject([{ reason: "retry-limit-exceeded" }]);
