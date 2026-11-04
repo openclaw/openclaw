@@ -3,6 +3,7 @@ import {
   formatErrorMessage,
   readErrorCauses,
   readErrorName,
+  stringifyNonErrorCause,
 } from "@openclaw/normalization-core/error-coercion";
 import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { redactToolDetail } from "./browser-redact.ts";
@@ -68,6 +69,15 @@ export function formatUiError(error: unknown, fallback = ""): string {
     formatErrorMessage(error),
   );
   return redactToolDetail(message) || fallback;
+}
+
+/** Technical details are opt-in and redacted, never replaced by recovery copy. */
+export function formatUiErrorDetails(error: unknown): string {
+  const message = formatErrorMessage(error);
+  const details = asNullableRecord(error)?.details;
+  return redactToolDetail(
+    details == null ? message : `${message}\n${stringifyNonErrorCause(details)}`,
+  );
 }
 
 export function formatUiExternalText(value: string | null | undefined, fallback = ""): string {

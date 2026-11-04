@@ -141,7 +141,7 @@ const enModelControls = {
       defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Only admins can turn on Full access.",
       requiresAdmin: "Requires admin access.",
-      updateFailed: "Couldn't change permissions: {error}",
+      updateFailed: "Couldn’t change permissions. Try again.",
       refreshFailed: "Permissions saved, but this chat didn't refresh. Reload to see the change.",
       modes: {
         "read-only": {

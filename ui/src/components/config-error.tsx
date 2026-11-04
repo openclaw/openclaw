@@ -1,11 +1,11 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, Show } from "solid-js";
-import { formatUiError, UserFacingError } from "../lib/format-error.ts";
+import { formatUiError, formatUiErrorDetails, UserFacingError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 
 /** Raw failures stay redacted and opt-in, separate from the recovery summary. */
 export function ErrorDetails(props: { error: unknown }) {
-  const detail = createMemo(() => (props.error == null ? "" : formatUiError(props.error)));
+  const detail = createMemo(() => (props.error == null ? "" : formatUiErrorDetails(props.error)));
   return (
     <Show when={detail()} keyed>
       {(message) => (

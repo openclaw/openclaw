@@ -1,6 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show } from "solid-js";
-import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ErrorDetails } from "../config-error.tsx";
 import { statusIconPaths } from "../icon-data-status.ts";
@@ -135,7 +134,7 @@ export function LazyViewError(props: {
             </button>
           </>
         }
-        detail={props.hideDetail ? undefined : formatUiError(props.error)}
+        detail={props.hideDetail ? undefined : props.error}
         inline={props.inline ?? Boolean(props.render)}
         stale={props.stale}
       />
@@ -146,7 +145,7 @@ export function LazyViewError(props: {
 export function PanelErrorState(props: {
   actions?: SolidJSX.Element;
   class?: string;
-  detail?: string;
+  detail?: unknown;
   inline?: boolean;
   role?: "alert" | "status";
   stale?: boolean;

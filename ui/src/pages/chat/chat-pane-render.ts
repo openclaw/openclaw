@@ -510,6 +510,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...composerAvailability,
       disabledReasonAction: catalogReason?.action,
       error: providerPaused ? null : state.lastError,
+      errorDetail: state.lastErrorDetail,
       diskSpace: placementComposer.diskSpace,
       workerRuntimeInstall: placementComposer.workerRuntimeInstall,
       runError:
