@@ -85,6 +85,13 @@ function createJsonStringPruner() {
   let unicodeDigits = 0;
   // An escape sequence is kept or dropped whole so the result stays valid JSON.
   let keepEscape = true;
+  // Copy kept runs: a view would keep its whole decoded chunk alive.
+  const keepRun = (bytes: Buffer, start: number, end: number) => {
+    if (end > start) {
+      output.push(Buffer.from(bytes.subarray(start, end)));
+      outputBytes += end - start;
+    }
+  };
   return {
     get bytes() {
       return outputBytes;
@@ -120,8 +127,7 @@ function createJsonStringPruner() {
         }
         if (keep !== keeping) {
           if (keeping) {
-            output.push(bytes.subarray(runStart, index));
-            outputBytes += index - runStart;
+            keepRun(bytes, runStart, index);
           } else {
             runStart = index;
           }
@@ -129,8 +135,7 @@ function createJsonStringPruner() {
         }
       }
       if (keeping) {
-        output.push(bytes.subarray(runStart));
-        outputBytes += bytes.length - runStart;
+        keepRun(bytes, runStart, bytes.length);
       }
     },
     take() {
