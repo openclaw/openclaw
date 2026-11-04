@@ -4,9 +4,9 @@ import type {
   MemoryMigrationProviderPlan,
   MigrationsMemoryApplyResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
-import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import "../../components/agent-select-registration.ts";
 import "../../components/modal-dialog.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
