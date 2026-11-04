@@ -152,6 +152,7 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
     const left = [...entries.values()].find((entry) => entry.pathname !== pathname);
     if (left) {
       showToast({
+        actionPrimary: true,
         message: t("configForm.secretUnsavedOnLeave", { field: left.label }),
         actionLabel: t("configForm.secretReview"),
         onAction: () =>

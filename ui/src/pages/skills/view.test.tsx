@@ -387,6 +387,30 @@ describe("renderSkills", () => {
     expect(onDetailOpen).toHaveBeenCalledWith("apple-notes");
   });
 
+  it("filters by status from a select that carries each count", async () => {
+    const { container, render } = createView(true);
+    const onStatusFilterChange = vi.fn();
+    render({
+      report: skillReport([
+        createSkill({ disabled: true }),
+        createSkill({ skillKey: "second", name: "Second" }),
+      ]),
+      onStatusFilterChange,
+    });
+    await Promise.resolve();
+
+    const select = container.querySelector<HTMLSelectElement>(".skills-toolbar__status")!;
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      "All 2",
+      "Ready 1",
+      "Needs setup 0",
+      "Disabled 1",
+    ]);
+    select.value = "needs-setup";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onStatusFilterChange).toHaveBeenCalledWith("needs-setup");
+  });
+
   it("treats skills blocked by the selected agent filter as needing setup", async () => {
     const { container, query, text, render } = createView(true);
     const report: SkillStatusReport = skillReport([createSkill({ blockedByAgentFilter: true })]);
@@ -396,7 +420,7 @@ describe("renderSkills", () => {
 
     expect(container.querySelectorAll(".plugins-item")).toHaveLength(0);
     expect(text()).toContain("Ready 0");
-    expect(text()).toContain("Needs Setup 1");
+    expect(text()).toContain("Needs setup 1");
 
     render({ report, statusFilter: "needs-setup", detailKey: "repo-skill" });
     await Promise.resolve();

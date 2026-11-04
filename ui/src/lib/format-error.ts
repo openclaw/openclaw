@@ -1,11 +1,14 @@
+import { readMissingScopeError } from "@openclaw/gateway-client/browser";
 import {
   collectErrorGraphCandidates,
   formatErrorMessage,
   readErrorCauses,
   readErrorName,
+  stringifyNonErrorCause,
 } from "@openclaw/normalization-core/error-coercion";
 import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { redactToolDetail } from "./browser-redact.ts";
+import { formatMissingScopeMessage } from "./gateway-errors.ts";
 
 /** The message is complete UI text; the cause remains available to diagnostics. */
 export class UserFacingError extends Error {}
@@ -51,6 +54,12 @@ export function formatUiError(error: unknown, fallback = ""): string {
   if (error instanceof UserFacingError) {
     return redactToolDetail(error.message) || fallback;
   }
+  const missingScope = readMissingScopeError(error);
+  if (missingScope) {
+    return redactToolDetail(
+      formatMissingScopeMessage(missingScope.missingScope, "complete this request"),
+    );
+  }
   const programmingErrors = collectErrorGraphCandidates(error, readErrorCauses).filter(
     isProgrammingError,
   );
@@ -68,6 +77,15 @@ export function formatUiError(error: unknown, fallback = ""): string {
     formatErrorMessage(error),
   );
   return redactToolDetail(message) || fallback;
+}
+
+/** Technical details are opt-in and redacted, never replaced by recovery copy. */
+export function formatUiErrorDetails(error: unknown): string {
+  const message = formatErrorMessage(error);
+  const details = asNullableRecord(error)?.details;
+  return redactToolDetail(
+    details == null ? message : `${message}\n${stringifyNonErrorCause(details)}`,
+  );
 }
 
 export function formatUiExternalText(value: string | null | undefined, fallback = ""): string {

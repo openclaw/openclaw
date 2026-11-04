@@ -29,7 +29,7 @@ export async function createApplicationAgent(
         : isGatewayMethodAdvertised(snapshot, "agents.create") !== true
           ? "agentChip.creationUnsupported"
           : "agentChip.creationUnavailable";
-    showToast({ message: t(reason), durationMs: 12_000 });
+    showToast({ severity: "error", message: t(reason), durationMs: 12_000 });
     return;
   }
   const client = context.gateway.snapshot.client;
@@ -122,6 +122,7 @@ export async function createApplicationAgent(
       restoreUncreatedChat();
     }
     showToast({
+      severity: created ? "warning" : "error",
       message:
         error instanceof AgentCreationUncertainError
           ? error.message

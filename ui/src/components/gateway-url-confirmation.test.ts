@@ -95,6 +95,12 @@ it("loads on demand, retries a failed import, and retires a pending modal withou
   await waitForSolid(() => expect(host.querySelector("openclaw-modal-dialog")).not.toBeNull());
   const modal = host.querySelector("openclaw-modal-dialog")!;
   expect(modal.textContent).toContain("https://current.example");
+  expect(modal.textContent).toContain(
+    "Anything you enter after switching goes to replacement.example.",
+  );
+  expect(modal.textContent).toContain(
+    "Your saved sign-in for current.example stays here and isn’t sent.",
+  );
   expect(modal.textContent).toContain("https://replacement.example");
   const buttons = Array.from(
     modal.querySelectorAll<HTMLButtonElement>(".gateway-switch__actions button"),

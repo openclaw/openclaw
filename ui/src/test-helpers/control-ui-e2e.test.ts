@@ -356,7 +356,7 @@ describe("shared proof capture", () => {
     ["none", "Loading chat", "none", undefined, undefined],
     ["evaluation", "Send message", "list", undefined, undefined],
     ["screenshot", "private-label", "list", undefined, undefined],
-    ["storage", "Sending message...", "list", undefined, undefined],
+    ["storage", "Sending message…", "list", undefined, undefined],
   ] as const)(
     "retains safe failure state despite %s failure (%s; %s catalog; %s/%s)",
     async (failure, sendLabel, catalogSource, shardIndex, shardCount) => {

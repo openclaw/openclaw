@@ -805,7 +805,7 @@ describe("renderAgentFiles", () => {
     ).map((tab) => directText(tab));
     expect(tabLabels).toStrictEqual(["AGENTS"]);
     expect(container.querySelector(".agent-files-hub-tabs .hub-tab__badge")?.textContent).toBe(
-      "missing",
+      "Missing",
     );
 
     const picker = container.querySelector<HTMLSelectElement>(".agent-tab-add");
