@@ -1,7 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { getEnvironmentData } from "node:worker_threads";
-import * as state from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -17,18 +16,11 @@ describe.skipIf(!connection)("iMessage recovery cursor on PostgreSQL state", () 
   const client = new pg.Client({ connectionString: connection });
   let stateDir: string;
 
-  const withPostgres = <T>(run: () => Promise<T>) =>
-    state.withDatabaseEngineSelection(
-      {
-        effectiveEngines: state.resolveDatabaseFamilyEngines({
-          database: { engine: "sqlite", families: { state: { engine: "postgres" } } },
-        }),
-        postgres: { connection: connection!, schemaPrefix: "imessage_conformance" },
-      },
-      run,
-    );
+  const previousConnection = getEnvironmentData("openclaw.test.state.connection");
 
   beforeAll(async () => {
+    // Select the existing state engine before the runtime opens stores or starts workers.
+    setEnvironmentData("openclaw.test.state.connection", connection);
     installIMessageStateRuntimeForTest();
     stateDir = getIMessageRuntime().state.resolveStateDir();
     await client.connect();
@@ -47,16 +39,18 @@ describe.skipIf(!connection)("iMessage recovery cursor on PostgreSQL state", () 
         await client.query(`DROP SCHEMA IF EXISTS "${row.schema.replaceAll('"', '""')}" CASCADE`);
       }
     } finally {
-      await client.end();
+      try {
+        await client.end();
+      } finally {
+        setEnvironmentData("openclaw.test.state.connection", previousConnection);
+      }
     }
   });
 
   it("loads, advances, and reloads the cursor at channel start (#184862)", async () => {
-    await withPostgres(async () => {
-      await expect(loadIMessageRecoveryCursor("default", DB)).resolves.toBeNull();
-      await advanceIMessageRecoveryCursor("default", DB, 4321);
-      await expect(loadIMessageRecoveryCursor("default", DB)).resolves.toBe(4321);
-      await expect(loadIMessageRecoveryCursor("default", `${DB}-other`)).resolves.toBeNull();
-    });
+    await expect(loadIMessageRecoveryCursor("default", DB)).resolves.toBeNull();
+    await advanceIMessageRecoveryCursor("default", DB, 4321);
+    await expect(loadIMessageRecoveryCursor("default", DB)).resolves.toBe(4321);
+    await expect(loadIMessageRecoveryCursor("default", `${DB}-other`)).resolves.toBeNull();
   });
 });
