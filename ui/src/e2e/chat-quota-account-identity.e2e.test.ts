@@ -53,6 +53,7 @@ suite.define(() => {
           modelProvider: "openai",
           contextTokens: 100_000,
           totalTokens: 14_000,
+          estimatedCostUsd: 0.02,
           totalTokensFresh: true,
           updatedAt: 1,
         };
@@ -164,6 +165,7 @@ suite.define(() => {
             ),
           );
         }
+        expect(await panel.textContent()).not.toContain("Cost");
         if (!scenario.unknown && !scenario.reverse) {
           await gateway.setMethodResponse("models.authStatus", {
             providers: [

@@ -213,6 +213,35 @@ describe("renderChatComposer context usage", () => {
     },
   );
 
+  it.each(["automatic", "unmeasured", "no-quota", "expired", "mixed"])(
+    "hides subscription cost estimates when quota identity is %s",
+    (scenario) => {
+      const provider = planProvider("anthropic", "Claude", [["Week", 10]]);
+      if (scenario === "unmeasured") {
+        delete provider.usage?.authProfileId;
+      } else if (scenario === "no-quota" || scenario === "expired") {
+        delete provider.usage;
+      }
+      if (scenario === "expired") {
+        provider.status = "expired";
+        provider.profiles[0]!.status = "expired";
+      }
+      if (scenario === "mixed") {
+        provider.profiles.push({ profileId: "anthropic:api", type: "api_key", status: "static" });
+      }
+      const container = renderComposer({
+        authProfileId: scenario === "automatic" || scenario === "mixed" ? null : "anthropic",
+        session: { modelProvider: "anthropic", estimatedCostUsd: 0.02 },
+        providerUsage: planUsage([provider]),
+      });
+      expect(part(container, "stats")?.textContent).not.toContain("Cost");
+      expect(part(container, "stats")?.textContent).not.toContain("$0.02");
+      if (scenario !== "no-quota" && scenario !== "expired") {
+        expect(container.textContent).toContain("Quota account unknown");
+      }
+    },
+  );
+
   it("deduplicates provider aliases and hides cost estimates for subscriptions", () => {
     const resetAt = Date.now() + 2 * 3_600_000 + 45_000;
     const windows: [string, number, number?][] = [

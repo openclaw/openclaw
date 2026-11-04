@@ -229,14 +229,15 @@ export function ChatComposerContextPanel(
   props: ContextNoticeProps & {
     model: ReturnType<typeof getContextNoticeViewModel>;
     currentGroup: ProviderQuotaGroup | undefined;
+    hasSubscription: boolean;
     quotaUnknown: boolean;
     open: boolean;
   },
 ) {
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.
-  // Only an account-matched plan suppresses the session cost estimate.
-  const showCosts = () => !props.currentGroup;
+  // Billing classification is independent of account-specific quota availability.
+  const showCosts = () => !props.currentGroup && !props.hasSubscription;
   const usageHref = () => `${normalizeBasePath(props.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);

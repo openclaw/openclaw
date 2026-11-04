@@ -122,6 +122,8 @@ export const uiE2eSerialTestFiles = [
   ...new Set([
     ...uiE2ePrivateServerTestFiles.filter((file) => !uiE2eStandaloneTestFiles.includes(file)),
     ...uiE2eRealGatewayTestFiles,
+    // Native paste spans multiple gestures; sibling contexts share Chromium's clipboard.
+    resolveUiTypeScriptPath("ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts"),
     uiE2eRuntimeBudgetTestFile,
   ]),
 ].toSorted();

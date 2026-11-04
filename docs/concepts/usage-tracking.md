@@ -20,6 +20,13 @@ without attribution, and conflicting account measurements show **Quota account
 unknown** instead of guessing. Model pickers and account summaries likewise do
 not borrow a plan name measured for another account.
 
+An unknown quota account does not change subscription billing into token-based
+billing. The composer keeps token-cost estimates hidden when the session
+provider has a subscription credential, even with automatic account selection or
+unavailable quota data. Until usage records attribute each run to its credential,
+providers with both subscription and API-key credentials keep this conservative
+subscription display.
+
 ## What it is
 
 - Pulls provider usage/quota directly from each provider's usage endpoint. No estimated provider billing; only provider-reported plan names, quota windows, balances, spend, budgets, daily cost history, token/model attribution, or account-state summaries.
