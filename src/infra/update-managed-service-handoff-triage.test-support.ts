@@ -139,16 +139,16 @@ export function registerManagedUpdateHandoffTriageTests(
   );
 
   itUnix.each([
-    "dirty",
-    "already-current",
-    "managed-service-handoff-cancelled",
-    "restart-health-pending",
-  ] as const)("classifies a zero-exit skipped updater result before triage: %s", async (reason) => {
-    const failed = reason === "dirty";
+    { reason: "dirty", failed: true },
+    { reason: "already-current", failed: false },
+    { reason: "managed-service-handoff-cancelled", failed: false },
+    { reason: "restart-health-pending", failed: false },
+    { reason: ["already-current"], failed: true },
+  ])("classifies skipped results before triage: %j", async ({ reason, failed }) => {
     const { state, sentinel } = await runManagedServiceManagerBoundary("systemd", {
       updaterExitCode: 0,
       helperExitCode: failed ? 1 : 0,
-      updaterNotification: "published",
+      updaterNotification: typeof reason === "string" ? "published" : undefined,
       updaterResult: {
         status: "skipped",
         mode: "npm",
@@ -159,25 +159,12 @@ export function registerManagedUpdateHandoffTriageTests(
     expect(state.triageCalls).toBe(failed ? 1 : undefined);
     expect(state.guardedRestart).toBeUndefined();
     expect(state.healthProbed).toBeUndefined();
-    expect(sentinel).toMatchObject({
-      payload: { status: "skipped", stats: { reason } },
-    });
-  });
-
-  itUnix("does not coerce a raw skipped reason into a known no-op", async () => {
-    const { state } = await runManagedServiceManagerBoundary("systemd", {
-      updaterExitCode: 0,
-      helperExitCode: 1,
-      updaterResult: {
-        status: "skipped",
-        mode: "npm",
-        reason: ["already-current"],
-        recovery: { serviceRestartSafe: true, version: "1.0.0", service: "healthy" },
-      },
-    });
-    expect(state.triageCalls).toBe(1);
-    expect(state.guardedRestart).toBeUndefined();
-    expect(state.healthProbed).toBeUndefined();
+    // Raw child JSON bypasses the typed sentinel writer.
+    if (typeof reason === "string") {
+      expect(sentinel).toMatchObject({
+        payload: { status: "skipped", stats: { reason } },
+      });
+    }
   });
 
   itUnix.each([

@@ -1,2 +1,2 @@
-# Preserve pending and strict raw-JSON classification at the generated helper boundary.
-18
+# Cover pending and malformed raw results in the shared generated-helper table.
+5
