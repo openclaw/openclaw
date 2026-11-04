@@ -43,9 +43,18 @@ export function admitPostgresPhysicalFacts(params: {
   schema?: StoreSchema;
   recordSchema?: boolean;
   preserveSchemaSeal?: boolean;
+  requireSealedSchema?: boolean;
 }): PostgresPhysicalFacts {
   const retained = getPostgresPhysicalFacts(params.db);
   if (retained) {
+    if (
+      retained.version !== params.version ||
+      retained.storeId !== params.storeId ||
+      retained.namespace !== params.namespace ||
+      retained.store !== params.store
+    ) {
+      throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
+    }
     return retained;
   }
   const capabilities = admitPostgresCapabilities(params.db);
@@ -70,6 +79,7 @@ export function admitPostgresPhysicalFacts(params: {
         schema,
         snapshot,
         params.preserveSchemaSeal,
+        params.requireSealedSchema,
       );
     }
     retainPostgresSchema(params.db, schema);

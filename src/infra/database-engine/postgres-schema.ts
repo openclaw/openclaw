@@ -105,7 +105,7 @@ export function withPostgresSearchExtensions(
   return { ...schema, searchExtensions: JSON.parse(snapshot.metadata.search_extensions ?? "{}") };
 }
 
-function postgresSchemaFingerprint(
+export function postgresSchemaFingerprint(
   catalog: readonly PostgresCatalogFact[],
   scratch?: { from: string; to: string },
 ): string {
@@ -201,6 +201,7 @@ export function verifyPostgresSchema(
   schema: StoreSchema,
   snapshot: ReturnType<typeof readPostgresSchema>,
   preserveSeal = false,
+  requireSeal = false,
 ): void {
   const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
   const ddl = postgresSchemaSql(schema, canonicalNamespace, snapshot.catalog);
@@ -215,6 +216,9 @@ export function verifyPostgresSchema(
   }
   if (metadata.server_major === major && metadata.fingerprint && metadata.ddl_hash === hash(ddl)) {
     return;
+  }
+  if (requireSeal) {
+    throw new Error(`Read-only PostgreSQL admission requires a matching schema seal. ${recovery}`);
   }
   // Inspection may compare reconstructed source DDL without rewriting the installed seal.
   if (preserveSeal) {
