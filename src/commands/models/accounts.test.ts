@@ -681,4 +681,30 @@ describe("personal model account CLI over an identified Gateway connection", () 
       },
     );
   });
+
+  it("reports an unreachable Gateway with the shared start-the-Gateway guidance", async () => {
+    await withOpenClawTestState(
+      { label: "personal-account-cli-offline", scenario: "minimal" },
+      async (state) => {
+        const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+        await once(server, "listening");
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Expected an ephemeral Gateway port.");
+        }
+        await closeMinimalGatewayServer(server);
+        await state.writeConfig({
+          gateway: { mode: "local", port: address.port, auth: { mode: "none" } },
+        });
+        await expect(
+          modelsAccountsListCommand({ port: String(address.port) }, runtime()),
+        ).rejects.toMatchObject({
+          name: "GatewayTransportError",
+          message: expect.stringContaining(
+            `Gateway not reachable at ws://127.0.0.1:${address.port} (ECONNREFUSED).`,
+          ),
+        });
+      },
+    );
+  });
 });
