@@ -8,6 +8,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   readSessionTranscriptFailureRunId,
@@ -61,32 +62,65 @@ export function listTranscriptArchivesFromDatabase(
     return [];
   }
   const selected = sqliteStringSet(selectors);
-  const query = getNodeSqliteKysely<ArchiveDatabase>(db)
-    .selectFrom("session_transcript_archives")
-    .select([
-      "archive_name as archiveName",
-      "session_id as sessionId",
-      "session_key as sessionKey",
-      "created_at as createdAt",
-    ])
-    .orderBy("created_at")
-    .orderBy("session_id")
-    .where((expression) =>
-      expression.or([
-        ...(selectors.length > 0
-          ? [expression("session_id", "in", selected), expression("session_key", "in", selected)]
-          : []),
-        ...(archiveNames.length > 0
-          ? [expression("archive_name", "in", sqliteStringSet(archiveNames))]
-          : []),
-      ]),
+  const archives = getNodeSqliteKysely<ArchiveDatabase>(db).selectFrom(
+    "session_transcript_archives",
+  );
+  // Each row stores archive_blob before created_at, so reading created_at from the
+  // table walks the blob's overflow pages (782 MB for 2.9k archives on one Gateway).
+  // Identity columns precede the blob and archive_name comes from its unique index;
+  // created_at comes from the covering retention index, read in the same snapshot.
+  const rows = runSqliteReadSnapshotSync(db, () => {
+    const identities = executeSqliteQuerySync(
+      db,
+      archives
+        .select([
+          "archive_name as archiveName",
+          "session_id as sessionId",
+          "generation",
+          "session_key as sessionKey",
+        ])
+        .where((expression) =>
+          expression.or([
+            ...(selectors.length > 0
+              ? [
+                  expression("session_id", "in", selected),
+                  expression("session_key", "in", selected),
+                ]
+              : []),
+            ...(archiveNames.length > 0
+              ? [expression("archive_name", "in", sqliteStringSet(archiveNames))]
+              : []),
+          ]),
+        ),
+    ).rows;
+    if (identities.length === 0) {
+      return [];
+    }
+    // Unfiltered so the planner scans the covering index instead of seeking table rows.
+    const createdAt = new Map(
+      executeSqliteQuerySync(
+        db,
+        archives.select(["session_id", "generation", "created_at"]),
+      ).rows.map((row) => [JSON.stringify([row.session_id, row.generation]), row.created_at]),
     );
-  const rows = executeSqliteQuerySync(db, query).rows;
-  return rows
-    .map((row) =>
-      Object.assign(row, { agentId: resolveAgentIdFromSessionKey(row.sessionKey, agentId) }),
-    )
-    .filter((row) => logicalAgentId === undefined || row.agentId === logicalAgentId);
+    return identities.map(({ generation, ...identity }) => ({
+      ...identity,
+      createdAt: createdAt.get(JSON.stringify([identity.sessionId, generation]))!,
+    }));
+  });
+  return (
+    rows
+      // Session ids are ASCII, so code-unit order matches SQLite's BINARY collation.
+      .toSorted(
+        (a, b) =>
+          a.createdAt - b.createdAt ||
+          (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0),
+      )
+      .map((row) =>
+        Object.assign(row, { agentId: resolveAgentIdFromSessionKey(row.sessionKey, agentId) }),
+      )
+      .filter((row) => logicalAgentId === undefined || row.agentId === logicalAgentId)
+  );
 }
 
 function hasTranscriptArchiveInDatabase(

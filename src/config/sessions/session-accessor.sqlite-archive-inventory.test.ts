@@ -1,26 +1,40 @@
+import fs from "node:fs";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
 import { listTranscriptArchivesFromDatabase } from "./session-accessor.sqlite-archive-read.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function insertArchive(
+  db: DatabaseSync,
+  [archiveName, sessionId, sessionKey, createdAt]: [string, string, string, number],
+  blob: Uint8Array = new Uint8Array(1),
+) {
+  db.prepare(
+    `INSERT INTO session_transcript_archives
+       (session_id, generation, session_key, reason, encoding, archive_blob, archive_sha256, archive_name, created_at)
+     VALUES (?, 'g', ?, 'deleted', 'zstd', ?, ?, ?, ?)`,
+  ).run(sessionId, sessionKey, blob, "0".repeat(64), archiveName, createdAt);
+}
 
 describe("SQLite archive inventory", () => {
   let db: DatabaseSync;
 
   beforeEach(() => {
     db = new DatabaseSync(":memory:");
-    db.exec(`
-      CREATE TABLE session_transcript_archives (
-        archive_name TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        session_key TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-      INSERT INTO session_transcript_archives VALUES
-        ('late.jsonl', 'late', 'agent:main:late', 30),
-        ('early-b.jsonl', 'early-b', 'agent:main:early-b', 10),
-        ('foreign.jsonl', 'foreign', 'agent:other:foreign', 5),
-        ('early-a.jsonl', 'early-a', 'agent:main:early-a', 10);
-    `);
+    ensureSessionTranscriptArchiveSchema(db);
+    for (const row of [
+      ["late.jsonl", "late", "agent:main:late", 30],
+      ["early-b.jsonl", "early-b", "agent:main:early-b", 10],
+      ["foreign.jsonl", "foreign", "agent:other:foreign", 5],
+      ["early-a.jsonl", "early-a", "agent:main:early-a", 10],
+    ] as const) {
+      insertArchive(db, [...row]);
+    }
   });
 
   afterEach(() => {
@@ -85,6 +99,49 @@ describe("SQLite archive inventory", () => {
         ...main,
       ]);
       expect(read("main")).toEqual(main);
+    },
+  );
+
+  // /proc/self/io counts every pread SQLite issues, including page-cache hits.
+  it.runIf(fs.existsSync("/proc/self/io"))(
+    "lists archive metadata without reading the transcript blobs stored beside it",
+    () => {
+      const file = path.join(tempDirs.make("openclaw-archive-inventory-"), "agent.sqlite");
+      const writer = new DatabaseSync(file);
+      ensureSessionTranscriptArchiveSchema(writer);
+      const names = Array.from({ length: 64 }, (_, index) => `s${index}.jsonl.deleted.zst`);
+      names.forEach((name, index) =>
+        insertArchive(
+          writer,
+          [name, `s${index}`, `agent:main:s${index}`, index],
+          new Uint8Array(256 * 1024).fill(index),
+        ),
+      );
+      writer.close();
+      const blobBytes = names.length * 256 * 1024;
+      const readChars = () =>
+        Number(/^rchar: (\d+)$/m.exec(fs.readFileSync("/proc/self/io", "utf8"))![1]);
+      // A fresh connection starts with an empty page cache, so every page read is a pread.
+      const reader = new DatabaseSync(file, { readOnly: true });
+      try {
+        for (const [selectors, archiveNames] of [
+          [[], names],
+          [["s3"], []],
+        ] as const) {
+          const before = readChars();
+          const archives = listTranscriptArchivesFromDatabase(
+            { db: reader, agentId: "main" },
+            undefined,
+            selectors,
+            archiveNames,
+          );
+          expect(readChars() - before).toBeLessThan(blobBytes / 32);
+          expect(archives.length).toBe(selectors.length ? 1 : names.length);
+        }
+      } finally {
+        clearNodeSqliteKyselyCacheForDatabase(reader);
+        reader.close();
+      }
     },
   );
 });
