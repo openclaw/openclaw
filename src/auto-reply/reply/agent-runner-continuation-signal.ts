@@ -248,26 +248,30 @@ export async function handleContinuationSignal(context: {
               : effectiveContinuationSignal.silent
                 ? "silent"
                 : "normal";
-            await enqueuePendingDelegate(sessionKey, {
-              task: delegateTask,
-              originRunId: runId,
-              ...(delayMs > 0 ? { delayMs } : {}),
-              ...(delegateMode !== "normal" ? { mode: delegateMode } : {}),
-              ...(effectiveContinuationSignal.targetSessionKey
-                ? { targetSessionKey: effectiveContinuationSignal.targetSessionKey }
-                : {}),
-              ...(effectiveContinuationSignal.targetSessionKeys &&
-              effectiveContinuationSignal.targetSessionKeys.length > 0
-                ? { targetSessionKeys: effectiveContinuationSignal.targetSessionKeys }
-                : {}),
-              ...(effectiveContinuationSignal.fanoutMode
-                ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
-                : {}),
-              ...(internalBracketTraceparent ? { traceparent: internalBracketTraceparent } : {}),
-              ...(effectiveContinuationSignal.model
-                ? { model: effectiveContinuationSignal.model }
-                : {}),
-            });
+            await enqueuePendingDelegate(
+              sessionKey,
+              {
+                task: delegateTask,
+                originRunId: runId,
+                ...(delayMs > 0 ? { delayMs } : {}),
+                ...(delegateMode !== "normal" ? { mode: delegateMode } : {}),
+                ...(effectiveContinuationSignal.targetSessionKey
+                  ? { targetSessionKey: effectiveContinuationSignal.targetSessionKey }
+                  : {}),
+                ...(effectiveContinuationSignal.targetSessionKeys &&
+                effectiveContinuationSignal.targetSessionKeys.length > 0
+                  ? { targetSessionKeys: effectiveContinuationSignal.targetSessionKeys }
+                  : {}),
+                ...(effectiveContinuationSignal.fanoutMode
+                  ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
+                  : {}),
+                ...(internalBracketTraceparent ? { traceparent: internalBracketTraceparent } : {}),
+                ...(effectiveContinuationSignal.model
+                  ? { model: effectiveContinuationSignal.model }
+                  : {}),
+              },
+              { electingOperatorAuthority: followupRun.operatorAuthority },
+            );
             await persistContinuationChainState({
               count: currentChainCount,
               startedAt: chainStartedAt,

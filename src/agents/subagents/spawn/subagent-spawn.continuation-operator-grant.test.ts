@@ -17,6 +17,8 @@ import {
 import { resetContinueDelegateTurnAdmissionForTests } from "../../../auto-reply/continuation/delegate-turn-admission.js";
 import { captureContinuationQueueContext } from "../../../auto-reply/continuation/queue-context.js";
 import { resetContinuationStateForTests } from "../../../auto-reply/continuation/state.js";
+import { scheduleReplyContinuation } from "../../../auto-reply/reply/agent-runner-continuation-schedule.js";
+import { createTestFollowupRun } from "../../../auto-reply/reply/agent-runner.test-fixtures.js";
 import {
   captureRuntimeConfigAsyncReader,
   clearConfigCache,
@@ -24,7 +26,9 @@ import {
   type OpenClawConfig,
 } from "../../../config/config.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { captureAgentTurnPrincipal } from "../../../gateway/agent-turn/principal.js";
 import { invalidateGatewayDeviceRevocation } from "../../../gateway/device-revocation.js";
+import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
 import {
   createOperatorRecoveryFixture,
   pairedOperator,
@@ -140,12 +144,12 @@ function turnScope(gateway: ReturnType<typeof gatewayInstance>, client?: Gateway
       : {}),
     isWebchatConnect: () => false,
   };
+  const inTurn = <T>(run: () => T) => withPluginRuntimeGatewayRequestScope(scope, run);
   return {
+    inTurn,
     /** The electing turn: the tool accepts the delegate, then its post-response dispatch runs. */
-    elect: (delaySeconds: number) =>
-      withPluginRuntimeGatewayRequestScope(scope, () => electDelegate(delaySeconds)),
-    dispatch: (sessionKey: string) =>
-      withPluginRuntimeGatewayRequestScope(scope, () => dispatchQueued(sessionKey)),
+    elect: (delaySeconds: number) => inTurn(() => electDelegate(delaySeconds)),
+    dispatch: (sessionKey: string) => inTurn(() => dispatchQueued(sessionKey)),
     disconnect: () => {
       connected = false;
     },
@@ -167,7 +171,19 @@ async function operatorConnection(gateway: ReturnType<typeof gatewayInstance>, s
   });
   // The handshake binds access policy: none configured, so no plugin grant (null).
   fixture.client.internal = { ...fixture.client.internal, operatorAccessAuthority: null };
-  return { profileId: profile.id, device, ...turnScope(gateway, fixture.client) };
+  const turn = turnScope(gateway, fixture.client);
+  return {
+    profileId: profile.id,
+    device,
+    ...turn,
+    /** The run's admitted operator authority, retained by run admission beyond its request. */
+    admitRun: () =>
+      captureGatewayOperatorRunAuthority({
+        client: expectDefined(captureAgentTurnPrincipal(fixture.client), "operator principal"),
+        context: gateway.context,
+        sourceAuthority: null,
+      }).then((admitted) => expectDefined(admitted, "admitted run authority")),
+  };
 }
 
 async function electDelegate(delaySeconds: number): Promise<string> {
@@ -314,6 +330,51 @@ describe("continuation delegate dispatch under the elector's bounded grant", () 
     expect(await delegateRecords(OWNER)).toHaveLength(1);
     expect(await interruptedNotices()).toEqual([]);
     expect(peekSystemEvents(OWNER).filter((text) => text.includes("DELEGATE spawn"))).toEqual([]);
+  });
+
+  it("elects a bracket delegate under its run's authority after the connection closed", async () => {
+    const gateway = gatewayInstance(runtimeConfig());
+    const operator = await operatorConnection(gateway, ["operator.write"]);
+    const run = await operator.admitRun();
+    operator.disconnect();
+    try {
+      // The run's final reply carries [[CONTINUE_DELEGATE]]; its post-response step elects it.
+      await operator.inTurn(() =>
+        scheduleReplyContinuation({
+          cfg: runtimeConfig(),
+          sessionKey: OWNER,
+          followupRun: {
+            ...createTestFollowupRun({ sessionKey: OWNER }),
+            operatorAuthority: run.authority,
+          },
+          runId: "bracket-run",
+          usage: undefined,
+          effectiveContinuationSignal: {
+            kind: "delegate",
+            task: "fold the next crane",
+            delayMs: 50,
+          },
+          continuationExtractionFromBracket: true,
+          effectiveContinueWorkRequests: [],
+          continuationWorkReason: undefined,
+          internalBracketTraceparent: undefined,
+          continuation: {
+            persistContinuationChainState: async () => ({ chainId: undefined, entry: undefined }),
+            resetContinuationChainForFreshTurn: async () => {},
+            postCompactionDelegatesToPreserve: [],
+          },
+          getActiveSessionEntry: () => undefined,
+        }),
+      );
+      const [elected] = await delegateRecords(OWNER);
+      const record = await settledDelegate(expectDefined(elected, "bracket delegate").recordId);
+
+      expect(record.status).toBe("succeeded");
+      expectChildUnderElector(gateway.launches[0], operator.profileId);
+      await expectReturnsToOwner(1);
+    } finally {
+      run.release();
+    }
   });
 
   it("refuses a timed delegate whose operator device was revoked before it fired", async () => {

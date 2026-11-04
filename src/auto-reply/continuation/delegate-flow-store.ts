@@ -8,6 +8,7 @@
  * still spells it that way.
  */
 import crypto from "node:crypto";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { validateSubagentAttachments } from "../../agents/subagents/spawn/subagent-attachments.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -423,6 +424,8 @@ export async function createDelegateRecord(params: {
   phase: string;
   /** Tests and non-tool producers can inject their resolved runtime policy. */
   attachmentConfig?: OpenClawConfig;
+  /** The electing run's admitted operator, for elections made outside a tool call. */
+  electingOperatorAuthority?: AdmittedRunOperatorAuthority;
   now?: number;
 }): Promise<DelegateCustodyRecord> {
   const createdAt = params.now ?? Date.now();
@@ -443,6 +446,7 @@ export async function createDelegateRecord(params: {
         ? await captureContinuationDelegateDispatchGrant({
             ownerSessionKey: params.ownerKey,
             dueAt: createdAt + (params.delegate.delayMs ?? 0),
+            electingOperatorAuthority: params.electingOperatorAuthority,
           })
         : undefined,
   };

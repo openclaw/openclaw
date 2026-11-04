@@ -10,6 +10,7 @@
  * and internal turns) carry no grant and dispatch as before.
  */
 
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import { captureQueuedOperatorRecoverySource } from "../../gateway/operator-run-recovery-source.js";
@@ -37,15 +38,21 @@ function grantRefused(reason: string, cause?: unknown): Error {
   });
 }
 
-/** The electing request's Gateway operator, or nothing when no operator elected. */
+/**
+ * The electing run's Gateway operator, or nothing when no operator elected. A run's admitted
+ * authority outlives its request's connection, so callers outside a tool pass it explicitly.
+ */
 export async function captureContinuationDelegateDispatchGrant(params: {
   ownerSessionKey: string;
   dueAt: number;
+  electingOperatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<ContinuationDelegateDispatchGrant | undefined> {
-  const ambient = await captureAmbientGatewayOperatorAuthority({
-    missingBindingError: () =>
-      new Error("Continuation delegate election requires the operator's Gateway binding."),
-  });
+  const ambient = params.electingOperatorAuthority
+    ? { authority: params.electingOperatorAuthority, release: undefined }
+    : await captureAmbientGatewayOperatorAuthority({
+        missingBindingError: () =>
+          new Error("Continuation delegate election requires the operator's Gateway binding."),
+      });
   try {
     const source = captureQueuedOperatorRecoverySource(ambient.authority);
     // Channel principals are bound to their channel turn, not to a Gateway connection.
