@@ -20,6 +20,7 @@ import {
   replayResponsesReasoningUpdates,
   type ResponsesConfigurationUpdate,
 } from "./openai-responses-reasoning-update.js";
+import { retainedJsonBytes } from "./openai-responses-retained-bytes.js";
 import {
   normalizeOpenAIResponsesFunctionCallId,
   shouldNormalizeOpenAIResponsesToolCallId,
@@ -605,7 +606,7 @@ type HttpContinuationEntry =
       state: ResponsesContinuationState;
       idleTimer: ReturnType<typeof setTimeout>;
       retainedBytes: number;
-      strings: ReadonlyMap<string, number>;
+      jsonBytes: ReadonlyMap<string | object, number>;
     }
   | { kind: "claimed"; sessionId: string; owner: SessionResourceOwner };
 
@@ -682,27 +683,6 @@ function connectionIdentity(params: HttpContinuationIdentity): string {
   );
 }
 
-// Strings are immutable: reuse their exact byte counts by value, never by mutable
-// item identity. Each ready entry retains only its current strings; eviction and
-// session cleanup drop the counts with the baseline.
-function retainedJsonBytes(value: unknown, previous?: ReadonlyMap<string, number>) {
-  const strings = new Map<string, number>();
-  let stringBytes = 0;
-  const skeleton = JSON.stringify(value, (_key, member: unknown) => {
-    if (typeof member !== "string") {
-      return member;
-    }
-    let bytes = strings.get(member) ?? previous?.get(member);
-    if (bytes === undefined) {
-      bytes = Buffer.byteLength(JSON.stringify(member), "utf8") - 2;
-    }
-    strings.set(member, bytes);
-    stringBytes += bytes;
-    return "";
-  });
-  return { retainedBytes: stringBytes + Buffer.byteLength(skeleton, "utf8"), strings };
-}
-
 export function claimOpenAIResponsesHttpContinuation(
   params: HttpContinuationIdentity & {
     sessionId: string;
@@ -744,7 +724,7 @@ export function claimOpenAIResponsesHttpContinuation(
         previous !== undefined && dispatchedPreviousResponseId === previous.state.lastResponseId,
       );
       // Serialized-content budget, not JavaScript heap overhead.
-      const { retainedBytes, strings } = retainedJsonBytes(state, previous?.strings);
+      const { retainedBytes, jsonBytes } = retainedJsonBytes(state, previous?.jsonBytes);
       if (retainedBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES) {
         // Keep other sessions when this baseline cannot fit alone. Its next
         // request sends full history; the completed response remains valid.
@@ -758,7 +738,7 @@ export function claimOpenAIResponsesHttpContinuation(
         state,
         idleTimer: owner.runInDetachedAsyncContext(() => createHttpContinuationTimer(key)),
         retainedBytes,
-        strings,
+        jsonBytes,
       } satisfies Extract<HttpContinuationEntry, { kind: "ready" }>;
       httpContinuationRetainedBytes += retainedBytes;
       httpContinuationEntries.set(key, ready);

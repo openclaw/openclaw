@@ -21,12 +21,12 @@ export type RemoteModelCatalogWriteResult =
   | { status: "written" }
   | { status: "retained-newer"; row: RemoteModelCatalogStoreRow };
 
-// Reader generations are independent of wire versions. Task-capable writes must
-// never replace a slot whose released reader rejects the v3 wire on downgrade.
-export const REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v4";
-export const PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v3";
-export const OLDER_REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v2";
-// Released snapshots remain readable until this client stores its own.
+// Slot name predates the v2 wire; renaming it would discard cached catalogs.
+// It stores whichever wire the configured URL serves, v3 included. No release reads
+// it, and it must never replace the slot read by released v2 clients.
+export const REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v3";
+export const PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v2";
+// Released v1/v2 snapshots remain readable until this client stores its own.
 // Activation still checks source and age; downgrades keep their original slot.
 export const LEGACY_REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote";
 
@@ -46,10 +46,6 @@ export function readRemoteModelCatalog(
     readConfigMachineState<RemoteModelCatalogSnapshot>(REMOTE_MODEL_CATALOG_STATE_KEY, options) ??
     readConfigMachineState<RemoteModelCatalogSnapshot>(
       PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY,
-      options,
-    ) ??
-    readConfigMachineState<RemoteModelCatalogSnapshot>(
-      OLDER_REMOTE_MODEL_CATALOG_STATE_KEY,
       options,
     ) ??
     readConfigMachineState<RemoteModelCatalogSnapshot>(

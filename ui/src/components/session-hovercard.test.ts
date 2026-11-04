@@ -560,16 +560,14 @@ describe("session hovercard", () => {
     ).not.toBeNull();
   });
 
-  it("renders the latest turn as plain text when progress is absent", () => {
+  it("reserves the task area for progress reports, never the latest message", () => {
+    const latestMessage = "Land";
     const container = renderCard({
-      row: row({ lastMessagePreview: "  Finished <strong>without markup</strong>.  " }),
+      row: row({ lastMessagePreview: latestMessage }),
     });
 
-    expect(container.querySelector(".session-hovercard__excerpt")?.textContent).toBe(
-      "Finished <strong>without markup</strong>.",
-    );
-    expect(container.querySelector(".session-hovercard__excerpt strong")).toBeNull();
-    expect(container.querySelector(".session-progress-card")).toBeNull();
+    expect(container.textContent).not.toContain(latestMessage);
+    expect(container.querySelector(".session-hovercard__task")).toBeNull();
   });
 
   it.each(["active", "markdown-only", "completed"])(
@@ -577,10 +575,7 @@ describe("session hovercard", () => {
     (mode) => {
       const card = progressCard();
       const container = renderCard({
-        row: row({
-          ...(mode === "active" ? { lastMessagePreview: "This must not appear." } : {}),
-          ...(mode === "completed" ? { status: "done" } : {}),
-        }),
+        row: row(mode === "completed" ? { status: "done" } : {}),
         progressCard: {
           ...card,
           steps:
@@ -607,8 +602,6 @@ describe("session hovercard", () => {
       );
       expect(container.querySelector(".session-progress-card")).toBeNull();
       expect(container.querySelector("time")).toBeNull();
-      expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
-      expect(container.textContent).not.toContain("This must not appear.");
     },
   );
 

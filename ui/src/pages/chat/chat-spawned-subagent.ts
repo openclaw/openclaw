@@ -17,9 +17,23 @@ export type SubagentRoster = {
   subagentSessions?: readonly GatewaySessionRow[];
   /** True once the pane's own child query answered; seeded rows can be partial. */
   subagentSessionsHydrated?: boolean;
+  /** The optional child read settled unsuccessfully; live parent facts still apply. */
+  subagentSessionsUnavailable?: boolean;
   /** A newly named child is still awaiting a covering read before the wait can count it. */
   subagentSessionsPending?: boolean;
 };
+
+/** A child query can be hydrated before it observes its own parent. */
+export function hasLoadedDetailsSubagents(
+  details: SubagentRoster & { selectedSession?: GatewaySessionRow },
+) {
+  return (
+    details.subagentSessionsHydrated &&
+    details.subagentSessions?.some((row) =>
+      areUiSessionKeysEquivalent(row.key, details.selectedSession?.key),
+    )
+  );
+}
 
 /** What a launch row needs to show its subagent's session and open it. */
 export type SubagentRowContext = Pick<

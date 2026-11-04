@@ -21,6 +21,7 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { runtimeProcessScriptEntrypoints } from "./runtime-process-manifest.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import {
@@ -132,7 +133,10 @@ it.each([
       candidateRoot: path.join(fixture, "package"),
       config: {},
     };
-    const stagingRoot = mode === "snapshot" ? input.targetStateDir : path.join(cache, "openclaw");
+    const stagingRoot =
+      mode === "snapshot"
+        ? input.targetStateDir
+        : resolvePrivateSqliteSnapshotStagingRoot({ ...process.env, XDG_CACHE_HOME: cache });
     const admitted =
       mode === "snapshot" ? await inventoryUpdateCandidateStateWorker(input) : undefined;
     if (scenario.readError && mode === "snapshot") {
@@ -424,7 +428,10 @@ it.runIf(process.platform !== "win32")(
   "kills a cancelled schema worker before removing its parent-owned staging root",
   async ({ signal }) => {
     const cache = path.join(root, "kill-cache");
-    const cacheOwner = path.join(cache, "openclaw");
+    const cacheOwner = resolvePrivateSqliteSnapshotStagingRoot({
+      ...process.env,
+      XDG_CACHE_HOME: cache,
+    });
     const pidPath = path.join(root, "hung-worker.pid");
     const stagingPath = path.join(root, "hung-worker-staging.txt");
     const runner = path.join(root, "hung-worker.mjs");

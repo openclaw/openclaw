@@ -38,6 +38,10 @@
   visibility: visible;
 }
 
+.chat-thread[data-restoring] > .chat-position-rail {
+  transition: none;
+}
+
 .chat-position-rail__track {
   position: absolute;
   top: 0;
@@ -331,8 +335,6 @@
 
 .chat-image-skeleton.skeleton {
   --skeleton-base: transparent;
-  --skeleton-highlight: color-mix(in srgb, var(--bg-hover) 45%, transparent);
-  --skeleton-duration: 2.4s;
 
   position: absolute;
   inset: 0;

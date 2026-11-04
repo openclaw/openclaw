@@ -197,6 +197,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
   const explicit = params.aliasMap;
   const aliases = explicit
     ? {
+        packageRoot: undefined,
         cacheKey: createPluginLoaderModuleCacheKey({ tryNative, aliasMap: explicit }),
         getAliasMap: () => explicit,
         getSourceTransformAliasMap: () => explicit,
@@ -214,6 +215,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
   const scopedCacheKey = `${loaderFilename}::${params.cacheScopeKey ? `${params.cacheScopeKey}::` : ""}${moduleConfigCacheKey}`;
   return {
     loaderFilename,
+    hostRoot: aliases.packageRoot ?? undefined,
     getAliasMap: aliases.getAliasMap,
     resolveAlias: aliases.resolveAlias,
     tryNative,
@@ -275,6 +277,7 @@ function createPluginModuleLoader(
             if (!Object.hasOwn(modules, target)) {
               const native = tryNativeRequireModule(target, {
                 aliasMap: params.resolveAlias,
+                hostRoot: params.hostRoot,
               });
               if (!native.ok) {
                 throw new Error(
@@ -313,6 +316,7 @@ function createPluginModuleLoader(
         if (params.tryNative) {
           const native = tryNativeRequireJavaScriptModule(target, {
             aliasMap: resolveNativeAlias,
+            hostRoot: params.hostRoot,
             fallbackOnMissingDependency: true,
           });
           if (native.ok) {

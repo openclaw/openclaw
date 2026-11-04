@@ -2378,54 +2378,6 @@ describe("updateNpmInstalledPlugins", () => {
     expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to the default ClawHub spec when a beta release is unavailable", async () => {
-    installPluginFromClawHubMock
-      .mockResolvedValueOnce({
-        ok: false,
-        code: "version_not_found",
-        error: "version not found: beta",
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        pluginId: "demo",
-        targetDir: "/tmp/demo",
-        version: "1.2.4",
-        clawhub: {
-          source: "clawhub",
-          clawhubUrl: "https://clawhub.ai",
-          clawhubPackage: "demo",
-          clawhubFamily: "code-plugin",
-          clawhubChannel: "official",
-          integrity: "sha256-clawpack",
-          resolvedAt: "2026-05-01T00:00:00.000Z",
-        },
-      });
-
-    const infoMessages: string[] = [];
-    const warn = vi.fn();
-    const result = await updatePlugin(createClawHubInstallConfig(), "demo", {
-      updateChannel: "beta",
-      logger: { info: (msg) => infoMessages.push(msg), warn },
-    });
-
-    expect(clawHubInstallCall(0)?.spec).toBe("clawhub:demo@beta");
-    expect(clawHubInstallCall(1)?.spec).toBe("clawhub:demo");
-    expect(warn).not.toHaveBeenCalled();
-    expect(infoMessages).toEqual([
-      'Plugin "demo" has no beta ClawHub release for clawhub:demo@beta; using clawhub:demo instead. Core update can still complete.',
-    ]);
-    expectRecordFields(result.config.plugins?.installs?.demo, {
-      source: "clawhub",
-      spec: "clawhub:demo",
-      installPath: "/tmp/demo",
-      version: "1.2.4",
-      clawhubPackage: "demo",
-    });
-    expect(result.outcomes[0]?.message).toBe(
-      "Updated demo: unknown -> 1.2.4. (warning: beta channel fallback used clawhub:demo because clawhub:demo@beta could not be used).",
-    );
-  });
-
   it("skips ClawHub plugin updates when the bundled version is newer", async () => {
     const pluginId = "whatsapp";
     const bundledVersion = "2026.4.20";

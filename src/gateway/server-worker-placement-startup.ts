@@ -93,7 +93,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
 
 export function createGatewayGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
-  environments?: Pick<WorkerEnvironmentService, "get" | "startTunnel">;
+  environments?: Pick<WorkerEnvironmentService, "get" | "startTunnel" | "ensureRetainedRunning">;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   warn: (message: string) => void;
 }) {
@@ -117,6 +117,8 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
   const runtimeRefresh = createWorkerRuntimeRefreshWaiter({
     environments: params.environments,
     isStopping: () => stopped,
+    hasCurrentRunner: (deviceId) =>
+      nodeWorkerSupervisorTransport?.hasCurrentRunner(deviceId) === true,
   });
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const {

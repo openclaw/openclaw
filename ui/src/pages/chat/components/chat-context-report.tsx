@@ -92,7 +92,7 @@ export function ChatContextReport(
                   ? "chat.sessionDetails.contextOffline"
                   : "chat.sessionDetails.contextError",
               ),
-              icon: "alertTriangle",
+              severity: "warning",
             });
           }
         };

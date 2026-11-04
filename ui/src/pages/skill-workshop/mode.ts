@@ -16,20 +16,21 @@ export function resolveWorkshopMode(
     return null;
   }
   // The Gateway defaults an absent mode to auto; any other value learns nothing.
-  const configured = asRecord(asRecord(asRecord(config.skills)?.workshop)?.autonomous)?.mode;
+  const entry = asRecord(asRecord(asRecord(config.plugins)?.entries)?.["skill-workshop"]);
+  const configured = asRecord(asRecord(entry?.config)?.autonomous)?.mode;
   if (configured === undefined || configured === "auto") {
     return "auto";
   }
   return configured === "propose" ? "propose" : "off";
 }
 
-/** Patch the canonical config key; returns an error message or null on success. */
+/** Patch the plugin's own config key; returns an error message or null on success. */
 export async function setWorkshopMode(
   runtimeConfig: RuntimeConfigCapability,
   mode: SkillWorkshopMode,
 ): Promise<string | null> {
   const patch = {
-    raw: { skills: { workshop: { autonomous: { mode } } } },
+    raw: { plugins: { entries: { "skill-workshop": { config: { autonomous: { mode } } } } } },
     note: {
       auto: "Enable Skill Workshop auto-learning",
       propose: "Have Skill Workshop propose drafts",

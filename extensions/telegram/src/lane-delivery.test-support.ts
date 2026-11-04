@@ -27,14 +27,11 @@ export function createHarness({
   ...options
 }: {
   answerMessageId?: number;
-  answerStream?: DraftLaneState["stream"] | null;
+  answerStream?: DraftLaneState["stream"];
   resolveFinalPayloadCandidate?: DelivererOptions["resolveFinalPayloadCandidate"];
   resolveFinalPresentationText?: DelivererOptions["resolveFinalPresentationText"];
 } = {}) {
-  const answer =
-    answerStream === null
-      ? undefined
-      : (answerStream ?? createTestDraftStream({ messageId: answerMessageId }));
+  const answer = answerStream ?? createTestDraftStream({ messageId: answerMessageId });
   const reasoning = createTestDraftStream();
   const lanes = { answer: lane(answer), reasoning: lane(reasoning) };
   const mocks = {

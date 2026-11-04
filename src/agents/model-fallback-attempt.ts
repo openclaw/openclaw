@@ -7,6 +7,8 @@ import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import type { AgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
+import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortable.js";
 import {
@@ -117,6 +119,7 @@ export type ModelFallbackStepHandler = (step: ModelFallbackStepFields) => void |
 
 export type ModelFallbackResultClassification =
   | {
+      agentTerminal?: AgentTerminalSnapshot;
       message: string;
       reason?: FailoverReason;
       status?: number;
@@ -262,6 +265,8 @@ export async function runFallbackAttempt<T>(
     // Give the next candidate its own budget without replacing parent cancellation.
     renewAgentRunDeadline(params.attribution?.runId);
   }
+  const candidate = { provider: params.provider, model: params.model };
+  const context = { ...candidate, ...params.attribution };
   let result: T;
   try {
     const run = () =>
@@ -282,10 +287,7 @@ export async function runFallbackAttempt<T>(
     if (chainStopReason) {
       logModelFallbackChainStopped({
         reason: chainStopReason,
-        provider: params.provider,
-        model: params.model,
-        sessionId: params.attribution?.sessionId,
-        lane: params.attribution?.lane,
+        ...context,
         error: err,
       });
       throw err;
@@ -293,13 +295,13 @@ export async function runFallbackAttempt<T>(
     // A harness-local failure can select another candidate only while the turn is live.
     let candidateError = err;
     if (!harnessPreflight) {
-      const fallbackError = resolveModelFallbackError(err, {
-        provider: params.provider,
-        model: params.model,
-        sessionId: params.attribution?.sessionId,
-        lane: params.attribution?.lane,
-      });
+      const fallbackError = resolveModelFallbackError(err, context);
       if (fallbackError.kind === "coordination") {
+        logModelFallbackChainStopped({
+          reason: "local_runtime_coordination",
+          ...context,
+          error: err,
+        });
         throw err;
       }
       candidateError = fallbackError.error;
@@ -311,12 +313,11 @@ export async function runFallbackAttempt<T>(
   }
   const classification = await params.classifyResult?.({
     result,
-    provider: params.provider,
-    model: params.model,
+    ...candidate,
     attempt: params.attempt,
     total: params.total,
   });
-  const attemptError = resolveResultClassificationError(classification, params);
+  const attemptError = resolveResultClassificationError(classification, context);
   if (attemptError && params.abortSignal?.aborted) {
     throw toErrorObject(attemptError, "Non-Error thrown");
   }
@@ -326,19 +327,13 @@ export async function runFallbackAttempt<T>(
   }
   const buildClassifiedResult = () => ({
     result,
-    provider: params.provider,
-    model: params.model,
+    ...candidate,
   });
   if (!attemptError) {
     const stopReason =
       classification && "stopReason" in classification ? classification.stopReason : undefined;
     if (stopReason && params.total > 1) {
-      logModelFallbackChainStopped({
-        reason: stopReason,
-        provider: params.provider,
-        model: params.model,
-        ...params.attribution,
-      });
+      logModelFallbackChainStopped({ reason: stopReason, ...context });
     }
     return {
       ...(stopReason ? { stopped: true as const } : {}),
@@ -369,7 +364,7 @@ export async function runFallbackAttempt<T>(
 
 function resolveResultClassificationError(
   classification: ModelFallbackAttemptClassification,
-  params: { provider: string; model: string; attribution?: FailoverAttribution },
+  context: ModelCandidate & FailoverAttribution,
 ) {
   if (!classification || "stopReason" in classification) {
     return null;
@@ -379,17 +374,17 @@ function resolveResultClassificationError(
   }
   const message = normalizeOptionalString(classification.message);
   return message
-    ? new FailoverError(message, {
-        reason: classification.reason ?? "unknown",
-        provider: params.provider,
-        model: params.model,
-        sessionId: params.attribution?.sessionId,
-        lane: params.attribution?.lane,
-        status: classification.status,
-        code: classification.code,
-        rawError: classification.rawError,
-        rateLimitRetriesExhausted: classification.rateLimitRetriesExhausted,
-      })
+    ? withAgentTerminalSnapshot(
+        new FailoverError(message, {
+          reason: classification.reason ?? "unknown",
+          ...context,
+          status: classification.status,
+          code: classification.code,
+          rawError: classification.rawError,
+          rateLimitRetriesExhausted: classification.rateLimitRetriesExhausted,
+        }),
+        classification.agentTerminal,
+      )
     : null;
 }
 
@@ -651,21 +646,24 @@ export function throwFallbackFailureSummary(params: {
     reason: attempt.reason ?? "unknown",
   }));
   const lastAttempt = attempts.at(-1);
-  throw new FailoverError(message, {
-    reason: lastAttempt?.reason ?? "unknown",
-    provider: lastAttempt?.provider,
-    model: lastAttempt?.model,
-    // Recovery must not infer OAuth from the provider after candidate errors collapse here.
-    authMode: lastAttempt?.authMode,
-    status: lastAttempt?.status,
-    rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
-    code: lastAttempt?.code,
-    cause: params.lastError instanceof Error ? params.lastError : undefined,
-    sessionId: params.attribution?.sessionId,
-    lane: params.attribution?.lane,
-    attempts,
-    soonestCooldownExpiry: params.soonestCooldownExpiry ?? null,
-  });
+  throw withAgentTerminalSnapshot(
+    new FailoverError(message, {
+      reason: lastAttempt?.reason ?? "unknown",
+      provider: lastAttempt?.provider,
+      model: lastAttempt?.model,
+      // Recovery must not infer OAuth from the provider after candidate errors collapse here.
+      authMode: lastAttempt?.authMode,
+      status: lastAttempt?.status,
+      rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
+      code: lastAttempt?.code,
+      cause: params.lastError instanceof Error ? params.lastError : undefined,
+      sessionId: params.attribution?.sessionId,
+      lane: params.attribution?.lane,
+      attempts,
+      soonestCooldownExpiry: params.soonestCooldownExpiry ?? null,
+    }),
+    readAgentTerminalSnapshot(params.lastError),
+  );
 }
 
 export async function resolveFallbackSoonestCooldownExpiry(params: {

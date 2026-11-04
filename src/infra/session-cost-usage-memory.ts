@@ -139,9 +139,9 @@ async function runCapturedSessionActorUsage(
     const requested =
       operation.kind === "sessions"
         ? operation.sessions.map((entry) => entry.sessionFile)
-        : operation.kind === "summary"
-          ? undefined
-          : operation.sessionFiles;
+        : operation.kind === "refresh"
+          ? operation.sessionFiles
+          : undefined;
     const requestedSessionId = (file: string) => {
       const marker = parseSqliteSessionFileMarker(file);
       if (!marker || marker.agentId !== binding.agentId || marker.storePath !== binding.path) {
@@ -190,11 +190,10 @@ async function runCapturedSessionActorUsage(
     if (operation.kind === "inventory") {
       return {
         kind: "inventory",
-        files: (selectedFiles ?? [...files.values()].map(({ file }) => file))
+        files: [...files.values()]
+          .map(({ file }) => file)
           .filter(
-            (file): file is UsageCostTranscriptFile =>
-              file !== undefined &&
-              (operation.minMtimeMs === undefined || file.mtimeMs >= operation.minMtimeMs),
+            (file) => operation.minMtimeMs === undefined || file.mtimeMs >= operation.minMtimeMs,
           )
           .map(({ kind, sourcePath, sessionId, mtimeMs }) => ({
             kind,

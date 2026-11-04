@@ -30,6 +30,7 @@ import {
 } from "./openclaw-state-db-admission.js";
 import {
   CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   LAZY_ADDITIVE_STATE_TABLES,
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -40,7 +41,7 @@ import { migrateCronDeliveryAttemptState } from "./openclaw-state-db-cron-delive
 import * as cronIdentity from "./openclaw-state-db-cron-identity-migration.js";
 import {
   hasDanglingSkillWorkshopCollectionReviewIndex,
-  LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
+  repairDanglingSkillWorkshopCollectionReviewIndex,
 } from "./openclaw-state-db-doctor-schema.js";
 import { migrateHistoricalStateImports } from "./openclaw-state-db-historical-imports.js";
 import { stateIndexOrderingMigrations } from "./openclaw-state-db-index-ordering-migrations.js";
@@ -72,6 +73,7 @@ import {
   withLegacyTemplateStateCompatibility,
 } from "./openclaw-state-db-schema-v36-template-names.js";
 import { stateWorkerDiskMigrations } from "./openclaw-state-db-schema-v38-repository-disk.js";
+import { stateWorkerRetentionMigration } from "./openclaw-state-db-schema-v39-worker-retention.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -120,32 +122,6 @@ export function assertMigratedStateTableIntegrity(
   }
 }
 
-/**
- * Make the known malformed index parseable, then let SQLite drop and reclaim it
- * in the caller's transaction. A failed repair rolls both catalog edits back.
- */
-function repairDanglingSkillWorkshopCollectionReviewIndex(database: DatabaseSync): boolean {
-  if (!hasDanglingSkillWorkshopCollectionReviewIndex(database)) {
-    return false;
-  }
-  return withSqliteWritableSchema(database, () => {
-    database
-      .prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'index' AND name = ?")
-      .run(
-        `CREATE INDEX ${LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX} ON skill_workshop_collection_reviews(create_time DESC, review_id DESC)`,
-        LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
-      );
-    // SAFETY: the pragma result is treated as unknown and validated before arithmetic.
-    const row = database.prepare("PRAGMA schema_version").get() as {
-      schema_version?: unknown;
-    };
-    const schemaVersion = typeof row.schema_version === "number" ? row.schema_version : 0;
-    database.exec(`PRAGMA schema_version = ${schemaVersion + 1}; PRAGMA writable_schema = OFF;`);
-    database.exec(`DROP INDEX ${LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX};`);
-    return true;
-  });
-}
-
 /** Admit Doctor repair, then return the ownership-rechecked catalog repair operation. */
 export function prepareStateDatabaseSchemaRepair(
   database: DatabaseSync,
@@ -183,6 +159,31 @@ export function prepareStateDatabaseSchemaRepair(
       ? ["Removed dangling legacy Skill Workshop review index"]
       : [];
   };
+}
+
+/** Commit recognized catalog readability before a private preservation reader inspects it. */
+export function repairStateDatabaseSchemaReadability(
+  database: DatabaseSync,
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  const repair = prepareStateDatabaseSchemaRepair(database, pathname, env);
+  return runSqliteImmediateTransactionSync(
+    database,
+    () => {
+      const changes = repair();
+      if (changes.length > 0) {
+        assertOpenClawStateDatabaseOwner(database, { pathname });
+        assertSqliteTableIntegrity(database, pathname, "skill_workshop_collection_reviews");
+      }
+      return changes;
+    },
+    {
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      databaseLabel: pathname,
+      operationLabel: "state.schema.readability-repair",
+    },
+  );
 }
 
 type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];
@@ -247,11 +248,23 @@ export function assertOpenClawStateDatabaseForMaintenance(
 
   const metadata = assertOpenClawStateDatabaseOwner(database, options);
   if (metadata?.schema_version !== userVersion) {
-    const schemaVersion =
-      typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
-    );
+    // A peer process (the Gateway's update-run watcher) may publish the deferred
+    // version after this connection admitted its floor; refuse only if the header disagrees.
+    if (
+      metadata?.schema_version === OPENCLAW_STATE_SCHEMA_VERSION &&
+      readSqliteUserVersion(database) === OPENCLAW_STATE_SCHEMA_VERSION
+    ) {
+      publishStateSchemaVersionAdmission(database, {
+        userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+        contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+    } else {
+      const schemaVersion =
+        typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
+      throw new SqliteSchemaMismatchError(
+        `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
+      );
+    }
   }
   assertSqliteSchemaContains(
     database,
@@ -535,6 +548,7 @@ export const versionedStateMigrations = [
   stateLocalWorkspaceCasMigration,
   stateTemplateNamesMigration,
   ...stateWorkerDiskMigrations,
+  stateWorkerRetentionMigration,
 ] as const;
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -560,6 +574,7 @@ export function migrateBoundedStateSchema(
     stateLocalWorkspaceCasMigration,
     stateTemplateNamesMigration,
     ...stateWorkerDiskMigrations,
+    stateWorkerRetentionMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.

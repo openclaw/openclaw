@@ -160,19 +160,51 @@ describe("async config plugin validation", () => {
     }
   });
 
-  it("uses prepared installed evidence for stale channels without a synchronous store read", async () => {
-    const read = vi.spyOn(installedRecords, "loadInstalledPluginIndexInstallRecordsSync");
-    metadata.installedPluginRecordIds = new Set(["missing-fixture"]);
-    const result = await validate({ channels: { "missing-fixture": { enabled: true } } });
+  it("preserves an unavailable channel's exact disabled marker with an actionable warning", async () => {
+    const channels = { "missing-fixture": { enabled: false } };
+    const result = await validate({ channels });
+    expect(result.ok && result.config.channels).toEqual(channels);
     expect(result).toMatchObject({
       ok: true,
       warnings: expect.arrayContaining([
-        expect.objectContaining({
+        {
           path: "channels.missing-fixture",
-          message: expect.stringContaining("stale channel plugin config ignored"),
-        }),
+          message:
+            "unknown channel id: missing-fixture (disabled channel marker preserved; install the plugin to validate it)",
+        },
       ]),
     });
-    expect(read).not.toHaveBeenCalled();
   });
+
+  it.each([{ enabled: false, token: "synthetic" }, { enabled: true }, {}])(
+    "rejects unknown channel settings that are not an exact disable marker: %j",
+    async (settings) => {
+      expect(await validate({ channels: { "missing-fixture": settings } })).toMatchObject({
+        ok: false,
+        issues: [
+          { path: "channels.missing-fixture", message: "unknown channel id: missing-fixture" },
+        ],
+        warnings: [],
+      });
+    },
+  );
+
+  it.each([true, false])(
+    "uses prepared installed evidence for stale channels (enabled: %s) without a synchronous store read",
+    async (enabled) => {
+      const read = vi.spyOn(installedRecords, "loadInstalledPluginIndexInstallRecordsSync");
+      metadata.installedPluginRecordIds = new Set(["missing-fixture"]);
+      const result = await validate({ channels: { "missing-fixture": { enabled } } });
+      expect(result).toMatchObject({
+        ok: true,
+        warnings: expect.arrayContaining([
+          expect.objectContaining({
+            path: "channels.missing-fixture",
+            message: expect.stringContaining("stale channel plugin config ignored"),
+          }),
+        ]),
+      });
+      expect(read).not.toHaveBeenCalled();
+    },
+  );
 });

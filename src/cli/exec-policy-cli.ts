@@ -34,7 +34,8 @@ import {
   type ExecPolicyToolAccess,
   type ExecPolicyShowOptions,
 } from "./exec-policy-diagnostics.js";
-import { ExpectedCliError, rethrowExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { rethrowExpectedCliError } from "./failure-output.js";
 import { addGatewayClientOptions, resolveGatewayRpcOptionsWithLocalPort } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";

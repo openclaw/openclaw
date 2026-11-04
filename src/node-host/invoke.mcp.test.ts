@@ -64,12 +64,14 @@ describe("mcp.tools.call.v1", () => {
       server: "docs",
       tool: "search",
       arguments: { query: "x" },
+      elicitationId: "8875f5c7-7055-4cc0-94aa-3e0e27e326ec",
     });
 
     expect(callMcpTool).toHaveBeenCalledWith({
       server: "docs",
       tool: "search",
       arguments: { query: "x" },
+      elicitationId: "8875f5c7-7055-4cc0-94aa-3e0e27e326ec",
       timeoutMs: 321,
     });
     expect(result.ok).toBe(true);

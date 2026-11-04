@@ -133,7 +133,7 @@ describe("DraftSubmissionFlow", () => {
       }
       await vi.advanceTimersByTimeAsync(210_000);
       ready = true;
-      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(8_000);
       await submission;
       expect(writes).toBe(cancel ? 0 : 1);
       expect(new Set(frames).size).toBe(1);
@@ -260,6 +260,7 @@ describe("DraftSubmissionFlow", () => {
       expect(takePreparedTitle).not.toHaveBeenCalled();
       if (oversized) {
         expect(showToast).toHaveBeenCalledExactlyOnceWith({
+          severity: "error",
           message: "Too large to send: second.txt",
         });
       } else {

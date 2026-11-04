@@ -361,10 +361,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         },
         githubPublicationAvailable: attempt.githubPublicationAvailable,
         abortSignal,
-        skillWorkshop: {
-          ...(attempt.skillWorkshopReviewOf ? { reviewOf: attempt.skillWorkshopReviewOf } : {}),
-          libraryAuthoring: attempt.skillLibraryAuthoring,
-        },
+        skillLibraryAuthoring: attempt.skillLibraryAuthoring,
         modelCompat: extractModelCompat(attempt.model),
         delegationCapability: attempt.delegationCapability,
         modelAuthMode: await resolveModelAuthModeAsync(

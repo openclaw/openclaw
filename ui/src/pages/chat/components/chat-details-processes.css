@@ -90,8 +90,9 @@
   display: block;
   width: 8px;
   height: 8px;
-  border: 1.25px solid color-mix(in srgb, var(--accent) 30%, var(--details-surface, var(--card)));
-  border-top-color: var(--accent);
+  color: var(--accent);
+  background: currentColor;
+  mask: var(--spinner-mask-small);
   border-radius: 50%;
   corner-shape: round;
   animation: btn-spinner-spin 1.5s linear infinite;

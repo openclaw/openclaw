@@ -1017,6 +1017,8 @@ promote_windows_release_assets() {
     return 1
   fi
   windows_node_run_id="$(dispatch_workflow windows-node-release.yml \
+    -f release_publish_run_id="${RELEASE_PUBLISH_RUN_ID}" \
+    -f release_publish_run_attempt="${RELEASE_PUBLISH_RUN_ATTEMPT}" \
     -f tag="${RELEASE_TAG}" \
     -f windows_node_tag="${WINDOWS_NODE_TAG}" \
     -f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}")" || return 1

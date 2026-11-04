@@ -14,6 +14,7 @@ afterEach(() => {
   applyControlUiPresentation({ environment: null });
   initializeControlUiDocumentHead();
   document.documentElement.removeAttribute("style");
+  document.body.style.removeProperty("background-color");
   document.body.replaceChildren();
 });
 
@@ -48,7 +49,7 @@ describe("Control UI accent presentation", () => {
         expect(meta.hasAttribute("media")).toBe(false);
       }
       expect(unrelatedMeta.content).toBe("#123456");
-      expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(color);
+      expect(document.body.style.backgroundColor).toBe(root.style.backgroundColor);
     };
     try {
       shell.className = "shell shell--chat";
@@ -110,7 +111,6 @@ describe("Control UI accent presentation", () => {
         meta.remove();
       }
       palette.remove();
-      root.classList.remove("control-ui-system-chrome-canvas");
       delete root.dataset.theme;
       delete root.dataset.themeMode;
       vi.unstubAllGlobals();
@@ -129,29 +129,24 @@ describe("Control UI accent presentation", () => {
     try {
       shell.className = "shell shell--chat";
       syncControlUiSystemChrome(false, { contentCanvas: true, navScrim: false });
-      expect(root.classList.contains("control-ui-system-chrome-canvas")).toBe(true);
-      expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(
-        "rgb(20, 30, 40)",
-      );
+      expect(root.style.backgroundColor).toBe("rgb(20, 30, 40)");
+      expect(document.body.style.backgroundColor).toBe("rgb(20, 30, 40)");
 
       shell.className = "shell";
       syncControlUiSystemChrome();
-      expect(root.classList.contains("control-ui-system-chrome-canvas")).toBe(true);
+      expect(root.style.backgroundColor).toBe("rgb(20, 30, 40)");
       syncControlUiSystemChrome(false, { contentCanvas: false, navScrim: false });
-      expect(root.classList.contains("control-ui-system-chrome-canvas")).toBe(false);
-      expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(
-        "rgb(10, 20, 30)",
-      );
+      expect(root.style.backgroundColor).toBe("");
+      expect(document.body.style.backgroundColor).toBe("");
 
       shell.className = "shell shell--chat";
       syncControlUiSystemChrome();
-      expect(root.classList.contains("control-ui-system-chrome-canvas")).toBe(false);
+      expect(root.style.backgroundColor).toBe("");
       syncControlUiSystemChrome(false, { contentCanvas: true, navScrim: false });
       shell.remove();
       syncControlUiSystemChrome(false, { contentCanvas: false, navScrim: false });
-      expect(root.classList.contains("control-ui-system-chrome-canvas")).toBe(false);
+      expect(root.style.backgroundColor).toBe("");
     } finally {
-      root.classList.remove("control-ui-system-chrome-canvas");
       vi.unstubAllGlobals();
     }
   });

@@ -550,8 +550,6 @@ export function SessionHovercard(props: SessionHovercardInput) {
       (props.row?.placementProviderId && props.row?.placementProfileId),
     );
   const commentary = () => props.progressCard?.markdown?.trim() || undefined;
-  const preview = () =>
-    props.progressCard ? undefined : props.row?.lastMessagePreview?.trim() || undefined;
   return (
     <Show
       when={Boolean(props.row || hasContext() || hasPullRequestSection() || props.progressCard)}
@@ -604,11 +602,6 @@ export function SessionHovercard(props: SessionHovercardInput) {
               </div>
             </Show>
             <ProgressHeadsUp headsUp={headsUp()} />
-          </section>
-        </Show>
-        <Show when={preview()}>
-          <section class="session-hovercard__section session-hovercard__task">
-            <div class="session-hovercard__excerpt">{preview()}</div>
           </section>
         </Show>
         <Show when={hasPullRequestSection()}>
