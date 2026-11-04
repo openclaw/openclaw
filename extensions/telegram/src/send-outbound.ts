@@ -4,7 +4,6 @@ import {
   createMessageReceiptFromOutboundResults,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
 import {
   recordOutboundMessageForPromptContext,
@@ -80,11 +79,7 @@ export function withTelegramMessageAction<T, TMessageId extends string | number 
   });
 }
 
-/**
- * Telegram documents message effects for private chats only. The message action
- * rejects other targets up front; this keeps other payload producers from sending
- * the field to a resolved group or channel id.
- */
+/** Forward effects only when the resolved target is a private chat. */
 export function resolveTelegramMessageEffectParams(
   chatId: string,
   messageEffectId: string | undefined,
@@ -93,7 +88,6 @@ export function resolveTelegramMessageEffectParams(
     return undefined;
   }
   if (resolveTelegramTargetChatType(chatId) !== "direct") {
-    logVerbose("telegram message effect skipped: effects apply to private chats only");
     return undefined;
   }
   return { message_effect_id: messageEffectId };

@@ -56,21 +56,15 @@ export function readTelegramReplyToMessageId(params: Record<string, unknown>) {
   );
 }
 
-/** Telegram effects take the Bot API's numeric message_effect_id and play only in private chats. */
+/** Telegram effects take a numeric Bot API id and apply only to known private chats. */
 export function readTelegramMessageEffectId(params: Record<string, unknown>, to: string) {
   const effectId = readStringParam(params, "effectId") ?? readStringParam(params, "effect");
-  if (effectId === undefined) {
+  if (
+    !effectId ||
+    !TELEGRAM_MESSAGE_EFFECT_ID_RE.test(effectId) ||
+    resolveTelegramTargetChatType(to) !== "direct"
+  ) {
     return undefined;
-  }
-  if (!TELEGRAM_MESSAGE_EFFECT_ID_RE.test(effectId)) {
-    throw new Error(
-      "Telegram effectId must be a numeric message effect id (for example 5104841245755180586); effect names are not supported.",
-    );
-  }
-  if (resolveTelegramTargetChatType(to) !== "direct") {
-    throw new Error(
-      "Telegram message effects work only in private chats; remove effectId to send to this chat.",
-    );
   }
   return effectId;
 }

@@ -76,7 +76,6 @@ describe("Telegram registered action authority and input contracts", () => {
 
   const pollInput = { question: "Ready?", answers: ["Yes", "No"] };
   const sendInput = { to: "123", message: "Shipped" };
-  const effectId = "5104841245755180586";
   const nativeButtons = '[[{"text":"Yes","callback_data":"yes"}]]';
   const conflictingPoll = { to: "123", ...pollInput, pollAnonymous: true, pollPublic: true };
   const customEmojis = (length: number) =>
@@ -492,8 +491,6 @@ describe("Telegram registered action authority and input contracts", () => {
       /cannot be combined/,
     ],
     ["send", { ...sendInput, buttons: nativeButtons }, /native "buttons" is unsupported/],
-    ["send", { ...sendInput, effectId: "confetti" }, /numeric message effect id/],
-    ["send", { ...sendInput, to: "-1001", effectId }, /only in private chats/],
   ] as const)("rejects invalid %s input %j", async (action, params, error) => {
     cfg.channels!.telegram!.actions = { sticker: true };
     await expect(invoke(action, params)).rejects.toThrow(error);

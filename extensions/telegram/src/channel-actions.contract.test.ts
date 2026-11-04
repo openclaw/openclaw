@@ -171,9 +171,13 @@ describe("telegram actions contract", () => {
     });
   });
 
-  it.each(nonPrivateTargets)("rejects prepared effects on %s", async (to) => {
+  it.each(nonPrivateTargets)("omits prepared effects without blocking %s", async (to) => {
     const sending = prepareSend({ effectId }, presented, to);
-    await expect(sending).rejects.toThrow(/only in private chats/);
+    await expect(sending).resolves.toEqual(presented);
+  });
+
+  it("omits non-numeric effect names without blocking delivery", async () => {
+    await expect(prepareSend({ effect: "confetti" }, presented)).resolves.toEqual(presented);
   });
 
   it("leaves legacy delivery to the legacy owner", async () => {
