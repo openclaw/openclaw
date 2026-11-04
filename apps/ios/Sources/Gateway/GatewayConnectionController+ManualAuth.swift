@@ -57,7 +57,8 @@ extension GatewayConnectionController {
                 required: true,
                 expectedFingerprint: stored,
                 allowTOFU: false,
-                storeKey: stableID)
+                storeKey: stableID,
+                allowsApprovedAlternates: true)
         }
         return nil
     }

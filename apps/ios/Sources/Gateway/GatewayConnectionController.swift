@@ -7,6 +7,8 @@ import SwiftUI
 typealias GatewayTCPReachabilityProbe = @Sendable (String, Int, Double, String) async -> Bool
 typealias GatewayServiceEndpointResolver = @Sendable (NWEndpoint) async -> (host: String, port: Int)?
 typealias GatewayForceReconnectReset = @MainActor (NodeAppModel) async -> Void
+typealias GatewayTLSFingerprintApprove = @Sendable (
+    _ fingerprint: String, _ expected: String, _ stableID: String) -> Bool
 typealias GatewayTLSFingerprintPersist = @Sendable (_ fingerprint: String, _ stableID: String) -> Bool
 
 @MainActor
@@ -73,6 +75,7 @@ final class GatewayConnectionController {
     private let tlsFingerprintProbe: GatewayTLSFingerprintProbeFunction
     let serviceEndpointResolver: GatewayServiceEndpointResolver?
     private let forceReconnectReset: GatewayForceReconnectReset
+    private let approveTLSFingerprint: GatewayTLSFingerprintApprove
     private let persistTLSFingerprint: GatewayTLSFingerprintPersist
     let autoConnectRetryDelay: @MainActor (Duration) async throws -> Void
     let now: () -> Date
@@ -91,6 +94,9 @@ final class GatewayConnectionController {
         persistTLSFingerprint: @escaping GatewayTLSFingerprintPersist = { fingerprint, stableID in
             GatewayTLSStore.replaceFingerprint(fingerprint, stableID: stableID)
         },
+        approveTLSFingerprint: @escaping GatewayTLSFingerprintApprove = { fingerprint, expected, stableID in
+            GatewayTLSStore.approveFingerprint(fingerprint, ifCurrent: expected, stableID: stableID)
+        },
         autoConnectRetryDelay: @escaping @MainActor (Duration) async throws -> Void = {
             try await Task.sleep(for: $0)
         },
@@ -106,6 +112,7 @@ final class GatewayConnectionController {
         self.serviceEndpointResolver = serviceEndpointResolver
         self.forceReconnectReset = forceReconnectReset
         self.persistTLSFingerprint = persistTLSFingerprint
+        self.approveTLSFingerprint = approveTLSFingerprint
         self.autoConnectRetryDelay = autoConnectRetryDelay
         self.now = now
         if let ingress {
@@ -290,7 +297,11 @@ final class GatewayConnectionController {
         }
 
         let tlsParams = GatewayTLSParams(
-            required: true, expectedFingerprint: stored, allowTOFU: false, storeKey: stableID)
+            required: true,
+            expectedFingerprint: stored,
+            allowTOFU: false,
+            storeKey: stableID,
+            allowsApprovedAlternates: true)
 
         guard let url = self.buildGatewayURL(
             host: target.host,
@@ -402,11 +413,17 @@ final class GatewayConnectionController {
               self.connectAttemptGeneration == connectAttempt.suppressionLease.generation,
               connectAttempt.gatewayGeneration == self.appModel?.gatewayConnectGeneration
         else { return .superseded }
-        if let setupFingerprint, setupFingerprint != stored,
+        let storedApproval = setupFingerprint == nil ? nil : GatewayTLSStore.snapshot(stableID: stableID)
+        if setupFingerprint != nil, storedApproval == nil {
+            return .failed(String(localized: "Could not read gateway certificate approvals"))
+        }
+        if let setupFingerprint,
            !self.persistTLSFingerprint(setupFingerprint, stableID)
         {
             let message = String(localized: "Could not save gateway certificate")
             self.appModel?.gatewayStatusText = message
+            // Legacy cleanup can fail after the canonical replacement has already cleared approvals.
+            self.restoreStoredApproval(storedApproval, stableID: stableID)
             return .failed(message)
         }
         var expectedFingerprint = setupFingerprint ?? stored
@@ -441,7 +458,8 @@ final class GatewayConnectionController {
                 required: true,
                 expectedFingerprint: expectedFingerprint,
                 allowTOFU: false,
-                storeKey: stableID)
+                storeKey: stableID,
+                allowsApprovedAlternates: setupFingerprint == nil)
             : nil
         guard let url = self.buildGatewayURL(
             host: host,
@@ -459,7 +477,7 @@ final class GatewayConnectionController {
             contextPath: contextPath,
             lastConnectedAtMs: nil)
         guard self.persistActiveGateway(registryEntry) else {
-            self.restoreStoredFingerprint(stored, afterAttempting: setupFingerprint, stableID: stableID)
+            self.restoreStoredApproval(storedApproval, stableID: stableID)
             return .failed(String(localized: "Could not save the paired gateway."))
         }
         self.didAutoConnect = true
@@ -478,7 +496,7 @@ final class GatewayConnectionController {
             authOverride: authOverride,
             userInitiated: true)
         if !didStart {
-            self.restoreStoredFingerprint(stored, afterAttempting: setupFingerprint, stableID: stableID)
+            self.restoreStoredApproval(storedApproval, stableID: stableID)
             return .superseded
         }
         return .accepted
@@ -897,7 +915,8 @@ extension GatewayConnectionController {
             required: true,
             expectedFingerprint: prompt.fingerprintSha256,
             allowTOFU: false,
-            storeKey: pending.stableID)
+            storeKey: pending.stableID,
+            allowsApprovedAlternates: true)
 
         self.didAutoConnect = true
         let didStart = self.startAutoConnect(
@@ -944,13 +963,14 @@ extension GatewayConnectionController {
         let admissionCheckpoint = self.ingress.admissionCheckpoint()
         guard problem.canTrustRotatedCertificate,
               let stableID = problem.tlsStoreKey,
-              let fingerprint = problem.tlsObservedFingerprint
+              let fingerprint = problem.tlsObservedFingerprint,
+              let expectedFingerprint = problem.tlsExpectedFingerprint
         else {
             self.appModel?.gatewayStatusText = "Certificate review required"
             return false
         }
 
-        guard self.persistTLSFingerprint(fingerprint, stableID) else {
+        guard self.approveTLSFingerprint(fingerprint, expectedFingerprint, stableID) else {
             self.appModel?.gatewayStatusText = "Could not update gateway certificate"
             return false
         }
@@ -973,7 +993,8 @@ extension GatewayConnectionController {
                 required: currentTLS?.required ?? true,
                 expectedFingerprint: fingerprint,
                 allowTOFU: currentTLS?.allowTOFU ?? false,
-                storeKey: currentTLS?.storeKey ?? stableID)
+                storeKey: currentTLS?.storeKey ?? stableID,
+                allowsApprovedAlternates: true)
             let generation = appModel.gatewayConnectGeneration
             guard !Task.isCancelled, !self.hasPendingForgetCleanup(stableID: cfg.stableID) else { return false }
             do {
@@ -1565,16 +1586,10 @@ extension GatewayConnectionController {
         return .failed(problem.localizedMessage)
     }
 
-    private func restoreStoredFingerprint(
-        _ storedFingerprint: String?,
-        afterAttempting setupFingerprint: String?,
-        stableID: String)
-    {
-        guard setupFingerprint != nil, setupFingerprint != storedFingerprint else { return }
-        if let storedFingerprint {
-            _ = self.persistTLSFingerprint(storedFingerprint, stableID)
-        } else {
-            _ = GatewayTLSStore.clearFingerprint(stableID: stableID)
+    private func restoreStoredApproval(_ snapshot: GatewayTLSStore.ApprovalSnapshot?, stableID: String) {
+        guard let snapshot else { return }
+        if !GatewayTLSStore.restore(snapshot, stableID: stableID) {
+            self.appModel?.gatewayStatusText = "Could not restore gateway certificate approvals"
         }
     }
 }

@@ -86,6 +86,9 @@ struct IOSDeviceSettingsBridgeTests {
                 required: true, expectedFingerprint: "pin-a", allowTOFU: true, storeKey: "gateway")),
             Self.controlUIConfig(tls: GatewayTLSParams(
                 required: true, expectedFingerprint: "pin-a", allowTOFU: false, storeKey: "replacement")),
+            Self.controlUIConfig(tls: GatewayTLSParams(
+                required: true, expectedFingerprint: "pin-a", allowTOFU: false, storeKey: "gateway",
+                allowsApprovedAlternates: true)),
             Self.controlUIConfig(token: "replacement-shared-token"),
             Self.controlUIConfig(password: "replacement-password"),
         ]

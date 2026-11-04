@@ -306,7 +306,8 @@ extension GatewayConnectionController {
                     required: true,
                     expectedFingerprint: fingerprint,
                     allowTOFU: false,
-                    storeKey: stableID))
+                    storeKey: stableID,
+                    allowsApprovedAlternates: true))
         }
 
         let instanceID = GatewaySettingsStore.currentInstanceID()
