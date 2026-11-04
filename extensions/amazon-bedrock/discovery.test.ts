@@ -393,6 +393,28 @@ it("uses the plugin default when both region env overrides are blank", async () 
   expectModel(provider?.models ?? [], "xai.grok-4.6", { contextWindow: 500_000, maxTokens: 4096 });
 });
 
+it("uses the documented 256K context windows for the Qwen3 Coder 480B, Next 80B, and 235B 2507 models", async () => {
+  const models = await discoverFixture(
+    [
+      foundation("qwen.qwen3-coder-480b-a35b-v1:0"),
+      foundation("qwen.qwen3-next-80b-a3b"),
+      foundation("qwen.qwen3-235b-a22b-2507-v1:0"),
+    ],
+    [profile("us.qwen.qwen3-next-80b-a3b", ["qwen.qwen3-next-80b-a3b"])],
+    { region: "us-east-1" },
+  );
+  expectModel(models, "qwen.qwen3-coder-480b-a35b-v1:0", {
+    contextWindow: 256_000,
+    maxTokens: 4096,
+  });
+  expectModel(models, "qwen.qwen3-next-80b-a3b", { contextWindow: 256_000, maxTokens: 4096 });
+  expectModel(models, "qwen.qwen3-235b-a22b-2507-v1:0", {
+    contextWindow: 256_000,
+    maxTokens: 4096,
+  });
+  expectModel(models, "us.qwen.qwen3-next-80b-a3b", { contextWindow: 256_000, maxTokens: 4096 });
+});
+
 // Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix
 it("resolves au. and apac. prefixes for regional inference profiles", async () => {
   const models = await discoverFixture(

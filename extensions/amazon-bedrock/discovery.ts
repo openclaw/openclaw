@@ -97,6 +97,12 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "qwen.qwen3-coder-30b-a3b-v1:0": 256_000,
   "qwen.qwen3-32b-v1:0": 128_000,
   "qwen.qwen3-vl-235b-a22b": 128_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html
+  "qwen.qwen3-coder-480b-a35b-v1:0": 256_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-next-80b-a3b.html
+  "qwen.qwen3-next-80b-a3b": 256_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-235b-a22b-2507.html
+  "qwen.qwen3-235b-a22b-2507-v1:0": 256_000,
   // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-6.html
   "xai.grok-4.6": 500_000,
 };
