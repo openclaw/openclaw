@@ -357,7 +357,18 @@ it("keeps registered provider discovery, POST and EOF under one deadline", async
       chain.push({
         name:
           typeof name === "string" &&
-          ["Error", "TypeError", "TimeoutError", "AbortError", "DOMException"].includes(name)
+          [
+            "Error",
+            "TypeError",
+            "TimeoutError",
+            "AbortError",
+            "DOMException",
+            "BodyTimeoutError",
+            "HeadersTimeoutError",
+            "SocketError",
+            "ClientDestroyedError",
+            "ClientClosedError",
+          ].includes(name)
             ? name
             : "other",
         code:
@@ -366,6 +377,11 @@ it("keeps registered provider discovery, POST and EOF under one deadline", async
             "UND_ERR_BODY_TIMEOUT",
             "UND_ERR_HEADERS_TIMEOUT",
             "UND_ERR_SOCKET",
+            "UND_ERR_ABORT",
+            "UND_ERR_ABORTED",
+            "UND_ERR_DESTROYED",
+            "UND_ERR_CLOSED",
+            "UND_ERR_RES_CONTENT_LENGTH_MISMATCH",
             "ABORT_ERR",
             "ECONNRESET",
             "ETIMEDOUT",
