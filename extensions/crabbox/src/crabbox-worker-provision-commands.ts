@@ -8,7 +8,6 @@ import {
 import {
   crabboxCommandError,
   crabboxCommandOutput,
-  parseCrabboxJson,
   isFixedLeaseIdUnsupported,
   isUnrecognizedLease,
   leaseRunArgs,
@@ -22,11 +21,7 @@ import {
   createCrabboxWorkerDesktopSetup,
 } from "./crabbox-worker-desktop-setup.js";
 import { withCrabboxWorkerEnvProfile } from "./crabbox-worker-env-profile.js";
-import {
-  verifyGuestAcquisition,
-  verifyGuestInspect,
-  verifyLiveGuestInspect,
-} from "./crabbox-worker-guest-network.js";
+import { verifyGuestInspect } from "./crabbox-worker-guest-network.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import { buildCrabboxAllocationArgs, type parseCrabboxProfile } from "./crabbox-worker-profile.js";
 import { assertCrabboxResourceReceipt } from "./crabbox-worker-resource-receipt.js";
@@ -134,22 +129,19 @@ export async function inspectWithContext(
       }
       throw new WorkerProviderError(message);
     }
-    if (
-      params.resourceReceipt &&
-      (!params.retention || inspect.resourceReceipt || inspect.retention?.state === "running")
-    ) {
-      assertCrabboxResourceReceipt(params.resourceReceipt, inspect.resourceReceipt);
-    }
     if (inspect.id !== params.id) {
       throw new WorkerProviderError("Crabbox inspect returned a different lease id");
     }
     if (params.guestNetwork) {
       params.assertCurrent?.();
-      if (params.guestNetwork.acquisition) {
-        verifyGuestInspect(inspect, params.guestNetwork, params.id, params.provider);
-      } else {
-        verifyLiveGuestInspect(inspect, params.guestNetwork.expected, params.id, params.provider);
-      }
+      await verifyGuestInspect(inspect, params.guestNetwork, params.id, params.provider);
+      params.assertCurrent?.();
+    }
+    if (
+      params.resourceReceipt &&
+      (!params.retention || inspect.resourceReceipt || inspect.retention?.state === "running")
+    ) {
+      assertCrabboxResourceReceipt(params.resourceReceipt, inspect.resourceReceipt);
     }
     return inspect;
   }
@@ -207,21 +199,13 @@ export async function runProvisionWarmup(
     action: "warmup",
     args: [
       "warmup",
-      ...(params.guestNetwork ? ["--timing-json"] : []),
       ...buildCrabboxAllocationArgs(params.profile, params.id, params.slug, params.retention),
+      ...(params.guestNetwork ? ["--profile="] : []),
     ],
     timeoutMs: params.timeoutMs(),
   });
   if (result.termination === "exit" && result.code === 0) {
     params.assertCurrent?.();
-    if (params.guestNetwork) {
-      params.guestNetwork.acquisition = verifyGuestAcquisition(
-        parseCrabboxJson(result.stderr, "guest acquisition timing"),
-        params.guestNetwork,
-        params.id,
-        params.provider,
-      );
-    }
     return;
   }
   // Crabbox internal/cli/run.go rejects this capability before Warmup/Acquire.
@@ -349,7 +333,9 @@ export async function runProvisionSetup(
       waitForReady: false,
     });
     params.assertCurrent?.();
-    verifyGuestInspect(current, params.guestNetwork, params.inspect.id, params.provider);
+    if (!current) {
+      throw new WorkerProviderError("AWS guest lease disappeared before setup");
+    }
   }
 
   try {

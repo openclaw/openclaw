@@ -1,4 +1,5 @@
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
+import type { WorkerResourceReceipt } from "openclaw/plugin-sdk/plugin-entry";
 import {
   isRecord,
   normalizeOptionalString as nonEmptyString,
@@ -9,28 +10,22 @@ import {
   runCrabboxCommand,
 } from "./crabbox-worker-command.js";
 import {
-  readGuestNetworkExpectation,
-  type GuestNetworkBinding,
-} from "./crabbox-worker-guest-network.js";
+  prepareGatewayAwsGuestBoundary,
+  isGatewayAwsGuestReceipt,
+} from "./crabbox-worker-gateway-aws.js";
+import type { GuestNetworkBinding } from "./crabbox-worker-guest-network.js";
 import { CRABBOX_CONFIG_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 export async function loadCrabboxConfigShow(params: {
   binary: string;
   signal?: AbortSignal;
   provider?: string;
-  guestNetworkServer?: boolean;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
 }): Promise<unknown> {
   const result = await runCrabboxCommand({
     action: "config show",
-    args: [
-      "config",
-      "show",
-      "--json",
-      ...(params.guestNetworkServer ? ["--guest-network-server"] : []),
-      ...(params.provider ? ["--provider", params.provider] : []),
-    ],
+    args: ["config", "show", "--json", ...(params.provider ? ["--provider", params.provider] : [])],
     env: params.env,
     assertCurrent: params.assertCurrent,
     binary: params.binary,
@@ -72,9 +67,9 @@ export function createCrabboxGuestCommandEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   return {
+    ...process.env,
     ...env,
     // A nonempty CSV with no names overrides configured/profile allowlists in Crabbox.
-    CRABBOX_UNTRUSTED_WORKLOAD: "true",
     CRABBOX_ENV_ALLOW: ",",
     CRABBOX_CACHE_PNPM: "false",
     CRABBOX_CACHE_NPM: "false",
@@ -87,66 +82,95 @@ export function createCrabboxGuestCommandEnv(
 export async function prepareCrabboxGuestIsolation(params: {
   binary: string;
   provider: string;
+  cliVersion?: string;
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   assertCurrent: () => void;
 }): Promise<NodeJS.ProcessEnv> {
-  // Other drivers need their own identity/mount isolation contract, not an AWS inference.
+  params.assertCurrent();
   if (params.provider !== "aws") {
     throw new WorkerProviderError(
-      "Guest isolation is not qualified for Crabbox provider " + params.provider,
+      "Crabbox provider/route is not qualified: Gateway-only guests initially require direct AWS Linux allocation",
     );
   }
-  const env = params.env ?? createCrabboxGuestCommandEnv();
+  if (!params.cliVersion || !/^v?\d+\.\d+\.\d+$/u.test(params.cliVersion.trim())) {
+    throw new WorkerProviderError(
+      "Guest mode requires an operator-selected released Crabbox executable; development/candidate binaries are not qualified",
+    );
+  }
+  const env = createCrabboxGuestCommandEnv(params.env);
   const config = await loadCrabboxConfigShow({ ...params, env });
   params.assertCurrent();
-  if (!isRecord(config) || config.provider !== params.provider) {
-    throw new WorkerProviderError("Crabbox config does not match the requested guest provider");
+  const view = isRecord(config) ? config : undefined;
+  if (view?.provider !== "aws" || view.brokerMode !== "direct" || view.coordinator) {
+    throw new WorkerProviderError(
+      "Gateway-only guest mode does not qualify managed or ambiguous Crabbox allocation routes",
+    );
   }
-  const aws = isRecord(config) && isRecord(config.aws) ? config.aws : undefined;
-  const cache = isRecord(config) && isRecord(config.cache) ? config.cache : undefined;
-  if (!aws || typeof aws.instanceProfile !== "string" || aws.instanceProfile.trim()) {
-    throw new WorkerProviderError("Guest machines cannot have an AWS instance profile");
+  if (!isRecord(view?.aws) || view.aws.instanceProfile !== "" || view.tailscale !== false) {
+    throw new WorkerProviderError("AWS guests require no instance profile or Tailscale bootstrap");
   }
+  const forwarding = isRecord(view?.env) ? view.env : undefined;
+  const cache = isRecord(view?.cache) ? view.cache : undefined;
   if (
+    !Array.isArray(forwarding?.allow) ||
+    forwarding.allow.length ||
     !cache ||
-    [cache.pnpm, cache.npm, cache.docker, cache.git].some((value) => value !== false) ||
-    !(cache.volumes === null || (Array.isArray(cache.volumes) && cache.volumes.length === 0))
+    ["pnpm", "npm", "docker", "git"].some((key) => cache[key] !== false) ||
+    !Array.isArray(cache.volumes) ||
+    cache.volumes.length
   ) {
     throw new WorkerProviderError(
-      "Crabbox did not disable shared guest caches and volumes; use a supported CLI",
+      "Released Crabbox must confirm empty guest environment forwarding and disabled caches/volumes",
     );
   }
   return env;
 }
 
-/** Qualify the selected operator route; the CLI authenticates managed server policy before allocation. */
 export async function prepareCrabboxGuestNetwork(params: {
   binary: string;
   provider: string;
-  env: NodeJS.ProcessEnv;
+  env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   assertCurrent: () => void;
+  configureMetadata?: true;
+  resourceReceipt?: WorkerResourceReceipt;
 }): Promise<GuestNetworkBinding> {
   params.assertCurrent();
-  let config = await loadCrabboxConfigShow(params);
-  params.assertCurrent();
-  if (
-    isRecord(config) &&
-    isRecord(config.guestNetworkCapability) &&
-    config.guestNetworkCapability.allocationRoute === "managed-coordinator"
-  ) {
-    config = await loadCrabboxConfigShow({ ...params, guestNetworkServer: true });
-    params.assertCurrent();
-    const negotiated = readGuestNetworkExpectation(config);
-    if (
-      negotiated.allocationRoute !== "managed-coordinator" ||
-      negotiated.policy.bootstrapMode !== "ssh-public-key-v1"
-    ) {
-      throw new WorkerProviderError(
-        "Crabbox managed guest negotiation changed allocation route or bootstrap mode",
-      );
-    }
+  if (!params.configureMetadata && !isGatewayAwsGuestReceipt(params.resourceReceipt)) {
+    throw new WorkerProviderError(
+      "Guest access requires a qualified Gateway-owned AWS resource receipt",
+    );
   }
-  return { expected: readGuestNetworkExpectation(config) };
+  const config = await loadCrabboxConfigShow(params);
+  params.assertCurrent();
+  const boundary = await prepareGatewayAwsGuestBoundary(config, params);
+  params.assertCurrent();
+  return { ...params, boundary, receipt: params.resourceReceipt };
+}
+
+/** Compose trusted guest allocation inputs once; workload/profile admission remains core-owned. */
+export async function prepareCrabboxGuestAllocation(params: {
+  binary: string;
+  cliVersion?: string;
+  provider: string;
+  target: string;
+  untrustedWorkload?: boolean;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  assertCurrent: () => void;
+  resourceReceipt?: WorkerResourceReceipt;
+}): Promise<{ env: NodeJS.ProcessEnv; network: GuestNetworkBinding } | undefined> {
+  if (!params.untrustedWorkload) {
+    return undefined;
+  }
+  if (params.target !== "linux") {
+    throw new WorkerProviderError(
+      "Gateway-only AWS guest mode has not qualified this OS; use a Linux worker profile",
+    );
+  }
+  const env = await prepareCrabboxGuestIsolation(params);
+  const network = await prepareCrabboxGuestNetwork({ ...params, env, configureMetadata: true });
+  params.assertCurrent();
+  return { env, network };
 }

@@ -7,7 +7,6 @@ import {
   type WorkerResourceReceipt,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { LeaseCommandContext } from "./crabbox-worker-command.js";
-import { verifyGuestInspect } from "./crabbox-worker-guest-network.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import type { ParsedInspect } from "./crabbox-worker-inspect.js";
 import {
@@ -24,8 +23,7 @@ import {
 import { createCrabboxNodeResumer } from "./crabbox-worker-node-resume.js";
 import {
   assertAwsWorkerHasNoInstanceProfile,
-  prepareCrabboxGuestIsolation,
-  prepareCrabboxGuestNetwork,
+  prepareCrabboxGuestAllocation,
   assertHetznerDesktopHasManagedCoordinator,
 } from "./crabbox-worker-preflight.js";
 import {
@@ -197,11 +195,14 @@ export function createCrabboxWorkerProvider(
     }
     const { profile: parsed } = resolveCrabboxWorkloadProfile(profile, options);
     const retention = options?.retention && prepareCrabboxRetention(parsed, options.retention);
-    const receiptRequired = parsed.provider === "azure-sandbox";
+    const receiptRequired =
+      parsed.provider === "azure-sandbox" || options?.untrustedWorkload === true;
     const recordResourceReceipt = options?.recordResourceReceipt;
     if (receiptRequired && !recordResourceReceipt) {
       throw new WorkerProviderError(
-        "Crabbox Azure Sandbox requires Gateway resource receipt persistence",
+        parsed.provider === "azure-sandbox"
+          ? "Crabbox Azure Sandbox requires Gateway resource receipt persistence"
+          : "Gateway-only AWS guests require durable Gateway resource receipt persistence",
       );
     }
     if (
@@ -221,9 +222,11 @@ export function createCrabboxWorkerProvider(
       ? CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS
       : CRABBOX_WARMUP_TIMEOUT_MS;
     const protectedSetup = Object.keys(parsed.setupSecrets ?? {}).length > 0;
-    const project = supportsCrabboxProjectPreparation(profile, options?.machineClass, options?.os)
-      ? options?.project
-      : undefined;
+    const project =
+      !options?.untrustedWorkload &&
+      supportsCrabboxProjectPreparation(profile, options?.machineClass, options?.os)
+        ? options?.project
+        : undefined;
     if (options?.project?.preparation && !project) {
       throw new WorkerProviderError(
         "Crabbox prepared workers require warm images, protected setup, or a configured Linux Sandbox disk",
@@ -234,27 +237,26 @@ export function createCrabboxWorkerProvider(
       ...(signal ? [signal] : []),
       ...(project?.signal ? [project.signal] : []),
     ]);
-    const allocation = await resolveAllocation(profile, operationId);
+    // Guest requests always allocate cold fixed-ID resources, never an operator warm image.
+    const allocation = options?.untrustedWorkload
+      ? { leaseId: operationLeaseId(operationId) }
+      : await resolveAllocation(profile, operationId);
     signal?.throwIfAborted();
     const { binary, version: cliVersion } = await resolveBinary(parsed.binary, preparationSignal);
     const resourceEnv = crabboxResourceEnv(parsed.provider, parsed.requestedResources);
-    const guestEnv = options?.untrustedWorkload
-      ? await prepareCrabboxGuestIsolation({
-          binary,
-          provider: parsed.provider,
-          signal: preparationSignal,
-          assertCurrent,
-        })
-      : undefined;
-    const guestNetwork = guestEnv
-      ? await prepareCrabboxGuestNetwork({
-          binary,
-          provider: parsed.provider,
-          env: guestEnv,
-          signal: preparationSignal,
-          assertCurrent,
-        })
-      : undefined;
+    const guest = await prepareCrabboxGuestAllocation({
+      binary,
+      cliVersion,
+      provider: parsed.provider,
+      target: parsed.target,
+      untrustedWorkload: options?.untrustedWorkload,
+      env: resourceEnv,
+      resourceReceipt: options?.resourceReceipt,
+      signal: preparationSignal,
+      assertCurrent,
+    });
+    const guestEnv = guest?.env;
+    const guestNetwork = guest?.network;
     preparationSignal?.throwIfAborted();
     if (retention) {
       await assertCrabboxRetentionSupport({ binary, signal: preparationSignal });
@@ -401,9 +403,6 @@ export function createCrabboxWorkerProvider(
             idleTimeout: parsed.idleTimeout,
             lifetime: inspected.lifetime,
           });
-        }
-        if (guestNetwork) {
-          verifyGuestInspect(inspected, guestNetwork, leaseId, parsed.provider);
         }
         const inspectedParams = {
           ...context,

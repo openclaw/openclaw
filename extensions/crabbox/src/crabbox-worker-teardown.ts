@@ -1,6 +1,10 @@
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { stopCrabboxLease, type LeaseCommandContext } from "./crabbox-worker-command.js";
+import {
+  isGatewayAwsGuestReceipt,
+  deleteGatewayAwsGuestResource,
+} from "./crabbox-worker-gateway-aws.js";
 import type { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import {
   assertCrabboxLeaseId,
@@ -31,6 +35,21 @@ export function createCrabboxWorkerTeardown(dependencies: {
   ): Promise<void> => {
     await heartbeats.stop(context.id);
     context.assertCurrent?.();
+    if (context.resourceReceipt && isGatewayAwsGuestReceipt(context.resourceReceipt)) {
+      if (!context.assertCurrent) {
+        throw new Error("Gateway AWS guest cleanup requires current allocation authority");
+      }
+      await deleteGatewayAwsGuestResource({
+        receipt: context.resourceReceipt,
+        env: context.env,
+        signal,
+        assertCurrent: context.assertCurrent,
+        onCleanupAccepted,
+      });
+      // AWS is the resource owner. Crabbox's host-local claim is a derived projection
+      // and may remain stale until its next released-CLI status refresh.
+      return;
+    }
     // Cleanup has its own deadline. Confirmed stop or absence releases allocation/image ownership.
     await stopCrabboxLease({
       ...context,

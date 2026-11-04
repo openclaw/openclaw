@@ -8,9 +8,10 @@ import {
   runCrabboxCommand,
   type LeaseCommandContext,
 } from "./crabbox-worker-command.js";
+import { isGatewayAwsGuestReceipt } from "./crabbox-worker-gateway-aws.js";
 import type { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import {
-  createCrabboxGuestCommandEnv,
+  prepareCrabboxGuestIsolation,
   prepareCrabboxGuestNetwork,
 } from "./crabbox-worker-preflight.js";
 import {
@@ -52,9 +53,10 @@ export function createCrabboxWorkerLeaseLifecycle(options: {
     if (retention && (!lease.resourceReceipt || lease.resourceReceipt.leaseId !== lease.leaseId)) {
       throw new Error("Crabbox retained lifecycle requires the original resource receipt");
     }
+    const resolvedBinary = await resolveBinary(profile.binary, lease.signal);
     const resolved = {
       context: {
-        binary: (await resolveBinary(profile.binary, lease.signal)).binary,
+        binary: resolvedBinary.binary,
         heartbeatIntervalMs: profile.heartbeatIntervalMs,
         heartbeatTimeoutMs: profile.heartbeatTimeoutMs,
         id: lease.leaseId,
@@ -66,17 +68,30 @@ export function createCrabboxWorkerLeaseLifecycle(options: {
       },
       profile,
     };
-    if (lease.profile.sessionGuest && requireGuestAccess) {
+    // Guest allocation persists this provider-owned receipt before enrollment.
+    // It selects mandatory readback even though core passes only provider settings.
+    if (isGatewayAwsGuestReceipt(lease.resourceReceipt) && requireGuestAccess) {
       const assertCurrent = () => {
         options.signal.throwIfAborted();
         lease.signal?.throwIfAborted();
       };
       assertCurrent();
-      const env = createCrabboxGuestCommandEnv(resolved.context.env);
+      const env = await prepareCrabboxGuestIsolation({
+        binary: resolvedBinary.binary,
+        cliVersion: resolvedBinary.version,
+        provider: profile.provider,
+        env: {
+          ...resolved.context.env,
+          CRABBOX_AWS_REGION: lease.resourceReceipt?.identity.region,
+        },
+        signal: lease.signal,
+        assertCurrent,
+      });
       const guestNetwork = await prepareCrabboxGuestNetwork({
         binary: resolved.context.binary,
         provider: profile.provider,
         env,
+        resourceReceipt: lease.resourceReceipt,
         signal: lease.signal,
         assertCurrent,
       });

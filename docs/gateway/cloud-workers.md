@@ -206,7 +206,7 @@ the same attachment epoch through dispatch and publication. Browser tabs on
 the dedicated machine are VM-owned rather than Gateway-dashboard-owned.
 
 This does not qualify a provider's guest network boundary. Crabbox guest
-admission stays fail-closed pending the enforced network-receipt integration.
+admission stays fail-closed unless the Gateway-owned AWS qualification below succeeds.
 CUA recording handles are execution-local. Stop the recording, then use
 `file_fetch` with the same `environmentId` and its `resourceHandle` to export
 a single MP4. For multi-file captures, use one of the `fileResourceHandles`
@@ -216,6 +216,62 @@ paths or URLs. Exported bytes use the existing binary media pipeline.
 
 ## Disposable guest network qualification
 
-Guest allocation is limited to AWS routes implementing the versioned guest-network-v1 contract. Direct routes require operator-owned configured policy; managed-coordinator routes must first complete the authenticated versioned server-policy handshake. Discovery advertisements alone do not authorize allocation. The client pins policy identity, revision, digest, and bootstrap mode to allocation timing and fresh inspection of the exact lease, provider resource, and network boundary. Missing, conflicting, unknown, or changed enforcement facts fail closed before bootstrap. Stored guest access contexts requalify current policy and inspection before workspace or access preparation. Cleanup does not depend on this access qualification.
+The Gateway's Crabbox plugin initially supports automated, direct AWS Linux guest
+allocation with an unchanged released Crabbox CLI. It does not require a patched
+Crabbox server, a guest-network protocol, or an allocator-advertised receipt.
+Managed-coordinator routes, other providers, Windows, IPv6, and prepared or
+retained guest disks are not qualified by this path. Unsupported selections fail
+before guest bootstrap; they never fall back to a static or manually provisioned
+box. Existing machine classes and allowed CPU, RAM, Linux OS, region, and disk
+selections still drive per-request allocation.
 
-The managed bootstrap mode is ssh-public-key-v1; direct AWS requires disabled instance metadata. Neither route permits an instance profile or IPv6, and observed egress/platform-exception facts must match the supported contract. Policy files, rules, and authority selection are not guest machine-resource controls. Other providers and unqualified/legacy coordinator routes remain unavailable for guest workloads. Ordinary trusted flows are unchanged. Synthetic fixture validation is not live provider-isolation or captured-video playback proof.
+A trusted operator must select a released Crabbox executable and configure an
+explicit AWS subnet and existing security group in the ordinary Crabbox AWS
+configuration. The Gateway also needs AWS CLI access to the same AWS account.
+No network changes or cloud provisioning are performed merely by enabling a
+profile or reading this configuration. Development/candidate executables and
+implicit or managed routing are rejected for guest allocation.
+
+Before allocation, the Gateway independently reads the caller account, subnet,
+and security-group rules through the AWS control plane. Both ingress and egress
+rules must use wholly public IPv4 CIDRs. Rules overlapping private, link-local,
+loopback, shared, multicast, or reserved space fail closed, as do IPv6 rules,
+security-group peers, and unresolved prefix lists. The VPC must use only private
+RFC1918 IPv4 CIDRs, and the subnet's effective route table may contain only local
+VPC routes and routes through one independently verified, same-account attached
+internet gateway. Peering, VPN, transit, NAT, and appliance routes are not qualified.
+This prevents numerically public CIDRs from disguising private VPC routing. A
+default unrestricted egress
+security group is not a guest boundary. These network selectors are trusted
+operator configuration, not guest machine-resource controls.
+
+Crabbox performs ordinary fixed-ID allocation and trusted SSH initialization.
+Before delivering guest node enrollment or running guest-access setup, the
+Gateway verifies the exact AWS instance, account, VPC, subnet, network interface,
+and security group; rejects instance profiles; disables the instance metadata
+HTTP endpoint; and waits for effective API readback. It records the resource and
+semantic network-rule and effective-topology digest through the existing Gateway resource-receipt owner
+before node bootstrap. Subsequent guest access rechecks live AWS facts against
+that durable identity and digest. The session and allocation owners recheck
+current grant, attachment, and owner epoch after awaited qualification and before
+node effects. Missing, conflicting, changed, or unavailable facts do not authorize
+access.
+
+Guest mode disables configured environment forwarding and all Crabbox caches and
+cache volumes, skips configured command profiles and repository synchronization,
+and does not reuse operator warm images or setup secrets. Harness, model, and
+provider credentials remain on the Gateway; only the existing lease-scoped node
+bootstrap material is delivered. Ordinary trusted worker flows are unchanged.
+
+Trusted cleanup uses the recorded AWS account and exact instance identity, not
+current guest network permission or a revoked guest grant. AWS confirms deletion;
+Crabbox's host-local claim is a derived projection that can remain stale until its
+next status refresh. A missing original account credential or unconfirmed deletion
+retains cleanup ownership instead of claiming success.
+
+Mock control-plane tests and local released-CLI flag/configuration checks are not
+live provider-isolation, deny-egress, tamper, guest bootstrap, or captured-video
+playback qualification. An operator must qualify the real network and provider
+before live adoption. AWS-provided network services that are outside security-group
+filtering are not asserted blocked by CIDR rule inspection; the instance metadata
+endpoint is independently disabled.

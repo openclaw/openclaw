@@ -22,6 +22,7 @@ const current = vi.fn();
 const check = () =>
   prepareCrabboxGuestIsolation({
     binary: "crabbox",
+    cliVersion: "0.79.1",
     provider: "aws",
     env: createCrabboxGuestCommandEnv({}),
     assertCurrent: current,
@@ -29,8 +30,12 @@ const check = () =>
 beforeEach(() => {
   state.config = {
     provider: "aws",
+    brokerMode: "direct",
+    coordinator: "",
     aws: { instanceProfile: "" },
-    cache: { pnpm: false, npm: false, docker: false, git: false, volumes: null },
+    tailscale: false,
+    env: { allow: [] },
+    cache: { pnpm: false, npm: false, docker: false, git: false, volumes: [] },
   };
   state.run.mockClear();
   current.mockReset();
@@ -50,7 +55,7 @@ describe("guest Crabbox control-plane isolation", () => {
     expect(state.run).toHaveBeenCalledWith(
       expect.objectContaining({ args: ["config", "show", "--json", "--provider", "aws"] }),
     );
-    expect(current).toHaveBeenCalledOnce();
+    expect(current).toHaveBeenCalledTimes(2);
   });
   it.each([
     { provider: "gcp", aws: { instanceProfile: "" } },
