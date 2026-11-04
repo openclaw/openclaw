@@ -72,11 +72,12 @@ public struct OpenClawNativeRunRef: Codable, Hashable, Sendable {
 public enum OpenClawNativeOpenRequest: Equatable, Sendable {
     case session(OpenClawNativeSessionRef)
     case compose(OpenClawNativeSessionRef, draft: String?)
+    case liveVoice(OpenClawNativeSessionRef)
     case inspect(OpenClawNativeRunRef)
 
     public var session: OpenClawNativeSessionRef {
         switch self {
-        case let .session(session), let .compose(session, _):
+        case let .session(session), let .compose(session, _), let .liveVoice(session):
             session
         case let .inspect(run):
             run.session

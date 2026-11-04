@@ -146,6 +146,7 @@ final class InstalledNativeActionProofHost: OpenClawNativeActionHost {
         self.snapshot.forwardingKind = switch request {
         case .session: "session"
         case .compose: "compose"
+        case .liveVoice: "liveVoice"
         case .inspect: "inspect"
         }
         guard case let .inspect(run) = request else {

@@ -309,7 +309,8 @@ public final class RealtimeTalkRelaySession {
     }
 
     public var isReady: Bool {
-        !self.isClosed && self.hasReceivedReady && !self.hasReceivedFailure && self.relaySessionId != nil
+        !self.isClosed && self.hasReceivedReady && !self.hasReceivedFailure &&
+            self.startupIssue == nil && self.relaySessionId != nil
     }
 
     public init(

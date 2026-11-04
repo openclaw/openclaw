@@ -1578,6 +1578,26 @@ struct NativeActionRouterTests {
         }
     }
 
+    @Test func `native voice reuse requires the same healthy account lifetime`() async throws {
+        try await self.withHost { host in
+            #expect(await host.router.open(.session(host.session())) == .opened)
+            let original = try #require(host.binding)
+            let sibling = try #require(original.scoped(to: .init(
+                sessionKey: original.session.sessionKey, agentID: original.session.agentID)))
+            let distinct = IOSNativeActionBinding(
+                session: original.session, gateway: original.gateway, route: original.route)
+            #expect(original.canReuse(sibling))
+            #expect(sibling.canReuse(original))
+            #expect(!original.canReuse(distinct))
+            #expect(!distinct.canReuse(original))
+            sibling.observe(.rejected(expectedProfileID: sibling.expectedProfileId))
+            #expect(!original.canReuse(sibling))
+            #expect(!original.canReuse(original))
+            #expect(!sibling.canReuse(original))
+            #expect(distinct.canReuse(distinct))
+        }
+    }
+
     @Test(arguments: ["open owner", "open history", "prepare owner", "confirmation", "catalog"])
     func `captured owner observations retire cached authority without a broadcast`(stage: String) async throws {
         try await self.withHost { host in

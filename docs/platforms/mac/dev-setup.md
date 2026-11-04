@@ -63,6 +63,18 @@ Set `OPENCLAW_NODE_VERSION=<version>` when packaging to select a supported Node
 version for every private worker. If unset or empty, the CLI installer's default
 applies. Packaging installs and verifies the complete worker with that runtime.
 
+Native App Intents packaging requires full Xcode, including
+`appintentsmetadataprocessor`. The Swift build emits constant-value metadata and
+captures the shared Kit archive while it still owns the architecture build.
+Packaging extracts the shared package metadata, then the app metadata into
+`Contents/Resources/Metadata.appintents` before signing. Missing or empty
+metadata fails packaging.
+
+A successful Swift compile is not proof of Shortcuts or Spotlight discovery.
+The native action integration still requires full-Xcode extraction validation
+and discovery checks with a signed, installed app, including cold launch and
+macOS 26 Spotlight. Command Line Tools alone cannot provide that proof.
+
 Each worker keeps native binaries that support its architecture and omits
 incompatible macOS, Linux, and Windows prebuilds. This prevents unused Intel-only
 dependencies from triggering macOS compatibility warnings in Apple silicon

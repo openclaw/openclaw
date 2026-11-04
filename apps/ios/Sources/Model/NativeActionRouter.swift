@@ -278,6 +278,23 @@ final class NativeActionRouter: OpenClawNativeActionHost {
                     }
                     chat.input = draft
                 }
+            case .liveVoice:
+                let chat = presented.chat
+                let scopes = await presented.binding.gateway.currentOperatorScopes(
+                    ifCurrentRoute: presented.binding.route)
+                guard await presented.binding.isCurrent(), self.isCurrent(presented),
+                      scopes?.isDisjoint(with: ["operator.admin", "operator.write", "operator.talk"]) == false
+                else {
+                    throw OpenClawNativeActionError(
+                        "Open voice in the selected chat and finish its permission setup first.")
+                }
+                guard !chat.isAttachmentOwnerPinned else {
+                    throw OpenClawNativeActionError("Finish the current attachment before starting live voice.")
+                }
+                try await self.appModel.startNativeTalk(
+                    nativeBinding: presented.binding,
+                    presentationIsCurrent: { [weak self] in self?.isCurrent(presented) == true })
+                guard self.isCurrent(presented) else { throw CancellationError() }
             case .session, .inspect:
                 break
             }
@@ -440,21 +457,9 @@ final class NativeActionRouter: OpenClawNativeActionHost {
             $0.stableID.utf8.elementsEqual(gatewayID.utf8)
         }?.name ?? gatewayID
         let makeGateway: @Sendable (IOSNativeActionBinding?) -> OpenClawChatNativeActionGateway = { binding in
-            OpenClawChatNativeActionGateway(
-                gatewayID: gatewayID,
-                gatewayName: name,
-                supportsProfileBinding: {
-                    await operatorSession.supportsServerCapability(.profileBinding, ifCurrentRoute: route) == true
-                },
-                request: { request, expectedProfileId in
-                    try await operatorSession.request(
-                        request,
-                        ifCurrentRoute: route,
-                        distinguishPreDispatchRouteChange: true,
-                        expectedProfileId: expectedProfileId)
-                },
-                isCurrent: { await operatorSession.currentRoute(ifGatewayID: gatewayID) == route },
-                onProfileObservation: { binding?.observe($0) })
+            IOSNativeActionBinding.actionGateway(
+                gateway: operatorSession, route: route, gatewayID: gatewayID,
+                gatewayName: name, observing: binding)
         }
         // Verification observes the old capture; later confirmation observes the
         // newly admitted binding. Neither facade looks up a successor after an await.
