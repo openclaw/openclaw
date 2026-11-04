@@ -122,22 +122,20 @@ it.each([false, true])(
       ReplyToBody: "The restore finished.",
       ReplyToSender: "Example Bot",
       InboundEventKind: "user_request",
-      ...(withHistory
-        ? {
-            ChannelStructuredContext: [
-              {
-                label: "Conversation context",
-                source: "telegram",
-                type: "chat_window",
-                payload: {
-                  messages: [
-                    { message_id: "41", sender: "Example Bot", body: "The restore finished." },
-                  ],
-                },
+      ChannelStructuredContext: withHistory
+        ? [
+            {
+              label: "Conversation context",
+              source: "telegram",
+              type: "chat_window",
+              payload: {
+                messages: [
+                  { message_id: "41", sender: "Example Bot", body: "The restore finished." },
+                ],
               },
-            ],
-          }
-        : {}),
+            },
+          ]
+        : undefined,
     });
     const envelope = await envelopeFor(
       sessionCtx,
