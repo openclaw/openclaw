@@ -1088,6 +1088,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["late rejection", [["A."], "A. X.", true, "A. X. E.", ["Z."], false], ["A. X.", "X. E.Z."]],
     ["late error", [["A."], "A. X.", true, "A. X. E.", ["E.F", true], false], ["A. X.", "E.F"]],
     ["failed recovery", ["A. B.", ["A."], ["B."], 0, "A. B. C."], ["A. B.", "A. B. C."]],
+    ["indent", ["    a", ["    a"], null, "    a\n\n    b", ["\n\n    b"]], ["    a", "    b"]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1600,7 +1601,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       reasoning: [""],
       partial: "```ts\ncode\n```",
       final: "```ts\ncode\n```",
-      expected: "",
     },
   ])(
     "renders $name in the reasoning-enabled stream",

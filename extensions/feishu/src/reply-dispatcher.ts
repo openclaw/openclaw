@@ -328,9 +328,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
-  // A closed card keeps its preview; the next card continues the same message.
-  const continuedPreview = (text: string) =>
-    text.slice(text.startsWith(closedPreviewText) ? closedPreviewText.length : 0).trimStart();
+  // A closed card keeps its preview; the next card continues the same message. Only the
+  // separator after the closed text is dropped, never indentation or the first snapshot.
+  const continuedPreview = (text: string, from = closedPreviewText) =>
+    from && text.startsWith(from)
+      ? text.slice(from.length).replace(from.endsWith("\n") ? /^\s*\n/u : /^\s*\n|^[^\S\n]+/u, "")
+      : text;
 
   const setClosedPreview = (next: string, epoch = previewEpoch) => {
     // A new assistant message restarts the preview; late settlements belong to the old one.
@@ -514,9 +517,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             (finalizedReasoningText
               ? result.content?.split("\n\n---\n\n").pop()
               : result.content) ?? "";
-          const body = closingPreview
-            .slice(closingPreview.startsWith(priorClosedPreview) ? priorClosedPreview.length : 0)
-            .trimStart();
+          const body = continuedPreview(closingPreview, priorClosedPreview);
           setClosedPreview(
             result.visibleReplySent && accepted
               ? closingPreview
