@@ -229,6 +229,20 @@ it("reports truncated text streams without a terminal messageStop", async () => 
   expect(result.content[0]).not.toHaveProperty("index");
   expect(result.content[0]).not.toHaveProperty("partialJson");
 });
+it("forwards configured nucleus sampling to non-Claude Bedrock models", async () => {
+  const options = { reasoning: "off", temperature: 0.2, topP: 0.4 } as BedrockOptions;
+  const nova = await capturePayload(bedrockModel(), userContext(), options);
+  const claude = await capturePayload(
+    claudeModel("anthropic.claude-3-5-sonnet-20240620-v1:0", { reasoning: false }),
+    userContext(),
+    options,
+  );
+
+  expect(nova.inferenceConfig).toMatchObject({ temperature: 0.2, topP: 0.4 });
+  expect(claude.inferenceConfig).toMatchObject({ temperature: 0.2 });
+  expect(claude.inferenceConfig).not.toHaveProperty("topP");
+});
+
 describe("Bedrock thinking request composition", () => {
   const context = userContext("Think carefully.");
   const profile = claudeModel(opaqueProfile, { name: "US Claude Fable 5.1" });

@@ -83,6 +83,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBedrockRuntimeAuth } from "./aws-credential-refresh.js";
 import {
+  buildBedrockInferenceConfig,
   resolveBedrockCachePoint,
   resolveBedrockCacheRetention,
   resolveBedrockPromptCachePolicy,
@@ -423,11 +424,10 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         modelId: model.id,
         messages: convertMessages(context, model, cachePoint, toolConfig !== undefined),
         system: buildSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
-        inferenceConfig: {
-          ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
-          ...(options.temperature !== undefined &&
-            !sendsAdaptiveThinking && { temperature: options.temperature }),
-        },
+        inferenceConfig: buildBedrockInferenceConfig(options, {
+          adaptiveThinking: sendsAdaptiveThinking,
+          claude: isAnthropicClaudeModel(model),
+        }),
         toolConfig,
         additionalModelRequestFields,
         ...(isClaude5BedrockModel(model)
