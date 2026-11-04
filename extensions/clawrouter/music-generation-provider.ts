@@ -339,9 +339,9 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
             }
             attempted = true;
           },
-          // One retained signal owns the OpenRouter POST/EOF deadline. A parallel
-          // Undici timeout can terminate the stream before that signal supplies its reason.
+          // The retained signal owns the OpenRouter deadline, including the response body.
           timeoutMs: openRouter ? undefined : timeoutMs(),
+          streamTimeoutMs: openRouterTimeoutMs,
           maxRedirects: 0,
           policy: mergeSsrFPolicies(
             context.ssrfPolicy,

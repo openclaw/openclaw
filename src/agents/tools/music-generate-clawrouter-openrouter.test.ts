@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import * as mediaStore from "../../media/store.js";
+import * as openRouterAudio from "../../music-generation/openrouter-audio.js";
 import type { UnifiedModelCatalogProviderContext } from "../../plugins/types.js";
 import {
   installClawRouterMusicHostFixture,
@@ -347,6 +348,74 @@ it("rejects oversized prompts before discovery or POST", async () => {
 });
 
 it("keeps registered provider discovery, POST and EOF under one deadline", async () => {
+  // Temporary secret-free observation of the first real read failure, before decoder cleanup.
+  const describe = (value: unknown) => {
+    const chain: Array<{ name: string; code: string; terminated: boolean }> = [];
+    for (let depth = 0; depth < 4 && value && typeof value === "object"; depth++) {
+      const name = "name" in value ? value.name : undefined;
+      const code = "code" in value ? value.code : undefined;
+      chain.push({
+        name:
+          typeof name === "string" &&
+          ["Error", "TypeError", "TimeoutError", "AbortError", "DOMException"].includes(name)
+            ? name
+            : "other",
+        code:
+          typeof code === "string" &&
+          [
+            "UND_ERR_BODY_TIMEOUT",
+            "UND_ERR_HEADERS_TIMEOUT",
+            "UND_ERR_SOCKET",
+            "ABORT_ERR",
+            "ECONNRESET",
+            "ETIMEDOUT",
+            "ERR_STREAM_PREMATURE_CLOSE",
+          ].includes(code)
+            ? code
+            : "other",
+        terminated: "message" in value && value.message === "terminated",
+      });
+      value = "cause" in value ? value.cause : undefined;
+    }
+    return chain;
+  };
+  const decode = openRouterAudio.readOpenRouterAudioStream;
+  let observed = false;
+  vi.spyOn(openRouterAudio, "readOpenRouterAudioStream").mockImplementation(
+    async (res, limit, opts) => {
+      const body = res.body!;
+      const reader = body.getReader();
+      const read = reader.read.bind(reader);
+      vi.spyOn(body, "getReader").mockReturnValue(reader);
+      vi.spyOn(reader, "read").mockImplementation(async () => {
+        try {
+          return await read();
+        } catch (error) {
+          if (!observed) {
+            observed = true;
+            let remaining: unknown;
+            try {
+              remaining =
+                typeof opts?.timeoutMs === "function" ? opts.timeoutMs() : opts?.timeoutMs;
+            } catch (deadlineError) {
+              remaining = { error: describe(deadlineError) };
+            }
+            console.error(
+              "[clawrouter-music-first-read-rejection]",
+              JSON.stringify({
+                error: describe(error),
+                signalAborted: opts?.signal?.aborted,
+                signalReason: describe(opts?.signal?.reason),
+                remaining,
+              }),
+            );
+          }
+          throw error;
+        }
+      });
+      return await decode(res, limit, opts);
+    },
+  );
   f.hold = "body";
   const provider = f.acquired.registry.musicGenerationProviders.find(
     (entry) => entry.provider.id === "clawrouter",
