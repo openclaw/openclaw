@@ -64,9 +64,6 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "users.self",
   "users.setAvatar",
   "users.setDisplayName",
-  // Session readers record their own activity and receive person-only presence rows.
-  "presence.activity",
-  "system-presence",
 ]);
 
 const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
