@@ -1,2 +1,2 @@
-# Knowledge doctor check covers low saving-model output limits and the core resolver defaults.
-74
+# Knowledge doctor check: plugin finding, core limit resolver (ceiling vs request budget), and the plain-doctor rendering path.
+122
