@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import {
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -504,10 +505,7 @@ export function normalizeZaloInboundMessage(
         : data.msgType === "chat.video.msg"
           ? "video"
           : undefined;
-  const attachmentContent =
-    data.content && typeof data.content === "object"
-      ? (data.content as Record<string, unknown>)
-      : undefined;
+  const attachmentContent = asOptionalRecord(data.content);
   return {
     threadId,
     isGroup,
