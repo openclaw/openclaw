@@ -1001,6 +1001,10 @@ const configs: UserConfig[] = [
   workerDeployBuildConfig({
     "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
   }),
+  workerDeployBuildConfig(
+    { "worker/session-transcript.worker": "src/worker/worker-deploy-session-transcript.ts" },
+    true,
+  ),
   workerDeployBuildConfig({
     "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
   }),

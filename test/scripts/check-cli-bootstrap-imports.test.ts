@@ -38,6 +38,7 @@ const workerDeployArtifactNames = [
   "openclaw-state-read.worker.mjs",
   "service-child-group-anchor.mjs",
   "service-child-relay.mjs",
+  "session-transcript.worker.mjs",
   "sqlite-source-revision.worker.mjs",
   "sqlite-store.worker.mjs",
   "worker-native-lifecycle.worker.mjs",

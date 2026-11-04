@@ -2,8 +2,7 @@ import {
   captureSqliteWorkerClosePolicy,
   ensureSqliteLibrarySelected,
 } from "../../infra/bun-sqlite-library.js";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import {
   UsageCostWorkerReplyError,
   type UsageCostWorkerInput,
@@ -31,7 +30,7 @@ import type {
   SessionTranscriptWorkerReply,
 } from "./session-transcript-worker.types.js";
 
-const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
+const workerUrl = resolveRuntimeProcessEntrypointUrl("sessionTranscript");
 // V8's default young generation lets each idle reader keep ~60 MiB of nursery.
 const SESSION_TRANSCRIPT_WORKER_LIMITS = {
   maxOldGenerationSizeMb: 512,

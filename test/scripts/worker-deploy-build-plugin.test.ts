@@ -140,6 +140,7 @@ export { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 export { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 export { recordOpenClawDatabaseQuarantine, readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 export { readSecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
+export { createSessionTranscriptReadPool } from "../config/sessions/session-transcript-read-pools.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 export { projectComputerActResult } from "../agents/tools/computer-tool-result.js";
@@ -242,6 +243,7 @@ const {
   updateExecApprovals,
   readExecApprovalsSnapshot,
   readSecretStoreExecEnvironment,
+  createSessionTranscriptReadPool,
   closeOpenClawStateDatabaseAsync,
   resolveOpenClawStateSqlitePath,
   readStableSqliteFileGeneration,
@@ -253,6 +255,19 @@ const command = "portable exec authorization";
 try {
   await updateExecApprovals({ update: { kind: "replace", file: { version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } } } });
   assert.deepEqual(await readSecretStoreExecEnvironment({ includeSecretSentinels: false }), {});
+  const transcriptPool = createSessionTranscriptReadPool(1);
+  const storePath = process.env.OPENCLAW_STATE_DIR + "/transcript.sqlite";
+  try {
+    const reply = await transcriptPool.run(
+      { kind: "sqlite-target", storePath, env: process.env, registeredDatabases: [] },
+      { timeoutMs: 10_000 },
+      { storePaths: [storePath], admissionPaths: [storePath] },
+    );
+    assert.equal(reply.ok, true);
+    assert.equal(reply.value.target.path, storePath);
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+  }
   const assertCurrent = await commitExecAuthorizationLocked({
     agentId: "main", matches: [match], command, resolvedPath: process.execPath,
     authorization: { source: "current-policy", security: "full", ask: "off", allowlistSatisfied: true },
