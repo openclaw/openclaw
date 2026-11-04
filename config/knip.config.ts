@@ -1236,7 +1236,7 @@ const config = {
       ],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
-      // Maintained package commands select these opt-in Vitest configs outside
+      // Maintained commands select these opt-in Vitest configs outside
       // the default root patterns. Config ownership keeps their defaults live.
       vitest: {
         config: [
@@ -1244,6 +1244,7 @@ const config = {
           "vitest.{workspace,projects}.{js,mjs,ts,cjs,mts,cts,json}",
           "scripts/control-ui-parity/vitest.config.ts",
           "scripts/control-ui-retention/vitest.config.ts",
+          "test/vitest.codex-worker-authority.config.ts",
         ],
       },
       project: [

@@ -31,6 +31,8 @@ function fixture(
     createdAt?: string;
     updatedAt?: string;
     digestMismatch?: boolean;
+    conclusion?: string;
+    freshConclusion?: string;
   } = {},
 ) {
   const run = {
@@ -41,7 +43,7 @@ function fixture(
     event: "schedule",
     path: ".github/workflows/ci.yml",
     status: "completed",
-    conclusion: "success",
+    conclusion: options.conclusion ?? "success",
     repository: { full_name: repository },
     head_repository: { full_name: repository },
     created_at: earlier,
@@ -92,12 +94,14 @@ function fixture(
         head_repository: { full_name: options.consumerFork ? "contributor/fork" : repository },
       };
     } else if (endpoint === "actions/workflows/ci.yml/runs") {
+      expect(url.searchParams.get("status")).toBe("completed");
       body = { workflow_runs: [run] };
     } else if (endpoint === "actions/runs/20/artifacts") {
       body = { artifacts, total_count: artifacts.length };
     } else if (endpoint === "actions/runs/20/attempts/1") {
       body = {
         ...run,
+        conclusion: options.freshConclusion ?? run.conclusion,
         updated_at: options.updatedAt ?? earlier,
         head_repository: { full_name: options.freshFork ? "contributor/fork" : repository },
       };
@@ -117,6 +121,23 @@ function fixture(
 }
 
 describe("adaptive CI prior restore", () => {
+  it("retains verified observations from a failed workflow without admitting cancelled runs", async () => {
+    const failed = fixture({ conclusion: "failure" });
+    expect(
+      (await restoreCiAdaptivePriors({ env, fetchImpl: failed.fetchImpl })).candidates,
+    ).toHaveLength(2);
+    const cancelled = fixture({ conclusion: "cancelled" });
+    expect(
+      (await restoreCiAdaptivePriors({ env, fetchImpl: cancelled.fetchImpl })).candidates,
+    ).toEqual([]);
+    expect(cancelled.requests.some((request) => request.endsWith("/zip"))).toBe(false);
+    const changed = fixture({ freshConclusion: "cancelled" });
+    expect(
+      (await restoreCiAdaptivePriors({ env, fetchImpl: changed.fetchImpl })).candidates,
+    ).toEqual([]);
+    expect(changed.requests.some((request) => request.endsWith("/zip"))).toBe(false);
+  });
+
   it("restores at most two verified archives and binds the bundle to the current checkout/run", async () => {
     const f = fixture({ artifacts: 3 });
     const bundle = await restoreCiAdaptivePriors({ env, fetchImpl: f.fetchImpl });

@@ -66,6 +66,7 @@ import {
   renderChatView,
   getComposerTextarea,
   requireElement,
+  waitForElement,
   stubAnimationFrames,
   createDragEvent,
   getChatModelSelect,
@@ -78,7 +79,6 @@ import {
   appendMessageActionFixture,
 } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import { ReplyPreview } from "./components/chat-composer-view.tsx";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
@@ -233,8 +233,7 @@ function requireFirstAttachmentsChange(
   return attachments as ChatAttachment[];
 }
 
-beforeEach(async () => {
-  await ReplyPreview.preload();
+beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
   installTranscriptDomMocks();
   vi.spyOn(chatThread, "buildCachedChatItems").mockImplementation(buildChatItemsMock);
@@ -4087,7 +4086,7 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 
-  it("renders a dismissible reply preview without splitting an emoji at the limit", () => {
+  it("renders a dismissible reply preview without splitting an emoji at the limit", async () => {
     const onClearReply = vi.fn();
     const container = renderReply({
       replyTarget: {
@@ -4097,16 +4096,15 @@ describe("right-click Reply", () => {
       },
       onClearReply,
     });
-    expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
-      `${"x".repeat(119)}...`,
-    );
+    const preview = await waitForElement(container, ".chat-reply-preview__text");
+    expect(preview.textContent).toBe(`${"x".repeat(119)}...`);
     container.querySelector<HTMLButtonElement>(".chat-reply-preview__dismiss")!.click();
     expect(onClearReply).toHaveBeenCalledTimes(1);
   });
 
   it.each(["isComposing", "keyCode229", "rerendered-live"])(
     "preserves the reply and draft for %s Escape before deliberate reply clearing and abort",
-    (mode) => {
+    async (mode) => {
       const draft = "Keep this reply draft";
       const quote = "Keep this quoted message";
       const pane = createReplyPane(`reply-${mode}`, draft, quote);
@@ -4117,7 +4115,8 @@ describe("right-click Reply", () => {
         textarea.focus();
         expect(document.activeElement).toBe(textarea);
         expect(textarea.value).toBe(draft);
-        expect(pane.container.querySelector(".chat-reply-preview__text")?.textContent).toBe(quote);
+        const preview = await waitForElement(pane.container, ".chat-reply-preview__text");
+        expect(preview.textContent).toBe(quote);
         const updatesBeforeComposition = pane.redraw.mock.calls.length;
         if (mode === "rerendered-live") {
           textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
@@ -4183,13 +4182,14 @@ describe("right-click Reply", () => {
     },
   );
 
-  it("keeps a composing reply isolated from Escape in another pane", () => {
+  it("keeps a composing reply isolated from Escape in another pane", async () => {
     const paneA = createReplyPane("reply-pane-a", "Draft A", "Quote A");
     const paneB = createReplyPane("reply-pane-b", "Draft B", "Quote B");
     try {
       document.body.append(paneA.container, paneB.container);
       paneA.redraw();
       paneB.redraw();
+      await waitForElement(paneA.container, ".chat-reply-preview:not([role])");
       const textareaA = getComposerTextarea(paneA.container);
       const textareaB = getComposerTextarea(paneB.container);
       textareaA.focus();

@@ -52,7 +52,7 @@ const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx
 });
 const EmojiMenu = lazy(() => import("./chat-composer-emoji.tsx"), { export: "EmojiMenu" });
 // The reply strip loads with the first reply, outside the chat boot bundle.
-export const ReplyPreview = lazy(() => import("./chat-composer-reply-preview.tsx"), {
+const ReplyPreview = lazy(() => import("./chat-composer-reply-preview.tsx"), {
   export: "ComposerReplyPreview",
 });
 const ChatGoal = lazy(() => import("./chat-composer-goal.tsx"), { export: "ChatGoal" });

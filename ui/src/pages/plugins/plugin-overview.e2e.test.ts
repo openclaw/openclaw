@@ -175,9 +175,26 @@ describeControlUiE2e("Plugin overview", () => {
       await timeZone.waitFor();
       expect(await timeZone.inputValue()).toBe("Europe/Paris");
       expect(await timeZone.isEnabled()).toBe(true);
-      const permission = role(page, "checkbox", "Add context to prompts");
+      const permission = role(page, "checkbox", "Modify prompts");
       expect(await permission.isEnabled()).toBe(true);
       expect(await gateway.getRequests("config.set")).toEqual([]);
+      if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1" && entry === "fresh") {
+        const dir = createControlUiE2eArtifactDir("prompt-permission-settings");
+        for (const width of [1440, 393]) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".plugin-editor"),
+            [permission],
+            {
+              animations: "disabled",
+              viewport: { width, height: 1000 },
+              scrollTo: permission,
+            },
+          );
+          writeFileSync(path.join(dir, `settings-${width}.png`), frame.png);
+        }
+        await page.setViewportSize({ width: 1440, height: 1000 });
+      }
       const inspections = (await gateway.getRequests("plugins.inspect")).length;
       await gateway.deferNext("plugins.inspect");
       await permission.press("Space");
@@ -193,7 +210,7 @@ describeControlUiE2e("Plugin overview", () => {
       await expect.poll(() => permission.isChecked()).toBe(true);
       const permissionRow = page.locator('[data-setting="hooks.allowPromptInjection"]');
       await permissionRow.hover();
-      await role(permissionRow, "button", "Actions for Add context to prompts").click();
+      await role(permissionRow, "button", "Actions for Modify prompts").click();
       const resetInspections = (await gateway.getRequests("plugins.inspect")).length;
       await role(permissionRow, "menuitem", "Reset value").click();
       await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(1);
