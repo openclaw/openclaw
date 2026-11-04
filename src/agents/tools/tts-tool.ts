@@ -42,7 +42,7 @@ export function createTtsTool(opts?: {
     description:
       "Convert text to spoken audio (TTS) with the configured voice provider. Only explicit voice/speech/TTS intent or active TTS config; never ordinary text reply. Audio auto-delivered. After success follow reply instructions; no duplicate text/audio.",
     parameters: TtsToolSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const text = readToolStringParam(params, "text", { required: true });
       const channel = readToolStringParam(params, "channel");
@@ -55,6 +55,7 @@ export function createTtsTool(opts?: {
         cfg,
         channel: channel ?? opts?.agentChannel,
         timeoutMs,
+        signal,
         agentId: opts?.agentId,
         accountId: opts?.agentAccountId,
       });

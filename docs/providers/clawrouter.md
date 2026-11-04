@@ -678,3 +678,32 @@ prevent model calls or the existing `/v1/usage` snapshot.
     OpenClaw usage and status surfaces.
   </Card>
 </CardGroup>
+
+## OpenRouter MP3 speech
+
+TTS and Talk can select current, eligible OpenRouter `audio.speech` offers using
+`openai.audio_speech` input and `audio.binary` output. This requires the qualified
+Worker route and catalog declaration; installing this client does not activate an
+offer. Set `upstreamProvider: "openrouter"` in `tts.providers.clawrouter` or
+`talk.providers.clawrouter` and use the ClawRouter proxy credential.
+
+The default catalog model is `openrouter/hexgrad/kokoro-82m` with voice `af_alloy`.
+The other supported catalog models are `openrouter/elevenlabs/eleven-turbo-v2`
+and `openrouter/mistralai/voxtral-mini-tts-2603`. The selected offer binds the
+upstream model; direct-provider aliases and Gemini PCM offers are not accepted.
+Explicit voices use the native identifier, and speed must be between 0.25 and 4.
+Only `provider.zdr` and `provider.data_collection` data-policy flags are accepted.
+Output is explicitly MP3, including voice-note requests; this route cannot supply
+24 kHz telephony PCM.
+
+Native offers use `/v1/native/openrouter/v1/audio/speech`. Manifest offers use
+the catalog endpoint under `/v1/proxy/openrouter/` with a `{ body }` envelope.
+Discovery and synthesis use the selected proxy key only. Stale, foreign or
+unsupported offers fail before the POST. The caller signal reaches discovery,
+submission and body reads within the original operation deadline.
+
+Only complete HTTP 200 `audio/mpeg` output is returned, bounded to 16 MiB and the
+configured media limit. After a POST attempt, transport uncertainty, unusable
+output or cancellation stops automatic provider fallback. A proven pre-egress
+failure can still use a configured fallback. This replay rule does not determine
+billing, grant a refund, or turn unknown native charges into a token tariff.

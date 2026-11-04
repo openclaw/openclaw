@@ -74,6 +74,7 @@ export async function textToSpeechCore(
   persistTtsAudio: TtsAudioPersistence,
 ): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
+  params.signal?.throwIfAborted();
   if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
     return {
       success: false,
@@ -122,6 +123,7 @@ export async function textToSpeechCore(
     attempts: synthesis.attempts,
   };
 
+  params.signal?.throwIfAborted();
   let audioPath: string;
   try {
     audioPath = await persistTtsAudio({
@@ -139,6 +141,7 @@ export async function textToSpeechCore(
     };
   }
 
+  params.signal?.throwIfAborted();
   return {
     success: true,
     audioPath,
@@ -164,6 +167,7 @@ type SpeechSynthesisParams = {
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
   agentId?: string;
   accountId?: string;
 };
@@ -184,6 +188,7 @@ export async function synthesizeTalkSpeech(
 async function synthesizeSpeechInternal(
   params: SpeechSynthesisParams,
 ): Promise<TtsSynthesisResult> {
+  params.signal?.throwIfAborted();
   return await withOwnedTtsRequest(
     {
       text: params.text,
@@ -206,6 +211,7 @@ async function synthesizeSpeechInternal(
         synthesisText: normalizeSpeechText(params.text),
         providerOverrides: params.overrides?.providerOverrides,
         timeoutMs: params.timeoutMs,
+        signal: params.signal,
         target,
         logLabel: "TTS",
         selectOperation: ({ resolvedProvider }) => ({
