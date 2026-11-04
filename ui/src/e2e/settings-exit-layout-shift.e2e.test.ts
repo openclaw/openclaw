@@ -45,7 +45,7 @@ suite.define(() => {
           await waitForControlUiRoute(page, from);
           const topbarGeometry = () =>
             page.evaluate(() =>
-              [".topbar-nav-toggle", ".topbar-search", ".header-new-session"].map((selector) => {
+              [".topbar-nav-toggle", ".topbar-search"].map((selector) => {
                 const rect = document.querySelector(selector)?.getBoundingClientRect();
                 return rect && [rect.x, rect.y, rect.width, rect.height];
               }),

@@ -1853,6 +1853,7 @@ src/process/spawn-broker/resource-client.ts
 src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
 src/process/spawn-broker/resource-socket.ts
+src/process/spawn-broker/socket-directory.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-to-file.ts
 src/process/spawn-utils.ts
