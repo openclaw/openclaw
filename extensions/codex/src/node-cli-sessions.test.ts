@@ -110,11 +110,6 @@ const meta = (id: string, cwd: string, timestamp = "2026-05-14T00:10:23.618Z") =
   type: "session_meta",
   payload: { id, cwd },
 });
-const userMessage = (text: string, timestamp = "2026-05-14T00:10:24.000Z") => ({
-  timestamp,
-  type: "response_item",
-  payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
-});
 
 async function writeRollout(sessionId: string, records: unknown[] = [], large = false) {
   const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
