@@ -185,7 +185,7 @@ const enCron = {
       summaryCronTz: "Cron schedule {expr} ({tz})",
       timezoneOptional: "Time zone",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp: "Leave blank to use this computer’s time zone, or enter an IANA time zone.",
+      timezoneHelp: "Leave blank to use the time zone of the computer running OpenClaw, or enter an IANA time zone.",
       runsIn: "Runs in",
       mainSession: "Main session",
       isolatedSession: "Isolated session",
