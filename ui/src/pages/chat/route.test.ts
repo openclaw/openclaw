@@ -321,15 +321,8 @@ describe("loadChatRoute", () => {
   it("loads a specific synthetic catalog thread from its URL target", async () => {
     const { context, list, request } = contextFor();
     request.mockImplementation(async (method) => {
-      if (method === "sessions.catalog.list") {
-        return {
-          catalogs: [
-            {
-              id: "claude",
-              hosts: [{ hostId: "gateway:local", sessions: [{ threadId: "thread-2" }] }],
-            },
-          ],
-        };
+      if (method === "sessions.catalog.resolve") {
+        return null;
       }
       throw new Error(`Unexpected gateway request: ${method}`);
     });

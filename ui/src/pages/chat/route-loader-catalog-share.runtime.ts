@@ -10,11 +10,7 @@ import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  buildCatalogSessionKey,
-  lookupCatalogSession,
-  type CatalogSessionKey,
-} from "../../lib/sessions/catalog-key.ts";
+import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { catalogMethod } from "../../lib/sessions/catalog-read-method.ts";
 import { parseAgentSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import type { ResolvedCatalogShareRoute } from "./route-loader-catalog-share.ts";
@@ -34,17 +30,15 @@ function captureCatalogConnection(
   signal: AbortSignal,
 ) {
   const { hello } = context.gateway.snapshot;
-  const isCurrent = () =>
-    !signal.aborted &&
-    context.gateway.snapshot.phase === "connected" &&
-    context.gateway.snapshot.client === client &&
-    context.gateway.snapshot.hello === hello;
   return {
     hello,
-    isCurrent,
     assertCurrent() {
       signal.throwIfAborted();
-      if (!isCurrent()) {
+      if (
+        context.gateway.snapshot.phase !== "connected" ||
+        context.gateway.snapshot.client !== client ||
+        context.gateway.snapshot.hello !== hello
+      ) {
         throw new Error("The Gateway connection changed while resolving the conversation.");
       }
     },
@@ -209,20 +203,7 @@ export async function resolveCatalogContinuation(
 ) {
   const client = await waitForGatewayClient(context.gateway, signal);
   const connection = captureCatalogConnection(context, client, signal);
-  connection.assertCurrent();
-  const lookup = await lookupCatalogSession({
-    client,
-    key,
-    agentId,
-    signal,
-    isCurrent: connection.isCurrent,
-    listMethod: catalogMethod(connection, key.catalogId, "list"),
-  });
-  connection.assertCurrent();
-  if (!lookup) {
-    throw new Error("The Gateway connection changed while resolving the conversation.");
-  }
-  return lookup.session?.sessionKey
-    ? resolveBoundCatalogConversation(client, key, agentId, signal, connection)
-    : undefined;
+  // Resolve owns source visibility and destination authorization; a preliminary
+  // listing adds a round-trip and can lose a retained binding outside its page.
+  return resolveBoundCatalogConversation(client, key, agentId, signal, connection);
 }

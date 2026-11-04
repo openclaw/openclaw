@@ -238,9 +238,8 @@ it("reopens a Beam at its one live destination, retaining the bound non-default 
 it.each([
   ["share", "list", "hello"],
   ["share", "resolve", "hello"],
-  ["query", "list", "hello"],
   ["query", "resolve", "hello"],
-  ["query", "list", "client"],
+  ["query", "resolve", "client"],
 ] as const)("rejects stale %s %s results after %s replacement", async (route, phase, changed) => {
   const entered = createDeferredCore();
   const deferred = createDeferredCore<unknown>();
@@ -287,4 +286,40 @@ it.each([
   deferred.resolve(phase === "list" ? listed : { sessionKey: key });
   await checked;
   expect(request.mock.calls.some(([method]) => method.endsWith(".continue"))).toBe(false);
+});
+
+it.each([null, { sessionKey: "agent:analysis:dashboard:handoff" }])(
+  "resolves a query link directly under Gateway policy: %j",
+  async (result) => {
+    const request = vi.fn(async () => result);
+    await expect(
+      resolveCatalogContinuation(
+        catalogContext(request),
+        { catalogId: "beam", hostId: "gateway", threadId: fullId },
+        "research",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual(result ? { ...result, agentId: "analysis" } : undefined);
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "sessions.catalog.resolve",
+      { catalogId: "beam", hostId: "gateway", threadId: fullId, agentId: "research" },
+      { signal: expect.any(AbortSignal) },
+    );
+  },
+);
+
+it("preserves a query resolution denial without falling back to discovery", async () => {
+  const denied = new Error("session catalog thread is not visible to this caller");
+  const request = vi.fn(async () => {
+    throw denied;
+  });
+  await expect(
+    resolveCatalogContinuation(
+      catalogContext(request),
+      { catalogId: "beam", hostId: "gateway", threadId: fullId },
+      "research",
+      new AbortController().signal,
+    ),
+  ).rejects.toBe(denied);
+  expect(request).toHaveBeenCalledTimes(1);
 });

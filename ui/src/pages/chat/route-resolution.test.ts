@@ -13,7 +13,6 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { catalogList } from "./chat-pane-catalog.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { loadRoute, routeLocation as locationFor } from "./route-loading.test-support.ts";
 import {
@@ -208,17 +207,7 @@ describe("gateway-backed session route resolution", () => {
     });
     const catalogRow = row({ key: catalogKey, boardFace: "dashboard" });
     const { context, request } = contextFor({ ok: true, ...catalogRow, agentId: "roboclaw" });
-    request.mockResolvedValueOnce(
-      catalogList({ catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" }, [
-        {
-          threadId: "thread-1",
-          status: "idle",
-          archived: false,
-          canContinue: true,
-          canArchive: false,
-        },
-      ]),
-    );
+    request.mockResolvedValueOnce(null);
     const target = sessionNavigationTarget({
       face: "chat",
       sessionKey: catalogKey,
