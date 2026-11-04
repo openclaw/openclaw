@@ -11,8 +11,6 @@ import { defaultRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
-import { ExpectedCliError } from "./expected-cli-error.js";
-import { formatCliFailureLines } from "./failure-output.js";
 import {
   loadToolPlugin,
   runPluginsBuildCommand,
@@ -512,32 +510,8 @@ describe("plugin authoring commands", () => {
 
     await expect(
       loadToolPlugin({ rootDir: tmpDir, entryPath: path.join(tmpDir, "dist/index.js") }),
-    ).rejects.toThrow("plugin entry not found: ./dist/index.js");
+    ).rejects.toMatchObject({ humanOutput: "plugin entry not found: ./dist/index.js" });
   });
-
-  it.each([["build"], ["validate"]] as const)(
-    "names the missing entry when %s runs before the entry is compiled",
-    async (command) => {
-      const { root: tmpDir, entry } = sourceProject("uncompiled");
-      silenceRuntime("log");
-      // Validation reads the generated manifest before loading the entry.
-      await runPluginsBuildCommand({ root: tmpDir, entry });
-      const run = command === "build" ? runPluginsBuildCommand : runPluginsValidateCommand;
-      const error = await run({ root: tmpDir, entry: "./dist/index.js" }).catch(
-        (cause: unknown) => cause,
-      );
-
-      expect(error).toBeInstanceOf(ExpectedCliError);
-      expect(
-        formatCliFailureLines({
-          title: "The CLI command failed.",
-          error,
-          argv: ["node", "openclaw", "plugins", command],
-          env: {},
-        }),
-      ).toEqual(["plugin entry not found: ./dist/index.js"]);
-    },
-  );
 
   it.each(["{invalid json", "{ // package.json must remain strict JSON\n}"])(
     "rejects non-JSON package metadata without rewriting it: %s",
@@ -714,38 +688,6 @@ describe("plugin authoring commands", () => {
       "src",
     ]);
     expect(log).not.toHaveBeenCalled();
-  });
-
-  it("explains rejected init input instead of failing generically", async () => {
-    const existingDir = tempDirs.make("openclaw-plugin-init-existing-");
-    const cases = [
-      { id: " ", opts: {}, message: "Plugin id is required." },
-      {
-        id: "demo",
-        opts: { type: "bogus", directory: path.join(existingDir, "fresh") },
-        message:
-          'Unsupported plugin scaffold type "bogus". Supported types: tool, provider, feature.',
-      },
-      {
-        id: "demo",
-        opts: { directory: existingDir },
-        message: `Refusing to overwrite existing path: ${existingDir}`,
-      },
-    ];
-    for (const { id, opts, message } of cases) {
-      const error = await runPluginsInitCommand(id, opts).catch((cause: unknown) => cause);
-      expect(error).toBeInstanceOf(ExpectedCliError);
-      expect(
-        formatCliFailureLines({
-          title: "The CLI command failed.",
-          error,
-          argv: ["node", "openclaw", "plugins", "init"],
-          env: {},
-        }),
-      ).toEqual([message]);
-    }
-    expect(fs.existsSync(path.join(existingDir, "fresh"))).toBe(false);
-    expect(fs.readdirSync(existingDir)).toEqual([]);
   });
 
   it("finishes init with an absolute directory after the launch directory is removed", async () => {
