@@ -143,8 +143,8 @@ This compatibility path does not grant managed Tailscale semantics. `gateway.aut
 
 ### Exposure reporting
 
-**Settings → Privacy & Security** reports the requested Tailscale mode separately from
-the active route observed by the Gateway. A disabled Serve policy shows inactive
+**Settings → Privacy & Security** shows active Tailscale exposure and explains when
+it differs from the requested mode. A disabled Serve policy shows inactive
 exposure with a recovery step, rather than claiming tailnet access. A preserved
 external Funnel is labeled separately and remains limited to plugin-authenticated
 webhooks; it does not make Gateway-authenticated routes publicly accessible.

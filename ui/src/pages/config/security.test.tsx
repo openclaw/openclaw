@@ -512,17 +512,36 @@ it("retires host policy reads across reconnects of the same client", async () =>
   await waitForSolid(() => expect(policy()).toBe("Deny"));
 });
 
-it("shows inactive requested Serve with its failure reason instead of reassurance", async () => {
-  const mounted = renderSecurity({
-    networkAccess: { kind: "reportedLoopback" },
-    tailscaleExposure: {
-      requestedMode: "serve",
-      activeMode: "off",
-      status: "failed",
-      reason: "Enable Serve and restart the Gateway.",
-    },
-  });
-  expect(mounted.container.textContent).toContain(
-    "Tailscale requested: Serve. Active: Off. Enable Serve and restart the Gateway.",
-  );
-});
+it.each([
+  ["serve", "serve", "active", "Through Tailscale Serve."],
+  ["off", "off", "off", undefined],
+  [
+    "serve",
+    "off",
+    "failed",
+    "Requested Tailscale access is not active. Enable Serve and restart the Gateway.",
+  ],
+  [
+    "serve",
+    "funnel",
+    "preserved",
+    "An external Funnel is still active. Only plugin-authenticated webhooks accept it; Gateway-authenticated routes reject it.",
+  ],
+] as const)(
+  "describes requested %s with active %s (%s)",
+  async (requestedMode, activeMode, status, detail) => {
+    const mounted = renderSecurity({
+      networkAccess: { kind: activeMode === "serve" ? "reportedServe" : "reportedLoopback" },
+      tailscaleExposure: {
+        requestedMode,
+        activeMode,
+        status,
+        reason: status === "preserved" ? detail : "Enable Serve and restart the Gateway.",
+      },
+    });
+    expect(
+      expectRowByTitle(mounted.container, "Network access").querySelector(".settings-row__desc")
+        ?.textContent,
+    ).toBe(detail);
+  },
+);

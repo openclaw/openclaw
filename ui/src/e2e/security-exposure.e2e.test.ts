@@ -20,7 +20,7 @@ suite.define(() => {
       activeMode: "funnel",
       label: "External Funnel",
       reason:
-        "An external Funnel remains active for plugin-authenticated webhooks only; Gateway-authenticated routes reject it.",
+        "An external Funnel is still active. Only plugin-authenticated webhooks accept it; Gateway-authenticated routes reject it.",
     },
   ] as const)("shows $status Serve activation without claiming active Serve", async (fixture) => {
     await suite.withPage(
@@ -54,9 +54,14 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "settings/security");
         await gateway.waitForRequest("config.get");
         const row = page.getByRole("button", { name: /^Network access/ });
-        await expect.poll(() => row.textContent()).toContain(fixture.reason);
+        await expect
+          .poll(() => row.textContent())
+          .toContain(
+            fixture.status === "preserved"
+              ? "An external Funnel is still active. Only plugin-authenticated webhooks accept it; Gateway-authenticated routes reject it."
+              : "Requested Tailscale access is not active.",
+          );
         expect(await row.textContent()).toContain(fixture.label);
-        expect(await row.textContent()).toContain("Tailscale requested: Serve.");
         await row.focus();
         await expect.poll(() => row.evaluate((node) => node === document.activeElement)).toBe(true);
         await row.hover();

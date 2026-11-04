@@ -66,7 +66,7 @@ export async function startGatewayTailscaleExposure(params: {
       report(
         "funnel",
         "preserved",
-        "An external Funnel remains active for plugin-authenticated webhooks only; Gateway-authenticated routes reject it.",
+        "An external Funnel is still active. Only plugin-authenticated webhooks accept it; Gateway-authenticated routes reject it.",
       );
       params.logTailscale.warn(
         `external Tailscale Funnel for port ${params.port} remains active only for plugin-authenticated webhook routes; Gateway-authenticated routes reject its unattributable ingress. ` +

@@ -103,13 +103,13 @@ function GatewayAccessSection(props: SecurityViewProps) {
       : networkAccessStatus(props.security.networkAccess, props.security.gatewayAuth);
   const exposureDetail = () => {
     const exposure = props.security.tailscaleExposure;
-    if (!exposure) {
+    if (!exposure || exposure.requestedMode === exposure.activeMode) {
       return networkAccessDetail(props.security.networkAccess);
     }
-    const summary = t("quickSettings.security.tailscaleExposure.summary", {
-      requested: t(`quickSettings.security.tailscaleExposure.mode.${exposure.requestedMode}`),
-      active: t(`quickSettings.security.tailscaleExposure.mode.${exposure.activeMode}`),
-    });
+    if (exposure.status === "preserved" && exposure.reason) {
+      return exposure.reason;
+    }
+    const summary = t("quickSettings.security.tailscaleExposure.inactive");
     return exposure.reason ? `${summary} ${exposure.reason}` : summary;
   };
   return (
