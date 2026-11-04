@@ -171,12 +171,16 @@ export function createSessionOwnerFilterQuery(
         !facet.startupPending &&
         !facet.error &&
         facet.readSucceeded !== false &&
-        facet.result?.owners &&
-        filter.read().ownerId &&
-        filter.read().ownerId !== filter.selfUserId &&
-        !facet.result.owners.some((owner) => owner.id === filter.read().ownerId)
+        facet.result?.owners
       ) {
-        filter.set(null, false, { automatic: true });
+        const ownerId = filter.read().ownerId;
+        if (
+          ownerId &&
+          ownerId !== filter.selfUserId &&
+          !facet.result.owners.some((owner) => owner.id === ownerId)
+        ) {
+          filter.set(null, false, { automatic: true });
+        }
       }
     },
   );

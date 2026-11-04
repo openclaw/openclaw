@@ -1026,8 +1026,8 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
     expect(output).toContain("startup CSS gzip growth:");
     expect(output).toContain("Control UI candidate failure attribution:");
     expect(output).toContain("Control UI baseline failure attribution:");
-    expect(output.match(/Control UI module attribution \(top 30 per route\):/gu)).toHaveLength(2);
-    expect(output.match(/Module gzip sizes are non-additive/gu)).toHaveLength(2);
+    expect(output.match(/"moduleAttribution": \{/gu)).toHaveLength(2);
+    expect(output).toMatch(/"standaloneGzipBytes": \d+/u);
     expect(output).toContain("ui/main.js");
     expect(output).toContain("[control-ui-performance-base] FAILED (exit 1)");
     const identities = repo.readIdentities();
@@ -1067,7 +1067,7 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
     expect(output).toContain("startup CSS gzip growth:");
     expect(output).toContain("candidate attribution failed:");
     expect(output).toContain("Control UI baseline failure attribution:");
-    expect(output.match(/Control UI module attribution \(top 30 per route\):/gu)).toHaveLength(1);
+    expect(output.match(/"moduleAttribution": \{/gu)).toHaveLength(1);
     expect(output).toContain("[control-ui-performance-base] FAILED (exit 1)");
   });
 

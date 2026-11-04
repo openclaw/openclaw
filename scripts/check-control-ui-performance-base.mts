@@ -277,6 +277,7 @@ async function main(): Promise<void> {
               "scripts/check-control-ui-performance.mts",
               "--report-only",
               "--module-attribution",
+              "--json",
               "--dist",
               dist,
             ]);
