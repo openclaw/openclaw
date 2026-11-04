@@ -1,0 +1,2 @@
+# Regression tests for capability-gated show_widget warnings implied by canvas and group:openclaw.
+55

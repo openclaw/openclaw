@@ -194,21 +194,12 @@ describe("tool-policy-pipeline", () => {
       return { warnings, names: filtered.map((tool) => tool.name).toSorted() };
     };
 
-    test("does not warn for show_widget implied by canvas on a surface without widgets", () => {
-      expect(
-        runMessagingProfile(
-          ["group:openclaw", "canvas"],
-          [{ name: "message" }, { name: "canvas" }],
-          "canvas-family",
-        ),
-      ).toEqual({ warnings: [], names: ["canvas", "message"] });
-    });
-
-    test("does not warn for group:openclaw alone on a surface without widgets", () => {
-      expect(runMessagingProfile(["group:openclaw"], [{ name: "message" }], "group-only")).toEqual({
-        warnings: [],
-        names: ["message"],
-      });
+    test.each([
+      ["show_widget implied by canvas", ["group:openclaw", "canvas"], ["canvas", "message"]],
+      ["group:openclaw alone", ["group:openclaw"], ["message"]],
+    ])("does not warn for %s on a surface without widgets", (label, alsoAllow, names) => {
+      const tools = names.map((name) => ({ name }));
+      expect(runMessagingProfile(alsoAllow, tools, label)).toEqual({ warnings: [], names });
     });
 
     test("still warns for a literally configured show_widget", () => {
