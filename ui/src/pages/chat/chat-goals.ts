@@ -375,6 +375,30 @@ export async function submitChatGoalDraft(
   );
 }
 
+const blockedResumeNotes = new Map<string, string>();
+
+export function stageBlockedResumeNote(goalId: string, note: string): void {
+  const trimmed = note.trim();
+  if (trimmed) {
+    blockedResumeNotes.set(goalId, trimmed);
+  }
+}
+
+function blockedResumeNote(action: ChatGoalMutationAction): string | undefined {
+  if (action.action !== "resume") {
+    return undefined;
+  }
+  return action.note?.trim() || blockedResumeNotes.get(action.goalId);
+}
+
+function resumeNoteParam(action: ChatGoalMutationAction): { note?: string } {
+  const note = blockedResumeNote(action);
+  if (action.action === "resume") {
+    blockedResumeNotes.delete(action.goalId);
+  }
+  return note ? { note } : {};
+}
+
 export async function mutateChatGoal(
   host: ChatHost,
   action?: ChatGoalMutationAction,
@@ -429,6 +453,8 @@ export async function mutateChatGoal(
       ("action" in params ? params.action : "clear") !== action.action ||
       ((action.action === "edit" || action.action === "replace") &&
         (!("objective" in params) || params.objective !== action.objective)) ||
+      (action.action === "resume" &&
+        ("note" in params ? params.note : undefined) !== blockedResumeNote(action)) ||
       (action.action === "replace" &&
         (!("action" in params) ||
           params.action !== "replace" ||
@@ -437,6 +463,9 @@ export async function mutateChatGoal(
     ) {
       return rejectGoalOperation(host, t("chat.goals.outcomeUnknown"));
     }
+  }
+  if (operation && action?.action === "resume") {
+    blockedResumeNotes.delete(action.goalId);
   }
   if (!operation) {
     if (!action) {
@@ -472,7 +501,13 @@ export async function mutateChatGoal(
               }
             : action.action === "edit"
               ? { ...identity, action: "edit", objective: action.objective }
-              : { ...identity, action: action.action },
+              : action.action === "resume"
+                ? {
+                    ...identity,
+                    action: "resume",
+                    ...resumeNoteParam(action),
+                  }
+                : { ...identity, action: action.action },
       pending: false,
     };
     const validate =

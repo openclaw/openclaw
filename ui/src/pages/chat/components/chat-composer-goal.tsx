@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -14,6 +14,7 @@ import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts
 import type { ChatGoalAction, ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
+import { stageBlockedResumeNote } from "../chat-goals.ts";
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 
@@ -68,6 +69,7 @@ type GoalPresentationProps = Pick<
 
 /** Shared eligibility and callbacks; the parent supplies native write availability. */
 export function ChatGoalActions(props: GoalPresentationProps) {
+  const [resumeNote, setResumeNote] = createSignal("");
   const visibleAction = (action: (typeof goalActions)[number]) =>
     !props.resumeRecovery &&
     props.canAct &&
@@ -112,9 +114,18 @@ export function ChatGoalActions(props: GoalPresentationProps) {
                   onClick={() => {
                     if (action === "edit") {
                       props.onGoalEdit?.(props.goal);
-                    } else {
-                      props.onGoalAction?.(props.goal.id, action);
+                      return;
                     }
+                    if (action === "resume" && props.goal.status === "blocked") {
+                      const note = resumeNote().trim();
+                      if (!note) {
+                        return;
+                      }
+                      stageBlockedResumeNote(props.goal.id, note);
+                      props.onGoalAction?.(props.goal.id, action);
+                      return;
+                    }
+                    props.onGoalAction?.(props.goal.id, action);
                   }}
                 >
                   <Icon name={goalActionIcons[action]} />
@@ -125,6 +136,15 @@ export function ChatGoalActions(props: GoalPresentationProps) {
           </>
         )}
       </For>
+      <Show when={props.goal.status === "blocked" && visibleAction("resume")}>
+        <input
+          class="agent-chat__goal-resume-note"
+          type="text"
+          value={resumeNote()}
+          placeholder={t("chat.goals.resume")}
+          onInput={(event) => setResumeNote(event.currentTarget.value)}
+        />
+      </Show>
     </span>
   );
 }

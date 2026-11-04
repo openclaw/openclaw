@@ -140,6 +140,12 @@ it("disables only fresh Resume while the session is busy and preserves receipt r
   view.update({ resumeBusy: false });
   expect(resume.disabled).toBe(false);
   resume.click();
+  expect(onGoalAction).not.toHaveBeenCalled();
+  const note = view.query<HTMLInputElement>(".agent-chat__goal-resume-note")!;
+  note.value = "CI passed";
+  note.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  resume.click();
   expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(goal.id, "resume");
   view.update({ resumeBusy: true, resumeRecovery: { pending: false, onCheck } });
   view.query<HTMLButtonElement>(".agent-chat__goal-resume")!.click();
