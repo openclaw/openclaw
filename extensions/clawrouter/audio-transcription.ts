@@ -164,7 +164,9 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
       const prepared = await prepare(context);
       const senseaudio = prepared.provider === "senseaudio";
       const deepgram = prepared.provider === "deepgram";
-      if (deepgram) validateClawRouterDeepgramAudio(context);
+      if (deepgram) {
+        validateClawRouterDeepgramAudio(context);
+      }
       if (!deepgram && context.query && Object.keys(context.query).length > 0) {
         throw new Error(
           "ClawRouter transcription does not support providerOptions; use language and prompt only",
@@ -258,8 +260,9 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
           Array.isArray(candidate.model.capabilities) &&
           candidate.model.capabilities.includes("audio.transcription"),
       );
-      if (!offer)
+      if (!offer) {
         throw new Error("ClawRouter transcription has no eligible supported catalog offer");
+      }
       context.signal?.throwIfAborted();
       const fetchFn: typeof fetch = (input, init) => {
         uploadStarted = true;

@@ -65,7 +65,9 @@ export async function transcribeDeepgramPrerecordedAudio({
       }
       if (Array.isArray(value)) {
         url.searchParams.delete(key);
-        for (const item of value) url.searchParams.append(key, item);
+        for (const item of value) {
+          url.searchParams.append(key, item);
+        }
       } else {
         url.searchParams.set(key, String(value));
       }

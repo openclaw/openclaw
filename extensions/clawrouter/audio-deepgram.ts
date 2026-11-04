@@ -1,4 +1,5 @@
 import type { AudioTranscriptionRequest } from "openclaw/plugin-sdk/media-understanding";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 const booleanOptions = new Set([
   "smart_format",
@@ -30,23 +31,29 @@ const scalarOptions = new Set([
 export function validateClawRouterDeepgramAudio(
   input: Pick<AudioTranscriptionRequest, "query" | "language" | "prompt" | "mime">,
 ): void {
-  if (input.prompt?.trim())
+  if (input.prompt?.trim()) {
     throw new Error("ClawRouter Deepgram does not support transcription prompts; use keyterm");
+  }
   const mime = input.mime?.trim().toLowerCase() || "application/octet-stream";
   if (!/^audio\/[a-z0-9.+-]+$/.test(mime) && mime !== "application/octet-stream") {
     throw new Error("ClawRouter Deepgram requires native binary audio MIME");
   }
   const query = new URLSearchParams({ model: "nova-3" });
-  if (input.language?.trim()) query.set("language", input.language.trim());
+  if (input.language?.trim()) {
+    query.set("language", input.language.trim());
+  }
   for (const [name, value] of Object.entries(input.query ?? {})) {
     if (!booleanOptions.has(name) && !repeatedOptions.has(name) && !scalarOptions.has(name)) {
       throw new Error("ClawRouter Deepgram query option is outside the synchronous file contract");
     }
     if (Array.isArray(value)) {
-      if (!repeatedOptions.has(name))
+      if (!repeatedOptions.has(name)) {
         throw new Error("ClawRouter Deepgram scalar query cannot repeat");
+      }
       query.delete(name);
-      for (const item of value) query.append(name, item);
+      for (const item of value) {
+        query.append(name, item);
+      }
     } else {
       query.set(name, String(value));
     }
@@ -55,7 +62,7 @@ export function validateClawRouterDeepgramAudio(
     throw new Error("ClawRouter Deepgram query exceeds bounded native input");
   }
   for (const [name, value] of query) {
-    if (!value || value.length > 2048 || /[\u0000-\u001f\u007f]/.test(value)) {
+    if (!value || value.length > 2048 || containsAsciiControlCharacter(value)) {
       throw new Error("ClawRouter Deepgram query value is invalid");
     }
     if (booleanOptions.has(name) && value !== "true" && value !== "false") {

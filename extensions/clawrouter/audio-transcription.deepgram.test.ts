@@ -154,7 +154,7 @@ describe("ClawRouter native Deepgram file transcription", () => {
   it("redacts proxy credentials from provider errors without upload replay", async () => {
     await deepgramFixture(
       async ({ cfg, filePath, rawRequests }) => {
-        const error = await transcribeAudioFile({ cfg, filePath }).catch((error: unknown) => error);
+        const error = await transcribeAudioFile({ cfg, filePath }).catch((cause: unknown) => cause);
         expect(String(error)).toMatch(/401/);
         expect(String(error)).not.toContain("fixture-router");
         expect(rawRequests).toHaveLength(1);
