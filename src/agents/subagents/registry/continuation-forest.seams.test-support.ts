@@ -19,6 +19,7 @@ import type {
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { sleep } from "../../../utils/sleep.js";
 import type { spawnSubagentDirect } from "../spawn/subagent-spawn.js";
+import type { markContinuationRunsRetainedByReset } from "./subagent-continuation-reset-retention.js";
 
 /** What the installed world does at each seam. */
 export type ContinuationForestSeams = {
@@ -34,6 +35,8 @@ export type ContinuationForestSeams = {
   logLine?: (subsystem: string, message: string) => void;
   /** A product sleep begins; the returned callback runs when it ends. */
   clockWait?: () => () => void;
+  /** Runs a reset's retention mark pass; the load test measures it. */
+  measureMarks?: (pass: () => Promise<string[]>) => Promise<string[]>;
 };
 
 export const continuationForestSeams: ContinuationForestSeams = {};
@@ -79,6 +82,19 @@ export function logLines(actual: { createSubsystemLogger: typeof createSubsystem
           logger[level](message, meta);
         };
       return { ...logger, info: record("info"), warn: record("warn"), error: record("error") };
+    },
+  };
+}
+
+export function retentionMarks(actual: {
+  markContinuationRunsRetainedByReset: typeof markContinuationRunsRetainedByReset;
+}) {
+  return {
+    markContinuationRunsRetainedByReset: (
+      ...args: Parameters<typeof markContinuationRunsRetainedByReset>
+    ) => {
+      const pass = () => actual.markContinuationRunsRetainedByReset(...args);
+      return continuationForestSeams.measureMarks?.(pass) ?? pass();
     },
   };
 }

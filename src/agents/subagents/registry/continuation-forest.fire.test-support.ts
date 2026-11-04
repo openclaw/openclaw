@@ -57,6 +57,7 @@ export async function reportElection(
     name: election.name,
     at: Date.now(),
     intended: intendedRecipients(forest, entry),
+    boundSeq: entry.continuationFanoutMode === "all" ? ++forest.seq : 0,
   });
   const started = realNowMs();
   const result = await routeSubagentContinuationReturn({

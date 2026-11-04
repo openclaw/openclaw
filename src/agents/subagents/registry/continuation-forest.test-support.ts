@@ -135,6 +135,8 @@ export class ContinuationForest {
   t0 = 0;
   /** Gateway process generation: a restart begins the next one. */
   generation = 0;
+  /** The world's event order, for adoptions, reports and handovers that share a clock time. */
+  seq = 0;
   readonly nodes = new Map<string, AnnexNode>();
   readonly princes: AnnexNode[] = [];
   readonly rooms = new Set<string>();
@@ -678,7 +680,14 @@ export class ContinuationForest {
 
   private noteAdoption(sessionKey: string, reportId: string, head: string): void {
     const at = Date.now();
-    this.adoptions.push({ reportId, sessionKey, head, at, generation: this.generation });
+    this.adoptions.push({
+      reportId,
+      sessionKey,
+      head,
+      at,
+      generation: this.generation,
+      seq: ++this.seq,
+    });
     const key = `${reportId}\u0000${sessionKey}`;
     this.adoptionCounts.set(key, (this.adoptionCounts.get(key) ?? 0) + 1);
     const election = this.elections.get(reportId);

@@ -2,8 +2,11 @@
 // elections and the clock's units, shared by the world (continuation-forest.test-support.ts) and
 // its build, fire, trouble and oracle modules.
 
-/** Trees, generations below each prince (prince included), children per node. */
-export type AnnexShape = { trees: number; depth: number; fanOut: number };
+/**
+ * Trees, generations per tree (prince included), children per node, and how many trees' third
+ * child shouts to every room (default: every tree's; one `all` return writes a row per room).
+ */
+export type AnnexShape = { trees: number; depth: number; fanOut: number; alarmTrees?: number };
 export const DEFAULT_ANNEX_SHAPE: AnnexShape = { trees: 3, depth: 4, fanOut: 3 };
 
 /** The clock moves in steps of this size; every due time in the annex is a multiple of it. */
@@ -71,6 +74,8 @@ export type Report = {
   at: number;
   /** The rooms this report is meant for when it is made. */
   intended: string[];
+  /** When its recipient authority was bound: at election (0), or when an `all` return selects. */
+  boundSeq: number;
 };
 
 export type Adoption = {
@@ -79,12 +84,15 @@ export type Adoption = {
   head: string;
   at: number;
   generation: number;
+  /** The world's event order; clock times tie within a step. */
+  seq: number;
 };
 
 export type Handover = {
   sessionKey: string;
   at: number;
   how: "delete and recreate" | "owner change";
+  seq: number;
 };
 
 export function princeKey(tree: number): string {

@@ -99,7 +99,7 @@ export async function handOver(
   } else {
     assignSessionOwner(scope, { owner: OWNER_B, assignedBy: OWNER_A, assignedAt: Date.now() });
   }
-  forest.handovers.push({ sessionKey: node.sessionKey, at: Date.now(), how });
+  forest.handovers.push({ sessionKey: node.sessionKey, at: Date.now(), how, seq: ++forest.seq });
   await forest.settle();
 }
 

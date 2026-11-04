@@ -37,11 +37,38 @@ export async function tellStories(forest: ContinuationForest): Promise<string[]>
     rooms.add(adoption.sessionKey);
     adoptedRooms.set(adoption.reportId, rooms);
   }
+  deriveRefusalsFromHandovers(forest);
   for (const report of forest.reports.values()) {
     stories.push(...(await reportStories(forest, report, adoptedRooms.get(report.electionId))));
   }
   stories.push(...wakeStories(forest));
   return stories;
+}
+
+/**
+ * A report bound to a room's authority before the room changed hands, and not adopted by then,
+ * must be refused there: the handover advanced the epoch it carries. An `all` report bound after
+ * the handover belongs to the new occupant.
+ */
+function deriveRefusalsFromHandovers(forest: ContinuationForest): void {
+  const adoptedSeq = new Map<string, number>();
+  for (const adoption of forest.adoptions) {
+    const key = `${adoption.reportId}\u0000${adoption.sessionKey}`;
+    adoptedSeq.set(key, Math.min(adoptedSeq.get(key) ?? Infinity, adoption.seq));
+  }
+  for (const handover of forest.handovers) {
+    for (const report of forest.reports.values()) {
+      const key = `${report.electionId}\u0000${handover.sessionKey}`;
+      if (
+        report.boundSeq < handover.seq &&
+        report.intended.includes(handover.sessionKey) &&
+        (adoptedSeq.get(key) ?? Infinity) > handover.seq &&
+        !forest.expectedRefusals.has(key)
+      ) {
+        forest.expectedRefusals.set(key, "recipient-authority-changed");
+      }
+    }
+  }
 }
 
 /** Executed exactly once (attempt log), or refused or cancelled before it ever started. */

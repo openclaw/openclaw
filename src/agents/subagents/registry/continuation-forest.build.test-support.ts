@@ -74,7 +74,7 @@ export async function buildForest(forest: ContinuationForest, shape: AnnexShape)
     if (across && next !== prince && target) {
       across.routing = { kind: "out-of-tree", target };
     }
-    if (alarm) {
+    if (alarm && prince.tree < (shape.alarmTrees ?? shape.trees)) {
       alarm.routing = { kind: "all" };
     }
   }
