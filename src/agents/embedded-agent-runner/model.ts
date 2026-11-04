@@ -17,8 +17,8 @@ import {
   loadPreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.js";
-import { AuthStorage } from "../sessions/auth-storage.js";
-import { ModelRegistry } from "../sessions/model-registry.js";
+import { AuthStorage } from "../sessions/auth-storage.core.js";
+import { ModelRegistry } from "../sessions/model-registry.core.js";
 import { mergeModelMediaInput } from "./model.compat.js";
 import { resolveConfiguredProviderConfig } from "./model.configured-overrides.js";
 import { type ProviderRuntimeHooks, resolveRuntimeHooks } from "./model.provider-hooks.js";
