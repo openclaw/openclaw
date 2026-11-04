@@ -45,7 +45,9 @@ const world = vi.hoisted(() => ({
   effects: [] as string[],
   /** Run ids of the wake turns the provider ran. */
   wakeRunIds: [] as string[],
-  /** The next turn waits here, after its effect, until released. */
+  /** Turns aborted while they were held. */
+  interrupted: [] as string[],
+  /** The next turn waits here, after its effect, until released or aborted. */
   hold: undefined as { entered: () => void; released: Promise<void> } | undefined,
 }));
 // The provider is the edge: it reports the run's start, commits the turn's effect, and completes.
@@ -54,6 +56,7 @@ vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
   runEmbeddedAgent: async (params: {
     prompt: string;
     runId: string;
+    abortSignal?: AbortSignal;
     onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => unknown;
   }) => {
     await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
@@ -65,7 +68,13 @@ vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
     world.hold = undefined;
     if (hold) {
       hold.entered();
-      await hold.released;
+      const aborted = new Promise<void>((resolve) => {
+        params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      await Promise.race([hold.released, aborted]);
+      if (params.abortSignal?.aborted) {
+        world.interrupted.push(world.label(params.prompt));
+      }
     }
     return { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
   },
@@ -87,7 +96,7 @@ await prewarmConfigDrivenReplyRuntime();
 
 const FOLLOWUP_DEBOUNCE_MS = 500;
 const CLOCK_STEP_MS = 100;
-const REFUSED = "Retryable continuation skip: followup-refused";
+const REFUSED = "Retryable continuation skip: admission-refused";
 const REQUEUED = "Requeued same-session continuation wake";
 // Worker replies arrive as real macrotasks that the injected clock never advances.
 const realSetImmediate = globalThis.setImmediate;
@@ -109,11 +118,12 @@ afterEach(() => {
   vi.unstubAllEnvs();
   world.effects.length = 0;
   world.wakeRunIds.length = 0;
+  world.interrupted.length = 0;
   world.hold = undefined;
 });
 
 /** A session in `mode` whose first user turn has run, with continuation enabled. */
-async function withSession(mode: "followup" | "steer", run: () => Promise<void>) {
+async function withSession(mode: "followup" | "steer" | "interrupt", run: () => Promise<void>) {
   await withOpenClawTestState(
     { label: "wake-admission", env: { OPENCLAW_TEST_FAST: "0" } },
     async (state) => {
@@ -297,36 +307,41 @@ describe("a due continue_work wake with follow-ups pending and no active run", (
 });
 
 describe("a due continue_work wake whose session becomes active before reply admission", () => {
-  // A user turn starts between the dispatcher's busy check and the wake's admission. In steer mode
-  // the wake would be steered into that turn or queued behind it; it is refused and waits instead.
-  it("is refused, never steered or queued, and runs once after that turn", async () => {
-    await withSession("steer", async () => {
-      const recordId = await electDueWake();
-      const held = holdNextTurn();
-      let userTurnOne: ReturnType<typeof userTurn> | undefined;
-      workDispatchCustodyHooks.beforeUpdate = async (updates) => {
-        if (!userTurnOne && updates.some((u) => u.patch.stateJson?.includes('"turnStart"'))) {
-          userTurnOne = userTurn(1);
-          await held.running;
-        }
-      };
-      const dispatching = dispatchPendingContinuationWork({ sessionKey: key });
-      // Admission decides while user-1 still holds the session: the wake is requeued, or it entered
-      // the session's input queue to be steered or queued.
-      await until(
-        async () => wakeEnteredSession() || (await readWork(recordId)).phase === REQUEUED,
-      );
-      const entered = wakeEnteredSession();
-      const decided = await readWork(recordId);
-      held.release();
-      await Promise.all([userTurnOne, dispatching]);
-      expect(entered).toBe(false);
-      expect(decided).toMatchObject({ status: "queued", failureReason: REFUSED });
+  // A user turn starts between the dispatcher's busy check and the wake's admission. The wake would
+  // be steered into that turn or queued behind it (steer), or interrupt it (interrupt); it is
+  // refused and waits for that turn instead.
+  it.each(["steer", "interrupt"] as const)(
+    "in %s mode is refused, then runs once after that turn",
+    async (mode) => {
+      await withSession(mode, async () => {
+        const recordId = await electDueWake();
+        const held = holdNextTurn();
+        let userTurnOne: ReturnType<typeof userTurn> | undefined;
+        workDispatchCustodyHooks.beforeUpdate = async (updates) => {
+          if (!userTurnOne && updates.some((u) => u.patch.stateJson?.includes('"turnStart"'))) {
+            userTurnOne = userTurn(1);
+            await held.running;
+          }
+        };
+        const dispatching = dispatchPendingContinuationWork({ sessionKey: key });
+        // Admission decides while user-1 holds the session: the wake is requeued, or it entered
+        // the session's input queue (steered, queued, or run once user-1 is interrupted).
+        await until(
+          async () => wakeEnteredSession() || (await readWork(recordId)).phase === REQUEUED,
+        );
+        const entered = wakeEnteredSession();
+        const decided = await readWork(recordId);
+        held.release();
+        await Promise.allSettled([userTurnOne, dispatching]);
+        expect(world.interrupted).toEqual([]);
+        expect(entered).toBe(false);
+        expect(decided).toMatchObject({ status: "queued", failureReason: REFUSED });
 
-      await until(delivered(recordId), CLOCK_STEP_MS);
-      expect(world.effects).toEqual(["user-0", "user-1", "wake"]);
-    });
-  });
+        await until(delivered(recordId), CLOCK_STEP_MS);
+        expect(world.effects).toEqual(["user-0", "user-1", "wake"]);
+      });
+    },
+  );
 });
 
 describe("unchanged admission (controls)", () => {

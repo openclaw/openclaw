@@ -34,8 +34,8 @@ const MAX_TRANSIENT_ERROR_RETRY_COUNT = 8;
 const CONTINUATION_TURN_BUSY_REASON = "requests-in-flight";
 const CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON = "command-queue-busy";
 const CONTINUATION_TURN_DRAINING_REASON = "draining";
-// Reply admission refused the wake rather than queue it behind the session's turns (RFC §5.4.2).
-const CONTINUATION_TURN_FOLLOWUP_REFUSED_REASON = "followup-refused";
+// Reply admission found the session busy and refused the wake rather than queue it (RFC §5.4.2).
+const CONTINUATION_TURN_ADMISSION_REFUSED_REASON = "admission-refused";
 // Non-retryable: the no-op replay guard tripped. The row is
 // terminal-parked (superseded) so the self-rearm loop stops; never requeued.
 const CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON = "noop-rearm-blocked";
@@ -126,7 +126,7 @@ function isRetryableContinuationSkipReason(reason: string): boolean {
     reason === CONTINUATION_TURN_BUSY_REASON ||
     reason === CONTINUATION_TURN_DRAINING_REASON ||
     reason === CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON ||
-    reason === CONTINUATION_TURN_FOLLOWUP_REFUSED_REASON ||
+    reason === CONTINUATION_TURN_ADMISSION_REFUSED_REASON ||
     reason === CONTINUATION_TURN_LIFECYCLE_CHANGED_REASON
   );
 }
@@ -358,12 +358,12 @@ async function driveContinuationTurn(
   }
   if (admissionRefused) {
     // No run and no queued copy: the requeue clears the fence, and the wake runs once the session's
-    // queued turns have.
+    // queued and active turns have.
     return {
       status: "skipped",
       reason: signal.aborted
         ? CONTINUATION_TURN_RESET_REASON
-        : CONTINUATION_TURN_FOLLOWUP_REFUSED_REASON,
+        : CONTINUATION_TURN_ADMISSION_REFUSED_REASON,
     };
   }
   if (replyRunId && replyRunTerminalOutcome !== "completed") {
