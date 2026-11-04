@@ -26,7 +26,7 @@ const enSecretsStore = {
       "High risk: visible to admins and plaintext to Gateway-hosted agent commands. The agent can print, transmit, or persist it. Applies from the next reply.",
     hint: en.secretsStore.hint,
     required: "Enter a value.",
-    detect: "Protect sensitive names automatically",
+    detect: "Protect entries with sensitive names",
     detected: "{count} protected secrets detected",
     detectedOne: "{count} protected secret detected",
     unavailableOffline: "Reconnect to manage secrets.",

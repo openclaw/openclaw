@@ -1074,6 +1074,12 @@ declare only the covered actions, and load the updated registration. Existing
 direct-operator and interactive actions retain their admission rules. Upgrading
 the plugin does not grant additional authority to an existing job.
 
+`ChannelMessageActionContext.abortSignal` is the host-owned cancellation for the
+originating invocation. Canceling it may drop work that was never issued, such as
+a request still waiting in a rate-limit queue or retry backoff. A provider request
+already dispatched must still settle and keep its outcome, so an accepted write is
+never reported as unsent or replayed.
+
 ## Advanced topics
 
 <CardGroup cols={2}>

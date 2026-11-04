@@ -445,7 +445,7 @@ it.each(["tool", "user"] as const)("keeps stale counts independent of %s and sea
     {},
   ]);
   expect(container.querySelectorAll(".session-log-entry")).toHaveLength(role === "user" ? 1 : 0);
-  expect(text(container, ".usage-detail-error--conversation")).toContain("Showing stale data");
+  expect(text(container, ".usage-detail-error--conversation")).toContain("Showing last known data");
 });
 
 it("counts repeated assistant calls without counting toolResult results in the selected range", () => {
@@ -546,7 +546,7 @@ it("keeps loaded details visible and marks them stale after refresh failures", a
       expect(container.textContent).toContain("retained message");
       expect(container.textContent).toContain("undated message");
       expect(container.textContent).toContain(
-        locale === "en" ? "Showing stale data" : t("common.staleData"),
+        locale === "en" ? "Showing last known data" : t("common.staleData"),
       );
       const timestamps = [...container.querySelectorAll(".session-log-meta > span:nth-child(2)")];
       expect(timestamps.map((element) => element.textContent)).toEqual([

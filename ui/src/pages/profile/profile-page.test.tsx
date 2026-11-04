@@ -868,7 +868,7 @@ it.each([
   expect(access?.textContent).toContain(
     "Sessions, browsers, and tools may have additional restrictions.",
   );
-  expect(access?.textContent).toContain("Ask an admin to review your access.");
+  expect(access?.textContent).toContain("Ask your admin to review your access.");
   expect(request).not.toHaveBeenCalled();
 });
 

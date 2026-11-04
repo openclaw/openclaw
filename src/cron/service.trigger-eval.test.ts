@@ -472,6 +472,39 @@ describe("cron trigger evaluation", () => {
     expectScheduled(h, job.id, persisted?.state.nextRunAtMs);
   });
 
+  it("keeps a once trigger armed after malformed evaluator output", async () => {
+    const h = await createHarness({
+      evaluateCronTrigger: async () => ({
+        kind: "error",
+        code: "internal_error",
+        error: "cron trigger script must return an object with boolean fire",
+      }),
+    });
+    const job = await h.cron.add(watcher({ trigger: { script: "return malformed", once: true } }));
+    const dueAt = job.state.nextRunAtMs!;
+
+    await runWhenDue(h.cron, job.id);
+
+    expect(h.runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(h.cron.getJob(job.id)).toMatchObject({
+      enabled: true,
+      trigger: { once: true },
+      state: {
+        lastRunStatus: "error",
+        triggerEvalCount: 1,
+        nextRunAtMs: expect.any(Number),
+      },
+    });
+    expect(h.cron.getJob(job.id)?.state.lastTriggerFireAtMs).toBeUndefined();
+    expect(h.cron.getJob(job.id)!.state.nextRunAtMs!).toBeGreaterThan(dueAt);
+    expect(readHistory(h.storePath, job.id)).toEqual([
+      expect.objectContaining({
+        status: "error",
+        error: expect.stringContaining("must return an object with boolean fire"),
+      }),
+    ]);
+  });
+
   it("recovers the once lifecycle after a failed state edit", async () => {
     const pending = await pendingWatcher({});
     const { h, jobId } = pending;

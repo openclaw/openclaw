@@ -4,6 +4,10 @@
   "private": true,
   "description": "OpenClaw Skill Workshop plugin",
   "type": "module",
+  "dependencies": {
+    "@openclaw/gateway-protocol": "workspace:*",
+    "typebox": "1.4.3"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

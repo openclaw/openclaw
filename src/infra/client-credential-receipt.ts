@@ -104,13 +104,14 @@ export function parseClientCredentialReceipt(
   let sharedFile: ClientCredentialFileIdentity | null = null;
   if (value.sharedFile !== null) {
     const candidate = value.sharedFile;
+    // Node can expose high-bit POSIX identities as signed decimal strings.
     if (
       !isRecord(candidate) ||
       typeof candidate.path !== "string" ||
       typeof candidate.dev !== "string" ||
-      !/^\d+$/u.test(candidate.dev) ||
+      !/^-?\d+$/u.test(candidate.dev) ||
       typeof candidate.ino !== "string" ||
-      !/^\d+$/u.test(candidate.ino)
+      !/^-?\d+$/u.test(candidate.ino)
     ) {
       throw invalid();
     }

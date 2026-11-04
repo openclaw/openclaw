@@ -29,13 +29,13 @@ API calls, not exported OpenClaw functions.
 </Tip>
 
 Auth methods can return `agentRuntimeId` with `defaultModel` when sign-in belongs
-to a native harness. Model Setup applies that runtime to the selected agent's
+to a native harness. Models applies that runtime to the selected agent's
 model entry, not to global model defaults.
 
 `ProviderAuthContext.agentId` identifies the target agent when the caller has one.
 Native sign-in methods may use it to check previously remembered permissions.
 After explicit user consent, return `ProviderAuthResult.nativeRuntimeConsent`
-with the accepted harness IDs. Model Setup stages those permissions on that
+with the accepted harness IDs. Models stages those permissions on that
 agent in the same verified config commit as the runtime routing and plugin enable.
 Do not write a separate permission store or infer consent from successful login.
 
@@ -761,6 +761,12 @@ the generic response wait after one second and clears it on cancellation or
 `stop()`. It creates no timer when the caller does not observe waits. A provider
 with request-correlated evidence can call `report("slot")`. Any backend probes
 must be bounded by that request's lifetime; do not add an always-on polling loop.
+
+A native transport that runs `onPayload` itself should call
+`applyProviderPayloadHook(options, payload, model)` from
+`openclaw/plugin-sdk/provider-stream-shared`. It returns the hook's replacement, or the
+original payload when the hook returns `undefined`, and stops waiting when the request
+signal aborts, so a cancelled turn settles without dispatching the request.
 
 ## Next steps
 
