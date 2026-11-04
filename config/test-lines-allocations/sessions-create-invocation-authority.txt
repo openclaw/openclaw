@@ -1,0 +1,2 @@
+# Invocation-time write authority: already-built tools accept a live caller and reject absent/revoked authority.
+21

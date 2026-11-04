@@ -48,6 +48,26 @@ beforeEach(() => {
 });
 
 describe("sessions_create", () => {
+  it("resolves current write authority when an already-built tool is invoked", async () => {
+    const tool = createSessionsCreateTool();
+    const { authority } = issueAuthority();
+
+    await withSessionToolTestCaller(() => tool.execute("authorized-create", {}), authority);
+    expect(gateway.request).toHaveBeenCalledTimes(1);
+    expect(gateway.request.mock.calls[0]?.[0].params).toMatchObject({
+      idempotencyKey: expect.any(String),
+    });
+
+    gateway.request.mockClear();
+    const { authority: readOnly } = issueAuthority(["operator.read"]);
+    const denied = await withSessionToolTestCaller(
+      () => tool.execute("read-only-create", {}),
+      readOnly,
+    );
+    expect(denied.details).toMatchObject({ gated: true });
+    expect(gateway.request).not.toHaveBeenCalled();
+  });
+
   it("keeps the definition stable while refusing calls without session-write authority", async () => {
     const denied = [
       createSessionsCreateTool(),
@@ -60,11 +80,13 @@ describe("sessions_create", () => {
         expect(tool.name).toBe(authorized.name);
         expect(tool.description).toBe(authorized.description);
         expect(tool.parameters).toEqual(authorized.parameters);
-        const result = await tool.execute("denied", {});
-        expect(result.details).toMatchObject({ gated: true });
-        expect(JSON.stringify(result.content)).toContain("session write authority");
       }
     });
+    for (const tool of denied) {
+      const result = await tool.execute("denied", {});
+      expect(result.details).toMatchObject({ gated: true });
+      expect(JSON.stringify(result.content)).toContain("session write authority");
+    }
     expect(gateway.request).not.toHaveBeenCalled();
   });
 
@@ -73,9 +95,8 @@ describe("sessions_create", () => {
     const tool = createSessionsCreateTool({ sessionControlAuthority: authority });
     expect(tool.parameters).not.toHaveProperty("properties.action");
     expect(tool.parameters).toHaveProperty("additionalProperties", false);
-    expect(() => createSessionsCreateTool({ sessionControlAuthority: { ...authority } })).toThrow(
-      /issued by the host/i,
-    );
+    const unissued = createSessionsCreateTool({ sessionControlAuthority: { ...authority } });
+    await expect(unissued.execute("unissued", {})).rejects.toThrow(/issued by the host/i);
     await withSessionToolTestCaller(async () => {
       revoke();
       await expect(tool.execute("revoked", {})).rejects.toThrow("creation source revoked");
