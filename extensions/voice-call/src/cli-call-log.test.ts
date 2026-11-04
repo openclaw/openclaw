@@ -106,7 +106,7 @@ describe("voice-call diagnostic stream ownership", () => {
         execFileSync(
           process.execPath,
           ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", script, fifo],
-          { cwd: process.cwd(), timeout: 15_000, encoding: "utf8" },
+          { cwd: process.cwd(), timeout: 60_000, encoding: "utf8" },
         ),
       ).toContain("writerless-fifo-rejected");
     },

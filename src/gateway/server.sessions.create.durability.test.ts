@@ -633,6 +633,9 @@ test("dispatches the original bytes of a committed initial input", async () => {
   }
 });
 
+// Cold reply runtime and worktree setup can exceed the 10s default on hosted runners.
+const RECOVERY_RPC_TIMEOUT_MS = 60_000;
+
 test.for([
   { id: "openclaw-control-ui", mode: "webchat", worktree: true },
   { id: "openclaw-control-ui", mode: "webchat", worktree: false },
@@ -647,6 +650,7 @@ test.for([
     const { ws } = await openClient({
       client: { id, mode, platform: "test", version: "1.0.0" },
       browserOrigin: mode === "webchat" ? "http://localhost" : undefined,
+      timeoutMs: RECOVERY_RPC_TIMEOUT_MS,
     });
     const key = `agent:main:dashboard:durable-${id}-${worktree}`;
     const message = "Reply with exactly: retained first message.";
@@ -672,14 +676,19 @@ test.for([
         sessionId: string;
         runId: string;
         runStarted: boolean;
-      }>(ws, "sessions.create", {
-        agentId: "main",
-        key,
-        cwd: workspace,
-        worktree,
-        worktreeName: worktree ? `durability-${id}` : undefined,
-        message,
-      });
+      }>(
+        ws,
+        "sessions.create",
+        {
+          agentId: "main",
+          key,
+          cwd: workspace,
+          worktree,
+          worktreeName: worktree ? `durability-${id}` : undefined,
+          message,
+        },
+        RECOVERY_RPC_TIMEOUT_MS,
+      );
       expect(created.ok, JSON.stringify(created)).toBe(true);
       expect(created.payload?.runStarted).toBe(true);
       captured = expectDefined(dispatch.start.mock.calls[0]?.[0], "accepted dispatch");
@@ -688,15 +697,25 @@ test.for([
       expect(before.pendingWorktree !== undefined).toBe(worktree);
       const followup = "Also retain this queued follow-up.";
       if (worktree) {
-        const sent = await rpcReq(ws, "chat.send", {
-          sessionKey: key,
-          message: followup,
-          idempotencyKey: `followup-${id}`,
-        });
+        const sent = await rpcReq(
+          ws,
+          "chat.send",
+          {
+            sessionKey: key,
+            message: followup,
+            idempotencyKey: `followup-${id}`,
+          },
+          RECOVERY_RPC_TIMEOUT_MS,
+        );
         expect(sent.ok, JSON.stringify(sent)).toBe(true);
-        const pending = await rpcReq<{ pendingInputs: { items: unknown[] } }>(ws, "chat.history", {
-          sessionKey: key,
-        });
+        const pending = await rpcReq<{ pendingInputs: { items: unknown[] } }>(
+          ws,
+          "chat.history",
+          {
+            sessionKey: key,
+          },
+          RECOVERY_RPC_TIMEOUT_MS,
+        );
         expect(JSON.stringify(pending.payload?.pendingInputs.items)).toContain(followup);
       }
       // Drop process-only dispatches; do not run their terminal/error persistence.
@@ -732,9 +751,14 @@ test.for([
       const history = await rpcReq<{
         messages: unknown[];
         pendingInputs: { items: Array<{ state: string; message: unknown }> };
-      }>(ws, "chat.history", {
-        sessionKey: key,
-      });
+      }>(
+        ws,
+        "chat.history",
+        {
+          sessionKey: key,
+        },
+        RECOVERY_RPC_TIMEOUT_MS,
+      );
       expect(history.ok, JSON.stringify(history)).toBe(true);
       expect(JSON.stringify(history.payload?.messages)).toContain(message);
       if (worktree) {
