@@ -220,12 +220,11 @@ suite.define(() => {
               ).toEqual([true, true]);
             }
             await action.press("Enter");
-            const preview = page
-              .locator(".chat-reply-preview")
-              .filter({ has: page.getByRole("button", { name: "Cancel reply" }) });
-            await expect
-              .poll(() => preview.locator(".chat-reply-preview__text").textContent())
-              .toBe(content);
+            const preview = page.locator(".chat-reply-preview:has(.chat-reply-preview__dismiss)");
+            const strip = preview.locator(
+              ".chat-reply-attribution__name, .chat-reply-preview__text",
+            );
+            await expect.poll(() => strip.allTextContents()).toEqual(["Jordan Lee", content]);
             await preview.getByRole("button", { name: "Cancel reply" }).click();
             await action.evaluate((button) => button.blur());
             await page.mouse.move(0, 0);

@@ -11,7 +11,6 @@ import type {
   LearnSubcommand,
 } from "../../plugins/registry-contribution-types.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime.js";
-import { workshopLearnContribution } from "../../skills/workshop/learn-contribution.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import {
   commandReply,
@@ -29,7 +28,7 @@ import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js"
 const DEFAULT_LEARN_REQUEST = "Save the reusable workflow from what we just did as a skill.";
 const DEFAULT_MEMORY_LEARN_REQUEST = "Learn what is worth keeping from what we just did.";
 
-/** One contribution with the plugin that registered it; core Skill Workshop has none. */
+/** One contribution with the plugin that registered it. */
 type LearnContributor = { pluginId?: string; contribution: LearnContribution };
 
 /** A contributor that can learn on this turn, with the tools policy leaves it. */
@@ -38,12 +37,11 @@ type ActiveLearnContributor = LearnContributor & { availableTools: Set<string> }
 // Fixed medium order keeps the /learn prompt bytes stable across registration order.
 const MEDIUM_ORDER: readonly LearnMedium[] = ["skills", "memory"];
 
-/** Core Skill Workshop, then plugin contributions, sorted by medium and then plugin id. */
+/** Plugin contributions, sorted by medium and then plugin id. */
 function listLearnContributors(): LearnContributor[] {
   const registered: readonly LearnContributor[] =
     getPluginRegistryForContext()?.learnContributions ?? [];
-  const core: LearnContributor = { contribution: workshopLearnContribution };
-  return [core, ...registered].toSorted(
+  return [...registered].toSorted(
     (left, right) =>
       MEDIUM_ORDER.indexOf(left.contribution.medium) -
         MEDIUM_ORDER.indexOf(right.contribution.medium) ||

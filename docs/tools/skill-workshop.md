@@ -388,7 +388,7 @@ files you need from them by hand; OpenClaw does not restore them.
 | A skill was archived unexpectedly  | Unused-skill cleanup archives skills with no activity for 30 days. Run `openclaw skills workshop restore <name>`.                                                                                                                               |
 | A skill was split into references  | The daily [skill diet](#skill-diet) shrank it. Run `openclaw skills workshop restore <name>` to undo.                                                                                                                                           |
 
-In `auto` and `propose` modes, `openclaw doctor` runs the `core/doctor/skill-workshop-tool-policy`
+In `auto` and `propose` modes, `openclaw doctor` runs the `skill-workshop/tool-policy`
 check for each agent. It names the sandbox setting or the config layer that
 hides `skill_workshop` and the exact `allow` or `alsoAllow` change to make.
 

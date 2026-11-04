@@ -83,6 +83,41 @@ it("tracks aliases of synchronous transaction imports", () => {
       `).toEqual([asyncCallback(3, "runSqliteImmediateTransactionSync")]);
 });
 
+it("rejects async actor callbacks through aliases and local references", () => {
+  check(`
+        import { withSessionActorTransactionState as inActor } from "./session-actor-transaction.js";
+        async function mutate() {}
+        inActor(database, state, mutate);
+        withSessionActorTransactionState(database, state, async () => undefined);
+        withSqliteDatabaseWriteScope(database, keys, mutate);
+        inActor(database, state, () => 42);
+      `).toEqual([
+    asyncCallback(4, "withSessionActorTransactionState"),
+    asyncCallback(5, "withSessionActorTransactionState"),
+    asyncCallback(6, "withSqliteDatabaseWriteScope"),
+  ]);
+});
+
+it("rejects async commit hooks without forbidding async preparation or unrelated hooks", () => {
+  check(`
+        import { runSqliteImmediateTransactionSync as transact } from "./sqlite-transaction.js";
+        async function commitLater() {}
+        transact(db, () => 42, { ...options, async withCommit(commit) { commit(); } });
+        runPostgresTransactionSync(db, () => 42, { withCommit: commitLater });
+        runSqliteImmediateTransaction(db, async () => () => 42, { withCommit: async (commit) => commit() });
+        const withCommit = async () => undefined;
+        transact(db, () => 42, { withCommit });
+        transact(db, () => 42, { "withCommit": async function (commit) { commit(); } });
+        transact(db, () => 42, { ...options, withCommit(commit) { commit(); } });
+        createSession({ withCommit: async (commit) => await commit() });
+      `).toEqual(
+    [4, 5, 6, 8, 9].map((line) => ({
+      line,
+      reason: "passes an async commit hook to synchronous SQLite transaction helper",
+    })),
+  );
+});
+
 it("allows asynchronous preparation followed by a synchronous commit callback", () => {
   check(`
         const prepared = await prepareMutation();
