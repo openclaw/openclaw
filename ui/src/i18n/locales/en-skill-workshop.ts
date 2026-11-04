@@ -13,6 +13,9 @@ const enSkillWorkshop = {
       needsAdmin: "An admin can turn it on from Plugins.",
       missing: "Skill Workshop is not part of this OpenClaw install.",
       failed: "Skill Workshop is turned on but did not load. Check Plugins for details.",
+      reload: "Skill Workshop is on. Reload to open it.",
+      enableFailed: "Couldn’t turn on Skill Workshop. Try again.",
+      checkFailed: "Couldn’t check whether Skill Workshop is on.",
     },
     retry: "Retry",
     mode: {

@@ -20,7 +20,7 @@ import type { AdmittedRunContext } from "../admitted-run-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { resolveCliSessionReuse } from "../cli-session.js";
-import type { AgentRunExecutionContext } from "../command/shared-types.js";
+import type { AgentRunExecutionContext } from "../command/execution-context.types.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type { RunEmbeddedAgentParams } from "../embedded-agent-runner/run/params.js";
