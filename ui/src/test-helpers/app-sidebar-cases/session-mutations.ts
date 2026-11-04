@@ -3,8 +3,9 @@ import type { ControlUiAction } from "../../../../src/plugin-sdk/control-ui.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import "../../lib/toast-host.tsx";
 import { publishSidebarSessionList } from "../../components/session-data-events.ts";
+import "../../lib/toast-host.tsx";
+import { i18n } from "../../i18n/lib/translate.ts";
 import {
   pauseSessionPlacementRecovery,
   readSessionPlacementRecovery,
@@ -161,7 +162,9 @@ describe("AppSidebar session mutation feedback", () => {
     publish([{ ...current, hasActiveRun: true }]);
     await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
     expect(run.mock.calls.length).toBe(1);
-    await waitForFast(() => expect(toast.textContent).toContain("Reopen the session menu."));
+    await waitForFast(() =>
+      expect(toast.textContent).toContain(i18n.t("pluginUi.actionUnavailableSession")),
+    );
   });
 
   it("does not invoke a plugin for a removed or replaced menu session", async () => {
@@ -176,7 +179,9 @@ describe("AppSidebar session mutation feedback", () => {
       publish(rows);
       await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
       expect(run.mock.calls.length).toBe(0);
-      await waitForFast(() => expect(toast.textContent).toContain("Reopen the session menu."));
+      await waitForFast(() =>
+        expect(toast.textContent).toContain(i18n.t("pluginUi.actionSessionUnavailable")),
+      );
       toast.remove();
     }
 

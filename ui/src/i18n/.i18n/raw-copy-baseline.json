@@ -285,13 +285,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-stream-view.tsx",
-      "text": "Assistant"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/chat/components/chat-message-timestamp-view.tsx",
       "text": "% ctx"
     },
@@ -413,20 +406,6 @@
       "name": "text",
       "path": "ui/src/pages/plugins/consent-dialog.tsx",
       "text": "v"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/plugins/overview.tsx",
-      "text": "Clean"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/plugins/overview.tsx",
-      "text": "Review"
     },
     {
       "count": 1,

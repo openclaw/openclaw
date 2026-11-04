@@ -776,7 +776,7 @@ describe("ModelProvidersPage agent scope", () => {
     await toast.updateComplete;
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
-      expect(toast.querySelector('[role="status"]')?.textContent).toContain(
+      expect(toast.querySelector('[role="alert"]')?.textContent).toContain(
         "Priority could not be saved",
       ),
     );
