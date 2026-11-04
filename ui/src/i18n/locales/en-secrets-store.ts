@@ -42,7 +42,7 @@ const enSecretsStore = {
       "Saved {count} entries ({protected} protected, {readable} agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next reply.",
     warnings: "{count} runtime warnings.",
     partial: "Saved {saved} of {total} entries.",
-    partialFailure: "Couldn’t save the rest. Try again. {error}",
+    partialFailure: "Couldn’t finish the import. Reload the list to check what was saved.\n{error}",
     confirmDelete: "Delete {name}?",
     confirmDeleteMessage: "The stored value can’t be recovered.",
     deleted: "Deleted {name}.",
