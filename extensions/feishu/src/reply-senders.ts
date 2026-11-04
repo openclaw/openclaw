@@ -60,11 +60,15 @@ function shownPrefix(prose: string, shown = ""): string {
 
 /**
  * The leading part of `text` that `sent` covers when the sender cut it into chunks, or "" when
- * the sent form was converted. A cut drops the whitespace it falls on, so that is skipped.
+ * the sent form was converted. A cut drops the whitespace it falls on, and the post writes a soft
+ * line break as two spaces and a newline, so whitespace is skipped on both sides.
  */
 function coveredPrefix(text: string, sent = ""): string {
   let at = 0;
   for (const char of sent) {
+    if (/\s/u.test(char)) {
+      continue;
+    }
     while (!text.startsWith(char, at) && /\s/u.test(text[at] ?? "")) {
       at += 1;
     }
@@ -394,6 +398,10 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
               if (sent && covered) {
                 entry[0] = covered;
                 entry[1] = Promise.resolve(sent);
+              } else {
+                // An entry that owns no prefix would rethrow this rejection on every later walk.
+                // Without it the next walk sends the remainder again, with any converted chunk.
+                matchingBlocks.splice(matchingBlocks.indexOf(entry), 1);
               }
               throw error;
             }
