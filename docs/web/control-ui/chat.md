@@ -525,7 +525,7 @@ The Labs model selector offers:
 
 - **Utility model** (default): use the agent's configured utility model. A fast,
   inexpensive model is usually the best fit for this short, optional task.
-- **Conversation model**: use the model selected for this conversation.
+- **Session model**: use the model selected for this session.
 - **Default model**: use the agent's configured default model, ignoring the
   conversation's model override.
 

@@ -1194,7 +1194,7 @@ const startupEnglish = {
   },
   labsPage: {
     sectionDescription:
-      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future agent runs.",
+      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future replies.",
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
