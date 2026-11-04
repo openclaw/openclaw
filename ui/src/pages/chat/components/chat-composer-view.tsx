@@ -662,6 +662,7 @@ export function renderChatComposerView(
               <div class="agent-chat__composer-trail">
                 <div class="agent-chat__composer-meta agent-chat__composer-context">
                   <ContextNotice
+                    contextUsage={props.contextUsage}
                     session={props.selectedSession}
                     messages={props.messages}
                     providerUsage={props.providerUsage}

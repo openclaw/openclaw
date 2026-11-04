@@ -47,6 +47,7 @@ import {
 } from "./doctor-migration-backup-artifacts.js";
 import { useDoctorSessionSqliteTestFixture } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
+import { cleanupCompletedUpdateRecovery } from "./update-automatic-cleanup.js";
 import { createMissingConfigRecoveryManifest } from "./update-recovery-manifest.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -402,6 +403,46 @@ it("allows its current Gateway owner to mutate a recovery destination during ret
     expect(database.prepare("SELECT value FROM live_gateway_write").get()).toEqual({
       value: "current owner",
     });
+  } finally {
+    owner.release();
+  }
+});
+
+it("keeps retiring when its current Gateway owner writes during a destination check", async () => {
+  const fixture = await recoveryFixture();
+  const originals = fixture.target.completedMoves
+    .filter((move) => move.artifact?.classification !== "protected")
+    .map((move) => move.archivePath);
+  const { runId } = capturedRun(now, "succeeded");
+  await closeOpenClawStateDatabaseAsync();
+  const owner = acquireGatewayStateOwner({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    payload: {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: env.OPENCLAW_CONFIG_PATH!,
+      role: "gateway",
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+  });
+  // The live Gateway commits between the destination stat and anything read after it.
+  const lstat = fs.lstatSync;
+  let writes = 0;
+  vi.spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: fs.StatOptions) => {
+    const stat = lstat(file, options);
+    if (file === fixture.target.sqlitePath && options?.bigint) {
+      using database = new DatabaseSync(fixture.target.sqlitePath);
+      database.exec(`CREATE TABLE live_gateway_write_${++writes}(value TEXT)`);
+    }
+    return stat;
+  }) as typeof fs.lstatSync);
+  try {
+    const result = await cleanupCompletedUpdateRecovery(runId, env, () => {});
+    expect(writes).toBeGreaterThan(1);
+    expect(result?.advisory).toBeUndefined();
+    for (const file of originals) {
+      expect(fs.existsSync(file), file).toBe(false);
+    }
   } finally {
     owner.release();
   }

@@ -88,7 +88,7 @@ function isStreamingStartBackedOff(accountId: string): boolean {
   if (backoffUntil === undefined) {
     return false;
   }
-  if (backoffUntil <= Date.now()) {
+  if (backoffUntil <= performance.now()) {
     streamingStartBackoffUntilByAccount.delete(accountId);
     return false;
   }
@@ -384,7 +384,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       } catch (error) {
         streamingStartBackoffUntilByAccount.set(
           account.accountId,
-          Date.now() + STREAMING_START_FAILURE_BACKOFF_MS,
+          performance.now() + STREAMING_START_FAILURE_BACKOFF_MS,
         );
         params.runtime.error(
           `feishu[${account.accountId}]: streaming start failed; using non-streaming card fallback for ${
@@ -1198,7 +1198,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         // Later finals replace stream text. Each presentation fallback owns a
         // separate message; ordinary blocks retain their streaming policy.
         if (hasPresentationFallback || (info?.kind === "block" && !useStreamingCard)) {
-          if (hasPresentationFallback || coreBlockStreamingEnabled) {
+          if (hasPresentationFallback || coreBlockStreamingEnabled || hasMedia) {
             const firstChunkMentions =
               info?.kind === "final" || (info?.kind === "block" && !sentIndependentBlockText)
                 ? mentionTargets

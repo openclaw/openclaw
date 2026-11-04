@@ -22,6 +22,7 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
+import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
 import { applyStagedWorkerWorkspace } from "./workspace-reconcile-apply.js";
 import {
   gitInit,
@@ -124,7 +125,7 @@ describe("worker placement restart recovery", () => {
             stagingRoot: workerPath,
             baseManifestRef,
             currentManifestRef: `sha256:${createHash("sha256").update(JSON.stringify(current)).digest("hex")}`,
-            base,
+            reconciliation: prepareWorkspaceReconciliation(base, current),
             current,
             journal: source.journal,
             assertCurrent: source.assertCurrent,

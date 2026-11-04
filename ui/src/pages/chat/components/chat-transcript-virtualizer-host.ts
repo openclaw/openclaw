@@ -753,7 +753,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     if (!this.initialRange.measuring || !this.rowKeys.length || !this.scrollElement?.clientHeight) {
       return;
     }
-    const measured = this.presentation.measureRows();
+    const [measured, applyRail] = this.presentation.measureInitialRows(this.messageElements);
     if ((this.initialRange.pending && this.initialRange.extend(this.scrollElement)) || measured) {
       this.invalidate();
       return;
@@ -772,6 +772,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.offsetState.syncNativeOffset?.();
     }
     if (isTranscriptRangeCommitted(this.threadInnerElement, this.virtualizer)) {
+      applyRail?.();
       this.initialRange.complete();
       this.renderer.syncInitialPosition();
     }

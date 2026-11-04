@@ -24,6 +24,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { constants as osConstants, homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -56,6 +57,7 @@ const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const artifactTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const dependencyTempDirs = useAutoCleanupTempDirTracker(afterAll);
 const repoRoot = process.cwd();
+const require = createRequire(import.meta.url);
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
 const bundledOutputPaths = new Set<string>();
@@ -358,7 +360,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         "  printf '%s\\000\\000' \"$PWD\"",
         "  exit 0",
         "fi",
-        `exec node ${shellQuote(nodePath)} "$@"`,
+        `exec ${shellQuote(nodePath)} "$@"`,
       ].join("\n"),
     );
   }
@@ -467,12 +469,14 @@ function resolvePinnedFixturePnpm(cwd: string, nodeExecPath: string, pnpmArgs: s
 }
 
 function writeNodeCommand(commandPath: string, script: string): void {
-  writeFileSync(commandPath, `#!/usr/bin/env node\n${script.trimStart()}\n`, "utf8");
+  const sourcePath = `${commandPath}.cjs`;
+  writeFileSync(sourcePath, `${script.trimStart()}\n`, "utf8");
   if (process.platform === "win32") {
-    const shim = windowsNodeCmdShim(path.basename(commandPath));
+    const shim = windowsNodeCmdShim(path.basename(sourcePath));
     writeFileSync(`${commandPath}.cmd`, shim, "utf8");
+  } else {
+    writeShellCommand(commandPath, `exec node ${shellQuote(sourcePath)} "$@"`);
   }
-  chmodSync(commandPath, 0o755);
 }
 
 function makeFakeGit(
@@ -529,10 +533,7 @@ process.exit(response.status ?? 0);`;
       ].join("\n");
     });
     writeNodeCommand(nodePath, script);
-    writeShellCommand(
-      gitPath,
-      `${responseCases.join("\n")}\nexec node ${shellQuote(nodePath)} "$@"`,
-    );
+    writeShellCommand(gitPath, `${responseCases.join("\n")}\nexec ${shellQuote(nodePath)} "$@"`);
   }
   fakeGitBinDirs.set(key, binDir);
   return binDir;
@@ -1801,6 +1802,16 @@ describe("scripts/crabbox-wrapper", () => {
       target: "node22",
       plugins: [
         {
+          name: "fs-safe-source-owner",
+          setup(builder) {
+            // Relocated fixtures keep the parser beside its package-owned WASM asset.
+            builder.onResolve({ filter: /^@openclaw\/fs-safe(?:\/|$)/ }, (args) => ({
+              path: pathToFileURL(require.resolve(args.path)).href,
+              external: true,
+            }));
+          },
+        },
+        {
           name: "canonical-state-schemas",
           setup(builder) {
             // Relocated fixtures need the same embedded SQL as production bundles.
@@ -1908,11 +1919,11 @@ describe("scripts/crabbox-wrapper", () => {
       mkdirSync(path.dirname(candidate));
       writeShellCommand(
         candidate,
-        `OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG=${shellQuote(candidateLog)} exec node ${shellQuote(fake)} "$@"`,
+        `OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG=${shellQuote(candidateLog)} exec ${shellQuote(fake)} "$@"`,
       );
       writeShellCommand(
         managed,
-        `unset OPENCLAW_FAKE_CRABBOX_VERSION\nexec node ${shellQuote(fake)} "$@"`,
+        `unset OPENCLAW_FAKE_CRABBOX_VERSION\nexec ${shellQuote(fake)} "$@"`,
       );
       const log = makeInvocationLog();
       const options = {
@@ -3920,11 +3931,26 @@ esac
     expect(parseFakeCrabboxOutput(result).args).toContain("aws");
   });
 
-  it.each([false, true])("requires advertised Tensorlake support for aliases: %s", (advertised) => {
-    const providers = parseProvidersFromHelp(`provider: aws${advertised ? ", tensorlake" : ""}\n`);
-    for (const provider of ["tensorlake", "tl", "tensorlake-sbx"]) {
-      expect(isProviderAdvertised(provider, providers), provider).toBe(advertised);
+  it.each([
+    { canonical: "tensorlake", aliases: ["tensorlake", "tl", "tensorlake-sbx"] },
+    { canonical: "ascii-box", aliases: ["ascii-box", "ascii", "asciibox", "boat"] },
+  ])("requires advertised $canonical support for aliases", ({ canonical, aliases }) => {
+    for (const advertised of [false, true]) {
+      const providers = parseProvidersFromHelp(
+        `provider: aws${advertised ? `, ${canonical}` : ""}\n`,
+      );
+      for (const provider of aliases) {
+        expect(isProviderAdvertised(provider, providers), provider).toBe(advertised);
+      }
     }
+  });
+
+  it("passes an advertised Boat alias to Crabbox unchanged", () => {
+    const args = runArgs("boat", "--", "echo ok");
+    const result = runWrapper("provider: ascii-box\n", args);
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual(args);
   });
 
   it.each([

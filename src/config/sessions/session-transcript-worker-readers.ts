@@ -14,6 +14,7 @@ import type {
   SessionStoreTargetReadResult,
   SessionStoreTargetInventoryRequest,
 } from "./session-store-target-inventory.js";
+import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
@@ -314,6 +315,7 @@ const readers: Readers & ThisType<ReaderContext> = {
     return this.runRequest(prepare, inputBytes, (value) => value);
   },
   async readTranscript(input, signal) {
+    const caller = input.caller ?? getSessionTranscriptHydrationCaller();
     const events: TranscriptEvent[] = [];
     const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
     const eventSeqs: number[] | undefined = input.includeEventJson ? [] : undefined;
@@ -341,7 +343,7 @@ const readers: Readers & ThisType<ReaderContext> = {
       }
     };
     return await this.runRequest(
-      () => ({ kind: "transcript-hydration", ...input }),
+      () => ({ kind: "transcript-hydration", ...input, caller }),
       JSON.stringify(input).length * 2,
       (value) => {
         if (value.kind === "bounded") {

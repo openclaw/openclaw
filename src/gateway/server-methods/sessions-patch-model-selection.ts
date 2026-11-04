@@ -13,7 +13,7 @@ import {
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessSessionExecutionRestriction } from "../../agents/harness/execution-environment.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
   getModelRefStatus,

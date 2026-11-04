@@ -228,16 +228,16 @@ it.each([
 
 it("reuses group context until its five-minute TTL expires", async () => {
   const { api, getGroupInfo } = groupApi("group-ttl", "Group");
-  const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  const now = vi.spyOn(performance, "now").mockReturnValue(0);
 
   await withStoredSession("cache-ttl", api, async () => {
     await expect(resolveZaloGroupContext("cache-ttl", "group-ttl")).resolves.toMatchObject({
       name: "Group",
     });
-    now.mockReturnValue(1_700_000_299_999);
+    now.mockReturnValue(299_999);
     await resolveZaloGroupContext("cache-ttl", "group-ttl");
     expect(getGroupInfo).toHaveBeenCalledOnce();
-    now.mockReturnValue(1_700_000_300_000);
+    now.mockReturnValue(300_000);
     await resolveZaloGroupContext("cache-ttl", "group-ttl");
   });
 

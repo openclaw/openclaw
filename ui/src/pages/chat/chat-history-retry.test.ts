@@ -167,7 +167,7 @@ describe("shared chat history transient recovery", () => {
         phase: "failed",
         retryable: true,
         startup,
-        message: expect.stringContaining("timed out"),
+        message: expect.stringContaining("in time"),
       });
       expect(isChatHistoryRetrying(state)).toBe(false);
       expect(state).toMatchObject({
@@ -303,9 +303,9 @@ describe("shared chat history transient recovery", () => {
       .catch((error: unknown) => error)
       .finally(secondSettled);
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(await first).toMatchObject({ message: expect.stringContaining("timed out") });
+    expect(await first).toMatchObject({ message: expect.stringContaining("in time") });
     expect(request).toHaveBeenCalledTimes(1);
     expect(secondSettled).toHaveBeenCalledOnce();
-    expect(await second).toMatchObject({ message: expect.stringContaining("timed out") });
+    expect(await second).toMatchObject({ message: expect.stringContaining("in time") });
   });
 });

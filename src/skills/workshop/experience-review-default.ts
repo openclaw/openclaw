@@ -102,7 +102,7 @@ export function scheduleDailyWorkshopMaintenance(config: OpenClawConfig, agentId
   void runWithGatewayDetachedWorkContinuation(async () => {
     // Maintenance loads the library and runtime policy; most turns never need them.
     const { isSkillWorkshopDeniedForAgent } = await import("./tool-policy-diagnostic.js");
-    if (isSkillWorkshopDeniedForAgent(config, agentId)) {
+    if (await isSkillWorkshopDeniedForAgent(config, agentId)) {
       return;
     }
     const { archiveUnusedWorkshopSkills } = await import("./unused-archive.js");
