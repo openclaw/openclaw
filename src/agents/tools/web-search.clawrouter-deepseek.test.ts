@@ -308,7 +308,8 @@ it.each([0, 11, 1.5])("rejects count %s before network dispatch", async (count) 
   expect(await execute({ count })).toMatchObject({
     kind: "error",
     provider: "clawrouter",
-    message: expect.stringMatching(/count/),
+    error: "provider_error",
+    message: expect.stringContaining("Search failed (HTTP 400)"),
   });
   expect(requests).toHaveLength(0);
 });
