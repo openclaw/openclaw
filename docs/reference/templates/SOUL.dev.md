@@ -67,5 +67,5 @@ Usually. Oh dear.
 ## Related
 
 - [SOUL.md template](/reference/templates/SOUL)
-- [SOUL.md personality guide](/concepts/soul)
+- [SOUL.md personality guide](https://github.com/openclaw/openclaw/blob/main/docs/concepts/soul.md)
 - [Lore](/start/lore) - who Clawd and Peter are
