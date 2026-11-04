@@ -157,9 +157,33 @@ produce an explicit fallback. Different shard membership can still prevent a
 match; graph-input comparability alone does not relax the selector.
 
 The frozen decision records prior provenance, changed paths, graph candidates
-and the unchanged scheduled inventory. Model rankings remain a separate layer.
+and the unchanged scheduled inventory.
 These are prospective proposals, not measured omission savings. Include restore,
 download, comparison and export costs in the eventual net-benefit calculation.
+
+### Owned model rankings
+
+When a compatible prior is available, the same inventory callback records raw
+CART scores in `decision.ranking`. The source-controlled model in
+`scripts/ci-adaptive-model.json` uses five structural features: basename match,
+path-token overlap, same directory, observed dependency membership and the
+logarithm of changed-path count. Recorded dependencies describe membership,
+not direct edges or graph distance. Current outcomes and durations never enter
+these features. Missing dependency evidence remains unknown for a model that
+uses it; invalid or unavailable models produce null scores with reasons.
+
+The record includes hashes of the actual model bytes, extractor source and
+scoring inputs, along with elapsed scoring time. Rows preserve the full native
+inventory and its order, including project and pool identity. There is no score
+threshold, network request, provider token use or change to test execution.
+
+The initial tiny tree was trained on 120 rows from controlled source mutations,
+with separate owner groups reserved for evaluation. Its manifest records the
+corpus and row hashes. The 64-row held-out result had ranking AUC 0.98276, but
+its predictions coincided with dependency membership on that narrow corpus.
+These class-balanced leaf scores are not calibrated failure probabilities or
+evidence of improved selection over the graph. Natural regression coverage and
+net CI savings still require full-run comparisons.
 
 The first readout compares usable-data coverage, native-Bun gaps, observed
 failures, fallback causes, and paired total job costs. Learned selection and
