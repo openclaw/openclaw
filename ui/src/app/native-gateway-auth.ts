@@ -48,9 +48,12 @@ type NativeAuthHost = Window & {
   };
 };
 
-function readNativeCredential(value: Record<string, unknown>): NativeGatewayAuthorization["auth"] {
+function readNativeCredential(value: unknown): NativeGatewayAuthorization["auth"] {
   // Preserve the accepted native method. In particular, role-configured Gateways
   // distinguish shared-owner token/password auth from device-token authentication.
+  if (!isRecord(value)) {
+    throw new Error("The app returned an invalid Gateway credential. Reconnect in the app.");
+  }
   const keys = Object.keys(value);
   // Ingress-authenticated sessions sign device proof without a reusable Gateway credential.
   if (keys.length === 0) {
@@ -66,6 +69,8 @@ function readNativeCredential(value: Record<string, unknown>): NativeGatewayAuth
           return { token: credential };
         case "password":
           return { password: credential };
+        default:
+          break;
       }
     }
   }
@@ -88,7 +93,6 @@ function readAuthorization(
     !mode ||
     typeof client.version !== "string" ||
     typeof client.platform !== "string" ||
-    !isRecord(result.auth) ||
     !isStringArray(result.scopes) ||
     typeof device.id !== "string" ||
     typeof device.publicKey !== "string" ||
