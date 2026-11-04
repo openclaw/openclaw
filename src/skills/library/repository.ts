@@ -117,7 +117,10 @@ async function fetchPublicGitHubBytes(
 export async function withSkillRepository<T>(
   url: string,
   assertCurrent: () => void,
-  onDirectory: (directory: string) => Promise<T>,
+  onDirectory: (
+    directory: string,
+    repository: { url: string; ref: string; commit: string },
+  ) => Promise<T>,
 ): Promise<T> {
   const source = parseSkillRepositoryUrl(url);
   const repository = `${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`;
@@ -191,7 +194,11 @@ export async function withSkillRepository<T>(
           "The selected GitHub directory does not contain SKILL.md. Choose the exact skill directory or its SKILL.md file.",
         );
       }
-      return onDirectory(directory);
+      return onDirectory(directory, {
+        url: `https://github.com/${repository}`,
+        ref: source.ref,
+        commit,
+      });
     },
   );
 }

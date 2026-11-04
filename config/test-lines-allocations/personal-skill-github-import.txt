@@ -1,0 +1,4 @@
+# Personal skill GitHub import: protocol/source parsing, bounded archive and UI import flow,
+# plus real save-owner install policy/provenance and live profile-revocation regressions.
+# Replaces the callback-only revocation test; excludes the inherited 62-line budget debt.
+613

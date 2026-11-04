@@ -31,6 +31,7 @@ async function publishDirectory(
   directory: string,
   options: OpenClawStateDatabaseOptions,
   uploadId?: string,
+  installSource?: Parameters<typeof saveSkillLibrary>[4],
 ) {
   const files = await readSkillLibraryTree(directory);
   prepareSkillLibraryBundle(files);
@@ -47,6 +48,7 @@ async function publishDirectory(
     },
     options,
     uploadId,
+    installSource,
   );
 }
 
@@ -59,12 +61,22 @@ export async function importSkillLibrary(
   const access = captureSkillLibraryAccess(authority, options);
   await access.read("profile", undefined);
   if (params.source.kind === "github") {
-    return withSkillRepository(params.source.url, access.assertCurrent, (directory) =>
+    return withSkillRepository(params.source.url, access.assertCurrent, (directory, repository) =>
       publishDirectory(
         { ...authority, assertCurrent: access.assertCurrent },
         params.slug,
         directory,
         access.options,
+        undefined,
+        {
+          origin: {
+            type: "git",
+            spec: repository.url,
+            commit: repository.commit,
+            ref: repository.ref,
+          },
+          source: { kind: "git", authority: "third-party", mutable: false, network: true },
+        },
       ),
     );
   }

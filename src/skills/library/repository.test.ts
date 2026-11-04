@@ -9,7 +9,10 @@ import {
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { parseSkillRepositoryUrl, withSkillRepository } from "./repository.js";
 
-vi.mock("../../infra/net/fetch-guard.js", () => ({ fetchWithSsrFGuard: vi.fn() }));
+vi.mock("../../infra/net/fetch-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/net/fetch-guard.js")>()),
+  fetchWithSsrFGuard: vi.fn(),
+}));
 
 const commit = "a".repeat(40);
 const url = "https://github.com/example/skills/tree/main/skills/example";
@@ -27,15 +30,12 @@ async function archive(files: Record<string, string | Buffer>, symlink?: string)
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", platform: "UNIX" });
 }
 
-function serve(bytes: Buffer, afterArchive?: () => void) {
+function serve(bytes: Buffer) {
   vi.mocked(fetchWithSsrFGuard).mockImplementation(async (options) => {
     options.beforeRequest?.();
     const response = options.url.startsWith("https://api.github.com/")
       ? new Response(commit)
       : new Response(new Uint8Array(bytes));
-    if (options.url.startsWith("https://codeload.github.com/")) {
-      afterArchive?.();
-    }
     return { response, release, finalUrl: options.url };
   });
 }
@@ -90,7 +90,7 @@ describe("GitHub personal skill URLs", () => {
     expect(
       validateSkillsLibraryImportParams({
         slug: "example",
-        source: { kind: "github", url, slug: "extra" },
+        source: { kind: "github", url, authority: "user" },
       }),
     ).toBe(false);
     expect(validateSkillsLibraryImportParams({ slug: "example", source: { kind: "github" } })).toBe(
@@ -141,26 +141,6 @@ it("rejects links, traversal, missing instructions, and oversized support files 
       code: "INVALID_BUNDLE",
     });
   }
-  expect(publish).not.toHaveBeenCalled();
-});
-
-it("does not publish after authority expires during the download", async () => {
-  let expired = false;
-  const publish = vi.fn(async () => {});
-  serve(await archive({ "skills/example/SKILL.md": content }), () => {
-    expired = true;
-  });
-  await expect(
-    withSkillRepository(
-      url,
-      () => {
-        if (expired) {
-          throw new Error("Authority expired");
-        }
-      },
-      publish,
-    ),
-  ).rejects.toThrow("Authority expired");
   expect(publish).not.toHaveBeenCalled();
 });
 

@@ -835,6 +835,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/state-migrations.audit-logs.windows.test.ts",
   "src/infra/state-migrations.cold-navigation.test.ts",
   "src/infra/state-migrations.workspace-setup.windows.test.ts",
+  "src/skills/library/import-policy.test.ts",
   "src/skills/library/service.test.ts",
   "src/skills/library/selection-authority.test.ts",
   "src/skills/library/service-roles.test.ts",
