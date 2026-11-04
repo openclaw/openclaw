@@ -182,14 +182,16 @@ export function measureMarkPasses(): MarkPass[] {
         bytes += JSON.stringify(subagentRuns.get(runId) ?? null).length;
       }
       const after = process.memoryUsage();
-      passes.push({
+      const measured = {
         rows: marked.length,
         ms: Math.round(ms),
         bytes,
         heapBeforeMb: mb(before.heapUsed),
         heapAfterMb: mb(after.heapUsed),
         peakRssMb: mb(Math.max(peakRss, after.rss)),
-      });
+      };
+      passes.push(measured);
+      process.stderr.write(`[annex] mark pass ${JSON.stringify(measured)}\n`);
       return marked;
     } finally {
       clearInterval(sampler);

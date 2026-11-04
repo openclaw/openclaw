@@ -129,14 +129,20 @@ describe.runIf(LOAD)("the burning annex under load", () => {
         progress(forest, `nexus swap ${swap + 1} took ${swapsMs.at(-1)}ms`);
       }
       const held = Math.min(children, Number(HELD ?? children));
-      const release = await releaseHeldReturns(forest, nexus, held, BUDGET_MS);
-      const file = await writeLoadReport(`nexus-${size}`, {
+      const report = {
         kind: "nexus",
         size,
         children,
+        held,
         buildMs: Math.round(forest.timings.buildMs ?? 0),
         swapsMs,
         markPasses: passes,
+      };
+      // Written before the release too, so a release that never ends still leaves the swaps.
+      await writeLoadReport(`nexus-${size}`, report);
+      const release = await releaseHeldReturns(forest, nexus, held, BUDGET_MS);
+      const file = await writeLoadReport(`nexus-${size}`, {
+        ...report,
         release,
         contention: contention(forest),
       });
