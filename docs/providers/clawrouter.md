@@ -596,6 +596,15 @@ prevent model calls or the existing `/v1/usage` snapshot.
 
 ## Troubleshooting
 
+An upstream Anthropic `400` reporting `credit balance is too low` is a
+ClawRouter upstream-service failure, not a rejected ClawRouter key. OpenClaw
+keeps that key available to other requests and permits configured model
+fallbacks. Ask the ClawRouter operator to repair the upstream account, or retry
+with another available model. An explicit chat model pin still prevents silent
+model switching; a cron job's own model and fallback list remain independent of
+that pin. Router-key authentication failures and router budget denials retain
+their normal credential cooldown behavior.
+
 | Symptom                                  | Check                                                                                                                                              |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | No ClawRouter models                     | Confirm the plugin is enabled and allowed by `plugins.allow`, then check that the ClawRouter key is active and grants at least one ready provider. |
