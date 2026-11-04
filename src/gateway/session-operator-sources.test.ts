@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { emitResetCommandHooks } from "../auto-reply/reply/commands-reset-hooks.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { installSessionActorMemoryEntry } from "../config/sessions/session-actor-memory-entry-install.js";
@@ -6,6 +7,7 @@ import { createSessionActorMemoryState } from "../config/sessions/session-actor-
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -14,6 +16,7 @@ import {
   recoveryFixture,
 } from "./operator-run-recovery.test-support.js";
 import { recordSessionOperatorSource } from "./session-operator-sources.js";
+import { triggerSessionPatchHook } from "./session-patch-hooks.js";
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 
 const log = { warn: (message: string) => expect.fail(message) };
@@ -112,4 +115,50 @@ it("keeps an incognito session's recorded sources through reset but not into a n
     { sessionId: "fork", updatedAt: 3, operatorSources: sources },
   );
   expect(copied.operatorSources).toBeUndefined();
+});
+
+it("keeps recorded sources out of reset and patch hook payloads", async () => {
+  const sources = { person: { profileId: "person" } } as unknown as NonNullable<
+    InternalSessionEntry["operatorSources"]
+  >;
+  const entry: InternalSessionEntry = {
+    sessionId: "hooked",
+    updatedAt: 1,
+    operatorSources: sources,
+  };
+  const seen: unknown[] = [];
+  const handler = (event: { context: Record<string, unknown> }) => {
+    seen.push(event.context.sessionEntry, event.context.previousSessionEntry);
+  };
+  registerInternalHook("command:reset", handler);
+  registerInternalHook("session:patch", handler);
+  try {
+    await emitResetCommandHooks({
+      action: "reset",
+      ctx: {} as Parameters<typeof emitResetCommandHooks>[0]["ctx"],
+      cfg: {},
+      command: { surface: "webchat", senderId: "person", channel: "webchat" },
+      sessionKey: "agent:main:hooked",
+      sessionEntry: entry,
+      previousSessionEntry: entry,
+      workspaceDir: "/tmp",
+    });
+    triggerSessionPatchHook({
+      sessionKey: "agent:main:hooked",
+      sessionEntry: entry,
+      patch: { key: "agent:main:hooked" },
+      cfg: {},
+    });
+    await vi.waitFor(() => expect(seen).toHaveLength(4));
+  } finally {
+    unregisterInternalHook("command:reset", handler);
+    unregisterInternalHook("session:patch", handler);
+  }
+  expect(seen.slice(0, 3)).toEqual([
+    expect.objectContaining({ sessionId: "hooked" }),
+    expect.objectContaining({ sessionId: "hooked" }),
+    expect.objectContaining({ sessionId: "hooked" }),
+  ]);
+  expect(JSON.stringify(seen)).not.toContain("operatorSources");
+  expect(entry.operatorSources).toBe(sources);
 });
