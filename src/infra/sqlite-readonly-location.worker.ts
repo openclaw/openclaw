@@ -88,6 +88,10 @@ async function inspect(
     };
   }
   try {
+    if (mode === "staging-sweep") {
+      const { reclaimSqliteSnapshotsInProcess } = await import("./sqlite-snapshot-reclamation.js");
+      return { ok: true, reclamation: await reclaimSqliteSnapshotsInProcess(pathname) };
+    }
     if (mode === "task-delivery-recovery") {
       const recoveryDirectory = args[2];
       const sourcePath = args[3];

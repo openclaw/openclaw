@@ -1,11 +1,15 @@
+import { channel } from "node:diagnostics_channel";
+import { once } from "node:events";
 import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as directoryWatch from "../../infra/directory-watch-host.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import * as workerCpu from "../../infra/worker-cpu.js";
 import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
@@ -182,6 +186,50 @@ it("discovers external edits without waiting for a periodic scan and shares one 
   await expect.poll(() => descriptions(), { timeout: 10_000 }).toEqual(["Final"]);
   await expect.poll(() => descriptions(request(other)), { timeout: 10_000 }).toEqual(["Other"]);
 });
+
+it("retires idle discovery workers while retaining the catalog and explicit refresh", async ({
+  signal,
+}) => {
+  vi.useRealTimers();
+  const created = vi.spyOn(workerCpu, "createCpuTrackedWorker");
+  const entry = String(resolveRuntimeProcessEntrypointUrl("skillsDiscovery"));
+  const observedWorkers = () =>
+    created.mock.calls.flatMap(([url], index) => {
+      const result = created.mock.results[index];
+      return String(url) === entry && result?.type === "return" ? [result.value] : [];
+    });
+  const load = () => descriptions(request(), false);
+  try {
+    await write("Original");
+    expect(await load()).toEqual(["Original"]);
+    expect(await load()).toEqual(["Original"]);
+    expect(observedWorkers()).toHaveLength(1);
+    const version = getSkillsSnapshotVersion(workspace);
+    const worker = observedWorkers()[0];
+    if (!worker) {
+      throw new Error("Expected the real discovery worker");
+    }
+    const exited = once(worker, "exit", { signal: AbortSignal.timeout(5_000) });
+    channel("openclaw.memory.critical").publish(undefined);
+    await expect(
+      withinTest(exited, signal),
+      "idle discovery worker exits after critical pressure",
+    ).resolves.toBeDefined();
+    expect(worker.threadId).toBe(-1);
+    expect(await load()).toEqual(["Original"]);
+    expect(getSkillsSnapshotVersion(workspace)).toBe(version);
+    expect(observedWorkers()).toHaveLength(1);
+
+    await write("Edited");
+    await refreshSkillsDiscovery({ workspaceDir: workspace });
+    expect(await load()).toEqual(["Edited"]);
+    expect(observedWorkers()).toHaveLength(2);
+    expect(observedWorkers()[1]).not.toBe(worker);
+    expect(getSkillsSnapshotVersion(workspace)).toBeGreaterThan(version);
+  } finally {
+    await closeSkillsWatchers(true);
+  }
+}, 20_000);
 
 it("observes edits inside an admitted external symlink target", async () => {
   vi.useRealTimers();
