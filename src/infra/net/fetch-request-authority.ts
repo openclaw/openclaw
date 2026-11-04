@@ -56,16 +56,12 @@ export function withGuardedFetchBeforeRequest<T>(
   );
 }
 
-/** Carry a host-owned assertion through provider preparation without granting new authority. */
-export async function withGuardedFetchRequestAuthority<T>(
+// Retained guards must not share the async producer's lexical frame.
+function createRequestAuthority(
   assertCurrent: (() => void) | undefined,
-  run: (assertCurrent: (() => void) | undefined) => Promise<T>,
-  beforeRequest?: () => void,
-): Promise<T> {
-  let inherited = requestAuthority.getStore();
-  if (!assertCurrent && !beforeRequest && !inherited) {
-    return await run(undefined);
-  }
+  beforeRequest: (() => void) | undefined,
+  inherited: RequestAuthority | undefined,
+) {
   let active = true;
   const assertAuthority = () => {
     inherited?.assertCurrent();
@@ -74,26 +70,39 @@ export async function withGuardedFetchRequestAuthority<T>(
     }
     invokeSynchronousGuard(assertCurrent);
   };
+  return {
+    assertCurrent: assertAuthority,
+    beforeRequest:
+      beforeRequest || inherited?.beforeRequest
+        ? () => {
+            inherited?.beforeRequest?.();
+            invokeSynchronousGuard(beforeRequest);
+          }
+        : undefined,
+    close() {
+      active = false;
+      inherited = undefined;
+      assertCurrent = undefined;
+      beforeRequest = undefined;
+    },
+  };
+}
+
+/** Carry a host-owned assertion through provider preparation without granting new authority. */
+export async function withGuardedFetchRequestAuthority<T>(
+  assertCurrent: (() => void) | undefined,
+  run: (assertCurrent: (() => void) | undefined) => Promise<T>,
+  beforeRequest?: () => void,
+): Promise<T> {
+  const inherited = requestAuthority.getStore();
+  if (!assertCurrent && !beforeRequest && !inherited) {
+    return await run(undefined);
+  }
+  const authority = createRequestAuthority(assertCurrent, beforeRequest, inherited);
   try {
-    assertAuthority();
-    return await requestAuthority.run(
-      {
-        assertCurrent: assertAuthority,
-        beforeRequest:
-          beforeRequest || inherited?.beforeRequest
-            ? () => {
-                inherited?.beforeRequest?.();
-                invokeSynchronousGuard(beforeRequest);
-              }
-            : undefined,
-      },
-      // Keep the producer out of the guard's retained lexical context.
-      run.bind(undefined, assertAuthority),
-    );
+    authority.assertCurrent();
+    return await requestAuthority.run(authority, () => run(authority.assertCurrent));
   } finally {
-    active = false;
-    inherited = undefined;
-    assertCurrent = undefined;
-    beforeRequest = undefined;
+    authority.close();
   }
 }
