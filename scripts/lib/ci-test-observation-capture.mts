@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { readCiTestLaunchInputs } from "./ci-test-launch-inputs.mts";
 import { collectTestObservations } from "./ci-test-observations.mjs";
 
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -105,6 +106,7 @@ export function createCiTestObservationCapture(options: {
     return undefined;
   }
   const startedAt = new Date().toISOString();
+  const launchInputs = readCiTestLaunchInputs(directory);
   const records: string[] = [];
   let bytes = 0;
   let disabled = false;
@@ -114,6 +116,7 @@ export function createCiTestObservationCapture(options: {
         recordedAt: string;
         observations: ReturnType<typeof collectTestObservations>;
         graphInputs: ReturnType<typeof graphInputs>;
+        launchInputs: ReturnType<typeof readCiTestLaunchInputs>;
       }
     | undefined;
   const warn = () => console.warn("[adaptive-ci] observation export unavailable; tests unchanged");
@@ -178,6 +181,7 @@ export function createCiTestObservationCapture(options: {
           preExecution = {
             recordedAt: new Date().toISOString(),
             observations,
+            launchInputs,
             graphInputs: options.graphConfiguration
               ? graphInputs(root, options.graphConfiguration, env)
               : null,

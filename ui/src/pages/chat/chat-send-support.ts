@@ -319,7 +319,11 @@ export function surfaceChatDeliveryFailure(
         !scopedAgentId ||
         (session.agentId !== undefined && normalizeAgentId(session.agentId) === scopedAgentId)),
   );
-  showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}` });
+  showToast({
+    placement: "top-right",
+    severity: "error",
+    message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}`,
+  });
 }
 
 /** Model-facing text an annotation contributes ahead of the user's own message. */

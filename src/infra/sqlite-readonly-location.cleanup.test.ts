@@ -15,6 +15,7 @@ import {
   captureSqliteDatabaseAdmissions,
   hasSqliteDatabaseSchemaAdmissionForPath,
 } from "./sqlite-database-admission.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
   adoptPreparedLocation,
   registerRetainedSnapshotTempDirectory,
@@ -153,7 +154,7 @@ it("shares one awaited image across original-path inspection readers and drains 
     { agentDatabases: true },
   );
   expect(fs.readFileSync(source)).toEqual(original);
-  expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
+  expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
 });
 
 it("keeps mutable inspection copies exclusive while preparation overlaps a shared read", async () => {
