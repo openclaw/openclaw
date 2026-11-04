@@ -1,2 +1,2 @@
-# Real PostgreSQL refusal/read cases, override rejection, async/worker propagation and reader-writer pool isolation.
-192
+# Real PostgreSQL refusal/read cases, override rejection, async/worker propagation and actual idle reader/writer backend reuse.
+234

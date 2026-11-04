@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { MessagePort, type Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
-import { postgresBridgeReuseKey, preparePostgresBridge } from "./bridge-prestart.js";
+import { preparePostgresBridge } from "./bridge-prestart.js";
 import { PostgresSyncConnection } from "./connection.js";
 import { closePostgresPool } from "./pool.js";
 import type { BridgeWorkerData } from "./protocol.js";
@@ -117,13 +117,3 @@ it.each(["dispose", "abort"] as const)(
     expect(observed.workers).toHaveLength(4);
   },
 );
-
-it("never reuses a writer session for a read-only candidate", () => {
-  const writer = { url: "postgresql://localhost/proof", schema: "proof", storeId: "proof" };
-  expect(postgresBridgeReuseKey({ ...writer, readOnly: true })).not.toBe(
-    postgresBridgeReuseKey(writer),
-  );
-  expect(postgresBridgeReuseKey({ ...writer, readOnly: false })).toBe(
-    postgresBridgeReuseKey(writer),
-  );
-});

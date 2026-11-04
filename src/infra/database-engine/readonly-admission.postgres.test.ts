@@ -115,6 +115,58 @@ describe.skipIf(!connection)("read-only PostgreSQL admission", () => {
     });
   });
 
+  it("reuses idle backends only within their reader or writer role", () => {
+    withEngineStoreAdmission(() => {
+      using fixture = createPostgresEngineTestFixture({
+        directory: dirs.make("pg-readonly-reuse-"),
+        connection: connection!,
+        schemaPrefix: "readonly",
+        schema,
+      });
+      const seed = fixture.open();
+      const opened: Array<ReturnType<typeof openPostgresEngineTestStore>> = [];
+      const open = (readOnly: boolean) => {
+        const db = openPostgresEngineTestStore({
+          anchor: seed.anchor,
+          schema,
+          input: {
+            connection: connection!,
+            schemaPrefix: "readonly",
+            ...(readOnly ? { readOnly: true as const } : {}),
+          },
+          reusePostgresConnection: true,
+        });
+        opened.push(db);
+        return db;
+      };
+      try {
+        const writer = open(false);
+        const writerPid = writer.prepare("SELECT pg_backend_pid() AS pid").get();
+        writer.exec("INSERT INTO items VALUES (1, 'before')");
+        writer.close();
+        const reader = open(true);
+        const readerPid = reader.prepare("SELECT pg_backend_pid() AS pid").get();
+        expect(readerPid).not.toEqual(writerPid);
+        expect(() => reader.exec("UPDATE items SET value = 'denied'")).toThrow(/read.only/i);
+        reader.close();
+        const nextWriter = open(false);
+        expect(nextWriter.prepare("SELECT pg_backend_pid() AS pid").get()).toEqual(writerPid);
+        nextWriter.exec("UPDATE items SET value = 'after'");
+        nextWriter.close();
+        const nextReader = open(true);
+        expect(nextReader.prepare("SELECT pg_backend_pid() AS pid").get()).toEqual(readerPid);
+        expect(nextReader.prepare("SELECT * FROM items").all()).toEqual([
+          { id: 1, value: "after" },
+        ]);
+        expect(() => nextReader.exec("DELETE FROM items")).toThrow(/read.only/i);
+      } finally {
+        for (const db of opened) {
+          db.close();
+        }
+      }
+    });
+  });
+
   it("refuses a version change without migrating or resealing the source", () => {
     withEngineStoreAdmission(() => {
       using fixture = createPostgresEngineTestFixture({
