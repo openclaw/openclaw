@@ -15,8 +15,12 @@ const enCommandPalette = {
   },
   palette: {
     placeholder: en.palette.placeholder,
+    searchPlaceholder: en.palette.searchPlaceholder,
+    composePlaceholder: en.palette.composePlaceholder,
+    modeLabel: en.palette.modeLabel,
+    modes: en.palette.modes,
     noResults: "No results found",
-    noResultsStart: "Press {shortcut} to start a new session.",
+    noResultsStart: "Press {shortcut} to compose a new session.",
     startSession: "New session",
     startSessionBackground: "Start new session in background",
     startingSession: "Starting…",

@@ -120,7 +120,7 @@ async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
 }
 
 describe("command palette attachments", () => {
-  it("owns dropped files immediately, retains intent through failures/removal, and clears an empty draft", async () => {
+  it("owns dropped files immediately, retains intent through failures/removal, and keeps the chosen mode for an empty draft", async () => {
     const { palette, input, query, start, create, context } = await mount();
     const surface = query<HTMLElement>(".cmd-palette")!;
     const dispatch = (type: string, files: File[] = []) => {
@@ -162,7 +162,7 @@ describe("command palette attachments", () => {
     expect(context.navigate).not.toHaveBeenCalled();
     setInputValue(input, "");
     await palette.updateComplete;
-    expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(false);
+    expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(true);
   });
 
   it("keeps ready and pending attachments when dismissed, but releases them on disconnect", async () => {
@@ -374,9 +374,7 @@ it("keeps mobile attachment Return native and starts only from its button", asyn
     expect(palette.isOpen).toBe(true);
   }
   expect(start().querySelector("kbd")).toBeNull();
-  const footer = query<HTMLElement>(".cmd-palette > .cmd-palette__footer")!;
-  expect(footer.querySelector("kbd")?.textContent).toMatch(/^(Enter|⏎)$/);
-  expect(footer.textContent).not.toContain("Start session");
+  expect(query(".cmd-palette > .cmd-palette__footer")).toBeNull();
   start().click();
   await vi.waitFor(() =>
     expectSubmit({

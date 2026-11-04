@@ -94,9 +94,9 @@ suite.define(() => {
         await page.keyboard.press("ControlOrMeta+K");
         const palette = page.locator("openclaw-command-palette");
         await palette.locator(".cmd-palette__input").waitFor({ state: "visible" });
-        await palette.getByRole("button", { name: "New session settings", exact: true }).click();
+        await palette.locator(".cmd-palette__input").press("Tab");
+        await palette.locator(".palette-session-settings__trigger").click();
         const settings = palette.locator(".oc-popover.palette-session-settings");
-        await settings.locator(".palette-session-settings__workspace").click();
         await settings
           .locator('[data-machine="local"][data-project="docs"]')
           .waitFor({ state: "visible" });

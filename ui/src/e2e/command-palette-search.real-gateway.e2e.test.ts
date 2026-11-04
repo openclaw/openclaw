@@ -454,7 +454,7 @@ suite.define(() => {
           await page.keyboard.press("ControlOrMeta+K");
           const palette = page.locator(".cmd-palette");
           const input = palette.getByRole("textbox", {
-            name: "Search or start a task…",
+            name: "Search…",
             exact: true,
           });
           const results = palette.locator(".cmd-palette__results");

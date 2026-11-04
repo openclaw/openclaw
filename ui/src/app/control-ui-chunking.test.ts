@@ -574,12 +574,13 @@ describe("Control UI build chunking", () => {
     const styles = result.output
       .filter((asset) => asset.type === "asset")
       .filter((asset) => asset.fileName.endsWith(".css"));
-    expect(styles).toHaveLength(5);
+    expect(styles).toHaveLength(4);
     const sharedStyles = styles.find((style) => String(style.source).includes(".shared-fixture"));
     expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".sidebar-fixture") });
     expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".transcript-fixture") });
     expect(sharedStyles?.source).not.toContain(".optional-fixture");
-    expect(sharedStyles?.source).not.toContain(".tabs-fixture");
+    // The palette's mode tabs boot with the shell, so their sheet joins the shared one.
+    expect(sharedStyles?.source).toContain(".tabs-fixture");
     const routeStyles = styles.find((style) => String(style.source).includes(".settings-fixture"));
     expect(routeStyles?.source).toContain(".hub-fixture");
     expect(routeStyles?.source).not.toContain(".tabs-fixture");
@@ -662,10 +663,7 @@ describe("Control UI build chunking", () => {
     expect([tabState, shadowStyles, inlineTabsStyle].every((id) => id in tabsChunk.modules)).toBe(
       true,
     );
-    expect([hubTabs, pendingFocus].some((id) => id in tabsChunk.modules)).toBe(false);
-    for (const initial of [entryChunk, chatChunk, newSessionChunk]) {
-      expect(staticImports(initial.fileName)).not.toContain(tabsChunk.fileName);
-    }
+    expect(hubTabs in tabsChunk.modules).toBe(false);
     for (const route of [sessions, cron]) {
       const routeChunk = chunks.find((chunk) => route in chunk.modules)!;
       expect(staticImports(routeChunk.fileName)).toContain(chromeChunk.fileName);

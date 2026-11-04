@@ -62,7 +62,7 @@ async function openDesktopPanel(page: Page) {
   });
   await page
     .locator("openclaw-command-palette")
-    .getByRole("textbox", { name: "Search or start a task…" })
+    .getByRole("textbox", { name: "Search…" })
     .waitFor();
   await page.getByRole("option", { name: "Desktop", exact: true }).click();
   const panel = page.locator("openclaw-desktop-panel");
