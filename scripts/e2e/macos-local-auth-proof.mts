@@ -170,7 +170,8 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
     secrets: { providers: { proof: { source: "env", allowlist: ["GW_PROOF_CREDENTIAL"] } } },
     logging: {
       level: "debug",
-      consoleLevel: "debug",
+      // Keep protocol evidence in the file without contaminating CLI JSON status.
+      consoleLevel: "silent",
       consoleStyle: "json",
       file: path.join(state, "gateway.jsonl"),
     },
@@ -300,7 +301,7 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
     const phases = scenario.upgrade ? ["stable", "candidate"] : ["candidate"];
     for (const phase of phases) {
       if (scenario.upgrade && phase === "candidate") {
-        assert.equal(await cli("stop-stable", ["gateway", "stop", "--json"]), 0);
+        assert.equal(await cli("stop-stable", ["gateway", "stop", "--json", "--force"]), 0);
         // Replace the installed native bundle in the same fixture-owned location.
         // This exercises manual developer-candidate replacement, not Sparkle or signing continuity.
         fs.rmSync(path.join(root, name, "OpenClaw.app"), { recursive: true, force: true });
