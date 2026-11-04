@@ -4,6 +4,7 @@ import {
   type BedrockRuntimeClientConfig,
 } from "@aws-sdk/client-bedrock-runtime";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
+import type { HttpRequest } from "@smithy/types";
 import { createHttpProxyAgentsForTarget, type Model } from "openclaw/plugin-sdk/llm";
 import type { ConverseProxyTransportFactory } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -34,7 +35,7 @@ export async function createBedrockStreamClient(
       },
       maxAttempts: 1,
       requestHandler: {
-        async handle(request) {
+        async handle(request: HttpRequest) {
           const result = await proxy.send(
             {
               method: request.method,

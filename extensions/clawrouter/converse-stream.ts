@@ -1,4 +1,4 @@
-import type { ProviderCreateStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
@@ -16,7 +16,9 @@ import { CLAWROUTER_ROUTE_METADATA_KEY } from "./provider-policy-api.js";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 
-export function createClawRouterConverseStream(ctx: ProviderCreateStreamFnContext) {
+export function createClawRouterConverseStream(
+  ctx: Parameters<NonNullable<ProviderPlugin["createStreamFn"]>>[0],
+) {
   if (ctx.model.api !== "bedrock-converse-stream") {
     return undefined;
   }

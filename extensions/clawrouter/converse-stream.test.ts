@@ -4,7 +4,7 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createEmptyTransportUsage } from "openclaw/plugin-sdk/provider-stream-shared";
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import eventFixture from "./fixtures/converse-eventstream.json" with { type: "json" };
 import clawrouter from "./index.js";
 import { buildClawRouterProviderConfig } from "./provider-catalog.js";
@@ -168,12 +168,13 @@ async function setup(kind: "native" | "manifest" = "native") {
     baseUrl: ROOT,
   });
   const row = config.models[0];
-  expect(row?.api).toBe("bedrock-converse-stream");
+  assert(row?.api === "bedrock-converse-stream", "Expected a selected Converse model");
+  assert(row.baseUrl, "Expected the selected proxy endpoint");
   const model: Model = {
     ...row,
     provider: "clawrouter",
-    api: row.api!,
-    baseUrl: row.baseUrl!,
+    api: row.api,
+    baseUrl: row.baseUrl,
     input: ["text", "image"],
   };
   const call = (
@@ -181,7 +182,7 @@ async function setup(kind: "native" | "manifest" = "native") {
   ) => {
     const ctx = { config: cfg, provider: "clawrouter", modelId: ID, model, requestAuth: options };
     const streamFn = provider.createStreamFn?.(ctx);
-    expect(streamFn).toBeTypeOf("function");
+    assert(typeof streamFn === "function", "Expected the registered Converse stream hook");
     const wrapped = provider.wrapStreamFn?.({ ...ctx, streamFn });
     if (!wrapped) {
       throw new Error("Expected registered ClawRouter stream wrapper");
@@ -219,6 +220,7 @@ it.each(["native", "manifest"] as const)(
     expect(result.usage).toMatchObject({ input: 10, output: 3, totalTokens: 13 });
     expect(f.requests).toHaveLength(1);
     const req = f.requests[0];
+    assert(req, "Expected one proxy request");
     expect(req.headers.has("x-amz-security-token")).toBe(false);
     expect(req.headers.has("x-api-key")).toBe(false);
     let body = await req.json();
@@ -270,23 +272,28 @@ it.each(["foreign", "profile", "format", "capability", "stale", "origin"])(
   async (failure) => {
     const f = await setup();
     const provider = f.state.body.providers[0];
+    assert(provider, "Expected the selected provider");
+    const model = provider.models[0];
+    const route = provider.routes[0];
+    const offer = provider.offers[0];
+    assert(model && route && offer, "Expected a complete selected offer");
     if (failure === "foreign") {
       provider.id = "other";
     }
     if (failure === "profile") {
-      provider.models[0].upstream = "us." + UPSTREAM;
+      model.upstream = "us." + UPSTREAM;
     }
     if (failure === "format") {
-      provider.routes[0].requestFormat = "aws_bedrock.invoke";
+      route.requestFormat = "aws_bedrock.invoke";
     }
     if (failure === "capability") {
-      provider.models[0].capabilities = ["llm.embeddings"];
+      model.capabilities = ["llm.embeddings"];
     }
     if (failure === "stale") {
       f.state.body.observedAt = "2000-01-01T00:00:00Z";
     }
     if (failure === "origin") {
-      provider.offers[0].route = "https://foreign.example/converse-stream";
+      offer.route = "https://foreign.example/converse-stream";
     }
     const result = await (await f.call()(f.model, context, { apiKey: KEY })).result();
     expect(result.stopReason).toBe("error");
