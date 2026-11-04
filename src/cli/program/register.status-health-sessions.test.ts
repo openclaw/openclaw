@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   cleanup: vi.fn(),
   tail: vi.fn(),
   compact: vi.fn(),
+  usage: vi.fn(),
   lifecycle: vi.fn(),
   exportTrajectory: vi.fn(),
   ownerLoaded: vi.fn(),
@@ -38,6 +39,11 @@ vi.mock("../../commands/sessions-tail.js", () => {
 vi.mock("../../commands/sessions-compact.js", () => {
   mocks.ownerLoaded();
   return { sessionsCompactCommand: mocks.compact };
+});
+// mock-isolation: Capture lazy loading without reading usage state.
+vi.mock("../../commands/sessions-usage.js", () => {
+  mocks.ownerLoaded();
+  return { sessionsUsageCommand: mocks.usage };
 });
 vi.mock("../../commands/sessions-lifecycle.js", async (importOriginal) => {
   mocks.ownerLoaded();
@@ -104,6 +110,13 @@ it.each([
     "--max-lines must be a positive integer.",
   ],
   [`sessions compact ${key} --timeout 0 --json`, mocks.compact, timeoutError],
+  [
+    `sessions --store /tmp/other.sqlite usage`,
+    mocks.usage,
+    "`sessions usage` does not support the parent `sessions` option --store; the gateway resolves usage scope from the session key and --agent.",
+  ],
+  [`sessions usage --max-rows 0 --json`, mocks.usage, "--max-rows must be a positive integer."],
+  [`sessions usage --max-rows 500 --json`, mocks.usage, "--max-rows must be between 1 and 200."],
 ] as const)("rejects %s before loading the session owner", async (args, owner, message) => {
   const execution = run(args);
   await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
@@ -179,6 +192,17 @@ it.each([
 it("compact inherits parent agent and JSON options (#91378)", async () => {
   await run(`sessions --agent work --json compact ${key}`);
   expectOptions(mocks.compact, { key, agent: "work", json: true });
+});
+it("forwards sessions usage scope, range, and rows", async () => {
+  await run(`sessions --json usage ${key} --agent work --range 90d --group-family --max-rows 20`);
+  expectOptions(mocks.usage, {
+    sessionKey: key,
+    agent: "work",
+    range: "90d",
+    groupFamily: true,
+    limit: 20,
+    json: true,
+  });
 });
 it("forwards archive keys, inherited scope and RPC options", async () => {
   await run(
