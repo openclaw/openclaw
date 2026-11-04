@@ -16,6 +16,8 @@ writer: key material stays in the auth store, and configured providers reference
 the saved profile. Environment-provided keys remain managed by the Gateway
 process environment. The page distinguishes saved accounts from API keys managed in config or the
 environment without revealing keys.
+Use **Test access** to check whether a provider account can use its models.
+You can view Models without admin access, but only admins can change model settings.
 
 Saving a key and refreshing the catalog are separate outcomes. If refresh fails,
 the saved key remains; follow the reported recovery step. Removing a stored key

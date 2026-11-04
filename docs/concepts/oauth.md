@@ -264,9 +264,8 @@ Example (session override):
 
 ### 3) Multi-user: personal accounts
 
-On a shared gateway, each verified person can save several accounts per provider
-in **Settings → Profile → Connected accounts** and choose one as their new-chat
-default. **Add account** and `openclaw models accounts login` use the same
+On a shared Gateway, each verified person can save several accounts per provider
+in **Settings → Profile → Saved accounts** and choose one as their **New session default**. **Add account** and `openclaw models accounts login` use the same
 Gateway-owned provider and sign-in method catalog. Anthropic personal setup
 accepts an API key, not a Claude subscription token; system/agent auth remains
 a separate flow.
@@ -275,8 +274,10 @@ scope before requesting provider credentials. Gateway identity and provider
 sign-in are separate; a shared Gateway token does not identify a person. See
 [personal-account CLI setup](/cli/models#personal-model-accounts).
 
-The model picker in New session or an existing chat can select an
-account for that chat without changing the default. Ordered shared accounts
+The model picker in **New session** or an existing session can select an
+account for that session without changing the default. **Use for new sessions**
+changes only the default for future sessions. **Use shared default** clears that
+personal default without removing saved accounts or changing existing sessions. Ordered shared accounts
 remain same-provider failover candidates; the selection is not a billing
 guarantee. Personal credentials stay outside the shared profile list. See
 [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
