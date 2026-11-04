@@ -1,9 +1,9 @@
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseCrabboxProfile } from "./crabbox-worker-profile.js";
+import { parseCrabboxCleanupProfile } from "./crabbox-worker-profile.js";
 import type { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
 type WarmImageManager = ReturnType<typeof createCrabboxWarmImageManager>;
-type Profiles = readonly Parameters<typeof parseCrabboxProfile>[0][];
+type Profiles = readonly Parameters<typeof parseCrabboxCleanupProfile>[0][];
 
 export type CrabboxSnapshotActions = {
   pin: WarmImageManager["pin"];
@@ -20,7 +20,7 @@ export async function resolveCrabboxCheckpointBinaries(params: {
   const { profiles, signal, resolveBinary, warn } = params;
   signal.throwIfAborted();
   const resolutions = await Promise.allSettled(
-    profiles.map((profile) => resolveBinary(parseCrabboxProfile(profile).binary, signal)),
+    profiles.map((profile) => resolveBinary(parseCrabboxCleanupProfile(profile).binary, signal)),
   );
   signal.throwIfAborted();
   const binaries: string[] = [];

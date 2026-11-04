@@ -1819,8 +1819,7 @@ describe("session pull request refresh", () => {
   });
 
   function createFinalReplyState(refreshSessionPullRequests: ReturnType<typeof vi.fn>) {
-    return {
-      ...makeChatHost(),
+    return Object.assign(makeChatHost(), {
       chatMessagesBySession: new Map(),
       chatStreamRenderFrame: null,
       pendingSessionMessageReloadSessionKey: null,
@@ -1828,7 +1827,7 @@ describe("session pull request refresh", () => {
       sessionKey: "main",
       sessions: { reconcileRunTerminal: vi.fn() },
       settings: {},
-    } as unknown as ChatPageHost;
+    }) as unknown as ChatPageHost;
   }
 
   it.each([
@@ -1947,15 +1946,14 @@ describe("refreshChatMetadata", () => {
       hello?: { features: { methods: string[] } };
     } = {},
   ): ChatPageHost {
-    return {
-      ...makeChatHost(),
+    return Object.assign(makeChatHost(), {
       agentsList: null,
       assistantAgentId: "main",
       client: { request },
       hello: { features: { methods: ["chat.metadata"] } },
       sessionKey: "agent:work:main",
       ...overrides,
-    } as unknown as ChatPageHost;
+    }) as unknown as ChatPageHost;
   }
 
   it("ends a retired automatic catalog's loading before unrelated commands settle", async () => {

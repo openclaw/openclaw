@@ -191,7 +191,9 @@ export function copySourceFile(
       destination: { rootPath: path.dirname(targetPath), absolutePath: targetPath },
       expectedSourceIdentity: source.identity,
       sourceHardlinks: "allow",
-      clone: "auto",
+      // Reflinks lock the source inode and add shared extents to live databases.
+      // Inspection preserves source artifacts, not physical extent sharing.
+      clone: "never",
       mode: 0o600,
     });
     try {
@@ -249,6 +251,14 @@ export function isSqliteReadOnlyError(error: unknown): boolean {
     current = details.cause;
   }
   return false;
+}
+
+export function requiresPrivateRollbackRecovery(pathname: string, error: unknown): boolean {
+  return (
+    isSqliteReadOnlyError(error) &&
+    readSourceJournalMode(pathname) === "rollback" &&
+    readSourceSidecars(pathname).journal
+  );
 }
 
 function rollbackJournalReferencesSuperJournal(journalPath: string): boolean {
@@ -408,7 +418,10 @@ function* createStableReadOnlyCopyInTempDirectory(
       ? sqliteSnapshotStagingError(tempDir, error, false, pathname)
       : error;
     if (tempDir && existingTempDir === undefined) {
-      removeTempDirectory(tempDir);
+      const errors: unknown[] = [stagingError];
+      if (!removeTempDirectory(tempDir, (cleanupError) => errors.push(cleanupError))) {
+        throw preparationCleanupError(errors, "SQLite snapshot preparation");
+      }
     }
     throw stagingError;
   }
@@ -442,7 +455,7 @@ async function copyPreparedLocation(
       const { sourcePath, targetPath, expectedSourceIdentity } = step.value;
       const source = openPinnedFile(sourcePath, expectedSourceIdentity);
       try {
-        await copySqliteFile(sourcePath, targetPath, source.identity);
+        await copySqliteFile(sourcePath, targetPath, source.identity, { clone: "never" });
       } finally {
         try {
           assertPinnedIdentityUnchanged(source);
@@ -571,9 +584,7 @@ async function prepareReadOnlySourceInProcess(
           signal?.throwIfAborted();
           if (
             error instanceof AggregateError ||
-            !isSqliteReadOnlyError(error) ||
-            readSourceJournalMode(canonicalPath) !== "rollback" ||
-            !readSourceSidecars(canonicalPath).journal
+            !requiresPrivateRollbackRecovery(canonicalPath, error)
           ) {
             throw error;
           }
@@ -648,7 +659,7 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
   );
 }
 
-/** Artifact-preserving acquisition with native CoW where supported, in the isolated child. */
+/** Artifact-preserving byte copy in the isolated child, without source extent sharing. */
 export function prepareSqliteReadOnlyCopyInProcess(
   pathname: string,
   stagingRoot?: SqliteSnapshotDestination,
@@ -692,12 +703,7 @@ export async function inspectSqliteSchemaHeaderInProcess(
     } catch (error) {
       // Only SQLite's recovery-required refusal permits private recovery.
       // Ordinary I/O, admission, and native close errors must stay failures.
-      if (
-        error !== readError ||
-        !isSqliteReadOnlyError(error) ||
-        !statIfPresent(`${canonicalPath}-journal`) ||
-        readSourceJournalMode(canonicalPath) !== "rollback"
-      ) {
+      if (error !== readError || !requiresPrivateRollbackRecovery(canonicalPath, error)) {
         throw error;
       }
     }
