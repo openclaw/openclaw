@@ -1,4 +1,4 @@
-import { ErrorCodes, GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
@@ -274,10 +274,7 @@ export function createSessionManagedListRefresh(
           if (!isCurrent()) {
             return;
           }
-          if (
-            error instanceof GatewayProtocolRequestError &&
-            error.gatewayCode === ErrorCodes.FORBIDDEN
-          ) {
+          if (error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN") {
             entry.deniedConnectionEpoch = scope.epoch;
           }
           const awaitingGateway = isAwaitingGatewayFailure(error, host.snapshot());
