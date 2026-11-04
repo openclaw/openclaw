@@ -18,20 +18,24 @@ vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
   readProcessAncestry: () => null,
 }));
-vi.mock("./windows-port-pids.js", () => ({
+vi.mock("./windows-port-pids.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./windows-port-pids.js")>()),
   readWindowsListeningPidsOnPortSync: vi.fn(),
   readWindowsListeningPidsResultSync: boundary.listeners,
   readWindowsProcessArgsSync: vi.fn(),
   readWindowsProcessArgsResultSync: boundary.args,
 }));
-vi.mock("./gateway-owner-lease.js", () => ({
+vi.mock("./gateway-owner-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-owner-lease.js")>()),
   readGatewayOwnerLease: () => undefined,
   readGatewayOwnerLeaseAsync: async () => undefined,
 }));
-vi.mock("../logging/subsystem.js", () => ({
+vi.mock("../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
   createSubsystemLogger: () => ({ warn: boundary.warn }),
 }));
-vi.mock("./windows-install-roots.js", () => ({
+vi.mock("./windows-install-roots.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./windows-install-roots.js")>()),
   getWindowsInstallRoots: (): ReturnType<typeof getWindowsInstallRoots> => ({
     systemRoot: "C:\\Windows",
     programFiles: "C:\\Program Files",
