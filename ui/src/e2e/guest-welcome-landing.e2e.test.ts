@@ -150,7 +150,7 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl);
       const failure = page
         .getByRole("alert")
-        .filter({ hasText: "We couldn't set up your welcome session." });
+        .filter({ hasText: "Couldn’t set up your welcome session. Try again." });
       await expectBrowser(failure).toContainText("Roboclaw is busy right now.");
       // The rest of the UI stays usable while the failure is shown.
       await page.locator(`openclaw-app-sidebar [data-session-key="${shared.key}"]`).first().click();

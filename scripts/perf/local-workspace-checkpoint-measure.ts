@@ -74,6 +74,11 @@
  * Run separate fresh processes in A/A then ABAB order, at least five per arm.
  * Retirement is nested inside template.build; never add those durations together.
  * --owner-switch checks that another session at the same commit reuses the template.
+ * --head-advance cold|prewarm advances HEAD with identical source before that second
+ * session. The prewarm arm runs the existing background preparation owner first;
+ * its cost is reported separately. Compare two cold controls then five interleaved
+ * pairs: request-path template builds must change from one to zero, checkout HEAD
+ * must match, and prewarm plus request total cost must remain within measured spread.
  * --crash-builder interrupts the fixture's outstanding rm after the first prepare,
  * then exits without finalizers. Reopen that same --output with --recover-builder
  * --fake-builder-removal-ms 36000 to prove startup cleanup from persisted state.
@@ -111,6 +116,7 @@ const { values } = parseArgs({
     "fixture-source": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
     "owner-switch": { type: "boolean", default: false },
+    "head-advance": { type: "string" },
     "fresh-only": { type: "boolean", default: false },
     acceleration: { type: "boolean", default: false },
     "sandbox-backend": { type: "string", default: "docker" },
@@ -275,6 +281,13 @@ assert(!values["fixture-source"] || serialTurns);
 assert(!values["owner-switch"] || serialTurns);
 assert(!values["fresh-only"] || serialTurns);
 assert(!values.acceleration || serialTurns);
+assert(
+  !values["head-advance"] ||
+    (["cold", "prewarm"].includes(values["head-advance"]) &&
+      values["owner-switch"] &&
+      values["fresh-only"] &&
+      values.acceleration),
+);
 assert(["docker", "podman"].includes(values["sandbox-backend"]));
 assert(!values["sandbox-image"] || values.acceleration);
 const fakeBuilderRemovalMs =
@@ -591,6 +604,7 @@ const config: OpenClawConfig = {
     entries: { main: { workspace: repo } },
     defaults: {
       sandbox: {
+        ...(values["head-advance"] ? { mode: "all" as const } : {}),
         backend: values["sandbox-backend"],
         docker: { image: values["sandbox-image"] },
       },
@@ -942,6 +956,14 @@ measurement: try {
           "Requested template proof fell back before cloning; check filesystem, lockfile, and image",
         );
       }
+      if (values["head-advance"] && phase === "other-first") {
+        assert.equal(
+          spans["attempt.setup.sandbox.workspace_selection.prepare.reconcile.template.build"]
+            ?.count ?? 0,
+          values["head-advance"] === "cold" ? 1 : 0,
+          "Prewarming must move exactly one template build off the fresh request",
+        );
+      }
       if (prepare !== prepareWorkspace) {
         return measuredWorkspace;
       }
@@ -1022,6 +1044,20 @@ measurement: try {
       reads: typeof manifestReads;
     }> = [];
     if (values["owner-switch"]) {
+      if (values["head-advance"]) {
+        git("commit", "--quiet", "--allow-empty", "-m", "Synthetic HEAD advance");
+        if (values["head-advance"] === "prewarm") {
+          const { prewarmLocalWorkspaceTemplates } =
+            await import("../../src/gateway/worker-environments/local-workspace-prewarm.js");
+          await measureTurn("head-prewarm", async () => {
+            await prewarmLocalWorkspaceTemplates({
+              getConfig: () => config,
+              signal: new AbortController().signal,
+            });
+            return repo;
+          });
+        }
+      }
       const otherKey = `${sessionKey}:other`;
       const otherCanonical = path.join(output, "other-canonical");
       git("worktree", "add", "--quiet", "-b", "other", otherCanonical);
@@ -1089,6 +1125,13 @@ measurement: try {
         });
       }
       assert(otherProjection);
+      assert.equal(
+        execFileSync("git", ["-C", otherProjection, "rev-parse", "HEAD"], {
+          encoding: "utf8",
+        }).trim(),
+        git("rev-parse", "HEAD").trim(),
+        "Fresh projection must retain the selected checkout commit",
+      );
       for (const entry of inventory) {
         assert.deepEqual(
           readFixtureEntry(otherProjection, entry),
@@ -1106,6 +1149,7 @@ measurement: try {
         source: values["fixture-source"] ?? null,
         siblingWorktrees,
         acceleration: values.acceleration,
+        headAdvance: values["head-advance"] ?? null,
         sandboxBackend: sandbox.backend,
         sandboxImage: sandbox.docker.image,
         fakeBuilderRemovalMs,

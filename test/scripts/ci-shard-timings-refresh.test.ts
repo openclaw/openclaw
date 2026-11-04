@@ -22,11 +22,12 @@ const baseline = {
   updatedAt: "2026-09-01",
   source: "fixture",
   compactGroupSeconds: {
+    boat: {},
     blacksmith: { other: 99 },
     github: { compact: 17, "release-full-retained": 2000 },
   },
-  runtimePlacementTimings: { blacksmith: [], github: [] },
-  toolingFileSeconds: { blacksmith: {}, github: {} },
+  runtimePlacementTimings: { blacksmith: [], github: [], boat: [] },
+  toolingFileSeconds: { blacksmith: {}, github: {}, boat: {} },
   repoE2eFileSeconds: {},
   uiE2e: { fileSeconds: {}, perFileOverheadSeconds: 0 },
 };
@@ -157,6 +158,7 @@ it.each([
     ]);
   } else {
     expect(written.compactGroupSeconds).toEqual({
+      boat: {},
       blacksmith: { other: 99 },
       github: { compact: 17, "release-full-fixture": 900, "release-full-retained": 2000 },
     });

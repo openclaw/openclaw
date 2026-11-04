@@ -7,7 +7,6 @@ import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import type { AgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortable.js";
@@ -21,7 +20,6 @@ import {
   type FallbackAttemptRecord,
 } from "./failover-error.js";
 import { isLikelyContextOverflowError } from "./failover/classify.js";
-import type { FailoverReason } from "./failover/signal.js";
 import {
   MissingAgentHarnessError,
   isAgentHarnessPreflightError,
@@ -40,6 +38,7 @@ import type {
   FallbackAttempt,
   ModelCandidate,
   ModelFallbackAttemptProvenance,
+  ModelFallbackResultClassification,
 } from "./model-fallback.types.js";
 import { modelKey } from "./model-ref-shared.js";
 import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
@@ -116,22 +115,6 @@ export type ModelFallbackErrorHandler = (
 ) => void | Promise<void>;
 
 export type ModelFallbackStepHandler = (step: ModelFallbackStepFields) => void | Promise<void>;
-
-export type ModelFallbackResultClassification =
-  | {
-      agentTerminal?: AgentTerminalSnapshot;
-      message: string;
-      reason?: FailoverReason;
-      status?: number;
-      code?: string;
-      rawError?: string;
-      rateLimitRetriesExhausted?: number;
-      preserveResultOnExhaustion?: boolean;
-      preserveResultPriority?: number;
-    }
-  | { error: unknown }
-  | null
-  | undefined;
 
 /** Internal fallback execution also accepts producer-owned terminal causes. */
 type ModelFallbackAttemptClassification =

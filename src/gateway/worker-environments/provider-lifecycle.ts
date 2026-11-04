@@ -103,9 +103,11 @@ export function createWorkerProviderLifecycle(
 
   const runtimeRefresher = createWorkerRuntimeRefresher({
     ...options,
+    providerFor,
     requireCurrentOwner,
     stopOwner,
     identityResolverFor,
+    lifecycleLease,
   });
 
   const retained = createWorkerRetainedLifecycle({
@@ -113,6 +115,7 @@ export function createWorkerProviderLifecycle(
     providerFor,
     requireCurrentOwner,
     refreshRuntime: runtimeRefresher.refresh,
+    resumeNode: runtimeRefresher.resumeNodeInOperation,
   });
   const finishBootstrap = createWorkerSshBootstrap({
     ...options,
@@ -733,6 +736,7 @@ export function createWorkerProviderLifecycle(
     providerFor,
     reconcileRecord,
     readRuntimeRefresh: runtimeRefresher.read,
+    resumeNode: runtimeRefresher.resumeNode,
     ensureRetainedRunning: retained.ensureRetainedRunning,
     suspendRetained: retained.suspendRetained,
   };

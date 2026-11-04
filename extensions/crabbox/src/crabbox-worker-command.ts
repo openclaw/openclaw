@@ -66,6 +66,7 @@ export async function runCrabboxCommand(params: {
   signal?: AbortSignal;
   timeoutMs: number;
   assertCurrent?: () => void;
+  killGraceMs?: number;
 }): Promise<SpawnResult> {
   params.signal?.throwIfAborted();
   params.assertCurrent?.();
@@ -75,6 +76,7 @@ export async function runCrabboxCommand(params: {
       timeoutMs: params.timeoutMs,
       maxOutputBytes: MAX_OUTPUT_BYTES,
       killProcessTree: true,
+      ...(params.killGraceMs === undefined ? {} : { killGraceMs: params.killGraceMs }),
       ...(params.env === undefined ? {} : { env: params.env }),
       ...(params.input === undefined ? {} : { input: params.input }),
       ...(params.signal ? { signal: params.signal } : {}),

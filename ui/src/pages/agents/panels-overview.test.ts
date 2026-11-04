@@ -109,7 +109,10 @@ it("shows Overview context as rows that open their owning tabs", async () => {
     ),
   );
   expect(container.querySelector(".settings-kv")).toBeNull();
-  expect(overviewRow(container, "Primary Model")).toBeUndefined();
+  const primaryModel = overviewRow(container, "Primary model");
+  assert(primaryModel);
+  expect(primaryModel.querySelector(".model-picker")).not.toBeNull();
+  expect(primaryModel.querySelector(".settings-row__value")).toBeNull();
   const skills = overviewRow(container, "Skills filter");
   expect(skills?.querySelector(".settings-row__value")?.textContent).toBe("2 selected");
   skills?.click();

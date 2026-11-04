@@ -21,6 +21,7 @@ import {
   createCrabboxNodeEnrollmentSetup,
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
+import { createCrabboxNodeResumer } from "./crabbox-worker-node-resume.js";
 import {
   assertAwsWorkerHasNoInstanceProfile,
   prepareCrabboxGuestIsolation,
@@ -697,6 +698,7 @@ export function createCrabboxWorkerProvider(
     maintain: maintenance.maintain,
     ...machineOptions,
     ...crabboxWorkerProfileCapabilities,
+    resumeNode: createCrabboxNodeResumer({ resolveBinary, signal: providerAbort.signal }),
     runSetupCommand: createCrabboxSetupCommandRunner({
       resolveBinary: async (...args) => (await resolveBinary(...args)).binary,
     }),

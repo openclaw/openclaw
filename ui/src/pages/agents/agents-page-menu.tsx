@@ -7,7 +7,10 @@ import { showToast } from "../../lib/toast.ts";
 
 async function copyAgentId(id: string) {
   const copied = await copyToClipboard(id);
-  showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+  showToast({
+    severity: copied ? "success" : "error",
+    message: t(copied ? "common.copied" : "common.copyFailed"),
+  });
 }
 
 // Holds the selected agent's actions. New agent and Refresh join them on the phone.
