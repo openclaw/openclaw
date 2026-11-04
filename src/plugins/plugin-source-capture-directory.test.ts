@@ -16,6 +16,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
@@ -149,10 +150,17 @@ function expectArtifactBytes(artifact: ReturnType<typeof capturePluginGeneration
   expectBytes(artifact.resolve(path.join(source, "index.cjs")));
 }
 
-function runChild(script: string, args: string[] = [], exitCode = 0, execArgv: string[] = []) {
+function runChild(
+  script: string,
+  args: string[] = [],
+  exitCode = 0,
+  execArgv: string[] = [],
+  execPath = process.execPath,
+) {
+  const childRuntimeArgs = resolveRuntimeWorkerArgv(artifactUrl, execPath).slice(0, -1);
   const result = spawnSync(
-    process.execPath,
-    [...execArgv, ...runtimeArgs, "--input-type=module", "-e", script, ...args],
+    execPath,
+    [...execArgv, ...childRuntimeArgs, "--input-type=module", "-e", script, ...args],
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, encoding: "utf8", timeout: 15_000 },
   );
   expect(result.error).toBeUndefined();
@@ -160,6 +168,7 @@ function runChild(script: string, args: string[] = [], exitCode = 0, execArgv: s
   return result;
 }
 
+// Forced WeakRef collection needs V8; JSC may retain dead objects through conservative stack roots.
 it("does not retain the caller that first imports source capture storage", () => {
   runChild(
     `
@@ -191,6 +200,7 @@ it("does not retain the caller that first imports source capture storage", () =>
     [],
     0,
     ["--expose-gc"],
+    resolveTestNodeExecPath(),
   );
 });
 
@@ -245,6 +255,7 @@ it("releases failed native loads only when their source capture is disposed", ()
     [],
     0,
     ["--expose-gc"],
+    resolveTestNodeExecPath(),
   );
 });
 
