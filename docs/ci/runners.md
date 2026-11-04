@@ -173,7 +173,9 @@ iOS screenshot capture, Store Release, and its screenshot-only operation use `xc
 
 Before checkout, the screenshot capture and release jobs disable host Spotlight indexing on their disposable runners, matching release qualification. This reduces contention while retaining the existing simulator headroom checks. The optional `startup_probe` diagnostic keeps indexing enabled for its Spotlight positive controls. Local screenshot commands leave host indexing unchanged.
 
-The shared screenshot wrapper scans and mounts installed runtimes, ensures CI has the watchOS simulator runtime matching the selected Xcode SDK, downloading it only when unavailable, and logs the image, Xcode, and runtime inventory. Watch capture selects a supported device type from the latest available watchOS runtime, so an image without pre-created Watch devices still works. If CI device creation reports a missing Watch runtime path, the capture owner logs the disk-image inventory, deletes only that runtime's image, downloads the version matching the selected Xcode SDK, and verifies its mounted bundle path before retrying creation once. Missing or ambiguous image registrations, failed downloads, and failed retries stop capture with an error. The existing capture lifecycle still owns simulator creation and cleanup; the existing phone-only mode does not provision Watch runtimes.
+Screenshot-only runs retain the full build and XCTest logs and archived `.xcresult` bundles alongside phase and resource diagnostics, including when capture fails. These runs use synthetic screenshot fixtures without release credentials; the console keeps only the final 8 KiB of each native command's output.
+
+The shared screenshot wrapper scans and mounts installed runtimes, ensures CI has the watchOS simulator runtime matching the selected Xcode SDK, downloading it only when unavailable, and logs the image, Xcode, and runtime inventory. Watch capture selects a supported device type from the latest available watchOS runtime, so an image without pre-created Watch devices still works. If CI device creation reports a missing Watch runtime path, the capture owner logs the disk-image inventory, deletes only that runtime's image, downloads the version matching the selected Xcode SDK, and verifies its mounted bundle path before retrying creation once. Runtime replacement waits up to 120 seconds for deleting registrations and every observed MobileAsset path to disappear before downloading or importing a replacement; a successful delete command alone does not establish completion. Ambiguous image registrations, cleanup timeouts, failed downloads, and failed retries stop capture with an error. The existing capture lifecycle still owns simulator creation and cleanup; the existing phone-only mode does not provision Watch runtimes.
 
 The macOS critical-security CodeQL job temporarily stays on `macos-26-intel` with Xcode 26.6 because [Swift build tracing is unsupported on macOS 27 and Xcode 27](https://github.com/github/codeql/issues/22742). This preserves Swift security coverage until upstream restores traced-build support. It continues to build the native app for ARM64. The native app keeps its macOS 26.2 deployment target, shared Swift packages keep macOS 15, and the Tauri companion keeps macOS 13.0 through its package configuration and explicit build environment.
 
@@ -427,6 +429,21 @@ and other rows remain unchanged. Main-shaped qualification dispatches retain
 this exact-head SDK report alongside push coverage and use the admitted runner
 backend. They use the full validation tier; the main validation tier is reserved
 for ordinary same-revision manual or scheduled validation.
+
+### Boat build qualification
+
+A maintainer can dispatch `ci.yml` with `runner_backend=boat`,
+`release_gate=true`, `pull_request_number`, and `target_ref` set to the full
+current same-repository PR head. The workflow branch and revision must match
+that head. Existing maintainer and exact-head admission applies.
+
+The first attempt runs only `build-artifacts` on `boat-xlarge`, using store-only
+dependency setup. The rest of the plan and its runner routes use `hybrid`.
+Retries use the existing hosted route. Boat is not a repository backend value;
+this pilot does not change defaults, fork admission, or worker limits. The Boat
+GitHub integration, repository access, and account capacity must be configured
+before dispatch. Resource, cache, and artifact behavior still require live
+qualification before expanding the cutover.
 
 ### RunsOn qualification
 

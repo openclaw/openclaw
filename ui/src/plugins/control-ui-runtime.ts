@@ -21,6 +21,7 @@ import type {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
+import { i18n } from "../i18n/lib/translate.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
@@ -417,15 +418,15 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         );
       };
       const complete = await raceWithTimeout(
-        racePromiseWithAbortSignal(
-          initialize(),
-          abort.signal,
-          () => new Error("Plugin UI activation ended."),
-        ),
+        racePromiseWithAbortSignal(initialize(), abort.signal),
         ACTIVATION_TIMEOUT_MS,
         () => {
+          const message = i18n.t("pluginUi.activationTimedOut");
+          // A stalled loader has not registered its lazy copy; keep the deadline synchronous.
           throw new Error(
-            "Plugin UI initialization timed out. Check the plugin and reload its UI.",
+            message === "pluginUi.activationTimedOut"
+              ? i18n.t("pluginUi.inlineUnavailable")
+              : message,
           );
         },
       );

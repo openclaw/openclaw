@@ -244,7 +244,7 @@ it.each(["cancelled", ""])("explains a sign-in the Gateway cancelled (%j)", asyn
   );
   const { page } = await mountSetup(request);
   await click(page, "Sign in with ChatGPT");
-  alertText(page).toBe("Provider sign-in was cancelled.");
+  alertText(page).toBe("Sign-in canceled");
 });
 
 it("uses shell-neutral native capabilities for fallback, Gateway selection, and permissions", async () => {

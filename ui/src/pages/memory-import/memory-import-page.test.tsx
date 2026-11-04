@@ -187,7 +187,7 @@ describe("MemoryImportPage", () => {
     context.gateway.snapshot.phase = "stopped";
     const page = await mountPage(context);
 
-    expect(page.textContent).toContain("Connect to the gateway to import memory.");
+    expect(page.textContent).toContain("Reconnect to import memory.");
     expect(page.querySelector(".memory-import")).toBeNull();
     expect(page.textContent).not.toContain("Memory import requires operator.admin access.");
     expect(request).not.toHaveBeenCalled();
@@ -195,7 +195,7 @@ describe("MemoryImportPage", () => {
     context.gateway.snapshot.phase = "connected";
     context.notify();
     await waitForButton(page, "import-provider-button");
-    expect(page.textContent).not.toContain("Connect to the gateway to import memory.");
+    expect(page.textContent).not.toContain("Reconnect to import memory.");
     expect(page.textContent).toContain("/tmp/openclaw-research");
   });
 

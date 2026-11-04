@@ -2,12 +2,14 @@ import { asNullableRecord as readThemeRecord } from "@openclaw/normalization-cor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   THEME_ID_PATTERN,
+  ThemeValidationError,
   describeThemeLabel,
   requireThemeId,
   type ImportedCustomTheme,
 } from "../../app/custom-theme.ts";
-import { normalizeThemePalette } from "../../app/theme-palette.ts";
+import { MissingThemeTokenError, normalizeThemePalette } from "../../app/theme-palette.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { readResponseTextWithLimit } from "../../lib/response-body.ts";
 
@@ -52,7 +54,30 @@ function normalizePastedThemeInput(input: string): string {
   return embeddedUrl ?? inputValue;
 }
 
+export function formatThemeValidationError(error: unknown): string {
+  if (error instanceof MissingThemeTokenError) {
+    return t("configView.appearance.themeImport.missingToken", { token: error.message });
+  }
+  if (error instanceof ThemeValidationError) {
+    return error.message
+      ? t("configView.appearance.themeImport.invalidToken", { token: error.message })
+      : t("configView.appearance.themeImport.invalidLink");
+  }
+  return formatUiError(error);
+}
+
 export async function importCustomThemeFromUrl(input: string): Promise<ImportedCustomTheme> {
+  try {
+    return await importTheme(input);
+  } catch (error) {
+    if (error instanceof ThemeValidationError) {
+      throw new Error(formatThemeValidationError(error), { cause: error });
+    }
+    throw error;
+  }
+}
+
+async function importTheme(input: string): Promise<ImportedCustomTheme> {
   const normalized = normalizePastedThemeInput(input);
   let parsed: URL;
   try {
@@ -97,7 +122,9 @@ export async function importCustomThemeFromUrl(input: string): Promise<ImportedC
       }
     }
     if (!response.ok) {
-      throw new Error(t("configView.appearance.importErrors.http", { status: String(response.status) }));
+      throw new Error(
+        t("configView.appearance.importErrors.http", { status: String(response.status) }),
+      );
     }
     const text = await readResponseTextWithLimit(response, {
       maxBytes: MAX_TWEAKCN_THEME_BYTES,
