@@ -203,14 +203,19 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Batch105, pinned main `c8094c112b45`: qualify a rendered-response barrier in the
-empty native-session catalog browser case. Request capture alone does not prove
-that the catalog response was applied. The proposed same-response nonempty
-sentinel must render before the existing Codex/Claude absence assertions.
-This prerequisite ledger-only draft leaves the primary and production unchanged.
-Official baseline, identical actual-owner fault controls, restored candidate,
-focused checks, fresh review and exact-head CI/security are pending. Preserve
-all six declarations/seven cases; no runtime repair or removal credit yet.
+Batch105, pinned main `c8094c112b45`: add a same-response nonempty catalog
+and await its rendered row before the existing empty Codex/Claude absence checks.
+All six declarations/seven cases and both absence assertions remain. Official
+unchanged and clean candidate browser runs each pass seven cases. Discarding
+catalogs at the actual response-application owner passes the original selected
+case but fails the repaired case at its positive visibility assertion; six other
+cases are intentionally skipped in each control. Production is restored exactly.
+The native reporter redacts verbose names; actual seven-case totals and unchanged
+source declaration/title inventory are recorded separately. Four added test lines
+have an exact per-change allocation; the shared scalar is unchanged. Scoped UI
+test types, typed lint, formatting, ledger compilation, whitespace and the line
+ratchet pass. Fresh review and exact-head CI/security remain required gates.
+No production behavior or source-census reclassification is claimed.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
