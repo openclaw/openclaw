@@ -447,6 +447,7 @@ function renderSidebarMenus(
             archiveAllowed={archiveAllowed()}
             deleteAllowed={deleteAllowed()}
             cloudWorkerStopAllowed={cloudWorkerStopAllowed()}
+            cloudWorkerStopLabel={t(cloudWorkerStopAction()?.copyKey ?? "sessionsView.stopWorker")}
             groups={view.knownSessionGroups()}
             currentOwner={session().owner?.actor ?? null}
             work={batchRows() ? null : projected.sessionMenuWork}
@@ -526,7 +527,7 @@ function renderSidebarMenus(
                       if (!actionSignal.aborted) {
                         showToast({
                           severity: "error",
-                          message: error instanceof Error ? error.message : String(error),
+                          message: formatUiError(error),
                         });
                       }
                     });

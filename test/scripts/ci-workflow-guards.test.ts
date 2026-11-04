@@ -815,6 +815,7 @@ AFTER_CD
     const workflow = readWorkflow(".github/workflows/stale.yml");
     expect(Object.keys(workflow.jobs)).toEqual(["stale-lifecycle"]);
     const job = workflow.jobs["stale-lifecycle"];
+    expect(job["runs-on"]).toBe("ubuntu-24.04");
     const script = String(
       requiredWorkflowStep(job.steps, "Evaluate issue/PR inactivity").with?.script,
     );

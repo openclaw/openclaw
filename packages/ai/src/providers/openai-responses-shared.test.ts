@@ -282,8 +282,9 @@ describe("convertResponsesMessages", () => {
     ["provider", convertResponsesMessages],
     ["transport", convertTransportResponsesMessages],
   ] as const)("preserves frozen %s bytes, identities and replay fences", (_style, convert) => {
+    const inspect = vi.fn(isDeeplyFrozenPlainData);
     const host = createAiTransportHost({
-      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData: inspect },
     });
     runWithAiTransportHost(host, () => {
       const model: Model = { ...nativeOpenAIModel, input: ["text", "image"] };
@@ -329,9 +330,7 @@ describe("convertResponsesMessages", () => {
         expect(JSON.stringify(build(target, options))).not.toContain("ciphertext");
         const again = build();
         expect(JSON.stringify(again)).toBe(golden);
-        for (const index of [1, 2, 3]) {
-          expect(again[index]).toBe(first[index]);
-        }
+        first.slice(1, 4).forEach((item, index) => expect(again[index + 1]).toBe(item));
       }
       const idless = convert(model, context, testAllowedToolCallProviders, {
         ...reasoningReplayIdentity,
@@ -341,6 +340,7 @@ describe("convertResponsesMessages", () => {
         golden.replace(/"id":"(?:rs_prior|msg_prior|fc_read)",/g, ""),
       );
       expect(first.slice(1, 4).every(isDeeplyFrozenPlainData)).toBe(true);
+      expect(inspect.mock.calls.filter(([value]) => value === context.messages[1])).toHaveLength(1);
     });
   });
 
