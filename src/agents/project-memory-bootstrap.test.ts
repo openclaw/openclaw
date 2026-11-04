@@ -441,8 +441,15 @@ it.each(["legacy", "native", "open", "close"])(
     if (stage === "close") {
       runtimeMocks.listCurated.mockResolvedValue({ hits: nativeEntries });
     }
+    const caller = new AbortController();
     let result: string[] | undefined;
-    const preparation = bootstrap().then((lines) => {
+    const preparation = bootstrap({
+      context: {
+        authority: { kind: "host", operation: "project-test" },
+        signal: caller.signal,
+        assertCurrent() {},
+      },
+    }).then((lines) => {
       result = lines;
     });
     try {
@@ -450,6 +457,8 @@ it.each(["legacy", "native", "open", "close"])(
       await vi.advanceTimersByTimeAsync(1_000);
       expect(result).toEqual([]);
       expect(logMocks.warn).toHaveBeenCalledWith(expect.stringContaining("1000ms budget"));
+      expect(caller.signal.aborted).toBe(false);
+      caller.abort();
       if (stage !== "legacy") {
         const context = runtimeMocks.getProvider.mock.calls[0]?.[0].context;
         expect(context?.signal.aborted).toBe(true);

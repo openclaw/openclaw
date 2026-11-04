@@ -208,7 +208,9 @@ or unavailable recall still requires disclosure.
 Automatic project recall has a one-second preparation budget, including provider
 startup and cleanup. If the budget expires, the turn continues without project
 candidates and the Gateway logs `project memory recall skipped` with the reason.
-Late results are discarded; memory tools remain available for explicit retrieval.
+Late results are discarded. The read may finish under the current turn's existing
+authority; the budget does not cancel storage work. Memory tools remain available
+for explicit retrieval.
 Cold or busy stores can therefore omit automatic recall on consecutive turns;
 explicit retrieval uses the memory tool's own lifetime rather than this budget.
 
