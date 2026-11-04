@@ -361,7 +361,8 @@ const startupEnglish = {
       "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
     socketRefused:
       "Browser refused the Gateway WebSocket for security reasons. Check the Gateway WebSocket URL and browser security policy.",
-    socketCreateFailed: "Could not create the Gateway WebSocket: {message}",
+    socketCreateFailed:
+      "Couldn’t create the Gateway WebSocket. Check the Gateway WebSocket URL and browser security policy. Details: {message}",
     socketTimeout: "gateway websocket opening timed out after {milliseconds}ms",
   },
   pluginUi: {

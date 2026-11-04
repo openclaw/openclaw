@@ -17,7 +17,8 @@ const enLocalErrors = {
     gatewayChanged: "Gateway changed before the notification change could be saved.",
     manageDenied: "Your Gateway access does not allow managing browser notifications.",
     readDenied: "Your Gateway access does not allow reading notification preferences.",
-    vapidKey: "Failed to retrieve VAPID public key",
+    vapidKey:
+      "Couldn’t retrieve the VAPID public key. Check the Gateway connection and try enabling notifications again.",
     serviceWorkerTimeout: "Service worker not ready (timed out)",
     unavailable:
       "Web Push is unavailable in this browser. On iPhone or iPad, add OpenClaw to the Home Screen and open the installed app.",
