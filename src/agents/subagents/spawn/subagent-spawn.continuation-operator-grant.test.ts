@@ -116,6 +116,8 @@ async function operatorConnection(gateway: ReturnType<typeof gatewayInstance>, s
     scopes,
     sourceIngress: "internal",
   });
+  // The handshake binds access policy: none configured, so no plugin grant (null).
+  fixture.client.internal = { ...fixture.client.internal, operatorAccessAuthority: null };
   let connected = true;
   const scope = {
     context: gateway.context,

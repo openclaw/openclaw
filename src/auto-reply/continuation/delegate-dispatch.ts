@@ -29,6 +29,7 @@ import type {
   DelegateDispatchParams,
   DelegateDispatchResult,
 } from "./delegate-dispatch-contract.js";
+import { runUnderContinuationDelegateDispatchGrant } from "./delegate-dispatch-grant.js";
 import { armDelegateDispatchHedge, clearDelegateDispatchHedge } from "./delegate-dispatch-hedge.js";
 import {
   buildDelegateSpawnRequest,
@@ -445,30 +446,40 @@ export async function dispatchToolDelegates(
         rejected++;
         continue;
       }
-      spawnAttempted = true;
-      const result = await spawnSubagentDirect(
-        buildDelegateSpawnRequest({
-          delegate,
-          nextHop,
-          maxChainLength,
-          chainState: {
-            startedAt: plannedTerminalChainState.chainStartedAt,
-            tokens,
-            chainId: dispatchChainId,
-          },
-          silent,
-          silentWake,
-          ...(spawnTraceparent ? { traceparent: spawnTraceparent } : {}),
-        }),
+      // A refused grant throws before the spawn: a terminal rejection, never an uncertain spawn.
+      const result = await runUnderContinuationDelegateDispatchGrant(
         {
-          agentSessionKey: sessionKey,
-          requesterAgentIdOverride: activeDispatch.ownerAgentId,
-          ...(delegate.originRunId ? { requesterTurnRunId: delegate.originRunId } : {}),
-          agentChannel: ctx.agentChannel,
-          agentAccountId: ctx.agentAccountId,
-          agentTo: ctx.agentTo,
-          agentThreadId: ctx.agentThreadId,
-          continuationDelegateAdmission: activeDispatch.authority,
+          grant: delegate.dispatchGrant,
+          ownerSessionKey: sessionKey,
+          resolveGatewayContext: ctx.resolveGatewayContext,
+        },
+        () => {
+          spawnAttempted = true;
+          return spawnSubagentDirect(
+            buildDelegateSpawnRequest({
+              delegate,
+              nextHop,
+              maxChainLength,
+              chainState: {
+                startedAt: plannedTerminalChainState.chainStartedAt,
+                tokens,
+                chainId: dispatchChainId,
+              },
+              silent,
+              silentWake,
+              ...(spawnTraceparent ? { traceparent: spawnTraceparent } : {}),
+            }),
+            {
+              agentSessionKey: sessionKey,
+              requesterAgentIdOverride: activeDispatch.ownerAgentId,
+              ...(delegate.originRunId ? { requesterTurnRunId: delegate.originRunId } : {}),
+              agentChannel: ctx.agentChannel,
+              agentAccountId: ctx.agentAccountId,
+              agentTo: ctx.agentTo,
+              agentThreadId: ctx.agentThreadId,
+              continuationDelegateAdmission: activeDispatch.authority,
+            },
+          );
         },
       );
 

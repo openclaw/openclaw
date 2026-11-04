@@ -131,6 +131,13 @@ const PendingDelegateStateSchema = z
     inheritedSilent: z.boolean().optional(),
     inheritedWake: z.boolean().optional(),
     originRunId: z.string().min(1).optional(),
+    dispatchGrant: z
+      .strictObject({
+        source: z.unknown(),
+        ownerSessionKey: z.string().min(1),
+        expiresAt: z.number().int().nonnegative(),
+      })
+      .optional(),
     // Pre-cure rows may contain these overrides. Decode accepts but never projects
     // them, so restart rebinds the spawn to the authoritative custody owner.
     spawnRequesterSessionKey: z.string().min(1).optional(),
@@ -264,6 +271,7 @@ export function encodeDelegateState(
     ...(delegate.inheritedSilent ? { inheritedSilent: true } : {}),
     ...(delegate.inheritedWake ? { inheritedWake: true } : {}),
     ...(delegate.originRunId ? { originRunId: delegate.originRunId } : {}),
+    ...(delegate.dispatchGrant ? { dispatchGrant: delegate.dispatchGrant } : {}),
   };
 }
 

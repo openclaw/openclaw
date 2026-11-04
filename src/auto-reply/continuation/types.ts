@@ -126,6 +126,17 @@ export type PendingContinuationDelegate = {
   spawnAttempt?: { attemptId: number; childRunId: string };
   /** Every child run ID recorded on the record, for the registry handoff check. */
   recordedChildRunIds?: readonly string[];
+  /** The electing Gateway operator's bounded authority; dispatch restores it (#1271). */
+  dispatchGrant?: ContinuationDelegateDispatchGrant;
+};
+
+/** Captured when a Gateway operator elects a delegate; see delegate-dispatch-grant.ts. */
+export type ContinuationDelegateDispatchGrant = {
+  /** Durable operator source: principal and scope ceiling, decoded by its restore owner. */
+  source: unknown;
+  /** The owner session the elector authorized the spawn under. */
+  ownerSessionKey: string;
+  expiresAt: number;
 };
 
 // ---------------------------------------------------------------------------

@@ -1,3 +1,4 @@
+import { runUnderContinuationDelegateDispatchGrant } from "../auto-reply/continuation/delegate-dispatch-grant.js";
 import { dispatchToolDelegates } from "../auto-reply/continuation/delegate-dispatch.js";
 import {
   createContinuationOwnerSessionLoader,
@@ -535,41 +536,46 @@ async function coordinateSubagentContinuationInOwnedWork(params: {
           );
           continue;
         }
-        spawnAttempted = true;
-        const spawnResult = await spawnSubagentDirect(
-          {
-            task: `[continuation:chain-hop:${nextHop}] Tool-delegated from sub-agent (depth ${childDepth}): ${delegate.task}`,
-            ...(toolSilent ? { silentAnnounce: true } : {}),
-            ...(toolWake ? { silentAnnounce: true, wakeOnReturn: true } : {}),
-            ...(delegate.targetSessionKey
-              ? { continuationTargetSessionKey: delegate.targetSessionKey }
-              : {}),
-            ...(delegate.targetSessionKeys?.length
-              ? { continuationTargetSessionKeys: delegate.targetSessionKeys }
-              : {}),
-            ...(delegate.fanoutMode ? { continuationFanoutMode: delegate.fanoutMode } : {}),
-            drainsContinuationDelegateQueue: true,
-            continuationChainState: await accounting.buildChildContinuationSpawnState(nextHop),
-            ...(delegate.flowId ? { continuationDelegateFlowId: delegate.flowId } : {}),
-            ...(delegate.spawnAttempt
-              ? { continuationChildRunId: delegate.spawnAttempt.childRunId }
-              : {}),
-            ...(delegate.model ? { model: delegate.model } : {}),
-            ...(delegate.attachments ? { attachments: delegate.attachments } : {}),
-            ...(delegate.attachAs?.mountPath
-              ? { attachMountPath: delegate.attachAs.mountPath }
-              : {}),
-          },
-          {
-            agentSessionKey: params.childSessionKey,
-            completionOwnerKey: params.targetRequesterSessionKey,
-            requesterAgentIdOverride: activeDispatch.ownerAgentId,
-            ...(delegate.originRunId ? { requesterTurnRunId: delegate.originRunId } : {}),
-            agentChannel: params.targetRequesterOrigin?.channel ?? undefined,
-            agentAccountId: params.targetRequesterOrigin?.accountId ?? undefined,
-            agentTo: params.targetRequesterOrigin?.to ?? undefined,
-            agentThreadId: params.targetRequesterOrigin?.threadId ?? undefined,
-            continuationDelegateAdmission: activeDispatch.authority,
+        const spawnResult = await runUnderContinuationDelegateDispatchGrant(
+          { grant: delegate.dispatchGrant, ownerSessionKey: params.childSessionKey },
+          async () => {
+            spawnAttempted = true;
+            return await spawnSubagentDirect(
+              {
+                task: `[continuation:chain-hop:${nextHop}] Tool-delegated from sub-agent (depth ${childDepth}): ${delegate.task}`,
+                ...(toolSilent ? { silentAnnounce: true } : {}),
+                ...(toolWake ? { silentAnnounce: true, wakeOnReturn: true } : {}),
+                ...(delegate.targetSessionKey
+                  ? { continuationTargetSessionKey: delegate.targetSessionKey }
+                  : {}),
+                ...(delegate.targetSessionKeys?.length
+                  ? { continuationTargetSessionKeys: delegate.targetSessionKeys }
+                  : {}),
+                ...(delegate.fanoutMode ? { continuationFanoutMode: delegate.fanoutMode } : {}),
+                drainsContinuationDelegateQueue: true,
+                continuationChainState: await accounting.buildChildContinuationSpawnState(nextHop),
+                ...(delegate.flowId ? { continuationDelegateFlowId: delegate.flowId } : {}),
+                ...(delegate.spawnAttempt
+                  ? { continuationChildRunId: delegate.spawnAttempt.childRunId }
+                  : {}),
+                ...(delegate.model ? { model: delegate.model } : {}),
+                ...(delegate.attachments ? { attachments: delegate.attachments } : {}),
+                ...(delegate.attachAs?.mountPath
+                  ? { attachMountPath: delegate.attachAs.mountPath }
+                  : {}),
+              },
+              {
+                agentSessionKey: params.childSessionKey,
+                completionOwnerKey: params.targetRequesterSessionKey,
+                requesterAgentIdOverride: activeDispatch.ownerAgentId,
+                ...(delegate.originRunId ? { requesterTurnRunId: delegate.originRunId } : {}),
+                agentChannel: params.targetRequesterOrigin?.channel ?? undefined,
+                agentAccountId: params.targetRequesterOrigin?.accountId ?? undefined,
+                agentTo: params.targetRequesterOrigin?.to ?? undefined,
+                agentThreadId: params.targetRequesterOrigin?.threadId ?? undefined,
+                continuationDelegateAdmission: activeDispatch.authority,
+              },
+            );
           },
         );
         if (spawnResult.status === "accepted") {

@@ -4,6 +4,7 @@
 // then custody recovery (phase B). Phase A also runs on demand under the first
 // custody mutation, so a turn admitted before this boot runs reads committed
 // custody.
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { reapOrphanedContinuationCustody } from "./custody-orphan-reaper.js";
@@ -62,6 +63,8 @@ export async function maintainContinuationCustody(params: {
  */
 export async function runContinuationCustodyBoot(params: {
   armedAt: number;
+  /** The booting Gateway; recovered operator delegates restore their grants on it. */
+  resolveGatewayContext?: GatewayContextResolver;
   whenSubagentRegistryActivated: () => Promise<void>;
   /**
    * Runs one custody step under the caller's work admission. The registry
@@ -79,11 +82,14 @@ export async function runContinuationCustodyBoot(params: {
   // 3. Phase B: custody recovery. It never re-hydrates: phase A's projection
   //    has been kept current by every commit since, and a late re-read would
   //    overwrite newer committed facts.
-  return await admit(() => recoverContinuationCustody(params.armedAt));
+  return await admit(() =>
+    recoverContinuationCustody(params.armedAt, params.resolveGatewayContext),
+  );
 }
 
 async function recoverContinuationCustody(
   armedAt: number,
+  resolveGatewayContext: GatewayContextResolver | undefined,
 ): Promise<ContinuationCustodyBootSummary> {
   await whenContinuationCustodyReady();
   const [delegateRecovery, workModule, workAuthority] = await Promise.all([
@@ -96,6 +102,7 @@ async function recoverContinuationCustody(
   const delegates = await delegateRecovery.recoverPendingContinuationDelegates({
     queuedCreatedAtOrBefore: armedAt,
     includeRunningUpdatedAtOrBefore: armedAt,
+    ...(resolveGatewayContext ? { ctx: { resolveGatewayContext } } : {}),
   });
   const { requeued: awaitingNextCompactionRequeued } =
     await delegateRecovery.requeueAwaitingNextCompactionDelegates({
