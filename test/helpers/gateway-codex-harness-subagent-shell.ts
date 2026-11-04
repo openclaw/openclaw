@@ -1,9 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect } from "vitest";
-import type { ToolsInvokeResult } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../../src/gateway/client.js";
 import { extractAssistantTexts, formatAssistantTextPreview } from "./gateway-codex-harness.js";
 
@@ -29,51 +27,63 @@ type ProbeParams = {
 async function spawnHiddenSubagent(
   params: ProbeParams & { task: string },
 ): Promise<{ childSessionKey: string; replies: string[] }> {
-  const invoked = await params.client.request<ToolsInvokeResult>(
-    "tools.invoke",
-    {
-      name: "sessions_spawn",
-      sessionKey: params.sessionKey,
-      args: {
-        task: params.task,
-        agentId: "dev",
-        thinking: params.thinking,
-        mode: "run",
-        cleanup: "keep",
-        context: "isolated",
-        lightContext: true,
-        expectsCompletionMessage: false,
-        runTimeoutSeconds: params.agentTimeoutSeconds,
-      },
-    },
-    { timeoutMs: params.requestTimeoutMs },
-  );
-  expect(invoked.ok, JSON.stringify(invoked)).toBe(true);
-  const result = asOptionalRecord(asOptionalRecord(invoked.output)?.details);
-  if (
-    result?.status !== "accepted" ||
-    typeof result.childSessionKey !== "string" ||
-    !result.childSessionKey.includes(":subagent:") ||
-    typeof result.runId !== "string"
-  ) {
-    throw new Error(`hidden subagent spawn failed: ${JSON.stringify(invoked)}`);
-  }
-  const waited: { status?: string } = await params.client.request(
-    "agent.wait",
-    { runId: result.runId, timeoutMs: params.requestTimeoutMs },
-    { timeoutMs: params.requestTimeoutMs + 5_000 },
-  );
-  if (waited?.status !== "ok") {
-    throw new Error(`agent.wait failed for ${result.runId}: ${JSON.stringify(waited)}`);
-  }
-  const history: { messages?: unknown[] } = await params.client.request("chat.history", {
-    sessionKey: result.childSessionKey,
-    limit: 40,
-  });
-  return {
-    childSessionKey: result.childSessionKey,
-    replies: extractAssistantTexts(history.messages ?? []),
+  // Spawn through the parent's own model turn, as a real user session does.
+  // A Gateway tools.invoke spawn makes the child inherit that HTTP surface's
+  // default denies (exec, apply_patch, ...), which correctly remove its shell.
+  const listSubagents = async (): Promise<Set<string>> => {
+    const listed: { sessions?: Array<{ key?: string }> } = await params.client.request(
+      "sessions.list",
+      { includeGlobal: true, limit: 200 },
+    );
+    return new Set(
+      (listed.sessions ?? [])
+        .map((entry) => entry.key)
+        .filter((key): key is string => typeof key === "string" && key.includes(":subagent:")),
+    );
   };
+  const before = await listSubagents();
+  const spawnArgs = {
+    task: params.task,
+    agentId: "dev",
+    mode: "run",
+    cleanup: "keep",
+    context: "isolated",
+    lightContext: true,
+    runTimeoutSeconds: params.agentTimeoutSeconds,
+  };
+  await params.client.request(
+    "agent",
+    {
+      sessionKey: params.sessionKey,
+      idempotencyKey: `idem-${randomBytes(6).toString("hex")}`,
+      message:
+        "Call the sessions_spawn tool exactly once with these JSON arguments. Do not do the task " +
+        "yourself. Then reply exactly SPAWNED.\n" +
+        JSON.stringify(spawnArgs),
+    },
+    { expectFinal: true, timeoutMs: params.requestTimeoutMs },
+  );
+  const spawned = [...(await listSubagents())].filter((key) => !before.has(key));
+  if (spawned.length !== 1) {
+    throw new Error(`parent turn spawned ${spawned.length} subagents: ${JSON.stringify(spawned)}`);
+  }
+  const childSessionKey = spawned[0]!;
+  const deadline = Date.now() + params.requestTimeoutMs;
+  let replies: string[] = [];
+  while (Date.now() < deadline) {
+    const history: { messages?: unknown[] } = await params.client.request("chat.history", {
+      sessionKey: childSessionKey,
+      limit: 40,
+    });
+    replies = extractAssistantTexts(history.messages ?? []).filter((text) => text.trim());
+    if (replies.length > 0) {
+      return { childSessionKey, replies };
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 3_000);
+    });
+  }
+  return { childSessionKey, replies };
 }
 
 /**
