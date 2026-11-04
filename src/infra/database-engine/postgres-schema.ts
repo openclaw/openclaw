@@ -105,7 +105,7 @@ export function withPostgresSearchExtensions(
   return { ...schema, searchExtensions: JSON.parse(snapshot.metadata.search_extensions ?? "{}") };
 }
 
-export function postgresSchemaFingerprint(
+function postgresSchemaFingerprint(
   catalog: readonly PostgresCatalogFact[],
   scratch?: { from: string; to: string },
 ): string {
