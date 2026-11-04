@@ -90,14 +90,18 @@ function createSubscriptionState(options?: {
   return { selected, state, subscribeMessages, unsubscribeMessages, publishedLoads };
 }
 
-it("makes the new subscription ready before the old unsubscribe settles", async () => {
+it.each([0, 120_000])("makes the new subscription ready before old release (clock step %s)", async (step) => {
+  useFakeClock();
   const release = createDeferred();
-  const { state, selected, unsubscribeMessages } = createSubscriptionState({
+  const { state, selected, subscribeMessages, unsubscribeMessages } = createSubscriptionState({
     previous: previousSubscription,
     unsubscribeMessages: vi.fn(() => release.promise),
   });
+  subscribeMessages.mockRejectedValueOnce(sessionChanged());
   const sync = syncSubscription(state);
   await Promise.resolve();
+  vi.setSystemTime(Date.now() + step);
+  await vi.advanceTimersByTimeAsync(500);
   expect(unsubscribeMessages).toHaveBeenCalledOnce();
   try {
     await vi.waitFor(() => expect(state.chatSessionMessageSubscription).toEqual(selected));
@@ -195,27 +199,6 @@ it.each(["dispose", "selection", "capability", "deadline"] as const)(
   },
 );
 
-it("retries the message subscription when the wall clock jumps forward", async () => {
-  useFakeClock();
-  const selected = { key: "agent:main:selected", agentId: null } satisfies Subscription;
-  let calls = 0;
-  const subscribeMessages = vi.fn<Subscribe>(async () => {
-    calls += 1;
-    if (calls === 1) {
-      throw sessionChanged();
-    }
-    return selected;
-  });
-  const { state } = createSubscriptionState({ subscribeMessages });
-  const pending = syncSubscription(state);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(subscribeMessages).toHaveBeenCalledTimes(1);
-  vi.setSystemTime(Date.now() + 120_000);
-  await vi.advanceTimersByTimeAsync(500);
-  await expect(pending).resolves.toBe(true);
-  expect(subscribeMessages.mock.calls.length).toBeGreaterThan(1);
-  expect(state.chatSessionMessageSubscription).toEqual(selected);
-});
 
 it.each([
   sessionChanged({ code: "FORBIDDEN" }),

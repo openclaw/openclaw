@@ -1,2 +1,0 @@
-# Discord guild-icon cache clock-step regression coverage (#192572).
-28
