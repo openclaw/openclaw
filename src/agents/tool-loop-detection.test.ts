@@ -49,9 +49,7 @@ function createLoop(toolName: string, params: unknown) {
 }
 
 function argsHash(params: unknown) {
-  const state = createState();
-  recordToolCall(state, "browser", params);
-  return state.toolCallHistory?.[0]?.argsHash;
+  return createLoop("browser", params).record(jsonResult({}))?.argsHash;
 }
 
 function outcomeHash(text: string) {
@@ -137,6 +135,7 @@ describe("tool-loop-detection", () => {
   it("warns only for history belonging to the current run", () => {
     const state = createState();
     const params = { path: "/same.txt" };
+    expect(detectToolCallLoop(state, "read", params)).toEqual({ stuck: false });
     for (let index = 0; index < WARNING_THRESHOLD; index++) {
       recordToolCall(state, "read", params, `call-${index}`, { runId: "run-1" });
     }
@@ -150,10 +149,6 @@ describe("tool-loop-detection", () => {
       stuck: false,
     });
     expect(detectToolCallLoop(state, "read", params)).toEqual({ stuck: false });
-  });
-
-  it("allows calls without history", () => {
-    expect(createLoop("read", {}).detect()).toEqual({ stuck: false });
   });
 
   it.each(["stable", "progress", "pending", "unanchored-veto"] as const)(
@@ -172,7 +167,11 @@ describe("tool-loop-detection", () => {
           result:
             kind === "unanchored-veto" && toolName === "write"
               ? veto
-              : jsonResult({ value: kind === "progress" && toolName === "read" ? index : "same" }),
+              : kind === "stable" && toolName === "exec"
+                ? execResult({ status: "completed", exitCode: 1, output: `failure pid=${index}` })
+                : jsonResult({
+                    value: kind === "progress" && toolName === "read" ? index : "same",
+                  }),
         });
       }
       const result = detectToolCallLoop(state, "exec", {});

@@ -29,11 +29,15 @@ export function getCrossToolNoProgressStreak(
     if (!record.resultHash) {
       continue;
     }
+    const resultHash =
+      record.outcomeKind === "terminal-exec-failure"
+        ? (record.failureIdentityHash ?? record.resultHash)
+        : record.resultHash;
     // Progress by any participating signature ends the shared no-progress tail.
-    if (outcome.resultHash && outcome.resultHash !== record.resultHash) {
+    if (outcome.resultHash && outcome.resultHash !== resultHash) {
       break;
     }
-    outcome.resultHash = record.resultHash;
+    outcome.resultHash = resultHash;
     outcome.count += outcome.vetoes + 1;
     outcome.concrete += 1;
     outcome.vetoes = 0;
