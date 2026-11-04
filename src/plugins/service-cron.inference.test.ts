@@ -6,7 +6,8 @@ import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createPluginServiceCronGetter } from "./service-cron.js";
 import { createServiceCronHost } from "./services.test-support.js";
 
-vi.mock("../gateway/cron-inference-capture.js", () => ({
+vi.mock("../gateway/cron-inference-capture.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/cron-inference-capture.js")>()),
   captureCronCreatedInference: vi.fn(),
 }));
 
