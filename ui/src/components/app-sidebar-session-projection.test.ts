@@ -343,7 +343,12 @@ it("reveals late active ancestry once per navigation without changing other disc
     childSessionKeys: [middle.key],
     containsActiveDescendant: true,
   });
-  const unrelated = sessionRow("unrelated");
+  const runningChild = sessionRow("unrelated-running", { hasActiveRun: true });
+  const unrelated = sessionRow("unrelated", {
+    children: [runningChild],
+    childSessionKeys: [runningChild.key],
+    containsActiveDescendant: true,
+  });
   treeProjection.children.restore(
     [root, middle, unrelated].map(({ key }) => ({
       key,
@@ -378,7 +383,7 @@ it("reveals late active ancestry once per navigation without changing other disc
   ]);
   projectTree([root, unrelated]);
   expect(treeProjection.children.isExpanded(middle.key)).toBe(false);
-  projectTree([], null);
+  projectTree([unrelated], null);
   projectTree([root, unrelated]);
   expect(treeProjection.children.isExpanded(middle.key)).toBe(true);
   expect(treeProjection.children.isExpanded(unrelated.key)).toBe(false);

@@ -54,11 +54,11 @@ export async function runActiveSessionRevealScenario(page: Page, baseUrl: string
     ...row("agent:main:dashboard:website", "Refresh the project website"),
     category: "Website",
   };
-  const unrelatedChild = row(
-    "agent:main:dashboard:website-links",
-    "Check website links",
-    unrelated.key,
-  );
+  const unrelatedChild = {
+    ...row("agent:main:dashboard:website-links", "Check website links", unrelated.key),
+    hasActiveRun: true,
+    activeRunIds: ["website-run"],
+  };
   const sessions = [root, middle, parent, ...siblings, leaf, unrelated, unrelatedChild];
   for (const session of sessions) {
     session.childSessions = sessions

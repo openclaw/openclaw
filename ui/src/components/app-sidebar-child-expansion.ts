@@ -16,7 +16,10 @@ export class SidebarChildExpansion {
 
   /** Opens a projection pass; a scope change drops state unless a snapshot handoff is pending. */
   beginPass(
-    input: SidebarExpansionScope & { selectedSessionKey: string | null },
+    input: SidebarExpansionScope & {
+      selectedSessionKey: string | null;
+      rows: readonly SidebarRecentSession[];
+    },
     previous: SidebarExpansionScope | null,
   ): void {
     const scopeChanged =
@@ -32,6 +35,22 @@ export class SidebarChildExpansion {
       this.observedChildKeys.clear();
     }
     this.restoredPending = false;
+    const reveal = (row: SidebarRecentSession): boolean => {
+      if (row.visuallyActive) {
+        return true;
+      }
+      if (!row.children.some(reveal)) {
+        return false;
+      }
+      if (!this.revealedAncestors.has(row.key)) {
+        this.revealedAncestors.add(row.key);
+        if (!this.isExpanded(row.key)) {
+          this.modes.set(row.key, "expanded");
+        }
+      }
+      return true;
+    };
+    input.rows.some(reveal);
   }
 
   keys(): string[] {
@@ -40,19 +59,7 @@ export class SidebarChildExpansion {
 
   observe(session: SidebarRecentSession, listLoaded: boolean): void {
     const previousChildren = this.observedChildKeys.get(session.key);
-    let mode = this.modes.get(session.key);
-    if (
-      this.activeSessionKey !== null &&
-      session.containsActiveDescendant &&
-      !this.revealedAncestors.has(session.key)
-    ) {
-      this.revealedAncestors.add(session.key);
-      // The tree producer already marks the selected path. Reopen its explicit
-      // collapses once per navigation in this existing observation pass.
-      if (mode === "collapsed-by-user") {
-        mode = undefined;
-      }
-    }
+    const mode = this.modes.get(session.key);
     // New children reveal their parent once; ordinary refreshes and reordering
     // must not undo an explicit collapse or the operator's Show more choice.
     const hasNewChild =
