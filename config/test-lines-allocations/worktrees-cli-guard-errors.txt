@@ -1,2 +1,0 @@
-# Show worktrees gc and exact-state guard messages instead of the generic CLI failure.
-19
