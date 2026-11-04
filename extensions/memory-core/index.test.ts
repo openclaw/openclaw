@@ -1,9 +1,19 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
@@ -291,6 +301,64 @@ describe("memory-core plugin runtime registration", () => {
       ).toEqual([["heartbeat", "cron"]]);
       expect(on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
       expect(subagentRun).not.toHaveBeenCalled();
+    }
+  });
+
+  it("fires conversation intents when the session target differs from the native chat id", async () => {
+    const stateDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-core-intents-")),
+    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      await fs.mkdir(path.dirname(resolveOpenClawAgentSqlitePath({ agentId: "main" })), {
+        recursive: true,
+      });
+      const on = vi.fn();
+      const { tools } = captureCapability({ config: {}, on });
+      const factory = tools.find(([, options]) => options?.names?.includes("intent"))?.[0];
+      assert(factory && "contextVersion" in factory, "Expected v2 intent factory");
+      const tool = factory.create({
+        config: {},
+        agentId: "main",
+        sessionKey: "agent:main:qa-channel:channel:channel:intent-en",
+        messageChannel: "qa-channel",
+        nativeChannelId: "intent-en",
+        requesterSenderId: "alice",
+        assertInvocationCurrent: () => {},
+      }) as AnyAgentTool;
+      await tool.execute("create", {
+        action: "create",
+        description: "Mention the release checklist.",
+        triggerKeywords: ["release"],
+        scope: "conversation",
+        senderScope: "sender",
+      });
+      const handler = on.mock.calls.find(([name]) => name === "before_prompt_build")?.[1];
+      assert(handler, "Expected before_prompt_build hook");
+
+      const result = await handler(
+        { prompt: "release notes are ready", messages: [] },
+        {
+          trigger: "user",
+          agentId: "main",
+          sessionKey: "agent:main:qa-channel:channel:channel:intent-en",
+          channel: "qa-channel",
+          messageProvider: "qa-channel",
+          channelId: "channel:intent-en",
+          chatId: "intent-en",
+          senderId: "alice",
+          hookInvocation: { assertActive: () => {} },
+        },
+      );
+
+      expect(result?.prependContext).toContain("Mention the release checklist.");
+    } finally {
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      vi.unstubAllEnvs();
+      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 
