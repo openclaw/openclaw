@@ -87,7 +87,9 @@ it.skipIf(hostPlatform !== "win32")("real Claude consumes exactly the relocated 
  const packageRoot=path.join(context.cwd,"node_modules/@anthropic-ai/claude-code");
  const metadata=JSON.parse(await readFile(path.join(packageRoot,"package.json"),"utf8"));
  const entry=path.join(packageRoot,typeof metadata.bin === "string" ? metadata.bin : metadata.bin.claude);
- context.args=[entry,"--print","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-prompt-tool","stdio","--permission-mode","default","--setting-sources","","--no-session-persistence","--strict-mcp-config","--mcp-config",'{"mcpServers":{}}',"--settings",JSON.stringify(CLAUDE_RESTRICTED_SETTINGS),"--allowedTools",tools.join(","),"--tools","Read","--disallowedTools","Write,Bash"];
+ expect(entry).toMatch(/\.exe$/i);
+ context.command=entry;
+ context.args=["--print","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-prompt-tool","stdio","--permission-mode","default","--setting-sources","","--no-session-persistence","--strict-mcp-config","--mcp-config",'{"mcpServers":{}}',"--settings",JSON.stringify(CLAUDE_RESTRICTED_SETTINGS),"--allowedTools",tools.join(","),"--tools","Read","--disallowedTools","Write,Bash"];
  let resolveRules:(value:unknown)=>void;
  let rejectRules:(error:unknown)=>void;
  const rules=new Promise<unknown>((resolve,reject)=>{resolveRules=resolve;rejectRules=reject;});
