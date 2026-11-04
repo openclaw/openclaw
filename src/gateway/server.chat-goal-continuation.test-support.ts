@@ -67,8 +67,8 @@ export function registerGoalAutomaticContinuationCases(
     await start("Finish the configuration change after human approval");
     await expectDrained();
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-    const entry = expectDefined(loadSessionEntry(scope()));
-    const goal = expectDefined(entry.goal);
+    const entry = expectDefined(loadSessionEntry(scope()), "session must remain after waiting");
+    const goal = expectDefined(entry.goal, "unfinished Goal must remain after waiting");
     expect(goal).toMatchObject({
       id: original?.id,
       objective: original?.objective,
