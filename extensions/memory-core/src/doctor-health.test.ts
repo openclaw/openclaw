@@ -330,7 +330,7 @@ describe("managed local embedding setup health check", () => {
             return prepare(file, options);
           }
           const allocation = vi.spyOn(fsSync, "mkdtempSync").mockImplementation((...args) => {
-            if (String(args[0]).includes("openclaw-sqlite-readonly-")) {
+            if (args[0].includes("openclaw-sqlite-readonly-")) {
               throw Object.assign(new Error("Temporary inspection storage exhausted"), {
                 code: "ENOSPC",
               });

@@ -1,9 +1,10 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, expect, it, vi } from "vitest";
-import { registerMemoryCoreDoctorChecks } from "../extensions/memory-core/doctor-health-api.js";
+import { registerMemoryCoreDoctorChecks } from "../extensions/memory-core/api.js";
 import {
   finishParams,
   updateResult,
@@ -105,7 +106,17 @@ afterEach(() => {
 it.each(["preflight", "copy-enospc", "corrupt-source"] as const)(
   "settles migrated package update readiness for %s",
   async (fault) => {
-    const stateDir = dirs.make("update-memory-inspection-");
+    const home = dirs.make("update-memory-inspection-home-");
+    const stateDir = path.join(home, ".openclaw");
+    fs.mkdirSync(stateDir);
+    // Model the isolated installation's OS account so real service admission sees canonical paths.
+    vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.stubEnv("OPENCLAW_HOME", home);
+    vi.stubEnv("OPENCLAW_PROFILE", "default");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
     vi.stubEnv(UPDATE_POST_CORE_CONVERGENCE_ENV, "1");
@@ -226,7 +237,12 @@ it.each(["preflight", "copy-enospc", "corrupt-source"] as const)(
         packageTransaction: transaction,
         rollbackBlockedReason: "state-migrated-no-rollback",
         opts: { json: true },
-        preManagedServiceStop: { stopped: true, running: true },
+        preManagedServiceStop: {
+          stopped: true,
+          running: true,
+          inspected: true,
+          runtimeInspected: true,
+        },
       }),
     ).catch((error: unknown) => ({ error }));
     if (fault !== "corrupt-source") {
