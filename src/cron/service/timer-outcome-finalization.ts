@@ -184,7 +184,7 @@ export async function finalizeCompletedCronRunOutcomes(
                 ? {
                     recomputeExpired: true,
                     ...(request.request?.preserveCadence
-                      ? { preserveExpiredPacedNextRunJobId: request.jobId }
+                      ? { preserveDisabledJobId: request.jobId }
                       : {}),
                   }
                 : {}),

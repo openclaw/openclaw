@@ -407,7 +407,7 @@
   white-space: normal;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 640px) {
   .model-providers__defaults .settings-row {
     flex-direction: column;
     align-items: stretch;

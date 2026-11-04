@@ -157,10 +157,17 @@ export function createSlackActions(
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     isToolDeliveryAction: ({ args }) =>
       typeof args.action === "string" && SLACK_TOOL_DELIVERY_ACTIONS.has(args.action),
-    prepareSendPayload: ({ ctx, to, payload }) =>
-      ctx.action === "send" && !shouldUseWorkspaceAwareSlackActionSend(to, ctx.toolContext)
-        ? payload
-        : null,
+    prepareSendPayload: ({ ctx, to, payload }) => {
+      if (ctx.action !== "send") {
+        return null;
+      }
+      // `replyBroadcast` has no durable payload field, so the core send path would drop it.
+      // Keep those sends on the plugin action path, which forwards `reply_broadcast`.
+      if (readBooleanParam(ctx.params, "replyBroadcast") === true) {
+        return null;
+      }
+      return shouldUseWorkspaceAwareSlackActionSend(to, ctx.toolContext) ? null : payload;
+    },
     handleAction: async (ctx) => {
       const { action, cfg, params: actionParams } = ctx;
       const accountId = ctx.accountId ?? undefined;
@@ -295,7 +302,9 @@ export function createSlackActions(
           action: messageAction,
           channelId: resolveChannelId(),
           messageId,
-          ...(action === "reactions" ? { limit: actionParams.limit } : {}),
+          ...(action === "reactions" || action === "list-pins"
+            ? { limit: actionParams.limit }
+            : {}),
         });
       }
 

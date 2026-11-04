@@ -43,10 +43,10 @@ const enBrowser = {
     notRunning: "The gateway browser is not running.",
     start: "Start browser",
     errors: {
-      pasteFailed: "Could not paste. Reconnect to a managed browser and try again.",
-      requestFailed: "Browser request failed: {error}",
+      pasteFailed: "Couldn’t paste. Reconnect to a managed browser and try again.",
+      requestFailed: "Couldn’t complete this browser request. Try again. {error}",
       downloadFailed:
-        "Could not download this file: {error}. Try again, or open it in your browser to save it.",
+        "Couldn’t download this file. Try again, or open it in your browser to save it. {error}",
       downloadEmpty: "No file returned.",
       screenshotPathMissing: "Browser screenshot did not return a media path.",
       screenshotFetchTimedOut: "Screenshot fetch timed out.",

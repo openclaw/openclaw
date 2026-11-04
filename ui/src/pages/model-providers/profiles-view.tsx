@@ -23,9 +23,8 @@ registerEnglishCatalog(registerSettingsEnglish);
 
 export function showProfileActionError(error: unknown): void {
   showToast({
-    placement: "bottom",
     message: modelProviderErrorMessage(error),
-    icon: "alertTriangle",
+    severity: "error",
     durationMs: 12_000,
   });
 }
@@ -36,9 +35,8 @@ export function showProfileLogoutSuccess(warning?: string): void {
     return;
   }
   showToast({
-    placement: "bottom",
     message: warning,
-    icon: "alertTriangle",
+    severity: "warning",
   });
 }
 

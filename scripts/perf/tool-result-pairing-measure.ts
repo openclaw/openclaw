@@ -206,6 +206,10 @@ const classificationPasses = coverage
   .flatMap((script) => script.functions)
   .filter((fn) => fn.functionName === "classifyToolUseResultPairing")
   .reduce((sum, fn) => sum + (fn.ranges[0]?.count ?? 0), 0);
+const occurrenceQueues = coverage
+  .flatMap((script) => script.functions)
+  .filter((fn) => fn.functionName === "createToolCallOccurrenceQueue")
+  .reduce((sum, fn) => sum + (fn.ranges[0]?.count ?? 0), 0);
 let bytes = 0;
 const classificationAllocation: Record<string, number> = {};
 const nodes = [{ node: profile.head, stack: [] as string[] }];
@@ -242,6 +246,7 @@ console.log(
     allocationBytes: bytes,
     bytesPerOperation: bytes / iterations,
     classificationPasses,
+    occurrenceQueues,
     classificationBytesPerOperation: Object.fromEntries(
       Object.entries(classificationAllocation).map(([caller, total]) => [
         caller,

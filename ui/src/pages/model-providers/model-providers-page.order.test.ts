@@ -94,7 +94,7 @@ describe("ModelProvidersPage profile actions", () => {
 
     await waitForSolid(() => {
       expect(page.view.props.authStatus?.unavailable?.code).toBe("PREPARED_MODEL_AUTH_UNAVAILABLE");
-      expect(toast.toast?.message).toBe(warning);
+      expect(toast.toasts[0]?.options.message).toBe(warning);
     });
     await toast.updateComplete;
     await vi.dynamicImportSettled();
