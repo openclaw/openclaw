@@ -63,8 +63,8 @@ function mockGitHub(
     ghPath,
     [
       "#!/usr/bin/env node",
-      "const fs = require('node:fs');",
-      "const path = require('node:path');",
+      "import fs from 'node:fs';",
+      "import path from 'node:path';",
       "const args = process.argv.slice(2);",
       "if (args[0] === 'run' && args[1] === 'view') {",
       `  console.log(JSON.stringify(${JSON.stringify(runInfo)}));`,

@@ -626,8 +626,8 @@ describe("security review workflow trust boundaries", () => {
       writeFileSync(
         join(bin, "npm"),
         `#!${process.execPath}
-const fs = require("node:fs");
-const path = require("node:path");
+import fs from "node:fs";
+import path from "node:path";
 fs.writeFileSync(${JSON.stringify(installLog)}, JSON.stringify({
   args: process.argv.slice(2),
   cwd: process.cwd(),

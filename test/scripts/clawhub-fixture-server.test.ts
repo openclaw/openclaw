@@ -4,9 +4,10 @@ import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
 import { checkClawHubPackageTrust } from "../../src/infra/clawhub-install-trust.js";
+import { fetchWithRuntimeDispatcher } from "../../src/infra/net/runtime-fetch.js";
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writePluginInspectFixture } from "./plugin-inspect.test-support.js";
@@ -18,7 +19,7 @@ const servers: ChildProcess[] = [];
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     // Keep startup records and artifacts alive until every fixture process has exited.
     await Promise.all(servers.splice(0).map(stopServer));
     cleanup();
@@ -140,6 +141,11 @@ function runNoRequestsAssertion(baseUrl?: string, cwd = process.cwd(), env = pro
 }
 
 describe("ClawHub fixture server", () => {
+  beforeEach(() => {
+    // These servers are local even when the host configures an outbound HTTP proxy.
+    vi.stubEnv("no_proxy", "127.0.0.1");
+  });
+
   it.for([["kitchen-sink-plugin", KITCHEN_SINK_VERSION, PACKAGE_NAME]] as const)(
     "serves an accepted install audit for the %s profile",
     async ([profile, version, packageName], { signal }) => {
@@ -153,7 +159,7 @@ describe("ClawHub fixture server", () => {
         logger: { info: (message) => auditMessages.push(message) },
       });
 
-      expect(trust.ok).toBe(true);
+      expect(trust.ok, JSON.stringify(trust)).toBe(true);
       expect(auditMessages).toHaveLength(1);
       expect(auditMessages[0]).toContain("Outcome: Safe");
       expect(auditMessages[0]).toContain("No security concerns found in the fixture release.");
@@ -402,20 +408,20 @@ ${runner.slice(boundary)}
       artifactSha256: sha256,
     });
     const securityUrl = `${baseUrl}${whatsappPath}/versions/${version}/security`;
-    const fetchImpl = globalThis.fetch;
     let security: unknown;
-    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
-      const response = await fetchImpl(input, init);
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      const response = await fetchWithRuntimeDispatcher(input, init);
       const requestUrl =
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (requestUrl === securityUrl) {
         security = await response.clone().json();
       }
       return response;
-    });
+    };
     const auditMessages: string[] = [];
     const trust = await checkClawHubPackageTrust({
       subject: { kind: "plugin", packageName: "@openclaw/whatsapp" },
+      fetchImpl,
       version,
       baseUrl,
       mode: "update",

@@ -117,6 +117,8 @@ const submissionId = "11111111-2222-4333-8444-555555555555";
 
 function notarizationFixture(extension = "zip") {
   const root = tempDirs.make("openclaw-notary-resume-");
+  // Exercise PATH tools in the same ESM scope as workspace-local release gates.
+  writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
   const artifact = path.join(root, `OpenClaw.${extension}`);
   const submission = path.join(root, "submission.json");
   const result = path.join(root, "accepted.json");
@@ -139,7 +141,7 @@ function notarizationFixture(extension = "zip") {
   writeFileSync(
     path.join(bin, "xcrun"),
     `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 const calls = ${JSON.stringify(calls)};
 const prior = fs.existsSync(calls) ? fs.readFileSync(calls, "utf8").trim().split("\\n").map(JSON.parse) : [];

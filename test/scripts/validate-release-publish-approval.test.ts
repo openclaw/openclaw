@@ -202,7 +202,7 @@ function runAndroidApproval({
   fs.writeFileSync(
     path.join(tempRoot, "gh"),
     `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "attestation" && args[1] === "verify") {
   fs.writeFileSync(${JSON.stringify(attestationArgsPath)}, JSON.stringify(args));
@@ -252,7 +252,7 @@ process.stdout.write(JSON.stringify(responses[args[1]]));
   fs.writeFileSync(
     path.join(tempRoot, "git"),
     `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 const target = JSON.parse(fs.readFileSync(${JSON.stringify(targetPath)}, "utf8"));
 if (JSON.stringify(args) === JSON.stringify(["rev-parse", "v2026.8.1^{commit}"])) {

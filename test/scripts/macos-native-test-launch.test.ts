@@ -98,9 +98,9 @@ function fixture(
   fs.writeFileSync(path.join(cache, "fixture-cache"), "reusable build cache");
   // Every executable that could build, test, or mutate the checkout is fake.
   const fake = `#!${process.execPath}
-const fs = require('node:fs');
-const path = require('node:path');
-const assert = require('node:assert/strict');
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert/strict';
 const tool = path.basename(process.argv[1]);
 const args = process.argv.slice(2);
 const env = process.env;
@@ -715,10 +715,11 @@ process.send('ready');
     fs.writeFileSync(
       path.join(f.root, "bin/swift"),
       `#!${process.execPath}
-const fs = require('node:fs');
+import fs from 'node:fs';
+import { spawn } from 'node:child_process';
 const eventPathIndex = process.argv.indexOf('--event-stream-output-path');
 if (eventPathIndex !== -1) fs.writeFileSync(process.argv[eventPathIndex + 1], ${JSON.stringify(eventStream("runStarted", "runEnded"))});
-const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(leaf)}], {detached: true, stdio: ['ignore', 'inherit', 'inherit', 'ipc']});
+const child = spawn(process.execPath, ['-e', ${JSON.stringify(leaf)}], {detached: true, stdio: ['ignore', 'inherit', 'inherit', 'ipc']});
 child.once('message', () => process.exit(0));
 `,
     );
