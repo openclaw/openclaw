@@ -191,18 +191,15 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `b6585ef8714e`: give the conversation receipt mock an independent
-structured clone in `test/conversation-tools.codex.integration.test.ts`. Preserve
-all seven receipt vectors and every Gateway, schema, response and delivery
-telemetry assertion. The equality oracle must detect in-place result changes
-instead of sharing its expected object with the hosted-tool result.
+Pinned main `062d5d85481f`: qualify the cumulative prompt expectation in
+`test/copilot-tool-policy-handoff.live.test.ts`. The allowed native `ask_user`
+turn can deliver a prompt through `onBlockReply`; restricted create/resume turns
+must add no prompts. Preserve the complete existing case and every other
+Gateway, SDK session, model-request and terminal assertion.
 
-Baseline and restored candidate each pass all seven cases. A valid in-place
-channel mutation in the actual hosted-tool producer passes all seven original
-oracles and fails all seven repaired receipt equalities through the Codex bridge.
-The same seven vectors remain, and producer/test bytes restore exactly. No
-production defect, native Codex process, live Gateway or external delivery is
-claimed.
+The original 315-line test is unchanged for the first real SDK/CLI reproduction
+through its deterministic model-layer fixture. Runtime proof and any repair are
+pending; no live Gateway, real provider account or external delivery is claimed.
 
 ## Completed source review
 
