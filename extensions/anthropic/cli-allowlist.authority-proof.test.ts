@@ -83,10 +83,15 @@ it.skipIf(hostPlatform !== "win32")("real Claude consumes exactly the relocated 
  await mkdir(context.env.APPDATA!,{recursive:true});await mkdir(context.env.LOCALAPPDATA!,{recursive:true});
  const npm=path.join(path.dirname(process.execPath),"node_modules/npm/bin/npm-cli.js");
  await access(npm);
- execFileSync(process.execPath,[npm,"install","--prefix",context.cwd,"--ignore-scripts","--no-package-lock","--omit=dev","@anthropic-ai/claude-code@2.1.280"],{timeout:180000,stdio:"pipe"});
+ // The verified vendor postinstall replaces bin/claude.exe's stub with the
+ // optional platform package's native executable inside this private prefix.
+ execFileSync(process.execPath,[npm,"install","--prefix",context.cwd,"--no-package-lock","--omit=dev","@anthropic-ai/claude-code@2.1.280"],{timeout:180000,stdio:"pipe"});
  const packageRoot=path.join(context.cwd,"node_modules/@anthropic-ai/claude-code");
  const metadata=JSON.parse(await readFile(path.join(packageRoot,"package.json"),"utf8"));
  const entry=path.join(packageRoot,typeof metadata.bin === "string" ? metadata.bin : metadata.bin.claude);
+ const version=execFileSync(entry,["--version"],{timeout:30000,encoding:"utf8",env:context.env,windowsHide:true}).trim();
+ expect(version).toContain(metadata.version);
+ console.log(JSON.stringify({scenario:"real-claude-binary-ready",version}));
  expect(entry).toMatch(/\.exe$/i);
  context.command=entry;
  context.args=["--print","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-prompt-tool","stdio","--permission-mode","default","--setting-sources","","--no-session-persistence","--strict-mcp-config","--mcp-config",'{"mcpServers":{}}',"--settings",JSON.stringify(CLAUDE_RESTRICTED_SETTINGS),"--allowedTools",tools.join(","),"--tools","Read","--disallowedTools","Write,Bash"];
