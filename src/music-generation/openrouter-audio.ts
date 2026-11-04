@@ -59,11 +59,13 @@ export async function readOpenRouterAudioStream(
   const decoder = new TextDecoder("utf-8", { fatal: options?.requireEof === true });
   let wireBytes = 0;
   let completed = false;
+  const audioBuffers: Buffer[] = [];
+  const transcriptChunks: string[] = [];
   const result = {
-    audioBuffers: [] as Buffer[],
+    audioBuffers,
     audioBytes: 0,
     audioBase64Remainder: "",
-    transcriptChunks: [] as string[],
+    transcriptChunks,
     transcriptBytes: 0,
   };
   function appendDecodedOpenRouterMusicAudio(base64: string): void {
