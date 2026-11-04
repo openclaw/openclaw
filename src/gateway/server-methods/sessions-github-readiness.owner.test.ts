@@ -85,7 +85,7 @@ it("observes a human-created managed session through the CLI owner's real readin
           ([method]) => method === "sessions.github.readiness",
         );
         expect(readinessCalls.length).toBe(2);
-        for (const [, , options] of readinessCalls) {
+        for (const options of readinessCalls.map((call) => call[2])) {
           expect(options.client?.connect.scopes).toEqual(["operator.read"]);
           expect(options.client?.internal?.syntheticClient).toBe(true);
           expect(options.client?.internal?.operatorRoleActor).toEqual({
