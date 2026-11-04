@@ -1,6 +1,10 @@
 // Gateway port option tests cover strict CLI validation before transports open.
 import { describe, expect, it } from "vitest";
-import { parseGatewayPortOption } from "./gateway-port-option.js";
+import {
+  parseGatewayClientPortOption,
+  parseGatewayPortOption,
+  resolveGatewayLocalPortOverride,
+} from "./gateway-port-option.js";
 
 describe("parseGatewayPortOption", () => {
   it.each([
@@ -27,4 +31,17 @@ describe("parseGatewayPortOption", () => {
       );
     },
   );
+
+  it("reports Gateway client port errors through the expected CLI error path", () => {
+    const expected = (humanOutput: string) => expect.objectContaining({ humanOutput });
+    expect(() => parseGatewayClientPortOption("abc")).toThrow(
+      expected("--port must be an integer between 1 and 65535."),
+    );
+    expect(() => resolveGatewayLocalPortOverride({ port: "0" })).toThrow(
+      expected("--port must be an integer between 1 and 65535."),
+    );
+    expect(() => resolveGatewayLocalPortOverride({ port: "1", url: "ws://127.0.0.1:1" })).toThrow(
+      expected("Use either --url or --port, not both."),
+    );
+  });
 });
