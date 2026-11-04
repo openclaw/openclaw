@@ -43,6 +43,8 @@ describeControlUiE2e("Plugin SDK compatibility notice", () => {
     const context = await newContext();
     onTestFinished(() => context.close());
     const page = await context.newPage();
+    // Keep the fixture removalDate in the future so the dated notice stays stable.
+    await page.clock.setFixedTime(new Date("2026-06-15T12:00:00Z"));
     const plugin = {
       ...calendarPlugin,
       id: "sdk-demo",

@@ -75,16 +75,18 @@ export function renderPluginCompatibilityNotices(
         renderPluginRowMessage({
           kind: "info",
           get text() {
-            return notice.removalDate
-              ? t("pluginsPage.compatibilityDeprecatedDated", {
-                  date: formatDateMs(Date.parse(`${notice.removalDate}T00:00:00Z`), {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                    timeZone: "UTC",
-                  }),
-                })
-              : t("pluginsPage.compatibilityDeprecatedUndated");
+            if (!notice.removalDate) {
+              return t("pluginsPage.compatibilityDeprecatedUndated");
+            }
+            const date = formatDateMs(Date.parse(`${notice.removalDate}T00:00:00Z`), {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+              timeZone: "UTC",
+            });
+            return notice.removalDate < new Date().toISOString().slice(0, 10)
+              ? t("pluginsPage.compatibilityDeprecatedPast", { date })
+              : t("pluginsPage.compatibilityDeprecatedDated", { date });
           },
           link: notice.migrationGuideUrl
             ? {

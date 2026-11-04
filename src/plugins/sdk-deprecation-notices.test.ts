@@ -1,7 +1,22 @@
-import { expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 import { buildPluginSdkDeprecationNotices } from "./sdk-deprecation-notices.js";
 import { recordPluginSdkDeprecationUsage } from "./sdk-deprecation-usage.js";
+
+// Notices branch on the real UTC calendar; pin the clock so fixed removeAfter
+// fixtures stay deterministic after their dates pass.
+function setUtcClock(isoDay: string) {
+  vi.setSystemTime(new Date(`${isoDay}T12:00:00Z`));
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  setUtcClock("2026-06-15");
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 it("presents recorded members, replacement hints, and their approved final compatibility day", () => {
   recordPluginSdkDeprecationUsage(
@@ -42,6 +57,52 @@ it("keeps the earliest announced retirement visible alongside undated APIs", () 
       message: expect.stringContaining("retire on Dec 31, 2026"),
     },
   ]);
+});
+
+it("states an elapsed migration date without claiming the APIs retired", () => {
+  recordPluginSdkDeprecationUsage(
+    "notice-past",
+    "session-store:getSessionEntry",
+    "getSessionEntry",
+    "getSessionEntryAsync",
+    "2020-01-01",
+  );
+  expect(buildPluginSdkDeprecationNotices("notice-past")).toEqual([
+    {
+      code: "deprecated-sdk-api",
+      severity: "info",
+      message:
+        "Uses OpenClaw APIs whose migration date passed on Jan 1, 2020. The APIs remain available; plugin authors should migrate. See the migration guide.",
+      removalDate: "2020-01-01",
+      migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration/how-to-migrate",
+      apis: [
+        {
+          id: "session-store:getSessionEntry",
+          displayName: "getSessionEntry",
+          replacement: "getSessionEntryAsync",
+          removeAfter: "2020-01-01",
+        },
+      ],
+    },
+  ]);
+});
+
+it("keeps future-tense copy on the final compatibility day and switches the next UTC day", () => {
+  recordPluginSdkDeprecationUsage(
+    "notice-boundary",
+    "session-store:getSessionEntry",
+    "getSessionEntry",
+    "getSessionEntryAsync",
+    "2026-12-31",
+  );
+  setUtcClock("2026-12-31");
+  expect(buildPluginSdkDeprecationNotices("notice-boundary")[0]?.message).toBe(
+    "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update.",
+  );
+  setUtcClock("2027-01-01");
+  expect(buildPluginSdkDeprecationNotices("notice-boundary")[0]?.message).toBe(
+    "Uses OpenClaw APIs whose migration date passed on Dec 31, 2026. The APIs remain available; plugin authors should migrate. See the migration guide.",
+  );
 });
 
 it("uses registry metadata only for deprecated subpaths and does not invent an undated deadline", () => {
