@@ -82,6 +82,12 @@ const rules = [
       "OpenClaw is not affiliated with Moltbook, and issues related to Moltbook should not be submitted here.",
   },
 ];
+// Authentication-only history: never publish this pre-attribution support receipt again.
+const legacySupportRule = {
+  label: "r: support",
+  message:
+    "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq-first-run#i-am-stuck-fastest-way-to-get-unstuck.",
+};
 const issueInvalidRule = { stateReason: "not_planned" };
 const issueSpamRule = { stateReason: "not_planned", lock: true, lockReason: "spam" };
 
@@ -137,7 +143,7 @@ export function hasVerifiedResponseClosure(snapshot, event) {
     return false;
   }
   return comments.some((comment) =>
-    [...rules, issueInvalidRule, issueSpamRule].some(
+    [...rules, legacySupportRule, issueInvalidRule, issueSpamRule].some(
       (rule) =>
         verifiedResponseReceipt(
           snapshot,
