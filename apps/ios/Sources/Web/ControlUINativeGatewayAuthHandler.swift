@@ -52,6 +52,9 @@ final class ControlUINativeGatewayAuthHandler: NSObject, WKScriptMessageHandlerW
         guard let appModel, self.isAvailable(for: message, appModel: appModel),
               let request = Request(message.body)
         else {
+            GatewayDiagnostics.log(
+                "control ui native auth unavailable reason=handler-unavailable "
+                    + "stableID=\(self.config.effectiveStableID)")
             replyHandler(nil, "Native gateway authentication is unavailable for this document.")
             return
         }
@@ -69,14 +72,24 @@ final class ControlUINativeGatewayAuthHandler: NSObject, WKScriptMessageHandlerW
             // Actor hops may outlive navigation, disconnect, or reassignment. Revalidate at signing.
             guard await session.currentRoute() == route,
                   self.document.accepts(document, authorityGeneration: appModel.operatorAuthorityGeneration),
-                  self.isAvailable(for: message, appModel: appModel),
-                  let result = Self.signedResult(
-                      request: request,
-                      config: self.config,
-                      expectedToken: self.expectedToken,
-                      binding: binding,
-                      scopes: scopes)
+                  self.isAvailable(for: message, appModel: appModel)
             else {
+                GatewayDiagnostics.log(
+                    "control ui native auth unavailable reason=route-not-current "
+                        + "stableID=\(self.config.effectiveStableID)")
+                replyHandler(nil, "The native gateway connection is no longer current.")
+                return
+            }
+            guard let result = Self.signedResult(
+                request: request,
+                config: self.config,
+                expectedToken: self.expectedToken,
+                binding: binding,
+                scopes: scopes)
+            else {
+                GatewayDiagnostics.log(
+                    "control ui native auth unavailable reason=sign-rejected "
+                        + "stableID=\(self.config.effectiveStableID)")
                 replyHandler(nil, "The native gateway connection is no longer current.")
                 return
             }
@@ -104,20 +117,43 @@ final class ControlUINativeGatewayAuthHandler: NSObject, WKScriptMessageHandlerW
         scopes: [String]?) -> [String: Any]?
     {
         guard let authorization = AuthenticatedControlUI.storedOperatorAuthorization(
-            config: config, expectedToken: expectedToken),
-            authorization.identity.deviceId == binding.deviceId
-        else { return nil }
+            config: config, expectedToken: expectedToken)
+        else {
+            // Reason buckets stay credential-free: token values must never enter diagnostics.
+            let grantExists = AuthenticatedControlUI.storedOperatorAuthorization(config: config) != nil
+            GatewayDiagnostics.log(
+                "control ui native sign unavailable reason=\(grantExists ? "expected-token-mismatch" : "grant-missing") "
+                    + "stableID=\(config.effectiveStableID)")
+            return nil
+        }
+        guard authorization.identity.deviceId == binding.deviceId
+        else {
+            GatewayDiagnostics.log(
+                "control ui native sign unavailable reason=identity-mismatch "
+                    + "stableID=\(config.effectiveStableID)")
+            return nil
+        }
         let identity = authorization.identity
         let scopes = scopes ?? authorization.entry.scopes
         let auth: [String: String]
         let signatureToken: String?
         switch binding.source {
         case .sharedToken:
-            guard let token = config.token?.trimmedNonEmpty else { return nil }
+            guard let token = config.token?.trimmedNonEmpty else {
+                GatewayDiagnostics.log(
+                    "control ui native sign unavailable reason=binding-credential-missing "
+                        + "stableID=\(config.effectiveStableID)")
+                return nil
+            }
             auth = ["token": token]
             signatureToken = token
         case .password:
-            guard let password = config.password?.trimmedNonEmpty else { return nil }
+            guard let password = config.password?.trimmedNonEmpty else {
+                GatewayDiagnostics.log(
+                    "control ui native sign unavailable reason=binding-credential-missing "
+                        + "stableID=\(config.effectiveStableID)")
+                return nil
+            }
             auth = ["password": password]
             signatureToken = nil
         case .deviceToken, .bootstrapToken, .none:
@@ -136,7 +172,12 @@ final class ControlUINativeGatewayAuthHandler: NSObject, WKScriptMessageHandlerW
         let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(fields: fields)
         guard let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
               let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity)
-        else { return nil }
+        else {
+            GatewayDiagnostics.log(
+                "control ui native sign unavailable reason=sign-failure "
+                    + "stableID=\(config.effectiveStableID)")
+            return nil
+        }
         return [
             "client": [
                 "id": config.nodeOptions.clientId,

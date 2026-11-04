@@ -182,7 +182,8 @@ struct EmbeddedDashboardContent: View {
                     config: self.config,
                     pageURL: self.url,
                     storedOperatorToken: storedOperatorToken,
-                    usesNativeNavigationChrome: true),
+                    usesNativeNavigationChrome: true,
+                    isNativeOperatorRouteLive: self.appModel.isOperatorGatewayConnected),
                 tls: self.config?.tls,
                 basicProxyCredentialProvider: {
                     AuthenticatedControlUI.basicProxyCredential(config: self.config)
@@ -191,7 +192,8 @@ struct EmbeddedDashboardContent: View {
                 nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
                     config: self.config,
                     storedOperatorToken: storedOperatorToken,
-                    appModel: self.appModel),
+                    appModel: self.appModel,
+                    isNativeOperatorRouteLive: self.appModel.isOperatorGatewayConnected),
                 usesNativeEmbed: true,
                 embedCompatibility: self.embedCompatibility)
                 .id(AuthenticatedControlUI.webContentIdentity(
