@@ -1,2 +1,2 @@
-# Registered Claude CLI stream plus runner regression: one published completion per automatic compaction.
-66
+# Registered Claude CLI stream plus runner regression: one published start and completion per automatic compaction.
+87

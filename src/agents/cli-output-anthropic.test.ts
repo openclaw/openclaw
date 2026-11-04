@@ -16,7 +16,7 @@ async function loadClaudeBackend() {
   return buildAnthropicCliBackend();
 }
 
-it("publishes one completion for a Claude automatic compaction", async () => {
+it("publishes one start and one completion per Claude automatic compaction", async () => {
   const backend = await loadClaudeBackend();
   const runId = "claude-auto-compaction-once";
   const handlers = createCliEventHandlers({
@@ -50,11 +50,20 @@ it("publishes one completion for a Claude automatic compaction", async () => {
         // Boundary-only automatic compactions each still complete.
         boundary,
         boundary,
-        // Claude Code 2.1.318 closes one automatic compaction with both records.
+        // Claude Code 2.1.318 resends `compacting` every 30 s during one compaction,
+        // then closes it with both a success status and an automatic boundary.
+        { ...status, status: "compacting" },
+        { ...status, status: "compacting" },
+        { ...status, status: "compacting" },
+        { ...status, status: null, compact_result: "success" },
+        boundary,
+        // A back-to-back compaction after a finished one still notifies.
+        { ...status, status: "compacting" },
         { ...status, status: "compacting" },
         { ...status, status: null, compact_result: "success" },
         boundary,
         boundary,
+        { ...status, status: "compacting" },
         { ...status, status: "compacting" },
         { ...status, status: null, compact_result: "failed" },
         boundary,
@@ -68,7 +77,19 @@ it("publishes one completion for a Claude automatic compaction", async () => {
     dispose();
   }
 
-  expect(phases).toEqual(["end", "end", "start", "end", "end", "start", "end", "end"]);
+  // One start and one end per compaction; boundary-only compactions add an end each.
+  expect(phases).toEqual([
+    "end",
+    "end",
+    "start",
+    "end",
+    "start",
+    "end",
+    "end",
+    "start",
+    "end",
+    "end",
+  ]);
   expect(handlers.hasActiveCompaction()).toBe(false);
 });
 

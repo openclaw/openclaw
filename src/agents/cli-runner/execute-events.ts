@@ -434,6 +434,11 @@ export function createCliEventHandlers(params: {
   };
   const emitCliCompaction = (event: CliCompactionDelta) => {
     observedCliActivity = true;
+    // Claude Code resends its `compacting` status every 30 s while one compaction
+    // runs. The activity above feeds the watchdog; publish only the first start.
+    if (event.phase === "start" && compactionActive) {
+      return;
+    }
     // Claude Code closes one successful compaction with a status `compact_result`
     // and an automatic `compact_boundary`. Drop that one repeat; ends without a
     // start (boundary-only streams) still publish.
