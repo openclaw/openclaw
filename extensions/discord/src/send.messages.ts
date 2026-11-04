@@ -238,7 +238,10 @@ export async function listPinsDiscord(
     const page = response as RESTGetAPIChannelMessagesPinsResult;
     messages.push(...page.items.map((pin) => pin.message));
     if (!page.has_more || (limit !== undefined && messages.length >= limit)) {
-      return messages.slice(0, limit);
+      if (limit !== undefined && messages.length > limit) {
+        messages.length = limit;
+      }
+      return messages;
     }
     // Pagination uses the last pin timestamp verbatim, not its message snowflake.
     const nextBefore = page.items.at(-1)?.pinned_at;

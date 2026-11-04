@@ -46,7 +46,10 @@ export async function listMatrixPins(
   opts: MatrixActionClientOpts & { limit?: number } = {},
 ): Promise<{ pinned: string[]; events: MatrixMessageSummary[] }> {
   return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
-    const pinned = (await readPinnedEvents(client, resolvedRoom)).slice(0, opts.limit);
+    const pinned = await readPinnedEvents(client, resolvedRoom);
+    if (opts.limit !== undefined && pinned.length > opts.limit) {
+      pinned.length = opts.limit;
+    }
     const events = (
       await Promise.all(pinned.map((eventId) => fetchEventSummary(client, resolvedRoom, eventId)))
     ).filter((event): event is MatrixMessageSummary => Boolean(event));

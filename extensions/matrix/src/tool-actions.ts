@@ -325,12 +325,7 @@ export async function handleMatrixAction(
       action === "list-pins"
         ? { kind: "list" as const }
         : { kind: action, messageId: readStringParam(params, "messageId", { required: true }) };
-    const limit =
-      action === "list-pins"
-        ? readPositiveIntegerParam(params, "limit", {
-            message: "limit must be a positive integer.",
-          })
-        : undefined;
+    const limit = action === "list-pins" ? readPositiveIntegerParam(params, "limit") : undefined;
     const roomId = readRoomId(params);
     const { withReadTarget } = prepareAction("pins");
     return await withReadTarget(roomId, async (resolvedRoom, actionOpts) => {

@@ -891,10 +891,9 @@ export async function handleSlackAction(
     }
     await assertReadTargetAllowed(target);
     const pins = await slackActionRuntime.listSlackPins(channelId, readOpts);
-    const normalizedPins = pins.slice(0, readSlackResultLimit(params)).map((pin) => {
-      const message = pin.message
-        ? withNormalizedTimestamp(pin.message, pin.message.ts)
-        : pin.message;
+    pins.length = Math.min(pins.length, readPositiveIntegerParam(params, "limit") ?? pins.length);
+    const normalizedPins = pins.map((pin) => {
+      const message = pin.message && withNormalizedTimestamp(pin.message, pin.message.ts);
       return message ? Object.assign({}, pin, { message }) : pin;
     });
     return jsonResult({ ok: true, pins: normalizedPins });

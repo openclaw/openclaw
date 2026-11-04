@@ -104,26 +104,17 @@ afterEach(() => {
 });
 const scopedOptions = () => ({ cfg, teamId: "T123" });
 
-it("reads normalized pins from the trusted current workspace", async () => {
-  listSlackPins.mockResolvedValueOnce([{ message: { ts: "1712345678.123456", text: "pin" } }]);
-  const result = await act({ action: "listPins", channelId: "C123" }, trustedContext);
+it.each([undefined, 1])("reads normalized pins with limit %s", async (limit) => {
+  const pin = { message: { ts: "1712345678.123456", text: "pin" } };
+  listSlackPins.mockResolvedValueOnce(Array.from({ length: 101 }, () => pin));
+  const result = await act({ action: "listPins", channelId: "C123", limit }, trustedContext);
   expect(listSlackPins).toHaveBeenCalledWith("C123", scopedOptions());
   expect(result.details).toMatchObject({
     ok: true,
-    pins: [{ message: { ts: "1712345678.123456", text: "pin", timestampMs: 1712345678123 } }],
+    pins: Array.from({ length: limit ?? 101 }, () => ({
+      message: { ...pin.message, timestampMs: 1712345678123 },
+    })),
   });
-});
-
-it("returns at most the requested number of pins", async () => {
-  listSlackPins.mockResolvedValueOnce(
-    ["1", "2", "3"].map((ts) => ({ message: { ts: `171234567${ts}.000000`, text: ts } })),
-  );
-  const result = await act({ action: "listPins", channelId: "C123", limit: 2 }, trustedContext);
-  expect(result.details).toMatchObject({
-    ok: true,
-    pins: [{ message: { text: "1" } }, { message: { text: "2" } }],
-  });
-  expect((result.details as { pins: unknown[] }).pins).toHaveLength(2);
 });
 
 it("rejects a bare detached target for an authenticated Enterprise install", async () => {
