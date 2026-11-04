@@ -1038,7 +1038,11 @@ def write_watch_screenshot_mode_defaults(*); end
 def set_watch_status_bar_override(*)
   false
 end
-def normalize_watch_screenshot_status_bar(*); end
+def normalize_watch_screenshot_status_bar(*)
+  raise "Watch image processing started before simulator cleanup" unless @owned.empty?
+  raise "Watch image processing failed" if @scenario == "normalize-failure"
+  @normalized = true
+end
 def sleep(seconds)
   return if seconds == 3
   if seconds == 2
@@ -1312,10 +1316,10 @@ def sh(command, *arguments, **options)
   end
 end
 
-results = %w[combined missing-spec ambiguous-spec watch-unrelated-runtime watch-staging watch-staging-empty watch-staging-retained watch-staging-rejected watch-staging-unverified watch-staging-ambiguous unavailable-staged unavailable-staged-rescan-timeout unavailable-package-missing watch-maintenance watch-runtime-missing diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-deleting unavailable-deletion-natural unavailable-deletion-reregistered unavailable-deletion-stuck unavailable-deletion-retained unavailable-deletion-delayed unavailable-ambiguous unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
+results = %w[combined missing-spec ambiguous-spec watch-unrelated-runtime watch-staging watch-staging-empty watch-staging-retained watch-staging-rejected watch-staging-unverified watch-staging-ambiguous unavailable-staged unavailable-staged-rescan-timeout unavailable-package-missing watch-maintenance watch-runtime-missing diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-deleting unavailable-deletion-natural unavailable-deletion-reregistered unavailable-deletion-stuck unavailable-deletion-retained unavailable-deletion-delayed unavailable-ambiguous unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure normalize-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
-    @owned, @created = {}, 0
+    @owned, @created, @normalized = {}, 0, false
     @admissions = []
     @observations, @captures = [], 0
     @watch_creates = 0
@@ -1379,7 +1383,7 @@ results = %w[combined missing-spec ambiguous-spec watch-unrelated-runtime watch-
     diagnostics_path = File.join(ios_root, "build", "screenshot-diagnostics.json")
     {
       scenario: scenario, builds: @builds, error: error, installed: @installed,
-      owned: @owned.keys,
+      owned: @owned.keys, normalized: @normalized,
       observations: @observations,
       admissions: @admissions,
       lifecycle: @commands.select { |args| args[0, 2] == ["xcrun", "simctl"] && %w[create bootstatus shutdown delete].include?(args[2]) }.map { |args| args.drop(2) },
@@ -1417,6 +1421,7 @@ puts JSON.generate(results)
       logs: string[];
       versions: string[][];
       owned: string[];
+      normalized: boolean;
       observations: {
         seconds: number;
         phase: string;
@@ -1526,6 +1531,7 @@ puts JSON.generate(results)
     expect(row("diagnostics")).toMatchObject({
       error: null,
       pngs: 9,
+      normalized: true,
       diagnostics: {
         schemaVersion: 1,
         diagnostics: expect.arrayContaining([
@@ -1541,12 +1547,14 @@ puts JSON.generate(results)
             outcome: "succeeded",
             activeSimulatorCount: 0,
           }),
+          expect.objectContaining({ phase: "image-normalize", outcome: "succeeded" }),
         ]),
       },
     });
     expect(row("standalone")).toMatchObject({
       builds: ["watch"],
       error: null,
+      normalized: true,
       installed:
         "/apps/ios/build/WatchScreenshotDerivedData/Build/Products/Debug-watchsimulator/OpenClawWatchApp.app",
       pngs: 1,
@@ -1611,8 +1619,14 @@ puts JSON.generate(results)
     expect(row("watch-cleanup-failure")).toMatchObject({
       error: "cleanup failed",
       pngs: 9,
+      normalized: false,
       watchCreates: 1,
       repairCommands: [],
+    });
+    expect(row("normalize-failure")).toMatchObject({
+      error: "Watch image processing failed",
+      owned: [],
+      normalized: false,
     });
     for (const scenario of [
       "watch-staging",

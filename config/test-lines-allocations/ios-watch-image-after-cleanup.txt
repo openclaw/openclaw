@@ -1,0 +1,2 @@
+# Exercise Watch normalization after cleanup and preserve cleanup/renderer failures.
+15

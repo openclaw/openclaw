@@ -66,6 +66,7 @@ const phases = new Set([
       "delete",
       "status-bar",
       "watch-capture",
+      "image-normalize",
       "capture",
     ].map((operation) => `screenshot-${device}-${operation}`),
   ),

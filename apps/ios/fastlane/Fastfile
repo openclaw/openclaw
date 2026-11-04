@@ -721,6 +721,7 @@ def capture_watch_screenshot(diagnostics: nil)
   watch_app_identifier = bundle_identifier_for_product(app_path)
   screenshot_mode_bundle_identifiers = [watch_app_identifier]
   output_path = nil
+  device_name = nil
 
   with_screenshot_simulator(watch_name: watch_snapshot_device, diagnostics: diagnostics) do |udid, device|
     device_name = device.fetch("name")
@@ -741,8 +742,12 @@ def capture_watch_screenshot(diagnostics: nil)
       )
       sleep(3)
       sh(shell_join(["xcrun", "simctl", "io", udid, "screenshot", output_path]))
-      normalize_watch_screenshot_status_bar(output_path)
     end
+  end
+
+  # Swift image processing no longer needs the simulator's background services.
+  screenshot_phase(diagnostics, "image-normalize", device: device_name) do
+    normalize_watch_screenshot_status_bar(output_path)
   end
 
   UI.success("Captured Apple Watch screenshot: #{output_path}")

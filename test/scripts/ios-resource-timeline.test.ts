@@ -39,6 +39,7 @@ describe("iOS resource timeline workload boundary", () => {
   it.each([
     ["private-api-token", "other"],
     ["qualification-native-build", "qualification-native-build"],
+    ["screenshot-watch-image-normalize", "screenshot-watch-image-normalize"],
   ])("preserves workload exit and output while sanitizing phase %s", (phase, expected) => {
     const output = path.join(tempDirs.make("ios-resource-timeline-"), "timeline.jsonl");
     const result = run(
