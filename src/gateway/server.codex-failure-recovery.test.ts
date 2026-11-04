@@ -1,10 +1,12 @@
-import childProcess, { type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import nodeProcess from "node:process";
+import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
@@ -92,6 +94,8 @@ async function startNativeGatewayWithClient(
 
 type ProviderRequest = { body: string; threadId: string | string[] | undefined };
 type ReadyThread = { threadId: string; clientId: string; action: string };
+type NativeProcess = EventEmitter &
+  Pick<ChildProcess, "stdin" | "stdout" | "pid" | "exitCode" | "signalCode" | "kill">;
 
 const RECOVERY_FAILURE_TEXT =
   "⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
@@ -154,30 +158,47 @@ module.exports = {
 };`,
     );
 
-    const nativeProcesses = new Map<ChildProcess, { output: string }>();
+    const nativeProcesses = new Map<NativeProcess, { output: string }>();
     if (shutdown) {
-      const spawn = childProcess.spawn;
-      const spawnSpy = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
-        // Keep native retention only in replacement controls, so no unload receipt arrives.
-        if (Array.isArray(args[1])) {
-          args[1] = args[1].map((arg) =>
-            arg === "thread_unload_delay_secs=0" ? "thread_unload_delay_secs=1800" : arg,
-          );
-        }
-        const child = spawn(...args);
-        if (Array.isArray(args[1]) && args[1].includes("app-server")) {
+      const workerInputs = new Set<Worker["stdin"]>();
+      const onWorker = (worker: Worker) => workerInputs.add(worker.stdin);
+      nodeProcess.on("worker", onWorker);
+      const emit = EventEmitter.prototype.emit;
+      const observe = vi.spyOn(EventEmitter.prototype, "emit").mockImplementation(function (
+        this: EventEmitter,
+        event,
+        ...args
+      ) {
+        // The transport facade shares the real Worker's input, but owns native
+        // pid/exit facts. Holding the Worker itself would prove the wrong exit.
+        const child = this as NativeProcess;
+        if (event === "spawn" && child.stdin && workerInputs.has(child.stdin)) {
           const captured = { output: "" };
           nativeProcesses.set(child, captured);
           child.stdout?.on("data", (chunk: Buffer) => {
             captured.output += chunk.toString();
           });
         }
-        return child;
+        return emit.call(this, event, ...args);
       });
-      syncBuiltinESMExports();
+      const postMessage = Worker.prototype.postMessage;
+      const launch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+        this: Worker,
+        message,
+        transferList,
+      ) {
+        if (isRecord(message) && message.type === "launch" && Array.isArray(message.args)) {
+          // Keep native retention only in replacement controls, so no unload receipt arrives.
+          message.args = message.args.map((arg: unknown) =>
+            arg === "thread_unload_delay_secs=0" ? "thread_unload_delay_secs=1800" : arg,
+          );
+        }
+        postMessage.call(this, message, transferList);
+      });
       onTestFinished(() => {
-        spawnSpy.mockRestore();
-        syncBuiltinESMExports();
+        nodeProcess.off("worker", onWorker);
+        observe.mockRestore();
+        launch.mockRestore();
       });
     }
     const requests: ProviderRequest[] = [];
@@ -560,7 +581,7 @@ module.exports = {
 
 /** Hold only the observed native child's exit; protocol, writer lock and run cancellation stay real. */
 function holdNativeExit(
-  processes: Map<ChildProcess, { output: string }>,
+  processes: Map<NativeProcess, { output: string }>,
   threadId: string,
   withholdExitConfirmation: boolean,
 ) {
