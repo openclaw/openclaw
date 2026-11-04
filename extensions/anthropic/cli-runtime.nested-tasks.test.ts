@@ -152,15 +152,18 @@ async function context(mode: string, childType = "local_agent", ancestry?: Ances
     useResume: false,
     liveSession,
     timeoutMs: 1500,
-    abortSignal: AbortSignal.timeout(2000),
     requestToolPermission: async () => ({ behavior: "deny", message: "unused" }),
     requestUserInput: async () => ({ status: "cancelled", message: "unused" }),
   } satisfies CliBackendExecuteContext;
   return { ...ctx, generations };
 }
+function executeTurn(ctx: CliBackendExecuteContext) {
+  // A reused native session still receives a fresh, independently bounded request.
+  return executeClaudeCli({ ...ctx, abortSignal: AbortSignal.timeout(2000) });
+}
 async function collect(ctx: CliBackendExecuteContext) {
   const records: Record<string, unknown>[] = [];
-  for await (const record of executeClaudeCli(ctx)) {
+  for await (const record of executeTurn(ctx)) {
     records.push(record);
   }
   return records.filter((record) => record.type === "result");
@@ -350,7 +353,7 @@ it("retires deep ancestry holds when the consumer cancels the stream", async () 
   scenario.stopAfterWaiting = true;
   const ctx = await context("ancestry", "local_agent", scenario);
   let sawWaiting = false;
-  for await (const record of executeClaudeCli(ctx)) {
+  for await (const record of executeTurn(ctx)) {
     if (record.type === "result") {
       expect(record).toMatchObject({ result: "waiting", openclaw_interim_result: true });
       sawWaiting = true;
