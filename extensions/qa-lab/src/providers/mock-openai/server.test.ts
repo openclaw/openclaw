@@ -2729,30 +2729,27 @@ describe("qa mock openai server", () => {
     expect(outputText(await toolResult.json())).toContain("Attachment: /tmp/qa-lighthouse.png");
   });
 
-  it("completes an image without replaying a tool unavailable to the completion turn", async () => {
-    const server = await startMockServer();
-    const prompt = "Image generation check: generate a QA lighthouse image.";
-    const imagePlan = await expectNonStreamingResponsesJson<unknown>(server, {
-      tools: [IMAGE_GENERATE_TOOL],
-      input: [makeUserInput(prompt)],
-    });
-    const imageCall = outputToolCall(imagePlan, "image_generate");
-    const callId = outputToolCallId(imageCall, "call_mock_image_generate_unavailable");
-    const completionEvent = [
-      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-      "OpenClaw runtime context (internal):",
-      "",
-      "[Internal task completion event]",
-      "source: image_generation",
-      "task: A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
-      "status: completed successfully",
-      "Generated media:",
-      "MEDIA:/tmp/qa-lighthouse.png",
-      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-    ].join("\n");
-    const completion = await expectNonStreamingResponsesJson<unknown>(server, {
-      tools: [MESSAGE_TOOL],
-      input: [
+  it.each([false, true])(
+    "completes an image without replaying it (image tool available: %s)",
+    async (imageToolAvailable) => {
+      const server = await startMockServer();
+      const prompt = "Image generation check: generate a QA lighthouse image.";
+      const imagePlan = await expectNonStreamingResponsesJson<unknown>(server, {
+        tools: [IMAGE_GENERATE_TOOL],
+        input: [makeUserInput(prompt)],
+      });
+      const imageCall = outputToolCall(imagePlan, "image_generate");
+      const callId = outputToolCallId(imageCall, "call_mock_image_generate_unavailable");
+      const completionEvent = [
+        "[Inter-session message] sourceChannel=internal sourceTool=image_generate isUser=false",
+        "[Internal task completion event]",
+        "source: image_generation",
+        "task: A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
+        "status: completed successfully",
+        "Generated media:",
+        "MEDIA:/tmp/qa-lighthouse.png",
+      ].join("\n");
+      const completionInput = [
         makeUserInput(prompt),
         {
           type: "function_call",
@@ -2768,18 +2765,38 @@ describe("qa mock openai server", () => {
           }),
         ),
         makeUserInput(completionEvent),
-      ],
-    });
+      ];
+      const completion = await expectNonStreamingResponsesJson<unknown>(server, {
+        tools: imageToolAvailable ? [MESSAGE_TOOL, IMAGE_GENERATE_TOOL] : [MESSAGE_TOOL],
+        input: completionInput,
+      });
 
-    expect(
-      outputItems(completion).some(
-        (item) => item.type === "function_call" && item.name === "image_generate",
-      ),
-    ).toBe(false);
-    expect(outputText(completion)).toBe(
-      "Protocol note: generated the QA lighthouse image successfully.\nMEDIA:/tmp/qa-lighthouse.png",
-    );
-  });
+      expect(
+        outputItems(completion).some(
+          (item) => item.type === "function_call" && item.name === "image_generate",
+        ),
+      ).toBe(false);
+      expect(outputText(completion)).toBe(
+        "Protocol note: generated the QA lighthouse image successfully.\nMEDIA:/tmp/qa-lighthouse.png",
+      );
+      const nextRequest = await expectNonStreamingResponsesJson<unknown>(server, {
+        tools: [IMAGE_GENERATE_TOOL],
+        input: [...completionInput, makeUserInput(prompt)],
+      });
+      expect(outputToolCall(nextRequest, "image_generate").arguments).toBe(imageCall.arguments);
+      const projectedRequest = await expectNonStreamingResponsesJson<unknown>(server, {
+        tools: [IMAGE_GENERATE_TOOL],
+        input: [
+          makeUserInput(
+            `<conversation_context>\n[user]\n${completionEvent}\n</conversation_context>\n\nCurrent user request:\n${prompt}`,
+          ),
+        ],
+      });
+      expect(outputToolCall(projectedRequest, "image_generate").arguments).toBe(
+        imageCall.arguments,
+      );
+    },
+  );
 
   it.each([
     [

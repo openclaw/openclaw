@@ -25,6 +25,7 @@ import { resolveAfterToolHttpFailure } from "./mock-openai-after-tool-failures.j
 import {
   buildAssistantText,
   buildImageInspectionReply,
+  buildImageGenerationCompletionReply,
   readForkedContextCompletion,
   isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
@@ -1709,6 +1710,12 @@ async function buildResponsesPayload(
       );
     }
     return buildAssistantEvents("NONE");
+  }
+  // A completion reentry retains the kickoff in history and may still expose
+  // image_generate. Deliver its result before considering another generation.
+  const imageCompletionReply = buildImageGenerationCompletionReply(input);
+  if (imageCompletionReply) {
+    return buildAssistantEvents(imageCompletionReply);
   }
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&

@@ -132,13 +132,18 @@ export function buildImageInspectionReply(
   return undefined;
 }
 
-export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
-  const prompt = extractLastUserText(input);
+export function buildImageGenerationCompletionReply(input: ResponsesInputItem[]) {
   const latestRawUserText = extractAllUserTexts(input).at(-1) ?? "";
-  const completedImageMediaPath = readCompletedImageGenerationMediaPath(latestRawUserText);
+  const { current } = splitMockConversationContext(latestRawUserText);
+  const completedImageMediaPath = readCompletedImageGenerationMediaPath(current);
   if (completedImageMediaPath) {
     return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${completedImageMediaPath}`;
   }
+  return undefined;
+}
+
+export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
+  const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
   const scenarioToolOutput =
     toolOutput ||
