@@ -57,7 +57,7 @@ describe("ClawRouter registered file transcription", () => {
       cfg.models!.providers!.clawrouter!.apiKey = "fixture-router";
       cfg.tools!.media!.models![0]!.model = "whisper-1";
       await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(
-        /qualified OpenAI or SenseAudio model/,
+        /qualified native model/,
       );
       expect(requests).toHaveLength(0);
     });

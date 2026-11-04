@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
 
 type Capture = { url: string; authorization?: string; body: Buffer; form: FormData };
+type RawCapture = { url: string; authorization?: string; contentType?: string; body: Buffer };
 export type AudioCatalog = {
   provider: string;
   model: string;
@@ -16,12 +17,14 @@ export type AudioCatalog = {
   path?: string;
   authType?: string;
   upstream?: string;
+  endpoint?: string;
 };
 export async function withClawRouterAudioFixture(
   run: (p: {
     cfg: OpenClawConfig;
     filePath: string;
     requests: Capture[];
+    rawRequests: RawCapture[];
     audio: Buffer;
     home: string;
     catalog: AudioCatalog;
@@ -51,6 +54,7 @@ export async function withClawRouterAudioFixture(
       const filePath = home + "/meeting (1).wav";
       await fs.writeFile(filePath, audio);
       const requests: Capture[] = [];
+      const rawRequests: RawCapture[] = [];
       const catalogRequests: string[] = [];
       const catalog: AudioCatalog = {
         provider: "openai",
@@ -69,6 +73,7 @@ export async function withClawRouterAudioFixture(
                 return;
               }
               const path = catalog.path ?? "/v1/audio/transcriptions";
+              const endpoint = catalog.endpoint ?? "transcriptions";
               res.setHeader("content-type", "application/json");
               res.end(
                 JSON.stringify({
@@ -87,7 +92,7 @@ export async function withClawRouterAudioFixture(
                       nativeBaseUrl: `/v1/native/${catalog.provider}`,
                       routes: [
                         {
-                          endpoint: "transcriptions",
+                          endpoint,
                           path,
                           methods: ["POST"],
                           requestFormat: catalog.requestFormat,
@@ -103,7 +108,7 @@ export async function withClawRouterAudioFixture(
                       ],
                       offers: [
                         {
-                          endpoint: "transcriptions",
+                          endpoint,
                           modelId: `${catalog.provider}/${catalog.model}`,
                           transport: "http",
                           routeKind: "native",
@@ -119,6 +124,16 @@ export async function withClawRouterAudioFixture(
               return;
             }
             const body = await consumeBuffer(req);
+            if (!req.headers["content-type"]?.startsWith("multipart/form-data")) {
+              rawRequests.push({
+                url: req.url ?? "",
+                authorization: req.headers.authorization,
+                contentType: req.headers["content-type"],
+                body,
+              });
+              respond(res);
+              return;
+            }
             const form = await new Response(body, {
               headers: { "content-type": req.headers["content-type"] ?? "" },
             }).formData();
@@ -153,7 +168,16 @@ export async function withClawRouterAudioFixture(
               },
             },
           };
-          await run({ cfg, filePath, requests, audio, home, catalog, catalogRequests });
+          await run({
+            cfg,
+            filePath,
+            requests,
+            rawRequests,
+            audio,
+            home,
+            catalog,
+            catalogRequests,
+          });
         },
       );
     },
@@ -162,6 +186,7 @@ export async function withClawRouterAudioFixture(
         CLAWROUTER_API_KEY: undefined,
         OPENAI_API_KEY: "fixture-upstream-never-router",
         SENSEAUDIO_API_KEY: "fixture-senseaudio-never-router",
+        DEEPGRAM_API_KEY: "fixture-deepgram-never-router",
       },
     },
   );

@@ -37,3 +37,5 @@ export {
   type OpenAiCompatibleVideoPayload,
 } from "../media-understanding/openai-compatible-video.ts";
 export { transcribeOpenAiCompatibleAudio } from "../media-understanding/openai-compatible-audio.js";
+
+export { transcribeDeepgramPrerecordedAudio } from "../media-understanding/deepgram-audio.js";
