@@ -261,6 +261,28 @@ external model invocation. The command does not call a model or send source to a
 service. Historical graphs cannot prove dynamic filesystem or generated-input
 coverage; full-run comparison remains necessary before enabling actual skips.
 
+## Evaluate recorded decisions
+
+Compare an exported capture's frozen graph and model scores with its later
+outcomes:
+
+```bash
+node scripts/ci-adaptive-evaluate.mjs \
+  --input observations.json \
+  --output evaluation.json
+```
+
+This command performs no inference or test execution. It joins files by their
+project, pool and path, including when ranking rows have a different order.
+Missing predictions remain unavailable, and incomplete files remain unknown.
+The report identifies failed files proposed for omission, recorded score
+buckets and summed complete-file durations. Failures remain unattributed;
+they are not automatically causal regression labels or independent episodes.
+
+The evaluator rejects inconsistent source/inventory identities and recording
+times. The caller must independently verify source and prior artifact
+provenance. Summed file durations are not elapsed time, CPU time or savings.
+
 ## Estimate cost and compute savings
 
 ```bash
@@ -308,3 +330,12 @@ scenario inputs, not invoice predictions; credits, discounts, minimums and
 storage charges need separate accounting. Workflow critical-path savings stay
 unknown until a dependency timeline is available. Do not label summed job time
 as developer wait time.
+
+## Declared file inputs
+
+Prefer module imports for JSON fixtures so Vitest records their dependencies
+without additional rules. Binary fixtures read through `node:fs` use the exact
+test-to-input mapping in `test/vitest/vitest.declared-inputs.ts`. The shared Vite
+plugin registers these inputs with native dependency recording and related-test
+selection. It does not intercept file reads or change the scheduled inventory.
+Undeclared file reads remain a graph coverage gap.
