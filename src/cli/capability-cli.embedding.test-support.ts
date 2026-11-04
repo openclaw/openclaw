@@ -2,6 +2,27 @@ import { expect, it, type Mock } from "vitest";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { runCapability } from "./capability-cli.test-harness.js";
 
+export async function interruptCapability(
+  run: (waitForAbort: (signal?: AbortSignal) => Promise<never>) => Promise<void>,
+): Promise<void> {
+  const scope = new AsyncWorkScope();
+  let cancelled = false;
+  const waitForAbort = (signal?: AbortSignal) => {
+    const { promise, reject } = Promise.withResolvers<never>();
+    expect(signal).toBeDefined();
+    const onAbort = () => {
+      cancelled = true;
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    scope.beginClose(new Error("interrupted"));
+    return promise;
+  };
+  await scope.track(() => run(waitForAbort));
+  expect(cancelled).toBe(true);
+  await scope.drain();
+}
+
 export function registerEmbeddingCapabilityCliTests({
   embedBatch,
   closeProvider,
@@ -10,7 +31,12 @@ export function registerEmbeddingCapabilityCliTests({
   log,
   expectError,
 }: {
-  embedBatch: Mock<(inputs: unknown[], options?: { inputType?: string }) => Promise<number[][]>>;
+  embedBatch: Mock<
+    (
+      inputs: unknown[],
+      options?: { inputType?: string; signal?: AbortSignal },
+    ) => Promise<number[][]>
+  >;
   closeProvider: Mock<() => Promise<void>>;
   providerCall: () => unknown;
   jsonOutput: () => unknown;
@@ -83,23 +109,13 @@ export function registerEmbeddingCapabilityCliTests({
     },
   );
 
-  it("passes the interrupt signal to the embedding batch and suppresses late output", async () => {
-    const scope = new AsyncWorkScope();
-    const received: AbortSignal[] = [];
-    embedBatch.mockImplementationOnce(async (_inputs, options) => {
-      const signal = (options as { signal?: AbortSignal } | undefined)?.signal;
-      if (signal !== undefined) {
-        received.push(signal);
-        scope.beginClose(new Error("interrupted"));
-      }
-      return [[0.1, 0.2]];
+  it("cancels pending embedding work and suppresses output while closing the provider", async () => {
+    await interruptCapability((waitForAbort) => {
+      embedBatch.mockImplementationOnce((_inputs, options) => waitForAbort(options?.signal));
+      return create("--json");
     });
-
-    await scope.track(() => create("--json"));
-
-    expect(received).toHaveLength(1);
-    expect(received[0]!.aborted).toBe(true);
     expect(jsonOutput()).toBeUndefined();
+    expect(log).not.toHaveBeenCalled();
     expect(closeProvider).toHaveBeenCalledTimes(1);
   });
 }

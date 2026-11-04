@@ -166,6 +166,7 @@ Notes:
 - `--thinking adaptive` maps to the completion-runtime level `medium`; `--thinking max` maps to `max` for OpenAI models that support the native max effort, otherwise `xhigh`.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.
 - An interrupt accepted during generation cancels the in-flight local request or Gateway call and stops waiting for it instead of letting the run finish, and publishes no output for the interrupted run.
+- For `model run --gateway`, interruption cancels the caller's RPC and does not change the lifetime of Gateway-owned generation.
 
 ## Image
 
@@ -314,6 +315,9 @@ that prefix; model ids that contain a slash keep the provider prefix, for exampl
 Without `--json`, `embedding create` shows the provider and model, followed by
 each input, its dimension count, and a preview of the first eight vector values.
 Longer vectors end with `...`; use `--json` to retrieve complete vectors.
+
+An accepted interrupt forwards cancellation to the embedding provider and suppresses
+output from the interrupted batch.
 
 ## JSON output
 
