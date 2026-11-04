@@ -50,17 +50,22 @@ it("adopts completion as host input and observes current notification policy", a
   });
 });
 
-it("suppresses adopted wakes for retired and ineligible sessions", async () => {
+it("adopts wakes only for current, eligible sessions", async () => {
   await withOpenClawTestState({ label: "durable-exec-eligibility" }, async (state) => {
     setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
     openOpenClawStateDatabase({ env: state.env });
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    for (const [kind, extra] of [
-      ["reset", { sessionId: "replacement" }],
-      ["archived", { archivedAt: 1 }],
-      ["dashboard:spawned", { spawnDepth: 1, spawnedBy: "agent:main:main" }],
-      ["cron:job:run:ended", {}],
-      ["subagent:child", {}],
+    for (const [kind, extra, adopted] of [
+      ["reset", { sessionId: "replacement" }, false],
+      ["archived", { archivedAt: 1 }, false],
+      ["dashboard:spawned", { spawnDepth: 1, spawnedBy: "agent:main:main" }, false],
+      ["cron:job:run:ended", {}, false],
+      ["subagent:child", {}, false],
+      [
+        "dashboard:visible",
+        { createdVia: "spawn", spawnDepth: 1, spawnedBy: "agent:main:main" },
+        true,
+      ],
     ] as const) {
       const sessionKey = `agent:main:${kind}`;
       writeSessionEntry(database, sessionKey, {
@@ -71,8 +76,8 @@ it("suppresses adopted wakes for retired and ineligible sessions", async () => {
       const process = createProcessSessionFixture({ id: kind, backgrounded: true });
       Object.assign(process, { agentId: "main", sessionKey, notifyOnExit: true });
       await prepareAdoptedDurableProcessNotification(process, "original");
-      expect(process.notifySessionTarget, kind).toBeUndefined();
-      expect(process.notifyOnExit, kind).toBe(false);
+      expect(process.notifySessionTarget?.sessionId, kind).toBe(adopted ? "original" : undefined);
+      expect(process.notifyOnExit, kind).toBe(adopted);
     }
   });
 });

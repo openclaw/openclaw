@@ -87,6 +87,9 @@ starting an agent turn, enabling automations, or changing OpenClaw state.
 Requirements needing online preflight appear as blockers. `build` creates a
 deterministic `.tgz` and refuses to overwrite an existing file.
 
+For `create`, omit `--name` and `--agent-id` to use default identities. Explicitly
+empty values are invalid and fail before project files are written.
+
 A minimal `package.json` identifies the package and its manifest:
 
 ```json
