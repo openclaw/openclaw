@@ -12,6 +12,23 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: session controls, the composer, and how the transcript renders.
 
+## Goals, questions, and recovery
+
+A goal belongs to a session. Saving an edited goal does not start a reply. Replacing
+its objective during a reply interrupts that reply, updates the objective, and
+resumes the goal. If you switch sessions while entering a goal, cancel the entry
+and select **Goal** again in the session you want to use.
+
+If an answer cannot be sent, its draft stays saved so you can retry. If browser
+storage fails, keep the tab open or copy the draft before reloading. A goal update
+that cannot save its recovery request is not sent; free browser storage and try
+again. For an unconfirmed goal update, use **Check outcome** before changing it.
+
+**Session paused as a precaution** means the provider has findings to review
+before the session can continue. Queued messages stay held; review and retry each
+message separately after continuation is accepted. A session stopped without
+reviewable findings cannot continue.
+
 An existing session with an empty transcript shows **No messages yet** and keeps
 the composer available. The agent welcome and recent chats appear only on the
 **New session** page. If no model is configured, the existing session's composer
