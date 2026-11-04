@@ -63,7 +63,7 @@ function fixture(chatModels = 200) {
   };
 }
 
-it("publishes native capabilities only to the negotiated v3 output", async () => {
+it("publishes task facts only on the opt-in v3 wire", async () => {
   const { files, run } = fixture();
   await expect(run()).resolves.toMatchObject({ wrote: true });
   const payloads = files.map((file) => JSON.parse(fs.readFileSync(file, "utf8")));
@@ -74,18 +74,16 @@ it("publishes native capabilities only to the negotiated v3 output", async () =>
   expect(v2.providers).not.toHaveProperty("fixture");
   expect(v2.models).toHaveLength(200);
   expect(v3.models).toHaveLength(201);
-  expect(v3.models.find((model) => model.id === "chat-0")?.inference).toEqual({
-    chat: true,
-    decision: { protocol: "fixture.decisions", input: ["text"] },
-  });
-  const native = v3.models.find((model) => model.provider === "fixture");
-  expect(native).toMatchObject({ id: "native", inference: { chat: false } });
-  expect(native?.inference?.decision).toMatchObject({
-    protocol: "fixture.decisions",
-    billing: { usdPerMillion: { input: 0, output: 0 } },
-  });
+  const native = v3.models.find((model) => model.id === "native");
+  expect(native?.inference).toEqual(nativeModel.inference);
+  expect(native?.pricing).toEqual({ status: "unknown" });
   expect(native).not.toHaveProperty("baseUrl");
   expect(v3.providers.fixture).toEqual({});
+  expect(v3.models.find((model) => model.id === "chat-0")?.inference).toEqual({
+    chat: true,
+    decision,
+  });
+  expect(v2.models.find((model) => model.id === "chat-0")).not.toHaveProperty("inference");
 });
 
 it("does not use native-only rows to satisfy the released chat catalog floor", async () => {

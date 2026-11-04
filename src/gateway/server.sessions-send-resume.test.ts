@@ -33,9 +33,9 @@ import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-s
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { refusePendingInputCommit } from "./pending-input-commit.test-support.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -63,7 +63,7 @@ let resolveGatewayContext: GatewayContextResolver;
 beforeAll(async () => {
   server = await startTestGatewayServer(await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] }));
   resolveGatewayContext = expectDefined(
-    getGatewayContextResolver(expectDefined(getGatewayRecoveryRuntime(), "Gateway runtime")),
+    getGatewayContextResolver(expectDefined(getGatewayLifecycleRuntime(), "Gateway runtime")),
     "Gateway context resolver",
   );
 });
@@ -363,9 +363,9 @@ it("fences a cancelled successor after adoption before queued input consumption"
       ],
       expect.anything(),
     );
-    // Custody remains unconsumed even though execution cleanup records interruption.
-    await proof.expectInputs("interrupted");
-    await proof.expectReceipts([{ state: "pending" }]);
+    // Custody remains unconsumed while cancellation records an ordinary failed send.
+    await proof.expectInputs("cancelled");
+    await proof.expectReceipts([{ state: "pending", cancelled: true }]);
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
   } finally {

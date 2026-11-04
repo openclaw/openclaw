@@ -96,6 +96,8 @@ vi.mock("./connect-auth-security.js", () => ({
 vi.mock("../../../version.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../version.js")>()),
   resolveRuntimeServiceBuildId: () => "build-a",
+  resolveRuntimeServiceCommit: () => "abcdef0",
+  resolveRuntimeServiceBuiltAt: () => "2026-10-21T11:55:00.000Z",
 }));
 
 const tailscaleClaim = vi.hoisted(() => vi.fn());
@@ -163,6 +165,37 @@ function makeState(role: "operator" | "node", scopes: string[]) {
   };
 }
 
+describe("sendGatewayHello running Gateway exposure", () => {
+  const gatewayExposure = { bindHost: "0.0.0.0", tailscaleMode: "off" } as const;
+
+  it("advertises what the process runs with to admins, not what config says", async () => {
+    const context = makeContext("operator", ["operator.admin"]);
+    await sendGatewayHello(
+      { ...context, handler: { ...context.handler, gatewayExposure } } as never,
+      { ...makeState("operator", ["operator.admin"]), resolvedAuth: { mode: "password" } } as never,
+      {},
+    );
+    expect(helloSnapshot(context)).toMatchObject({
+      authMode: "password",
+      bindHost: "0.0.0.0",
+      tailscaleMode: "off",
+    });
+  });
+
+  it("keeps it from clients without admin scope", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+    await sendGatewayHello(
+      { ...context, handler: { ...context.handler, gatewayExposure } } as never,
+      makeState("operator", ["operator.read"]) as never,
+      {},
+    );
+    const snapshot = helloSnapshot(context);
+    expect(snapshot?.authMode).toBeUndefined();
+    expect(snapshot?.bindHost).toBeUndefined();
+    expect(snapshot?.tailscaleMode).toBeUndefined();
+  });
+});
+
 function helloPayload(context: ReturnType<typeof makeContext>) {
   const response = context.sendFrame.mock.calls.at(0)?.at(0) as { payload?: HelloOk } | undefined;
   return response?.payload;
@@ -195,6 +228,15 @@ describe("sendGatewayHello update detail scope", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getHealthCache).mockReturnValue(null);
+  });
+
+  it("advertises input custody without changing negotiated scopes", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloPayload(context)?.features.capabilities).toContain("chat-input-custody-v1");
+    expect(helloPayload(context)?.auth.scopes).toEqual(["operator.read"]);
   });
 
   it.each([
@@ -571,6 +613,11 @@ describe("sendGatewayHello update detail scope", () => {
   );
 
   it.each([
+    {
+      label: "member",
+      role: "operator" as const,
+      scopes: ["operator.sessions.read", "operator.sessions.write"],
+    },
     { label: "pairing-only operator", role: "operator" as const, scopes: ["operator.pairing"] },
     { label: "node", role: "node" as const, scopes: ["operator.read"] },
   ])("omits update details for a $label", async ({ role, scopes }) => {
@@ -583,6 +630,10 @@ describe("sendGatewayHello update detail scope", () => {
       includeUpdateDetails: false,
     });
     expectRedactedHelloSnapshot(context);
+    expect(helloPayload(context)?.server).toMatchObject({
+      commit: "abcdef0",
+      builtAt: "2026-10-21T11:55:00.000Z",
+    });
     expect(helloPayload(context)?.features.capabilities).toContain("node-permission-errors");
     expect(helloPayload(context)?.features.capabilities).toContain("agent-session-id-create-v1");
   });
@@ -644,6 +695,27 @@ describe("sendGatewayHello update detail scope", () => {
     }
   });
 
+  it.each([
+    [{ controlUi: { basePath: "/__openclaw__/" } }, "/__openclaw__"],
+    [{ controlUi: { basePath: "/" } }, undefined],
+    [{ controlUi: { enabled: false, basePath: "/__openclaw__" } }, undefined],
+  ])(
+    "advertises the Control UI mount path without a public origin: %j",
+    async (gateway, basePath) => {
+      const context = makeContext("operator", ["operator.read"]);
+      context.configSnapshot = { gateway };
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+      expect(helloPayload(context)?.controlUiBasePath).toBe(basePath);
+      if (basePath === undefined) {
+        expect(helloPayload(context)).not.toHaveProperty("controlUiBasePath");
+      }
+    },
+  );
+
   it("keeps hello projection and telemetry at effective scopes", async () => {
     const state = {
       ...makeState("operator", ["operator.pairing"]),
@@ -668,6 +740,7 @@ describe("sendGatewayHello update detail scope", () => {
       method: "none",
       role: "operator",
       scopes: ["operator.pairing"],
+      roleAllowsAdmin: true,
       recoveryMigrationAllowed: true,
       recoveryScope: expect.stringMatching(/^[A-Za-z0-9_-]+$/u),
       deviceToken: "paired-token",

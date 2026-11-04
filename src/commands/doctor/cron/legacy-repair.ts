@@ -1,6 +1,5 @@
 // Doctor cron storage repair mechanics for quarantine, payloads, and Codex refs.
 
-import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
@@ -10,7 +9,6 @@ import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-confi
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
-  assertCronJobsStoreUnchanged,
   CronJobsStoreChangedError,
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreWithConfigJobsReadOnly,
@@ -22,14 +20,12 @@ import {
   type CronQuarantinedJob,
   type QuarantinedCronConfigJob,
 } from "../../../cron/store.js";
-import { resolveCronStoreKeyInDatabase } from "../../../cron/store/paths.js";
 import { fingerprintCronJobRows } from "../../../cron/store/row-codec.js";
 import type { CronJob } from "../../../cron/types.js";
 import {
   collectErrorGraphCandidates,
   formatErrorMessage as errorMessage,
 } from "../../../infra/errors.js";
-import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { importRetiredStateSource } from "../../../infra/state-migrations.retired-archive.js";
 import { listRetiredCronStateFiles } from "../../../infra/state-migrations.retired-cron-files.js";
 import { listExistingRetiredStateFiles } from "../../../infra/state-migrations.retired-files.js";
@@ -53,15 +49,14 @@ import {
   loadLegacyCronQuarantineForMigration,
   type LegacyCronQuarantine,
 } from "./legacy-quarantine-migration.js";
+import { captureLegacyCronRepairAdmission } from "./legacy-repair-admission.js";
 import { archiveLegacyCronFile } from "./quarantine-archive.js";
 import { mergeRuntimeEntryIntoConfigJob } from "./repair-plan.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
 import {
-  assertCronStateSchemaSupported,
   assertCronStateSchemaSupportedAsync,
   rethrowSqliteSchemaVersionError,
 } from "./schema-safety.js";
-import { inspectCronOwnerRowsForDoctor } from "./store-inventory.js";
 import {
   canRepairCronDeliveryForDoctor,
   collectStoredCronCodexRuntimePolicyTargets,
@@ -204,7 +199,7 @@ export async function applyLegacyCronStoreRepair(params: {
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   recoverQuarantinedScheduleJobs?: boolean;
 }): Promise<LegacyCronRepairResult> {
-  assertCronStateSchemaSupported();
+  await assertCronStateSchemaSupportedAsync();
   const { state } = params;
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -360,37 +355,33 @@ export async function applyLegacyCronStoreRepair(params: {
           version: 1,
           jobs: state.rawJobs as unknown as CronJob[],
         } as const;
-        const source = captureOpenClawStateReadContext();
-        const assertCurrent = () => {
-          source.admission.assertCurrent();
-          source.maintenanceScope?.assertDatabaseAccess(source.admission.databasePath);
-        };
-        const assertSnapshotCurrent = (db: EngineConnection): undefined => {
-          assertCurrent();
-          state.legacyImport?.assertCurrent();
-          if (
-            !isDeepStrictEqual(
-              inspectCronOwnerRowsForDoctor(db, resolveCronStoreKeyInDatabase(db, state.storePath)),
-              state.ownerRows,
-            )
-          ) {
-            throw new CronJobsStoreChangedError(state.storePath);
-          }
-          if (state.jobsFingerprint !== undefined) {
-            assertCronJobsStoreUnchanged(db, state.storePath, state.jobsFingerprint);
-          }
-        };
+        const { assertCurrent, assertRowsUnchanged: assertSnapshotCurrent } =
+          captureLegacyCronRepairAdmission(state);
         const saveOptions = {
           ...(quarantine ? { quarantine } : {}),
           ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
           preserveRuntimeState: true,
         };
         if (state.ownerRows.length > 0 || state.persistedQuarantine.length > 0) {
-          const backupPath = await backupCronStoreForDoctor(
+          const backup = await backupCronStoreForDoctor(
             { env: process.env },
-            { assertCurrent, assertRowsUnchanged: assertSnapshotCurrent },
+            {
+              plan: [
+                "legacy",
+                state.storePath,
+                state.ownerRows,
+                state.jobsFingerprint,
+                state.persistedQuarantine,
+                store,
+                quarantineEntries,
+                deleteQuarantineEntries,
+              ],
+              assertCurrent,
+              assertRowsUnchanged: assertSnapshotCurrent,
+            },
           );
-          changes.push(`Saved pre-repair cron backup: ${backupPath}`);
+          changes.push(`Saved pre-repair cron backup: ${backup.backupPath}`);
+          warnings.push(...backup.warnings);
         }
         await saveCronJobsStore(state.storePath, store, {
           ...saveOptions,

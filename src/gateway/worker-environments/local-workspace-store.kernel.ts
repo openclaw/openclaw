@@ -8,13 +8,11 @@ import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import {
+  currentLocalWorkspaceSweepEpoch,
   readLocalWorkspaceSourcePaths,
   readLocalWorkspaceSweepCandidates,
 } from "./local-workspace-cas.kernel.js";
-import type {
-  LocalWorkspaceMutation,
-  LocalWorkspaceProjection,
-} from "./local-workspace-store.types.js";
+import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
 
 const table = "local_workspace_projections";
 const nodes = "local_workspace_manifest_nodes";
@@ -47,7 +45,18 @@ export function mutateLocalWorkspaceProjection(
   db: EngineConnection,
   id: string,
   mutation: LocalWorkspaceMutation,
+  preparationEpoch?: number,
 ) {
+  // A stalled preparation can be collected before its root is published. Reject
+  // before any row change; the next reconciliation prepares the live files again.
+  if (
+    preparationEpoch !== undefined &&
+    preparationEpoch < currentLocalWorkspaceSweepEpoch(db) - 1
+  ) {
+    throw new Error(
+      "Local workspace preparation expired during cleanup; retry the session. Both workspaces were preserved.",
+    );
+  }
   // Mutation admission must not materialize manifests or recovery packs.
   const current = tableExists(db, table)
     ? executeSqliteQueryTakeFirstSync(
@@ -151,7 +160,7 @@ export function mutateLocalWorkspaceProjection(
 export function readLocalWorkspaceProjectionByPathInDatabase(
   db: EngineConnection,
   projectionPath: string,
-): LocalWorkspaceProjection | null {
+) {
   if (!getAdmittedSqlSchemaFacts(db)) {
     throw new Error("Local workspace lookup requires admitted schema facts.");
   }
@@ -161,7 +170,10 @@ export function readLocalWorkspaceProjectionByPathInDatabase(
   return (
     executeSqliteQueryTakeFirstSync(
       db,
-      query(db).selectFrom(table).selectAll().where("projection_path", "=", projectionPath),
+      query(db)
+        .selectFrom(table)
+        .select(["worktree_id", "agent_id", "session_key", "session_id", "lifecycle_revision"])
+        .where("projection_path", "=", projectionPath),
     ) ?? null
   );
 }

@@ -57,7 +57,7 @@ ghx issue view <issue> --repo openclaw/openclaw \
 
 - Before committing or landing nontrivial code: fresh review through permitted workflow; resolve actionable findings unless user opts out. Actionable = likely or high-impact; decline unlikely, recoverable edge cases whose fix adds disproportionate complexity, with one-line reason.
 
-- Nontrivial code commit/landing: `$autoreview`; resolve verified actionable findings. Review-only: independent pass only when requested, no extra mandatory CLI pass.
+- Nontrivial code commit/landing: use the [selected local review route](../../../docs/reference/pull-request-review-flow.md#local-review-before-a-pr) and resolve verified actionable findings. Required fresh independent review still applies. Review-only: independent pass only when requested, no extra mandatory CLI pass.
 - Reopen review for substantive changes/unresolved concerns, not patch-identical rebase/mechanical head change. Address real human/bot findings; explain rejections. Bot scores/Rank-up lists create no separate obligations. ClawSweeper advisory; never wait for comment to land.
 - Current PR template: plain problem/impact; inventories in diff/details. Keep risks, migrations, actions, proof, gaps, credit current; explain material tradeoffs. No invented internal-only user benefit or universal LOC/provenance/alternate-fix essays.
 - `CHANGELOG.md` release-owned; release-note context in PR/commit. Agent transcripts only on explicit request.

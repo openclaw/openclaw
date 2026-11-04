@@ -169,12 +169,11 @@ export function findTelegramTokenOwnerAccountId(params: {
       continue;
     }
     const ownerAccountId = tokenOwners.get(token);
+    if (account.accountId === normalizedAccountId) {
+      return ownerAccountId ?? null;
+    }
     if (!ownerAccountId) {
       tokenOwners.set(token, account.accountId);
-      continue;
-    }
-    if (account.accountId === normalizedAccountId) {
-      return ownerAccountId;
     }
   }
   return null;

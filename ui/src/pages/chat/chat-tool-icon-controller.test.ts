@@ -6,6 +6,7 @@ import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import * as iconLoader from "../plugins/icon-loader.ts";
 import { createChatToolIcons } from "./chat-tool-icon-controller.ts";
 
@@ -64,6 +65,7 @@ function setup() {
     phase: "connected",
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
+    hello: gatewayHelloForMethods(["plugins.list", "tools.effective"]),
   });
   const context = {
     resourceBasePath: "",
@@ -123,6 +125,34 @@ afterEach(() => {
 });
 
 describe("chat tool icon ownership", () => {
+  it("keeps fallback icons without broad read access and retires artwork when access changes", async () => {
+    const { icon, context, update, request, fetch } = setup();
+    const setScopes = (scopes: string[]) => {
+      context.gateway.snapshot.hello = gatewayHelloForMethods(
+        ["plugins.list", "tools.effective"],
+        scopes,
+      );
+      update();
+    };
+    setScopes(["operator.sessions.read"]);
+    for (const name of ["meeting_status", "meeting_list", "other"]) {
+      expect(icon(name)).toBeUndefined();
+      await Promise.resolve();
+    }
+    expect(request).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    setScopes(["operator.read"]);
+    await vi.waitFor(() => expect(icon("meeting_status")?.url).toBe("blob:plugin-icon"));
+    setScopes(["operator.sessions.read"]);
+    expect(icon("meeting_status")).toBeUndefined();
+    const calls = request.mock.calls.length;
+    icon("new_tool");
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(calls);
+    setScopes(["operator.read"]);
+    await vi.waitFor(() => expect(icon("meeting_status")?.url).toBe("blob:plugin-icon"));
+  });
+
   it("uses third-party logos only for plugin-owned tools and falls back through activity artwork", async () => {
     const { icon, request, fetch } = setup();
     const logo = vi.spyOn(iconLoader, "fetchPluginIconBlobUrl").mockResolvedValue("blob:brand");
@@ -184,9 +214,14 @@ describe("chat tool icon ownership", () => {
             groups: [
               {
                 ...catalog.groups[0]!,
-                tools: ["browser", "canvas", "web_search", "mcp__notes__browser"].map((id) =>
-                  Object.assign({}, catalog.groups[0]!.tools[0]!, { id }),
-                ),
+                tools: [
+                  "browser",
+                  "canvas",
+                  "web_search",
+                  "mcp__notes__browser",
+                  "search",
+                  "structured_output",
+                ].map((id) => Object.assign({}, catalog.groups[0]!.tools[0]!, { id })),
               },
             ],
           },
@@ -195,7 +230,9 @@ describe("chat tool icon ownership", () => {
       await vi.waitFor(() => expect(icon(name)?.url).toBe("blob:plugin-icon"));
       expect(icon(name)?.branding).toBe(false);
     }
-    await vi.waitFor(() => expect(icon("mcp__notes__browser")?.url).toBe("blob:brand"));
+    for (const name of ["mcp__notes__browser", "search", "structured_output"]) {
+      await vi.waitFor(() => expect(icon(name)?.url).toBe("blob:brand"));
+    }
     expect(logo).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledOnce();
   });

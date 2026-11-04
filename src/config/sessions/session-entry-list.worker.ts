@@ -1,4 +1,3 @@
-import { jsonExtractText, jsonPathValue } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
@@ -6,7 +5,6 @@ import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import {
   cacheValidityTokensEqual,
@@ -28,18 +26,12 @@ export async function readSessionEntryList(
     ...request.scope,
     env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
   };
-  // Prepare optional command code before entering the synchronous reader snapshot.
-  const recovery =
-    scope.mainSessionRecovery || scope.pendingExecRecovery || scope.pendingInputRecovery;
   const listing =
-    recovery || scope.cleanupSession !== undefined
-      ? undefined
-      : await import("./session-accessor.sqlite-entry-list.read.js");
+    scope.cleanupSession === undefined
+      ? await import("./session-accessor.sqlite-entry-list.read.js")
+      : undefined;
   const resolveScope = listing
     ? (await import("./session-accessor.sqlite-read-scope.js")).resolveSqliteScope
-    : undefined;
-  const mainRecovery = scope.mainSessionRecovery
-    ? await import("./restart-recovery-state.js")
     : undefined;
   const cleanup =
     scope.cleanupSession === undefined ? undefined : await import("./plugin-host-cleanup.js");
@@ -48,130 +40,11 @@ export async function readSessionEntryList(
   let unchanged: true | undefined;
   let nextCronRunUpdatedAt: number | null = null;
   let nextCronRunSessionKey: string | null = null;
-  let nextExecRecoverySessionKey: string | null = null;
 
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
-        if (scope.mainSessionRecovery) {
-          const keys = executeSqliteQuerySync(
-            database.db,
-            getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
-              .selectFrom("session_nodes")
-              .select("session_key")
-              .where("archived_at", "is", null)
-              .where((eb) =>
-                eb(
-                  jsonPathValue(
-                    database.db,
-                    eb.ref("entry_json"),
-                    eb.val("$.mainRestartRecovery.tombstone"),
-                  ),
-                  "is",
-                  null,
-                ),
-              )
-              .where((eb) =>
-                eb.or([
-                  ...[
-                    "mainRestartRecovery",
-                    "restartRecoveryRuns",
-                    "restartRecoveryDeliveryRunId",
-                    "pendingFinalDelivery",
-                  ].map((field) =>
-                    eb(jsonExtractText(database.db, eb.ref("entry_json"), field), "is not", null),
-                  ),
-                  ...(scope.mainSessionRecovery === "orphans"
-                    ? [
-                        eb(
-                          eb.cast<string>(
-                            jsonExtractText(database.db, eb.ref("entry_json"), "abortedLastRun"),
-                            "text",
-                          ),
-                          "in",
-                          ["1", "true"],
-                        ),
-                        eb(
-                          jsonExtractText(database.db, eb.ref("entry_json"), "status"),
-                          "=",
-                          "interrupted",
-                        ),
-                      ]
-                    : []),
-                ]),
-              ),
-          ).rows.map((row) => row.session_key);
-          // Terminal run fences alone are not custody; completed rows with remaining claims still settle.
-          // Startup still validates pending canonical rows even when no orphan needs recovery.
-          return keys.length || scope.mainSessionRecovery === "orphans"
-            ? readSelectedSessionEntriesInDatabase(database, keys).filter(
-                ({ entry, sessionKey }) =>
-                  scope.mainSessionRecovery === "orphans"
-                    ? mainRecovery!.hasOrphanedMainSessionWork(entry, sessionKey)
-                    : mainRecovery!.hasMainSessionRecoveryClaim(entry),
-              )
-            : [];
-        }
-        if (scope.pendingExecRecovery) {
-          const page = scope.pendingExecRecovery;
-          const keys = executeSqliteQuerySync(
-            database.db,
-            getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
-              .selectFrom("session_nodes")
-              .select("session_key")
-              .where("session_key", ">", page.afterSessionKey ?? "")
-              // Absent facts evaluate to SQL NULL; empty obligations are not candidates.
-              .where((eb) =>
-                eb(
-                  jsonExtractText(database.db, eb.ref("entry_json"), "pendingExecNotifications"),
-                  "!=",
-                  "{}",
-                ),
-              )
-              .orderBy("session_key")
-              .limit(page.limit),
-          ).rows.map((row) => row.session_key);
-          nextExecRecoverySessionKey = keys.length === page.limit ? keys.at(-1)! : null;
-          return keys.length ? readSelectedSessionEntriesInDatabase(database, keys) : [];
-        }
-        if (scope.pendingInputRecovery) {
-          if (!hasSessionPendingInputsSchema(database.db)) {
-            return [];
-          }
-          const keys = executeSqliteQuerySync(
-            database.db,
-            getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
-              .selectFrom("session_pending_inputs as input")
-              .innerJoin("session_nodes as session", (join) =>
-                join
-                  .onRef("session.session_key", "=", "input.session_key")
-                  .onRef("session.current_session_id", "=", "input.session_id"),
-              )
-              .select("input.session_key")
-              .distinct()
-              .where("input.consumed_event_id", "is", null)
-              // Queued inputs without live custody become interrupted in the history owner.
-              .where("input.state", "in", ["queued", "interrupted"])
-              .where((eb) =>
-                eb.or([
-                  eb("input.state", "=", "queued"),
-                  ...["sessionSendDelivery", "chatInputRecovery"].map((field) =>
-                    eb(
-                      jsonPathValue(
-                        database.db,
-                        eb.ref("input.message_json"),
-                        eb.val(`$.__openclaw.${field}`),
-                      ),
-                      "is not",
-                      null,
-                    ),
-                  ),
-                ]),
-              ),
-          ).rows.map((row) => row.session_key);
-          return keys.length ? readSelectedSessionEntriesInDatabase(database, keys) : [];
-        }
         if (scope.cleanupSession === undefined) {
           const read = () =>
             listing!.listSqliteSessionEntriesFromDatabase(
@@ -255,6 +128,5 @@ export async function readSessionEntryList(
     unchanged,
     ...(scope.expiredCronRuns ? { nextCronRunUpdatedAt } : {}),
     ...(scope.cronRetention ? { nextCronRunSessionKey } : {}),
-    ...(scope.pendingExecRecovery ? { nextExecRecoverySessionKey } : {}),
   };
 }

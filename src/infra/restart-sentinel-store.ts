@@ -18,7 +18,7 @@ import { updateRecoverySchema } from "./update-recovery.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
 type RestartSentinelStats = z.infer<typeof restartSentinelStatsSchema>;
-export type RestartSentinelContinuation = z.infer<typeof restartSentinelContinuationSchema>;
+type RestartSentinelContinuation = z.infer<typeof restartSentinelContinuationSchema>;
 
 export type RestartSentinelPayload = SchemaContract<
   Omit<z.input<typeof restartSentinelPayloadSchema>, "stats" | "continuation">

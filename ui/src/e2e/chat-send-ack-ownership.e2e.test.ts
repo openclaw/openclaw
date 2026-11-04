@@ -23,14 +23,14 @@ suite.define(() => {
       const toolText = "Successor C tool proof";
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
-      await page.locator("[data-settings-send-shortcut]").selectOption("enter");
+      await page.locator('[data-test-id="send-shortcut-enter"]').click();
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const composer = page.locator(".agent-chat__input textarea");
       await composer.fill("Start the original task.");
       await exactButton(page, "Send message").click();
       const original = await gateway.waitForRequest("chat.send");
       const runId = String(asOptionalRecord(original.params)?.idempotencyKey);
-      const stop = page.getByRole("button", { name: "Stop generating" });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       await stop.waitFor();
       const progress = "Original run continues working.";
       await chat({

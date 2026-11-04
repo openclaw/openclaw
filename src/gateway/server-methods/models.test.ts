@@ -37,6 +37,7 @@ import {
   EXPECTED_IMPLICIT_CODEX_RUNTIME,
   EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
   thinkingLevels,
+  withStatedRuntime,
 } from "./models-runtime.fixtures.test-support.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
@@ -291,7 +292,7 @@ async function listModels(params: Parameters<typeof requestModelsList>[0]) {
 }
 
 function expectModels(respond: ReturnType<typeof vi.fn>, models: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, { models }, undefined);
+  expect(respond).toHaveBeenCalledWith(true, { models: withStatedRuntime(models) }, undefined);
 }
 
 async function expectModelsList(params: Parameters<typeof requestModelsList>[0], models: unknown) {
@@ -971,16 +972,7 @@ describe("models.list", () => {
         }).models,
       } as unknown as OpenClawConfig;
 
-      const loadConfiguredCatalog = catalogLoader(catalog);
-      const { request: configuredRequest, respond: configuredRespond } = requestModelsList({
-        view: "configured",
-        includeDefaultModels: false,
-        runtimeConfig: cfg,
-        loadGatewayModelCatalog: loadConfiguredCatalog,
-      });
-      await configuredRequest;
-
-      expectModels(configuredRespond, [
+      const configuredModels = [
         {
           ...GPT_CODEX,
           agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
@@ -999,45 +991,38 @@ describe("models.list", () => {
         },
         { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
         { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
-      ]);
+      ];
+      const loadConfiguredCatalog = catalogLoader(catalog);
+      await expectModelsList(
+        {
+          view: "configured",
+          includeDefaultModels: false,
+          runtimeConfig: cfg,
+          loadGatewayModelCatalog: loadConfiguredCatalog,
+        },
+        configuredModels,
+      );
       expect(loadConfiguredCatalog).toHaveBeenCalledWith(
         expect.objectContaining({ readOnly: true }),
       );
 
-      const { request: allRequest, respond: allRespond } = requestModelsList({
-        view: "all",
-        runtimeConfig: cfg,
-        loadGatewayModelCatalog: catalogLoader(catalog),
-      });
-      await allRequest;
-
-      expectModels(allRespond, [
+      await expectModelsList(
         {
-          id: "claude-test",
-          name: "Claude Test",
-          provider: "anthropic",
-          available: false,
-          unavailableReason: "missing-auth",
+          view: "all",
+          runtimeConfig: cfg,
+          loadGatewayModelCatalog: catalogLoader(catalog),
         },
-        {
-          ...GPT_CODEX,
-          agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
-          cyberAccessProgramDefault: "standard",
-          local: false,
-          available: true,
-        },
-        {
-          id: "gpt-codex-test",
-          name: "GPT Codex Test",
-          provider: "openai",
-          agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
-          cyberAccessProgramDefault: "standard",
-          local: false,
-          available: true,
-        },
-        { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
-        { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
-      ]);
+        [
+          {
+            id: "claude-test",
+            name: "Claude Test",
+            provider: "anthropic",
+            available: false,
+            unavailableReason: "missing-auth",
+          },
+          ...configuredModels,
+        ],
+      );
     });
   });
 
@@ -1074,25 +1059,23 @@ describe("models.list", () => {
               },
             }).models,
           } as unknown as OpenClawConfig;
-          const expected = {
-            models: [
-              {
-                id: "llama-configured",
-                name: "Llama Configured",
-                provider: "vllm",
-                local: true,
-                available: true,
-                tags: ["default"],
-              },
-              {
-                id: "llama-discovered",
-                name: "Llama Discovered",
-                provider: "vllm",
-                local: true,
-                available: true,
-              },
-            ],
-          };
+          const expected = [
+            {
+              id: "llama-configured",
+              name: "Llama Configured",
+              provider: "vllm",
+              local: true,
+              available: true,
+              tags: ["default"],
+            },
+            {
+              id: "llama-discovered",
+              name: "Llama Discovered",
+              provider: "vllm",
+              local: true,
+              available: true,
+            },
+          ];
 
           for (const view of ["default", "configured"] as const) {
             const { request, respond } = requestModelsList({
@@ -1102,7 +1085,7 @@ describe("models.list", () => {
               loadGatewayModelCatalog: catalogLoader(catalog),
             });
             await request;
-            expect(respond).toHaveBeenCalledWith(true, expected, undefined);
+            expectModels(respond, expected);
           }
         },
       );
@@ -1203,6 +1186,7 @@ describe("models.list", () => {
                     source: "model",
                   },
                   available,
+                  supportsFastMode: false,
                   tags: ["configured"],
                   ...(authenticated ? {} : { unavailableReason: "missing-auth" }),
                 },
@@ -1285,13 +1269,13 @@ describe("models.list", () => {
           loadGatewayModelCatalog: catalogLoader([LLAMA_SECURE]),
         });
 
-        expect.soft(respond).toHaveBeenCalledWith(
-          true,
-          {
-            models: [{ ...LLAMA_SECURE, available: true }],
-          },
-          undefined,
-        );
+        expect
+          .soft(respond)
+          .toHaveBeenCalledWith(
+            true,
+            { models: withStatedRuntime([{ ...LLAMA_SECURE, available: true }]) },
+            undefined,
+          );
       }
     } finally {
       clearRuntimeConfigSnapshot();
@@ -1330,11 +1314,7 @@ describe("models.list", () => {
         },
       ]);
 
-      try {
-        await expectDemoAvailability(false);
-      } finally {
-        clearRuntimeAuthProfileStoreSnapshots();
-      }
+      await expectDemoAvailability(false);
     });
   });
 
@@ -1463,11 +1443,7 @@ describe("models.list", () => {
           },
         },
       ]);
-      try {
-        await expectDemoAvailability(true, { secrets: FILE_SECRETS });
-      } finally {
-        clearRuntimeAuthProfileStoreSnapshots();
-      }
+      await expectDemoAvailability(true, { secrets: FILE_SECRETS });
     });
   });
 

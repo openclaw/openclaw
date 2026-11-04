@@ -53,11 +53,18 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
         ? await context.cron.list({ includeDisabled: true })
         : [await context.cron.readJob(jobId!)].filter((job) => job !== undefined);
     const storeKey = context.cron.getStoreKey?.() ?? cronStoreKey(context.cronStorePath);
-    await visibilityRead.prepare();
-    const resolvePageOptions = (): ReadCronRunHistoryPageOptions | undefined => {
-      const visibility = visibilityRead.resolve();
+    // The admitted job reads its own recorded outcomes, not the conversations
+    // attached to those runs. Other callers still need session visibility.
+    const initialCallerScope = readCronCallerScope(client);
+    if (!jobId || initialCallerScope?.currentJobId !== jobId) {
+      await visibilityRead.prepare();
+    }
+    const resolvePageOptions = (
+      callerScope = readCronCallerScope(client),
+    ): ReadCronRunHistoryPageOptions | undefined => {
+      const visibility =
+        jobId && callerScope?.currentJobId === jobId ? undefined : visibilityRead.resolve();
       const defaultAgentId = context.cron.getDefaultAgentId();
-      const callerScope = readCronCallerScope(client);
       if (scope === "all") {
         if (callerScope) {
           throw new Error("Cron history scope changed; retry the request");
@@ -87,8 +94,8 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
       const matchedJob =
         job &&
         filterCronRunLogJobsByAgent([job], p.agentId, defaultAgentId).length > 0 &&
-        cronJobIsVisible(job, visibility, defaultAgentId) &&
-        cronJobMatchesCallerScope({ job, callerScope, defaultAgentId, allowCurrentJob: true })
+        cronJobMatchesCallerScope({ job, callerScope, defaultAgentId, allowCurrentJob: true }) &&
+        cronJobIsVisible(job, visibility, defaultAgentId)
           ? job
           : undefined;
       // Operator history survives deletion; scoped reads need a live matching owner.
@@ -109,7 +116,7 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
           : undefined,
       };
     };
-    const initialOptions = resolvePageOptions();
+    const initialOptions = resolvePageOptions(initialCallerScope);
     if (!initialOptions) {
       return;
     }

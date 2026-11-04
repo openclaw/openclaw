@@ -30,6 +30,7 @@ describe("sharing identity display", () => {
     });
     expect(identities.find((item) => item.id === "profile-1")).toMatchObject({
       label: "new-name@example.test",
+      avatarUrl: "/api/users/profile-1/avatar?v=2",
       identity: { type: "profile", id: "profile-1" },
     });
     expect(identities.find((item) => item.id === "agent-1")).toMatchObject({

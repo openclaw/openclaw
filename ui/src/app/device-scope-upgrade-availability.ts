@@ -4,7 +4,7 @@ import { hasOperatorAdminAccess } from "./operator-access.ts";
 
 export type ScopeUpgradeState =
   | { phase: "hidden" }
-  | { phase: "guidance" }
+  | { phase: "guidance"; reason?: "role" }
   | { phase: "available" }
   | { phase: "requesting" }
   | { phase: "pending"; requestId: string }
@@ -21,6 +21,9 @@ export function readScopeUpgradeAvailability(
     hasOperatorAdminAccess(auth)
   ) {
     return { phase: "hidden" };
+  }
+  if (auth.roleAllowsAdmin === false) {
+    return { phase: "guidance", reason: "role" };
   }
   return isGatewayMethodAdvertised(snapshot, "device.scopes.requestUpgrade") === true &&
     isGatewayMethodAdvertised(snapshot, "device.scopes.waitUpgrade") === true &&

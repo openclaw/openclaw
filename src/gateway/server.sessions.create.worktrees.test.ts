@@ -142,9 +142,19 @@ test("sessions.create fences the first workspace write behind its diff baseline"
 test("sessions.create rolls back failed provisioning before a same-key creator proceeds", async () => {
   const workspace = await createWorkspace("openclaw-session-worktree-rollback-");
   testState.agentConfig = { workspace };
-  testState.sessionConfig = { sharing: { drafts: false } };
+  testState.sessionConfig = { sharing: { drafts: true } };
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:worktree-rollback";
+  const cfg = loadGatewayTestConfig();
+  const options = { ...adminOptions, context: { getRuntimeConfig: () => cfg } };
+  const create = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
+  const preparation = vi
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
+      const result = await create(this, params);
+      cfg.session = { ...cfg.session, sharing: { drafts: false } };
+      return result;
+    });
   const originalRollback = captureMethodCall("rollbackPreparation")(
     ManagedWorktreeService.prototype,
   );
@@ -162,7 +172,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       await originalRollback(this, record, withRollback);
     });
   try {
-    const failedPromise = createSession({ key, visibility: "draft", worktree: true });
+    const failedPromise = createSession({ key, visibility: "draft", worktree: true }, options);
     await Promise.race([
       rollbackStarted,
       failedPromise.then((result) => {
@@ -170,7 +180,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       }),
     ]);
     let successorSettled = false;
-    const successorPromise = createSession({ key, worktree: true }).then((result) => {
+    const successorPromise = createSession({ key, worktree: true }, options).then((result) => {
       successorSettled = true;
       return result;
     });
@@ -183,7 +193,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        message: "session visibility is disabled: draft",
+        message: expect.stringContaining("session visibility is disabled: draft"),
         details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
       },
     });
@@ -203,7 +213,10 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       canonicalWorkspaceDir: workspace,
     });
 
-    const adoptedFailure = await createSession({ key, visibility: "draft", worktree: true });
+    const adoptedFailure = await createSession(
+      { key, visibility: "draft", worktree: true },
+      options,
+    );
     expect(adoptedFailure).toMatchObject({
       ok: false,
       error: { message: "sessions.create visibility requires a new session" },
@@ -215,6 +228,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
   } finally {
     releaseRollback();
     rollbackSpy.mockRestore();
+    preparation.mockRestore();
     await removeLiveWorktree(successorWorktreeId);
     await disposeSessionReadContexts();
     testState.agentConfig = undefined;
@@ -255,7 +269,7 @@ test.each([
     }
     const { storePath } = await createSessionStoreDir();
     testState.agentConfig = { workspace };
-    testState.sessionConfig = { sharing: { drafts: false } };
+    testState.sessionConfig = { sharing: { drafts: true } };
     const cfg = loadGatewayTestConfig();
     (await getGatewayConfigModule()).setRuntimeConfigSnapshot(cfg);
     const entered = createDeferredCore();
@@ -304,10 +318,14 @@ test.each([
       } else {
         await managedWorktrees.remove({ id: worktree.id, reason: "manual-delete" });
       }
+      cfg.session = { ...cfg.session, sharing: { drafts: false } };
       proceed.resolve();
       await expect(creation).resolves.toMatchObject({
         ok: false,
-        error: { code: "INVALID_REQUEST", message: "session visibility is disabled: draft" },
+        error: {
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("session visibility is disabled: draft"),
+        },
       });
       expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
       const record = getRegistryWorktree(process.env, worktree.id);

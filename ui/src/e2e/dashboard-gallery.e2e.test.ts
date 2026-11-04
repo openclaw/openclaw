@@ -44,8 +44,8 @@ const dashboardRows = agesSeconds.map((age, index) => ({
   status: index === 0 ? "running" : "done",
   createdActor: {
     type: "human",
-    id: index % 2 ? "peter" : "mira",
-    label: index % 2 ? "Peter" : "Mira",
+    id: index % 2 ? "riley" : "mira",
+    label: index % 2 ? "Riley" : "Mira",
   },
 }));
 
@@ -118,6 +118,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessions: rows,
           featureMethods: ["board.get"],
+          deferredRequests: [{ method: "sessions.list", match: { hasBoard: true } }],
           methodResponses: {
             "config.get": themeConfigResponse("dash", mode),
             "sessions.list": { cases: [responseCase({ hasBoard: true }, list(rows))] },
@@ -134,6 +135,14 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}dashboards`);
         const gallery = page.locator("openclaw-dashboards-page");
+        const toolbar = gallery.locator(".dashboards-toolbar");
+        await gallery.locator(".dashboards-loading__control").first().waitFor();
+        const loadingToolbar = await toolbar.boundingBox();
+        await gateway.resolveDeferred("sessions.list");
+        await gallery.getByRole("searchbox").waitFor();
+        const loadedToolbar = await toolbar.boundingBox();
+        expect(loadedToolbar!.y).toBeCloseTo(loadingToolbar!.y, 0);
+        expect(Math.abs(loadedToolbar!.height - loadingToolbar!.height)).toBeLessThan(1);
         const emptyCard = gallery.locator(`[data-dashboard-session="${emptyKey}"]`);
         const filledCard = gallery.locator(`[data-dashboard-session="${selectedSessionKey}"]`);
         const empty = emptyCard.locator(".board-empty");
@@ -207,6 +216,8 @@ suite.define(() => {
           cases: [responseCase({ hasBoard: true }, list([]))],
         });
         await page.reload();
+        await gallery.locator(".dashboards-loading__control").first().waitFor();
+        await gateway.resolveDeferred("sessions.list");
         await gallery.locator("[data-dashboards-empty]").waitFor();
         expect(await gallery.locator("[data-dashboards-no-results]").count()).toBe(0);
         await saveFrame("catalog-empty", gallery.locator("[data-dashboards-empty]"));
@@ -226,6 +237,56 @@ suite.define(() => {
             JSON.stringify({ theme, measurements }, null, 2),
           );
         }
+      },
+    );
+  });
+
+  it("keeps the phone gallery geometry from skeleton to loaded", async () => {
+    const rows = [{ ...dashboardRows[0]!, hasBoard: true }];
+    await suite.withPage(
+      { colorScheme: "light", viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await page.route("**/dashboard-gallery-widget.html", (route) =>
+          route.fulfill({ contentType: "text/html; charset=utf-8", body: widgetMarkup }),
+        );
+        const gateway = await installMockGateway(page, {
+          sessions: rows,
+          featureMethods: ["board.get"],
+          deferredRequests: [{ method: "sessions.list", match: { hasBoard: true } }],
+          methodResponses: {
+            "board.get": boardSnapshots[0],
+            "sessions.list": {
+              cases: [
+                responseCase(
+                  { hasBoard: true },
+                  {
+                    ts: now,
+                    path: "",
+                    count: rows.length,
+                    defaults: { contextTokens: null, model: null, modelProvider: null },
+                    sessions: rows,
+                  },
+                ),
+              ],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}dashboards`);
+        const gallery = page.locator("openclaw-dashboards-page");
+        const geometry = async () => {
+          const toolbar = (await gallery.locator(".dashboards-toolbar").boundingBox())!;
+          const card = (await gallery.locator(".dashboard-card").first().boundingBox())!;
+          return { toolbarHeight: toolbar.height, cardY: card.y, cardHeight: card.height };
+        };
+        await gallery.locator(".dashboards-loading__control").first().waitFor();
+        const loading = await geometry();
+        await gateway.resolveDeferred("sessions.list");
+        await gallery.getByRole("searchbox").waitFor();
+        await gallery.locator("[data-dashboard-session]").waitFor();
+        const loaded = await geometry();
+        expect(loaded.toolbarHeight).toBeCloseTo(loading.toolbarHeight, 0);
+        expect(loaded.cardY).toBeCloseTo(loading.cardY, 0);
+        expect(loaded.cardHeight).toBeCloseTo(loading.cardHeight, 0);
       },
     );
   });
@@ -358,6 +419,49 @@ suite.define(() => {
             })),
           )
           .toEqual({ documentWidth: 390, viewportWidth: 390, columns: 1 });
+
+        const cards = gallery.locator("[data-dashboard-session]");
+        const filter = gallery.locator(".dashboards-filter__trigger");
+        expect(await filter.getAttribute("class")).not.toContain("active");
+        await filter.click();
+        const popover = page.locator("#dashboards-filter-popover");
+        await popover.getByRole("radio", { name: "Riley" }).click();
+        await expect.poll(() => cards.count()).toBe(6);
+        await popover.getByRole("radio", { name: "Title A–Z" }).click();
+        await expect.poll(() => cards.first().locator("h2").textContent()).toBe("Dashboard 1");
+        expect(await filter.getAttribute("class")).toContain("active");
+        await popover.getByRole("radio", { name: "All authors" }).click();
+        await popover.getByRole("radio", { name: "Recently updated" }).click();
+        await expect.poll(() => cards.count()).toBe(12);
+        expect(await filter.getAttribute("class")).not.toContain("active");
+
+        // Each group is one tab stop, and arrow keys move the checked option with wraparound.
+        const authors = popover.locator(".dashboards-filter__authors").getByRole("radio");
+        await expect
+          .poll(() =>
+            authors.evaluateAll((options) =>
+              options.map((option) => option.getAttribute("tabindex")),
+            ),
+          )
+          .toEqual(["0", "-1", "-1"]);
+        await authors.first().focus();
+        await page.keyboard.press("ArrowUp");
+        await expect.poll(() => authors.last().getAttribute("aria-checked")).toBe("true");
+        expect(await authors.last().evaluate((option) => option.matches(":focus"))).toBe(true);
+        await expect.poll(() => cards.count()).toBe(6);
+        await page.keyboard.press("ArrowDown");
+        await expect.poll(() => authors.first().getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => cards.count()).toBe(12);
+
+        // An outside tap only closes the popover; the next one opens the card.
+        const galleryUrl = page.url();
+        const card = cards.nth(1);
+        const cardBox = (await card.boundingBox())!;
+        await page.mouse.click(cardBox.x + 4, cardBox.y + cardBox.height - 8);
+        await popover.waitFor({ state: "hidden" });
+        expect(page.url()).toBe(galleryUrl);
+        await page.mouse.click(cardBox.x + 4, cardBox.y + cardBox.height - 8);
+        await expect.poll(() => page.url()).not.toBe(galleryUrl);
       },
     );
   });

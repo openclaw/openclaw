@@ -431,4 +431,33 @@ struct RealtimePCMStreamingAudioPlayerTests {
         #expect(probe.results.first?.finished == false)
     }
 }
+
+struct RealtimePCMLoudnessTests {
+    private static func frame(_ value: Int16) -> Data {
+        [Int16](repeating: value, count: 480).withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+
+    private static func samples(_ data: Data) -> [Int16] {
+        data.withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
+    }
+
+    @Test func `quiet speech is lifted and loud frames stay under the ceiling`() {
+        var loudness = RealtimePCMLoudness()
+        #expect(Self.samples(loudness.apply(to: Self.frame(1000))).allSatisfy { $0 == 2820 })
+        #expect(Self.samples(loudness.apply(to: Self.frame(20000))).allSatisfy { $0 == 29204 })
+        // Recovery is gradual: the next quiet frame starts at the reduced gain and stays under full gain.
+        let after = Self.samples(loudness.apply(to: Self.frame(1000)))
+        #expect(after.first == 1460)
+        #expect((after.last ?? 0) > 1460 && (after.last ?? 0) < 2820)
+    }
+
+    @Test func `one loud sample late in a frame holds the whole frame under the ceiling`() {
+        var input = [Int16](repeating: 1000, count: 480)
+        input[400] = .min
+        var loudness = RealtimePCMLoudness()
+        let output = Self.samples(loudness.apply(to: input.withUnsafeBufferPointer { Data(buffer: $0) }))
+        #expect(output[400] == -29204)
+        #expect(output[0] == 891)
+    }
+}
 #endif
