@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "@openclaw/retry";
 import {
   extractProjectKeysFromCuratedEntry,
   normalizeProjectAnnotationKey,
@@ -184,15 +185,56 @@ async function prepareLegacyProjectMemoryBootstrap(
   }
 }
 
-export async function prepareProjectMemoryBootstrap(params: {
+type ProjectMemoryBootstrapParams = {
   cfg: OpenClawConfig;
   agentId: string;
   activeProjectKeys: readonly string[];
   context?: MemoryCallerContext;
-}): Promise<string[]> {
+};
+
+export async function prepareProjectMemoryBootstrap(
+  params: ProjectMemoryBootstrapParams,
+): Promise<string[]> {
   if (params.activeProjectKeys.length === 0) {
     return [];
   }
+  const controller = new AbortController();
+  const context: MemoryCallerContext = {
+    authority: params.context?.authority ?? { kind: "host", operation: "project-memory-bootstrap" },
+    signal: controller.signal,
+    assertCurrent() {
+      controller.signal.throwIfAborted();
+      params.context?.assertCurrent();
+    },
+  };
+  try {
+    return await raceWithTimeout(
+      () => prepareProjectMemoryBootstrapWithinBudget({ ...params, context }),
+      1_000,
+      () => {
+        controller.abort();
+        log.warn(
+          "project memory recall skipped: 1000ms budget exceeded; continuing without project candidates",
+        );
+        return [];
+      },
+      {
+        signal: params.context?.signal,
+        onAbort: () => {
+          controller.abort();
+          return [];
+        },
+      },
+    );
+  } finally {
+    // Late provider work retains no caller authority and still runs its own cleanup.
+    controller.abort();
+  }
+}
+
+async function prepareProjectMemoryBootstrapWithinBudget(
+  params: ProjectMemoryBootstrapParams & { context: MemoryCallerContext },
+): Promise<string[]> {
   using phases = observeDiagnosticsTimelinePhases("project-memory.select");
   // Only a native slot owner serves recall under caller authority. Classification reads
   // owners this process already loaded; legacy owners keep the loaded-runtime path.
@@ -202,10 +244,7 @@ export async function prepareProjectMemoryBootstrap(params: {
     return runtime ? await prepareLegacyProjectMemoryBootstrap(params, runtime) : [];
   }
   let active = true;
-  const caller: MemoryCallerContext = params.context ?? {
-    authority: { kind: "host", operation: "project-memory-bootstrap" },
-    assertCurrent() {},
-  };
+  const caller = params.context;
   // Fails closed until the audience owner is loaded; then it checks the caller and its audience.
   let assertCallerCurrent = (): void => {
     throw new Error("project memory caller authority is unavailable");
