@@ -69,6 +69,7 @@ describe("probeFeishu", () => {
     const request = setupClient(response);
     const expected = { ok: false, appId: "cli_123", error };
     await expect(probeFeishu(DEFAULT_CREDS)).resolves.toEqual(expected);
+    vi.setSystemTime(Date.now() + 20 * 60_000);
     await expect(probeFeishu(DEFAULT_CREDS)).resolves.toEqual(expected);
     expect(request).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(60_001);
@@ -88,28 +89,6 @@ describe("probeFeishu", () => {
       ).resolves.toMatchObject({ ok: true, appId, botOpenId: `ou_${version}` });
     }
     expect(requestFn).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps a cached successful probe across a wall-clock forward step", async () => {
-    const requestFn = setupClient({
-      code: 0,
-      bot: { app_name: "CachedBot", open_id: "ou_cached" },
-    });
-    await expect(probeFeishu(DEFAULT_CREDS)).resolves.toMatchObject({
-      ok: true,
-      botOpenId: "ou_cached",
-    });
-    expect(requestFn).toHaveBeenCalledTimes(1);
-
-    // A wall-clock forward step past the 10-minute success TTL must not expire
-    // the cached probe early; the cache window is anchored to the monotonic
-    // clock, so only elapsed time (fake timers) moves it.
-    vi.setSystemTime(Date.now() + 20 * 60_000);
-    await expect(probeFeishu(DEFAULT_CREDS)).resolves.toMatchObject({
-      ok: true,
-      botOpenId: "ou_cached",
-    });
-    expect(requestFn).toHaveBeenCalledTimes(1);
   });
 
   it.each([

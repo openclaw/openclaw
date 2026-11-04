@@ -1249,6 +1249,12 @@ describe("Claude session catalog", () => {
 
   it("serves an unchanged assembled scan without reparsing transcript files", async () => {
     const home = await createHome();
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    await writeDesktopMetadata(home, "missing", {
+      cliSessionId: "missing-desktop-transcript",
+      title: "Missing",
+    });
     const sessionIds = ["cached-session-a", "cached-session-b"];
     await writeUnindexedCliSessions(
       home,
@@ -1267,6 +1273,8 @@ describe("Claude session catalog", () => {
 
     // Polls re-read until the watch vouches for coverage; from then on an unchanged tree is free.
     await expectClaudeCatalogQuiescent(home, spies, homeCalls, first);
+    now += 15_001;
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3_600_000);
     const records = await listClaudeSessions(home);
     for (const spy of spies) {
       spy.mockClear();
@@ -1275,24 +1283,10 @@ describe("Claude session catalog", () => {
     for (const spy of spies) {
       expect(homeCalls(spy)).toEqual([]);
     }
-  });
-
-  it("does not shorten cache validity for Desktop rows with no captured transcript", async () => {
-    const home = await createHome();
-    await writeUnindexedCliSessions(home, { existing: "Existing" });
-    await writeDesktopMetadata(home, "missing", {
-      cliSessionId: "missing-desktop-transcript",
-      title: "Missing",
-    });
-    let now = 1_000;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    const openSpy = vi.spyOn(fs, "open");
-    const first = await listPage({}, home);
-    openSpy.mockClear();
-
-    now += 15_001;
-    await expect(listPage({}, home)).resolves.toEqual(first);
-    expect(openSpy).not.toHaveBeenCalled();
+    now += 300_001;
+    vi.mocked(Date.now).mockReturnValue(Date.now() - 7_200_000);
+    await listPage({}, home);
+    expect(homeCalls(spies[2])).not.toEqual([]);
   });
 
   it("retries a transient project snapshot read on the short I/O recovery bound", async () => {
@@ -1353,35 +1347,6 @@ describe("Claude session catalog", () => {
       sessions: [{ threadId: sessionId }],
     });
     expect(transcriptAttempts).toBe(2);
-  });
-
-  it("re-scans on TTL expiry by elapsed time even when the wall clock rolls back", async () => {
-    const home = await createHome();
-    const watches = createClaudeCatalogWatchDriver(home);
-    const sessionId = "ttl-session";
-    const transcriptPath = projectFile(home, `${sessionId}.jsonl`);
-    await writeUnindexedCliSessions(home, { [sessionId]: "Alpha" });
-    const realDateNow = Date.now.bind(Date);
-    let elapsed = 0;
-    let wallOffset = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-    vi.spyOn(Date, "now").mockImplementation(() => realDateNow() + wallOffset);
-
-    // Cache the tree snapshot and arm the watch so later calls only rescan on TTL expiry.
-    await listPage({}, home);
-    watches.arm();
-    await listPage({}, home);
-    expect((await listPage({}, home)).sessions).toMatchObject([{ threadId: sessionId }]);
-
-    // The watch misses the transcript deletion, so an incremental scan would leave a ghost entry.
-    await fs.rm(transcriptPath);
-
-    // The wall clock rolls back an hour while elapsed time advances past the hard scan TTL:
-    // a Date.now()-keyed deadline would appear not to have expired, but performance.now() proves it has.
-    wallOffset -= 3_600_000;
-    elapsed += 300_001;
-
-    expect((await listPage({}, home)).sessions).toEqual([]);
   });
 
   it.each(["transcript", "index"] as const)(
