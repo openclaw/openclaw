@@ -156,7 +156,7 @@ it.each([
   expect(models.map((model) => model.id)).toEqual(expected);
 });
 
-it("keeps the conservative fallback for unknown inference profiles", async () => {
+it.each([undefined, 64_000])("unknown profile fallback %s", async (defaultContextWindow) => {
   const models = await discoverFixture(
     [],
     [
@@ -164,17 +164,16 @@ it("keeps the conservative fallback for unknown inference profiles", async () =>
         region: "ap-northeast-1",
       }),
     ],
-    { region: "ap-northeast-1" },
+    { region: "ap-northeast-1", config: { defaultContextWindow } },
   );
   expect(models).toHaveLength(1);
   expectFields(models[0], {
     id: "jp.example.unknown-text-v1:0",
-    contextWindow: 32000,
+    contextWindow: defaultContextWindow ?? 32000,
     maxTokens: 4096,
     input: ["text"],
   });
 });
-
 it.each([
   ["opus", { xhigh: "xhigh", max: "max" }],
   ["sonnet", { off: "low", minimal: "low", xhigh: "xhigh", max: "max" }],
@@ -384,12 +383,13 @@ it.each([false, undefined])(
 );
 
 it("uses the plugin default when both region env overrides are blank", async () => {
-  mockDiscovery([activeFoundation]);
+  mockDiscovery([foundation("xai.grok-4.6")]);
   const provider = await resolveImplicit(
     { enabled: true, refreshInterval: 0 },
     { AWS_REGION: "", AWS_DEFAULT_REGION: "   " },
   );
   expect(provider?.baseUrl).toBe("https://bedrock-runtime.us-east-1.amazonaws.com");
+  expectModel(provider?.models ?? [], "xai.grok-4.6", { contextWindow: 500_000, maxTokens: 4096 });
 });
 
 // Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix

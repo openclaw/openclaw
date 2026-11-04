@@ -27,6 +27,7 @@ import {
   openWs,
   rpcReq,
   testState,
+  waitForWsClose,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
 import type { SessionsListResult } from "./session-utils.types.js";
@@ -231,7 +232,7 @@ describe("gateway presence audience", () => {
         };
       };
       try {
-        const guest = await openRecipient("guest", ["operator.sessions.write"]);
+        let guest = await openRecipient("guest", ["operator.sessions.write"]);
         const activity = {
           source: "activity",
           includePeople: true,
@@ -250,8 +251,11 @@ describe("gateway presence audience", () => {
             ]),
           },
         });
-        // Reuse this connection and its warmed selection after revoking the role's authority.
+        // A changed current-role presentation claim retires the warmed connection.
+        const demoted = waitForWsClose(guest.ws, 1_000);
         setUserProfileRole(guestProfile.id, "guest");
+        expect(await demoted).toBe(true);
+        guest = await openRecipient("guest", ["operator.sessions.write"]);
         for (const method of ["users.list", "presence.query"]) {
           expect(await rpcReq(guest.ws, method, {})).toMatchObject({
             ok: false,

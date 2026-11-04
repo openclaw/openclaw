@@ -261,6 +261,28 @@ external model invocation. The command does not call a model or send source to a
 service. Historical graphs cannot prove dynamic filesystem or generated-input
 coverage; full-run comparison remains necessary before enabling actual skips.
 
+## Evaluate recorded decisions
+
+Compare an exported capture's frozen graph and model scores with its later
+outcomes:
+
+```bash
+node scripts/ci-adaptive-evaluate.mjs \
+  --input observations.json \
+  --output evaluation.json
+```
+
+This command performs no inference or test execution. It joins files by their
+project, pool and path, including when ranking rows have a different order.
+Missing predictions remain unavailable, and incomplete files remain unknown.
+The report identifies failed files proposed for omission, recorded score
+buckets and summed complete-file durations. Failures remain unattributed;
+they are not automatically causal regression labels or independent episodes.
+
+The evaluator rejects inconsistent source/inventory identities and recording
+times. The caller must independently verify source and prior artifact
+provenance. Summed file durations are not elapsed time, CPU time or savings.
+
 ## Estimate cost and compute savings
 
 ```bash
