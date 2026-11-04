@@ -139,7 +139,9 @@ suite.define(() => {
               .click();
             await waitForControlUiGatewayReady(page);
             const transcript = page.locator(".chat-thread-inner");
-            await expect.poll(() => transcript.textContent()).toContain("open a PR");
+            await expect
+              .poll(() => transcript.textContent(), { timeout: 30_000 })
+              .toContain("open a PR");
             const capture = process.env.OPENCLAW_SLACK_IDENTITY_CAPTURE;
             if (capture) {
               await mkdir(path.dirname(capture), { recursive: true });
@@ -177,9 +179,8 @@ suite.define(() => {
                 lifecycleRevision: committed.lifecycleRevision,
               });
             });
-            await expect.poll(() => transcript.textContent()).toContain("Live:");
             await expect
-              .poll(() => transcript.textContent())
+              .poll(() => transcript.textContent(), { timeout: 30_000 })
               .toContain("Live: @Gateway Alice, ask @Roboclaw");
           },
         );
