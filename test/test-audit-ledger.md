@@ -188,15 +188,24 @@ those prohibited tools to enter the exemption. Require every listed tool to be
 absent in the same case.
 
 Source qualification covers the complete harness and native-tool-policy owners,
-host safe-deny consumption and causal history. The actual producer still excludes
-all five names. Independently inject each prohibited name at that producer to
-qualify the gap, then restore exact owner and test bytes. Native baseline,
-candidate, fault controls, scoped checks and fresh review remain pending.
+host safe-deny consumption and causal history. Each actual producer fault adds
+one of the five prohibited names: the original selected case passes each fault,
+and the repair fails at that name's exclusion keeper. Owner and test bytes restore
+exactly after every control. Untouched baseline and clean candidate each pass all37
+cases. The two selected host-policy cases pass;91 other cases remain outside that
+filter. Formatting, MDX and whitespace checks pass. The local test-line ratchet
+passes with zero growth while its tree retains47 lines of existing debt.
 
-No production, API, configuration, helper, registration or allocation change is
-proposed. The assertion replacement has zero net test lines before formatting.
-This proves the declared exemption contract only; native Codex execution and live
-authorization behavior are outside this test.
+Focused typecheck fails with five diagnostics in unchanged MCP owners; the original
+test reproduces the same five. Typed lint stops before analysis because SDK
+boundary declaration preparation fails in those same owners. These are recorded
+baseline failures, not passing checks. Fresh review, published-head proof and CI
+remain pending.
+
+Production, imports, helpers, APIs, configuration, shared scalar and allocations
+are unchanged. No declaration or case is removed. This proves the declared
+exemption contract only; native Codex execution and live authorization behavior
+are outside this test.
 
 ## Completed source review
 
