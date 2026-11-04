@@ -1,8 +1,10 @@
 import ConcurrencyExtras
+import CryptoKit
 import Foundation
 import OpenClawDiscovery
 import OpenClawKit
 import OSLog
+import Security
 
 enum GatewayEndpointState: Equatable {
     case ready(
@@ -67,6 +69,7 @@ actor GatewayEndpointStore {
         let scheme: String
         let bindMode: String?
         let personalIdentityEnabled: Bool
+        let localTLSCertificateFingerprint: String?
         let remoteTransport: AppState.RemoteTransport
         let directRemoteURL: URL?
         let remoteTLSFingerprint: String?
@@ -635,7 +638,8 @@ actor GatewayEndpointStore {
         let tls = GatewayTLSRoute.resolve(
             url: url,
             connectionMode: mode,
-            configuredFingerprint: mode == .local ? nil : source.remoteTLSFingerprint)
+            configuredFingerprint: mode == .local ? nil : source.remoteTLSFingerprint,
+            localServiceCertificateFingerprint: mode == .local ? source.localTLSCertificateFingerprint : nil)
         let changed = self.resolvedEndpoint.map { endpoint in
             endpoint.config.url != url ||
                 endpoint.config.token != source.token ||
@@ -677,7 +681,9 @@ extension GatewayEndpointStore.SourceSnapshot {
         else { return false }
         if self.mode == .local {
             return self.localHost == other.localHost && self.localPort == other.localPort &&
-                self.scheme == other.scheme && self.personalIdentityEnabled == other.personalIdentityEnabled
+                self.scheme == other.scheme &&
+                self.localTLSCertificateFingerprint == other.localTLSCertificateFingerprint &&
+                self.personalIdentityEnabled == other.personalIdentityEnabled
         }
         guard self.remoteTransport == other.remoteTransport,
               self.remoteTLSFingerprint == other.remoteTLSFingerprint
@@ -806,6 +812,17 @@ extension GatewayEndpointStore {
             launchdSnapshot: launchdSnapshot,
             tailscaleIP: tailscaleIP,
             port: localPort) : nil
+        let localTLSCertificateFingerprint: String?
+        if mode == .local, let localConfig, localConfig.url.scheme == "wss" {
+            localTLSCertificateFingerprint = Self.localGatewayTLSCertificateFingerprint(
+                url: localConfig.url,
+                root: root,
+                launchdSnapshot: launchdSnapshot,
+                profile: profile,
+                appConfigURL: OpenClawPaths.configURL)
+        } else {
+            localTLSCertificateFingerprint = nil
+        }
         let remoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
         let sshRouteIdentity: SSHRouteIdentity?
         if mode == .remote, remoteResolution.transport == .ssh {
@@ -847,6 +864,7 @@ extension GatewayEndpointStore {
             scheme: localConfig?.url.scheme ?? self.resolveGatewayScheme(root: root, env: env),
             bindMode: bindMode,
             personalIdentityEnabled: AppDefaults.standard.bool(forKey: "gateway.primary.personalIdentityEnabled"),
+            localTLSCertificateFingerprint: localTLSCertificateFingerprint,
             remoteTransport: remoteResolution.transport,
             directRemoteURL: remoteResolution.directURL,
             remoteTLSFingerprint: isRemote ? GatewayRemoteConfig.resolveTLSFingerprint(root: root) : nil,
@@ -867,6 +885,102 @@ extension GatewayEndpointStore {
     {
         guard configIsCurrent, configMode == appMode else { return .unconfigured }
         return appMode
+    }
+
+    private static func localGatewayTLSCertificateFingerprint(
+        url: URL,
+        root: [String: Any],
+        launchdSnapshot: LaunchAgentPlistSnapshot?,
+        profile: AppProfile,
+        appConfigURL: URL
+    ) -> String? {
+        guard url.scheme?.lowercased() == "wss",
+              url.host.map(LoopbackHost.isLoopbackHost) == true,
+              let launchdSnapshot
+        else { return nil }
+        let environment = launchdSnapshot.environment
+        if let serviceProfile = environment["OPENCLAW_PROFILE"] {
+            let serviceProfile = AppProfile(environment: ["OPENCLAW_PROFILE": serviceProfile])
+            guard serviceProfile.validationError == nil, serviceProfile.name == profile.name else { return nil }
+        }
+        let serviceConfigURL: URL
+        if let raw = environment["OPENCLAW_CONFIG_PATH"], !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard let path = absoluteServicePath(raw) else { return nil }
+            serviceConfigURL = path
+        } else if let raw = environment["OPENCLAW_STATE_DIR"],
+                  !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            guard let directory = absoluteServicePath(raw) else { return nil }
+            serviceConfigURL = directory.appendingPathComponent("openclaw.json")
+        } else {
+            serviceConfigURL = profile.stateDirectoryURL().appendingPathComponent("openclaw.json")
+        }
+        guard serviceConfigURL.standardizedFileURL.path == appConfigURL.standardizedFileURL.path else { return nil }
+        let gateway = root["gateway"] as? [String: Any]
+        guard let tls = gateway?["tls"] as? [String: Any], tls["enabled"] as? Bool == true else { return nil }
+        if let rawTLS = environment["OPENCLAW_GATEWAY_TLS"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawTLS.isEmpty, rawTLS != "1", rawTLS.lowercased() != "true"
+        {
+            return nil
+        }
+        let configuredPort = OpenClawConfigFile.gatewayPort(root: root)
+        let effectivePort = launchdSnapshot.port ?? GatewayEnvironment.resolvedGatewayPort(
+            environment: environment,
+            configPort: configuredPort,
+            storedPort: 0,
+            profile: profile
+        )
+        guard effectivePort == url.port else { return nil }
+        let configDirectory: URL
+        if let raw = environment["OPENCLAW_STATE_DIR"], !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard let directory = absoluteServicePath(raw) else { return nil }
+            configDirectory = directory
+        } else if let raw = environment["OPENCLAW_CONFIG_PATH"],
+                  !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            guard let configURL = absoluteServicePath(raw) else { return nil }
+            configDirectory = configURL.deletingLastPathComponent()
+        } else {
+            configDirectory = profile.stateDirectoryURL()
+        }
+        let certificatePath: URL
+        if let raw = tls["certPath"] as? String, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard let path = absoluteServicePath(raw) else { return nil }
+            certificatePath = path
+        } else {
+            certificatePath = configDirectory.appendingPathComponent("gateway/tls/gateway-cert.pem")
+        }
+        guard let handle = try? FileHandle(forReadingFrom: certificatePath) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 64 * 1024 + 1), data.count <= 64 * 1024,
+              let certificateData = leafCertificateData(data),
+              let certificate = SecCertificateCreateWithData(nil, certificateData as CFData)
+        else { return nil }
+        let der = SecCertificateCopyData(certificate) as Data
+        return SHA256.hash(data: der).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func absoluteServicePath(_ raw: String) -> URL? {
+        let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return nil }
+        if path.hasPrefix("~"), path != "~", !path.hasPrefix("~/") {
+            return nil
+        }
+        let expanded = (path as NSString).expandingTildeInPath
+        guard expanded.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: expanded).standardizedFileURL
+    }
+
+    private static func leafCertificateData(_ data: Data) -> Data? {
+        if SecCertificateCreateWithData(nil, data as CFData) != nil {
+            return data
+        }
+        guard let pem = String(data: data, encoding: .utf8),
+              let begin = pem.range(of: "-----BEGIN CERTIFICATE-----"),
+              let end = pem.range(of: "-----END CERTIFICATE-----", range: begin.upperBound ..< pem.endIndex)
+        else { return nil }
+        let encoded = String(pem[begin.upperBound ..< end.lowerBound].filter { !$0.isWhitespace })
+        return Data(base64Encoded: encoded)
     }
 
     private static func resolveGatewayPort(
@@ -1108,6 +1222,22 @@ extension GatewayEndpointStore {
             },
             profile: profile,
             beforeConfigRead: beforeConfigRead)
+    }
+
+    static func _testLocalGatewayTLSCertificateFingerprint(
+        url: URL,
+        root: [String: Any],
+        launchdSnapshot: LaunchAgentPlistSnapshot?,
+        profile: AppProfile,
+        appConfigURL: URL
+    ) -> String? {
+        localGatewayTLSCertificateFingerprint(
+            url: url,
+            root: root,
+            launchdSnapshot: launchdSnapshot,
+            profile: profile,
+            appConfigURL: appConfigURL
+        )
     }
 
     static func _testResolveLocalGatewayHost(

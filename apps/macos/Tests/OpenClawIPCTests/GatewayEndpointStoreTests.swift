@@ -254,6 +254,7 @@ struct GatewayEndpointStoreTests {
             scheme: scheme,
             bindMode: bindMode,
             personalIdentityEnabled: personalIdentityEnabled,
+            localTLSCertificateFingerprint: nil,
             remoteTransport: transport,
             directRemoteURL: directURL,
             remoteTLSFingerprint: tlsFingerprint,
