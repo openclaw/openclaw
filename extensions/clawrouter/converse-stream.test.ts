@@ -225,7 +225,7 @@ async function setup(root: string, state: FixtureState, requests: Request[]) {
     input: ["text", "image"],
   };
   const call = (
-    options: Parameters<NonNullable<typeof provider.createStreamFn>>[0]["requestAuth"] = undefined,
+    options?: Parameters<NonNullable<typeof provider.createStreamFn>>[0]["requestAuth"],
   ) => {
     const ctx = { config: cfg, provider: "clawrouter", modelId: ID, model, requestAuth: options };
     const streamFn = provider.createStreamFn?.(ctx);
@@ -422,7 +422,7 @@ it("cancels before catalog or paid dispatch", async () => {
 it("cancels while reading the proxy body without decoding partial output or retrying", async () => {
   await withFixture(async (f) => {
     const abort = new AbortController();
-    const started = createDeferred<void>();
+    const started = createDeferred();
     f.state.respond = (res) => {
       res.setHeader("content-type", "application/vnd.amazon.eventstream");
       res.write(wire.subarray(0, 256), () => started.resolve());
