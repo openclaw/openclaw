@@ -21,7 +21,7 @@ const mediaMetadataPlugins = vi.hoisted(() => {
     },
   ];
 });
-
+// mock-isolation: Use synthetic manifest metadata without live plugin discovery or policy state.
 vi.mock("../plugins/manifest-contract-eligibility.js", () => {
   const manifestRegistry = { plugins: mediaMetadataPlugins, diagnostics: [] };
   return {
