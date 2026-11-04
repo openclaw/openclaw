@@ -448,7 +448,7 @@ function runRunnerProfileFixture(options: {
   headRepository?: string;
   repository?: string;
   runAttempt?: number;
-  requestedProfile?: "default" | "hybrid" | "runson";
+  requestedProfile?: "default" | "hybrid" | "runson" | "boat";
   ciShape?: "default" | "main";
   qualificationDispatch?: boolean;
   targetSupportsRunson?: boolean;
@@ -5382,6 +5382,19 @@ describe("ci workflow guards", () => {
         requestedProfile: "default",
         admitted: true,
       },
+      { name: "Boat build", requestedProfile: "boat", admitted: true },
+      {
+        name: "Boat fork",
+        requestedProfile: "boat",
+        prRepository: "fork/openclaw",
+        admitted: false,
+      },
+      {
+        name: "Boat stale head",
+        requestedProfile: "boat",
+        prHead: "b".repeat(40),
+        admitted: false,
+      },
       { name: "main Spot", ciShape: "main", requestedProfile: "runson", admitted: true },
       { name: "different checkout", githubSha: "b".repeat(40), admitted: false },
       { name: "different PR branch", prBranch: "other-branch", admitted: false },
@@ -5489,6 +5502,86 @@ describe("ci workflow guards", () => {
       });
     },
   );
+
+  it("qualifies only the first-attempt Boat build and keeps sibling routing and caches", () => {
+    const fixture = {
+      configuredProfile: "hybrid",
+      eventName: "workflow_dispatch" as const,
+      requestedProfile: "boat" as const,
+      targetSupportsContract: true,
+    };
+    expect(runRunnerProfileFixture(fixture).status).not.toBe(0);
+    const admitted = runRunnerProfileFixture({ ...fixture, qualificationDispatch: true });
+    expect(admitted.status, admitted.output).toBe(0);
+    expect(admitted.outputs).toMatchObject({
+      runner_profile: "hybrid",
+      node_runner_backend: "hybrid",
+      qualification_runner_backend: "hybrid",
+      boat_build_qualification: "true",
+    });
+    const workflow = readCiWorkflow();
+    const context = {
+      eventName: "workflow_dispatch" as const,
+      repository: "openclaw/openclaw",
+      runnerBackend: "hybrid" as const,
+      runAttempt: 1,
+      runnerEnvironment: "self-hosted" as const,
+      matrix: { runner: "blacksmith-8vcpu-ubuntu-2404", check_name: "fixture", task: "build-play" },
+      preflightOutputs: admitted.outputs,
+    };
+    for (const name of Object.keys(workflow.jobs)) {
+      const job = workflow.jobs[name];
+      if (
+        !String(job.needs).includes("preflight") ||
+        typeof job["runs-on"] !== "string" ||
+        !job["runs-on"].startsWith("${{")
+      ) {
+        continue;
+      }
+      const control = {
+        ...context,
+        preflightOutputs: { ...admitted.outputs, boat_build_qualification: "false" },
+      };
+      expect(evaluateWorkflowExpression(job["runs-on"], context), name).toEqual(
+        name === "build-artifacts"
+          ? "boat-xlarge"
+          : evaluateWorkflowExpression(job["runs-on"], control),
+      );
+      for (const step of job.steps ?? []) {
+        if (step.with?.["dependency-cache"] === undefined) {
+          continue;
+        }
+        expect(
+          evaluateWorkflowExpression(step.with["dependency-cache"], { ...context, job: name }),
+          name,
+        ).toBe(
+          name === "build-artifacts"
+            ? "false"
+            : evaluateWorkflowExpression(step.with["dependency-cache"], { ...control, job: name }),
+        );
+      }
+    }
+    const retry = runRunnerProfileFixture({
+      ...fixture,
+      qualificationDispatch: true,
+      runAttempt: 2,
+    });
+    expect(retry.status, retry.output).toBe(0);
+    expect(retry.outputs.boat_build_qualification).toBe("false");
+    expect(
+      evaluateWorkflowExpression(workflow.jobs["build-artifacts"]["runs-on"], {
+        ...context,
+        runAttempt: 2,
+      }),
+    ).toBe("ubuntu-24.04");
+    expect(
+      runRunnerProfileFixture({
+        ...fixture,
+        configuredProfile: "boat",
+        requestedProfile: "default",
+      }).status,
+    ).not.toBe(0);
+  });
 
   it("resolves admitted main qualification profiles without changing ordinary main routing", () => {
     for (const [configuredProfile, backend] of (
@@ -11775,6 +11868,7 @@ describe("ci workflow guards", () => {
       const [row] = rows;
       expect(row).toMatchObject({
         check_name: "checks-node-manual-inventory",
+        adaptive_observations: true,
         env,
         runner: "ubuntu-24.04",
         timeout_minutes: 20,
@@ -11923,6 +12017,41 @@ describe("ci workflow guards", () => {
         expect(Object.keys(pools).length).toBeGreaterThan(0);
         for (const encoded of Object.values(pools)) {
           expect(String(encoded).length).toBeLessThanOrEqual(60_000);
+        }
+        const download = requiredWorkflowStep(
+          readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps,
+          "Download adaptive CI priors",
+        );
+        const rows = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
+        for (const row of rows) {
+          let packed = row.groups_gzip_base64;
+          if (row.groups_pool) {
+            const groups = decodeNodeTestGroups(pools[row.groups_pool])[row.groups_index];
+            if (!Array.isArray(groups)) {
+              throw new Error("Missing pooled groups");
+            }
+            packed = encodeNodeTestGroups(groups);
+          }
+          const plans = resolveShardPlans({
+            OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: packed,
+            OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(row.groups),
+            OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(row.configs),
+          });
+          const observes = plans.some(
+            (entry) =>
+              entry.kind === "group" &&
+              entry.plan.configs?.includes("test/vitest/vitest.unit-fast.config.ts"),
+          );
+          expect(row.adaptive_observations === true).toBe(observes);
+          expect(
+            evaluateWorkflowCondition(download.if, {
+              eventName: "schedule",
+              runAttempt: 1,
+              repository: "openclaw/openclaw",
+              preflightOutputs: { frozen_target: "false" },
+              matrix: row,
+            }),
+          ).toBe(observes);
         }
       }
     },

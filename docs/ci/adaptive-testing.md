@@ -81,7 +81,13 @@ and context. Changes to configuration or include files during execution cannot
 rewrite that frozen identity. A missing or invalid terminal receipt leaves the
 incomplete snapshot available if the artifact upload runs.
 
-If expanded dependency paths exceed the export limit, the capture retains
+If expanded dependency paths exceed the export limit, the capture first uses a
+version-2 observation payload: one shared `dependencyPaths` table with integer
+references in each file's `dependencies` array. Readers resolve those references
+before graph selection or model scoring; missing edges remain `null`. Small
+exports and frozen pre-execution snapshots keep version 1. Both versions remain
+readable, including retained historical artifacts. The outer export stays version 1.
+If the compact payload still exceeds the limit, the capture retains
 terminal outcomes and the frozen snapshot with all dependencies set to `null`,
 and emits a warning. Missing graph data still requires conservative selection.
 If that smaller export also exceeds the limit, the incomplete snapshot remains.
@@ -94,8 +100,9 @@ a prior dependency graph; consumers must retain both identities independently.
 Recording does not fetch Git history; an unavailable comparison commit is a data gap.
 The file hashes the finalized command arguments and pre/post-shard include-file
 contents without exporting absolute paths. A missing base, dirty checkout, or
-unreadable input records a fallback reason. Every record includes
-`no-prior-snapshot`: this stage does not resolve prior artifacts or omit tests.
+unreadable input records a fallback reason. Every launch record includes
+`no-prior-snapshot`: prior qualification happens later, when the reporter has
+the native inventory. The launch record itself does not resolve priors.
 
 The reporter freezes the launch file's SHA-256 hash when it initializes and
 retains it as `preExecution.launchInputs`. Consumers must match the hash to the
@@ -107,8 +114,9 @@ Launch records are bounded to 1 MiB. Preparation is best effort and does not
 change the test command or result when it fails.
 
 The native snapshot follows configuration evaluation and native test selection;
-the launch record precedes them. Neither contains a prior graph, model ranking
-or evaluated selection decision.
+the launch record precedes them. Its `decision` field freezes a graph proposal
+before tests execute, using the full native inventory. `scheduledFiles` always
+contains that inventory; the proposal cannot change execution.
 Global setup can still change worker settings after capture. The local recording
 timestamp is not artifact availability: a later consumer must also retain the
 publication/download time before using an earlier run as predictive evidence.
@@ -131,6 +139,63 @@ retain source/diff provenance, and measure overlapping-file graph differences.
 The shadow selector still requires the original exact context. Matching graph
 inputs never grants permission to omit tests.
 
+### Published prior snapshots
+
+For sampled same-repository PRs and scheduled runs, preflight uses its existing
+read-only Actions permission to restore at most two observation archives from
+the five most recent completed scheduled main runs. Successful and failed
+workflows can contribute observations; cancelled runs cannot. An unrelated job
+failure does not erase complete file results, while missing, incomplete or
+failing file history still requires conservative selection. Restore verifies the exact
+run/attempt, source commit/tree, archive digest and paired launch/member hashes.
+The producer must have completed and published before the current run began.
+Restore has a shared ten-second deadline and does not retry requests. Missing
+history or unavailable APIs produce an empty bundle and preserve full execution.
+
+The bundle is shared through a same-run artifact. Test jobs download it without
+additional token permissions. Each bundle binds the current workflow run,
+attempt and actual checkout commit/tree; the reporter also freezes the bundle
+hash. Preflight obtains the exact prior-to-current comparison from GitHub once
+per prior revision, including removed paths and both ends of renames. It verifies
+the prior is an ancestor and rejects comparisons with 300 or more files because
+GitHub caps the returned file list. The native inventory callback consumes this
+bound comparison; it does not substitute the launch record's comparison base.
+
+Exact configuration, lock, environment and runtime identities must match. The
+test checkout can remain shallow; no test process fetches history or calls GitHub.
+Unknown source, dirty checkout, stale bundle or incompatible inputs
+produce an explicit fallback. Different shard membership can still prevent a
+match; graph-input comparability alone does not relax the selector.
+
+The frozen decision records prior provenance, changed paths, graph candidates
+and the unchanged scheduled inventory.
+These are prospective proposals, not measured omission savings. Include restore,
+download, comparison and export costs in the eventual net-benefit calculation.
+
+### Owned model rankings
+
+When a compatible prior is available, the same inventory callback records raw
+CART scores in `decision.ranking`. The source-controlled model in
+`scripts/ci-adaptive-model.json` uses five structural features: basename match,
+path-token overlap, same directory, observed dependency membership and the
+logarithm of changed-path count. Recorded dependencies describe membership,
+not direct edges or graph distance. Current outcomes and durations never enter
+these features. Missing dependency evidence remains unknown for a model that
+uses it; invalid or unavailable models produce null scores with reasons.
+
+The record includes hashes of the actual model bytes, extractor source and
+scoring inputs, along with elapsed scoring time. Rows preserve the full native
+inventory and its order, including project and pool identity. There is no score
+threshold, network request, provider token use or change to test execution.
+
+The initial tiny tree was trained on 120 rows from controlled source mutations,
+with separate owner groups reserved for evaluation. Its manifest records the
+corpus and row hashes. The 64-row held-out result had ranking AUC 0.98276, but
+its predictions coincided with dependency membership on that narrow corpus.
+These class-balanced leaf scores are not calibrated failure probabilities or
+evidence of improved selection over the graph. Natural regression coverage and
+net CI savings still require full-run comparisons.
+
 The first readout compares usable-data coverage, native-Bun gaps, observed
 failures, fallback causes, and paired total job costs. Learned selection and
 automatic omission require a separate evaluation and rollout decision.
@@ -139,20 +204,6 @@ A passed or failed file is complete only after a terminal run receipt and all
 its cases complete without skips or pending cases. Interrupted, filtered,
 unhandled-error, and missing-result runs remain unknown. Failure-tail replays
 are ignored; conflicting receipts are rejected.
-
-## Restore prior observations
-
-Sampled same-repository PRs and scheduled runs restore at most two observation
-archives from the five most recent successful scheduled main runs. Preflight
-uses its existing read-only Actions permission and a shared ten-second deadline
-without retries. Each archive is bound to its run, attempt, source commit/tree,
-digest and paired launch/member hashes. The producer must finish before the
-current run begins. Missing history or unavailable APIs produce an empty bundle.
-
-The same-run `ci-adaptive-priors-*` artifact contains inert JSON in
-`.artifacts/ci-adaptive-priors.json`, bound to the current run, attempt and actual
-checkout revision. It retains the existing seven-day observation retention.
-This layer restores evidence only; it does not change test execution.
 
 ## Current coverage
 

@@ -292,14 +292,21 @@ function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): JSX.
       description={t("pluginConsent.grantsDescription")}
       carapace
     >
-      {renderPluginMetaRow(
-        t("pluginConsent.promptInjection"),
-        grantValue(
-          grants.hooks.allowPromptInjection,
-          "pluginConsent.allowed",
-          "pluginConsent.blocked",
-        ),
-      )}
+      <SettingsRow
+        title={t("pluginConsent.promptInjection")}
+        description={t("pluginConsent.promptInjectionDescription")}
+        control={
+          <span>
+            {grantValue(
+              grants.hooks.allowPromptInjection,
+              "pluginConsent.allowed",
+              "pluginConsent.blocked",
+            )}
+          </span>
+        }
+        stackedOnNarrow
+        carapace
+      />
       {renderPluginMetaRow(
         t("pluginConsent.conversationAccess"),
         <>

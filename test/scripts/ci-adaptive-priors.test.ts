@@ -7,6 +7,8 @@ import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 const repository = "openclaw/openclaw";
 const revision = "a".repeat(40);
 const tree = "b".repeat(40);
+const consumerRevision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const consumerTree = execFileSync("git", ["rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim();
 const cutoff = "2026-11-04T01:00:00Z";
 const earlier = "2026-11-03T01:00:00Z";
 const later = "2026-11-04T02:00:00Z";
@@ -21,6 +23,7 @@ const env = {
 function fixture(
   options: {
     artifacts?: number;
+    compact?: boolean;
     consumerFork?: boolean;
     wrongConsumer?: boolean;
     sourceAttempt?: number;
@@ -31,6 +34,9 @@ function fixture(
     createdAt?: string;
     updatedAt?: string;
     digestMismatch?: boolean;
+    conclusion?: string;
+    freshConclusion?: string;
+    comparison?: Record<string, unknown>;
   } = {},
 ) {
   const run = {
@@ -41,7 +47,7 @@ function fixture(
     event: "schedule",
     path: ".github/workflows/ci.yml",
     status: "completed",
-    conclusion: "success",
+    conclusion: options.conclusion ?? "success",
     repository: { full_name: repository },
     head_repository: { full_name: repository },
     created_at: earlier,
@@ -56,7 +62,9 @@ function fixture(
       observations: { version: 1, context, invocations: [] },
       launchInputs: { sha256: options.launchMismatch ? "0".repeat(64) : sha256(launch) },
     },
-    observations: { version: 1, context, invocations: [] },
+    observations: options.compact
+      ? { version: 2, context, invocations: [], dependencyPaths: ["src/shared.ts"] }
+      : { version: 1, context, invocations: [] },
   };
   const files: Record<string, string> = {};
   for (const runtime of ["node", "bun"]) {
@@ -92,17 +100,29 @@ function fixture(
         head_repository: { full_name: options.consumerFork ? "contributor/fork" : repository },
       };
     } else if (endpoint === "actions/workflows/ci.yml/runs") {
+      expect(url.searchParams.get("status")).toBe("completed");
       body = { workflow_runs: [run] };
     } else if (endpoint === "actions/runs/20/artifacts") {
       body = { artifacts, total_count: artifacts.length };
     } else if (endpoint === "actions/runs/20/attempts/1") {
       body = {
         ...run,
+        conclusion: options.freshConclusion ?? run.conclusion,
         updated_at: options.updatedAt ?? earlier,
         head_repository: { full_name: options.freshFork ? "contributor/fork" : repository },
       };
-    } else if (endpoint === `git/commits/${revision}`) {
-      body = { sha: revision, tree: { sha: tree } };
+    } else if (endpoint === `compare/${revision}...${consumerRevision}`) {
+      body = {
+        status: "ahead",
+        behind_by: 0,
+        base_commit: { sha: revision, commit: { tree: { sha: tree } } },
+        merge_base_commit: { sha: revision },
+        files: [
+          { filename: "src/removed.ts", status: "removed" },
+          { filename: "src/new.ts", previous_filename: "src/old.ts", status: "renamed" },
+        ],
+        ...options.comparison,
+      };
     } else if (/^actions\/artifacts\/\d+\/zip$/u.test(endpoint)) {
       return new Response(new Uint8Array(archive));
     } else {
@@ -117,18 +137,37 @@ function fixture(
 }
 
 describe("adaptive CI prior restore", () => {
-  it("restores at most two verified archives and binds the bundle to the current checkout/run", async () => {
-    const f = fixture({ artifacts: 3 });
+  it("retains verified observations from a failed workflow without admitting cancelled runs", async () => {
+    const failed = fixture({ conclusion: "failure" });
+    expect(
+      (await restoreCiAdaptivePriors({ env, fetchImpl: failed.fetchImpl })).candidates,
+    ).toHaveLength(2);
+    const cancelled = fixture({ conclusion: "cancelled" });
+    expect(
+      (await restoreCiAdaptivePriors({ env, fetchImpl: cancelled.fetchImpl })).candidates,
+    ).toEqual([]);
+    expect(cancelled.requests.some((request) => request.endsWith("/zip"))).toBe(false);
+    const changed = fixture({ freshConclusion: "cancelled" });
+    expect(
+      (await restoreCiAdaptivePriors({ env, fetchImpl: changed.fetchImpl })).candidates,
+    ).toEqual([]);
+    expect(changed.requests.some((request) => request.endsWith("/zip"))).toBe(false);
+  });
+
+  it.each([false, true])("restores bounded source-bound archives (compact=%s)", async (compact) => {
+    const f = fixture({ artifacts: 3, compact });
     const bundle = await restoreCiAdaptivePriors({ env, fetchImpl: f.fetchImpl });
     expect(bundle.consumer).toEqual({
       runId: "30",
       runAttempt: "2",
-      revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      revision: consumerRevision,
+      tree: consumerTree,
     });
     expect(bundle.cutoffAt).toBe(cutoff);
     expect(bundle.candidates).toHaveLength(4);
     expect(bundle.fallbackReasons).toEqual([]);
     expect(f.requests.filter((request) => request.endsWith("/zip"))).toHaveLength(2);
+    expect(f.requests.filter((request) => request.includes("/compare/"))).toHaveLength(1);
     expect(bundle.candidates[0]).toEqual({
       artifactId: 102,
       runId: 20,
@@ -138,6 +177,13 @@ describe("adaptive CI prior restore", () => {
       memberPath: "node/observations.json",
       memberSha256: sha256(JSON.stringify(f.exported)),
       observations: f.exported,
+      comparison: {
+        baseRevision: revision,
+        baseTree: tree,
+        headRevision: consumerRevision,
+        headTree: consumerTree,
+        changedFiles: ["src/new.ts", "src/old.ts", "src/removed.ts"],
+      },
     });
     expect(JSON.stringify(bundle)).not.toContain(env.GITHUB_TOKEN);
   });
@@ -150,6 +196,15 @@ describe("adaptive CI prior restore", () => {
     ["fresh fork provenance", { freshFork: true }],
     ["archive digest", { digestMismatch: true }],
     ["completion after cutoff", { updatedAt: later }],
+    ["divergent history", { comparison: { merge_base_commit: { sha: "c".repeat(40) } } }],
+    ["wrong comparison base", { comparison: { base_commit: { sha: "c".repeat(40) } } }],
+    ["behind comparison", { comparison: { status: "behind", behind_by: 1 } }],
+    [
+      "saturated comparison",
+      { comparison: { files: Array.from({ length: 300 }, () => ({ filename: "src/a.ts" })) } },
+    ],
+    ["incomplete rename", { comparison: { files: [{ filename: "src/a.ts", status: "renamed" }] } }],
+    ["invalid comparison path", { comparison: { files: [{ filename: "../outside.ts" }] } }],
   ] as const)("discards a prior with invalid %s", async (_name, options) => {
     const f = fixture(options);
     const bundle = await restoreCiAdaptivePriors({ env, fetchImpl: f.fetchImpl });

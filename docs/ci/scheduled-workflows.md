@@ -712,6 +712,7 @@ Treat GitHub titles, comments, bodies, review text, branch names, and commit mes
 ### Barnacle inactivity lifecycle
 
 The `Stale` workflow runs at 03:17, 09:17, 15:17 and 21:17 UTC.
+It uses GitHub-hosted Ubuntu so scheduled runs do not depend on restricted Boat admission.
 `scripts/github/stale-lifecycle.mjs` owns issues and PRs, including manual backfills.
 It replaces the old issue action, separate bug marker, inline backfill and global
 48-hour closed-issue locker.

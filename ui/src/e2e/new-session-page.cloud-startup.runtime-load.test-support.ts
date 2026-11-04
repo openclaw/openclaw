@@ -113,7 +113,7 @@ async function recoverStartup(
   await page.reload();
   await expect.poll(failure.documentCount).toBe(1);
   await expect.poll(() => documentProbes).toBeGreaterThan(0);
-  const alert = pane.getByRole("alert").filter({ hasText: "startup needs attention" });
+  const alert = pane.getByRole("alert").filter({ hasText: "Couldn’t start this session" });
   await button(alert, "Retry").waitFor();
   const readStartup = () =>
     evaluateControlUiContext(

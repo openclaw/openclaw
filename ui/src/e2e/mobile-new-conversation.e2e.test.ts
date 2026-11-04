@@ -16,7 +16,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-support.ts";
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Mobile New conversation" });
+const suite = createControlUiE2eSuite({ name: "Mobile New session" });
 const mobile = {
   viewport: { width: 390, height: 844 },
   hasTouch: true,
@@ -186,7 +186,7 @@ suite.define(() => {
       if (route === "new") {
         await page.goto(suite.server.baseUrl + "sessions");
         await waitForControlUiRoute(page, { routeId: "sessions" });
-        const create = page.getByRole("link", { name: "New conversation", exact: true });
+        const create = page.getByRole("link", { name: "New session", exact: true });
         expect(await page.locator(".topbar .header-new-session").isVisible()).toBe(true);
         expect(await create.count()).toBe(1);
         expect(await create.getAttribute("href")).toBe("/new?agent=research");
@@ -220,7 +220,7 @@ suite.define(() => {
         await writeFile(path.join(dir, name + ".png"), frame.png);
       };
       await capture("closed");
-      const action = page.getByRole("link", { name: "New conversation", exact: true });
+      const action = page.getByRole("link", { name: "New session", exact: true });
       expect(await action.count()).toBe(0);
       // Mouse hover can reveal the sliding drawer's tooltip, which owns the first Escape.
       await navigationDrawerToggle(page).tap();
@@ -228,7 +228,7 @@ suite.define(() => {
       expect(await page.locator(".header-new-session:visible").count()).toBe(0);
       const drawerAction = page
         .locator(".shell-nav")
-        .getByRole("link", { name: "New conversation", exact: true });
+        .getByRole("link", { name: "New session", exact: true });
       expect(await drawerAction.count()).toBe(1);
       expect(await drawerAction.getAttribute("href")).toBe("/new?agent=research");
       const box = await drawerAction.boundingBox();
