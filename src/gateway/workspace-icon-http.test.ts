@@ -1,3 +1,4 @@
+import nativeFs from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -12,7 +13,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as boundaryFileRead from "../infra/boundary-file-read.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -34,8 +35,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./http-utils.js", () => ({
-  authorizeControlUiSessionOwnerReadRequestOrReply: (...args: unknown[]) =>
-    mocks.authorize(...args),
+  authorizeControlUiSessionOwnerReadRequestOrReply: mocks.authorize,
 }));
 
 const {
@@ -60,18 +60,22 @@ function expectHeaders(response: Response, headers: Record<string, string | null
   }
 }
 
-function holdIconRead() {
+function holdIconRead(root: string) {
   const reading = createDeferredCore();
   const release = createDeferredCore();
-  const readFile = boundaryFileRead.readFileDescriptorBounded;
-  const read = vi
-    .spyOn(boundaryFileRead, "readFileDescriptorBounded")
-    .mockImplementationOnce(async (...args) => {
+  // oxlint-disable-next-line typescript/unbound-method -- apply below preserves the intercepted pool receiver.
+  const run = WorkerTaskPool.prototype.run;
+  vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async function (
+    this: WorkerTaskPool<unknown, unknown>,
+    ...args
+  ) {
+    if (args[0] === root) {
       reading.resolve();
       await release.promise;
-      return await readFile(...args);
-    });
-  return { reading: reading.promise, release: release.resolve, restore: () => read.mockRestore() };
+    }
+    return await run.apply(this, args);
+  });
+  return { reading: reading.promise, release: release.resolve };
 }
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
@@ -226,55 +230,50 @@ describe("handleWorkspaceIconHttpRequest", () => {
   }
 
   it.each([
-    {
-      name: "weak quoted comma/star HEAD",
-      validator: 'W/"client,*,tag"',
-      expectedStatus: 200,
-    },
-    {
-      name: "literal backslash before weak match",
-      validator: (etag: string) => String.raw`"trailing\", W/` + etag,
-      expectedStatus: 304,
-    },
-  ])("honors $name for workspace image responses", async ({ validator, expectedStatus }) => {
-    await seedIcon();
+    ["weak quoted comma/star HEAD", 'W/"client,*,tag"', 200],
+    [
+      "literal backslash before weak match",
+      (etag: string) => String.raw`"trailing\", W/` + etag,
+      304,
+    ],
+  ] as const)(
+    "honors %s for workspace image responses",
+    async (_name, validator, expectedStatus) => {
+      await seedIcon();
 
-    const first = await fetch(iconRoute("agent:main:one"));
-    const etag = first.headers.get("etag") ?? "";
-    expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
-    await first.arrayBuffer();
+      const first = await fetch(iconRoute("agent:main:one"));
+      const etag = first.headers.get("etag") ?? "";
+      expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+      await first.arrayBuffer();
 
-    const response = await fetch(iconRoute("agent:main:one"), {
-      method: "HEAD",
-      headers: { "If-None-Match": typeof validator === "function" ? validator(etag) : validator },
-    });
-    expect(response.status).toBe(expectedStatus);
-    expectHeaders(response, {
-      etag,
-      "content-disposition": 'attachment; filename="workspace-icon"',
-      "content-length": expectedStatus === 304 ? null : String(PNG_BYTES.byteLength),
-    });
-    if (expectedStatus === 200) {
-      expect(response.headers.get("content-type")).toBe("image/png");
-    }
-    await expectBody(response, Buffer.alloc(0));
-  });
+      const response = await fetch(iconRoute("agent:main:one"), {
+        method: "HEAD",
+        headers: { "If-None-Match": typeof validator === "function" ? validator(etag) : validator },
+      });
+      expect(response.status).toBe(expectedStatus);
+      expectHeaders(response, {
+        etag,
+        "content-disposition": 'attachment; filename="workspace-icon"',
+        "content-length": expectedStatus === 304 ? null : String(PNG_BYTES.byteLength),
+      });
+      if (expectedStatus === 200) {
+        expect(response.headers.get("content-type")).toBe("image/png");
+      }
+      await expectBody(response, Buffer.alloc(0));
+    },
+  );
 
   it("refuses a session the profile cannot see without reading its workspace", async () => {
     await seedIcon();
     sessionVisible = false;
-    const read = vi.spyOn(boundaryFileRead, "readFileDescriptorBounded");
-    try {
-      const response = await requestIcon(403);
-      expectHeaders(response, { "cache-control": "no-store" });
-      await expect(response.json()).resolves.toEqual({
-        ok: false,
-        error: { message: "session access required", type: "forbidden" },
-      });
-      expect(read).not.toHaveBeenCalled();
-    } finally {
-      read.mockRestore();
-    }
+    const read = vi.spyOn(WorkerTaskPool.prototype, "run");
+    const response = await requestIcon(403);
+    expectHeaders(response, { "cache-control": "no-store" });
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: { message: "session access required", type: "forbidden" },
+    });
+    expect(read.mock.calls.some(([input]) => typeof input === "string")).toBe(false);
     sessionVisible = true;
     await expectBody(await requestIcon(), PNG_BYTES);
   });
@@ -291,6 +290,13 @@ describe("handleWorkspaceIconHttpRequest", () => {
   it("serves a cold canonical session through its main alias without chat startup", async () => {
     const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
     seedSession(root, "agent:main:main");
+    const lstat = nativeFs.lstatSync;
+    vi.spyOn(nativeFs, "lstatSync").mockImplementation((...args) => {
+      if (String(args[0]).startsWith(root)) {
+        throw new Error("Workspace metadata must not be observed on the HTTP thread");
+      }
+      return lstat(...args);
+    });
     const response = await requestIcon(200, "main");
     expectHeaders(response, {
       "content-type": "image/x-icon",
@@ -307,10 +313,10 @@ describe("handleWorkspaceIconHttpRequest", () => {
   it.each(["authority", "workspace"])(
     "rejects a changed %s during icon preparation",
     async (kind) => {
-      await seedIcon();
+      const root = await seedIcon();
       const replacement =
         kind === "workspace" ? await makeWorkspace({ "favicon.svg": SVG_BYTES }) : undefined;
-      const held = holdIconRead();
+      const held = holdIconRead(root);
       const pending = fetch(iconRoute("agent:main:one"));
       try {
         await held.reading;
@@ -334,21 +340,17 @@ describe("handleWorkspaceIconHttpRequest", () => {
       } finally {
         held.release();
         await pending;
-        held.restore();
       }
     },
   );
 
   it("never exposes a local decoy for a bound or stopped remote workspace", async () => {
     const root = await seedIcon();
+    const unexpected = vi.fn().mockRejectedValue(new Error("unexpected workspace I/O"));
     const release = registerAgentWorkspaceAccess(root, {
       bridge: {
-        readFile: async () => {
-          throw new Error("unexpected remote icon read");
-        },
-        writeFile: async () => {
-          throw new Error("unexpected write");
-        },
+        readFile: unexpected,
+        writeFile: unexpected,
         stat: async () => null,
       },
     });
@@ -361,6 +363,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
         expect(response.headers.get("etag")).toBeNull();
         await response.arrayBuffer();
       }
+      expect(unexpected).not.toHaveBeenCalled();
     } finally {
       release();
     }
@@ -411,10 +414,10 @@ describe("handleWorkspaceIconHttpRequest", () => {
             : { spawnedCwd: undefined, pendingWorktree: { titleSource: "Pending" } };
       }
       await seedIcon(key, fields);
-      const reads = vi.spyOn(boundaryFileRead, "openRootFile");
+      const reads = vi.spyOn(WorkerTaskPool.prototype, "run");
       const response = await requestIcon(404, key);
       expectHeaders(response, { "cache-control": "no-store" });
-      expect(reads).not.toHaveBeenCalled();
+      expect(reads.mock.calls.some(([input]) => typeof input === "string")).toBe(false);
     },
   );
 
@@ -432,18 +435,15 @@ describe("handleWorkspaceIconHttpRequest", () => {
 
   it("never reads a workspace when authorization answers 401", async () => {
     await seedIcon("agent:main:hidden");
-    const reads = vi.spyOn(boundaryFileRead, "openRootFile");
-    // `sessions.list` hides incognito and non-owner draft sessions per client.
-    // Without that filter here, the read scope alone would let a caller who
-    // knows such a key pull bytes derived from a session it cannot list.
-    mocks.authorize.mockImplementation(
-      async (params: { res: { statusCode: number; end: () => void } }) => {
-        params.res.statusCode = 401;
-        params.res.end();
-        return null;
-      },
-    );
+    const reads = vi.spyOn(WorkerTaskPool.prototype, "run");
+    // Profile-hidden sessions must not enqueue filesystem work, even when
+    // the requester knows a valid incognito or non-owner draft session key.
+    mocks.authorize.mockImplementation(({ res }: { res: ServerResponse }) => {
+      res.statusCode = 401;
+      res.end();
+      return null;
+    });
     await requestIcon(401, "agent:main:hidden");
-    expect(reads).not.toHaveBeenCalled();
+    expect(reads.mock.calls.some(([input]) => typeof input === "string")).toBe(false);
   });
 });
