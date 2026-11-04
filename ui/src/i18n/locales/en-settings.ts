@@ -1992,7 +1992,7 @@ const enSettings = {
     itemCount: "[{count} item]",
     itemCountPlural: "[{count} items]",
     open: "Open",
-    fileOpenFailed: "Failed to open config file",
+    fileOpenFailed: "Couldn’t open the config file. Open the file manually on the Gateway device.",
     filePathCopied: "File path copied to clipboard: {path}",
     filePath: "File path: {path}",
     fileOpenedOnGateway: en.configView.fileOpenedOnGateway,

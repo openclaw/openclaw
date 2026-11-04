@@ -216,7 +216,7 @@ describe("renderChatComposer controls", () => {
 
   it("finishes locked dictation before submitting the complete draft with history held", async () => {
     const { container, active, locked, finishActive, onSend, commit } = renderDictatingComposer({
-      submitDisabledReason: "Loading chat",
+      submitDisabledReason: "Loading conversation…",
     });
     const finalTranscript = createDeferred<string>();
     finishActive.mockImplementation(async () => {

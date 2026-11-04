@@ -8,6 +8,7 @@ import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { iconData, type IconName } from "../components/icon-data.ts";
 import type { SidebarMenus } from "../components/sidebar-menus.tsx";
 import { Icon } from "../components/solid/icon.tsx";
+import { formatUiError } from "../lib/format-error.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
@@ -223,7 +224,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
                     fallback={(error) => {
                       const message = () => {
                         const failure = error();
-                        return failure instanceof Error ? failure.message : String(failure);
+                        return formatUiError(failure);
                       };
                       return <span role="alert">{message()}</span>;
                     }}

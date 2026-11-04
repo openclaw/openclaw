@@ -9,16 +9,17 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const githubCopy = registerGitHubConnectionsEnglish.catalog;
+
 const suite = createControlUiE2eSuite({
   name: "Control UI GitHub connections",
   startServerBeforeBrowser: true,
 });
 async function assertDeviceCodeCopy(page: Page, userCode: string) {
   const deviceCode = page.getByText(userCode, { exact: true });
-  const authorizationHint = page.getByText(
-    "Open GitHub yourself, then enter the one-time code shown here.",
-    { exact: true },
-  );
+  const authorizationHint = page.getByText("Open GitHub, then enter this one-time code.", {
+    exact: true,
+  });
   await authorizationHint.dblclick();
   expect(await page.evaluate(() => globalThis.getSelection()?.toString())).not.toBe("");
   await deviceCode.click();
@@ -144,7 +145,7 @@ suite.define(() => {
           const coauthorPreference = await coauthor.isChecked();
           await expect(github).toContainText("@personal-octocat");
           const personalConnection = github.locator('[data-github-connection="personal"]');
-          const manageLabel = registerGitHubConnectionsEnglish.catalog.githubConnections.manage;
+          const manageLabel = githubCopy.githubConnections.manage;
           await expect(
             personalConnection.getByRole("button", { name: manageLabel, exact: true }),
           ).toBeEnabled();
@@ -227,7 +228,7 @@ suite.define(() => {
           });
           await setup.getByRole("button", { name: "Disconnect", exact: true }).click();
           expect((await gateway.waitForRequest("users.github.disconnect")).params).toEqual({});
-          await expect(personalConnection).toContainText("Not connected");
+          await expect(personalConnection).toContainText(githubCopy.agentTools.githubDisconnected);
           await expect(identity).toContainText("@synthetic-person");
           await expect(identity.getByText("Verified", { exact: true })).toBeVisible();
           await expect.poll(() => coauthor.isChecked()).toBe(coauthorPreference);
@@ -267,20 +268,18 @@ suite.define(() => {
         await helpButton.click();
         const help = page.locator(".settings-section__help-panel");
         await expect(help).toContainText("My GitHub is used only when");
-        await expect(help).toContainText(
-          "Your account for explicitly selected Publish PR actions.",
-        );
+        await expect(help).toContainText("Your account when you choose it to publish a PR.");
         await helpButton.click();
         await expect(help).toHaveCount(0);
         const button = (name: string) => section.getByRole("button", { name, exact: true });
         const connection = (scope: string) =>
           section.locator(`[data-github-connection="${scope}"]`);
         await expect(connection("system")).toContainText("@system-octocat");
-        await expect(button("Change System GitHub")).toHaveCount(0);
+        await expect(button("Change system GitHub")).toHaveCount(0);
         await expect(connection("agent")).toHaveCount(0);
         const configReads = (await gateway.getRequests("config.get")).length;
         const configWrites = (await gateway.getRequests("config.set")).length;
-        await button("Connect My GitHub").click();
+        await button(githubCopy.githubConnections.connectMine).click();
         await expect(connection("personal").locator("[data-github-setup]")).toBeVisible();
         await expect(connection("system").locator("[data-github-setup]")).toHaveCount(0);
         await expect(button("Use a PAT instead")).toHaveCount(0);
@@ -311,10 +310,10 @@ suite.define(() => {
         await expect(section.locator("[data-github-setup]")).toHaveCount(0);
         await expect(button("Continue with GitHub")).toHaveCount(0);
         await gateway.setMethodResponse("users.github.status", status);
-        await button("Change My GitHub").click();
+        await button(githubCopy.githubConnections.changeMine).click();
         await button("Disconnect").click();
         expect((await gateway.waitForRequest("users.github.disconnect")).params).toEqual({});
-        await expect(connection("personal")).toContainText("Not connected");
+        await expect(connection("personal")).toContainText("Disconnected");
         await expect(section).not.toContainText("@personal-octocat");
         expect(await gateway.getRequests("config.get")).toHaveLength(configReads);
         expect(await gateway.getRequests("config.set")).toHaveLength(configWrites);

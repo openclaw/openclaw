@@ -26,6 +26,7 @@ function linkedMessage(label: string, before = "Connection lost. ".repeat(12)) {
   return { message, link };
 }
 const archived = {
+  severity: undefined,
   message: "Session archived",
   actionLabel: "Undo",
   onAction: () => undefined,
