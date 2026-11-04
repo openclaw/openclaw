@@ -1293,6 +1293,14 @@ Startup failure reports retain the last meaningful stderr diagnostic and the end
 of bounded log lines, with secrets redacted. Canary progress markers do not
 replace the failure reason. The installed updater owns this reporting, so an
 older updater can retain its earlier diagnostic behavior on the first update.
+During private rehearsal, exec SecretRef providers are deferred and their owners
+start cold with a recorded warning. Provider prerequisites such as a 1Password
+service-account token stay in the serving state directory; rehearsal does not
+copy them or run a resolver against that directory. SecretRefs remain references
+in the copied configuration. Credential availability is checked by the normally
+activated Gateway. This repair must be present in the candidate; it also applies
+to older updaters that supply the complete private-rehearsal environment.
+
 The canary verifies the copied plugin payloads without downloading replacements.
 It warns when plugin refresh is deferred; live update finalization owns that
 refresh, so a slow registry cannot consume the canary's startup budget.

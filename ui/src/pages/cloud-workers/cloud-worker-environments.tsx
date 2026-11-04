@@ -346,7 +346,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       return;
     }
     const confirmed = await confirm({
-      title: i18n.t(`cloudWorkersPage.snapshots.${dismiss ? "dismissBuild" : "cancelBuild"}`),
+      title: i18n.t(`cloudWorkersPage.snapshots.${dismiss ? "dismissBuild" : "cancelBuildTitle"}`),
       message: i18n.t(
         `cloudWorkersPage.snapshots.${dismiss ? "dismissBuildMessage" : "cancelBuildMessage"}`,
       ),
@@ -511,7 +511,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       } catch (error) {
         if (gateway.isCurrent(scope)) {
           if (kind === "mutating") {
-            showToast({ message: formatUiError(error) });
+            showToast({ severity: "error", message: formatUiError(error) });
           } else {
             const code =
               error instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(error) : null;

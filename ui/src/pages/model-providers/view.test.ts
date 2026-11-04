@@ -73,9 +73,9 @@ describe("renderModelProviders", () => {
     await updatePickers(container);
     for (const [label, change] of [
       ["Model", onPrimaryChange],
-      ["Utility Model", onUtilityChange],
-      ["Utility Fallback Model", onUtilityFallbackChange],
-      ["Fallback Model", onFallbackChange],
+      ["Utility model", onUtilityChange],
+      ["Utility fallback model", onUtilityFallbackChange],
+      ["Fallback model", onFallbackChange],
     ] as const) {
       const picker = settingsRow(container, label).querySelector<HTMLElement>(
         "openclaw-select-picker",
@@ -440,7 +440,8 @@ describe("renderModelProviders", () => {
     expect(
       provider?.querySelector<HTMLInputElement>(".model-providers__inline-form input")?.disabled,
     ).toBe(true);
-    expect(button(provider!, "Set API key")?.disabled).toBe(true);
+    // The open form stands in for the button that opened it.
+    expect(button(provider!, "Replace")).toBeUndefined();
     expect(button(provider!, "Remove provider")?.disabled).toBe(true);
     expect(
       provider?.querySelector<HTMLButtonElement>(".model-providers__profile-logout")?.disabled,
@@ -585,8 +586,8 @@ describe("renderModelProviders", () => {
       }),
     );
     const provider = container.querySelector('[data-provider-id="openai"]');
-    expect(text(provider)).toContain("Credentials for Writer");
-    expect(text(provider)).toContain("API key from environment (OPENAI_API_KEY)");
+    expect(text(container)).toContain("Connections for Writer");
+    expect(text(provider)).toContain("From environment (OPENAI_API_KEY)");
     expect(text(provider?.querySelector(".model-providers__probe-summary") ?? null)).toBe(
       "Connected",
     );
@@ -623,9 +624,8 @@ describe("renderModelProviders", () => {
     expect(text(readiness)).toContain("Connect a verified AI model");
     expect(text(readiness)).toContain("Model required");
     expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
-    expect(text(container.querySelector('[data-provider-id="openai"]'))).toContain(
-      "Credentials configured",
-    );
+    // Setup has one way to connect; the access section offers its own again once it ends.
+    expect(container.querySelectorAll("[data-models-connect]")).toHaveLength(1);
 
     button(readiness!, "Connect provider")?.click();
     expect(onConnectProvider).toHaveBeenCalledOnce();
@@ -657,13 +657,12 @@ describe("renderModelProviders", () => {
       const provider = container.querySelector('[data-provider-id="openai"]');
       expect(text(provider)).toContain("Credentials rejected");
       expect(text(provider)).not.toContain("Signed in");
-      expect(text(container.querySelector(".model-providers__profile-status"))).toContain(
-        "Credentials configured",
-      );
+      // The outcome is card-wide, so no single account takes the blame or the credit.
+      expect(text(container.querySelector(".model-providers__profile-status"))).toBe("");
     },
   );
 
-  it("collapses settled rows and keeps rows that need attention open", () => {
+  it("collapses settled rows and opens a rejected credential until the user closes it", () => {
     const container = mount(
       props({
         cards: [card(), card({ id: "anthropic", catalogStatus: "auth-rejected" })],
@@ -683,9 +682,10 @@ describe("renderModelProviders", () => {
     expand(container, "openai");
     expect(summary("openai").getAttribute("aria-expanded")).toBe("true");
     expect(detail("openai")?.id).toBe(summary("openai").getAttribute("aria-controls"));
-    // A rejected credential stays visible until it is fixed.
-    expand(container, "anthropic");
-    expect(detail("anthropic")).not.toBeNull();
+    summary("anthropic").click();
+    flush();
+    expect(detail("anthropic")).toBeNull();
+    expect(text(summary("anthropic"))).toContain("Credentials rejected");
   });
 
   it("does not invent config key provenance when auth status is unavailable", () => {
@@ -769,7 +769,6 @@ describe("renderModelProviders", () => {
     );
 
     const provider = container.querySelector('[data-provider-id="openai"]');
-    expect(text(provider)).toContain("Credentials configured");
     expect(text(provider)).toContain("No models available");
     expect(text(provider)).not.toContain("Connection failed");
   });
@@ -801,10 +800,10 @@ describe("renderModelProviders", () => {
       await openPicker(
         automatic.querySelectorAll<HTMLElement>(
           ".model-providers__defaults openclaw-select-picker",
-        )[1]!,
+        )[2]!,
       );
       const automaticOption = automatic
-        .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+        .querySelectorAll(".model-providers__defaults openclaw-select-picker")[2]
         ?.querySelector('[role="option"][aria-selected="true"]');
       expect(text(automaticOption?.querySelector(".picker-select__label") ?? null)).toBe("Auto");
       expect(text(automaticOption?.querySelector(".picker-select__description") ?? null)).toBe(
@@ -821,12 +820,12 @@ describe("renderModelProviders", () => {
       await openPicker(
         disabled.querySelectorAll<HTMLElement>(
           ".model-providers__defaults openclaw-select-picker",
-        )[1]!,
+        )[2]!,
       );
       expect(
         text(
           disabled
-            .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+            .querySelectorAll(".model-providers__defaults openclaw-select-picker")[2]
             ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
         ),
       ).toBe("Disabled");
@@ -837,10 +836,10 @@ describe("renderModelProviders", () => {
     await openPicker(
       container.querySelectorAll<HTMLElement>(
         ".model-providers__defaults openclaw-select-picker",
-      )[1]!,
+      )[2]!,
     );
     const option = container
-      .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+      .querySelectorAll(".model-providers__defaults openclaw-select-picker")[2]
       ?.querySelector(`[role="option"][data-value="${value}"]`);
     return {
       label: text(option?.querySelector(".picker-select__label") ?? null),
@@ -982,7 +981,7 @@ describe("renderModelProviders", () => {
         cards: [card({ configAuthMode: "oauth" })],
       }),
     );
-    const setKey = button(expand(container), "Set API key");
+    const setKey = button(expand(container), "Replace");
     expect(setKey?.disabled).toBe(true);
     expect(setKey?.title).toContain('auth mode is "oauth"');
   });

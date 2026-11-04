@@ -146,9 +146,7 @@ export async function readVerifiedArtifactSource(params: {
   artifactSha256: string;
   artifactByteLength: number;
 }): Promise<ResolvedClawHubSource> {
-  const loaded = await readTemplateManifestFile(params.sourceRoot, {
-    allowPublishedLegacyClawSelector: true,
-  });
+  const loaded = await readTemplateManifestFile(params.sourceRoot);
   if (!loaded.ok) {
     throw new ClawHubSourceError(
       "clawhub_manifest_invalid",

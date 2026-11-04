@@ -326,7 +326,7 @@ function ChatQueueItem(rowProps: {
   const text = () => {
     const attachments = item().attachments ?? [];
     return (
-      item().text ||
+      item().text.trim() ||
       describeChatQueueAttachmentLabels(
         attachments.some((attachment) => attachment.selectionAnnotation)
           ? attachments.map(({ fileName }) => fileName)

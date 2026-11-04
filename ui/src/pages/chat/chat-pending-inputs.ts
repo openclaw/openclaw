@@ -9,10 +9,11 @@ import type {
   ChatPendingInputsDismissResult,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
-import { extractText, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
@@ -81,7 +82,9 @@ function describePendingInputMessage(message: unknown): string {
     extractText(message)?.trim() ||
     describeChatQueueAttachmentLabels(attachmentLabels) ||
     describeChatQueueAttachmentLabels(
-      readTranscriptMediaEntries(message).map(({ fileName }) => fileName),
+      (readPersistedMediaFacts(asNullableRecord(message) ?? {}) ?? []).map(
+        ({ fileName }) => fileName,
+      ),
       imageCount,
     )
   );
