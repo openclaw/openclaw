@@ -39,15 +39,42 @@ import { combineFeishuStreamText, formatReasoningPrefix } from "./streaming-upda
 /**
  * A block's post or card: its text, its delivery and where it came from. A fallback card reports
  * a failure after its first chunk through its own block, and a card the close recovered for the
- * opening prose was created after every post that preceded that close. The preview card that
- * close failed to rewrite was created before those posts, so its receipt is kept beside it.
+ * opening prose was created after the posts that preceded that close, whose number is the last
+ * element, and before any later one. The preview card that close failed to rewrite was created
+ * before those posts, so its receipt is kept beside it.
  */
 export type FeishuBlockPostDelivery = [
   string,
   Promise<FeishuReplyDeliveryResult>,
   ("fallback" | "close")?,
   FeishuReplyDeliveryResult?,
+  number?,
 ];
+
+/** What a card that kept an earlier update still shows of `prose`: the update, less the reasoning set above it. */
+function shownPrefix(prose: string, shown = ""): string {
+  const rule = "\n\n---\n\n";
+  const answer = shown.slice(shown.includes(rule) ? shown.lastIndexOf(rule) + rule.length : 0);
+  return answer && prose.startsWith(answer) ? answer : "";
+}
+
+/**
+ * The leading part of `text` that `sent` covers when the sender cut it into chunks, or "" when
+ * the sent form was converted. A cut drops the whitespace it falls on, so that is skipped.
+ */
+function coveredPrefix(text: string, sent = ""): string {
+  let at = 0;
+  for (const char of sent) {
+    while (!text.startsWith(char, at) && /\s/u.test(text[at] ?? "")) {
+      at += 1;
+    }
+    if (!text.startsWith(char, at)) {
+      return "";
+    }
+    at += char.length;
+  }
+  return text.slice(0, at);
+}
 
 type FeishuReplySenderContext = {
   core: ReturnType<typeof getFeishuRuntime>;
@@ -64,7 +91,6 @@ type FeishuReplySenderContext = {
   requiredMentionTargets?: MentionTarget[];
   markVisibleReplySent: () => void;
   deliveredFinalTexts: Set<string>;
-  blockPostDeliveries: FeishuBlockPostDelivery[];
   rememberStreamingSettlement: (content: string, result: FeishuReplyDeliveryResult) => void;
   /** Hands a block post's receipt to the close, or nothing when an earlier block awaits it. */
   settleWithClose: (
@@ -112,7 +138,6 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     requiredMentionTargets,
     markVisibleReplySent,
     deliveredFinalTexts,
-    blockPostDeliveries,
     rememberStreamingSettlement,
     tableNeedsPostPath,
     answerTableNeedsPostPath,
@@ -259,6 +284,9 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     });
   };
 
+  // Every post and card of the message in progress, matched against the answer in text order.
+  // A new message starts a new list, so a close still walking the old one is not disturbed.
+  let blockPostDeliveries: FeishuBlockPostDelivery[] = [];
   // The answer the last close settled through its posts, and the mentions they carried.
   let closedAnswer: { text: string; mentions?: MentionTarget[] } | undefined;
   const sendPostReply = (
@@ -268,6 +296,8 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     options?: {
       /** The close's answer without its reasoning. Only the close passes it. */
       closeAnswerText?: string;
+      /** The idle that posts what an earlier close left previewed, even when it owns no post yet. */
+      later?: boolean;
       authoredText?: string;
       supplementalReasoningText?: string;
     },
@@ -287,15 +317,15 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
         infoKind,
         firstChunkMentions,
       });
-    if (matchingBlocks?.length) {
+    if (matchingBlocks && (matchingBlocks.length > 0 || options?.later)) {
       return (async () => {
         const accepted: FeishuReplyDeliveryResult[] = [];
         // The walk matches the card the close recovered for the opening prose first, since its
-        // text comes first, but that card was created after every post it passes, so on the
-        // block route its receipt follows theirs, while the preview card it stands in for keeps
-        // its place ahead of them. Off keeps its receipts in walk order.
-        const recovered: FeishuReplyDeliveryResult[] = [];
-        const byCreation = answerTableNeedsPostPath(blockAnswerText);
+        // text comes first, but that card was created after the posts that preceded the close and
+        // before any later one. Its receipt waits for those posts, while the preview card it
+        // stands in for keeps its place ahead of them.
+        let recovered: FeishuReplyDeliveryResult | undefined;
+        let recoveredAfter = 0;
         let remaining = blockAnswerText;
         let answerComplete = false;
         let fallbackFailure: unknown;
@@ -304,7 +334,14 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
           // advances the prefix; a partial rejection still owns its chunks. A fallback card
           // that failed after its first chunk owns them too, but its own block reported
           // that, so the rest goes out and the final then reports the same failure.
-          for (const [blockText, pending, origin, kept] of matchingBlocks) {
+          for (const [
+            at,
+            [blockText, pending, origin, kept, created = 0],
+          ] of matchingBlocks.entries()) {
+            if (recovered && at > recoveredAfter) {
+              accepted.push(recovered);
+              recovered = undefined;
+            }
             if (!remaining.startsWith(blockText)) {
               continue;
             }
@@ -324,21 +361,42 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
             if (kept) {
               accepted.push(kept);
             }
-            (origin === "close" && byCreation ? recovered : accepted).push(block);
+            if (origin === "close" && created > 0) {
+              recovered = block;
+              recoveredAfter = created;
+            } else {
+              accepted.push(block);
+            }
             remaining = remaining.slice(blockText.length).replace(/^\s*\n/u, "");
           }
-          accepted.push(...recovered.splice(0));
-          if (accepted.length === 0) {
+          if (recovered) {
+            accepted.push(recovered);
+            recovered = undefined;
+          }
+          if (accepted.length === 0 && !options?.later) {
             return await send();
           }
           if (remaining.trim()) {
-            accepted.push(
-              await sendChunkedTextReply({
-                text: remaining,
-                useCard: false,
-                firstChunkMentions,
-              }),
-            );
+            // What this sends is owned from here on: a later walk finds it and sends only what
+            // follows, and a partly accepted one keeps the chunks that went out.
+            const tail = sendChunkedTextReply({
+              text: remaining.trimStart(),
+              useCard: false,
+              firstChunkMentions,
+            });
+            const entry: FeishuBlockPostDelivery = [remaining, tail];
+            matchingBlocks.push(entry);
+            try {
+              accepted.push(await tail);
+            } catch (error: unknown) {
+              const sent = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+              const covered = coveredPrefix(remaining, sent?.content);
+              if (sent && covered) {
+                entry[0] = covered;
+                entry[1] = Promise.resolve(sent);
+              }
+              throw error;
+            }
           }
           answerComplete = true;
           const supplementalReasoningText = options?.supplementalReasoningText;
@@ -352,7 +410,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
             );
           }
           deliveredFinalTexts.add(blockAnswerText);
-          if (options?.closeAnswerText !== undefined) {
+          if (options?.closeAnswerText !== undefined && matchingBlocks === blockPostDeliveries) {
             closedAnswer = { text: blockAnswerText, mentions: firstChunkMentions };
           }
         } catch (error: unknown) {
@@ -362,7 +420,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
           // same receipts and sends only what is still missing. A partly sent card the walk
           // passed already failed through its own block. A final owns nothing when it fails,
           // so its error names the receipts and lets an attachment go out. So does a send
-          // that accepted a chunk of its own, which that retry would replay, and a failed
+          // that accepted a chunk of its own, which the close then owns, and a failed
           // reasoning supplement, which cannot reach the final at all.
           if (!partial && !answerComplete && options?.closeAnswerText !== undefined) {
             throw error;
@@ -371,7 +429,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
             partial && error instanceof Error ? (error.cause ?? error) : error,
             mergeFeishuReplyDeliveryResults([
               ...accepted,
-              ...recovered,
+              ...(recovered ? [recovered] : []),
               ...(partial ? [partial] : []),
             ]),
           );
@@ -416,16 +474,22 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
       supplementalReasoningText: keepsReasoning ? undefined : formatReasoningPrefix(reasoning),
       // The card is the prose's receipt whenever it shows accepted content, and a close
       // that failed around that content is reported after the rest of the answer went
-      // out. A card that shows nothing it can vouch for hands the prose to a card of
-      // its own, which can repeat what the card still shows. The walk matches that card
-      // first, and the block route reports it where it was created.
+      // out. A card whose rewrite was rejected still shows what it last accepted, so a card
+      // of its own carries only the prose that follows. The walk matches that card first,
+      // and the receipts report it where it was created.
       settle: async (result: FeishuReplyDeliveryResult, error?: unknown) => {
         if (result.visibleReplySent && result.finalTextAccepted !== false) {
           blockPostDeliveries.unshift([text, Promise.resolve(result)]);
           return { result, closeError: error };
         }
-        const recovered = sendChunkedTextReply({ text, useCard: true, infoKind: "block" });
-        blockPostDeliveries.unshift([text, recovered, "close", result]);
+        const created = blockPostDeliveries.length;
+        const shown = result.visibleReplySent ? shownPrefix(text, result.content) : "";
+        const recovered = sendChunkedTextReply({
+          text: text.slice(shown.length).trim() || text,
+          useCard: true,
+          infoKind: "block",
+        });
+        blockPostDeliveries.unshift([text, recovered, "close", result, created]);
         void recovered.catch(() => undefined);
         return {
           result: mergeFeishuReplyDeliveryResults([result, await recovered]),
@@ -504,10 +568,10 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
             createFeishuReplyDeliveryResult({ results: [settled], visibleReplySent: true }),
           )
         : undefined;
-    // The close walks this post's own entry, so the entry carries the image the block sent right
-    // after the post, ahead of the tail the close posts later.
-    const [entry] = blockPostDeliveries;
-    if (deferred && entry) {
+    // A later walk reads this post's own entry, so the entry carries the image the block sent right
+    // after the post, ahead of whatever the walk posts after it.
+    const entry = infoKind === "block" ? blockPostDeliveries.at(-1) : undefined;
+    if (entry) {
       entry[1] = Promise.resolve(settled);
     }
     return deferred ? { ...settled, finalization: deferred.finalization } : settled;
@@ -516,15 +580,32 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
   // The core asks for idle whenever its send queue drains with a finalization pending, so the
   // close a table post adopted can run before the model run ends. The block route then previews
   // the rest of that answer with no card left to carry it, and the next idle posts it the way the
-  // close would have, unless a final already delivered it.
+  // close would have, unless a final already delivered it. A caller exists only if a later block
+  // or final asks for the same answer, so its receipt is remembered for that one.
   const postLaterTail = (answer: string) =>
     closedAnswer &&
     answer.length > closedAnswer.text.length &&
     answer.startsWith(closedAnswer.text) &&
     answerTableNeedsPostPath(answer) &&
     ![...deliveredFinalTexts].some((delivered) => delivered.startsWith(answer))
-      ? sendPostReply(answer, "final", closedAnswer.mentions, { closeAnswerText: answer })
+      ? sendPostReply(answer, "final", closedAnswer.mentions, {
+          closeAnswerText: answer,
+          later: true,
+        }).then((result) => {
+          rememberStreamingSettlement(answer, result);
+          return result;
+        })
       : undefined;
+
+  // The next assistant message begins with no post of the earlier one to match, whether its
+  // preview is a prefix of that message or not, and with nothing of its own settled yet.
+  const startNextMessage = () => {
+    blockPostDeliveries = [];
+    leadingPreview = false;
+    previewAdoptsClose = false;
+    closedAnswer = closedAnswer && { text: "", mentions: closedAnswer.mentions };
+    return "";
+  };
 
   const sendMediaReplies = async (
     payload: ReplyPayload,
@@ -678,6 +759,8 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     sendPostReply,
     settleBlockPost,
     postLaterTail,
+    startNextMessage,
+    trackBlockPost: (entry: FeishuBlockPostDelivery) => blockPostDeliveries.push(entry),
     sendMediaReplies,
     ensureNoVisibleReplyFallback,
     ensureVisibleStreamingDelivery,

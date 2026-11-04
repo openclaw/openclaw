@@ -40,7 +40,7 @@ import {
   type FeishuReplyDeliveryResultWithFinalization,
 } from "./reply-delivery-result.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
-import { createFeishuReplySenders, type FeishuBlockPostDelivery } from "./reply-senders.js";
+import { createFeishuReplySenders } from "./reply-senders.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendCardFeishu } from "./send.js";
 import type { FeishuStreamingSession } from "./streaming-card.js";
@@ -271,7 +271,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // Partial previews are replaceable; only committed final text may precede an error notice.
   let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
-  const blockPostDeliveries: FeishuBlockPostDelivery[] = [];
   type StreamingDisposition = "closed" | "discarded";
   type StreamingCloseOutcome = {
     disposition: StreamingDisposition;
@@ -684,6 +683,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     sendPostReply,
     settleBlockPost,
     postLaterTail,
+    startNextMessage,
+    trackBlockPost,
     sendMediaReplies,
     ensureNoVisibleReplyFallback,
     ensureVisibleStreamingDelivery,
@@ -702,7 +703,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     requiredMentionTargets,
     markVisibleReplySent,
     deliveredFinalTexts,
-    blockPostDeliveries,
     rememberStreamingSettlement: (content, result) => {
       lastStreamingSettlement = { disposition: "closed", result, content };
     },
@@ -955,7 +955,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (!replyLifecycleStateInitialized) {
         replyLifecycleStateInitialized = true;
         deliveredFinalTexts.clear();
-        blockPostDeliveries.length = 0;
+        startNextMessage();
         lastStreamingSettlement = undefined;
         sentIndependentBlockText = false;
         idleRequestedForReply = false;
@@ -1230,7 +1230,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // attachment is an independent send, so the rejection holds until the media
             // has been attempted and both are reported together.
             try {
-              // An answer payload reaches this branch only as a block under block streaming.
+              // An answer payload reaches this branch as a block, under block streaming or, with
+              // it off, carrying media, which the widened condition above admits.
               const post =
                 previewStreamingEnabled && isAnswerPayload && tableNeedsPost
                   ? await prepareBlockPost(streamText, text)
@@ -1333,7 +1334,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           if (info?.kind === "block") {
             // This card is the block's delivery, so a later post or final walks past it,
             // even when it failed after its first chunk.
-            blockPostDeliveries.push([text, card, "fallback"]);
+            trackBlockPost([text, card, "fallback"]);
             void card.catch(() => undefined);
           }
           deliveredResults.push(await card);
@@ -1475,7 +1476,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         ? () => {
             // Snapshots cover one assistant message. Freeze earlier prose at the
             // source boundary so tool continuations cannot replace it.
-            snapshotBaseText = streamText ? `${streamText}\n\n` : "";
+            snapshotBaseText = streamText ? `${streamText}\n\n` : startNextMessage();
             lastPartial = "";
             modelWaitLine = "";
             return updateStreamingStatusLine("", false);
