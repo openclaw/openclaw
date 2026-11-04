@@ -5,6 +5,26 @@ import { schemaValidation } from "./protocol-validation.test-support.js";
 const startup = schemaValidation(S.ChatStartupParamsSchema);
 const history = schemaValidation(S.ChatHistoryCursorResultSchema);
 const chat = schemaValidation(S.ChatEventSchema);
+
+it("ChatEventSchema: accepts only explicit nonterminal input delivery outcomes", () => {
+  const input = {
+    runId: "source-input",
+    sessionKey: "agent:main:main",
+    agentId: "main",
+    seq: 1,
+    state: "input",
+    targetRunId: "active-run",
+  };
+  for (const delivery of ["read", "unconfirmed", "not-steered"]) {
+    chat.accepts({ ...input, delivery });
+    chat.accepts({ ...input, targetRunId: undefined, delivery });
+  }
+  chat.rejects(
+    input,
+    { ...input, delivery: "accepted" },
+    { ...input, delivery: "read", targetRunId: "" },
+  );
+});
 const send = schemaValidation(S.ChatSendParamsSchema);
 const statusEvent = {
   runId: "run-1",

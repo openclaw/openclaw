@@ -300,6 +300,25 @@
   order: 1;
 }
 
+/* Keep added delivery metadata on the existing row; long labels may truncate, not wrap controls. */
+.chat-group-footer:has(> .chat-group-footer__meta > .chat-input-delivery) {
+  flex-wrap: nowrap;
+}
+
+.chat-input-delivery {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  opacity: var(--chat-footer-disclosure-opacity, 0);
+  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
+  transition: opacity 120ms ease-out;
+}
+
 .chat-reaction-chip {
   display: inline-flex;
   align-items: center;

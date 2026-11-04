@@ -110,6 +110,7 @@ export {
   ChatEventSchema,
   ChatRunStartupPhaseSchema,
   ChatStatusEventSchema,
+  ChatInputDeliveryEventSchema,
   SendParamsSchema,
   PollParamsSchema,
   AgentParamsSchema,

@@ -177,6 +177,10 @@ describeLive("quiet steering with real caller authority", () => {
           listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
         ),
         OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+        // The fixture relay is local; an inherited HTTP proxy cannot reach it.
+        NO_PROXY: [process.env.NO_PROXY ?? process.env.no_proxy, "127.0.0.1", "localhost"]
+          .filter(Boolean)
+          .join(","),
         OPENAI_BASE_URL: undefined,
         OPENAI_API_BASE: undefined,
         OPENCLAW_PROFILE: profile,
@@ -192,16 +196,19 @@ describeLive("quiet steering with real caller authority", () => {
     instance.env.OPENCLAW_GATEWAY_PORT = String(instance.port);
     const clients: GatewayClient[] = [];
     const events: Array<{ event?: string; payload?: unknown }> = [];
-    const terminals = new Map<string, ReturnType<typeof createDeferred<{ state: string }>>>();
+    type Terminal = { state: string; errorMessage?: string };
+    const terminals = new Map<string, ReturnType<typeof createDeferred<Terminal>>>();
     const terminalFor = (runId: string) => {
       let terminal = terminals.get(runId);
       if (!terminal) {
-        terminal = createDeferred<{ state: string }>();
+        terminal = createDeferred<Terminal>();
         terminals.set(runId, terminal);
       }
       return terminal;
     };
-    const frontClaim = await acquireTestPortBlock({ offsets: [0] });
+    const frontClaim = await acquireTestPortBlock({
+      offsets: [0],
+    });
     const sockets = new Set<net.Socket>();
     // A normal TLS-terminating trusted edge, not an insecure-client exception.
     const front = createTlsServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM }, (socket) => {
@@ -238,7 +245,10 @@ describeLive("quiet steering with real caller authority", () => {
           },
         },
         trustedProxies: ["127.0.0.1"],
-        controlUi: { enabled: false, allowedOrigins: ["https://control.quiet.example.test"] },
+        controlUi: {
+          enabled: false,
+          allowedOrigins: ["https://control.quiet.example.test"],
+        },
         roles: {
           default: "high",
           definitions: {
@@ -338,14 +348,21 @@ describeLive("quiet steering with real caller authority", () => {
         onEvent: (event) => {
           if (index === 0) {
             events.push(event);
-            const payload = event.payload as { runId?: string; state?: string } | undefined;
+            const payload = event.payload as
+              | { runId?: string; state?: string; errorMessage?: string }
+              | undefined;
             if (
               event.event === "chat" &&
               payload?.runId &&
               payload.state &&
               ["final", "error", "aborted"].includes(payload.state)
             ) {
-              terminalFor(payload.runId).resolve({ state: payload.state });
+              terminalFor(payload.runId).resolve({
+                state: payload.state,
+                ...(typeof payload.errorMessage === "string"
+                  ? { errorMessage: payload.errorMessage }
+                  : {}),
+              });
             }
           }
         },
@@ -387,12 +404,13 @@ describeLive("quiet steering with real caller authority", () => {
       );
       return observed;
     };
-    const send = (client: GatewayClient, key: string, message: string) =>
+    const send = (client: GatewayClient, key: string, message: string, queueMode?: "steer") =>
       client.request<{ runId: string; status: string }>("chat.send", {
         sessionKey: key,
         message,
         idempotencyKey: randomUUID(),
         deliver: false,
+        ...(queueMode ? { queueMode } : {}),
       });
     const waitRun = async (runId: string) => {
       expect(
@@ -556,33 +574,56 @@ describeLive("quiet steering with real caller authority", () => {
         };
       });
 
-      await caseRun("solo compatible steer", async () => {
-        const key = await create("solo");
-        const gate = relay.arm();
-        const root = await send(
-          high,
-          key,
-          "First use read on report.txt. Then reply with SOLO_FIRST and follow any additional user instruction.",
+      for (const explicitReceipt of [false, true]) {
+        await caseRun(
+          explicitReceipt ? "explicit steering read receipt" : "solo compatible steer",
+          async () => {
+            const key = await create(explicitReceipt ? "read-receipt" : "solo");
+            const gate = relay.arm();
+            const root = await send(
+              high,
+              key,
+              "First use read on report.txt. Then reply with SOLO_FIRST and follow any additional user instruction.",
+            );
+            const request = await withinTest(gate.entered.promise, signal);
+            expect(request.model).toBe("gpt-5.4");
+            const steer = await send(
+              high,
+              key,
+              "Additional instruction: also include SOLO_STEER in your final response. Do not use tools.",
+              explicitReceipt ? "steer" : undefined,
+            );
+            const pending = await history(key, [steer.runId]);
+            expect(pending.inputReceipts?.find((x) => x.runId === steer.runId)?.queued).not.toBe(
+              true,
+            );
+            const readReceipt = expect.objectContaining({
+              event: "chat",
+              payload: expect.objectContaining({
+                sessionKey: key,
+                runId: steer.runId,
+                targetRunId: root.runId,
+                state: "input",
+                delivery: "read",
+              }),
+            });
+            // Admission while the provider is blocked is not a read receipt.
+            expect(events).not.toEqual(expect.arrayContaining([readReceipt]));
+            gate.release.resolve();
+            await waitRun(root.runId);
+            await waitRun(steer.runId);
+            const after = await history(key, [steer.runId]);
+            expect(
+              relay.requests.some((call) => JSON.stringify(call.input).includes("SOLO_STEER")),
+            ).toBe(true);
+            expect(JSON.stringify(after.messages)).toContain("SOLO_STEER");
+            if (explicitReceipt) {
+              expect(events).toEqual(expect.arrayContaining([readReceipt]));
+            }
+            return { root: root.runId, input: steer.runId, receipt: after.inputReceipts };
+          },
         );
-        const request = await withinTest(gate.entered.promise, signal);
-        expect(request.model).toBe("gpt-5.4");
-        const steer = await send(
-          high,
-          key,
-          "Additional instruction: also include SOLO_STEER in your final response. Do not use tools.",
-        );
-        const pending = await history(key, [steer.runId]);
-        expect(pending.inputReceipts?.find((x) => x.runId === steer.runId)?.queued).not.toBe(true);
-        gate.release.resolve();
-        await waitRun(root.runId);
-        await waitRun(steer.runId);
-        const after = await history(key, [steer.runId]);
-        expect(
-          relay.requests.some((call) => JSON.stringify(call.input).includes("SOLO_STEER")),
-        ).toBe(true);
-        expect(JSON.stringify(after.messages)).toContain("SOLO_STEER");
-        return { root: root.runId, input: steer.runId, receipt: after.inputReceipts };
-      });
+      }
 
       for (const [name, incumbent, incoming, second, duplicate] of [
         ["high owner low incoming identical", () => high, () => low, () => third, true],

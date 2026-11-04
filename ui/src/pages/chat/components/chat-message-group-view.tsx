@@ -9,8 +9,9 @@ import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
 import { readHandoffDisplay } from "../chat-sessions-yield.ts";
 import { listResumedHandoffSessions } from "../chat-subagent-wait.ts";
-import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import { persistedMessageEntryId, readChatInputDelivery } from "../chat-thread-items.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
+import { persistedSteerTargetRunId } from "../stream-causal-boundary.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
@@ -38,7 +39,7 @@ import {
 import type { MessageActionDetails } from "./chat-message-markdown.types.ts";
 import { GroupMessageReactions } from "./chat-message-reaction-chips-view.tsx";
 import { messageReactionOptions } from "./chat-message-reaction-model.ts";
-import { ChatSendStatus } from "./chat-message-send-status-view.tsx";
+import { ChatInputDeliveryStatus, ChatSendStatus } from "./chat-message-send-status-view.tsx";
 import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 import type { AssistantMessageDisclosure } from "./chat-message-text-view.tsx";
 import { MessageMeta } from "./chat-message-timestamp-view.tsx";
@@ -62,6 +63,7 @@ function MessageActionsRow(props: {
   class?: string;
   reactionGroup?: MessageGroupData;
   timestamp?: number;
+  inputDelivery?: ReturnType<typeof readChatInputDelivery>;
 }) {
   let owner: HTMLDivElement | undefined;
   return (
@@ -91,6 +93,7 @@ function MessageActionsRow(props: {
       <Show when={props.timestamp !== undefined}>
         <MessageMeta timestamp={props.timestamp!} meta={null} />
       </Show>
+      <ChatInputDeliveryStatus delivery={props.inputDelivery ?? null} />
     </div>
   );
 }
@@ -388,14 +391,17 @@ function FramedMessage(props: {
         ? avatar
         : undefined,
   }));
+  const inputDelivery = () => readChatInputDelivery(props.item.message);
   const showActions = () =>
     prepared().ownsActions &&
     (hasMessageActionButtons(prepared().actions, frame().options) ||
-      Boolean(prepared().actions?.reactionMessageId && frame().options.onReact)) &&
+      Boolean(prepared().actions?.reactionMessageId && frame().options.onReact) ||
+      Boolean(persistedSteerTargetRunId(props.item.message) || inputDelivery())) &&
     props.index < frame().lastMessageIndex &&
     !frame().isTurnBlock;
-  // The final message has the group footer; earlier actionable messages already
-  // reserve their own row. Inline-only activity keeps its original chip location.
+  // The final message has the group footer. Earlier steering inputs reserve a
+  // metadata row before delivery is known, even without copy/reply actions.
+  // Inline-only activity keeps its original chip location.
   const inlineReactions = () =>
     frame().isTurnBlock || (props.index < frame().lastMessageIndex && !showActions());
   return (
@@ -445,6 +451,7 @@ function FramedMessage(props: {
               details={prepared().actions}
               options={frame().options}
               class="chat-message-actions-row"
+              inputDelivery={inputDelivery()}
               reactionGroup={frame().group}
               timestamp={
                 frame().normalizedRole === "user"
@@ -464,6 +471,7 @@ function FramedMessage(props: {
             <div class="chat-group-footer__meta">
               <SenderIdentity frame={props.frame} />
               <MessageMeta timestamp={prepared().source.normalizedMessage.timestamp} meta={null} />
+              <ChatInputDeliveryStatus delivery={inputDelivery()} />
             </div>
             <MessageActionsRow
               messageKey={props.item.key}
@@ -603,6 +611,9 @@ function FramedMessageGroup(props: {
                 >
                   <ChatSendStatus status={frame().sendStatus} actions={options()} />
                 </Show>
+                <ChatInputDeliveryStatus
+                  delivery={readChatInputDelivery(props.group.messages.at(-1)?.message)}
+                />
               </div>
               <Show
                 when={frame().isPeerGroup}

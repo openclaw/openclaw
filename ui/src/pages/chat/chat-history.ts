@@ -263,7 +263,9 @@ export type ChatEventPayload = {
   seq?: number;
   sessionKey: string;
   agentId?: string;
-  state: "status" | "delta" | "final" | "aborted" | "error";
+  state: "status" | "input" | "delta" | "final" | "aborted" | "error";
+  delivery?: Extract<ChatEvent, { state: "input" }>["delivery"];
+  targetRunId?: string;
   phase?: ChatRunStartupPhase;
   waitReason?: "response" | "slot";
   retry?: NonNullable<Extract<ChatEvent, { state: "status" }>["retry"]>;

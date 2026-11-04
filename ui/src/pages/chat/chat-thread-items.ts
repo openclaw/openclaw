@@ -2,6 +2,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import type { ChatInputDeliveryEvent } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { fnv1aUtf16 } from "../../../../src/shared/fnv1a.js";
@@ -325,6 +326,20 @@ export function resolveToolBlockId(
 
 export function isPendingSendMessage(message: unknown): boolean {
   return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
+}
+
+export function readChatInputDelivery(message: unknown): ChatInputDeliveryEvent["delivery"] | null {
+  const record = asRecord(message);
+  if (record?.role !== "user") {
+    return null;
+  }
+  const metadata = asRecord(record["__openclaw"]);
+  const receipt = asRecord(metadata?.inputDelivery);
+  const delivery = receipt?.delivery;
+  if (delivery === "read" || delivery === "unconfirmed" || delivery === "not-steered") {
+    return delivery;
+  }
+  return null;
 }
 
 export function readPendingSendStatus(message: unknown): {

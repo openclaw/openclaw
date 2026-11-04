@@ -11,6 +11,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
+  ChatInputDeliveryEvent,
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -29,6 +30,13 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryCursor } from "./chat-history-pagination.ts";
 import { matchesCompactionOperation } from "./chat-progress.ts";
+import {
+  CHAT_PROJECTION_SCOPE_KEYS,
+  chatProjectionScopeChanged,
+  projectChatInputDeliveries,
+  reduceChatInputDeliveries,
+  type ChatInputDeliveryReceipt,
+} from "./chat-projection-transforms.ts";
 import { reconcileChatReasoning, type ChatReasoningHost } from "./chat-reasoning.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import type { CompactionStatus, ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -38,17 +46,24 @@ const chatSessionProjections = new WeakMap<
   {
     projection?: SessionProjectionState;
     runId?: string;
+    inputDeliveries?: Map<string, ChatInputDeliveryReceipt>;
   }
 >();
-// Display ownership outlives active-state cleanup. It is not the foreground
-// terminal fence: an unowned final cannot suppress authoritative active rows.
-const CHAT_PROJECTION_SCOPE_KEYS = [
-  "sessionKey",
-  "sessionId",
-  "agentId",
-  "lifecycleRevision",
-  "activeLeafEntryId",
-] as const;
+/** Live delivery evidence belongs to this pane/session, never transcript custody or an ACK. */
+export function recordChatInputDelivery(
+  owner: ChatSessionProjectionOwner,
+  event: ChatInputDeliveryEvent,
+): void {
+  const scope = readChatSessionProjectionScope(owner, { agentId: event.agentId });
+  const projection = getChatSessionProjection(owner, scope);
+  publishChatSessionProjection(owner, projection);
+  const current = chatSessionProjections.get(owner);
+  const receipts = reduceChatInputDeliveries(current?.inputDeliveries, event);
+  if (!receipts) {
+    return;
+  }
+  publishChatSessionProjection(owner, projection, true, receipts);
+}
 
 type ChatSessionProjectionOwner = ChatComposerScope &
   ChatReasoningHost & {
@@ -217,17 +232,6 @@ export function readChatSessionProjectionScope(
   };
 }
 
-function chatProjectionScopeChanged(
-  previous: SessionProjectionScope,
-  scope: SessionProjectionScope,
-  keys: readonly (keyof SessionProjectionScope)[] = CHAT_PROJECTION_SCOPE_KEYS,
-) {
-  return keys.some(
-    (key) =>
-      Object.hasOwn(scope, key) && previous[key] !== undefined && previous[key] !== scope[key],
-  );
-}
-
 /** One pane owns its shared-reducer projection; split panes never share live state. */
 export function getChatSessionProjection(
   owner: ChatSessionProjectionOwner,
@@ -291,6 +295,7 @@ export function publishChatSessionProjection(
   owner: ChatSessionProjectionOwner,
   incomingProjection: SessionProjectionState,
   retainPairingQr = true,
+  inputDeliveryUpdate?: Map<string, ChatInputDeliveryReceipt>,
 ): void {
   let projection = incomingProjection;
   const current = chatSessionProjections.get(owner);
@@ -315,6 +320,25 @@ export function publishChatSessionProjection(
   const runId = current?.runId;
   const previousScope = current?.projection?.scope;
   const scopeChanged = previousScope && chatProjectionScopeChanged(previousScope, projection.scope);
+  // Delivery is a fact about an exact source message in this physical session.
+  // Advancing or selecting a leaf cannot unread that source; another branch only
+  // displays a receipt if it contains the same source identity.
+  const inputScopeChanged =
+    previousScope &&
+    chatProjectionScopeChanged(previousScope, projection.scope, [
+      "sessionKey",
+      "sessionId",
+      "agentId",
+      "lifecycleRevision",
+    ]);
+  const inputDeliveries = inputScopeChanged
+    ? undefined
+    : (inputDeliveryUpdate ?? current?.inputDeliveries);
+  // Cache snapshots may contain display projections. Only this pane’s live evidence may restore a receipt.
+  // Run-only streaming updates share the message array and do not traverse the transcript.
+  if (inputDeliveryUpdate || previous?.messages !== projection.messages) {
+    projection = projectChatInputDeliveries(projection, inputDeliveries);
+  }
   if (scopeChanged) {
     const status = owner.compactionStatus;
     const sessionChanged = chatProjectionScopeChanged(previousScope, projection.scope, [
@@ -341,6 +365,7 @@ export function publishChatSessionProjection(
   chatSessionProjections.set(owner, {
     projection,
     runId: retainedRunId,
+    ...(inputDeliveries ? { inputDeliveries } : {}),
   });
   reconcileChatReasoning(owner, projection, current?.projection?.messages);
   // Run-only transitions share the transcript array. Preserve their ownership
