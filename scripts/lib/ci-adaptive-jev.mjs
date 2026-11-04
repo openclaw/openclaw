@@ -27,7 +27,10 @@ async function responseJson(response, controller) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-/** Optional path-only ranking experiment. Never selects or reorders tests. */
+/**
+ * Optional path-only ranking experiment. Never selects or reorders tests.
+ * @param {{version: number, context: unknown, files: ReturnType<typeof observationFile>[], changedFiles: string[]}} request
+ */
 export async function rankAdaptiveJev(request, apiKey = process.env.TYPESAFE_API_KEY) {
   const started = performance.now();
   assert(request?.version === 1, "Unsupported ranking request");
