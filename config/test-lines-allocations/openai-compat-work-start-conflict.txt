@@ -1,0 +1,2 @@
+# Retriable session work-start rejections map to a 409 conflict envelope.
+37
