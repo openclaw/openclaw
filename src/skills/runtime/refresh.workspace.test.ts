@@ -28,7 +28,7 @@ import {
 } from "../loading/workspace-skill-sources.js";
 import { resolveSkillFileHost } from "../skill-file-host.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import * as remoteRefresh from "./refresh-remote.js";
 import { getSkillsSnapshotVersion as versionOf } from "./refresh-state.js";
 import * as refresh from "./refresh.js";

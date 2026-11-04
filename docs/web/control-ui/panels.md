@@ -22,7 +22,9 @@ Details keeps session metadata visible. Pull requests and automations appear
 expanded when they contain items; empty sections are omitted entirely. You can
 collapse populated sections without ordinary updates reopening them. Loading or
 failed automation reads show their status and retry action without an empty
-disclosure. Task progress remains independently collapsible.
+disclosure. Task progress remains independently collapsible. If the connection
+drops, progress shows **Disconnected · Activity may be outdated** while keeping
+the saved steps visible. A failed refresh keeps the last update and offers a retry.
 
 ## OpenClaw system care
 
@@ -40,7 +42,7 @@ Guided channel setup, workspace skills setup, web-search provider setup, and loc
 
 For Gateway setup, say `configure gateway` to choose the port, bind address, token or password auth, and Tailscale exposure. Before the first question, the web surface warns that applying the saved settings requires a restart that may disconnect the chat or require a new Control UI sign-in. The wizard changes config only; say `restart gateway` when you are ready to apply it. It manages only a local Gateway, so remote mode changes stay in `openclaw onboard` or `openclaw configure`.
 
-Say `import memory` to copy detected local memory into the existing default agent workspace. This flow does not change config or import credentials or skills, needs no Gateway restart, and distinguishes confirmed imports, nothing to import, provider failures, and failures where some files may already have been copied. Finish onboarding first if the default workspace does not exist. See [Import assistant memory](/web/control-ui/settings#import-assistant-memory) for the broader page that can target another agent or replace existing imports, and [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
+Say `import memory` to copy detected local memory into the existing default agent workspace. This flow does not change config or import credentials or skills, needs no Gateway restart, and distinguishes confirmed imports, nothing to import, provider failures, and failures where some files may already have been copied. Finish onboarding first if the default workspace does not exist. See [Import agent memory](/web/control-ui/settings#import-assistant-memory) for the broader page that can target another agent or replace existing imports, and [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
 
 Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel check, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
 
@@ -100,6 +102,8 @@ Selecting terminal text copies it automatically. A brief **Copied to clipboard**
 Terminal sessions appear as tabs in the Chat side-panel header; choosing **Terminal** again in the panel's **+** menu opens another shell, while sessions, upload, and dock-to-bottom actions sit in the header. A Terminal moved to the main area keeps its own tab strip.
 
 The unified panel also hosts **Browser**, **Files**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so on desktop switching sessions or reloading restores each session's own working layout. A chat conversation without a saved panel layout does not inherit panels open in another session. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
+
+In **Review**, choose **Sync locally** to copy the command for mirroring the session’s committed changes in a local checkout. **Files** distinguishes a search with no results (**No files match your search.**) from a filter with no matches (**No files match this filter.**).
 
 The side-panel divider follows the pointer and arrow-key direction in both
 left-to-right and right-to-left layouts.

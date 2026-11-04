@@ -186,6 +186,10 @@ A required completion-delivery failure is distinct from an execution failure: a 
 Chat failure notifications include the run start time in the agent's configured user timezone. When `gateway.publicOrigin` is configured and the Control UI is enabled, they also include an `Inspect` link to the automation run. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field and construct their own links.
 Chat notifications show normalized failure causes or allowlisted producer facts for known command and script failures. Arbitrary commands, paths, provider bodies, secrets, delivery errors, skip reasons, diagnostics, and stack/error text remain in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
 
+Billing and upstream-service failure notifications also explain the next step:
+resolve billing with the provider account owner, retry after a service failure,
+or choose another provider for the automation.
+
 #### Owner-conversation repair
 
 Repair is on by default for owned automations with inherited failure destinations: the first failure alert of a streak becomes a repair request in the conversation that created the job, and the alert is the fallback. A job with `failureAlert: false` gets neither.

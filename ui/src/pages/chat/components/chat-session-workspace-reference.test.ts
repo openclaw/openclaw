@@ -109,7 +109,7 @@ describe("session workspace file reference resolution", () => {
     await vi.waitFor(() =>
       expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
         kind: "unavailable",
-        message: "Failed to load REPORT.md",
+        message: "Couldn’t load REPORT.md. Check that the file still exists.",
       }),
     );
     expect(getFile).toHaveBeenCalledExactlyOnceWith("agent:main:current", "REPORT.md", {

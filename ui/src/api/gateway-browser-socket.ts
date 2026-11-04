@@ -5,6 +5,7 @@ import {
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
 import { gatewayWebSocketTransportUrl, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
+import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 
@@ -28,11 +29,8 @@ export function formatBrowserWebSocketConstructorError(err: unknown, url: string
   return {
     code,
     message: securityError
-      ? "Browser refused the Gateway WebSocket for security reasons." +
-        (isPlaintextWs
-          ? " Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789."
-          : " Check the Gateway WebSocket URL and browser security policy.")
-      : `Couldn’t create the Gateway WebSocket. Check the Gateway WebSocket URL and browser security policy. Details: ${browserMessage}`,
+      ? t(isPlaintextWs ? "runtimeErrors.socketInsecure" : "runtimeErrors.socketRefused")
+      : t("runtimeErrors.socketCreateFailed", { message: browserMessage }),
     details: { code, browserErrorName, browserMessage },
   };
 }
@@ -127,7 +125,9 @@ export function createBrowserGatewaySocket(
       return;
     }
     opening = false;
-    const reason = `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`;
+    const reason = t("runtimeErrors.socketTimeout", {
+      milliseconds: String(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS),
+    });
     try {
       handlers.error(new Error(reason));
     } finally {
