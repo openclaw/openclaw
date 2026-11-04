@@ -14,12 +14,12 @@ let terminalRuntimePath = params.recoveryModulePath;
 let serviceStoppedAtMs, serviceDowntimeMs;
 let recoveryObservation;
 
-// Child JSON is untyped. Normalize its reason before typed classification,
-// sentinel publication, and terminal recording can consume it.
+// Child JSON is untyped. Keep malformed supplied reasons reportable before
+// typed classification, sentinel publication, and terminal recording consume them.
 function parseManagedUpdateResult(output) {
   let result;
   try { result = JSON.parse(output); } catch { return null; }
-  if (result && typeof result === "object" && typeof result.reason !== "string") delete result.reason;
+  if (Object.hasOwn(result ?? {}, "reason") && typeof result.reason !== "string") result.reason = "managed-service-handoff-failed";
   return result;
 }
 

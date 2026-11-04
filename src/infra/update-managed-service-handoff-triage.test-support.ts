@@ -145,7 +145,8 @@ export function registerManagedUpdateHandoffTriageTests(
     { reason: "restart-health-pending", failed: false },
     { reason: ["already-current"], failed: true },
   ])("classifies skipped results before triage: %j", async ({ reason, failed }) => {
-    const { state, sentinel } = await runManagedServiceManagerBoundary("systemd", {
+    const { state, sentinel, run } = await runManagedServiceManagerBoundary("systemd", {
+      ledger: true,
       updaterExitCode: 0,
       helperExitCode: failed ? 1 : 0,
       updaterNotification: typeof reason === "string" ? "published" : undefined,
@@ -159,6 +160,11 @@ export function registerManagedUpdateHandoffTriageTests(
     expect(state.triageCalls).toBe(failed ? 1 : undefined);
     expect(state.guardedRestart).toBeUndefined();
     expect(state.healthProbed).toBeUndefined();
+    expect(run).toMatchObject({
+      phase: "finished",
+      status: "skipped",
+      reason: typeof reason === "string" ? reason : "managed-service-handoff-failed",
+    });
     // Raw child JSON bypasses the typed sentinel writer.
     if (typeof reason === "string") {
       expect(sentinel).toMatchObject({
