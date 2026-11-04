@@ -117,15 +117,14 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
       </Show>
       <span ref={(element) => props.contentRef?.(element)} class="chat-tool-disclosure__content">
         <Show
-          when={Boolean(shown()?.title)}
-          keyed
+          when={shown()?.title}
           fallback={
             <Show when={!props.bubbleMode}>
               <span class="chat-activity-group__label">{props.summary}</span>
             </Show>
           }
         >
-          {(_hasTitle) => (
+          {(title) => (
             <span
               class={[
                 "chat-activity-group__label chat-activity-group__label--live",
@@ -135,7 +134,7 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
                 },
               ]}
             >
-              {shown()?.title}
+              {title()}
               {!props.bubbleMode && shown()?.status === "running" ? "…" : ""}
             </span>
           )}
