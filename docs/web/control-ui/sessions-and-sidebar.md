@@ -49,6 +49,8 @@ sits directly below the avatar, separated from navigation by a divider. It stays
 the same place in Pages, Sessions, and Users, even when the list is collapsed.
 It opens New session for the selected agent; in team mode, choose an agent from
 its menu first. Command-palette search sits below the three view buttons.
+Search failures show **Couldn’t search sessions. Try again.**, rather than an empty result.
+If message search is unavailable, the palette still shows matching session titles and details.
 Click the selected Pages or Sessions view again to collapse its list, or press ⌘B on
 Mac or Ctrl+B on Windows/Linux. Clicks use the normal sidebar animation; the
 keyboard shortcut opens or closes navigation immediately. Reduced-motion preferences
