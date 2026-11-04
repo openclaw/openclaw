@@ -1076,6 +1076,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it.each([
     ["delta blocks", ["hello"], ["lo world"], "hellolo world"],
     ["covered tail", ["First.\n\nLast."], ["First.", "\n\nLast."], "First.\n\nLast."],
+    ["sentence gap", ["First. Last."], ["First.", "Last."], "First. Last."],
     ["repeated blocks", ["ha ha"], ["ha", " ha", "ha"], "ha haha"],
     ["block-only repeats", [], ["ha", "ha"], "haha"],
     [
