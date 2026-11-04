@@ -813,7 +813,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="side-panel-keyboard-shortcuts" />[Side panel keyboard shortcuts](/web/control-ui/settings#side-panel-keyboard-shortcuts)
 - <a id="this-mac-(macos-app)" />[This device (macOS and iOS apps)](/web/control-ui/settings#this-mac-macos-app)
 - <a id="custom-plugin-ui" />[Custom plugin UI](/web/control-ui/settings#custom-plugin-ui)
-- <a id="import-assistant-memory" />[Import assistant memory](/web/control-ui/settings#import-assistant-memory)
+- <a id="import-assistant-memory" />[Import agent memory](/web/control-ui/settings#import-assistant-memory)
 - <a id="mcp-page" />[MCP page](/web/control-ui/settings#mcp-page)
 - <a id="activity-tab" />[Activity tab](/web/control-ui/settings#activity-tab)
 - <a id="meetings-page" />[Meetings page](/web/control-ui/settings#meetings-page)

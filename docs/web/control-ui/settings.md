@@ -692,9 +692,11 @@ Authenticated native UI requires HTTPS or a browser-trusted loopback URL.
 On non-local plain HTTP, plugin pages explain how to open a supported URL;
 dashboard pairing and backend plugin operations remain available.
 
-## Import assistant memory
+<a id="import-assistant-memory" />
 
-Open **Settings** → **Import Memory** to bring local Codex, Claude Code, or Hermes memory
+## Import agent memory
+
+Open **Settings** → **Import memory** to bring local Codex, Claude Code, or Hermes memory
 into an OpenClaw agent. The Gateway discovers supported local memory on its own
 host, so a remote Control UI imports from the Gateway computer rather than the
 browser computer.

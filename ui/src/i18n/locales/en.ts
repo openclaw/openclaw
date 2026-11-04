@@ -1077,7 +1077,7 @@ const startupEnglish = {
     about: "About",
     aiAgents: "Agent defaults",
     modelSetup: "Models",
-    memoryImport: "Import Memory",
+    memoryImport: "Import memory",
     security: "Privacy & security",
     secrets: "Secrets",
     debug: "Debug",
