@@ -237,6 +237,33 @@ it("retains its successful history and cursor when retrying a failed refresh", a
   expect(element.textContent).not.toContain("Retained reply");
 });
 
+it("does not reread history for activity summaries but refreshes transcript events", async () => {
+  useClock();
+  const { current, element, requests, emit, reply } = setup();
+  await reply(0, "Initial reply");
+
+  current().testOptions.onEvent?.(
+    createGatewayEvent("sessions.changed", {
+      sessionKey: "agent:main:one",
+      agentId: "main",
+      reason: "activity-summary",
+      activitySummary: { text: "Working on a task", state: "current", updatedAt: 1 },
+    }),
+  );
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(requests).toHaveLength(1);
+  expect(element.textContent).toContain("Initial reply");
+
+  emit("session.message");
+  await vi.advanceTimersByTimeAsync(5_000);
+  await reply(1, "New reply");
+
+  emit("sessions.changed");
+  await vi.advanceTimersByTimeAsync(5_000);
+  await reply(2, "Updated reply");
+  expect(requests).toHaveLength(3);
+});
+
 it("paces durable events and retains one catch-up during a pending load", async () => {
   useClock();
   const { element, requests, emit, reply, settled } = setup();
