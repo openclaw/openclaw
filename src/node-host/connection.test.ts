@@ -142,6 +142,7 @@ function startConnectionFixture(
     handleInput: vi.fn(),
     cancel: vi.fn(),
     cancelAll: vi.fn<() => Promise<void>>(async () => undefined),
+    setLocalMcpAllowed: vi.fn(),
     tryPauseForUpdate: vi.fn(async () => true),
     resumeAfterUpdate: vi.fn(),
     updateGatewayConnection: vi.fn(),

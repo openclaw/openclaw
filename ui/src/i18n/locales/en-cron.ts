@@ -3,6 +3,21 @@ import { en } from "./en.ts";
 
 const enCron = {
   cron: {
+    job: {
+      state: "{status} · next {next} · last {last}",
+      pluginCommand: "Plugin command: /{command} ({plugin})",
+      system: "System: {text}",
+      command: "Command: {command}",
+      script: "Script: {script}",
+      agent: "Agent: {message}",
+    },
+    missingConfigRevision:
+      "This automation is missing its configuration revision. Refresh and try again.",
+    changedOnGateway:
+      "This automation changed on the Gateway. The latest definition is loaded; review it before retrying.",
+    changedOnGatewayLoadFailed:
+      "This automation changed on the Gateway, but the latest definition could not be loaded. Refresh before retrying.",
+    runQueued: "Run queued. Run ID: {runId}",
     adminRequired:
       "Browsing only. Only the human owner or an administrator can change this automation.",
     runNotStarted: {
@@ -109,7 +124,7 @@ const enCron = {
       clear: "Clear",
       allStatuses: "All statuses",
       allDelivery: "All delivery",
-      noMatching: "No matching runs.",
+      noMatching: "No runs match your filters.",
       emptyTitle: "No runs yet",
       emptyHint: "Runs show up here once an automation fires.",
       conditionActivity: "Condition activity",
@@ -127,6 +142,7 @@ const enCron = {
       emptyConditionUnchecked:
         "The condition has not been checked yet. Run history starts when the payload executes.",
       loadMore: "Load more runs",
+      loading: "Loading runs…",
       runStatusOk: "OK",
       runStatusError: "Error",
       runStatusSkipped: "Skipped",
@@ -185,7 +201,8 @@ const enCron = {
       summaryCronTz: "Cron schedule {expr} ({tz})",
       timezoneOptional: "Time zone",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp: "Leave blank to use the time zone of the computer running OpenClaw, or enter an IANA time zone.",
+      timezoneHelp:
+        "Leave blank to use the time zone of the computer running OpenClaw, or enter an IANA time zone.",
       runsIn: "Runs in",
       mainSession: "Main session",
       isolatedSession: "Isolated session",
@@ -319,6 +336,8 @@ const enCron = {
       nextRelative: "Next {at}",
     },
     runEntry: {
+      tokens: "{count} Tokens",
+      inputOutputTokens: "{input} in / {output} out",
       noSummary: "No summary.",
       deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Run at",
@@ -449,7 +468,7 @@ const enCron = {
       emptyHint: "Describe what OpenClaw should do and when — it runs on schedule.",
       noMatching: "No automations match the current filters.",
       loadMore: "Load more",
-      loading: "Loading...",
+      loading: "Loading automations…",
       schedulerOff: "Scheduler disabled",
       refresh: "Refresh",
       refreshing: "Refreshing...",

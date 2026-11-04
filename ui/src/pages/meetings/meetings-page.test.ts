@@ -590,7 +590,9 @@ describe("meeting transcript library", () => {
     snapshot.phase = "reconnecting";
     notify();
     pending.resolve(meetingPage);
-    await waitForSolid(() => expect(page.textContent).toContain("Connect to the Gateway"));
+    await waitForSolid(() =>
+      expect(page.textContent).toContain("Reconnect to read meeting transcripts."),
+    );
     expect(page.textContent).not.toContain("Keep the reader quiet");
   });
 

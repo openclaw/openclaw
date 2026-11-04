@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -45,7 +47,7 @@ const channel = {
     presentationCapabilities: { supported: true, buttons: true },
     renderPresentation: ({ payload, presentation }) => ({ ...payload, channelData: { buttons: presentation } }),
     sendPayload: async (ctx) => {
-      sent.push({ to: ctx.to, payload: ctx.payload });
+      sent.push({ to: ctx.to, threadId: ctx.threadId, payload: ctx.payload });
       globalThis.noticeProofFixture.afterSend?.();
       return { channel: "${PLUGIN_ID}", messageId: "m" + sent.length };
     },
@@ -62,7 +64,7 @@ module.exports = { id: "${PLUGIN_ID}", register(api) {
 
 type Proof = {
   runtime: PluginRuntime;
-  sent: Array<{ to: string; payload: Record<string, unknown> }>;
+  sent: Array<{ to: string; threadId?: string | number; payload: Record<string, unknown> }>;
   afterSend?: () => void;
 };
 
@@ -140,6 +142,7 @@ async function seedSession(
   sessionKey: string,
   channel: string | undefined,
   lifecycleRevision = "r1",
+  threadId?: string,
 ) {
   await upsertSessionEntryCore(
     { agentId: "main", storePath, sessionKey },
@@ -152,7 +155,12 @@ async function seedSession(
             delivery: {
               kind: "external" as const,
               route: { channel, accountId: "default", target: { to: "user-1" } },
-              context: { channel, accountId: "default", to: "user-1" },
+              context: {
+                channel,
+                accountId: "default",
+                to: "user-1",
+                ...(threadId ? { threadId } : {}),
+              },
               origin: { provider: channel, accountId: "default", to: "user-1" },
             },
           }
@@ -171,13 +179,17 @@ async function notices(sessionKey: string) {
   return entries.flatMap((entry) => readPluginNoticeData(entry.message, PLUGIN_ID, "done") ?? []);
 }
 
-function post(generation: NonNullable<Awaited<ReturnType<typeof capture>>>, id: string) {
+function post(
+  generation: NonNullable<Awaited<ReturnType<typeof capture>>>,
+  id: string,
+  deliver: { skipChannels?: string[] } | undefined = {},
+) {
   return proof.runtime.system.postSessionNotice({
     generation,
     notice: { type: "done", text: `Job ${id} finished.`, data: { id }, presentation },
     idempotencyKey: `${PLUGIN_ID}:${id}`,
     systemEvent: `Job ${id} context.`,
-    deliver: {},
+    ...(deliver ? { deliver } : {}),
   });
 }
 
@@ -272,4 +284,77 @@ it("skips a session reset after the plugin captured its generation", async () =>
   });
   expect(proof.sent).toEqual([]);
   expect(await notices(sessionKey)).toEqual([]);
+});
+
+it("records a transcript-only notice for a channel the caller skips", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-6`;
+  await seedSession(sessionKey, PLUGIN_ID);
+  const generation = await capture(sessionKey);
+
+  await expect(post(generation!, "g", { skipChannels: [PLUGIN_ID] })).resolves.toEqual({
+    status: "posted",
+    delivered: false,
+  });
+  expect(proof.sent).toEqual([]);
+  expect(await notices(sessionKey)).toEqual([{ id: "g" }]);
+  expect(peekSystemEvents(sessionKey)).toEqual(["Job g context."]);
+});
+
+it("delivers a thread-bound session's notice to the session key's thread", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-7:thread:456`;
+  await seedSession(sessionKey, PLUGIN_ID, "r1", "stale-thread");
+  const generation = await capture(sessionKey);
+
+  await expect(post(generation!, "h")).resolves.toEqual({ status: "posted", delivered: true });
+  expect(proof.sent).toMatchObject([{ to: "user-1", threadId: "456" }]);
+  expect(await notices(sessionKey)).toEqual([{ id: "h" }]);
+});
+
+it("skips a session reset during the delivery route lookup", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-8`;
+  await seedSession(sessionKey, PLUGIN_ID);
+  const generation = await capture(sessionKey);
+  const lookup = deliveryInfo.extractDeliveryInfo;
+  vi.spyOn(deliveryInfo, "extractDeliveryInfo").mockImplementation(async (...args) => {
+    const route = await lookup(...args);
+    await seedSession(sessionKey, PLUGIN_ID, "r2");
+    return route;
+  });
+
+  await expect(post(generation!, "i")).resolves.toEqual({
+    status: "skipped",
+    reason: "session-changed",
+  });
+  expect(peekSystemEvents(sessionKey)).toEqual([]);
+  expect(proof.sent).toEqual([]);
+  expect(await notices(sessionKey)).toEqual([]);
+});
+
+it("reads the session generation off the main thread and observes a committed reset", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-9`;
+  await seedSession(sessionKey, undefined);
+  // The transcript writer is not under test; only the generation reads are pinned. Statement-level
+  // observation also sees reads through statements cached before the observer attached.
+  const append = vi
+    .spyOn(transcriptRuntime, "appendAssistantMessageToSessionTranscript")
+    .mockResolvedValue({ ok: false, reason: "not under test" });
+  const sql = observeSqliteReadSql(StatementSync.prototype);
+  const reads = () =>
+    sql.queries.filter((query) => /\b(?:session_nodes|session_windows)\b/iu.test(query));
+  try {
+    const generation = await capture(sessionKey);
+    await post(generation!, "j", undefined);
+    expect(append).toHaveBeenCalledOnce();
+    expect(reads()).toEqual([]);
+    await seedSession(sessionKey, undefined, "r2");
+    sql.queries.length = 0;
+    await expect(post(generation!, "j", undefined)).resolves.toEqual({
+      status: "skipped",
+      reason: "session-changed",
+    });
+    expect(append).toHaveBeenCalledOnce();
+    expect(reads()).toEqual([]);
+  } finally {
+    sql.restore();
+  }
 });
