@@ -51,7 +51,7 @@ describe("sessions page cloud stop", () => {
         expect.objectContaining({
           title: "Stop this cloud device?",
           message:
-            "The session stops working on it and the machine is released. Your conversation and accepted changes stay.",
+            "The session stops working on it and the cloud device is released. Your conversation and accepted changes stay.",
           details: `Session: ${target.label ?? target.key}`,
           confirmLabel: "Stop",
         }),

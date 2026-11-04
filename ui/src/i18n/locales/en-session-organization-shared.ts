@@ -42,7 +42,7 @@ const enSessionOrganizationShared = {
     stopCloudWorkerConfirm: "Stop this cloud device?",
     stopCloudWorkerTarget: "Session: {session}",
     stopCloudWorkerDescription:
-      "The session stops working on it and the machine is released. Your conversation and accepted changes stay.",
+      "The session stops working on it and the cloud device is released. Your conversation and accepted changes stay.",
     stopCloudWorkerConfirmAction: "Stop",
     deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
     newGroupPrompt: "New group name",

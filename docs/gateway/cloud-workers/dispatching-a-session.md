@@ -40,7 +40,7 @@ While a placement is active, OpenClaw automatically samples available space on t
 
 When an OpenClaw worker uses `sessions_spawn`, the Gateway creates a visible child session in a separate managed worktree, provisions a worker with the parent's profile, and submits the initial task before returning acceptance. The call does not wait for the child task to finish.
 
-While that call is waiting, the parent remains an active turn under its existing run timeout. Quiet provisioning alone does not let a queued message take over the parent or make recovery abort it early. Worker progress does not extend the timeout, and the chat **Stop** control or `/stop` can still cancel the turn. Use **Stop cloud device…** separately to reconcile the workspace and release the machine.
+While that call is waiting, the parent remains an active turn under its existing run timeout. Quiet provisioning alone does not let a queued message take over the parent or make recovery abort it early. Worker progress does not extend the timeout, and the **Stop** control on **Chat** or `/stop` can still cancel the turn. Use **Stop cloud device…** separately to reconcile the workspace and release the cloud device.
 
 ### Runtime support
 
