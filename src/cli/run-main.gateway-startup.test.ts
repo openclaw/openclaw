@@ -119,77 +119,54 @@ describe("runCli exit behavior", () => {
     expect(parkCurrentLaunchAgentForMaintenanceMock).not.toHaveBeenCalled();
   });
 
-  it("defers config-drift exit until readiness releases its lease", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig(
-        {
-          cron: { store: "/tmp/included-a.json" },
-          gateway: { mode: "local" },
-        },
-        { hash: "guarded", path: "/tmp/openclaw.json", raw: "{}" },
-      ),
-    );
-    await runCli(cliArgs("gateway"));
-    await runGatewayBeforeHook();
-    const beforeStatePreparation =
-      ensureCliExecutionBootstrapMock.mock.calls[0]?.[0]?.beforeStatePreparation;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig(
-        {
-          cron: { store: "/tmp/included-b.json" },
-          gateway: { mode: "local" },
-        },
-        { hash: "guarded", path: "/tmp/openclaw.json", raw: "{}" },
-      ),
-    );
-    await withCliExitSpies(async (errorSpy, exitSpy) => {
-      await expect(beforeStatePreparation?.()).rejects.toMatchObject({
-        name: "ExitError",
-        code: 1,
-      });
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("changed during startup"));
-      expect(exitSpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("defers a service-mode future-config exit to readiness", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig(
-        { gateway: { mode: "local" } },
-        { hash: "guarded", path: "/tmp/openclaw.json", raw: "{}" },
-      ),
-    );
-    await runCli(cliArgs("gateway"));
-    await runGatewayBeforeHook();
-    const beforeStatePreparation =
-      ensureCliExecutionBootstrapMock.mock.calls[0]?.[0]?.beforeStatePreparation;
-    await withCliExitSpies(async (errorSpy, exitSpy) => {
+  it.each(["config drift", "future service config"] as const)(
+    "defers %s exit until readiness releases its lease",
+    async (kind) => {
+      const futureService = kind === "future service config";
+      readConfigFileSnapshotMock.mockResolvedValue(
+        validConfig(
+          { cron: { store: "/tmp/included-a.json" }, gateway: { mode: "local" } },
+          { hash: "guarded", path: "/tmp/openclaw.json", raw: "{}" },
+        ),
+      );
+      await runCli(cliArgs("gateway"));
+      await runGatewayBeforeHook();
+      const beforePreparation =
+        ensureCliExecutionBootstrapMock.mock.calls[0]?.[0]?.beforeStatePreparation;
+      const selected = validConfig(
+        futureService
+          ? {
+              env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
+              meta: { lastTouchedVersion: "9999.1.1" },
+            }
+          : { cron: { store: "/tmp/included-b.json" }, gateway: { mode: "local" } },
+        { hash: futureService ? "future" : "guarded", path: "/tmp/openclaw.json", raw: "{}" },
+      );
+      if (!futureService) {
+        readConfigFileSnapshotMock.mockResolvedValue(selected);
+      }
       await withEnvAsync(
         {
-          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
+          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: futureService ? "1" : undefined,
           OPENCLAW_SERVICE_MARKER: undefined,
         },
-        async () => {
-          await expect(
-            beforeStatePreparation?.(
-              validConfig(
-                {
-                  env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
-                  meta: { lastTouchedVersion: "9999.1.1" },
-                },
-                { hash: "future", path: "/tmp/openclaw.json", raw: "{}" },
-              ),
-            ),
-          ).rejects.toMatchObject({ name: "ExitError", code: 78 });
-          expect(errorSpy).toHaveBeenCalledWith(
-            expect.stringContaining("start the gateway service"),
-          );
-          expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
-          expect(exitSpy).not.toHaveBeenCalled();
-        },
+        () =>
+          withCliExitSpies(async (errorSpy, exitSpy) => {
+            const preparation = beforePreparation?.(futureService ? selected : undefined);
+            await expect(preparation).rejects.toMatchObject({
+              name: "ExitError",
+              code: futureService ? 78 : 1,
+            });
+            const message = futureService ? "start the gateway service" : "changed during startup";
+            expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(message));
+            if (futureService) {
+              expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
+            }
+            expect(exitSpy).not.toHaveBeenCalled();
+          }),
       );
-    });
-  });
+    },
+  );
 
   it.each([
     ["private", [], undefined, 0],
