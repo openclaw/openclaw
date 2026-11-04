@@ -435,6 +435,15 @@ export function createKnowledgeService(
             recordResponseBytes: RECORD_RESPONSE_MAX_BYTES,
           },
         };
+        const canWrite =
+          policy.writesEnabled &&
+          ((context.source === "tool" && toolGrant(context, stores.grantFor) !== "read") ||
+            (context.source === "session-action" &&
+              Boolean(
+                context.action.client?.scopes.some(
+                  (s: string) => s === "operator.write" || s === "operator.admin",
+                ),
+              )));
         const notReady = (
           agentId: string,
           store: Exclude<StoreState, "ready">,
@@ -446,7 +455,7 @@ export function createKnowledgeService(
           agent: agentId,
           store,
           scope: "private",
-          writesEnabled: false,
+          writesEnabled: store === "unprovisioned" && canWrite,
           live: "stopped" as const,
           records: 0,
           validRecords: 0,
@@ -482,15 +491,6 @@ export function createKnowledgeService(
             `This store couldn't be opened. ${(e as Error).message}`,
           );
         }
-        const canWrite =
-          policy.writesEnabled &&
-          ((context.source === "tool" && toolGrant(context, stores.grantFor) !== "read") ||
-            (context.source === "session-action" &&
-              Boolean(
-                context.action.client?.scopes.some(
-                  (s: string) => s === "operator.write" || s === "operator.admin",
-                ),
-              )));
 
         return {
           ...base,

@@ -1,0 +1,5 @@
+2
+# LOCAL 2026.11.8 row 174; source 96dc3b77ddbabc4fb7b1e2a78d6039a0b9c4e13b.
+# Moves existing write-access calculation before unprovisioned status return; passive reads remain noncreating. Scope limits: Actual store workers covered; no live scribe turn; initial nonexistent-test setup failure excluded.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
