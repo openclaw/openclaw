@@ -34,7 +34,7 @@ import { resolveAgentRuntimePrompt } from "../../runtime-prompt.js";
 import { buildSubagentStandingInstructions } from "../../subagents/spawn/subagent-system-prompt.js";
 import type { buildConfiguredAgentSystemPrompt } from "../../system-prompt-config.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
-import { toolPolicyRestrictsTools } from "../../tool-policy.js";
+import { isProducerSurfaceToolAllowlist, toolPolicyRestrictsTools } from "../../tool-policy.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { buildToolSchemaDirectoryPrompt } from "../../tool-search.js";
 import {
@@ -251,7 +251,11 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     attempt.promptMode ??
     (params.isRawModelRun ? "none" : resolvePromptModeForSession(attempt.sessionKey));
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(attempt.sessionKey);
-  const toolPolicyRestricted = toolPolicyRestrictsTools({ allow: attempt.toolsAllow });
+  // A cap that only records the producing run's own surface removes nothing this turn
+  // would build on its own, so the prompt prefix must stay identical for cache reuse.
+  const toolPolicyRestricted =
+    toolPolicyRestrictsTools({ allow: attempt.toolsAllow }) &&
+    !isProducerSurfaceToolAllowlist(attempt.toolsAllow);
   const effectivePromptMode = toolPolicyRestricted ? ("minimal" as const) : promptMode;
   phases.mark("attempt.system-prompt.provider");
   const providerPromptContext = {

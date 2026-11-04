@@ -16,6 +16,7 @@ import {
   normalizeToolList,
   normalizeToolPolicyName,
   readToolAllowlistIntersection,
+  retainProducerSurfaceToolAllowlist,
 } from "../../tool-policy.js";
 
 function createUniformCodingToolConstructionPlan(
@@ -110,7 +111,11 @@ export function mergeForcedEmbeddedAttemptToolsAllow(
   };
   const restrictions = readToolAllowlistIntersection(toolsAllow);
   const merged = merge(toolsAllow);
-  return restrictions ? attachToolAllowlistIntersection(merged, restrictions.map(merge)) : merged;
+  // Host-required additions do not turn a producer-surface cap into a narrowing.
+  return retainProducerSurfaceToolAllowlist(
+    restrictions ? attachToolAllowlistIntersection(merged, restrictions.map(merge)) : merged,
+    toolsAllow,
+  );
 }
 
 function resolveCodingToolConstructionPlanForAllowlist(
