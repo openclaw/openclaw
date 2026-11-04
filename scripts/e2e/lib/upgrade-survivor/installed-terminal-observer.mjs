@@ -58,7 +58,7 @@ const publishedRevision = "8b18b5578f66eab1501cba4cef2310d88bfb9a41";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const workerUrlDescriptors = Object.getOwnPropertyDescriptors(URL.prototype);
 const workerSearchParamsDescriptors = Object.getOwnPropertyDescriptors(URLSearchParams.prototype);
-const nativeArraySpecies = Object.getOwnPropertyDescriptor(Array, Symbol.species)?.get;
+const nativeArraySpecies = Object.getOwnPropertyDescriptor(Array, Symbol.species);
 
 function nativePrototypeMatches(prototype, expected) {
   const actual = Object.getOwnPropertyDescriptors(prototype);
@@ -265,7 +265,7 @@ function childLaunchSnapshot(argv, options) {
         (Object.getPrototypeOf(argv) === Array.prototype &&
           !Object.hasOwn(argv, "constructor") &&
           Object.getOwnPropertyDescriptor(Array.prototype, "constructor")?.value === Array &&
-          Object.getOwnPropertyDescriptor(Array, Symbol.species)?.get === nativeArraySpecies));
+          Object.getOwnPropertyDescriptor(Array, Symbol.species)?.get === nativeArraySpecies?.get));
     const data = plainData(options, true);
     const env = data && plainData(data.env);
     // Node slices argv, spreads options, then coerces cwd before reading env.
