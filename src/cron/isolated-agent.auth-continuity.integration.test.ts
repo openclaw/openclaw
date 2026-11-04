@@ -12,9 +12,11 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/r
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
+import { AWS_SDK_CREDENTIALS_MARKER } from "../agents/model-auth-markers.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as runtimeAuth from "../plugins/provider-runtime-auth.js";
 import "../agents/ai-transport-runtime-host.js"; // Initialize before spies; lazy setup copies the host.
 import {
   withOpenClawTestState,
@@ -31,6 +33,7 @@ const platformId = "openai:platform";
 const subscriptionId = "openai:subscription";
 const otherPlatformId = "openai:other-platform";
 const otherSubscriptionId = "openai:other-subscription";
+const awsSdkId = "openai:aws-sdk";
 const platformKey = "synthetic-platform-key";
 const subscriptionToken = [
   Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url"),
@@ -425,6 +428,47 @@ it.each([
     } finally {
       await resetPreparedModelRuntimeSnapshotsForTest();
     }
+  });
+});
+
+it("refuses an AWS SDK account removed while provider auth preparation awaits", async () => {
+  await withAuthState("cron-aws-sdk-prepare-race", async (state) => {
+    const requests: string[] = [];
+    interceptProvider(async (input, init) => {
+      requests.push(new Request(input, init).url);
+      return completedResponse("gpt-4.1");
+    });
+    // The marker account and `auth: "aws-sdk"` route, on a provider whose
+    // transport this fixture can intercept; Bedrock's own client is unchanged.
+    const cfg = configure(
+      state,
+      { model: "openai/gpt-4.1", models: runtimeModels("openai/gpt-4.1") },
+      { openai: { ...provider("https://api.openai.com/v1"), auth: "aws-sdk" } },
+      { profiles: { [awsSdkId]: { provider: "openai", mode: "api_key" } } },
+    );
+    await persistAuthProfileBatch({
+      profiles: [keyProfile(awsSdkId, AWS_SDK_CREDENTIALS_MARKER)],
+    });
+    await writeConfig(state, cfg);
+    const job = storedJob("aws-sdk-prepare-race");
+    job.inferenceBinding =
+      (await captureCronInferenceBinding({ cfg, agentId: "main" })) ?? undefined;
+    expect(job.inferenceBinding).toMatchObject({ profileId: awsSdkId, source: "auto" });
+    // Authorization is captured before preparation. Removing the account while
+    // preparation awaits is the last window before transport dispatch.
+    let removed = false;
+    vi.spyOn(runtimeAuth, "prepareProviderRuntimeAuth").mockImplementation(async () => {
+      removed = await removeAuthProfilesAcrossOwnerStores({ profileIds: [awsSdkId] });
+      clearRuntimeAuthProfileStoreSnapshots();
+      return undefined;
+    });
+    const result = await runStoredTurn(cfg, job);
+    expect(removed).toBe(true);
+    expect(result.status).toBe("error");
+    expect(result.error).toContain(
+      `account ${awsSdkId} on runtime openclaw was removed or replaced during the run`,
+    );
+    expect(requests).toEqual([]);
   });
 });
 

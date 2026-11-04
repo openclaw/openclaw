@@ -295,6 +295,29 @@ export async function captureCronInferenceBinding(params: {
   }
 }
 
+/**
+ * Name what an automation lost when its owner check fails mid-run.
+ *
+ * The shared authorization owner reports retirement for MCP callers, and a
+ * check after capture cannot tell removal from replacement; both mean the
+ * recorded account no longer authorizes this run.
+ */
+export function asCronInferenceAuthorizationError(
+  binding: CronInferenceBinding,
+  error: unknown,
+): unknown {
+  if (
+    error instanceof AuthProfileAuthorizationError &&
+    error.code === "MCP_AUTHORIZATION_RETIRED"
+  ) {
+    return new Error(
+      `Automation inference ${describeCronInferenceBinding(binding)} was removed or replaced during the run. Explicitly select an authorized account again.`,
+      { cause: error },
+    );
+  }
+  return error;
+}
+
 /** Reacquire the same owner, including its live revocation and replacement checks. */
 export async function acquireCronInferenceAuthorization(params: {
   binding: CronInferenceBinding;
