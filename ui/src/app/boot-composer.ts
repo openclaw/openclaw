@@ -59,10 +59,7 @@ export function adoptBootComposer(applicationRoute: boolean): void {
 
 /** The live element for a chat loading frame, or null once taken or retired. */
 export function bootComposerElement(): HTMLTextAreaElement | null {
-  if (element?.isConnected) {
-    // Capture before a frame move detaches the editor; its scroll event may still be queued.
-    scroll = [element.scrollLeft, element.scrollTop];
-  }
+  snapshotBootComposerScroll();
   return element;
 }
 

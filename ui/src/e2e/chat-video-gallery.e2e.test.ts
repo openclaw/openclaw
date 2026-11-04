@@ -110,6 +110,7 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}chat`);
           await gateway.waitForRequest("sessions.messages.subscribe");
+          await waitForChatScrollIdle(page);
           await scrollChatThreadToTop(page);
           await waitForChatScrollIdle(page);
           // Lazy media admission creates the expand button only near the viewport.
