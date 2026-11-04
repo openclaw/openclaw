@@ -25,8 +25,9 @@ description: "Author or review AgentSkills: create, repair, validate, or restruc
    - **Done when:** every planned resource has one purpose and a direct pointer from `SKILL.md`.
 
 4. Draft and persist.
-   - Live workspace skill: use `skill_workshop` to create or revise the skill. A personal create/update publishes
+   - Personal library: use `skill_library` to create or revise the skill. A personal create/update publishes
      immediately (there is no pending proposal and no separate apply step), so finish the draft before you write it.
+   - Learned Workshop skill: use `skill_workshop`.
    - Repository-owned skill source: use the repository's normal edit and review workflow.
    - **Done when:** the published skill or source diff implements every branch from step 1 and contains every resource from step 3.
 
