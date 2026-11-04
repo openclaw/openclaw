@@ -199,15 +199,27 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `b0b28f716040`: qualify early-failure steering custody in
+Pinned main `b0b28f716040`: release early-failure steering custody in
 `extensions/codex/src/app-server/run-attempt-lifecycle-controller.test-harness.ts`.
-The shared disposer completes the fake turn and yields but does not cancel its
-separate steering queue. The helper and both complete consumer files remain
-unchanged in this prerequisite draft. Source inspection alone does not establish
-a runtime defect; baseline, identical early-failure custody controls and any
-conditional repair are pending qualified native execution. Preserve all28
-physical declarations/54 expanded consumer cases and every existing assertion.
-No production change, source reclassification or support credit is claimed.
+The shared disposer now cancels its own steering queue before completing the fake
+turn and yielding. All28 physical declarations/54 expanded consumer cases, inputs
+and assertions remain; production is unchanged. The one added support line is
+outside the counted test-line paths; no allocation or shared ceiling change is
+needed. No source reclassification or support credit is claimed.
+
+The untouched native baseline and restored candidate pass all54 cases. An
+identical temporary early assertion failure follows the existing acknowledged
+steering dispatch before consumption. After actual disposal and test hooks, the
+original retains the pending delivery, one abort listener, its unexpired
+confirmation timer and dispatch batch. The candidate rejects delivery with the
+queue cancellation cause, removes the listener, clears the timer and releases
+the batch. Accepted-input history remains in both versions. Each control retains
+only the same intentionally failed case and53 passes; the original additionally
+fails the independent custody expectation. Diagnostic cleanup observes first,
+then settles only that queue and restores the timer delegates. Actual inventories
+match across all four runs; temporary consumer bytes and all production owners
+are restored exactly. This qualifies the in-process fixture and real steering
+owner with synthetic RPC acknowledgement, not a live Codex process or Gateway.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
