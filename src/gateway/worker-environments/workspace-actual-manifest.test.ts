@@ -404,6 +404,7 @@ it("preserves bottom-up directory membership and canonical output across input o
 });
 
 it("reserves aggregate inventory bytes even when every file hits the hash memo", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
   const root = await fs.realpath(tempDirs.make("workspace-inventory-byte-budget-"));
   const memo = new Map<string, string>();
   const metrics = { contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 };
@@ -426,7 +427,88 @@ it("reserves aggregate inventory bytes even when every file hits the hash memo",
   expect(metrics).toMatchObject({ contentHashCount: 0, memoHitCount: 1 });
 });
 
+it("opens only changed file content while retaining fresh edits, modes, and deletions", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+  const root = await fs.realpath(tempDirs.make("workspace-inventory-memo-opens-"));
+  const files = ["unchanged.txt", "changed.txt", "deleted.txt"];
+  await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "first")));
+  const memo = new Map<string, string>();
+  const capture = () =>
+    withWorkspaceHashMemo(memo, () => readActualWorkspaceManifestImpl({ root, baseCommit: null }));
+  const first = await capture();
+  const changed = path.join(root, files[1]!);
+  const before = await fs.stat(changed);
+  await fs.writeFile(changed, "edited");
+  await fs.chmod(changed, 0o755);
+  await fs.utimes(changed, before.atime, before.mtime);
+  await fs.unlink(path.join(root, files[2]!));
+  const opened = vi.spyOn(fs, "open");
+  const next = await capture();
+  expect(next.manifestRef).not.toBe(first.manifestRef);
+  expect(next.manifest.entries).toEqual([
+    {
+      path: "changed.txt",
+      type: "file",
+      mode: 0o755,
+      size: 6,
+      sha256: createHash("sha256").update("edited").digest("hex"),
+    },
+    {
+      path: "unchanged.txt",
+      type: "file",
+      mode: 0o644,
+      size: 5,
+      sha256: createHash("sha256").update("first").digest("hex"),
+    },
+  ]);
+  expect(opened.mock.calls.some(([file]) => file === path.join(root, files[0]!))).toBe(false);
+  expect(opened.mock.calls.some(([file]) => file === changed)).toBe(true);
+});
+
+it("rejects memo-hit included files behind a replaced parent directory", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+  const root = await fs.realpath(tempDirs.make("workspace-memo-parent-"));
+  const outside = await fs.realpath(tempDirs.make("workspace-memo-outside-"));
+  const parent = path.join(root, "parent");
+  await fs.mkdir(parent);
+  await fs.writeFile(path.join(parent, "value.txt"), "inside");
+  const memo = new Map<string, string>();
+  const capture = () =>
+    withWorkspaceHashMemo(memo, () =>
+      readActualWorkspaceManifestImpl({
+        root,
+        baseCommit: null,
+        includePaths: new Set(["parent/value.txt"]),
+      }),
+    );
+  await capture();
+  await fs.rename(parent, path.join(outside, "parent"));
+  await fs.symlink(path.join(outside, "parent"), parent, "junction");
+  await expect(capture()).rejects.toThrow("Gateway workspace file changed while it was being read");
+});
+
+it("rehashes recent files instead of retaining a reusable identity", async () => {
+  const root = await fs.realpath(tempDirs.make("workspace-memo-recent-"));
+  const target = path.join(root, "recent.txt");
+  await fs.writeFile(target, "fresh");
+  const stats = await fs.stat(target, { bigint: true });
+  vi.spyOn(Date, "now").mockReturnValue(Number(stats.ctimeNs / 1_000_000n));
+  const memo = new Map<string, string>();
+  const metrics = { contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 };
+  const capture = () =>
+    withWorkspaceHashMemo(
+      memo,
+      () => readActualWorkspaceManifestImpl({ root, baseCommit: null }),
+      metrics,
+    );
+  const first = await capture();
+  expect(await capture()).toEqual(first);
+  expect(metrics).toMatchObject({ contentHashCount: 2, memoHitCount: 0 });
+  expect(memo.size).toBe(0);
+});
+
 it("bounds active fallback scratch across inventories and skips reads on memo hits", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
   vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
   const roots = await Promise.all(
     [0, 1].map(() => fs.realpath(tempDirs.make("workspace-inventory-scratch-"))),

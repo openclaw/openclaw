@@ -14,8 +14,10 @@ import {
   serializeRemoteWorkspaceHashMemo,
   withWorkspaceHashMemo,
   withWorkerWorkspaceHashMemo,
+  workspaceCtimeIsReusable,
   type WorkspaceHashMemo,
 } from "./workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
 import { captureWorkspaceManifest, preflightWorkspaceApply } from "./workspace-manifest-worker.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 
@@ -29,6 +31,8 @@ if (typeof REMOTE_WORKSPACE_MANIFEST_JS !== "string") {
   throw new Error("Source workspace sync module did not export its manifest script");
 }
 
+useAgedWorkspaceHashClock();
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
@@ -41,6 +45,20 @@ function hashMetrics() {
 }
 
 describe("workspace hash memo", () => {
+  it.each([
+    [-1n, 10_000, false],
+    [0n, 10_000, true],
+    [7_999_999_999n, 10_000, true],
+    [8_000_000_000n, 10_000, false],
+    [9_000_000_000n, 10_000, false],
+    [11_000_000_000n, 10_000, false],
+  ] as const)(
+    "keeps ctime %s eligibility bounded at capture %s",
+    (ctimeNs, startedAtMs, reusable) => {
+      expect(workspaceCtimeIsReusable(ctimeNs, startedAtMs)).toBe(reusable);
+    },
+  );
+
   it("reuses content hashes only within one reconcile stat identity", async () => {
     const root = await fs.realpath(tempDirs.make("openclaw-workspace-hash-memo-"));
     const target = path.join(root, "same-size.txt");

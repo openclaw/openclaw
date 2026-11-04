@@ -11,6 +11,7 @@ import {
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
 import {
   captureWorkspaceManifest,
   captureWorkspaceSnapshot,
@@ -21,6 +22,7 @@ import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.tes
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const adapterUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.manifestWorker);
 const limitsUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.inventoryLimits).href;
+useAgedWorkspaceHashClock();
 afterEach(() => vi.restoreAllMocks());
 
 it("settles private Git-input staging before a cancelled tree read returns", async () => {
