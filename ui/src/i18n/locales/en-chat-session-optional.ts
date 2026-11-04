@@ -82,10 +82,10 @@ const catalog = {
       },
       progress: {
         updating: "Updating saved progress",
-        updateUnavailable: "Progress update unavailable; last plan preserved",
-        timedOut: "Execution timed out; plan preserved",
-        failed: "Execution failed; plan preserved",
-        stopped: "Execution stopped; plan preserved",
+        updateUnavailable: "Couldn’t update progress. Try again; your last plan is saved.",
+        timedOut: "Reply timed out; plan saved",
+        failed: "Reply failed; plan saved",
+        stopped: "Reply stopped; plan saved",
         count: "{completed}/{total}",
         description: "Task progress, {step}, {completed} of {total} completed, {status}",
       },
@@ -111,7 +111,7 @@ const catalog = {
         publishing: "Publishing PR…",
         published: "PR published",
         publishedBadge: "Published",
-        failed: "Publish failed",
+        failed: "Couldn’t publish",
         unavailable: "Publication unavailable",
         discoveryUnavailable: "Account discovery unavailable",
         confirm: "Confirm publication",
@@ -157,11 +157,11 @@ const catalog = {
         "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
     },
     workerRuntimeInstall: {
-      transferringTitle: "Updating worker runtime · {transferred} of {total} ({percent}%)",
-      installingTitle: "Installing worker runtime",
+      transferringTitle: "Preparing this device · {transferred} of {total} ({percent}%)",
+      installingTitle: "Preparing this device…",
       transferringBody:
-        "Transferring the new worker runtime to this device: {transferred} of {total} ({percent}%). The next turn starts when it finishes.",
-      installingBody: "Installing the new worker runtime on this device.",
+        "Transferring the update to this device: {transferred} of {total} ({percent}%). The next reply starts when it finishes.",
+      installingBody: "Installing the update on this device.",
     },
     taskSuggestions: {
       eyebrow: "Suggested task · in {repo}",
@@ -338,10 +338,10 @@ const catalog = {
       statusModified: "Modified",
     },
     subagentsPanel: {
-      nativeTitle: "Live native agents",
-      nativeCoverage: "Current native agent activity. Saved agent history is not included.",
-      nativeEmpty: "No native agents are currently observed.",
-      nativeTruncated: "Only part of the live native roster is shown.",
+      nativeTitle: "Live subagents",
+      nativeCoverage: "Current subagent activity. Saved history isn’t included.",
+      nativeEmpty: "No live subagents yet.",
+      nativeTruncated: "Only some live subagents are shown.",
       nativeRetry: "Updates retry automatically while this panel is visible.",
       nativeStatus: {
         running: "Running",
@@ -357,7 +357,7 @@ const catalog = {
       desktopWaiting: "Waiting for subagents",
       desktopFor: "for",
       desktopShowMore: "Show more",
-      desktopNoResults: "No subagents found",
+      desktopNoResults: "No subagents match your search.",
       desktopNoResultsDescription: "Try a different name or filter.",
       mobileFinished: "Finished",
       running: "Running ({count})",
@@ -365,11 +365,11 @@ const catalog = {
       callsOne: "{count} call",
       callsMany: "{count} calls",
       callsAtLeast: "{count}+ calls",
-      empty: "No subagents in this conversation.",
-      noRunning: "No running subagents",
+      empty: "No subagents yet.",
+      noRunning: "No running subagents.",
       refresh: "Refresh subagents",
       elapsed: "Elapsed time",
-      duration: "Run duration",
+      duration: "Duration",
     },
     sessionHeader: {
       continueInTerminal: {
@@ -377,7 +377,7 @@ const catalog = {
         description:
           "Copy this command to continue the current session. It is safe to paste in common terminals and shells.",
         authNote:
-          "The command contains no credentials. The terminal authenticates independently, and the session's access controls still apply.",
+          "The command contains no secrets. The terminal signs in separately, and session access controls still apply.",
       },
     },
     workspaceConflict: {

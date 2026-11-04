@@ -7,7 +7,7 @@ import {
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
 } from "../app/gateway-store.test-support.ts";
-import { t } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { ChatHistoryResponse } from "../pages/chat/chat-history-snapshot.ts";
 import "./control-ui-session-summary.tsx";
@@ -430,4 +430,18 @@ it("keeps the saved plan but reports unknown runtime during a failed history ref
     },
   });
   await vi.waitFor(() => expect(runtime()).toContain(t("sessionProgressCard.runtime.delegated")));
+});
+
+it("formats plugin message times and tooltips with the UI locale", async () => {
+  vi.spyOn(i18n, "getLocale").mockReturnValue("de");
+  const timestamp = Date.UTC(2026, 0, 2, 12, 34, 56);
+  const { element, reply } = setup();
+  await reply(0, "Dated message", {
+    messages: [{ role: "assistant", timestamp, content: [textBlock("Dated message")] }],
+  });
+  const time = element.querySelector("time");
+  expect(time?.title).toBe(new Date(timestamp).toLocaleString("de"));
+  expect(time?.textContent).toBe(
+    new Date(timestamp).toLocaleTimeString("de", { hour: "numeric", minute: "2-digit" }),
+  );
 });

@@ -349,7 +349,7 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
     page.expectRows(["recovered"], true);
     await poll();
     page.expectRows([], false);
-    expect(page.text()).toContain("You don't have permission to view logs.");
+    expect(page.text()).toContain("Couldn’t view logs. Ask an admin to grant read access.");
   }
 });
 

@@ -33,13 +33,13 @@ function createDeclarations() {
     usesSharedGatewayAuth: false,
     socket: { readyState: 1 } as GatewayWsClient["socket"],
     connect: connect(),
-    authenticatedUserId: "viewer@timing.test",
+    authenticatedUserId: "viewer-timing",
     personPresence: { onlineSince: Date.now() - 1_000 },
   };
   const clients = new GatewayClientRegistry([client]);
   const publishPresence = vi.fn();
   const declarations = createSessionViewerPresenceDeclarations({ clients, publishPresence });
-  const row = () => listSystemPresence().find((entry) => entry.user?.id === "viewer@timing.test");
+  const row = () => listSystemPresence().find((entry) => entry.user?.id === "viewer-timing");
   return { declarations, client, clients, publishPresence, row };
 }
 
@@ -144,13 +144,13 @@ describe("session viewer presence declarations", () => {
       usesSharedGatewayAuth: false,
       socket: { readyState: 1 } as GatewayWsClient["socket"],
       connect: connect(),
-      authenticatedUserId: "replacement@timing.test",
+      authenticatedUserId: "replacement-viewer-timing",
       personPresence: { onlineSince: Date.now() },
     };
     clients.add(replacement);
     declarations.replace("conn-a", ["alpha"]);
     expect(
-      listSystemPresence().find((entry) => entry.user?.id === "replacement@timing.test"),
+      listSystemPresence().find((entry) => entry.user?.id === "replacement-viewer-timing"),
     ).toMatchObject({ watchedSessions: ["alpha"] });
     expect(publishPresence).toHaveBeenCalledTimes(2);
   });

@@ -399,7 +399,8 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     const bounds = panel.getBoundingClientRect();
     const row = remove.getBoundingClientRect();
     expect(row.top).toBeGreaterThanOrEqual(bounds.top);
-    expect(row.bottom).toBeLessThanOrEqual(bounds.bottom);
+    // Native scrolling can round a fractional menu edge by less than one CSS pixel.
+    expect(row.bottom).toBeLessThanOrEqual(bounds.bottom + 1);
     expect(panel.scrollTop).toBeGreaterThan(0);
 
     await userEvent.keyboard("{Enter}");

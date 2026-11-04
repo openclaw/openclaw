@@ -62,14 +62,14 @@ const catalog = {
         toolAccess: {
           loadFailed: "Couldn’t load tools.",
         },
-        offlineBlocked: "Reconnect to change tools for this chat.",
+        offlineBlocked: "Reconnect to change tools for this session.",
         adminBlocked: "Admin access is required to manage MCP servers.",
         savingBlocked: "Saving… try again in a moment.",
       },
       overrides: {
         count: "{count} overrides",
         countOne: "{count} override",
-        clear: "Reset this chat’s changes",
+        clear: "Reset this session’s changes",
       },
       contextUsage: {
         title: "Context usage details",
@@ -171,10 +171,13 @@ const catalog = {
       voiceTranscript: "Voice transcript",
     },
     queue: {
+      storageFailed: "Couldn’t save this message. Free browser storage or reconnect to send it.",
+      draftStorageFailed:
+        "Couldn’t save the previous draft. Keep this tab open or copy it before reloading.",
       reviewEdit: "Review edit",
       reloadBlocked: "Save or cancel your queued message edit before reloading.",
       memoryOnlyReloadBlocked:
-        "A pending message is only saved in this tab. Keep this tab open until it is sent, or copy it before discarding it and reloading.",
+        "This pending message is only saved in this tab. Keep it open until the message is sent, or copy it before discarding and reloading.",
       memoryOnlyReview: "Review pending input",
       memoryOnlyTitle: "Unsent pending message",
       memoryOnlyDescription:
@@ -182,17 +185,17 @@ const catalog = {
       memoryOnlyText: "Message text",
       memoryOnlyDiscard: "Discard local copy and refresh",
       memoryOnlyChanged:
-        "The pending input changed or is being edited. It has not been discarded; review the current input before refreshing.",
+        "The pending input changed or is being edited. Review it before refreshing. It hasn’t been discarded.",
       memoryOnlyUnavailable:
-        "The pending input could not be opened. It remains protected in this tab; try Review pending input again.",
+        "Couldn’t open the pending input. It’s saved in this tab. Try Review pending input again.",
       connectionPending: "Finishing connection recovery. Try sending again when it is ready.",
       editSourceChanged:
-        "This queued message changed while you were editing. Your edit is still here. Copy it, cancel the edit, and review the queue before trying again.",
+        "The queued message changed. Your edit is still here. Copy it, cancel editing, then review the queue and try again.",
       editStorageFailed:
-        "Your edit could not be saved in this browser. Keep this tab open and copy your edit before freeing browser storage, then try again.",
-      full: "The message queue is full. Wait for a queued message to send or remove one, then try again.",
+        "Couldn’t save your edit. Keep this tab open. Copy your edit, free browser storage, then try again.",
+      full: "Couldn’t queue this message. Wait for one to send or remove one, then try again.",
       initialTurnPending:
-        "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
+        "The first message is unresolved. Reconnect if needed, then review it before sending another.",
       notSent: "Not sent",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
@@ -201,6 +204,9 @@ const catalog = {
         "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
+      resume: "Resume",
+      clearPaused: "Clear",
+      clearPausedQueue: "Clear paused messages",
       removeQueuedMessage: "Remove queued message",
       reorderQueuedMessage: "Reorder queued message with the arrow keys",
       reorderUnavailable: "This message holds its place and cannot be reordered",
@@ -208,15 +214,19 @@ const catalog = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
-        applyingSettings: "Applying chat settings",
+        applyingSettings: "Applying session settings",
         blockedByReview:
           "Queue paused. Review or discard the earlier held message in the conversation.",
+        pausedByStop: "Queue paused",
+        pausedByStopReason: "You stopped the run",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         editing: "Editing",
         needsReview: "Needs review",
       },
       imageCount: "Image ({count})",
+      annotationCount: "{count} annotation",
+      annotationsCount: "{count} annotations",
     },
     mentions: {
       menu: "Mention a person",
@@ -227,7 +237,7 @@ const catalog = {
       unavailable: "Could not load people. Try again.",
       accessDenied: "Mention access denied. Sign in or contact an admin.",
       profileUnavailable: "Profile unverified. Reconnect or contact an admin.",
-      rejected: "Mention search rejected. Check access or use another chat.",
+      rejected: "Mention search rejected. Check access or use another session.",
       limit: "You can mention up to 10 people per message.",
       selectedLabel: "Will notify",
       selected: "Will notify: {names}",
@@ -235,7 +245,7 @@ const catalog = {
       restoreFailed:
         "Mention selection could not be restored. Edit this message and select its recipients again.",
       unsupported:
-        "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
+        "Human mentions are not available in this mode. Remove the selected mentions or send from a normal session.",
     },
     permissions: {},
     voice: {
@@ -251,12 +261,7 @@ const catalog = {
       selectionConfirmationFailed: "Voice change unconfirmed.",
     },
     sendErrors: {
-      newSessionUnavailable: "Couldn’t start a new session. Try again.",
-      forkUnavailable: "Couldn’t fork this session. Try again.",
-      connectionChanged: "The connection changed. Try the command again.",
       disconnected: "Reconnect to continue.",
-      commandDisconnected: "Reconnect to use /{command}.",
-      commandFailed: "Couldn’t use /{command}. Try again.",
       newSessionBusy:
         "Wait for the current reply and queued messages before starting a new session.",
       newSessionLoading: "Sessions are still loading. Try again in a moment.",
@@ -273,11 +278,11 @@ const catalog = {
         "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",
     },
-    outboxRecoveryReviewTitle: "Review in this chat?",
+    outboxRecoveryReviewTitle: "Review in this session?",
     outboxRecoveryConfirm: "Add this saved copy to “{chat}” for review? Nothing will be sent.",
     outboxRecoveryRestore: "Restore",
     outboxRecoveryConflict:
-      "Keep or clear the draft and pending messages in this chat first, or open another non-Incognito chat. Your saved copy is unchanged.",
+      "Keep or clear the draft and pending messages in this session first, or open another non-Incognito session. Your saved copy is unchanged.",
     outboxRecoveryStorageFailed:
       "We could not access your saved messages. Reload to try again. Do not clear browser site data if you want to keep them.",
     outboxRecoveryFull:
@@ -294,7 +299,7 @@ const catalog = {
     outboxRecoveryDelete: "Delete",
     outboxRecoveryDeleteTitle: "Delete this saved copy?",
     outboxRecoveryDeleteConfirm:
-      "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a chat will not be deleted.",
+      "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a session will not be deleted.",
     outboxRecoveryDeleteConflict:
       "This saved copy changed while you were reviewing it. Nothing was deleted. Reload and review it again.",
     attachments: {

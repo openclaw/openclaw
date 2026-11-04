@@ -376,7 +376,7 @@ function failureIncident(params: {
 
 /**
  * Emits one alert per incident when threshold, best-effort, and cooldown policy allow it.
- * An owned job's first chat alert, or terminal one-shot failure, becomes a repair request.
+ * An owned job's first inherited chat alert, or terminal one-shot failure, requests repair.
  * A later failure alerts, naming the request, and the streak is never repaired twice.
  */
 function maybeEmitFailureAlert(
@@ -462,10 +462,21 @@ function maybeEmitFailureAlert(
     runAtMs: params.runAtMs,
     route: alertConfig,
   };
+  // Destination selectors express alert-only intent; policy or mode-only overrides
+  // still inherit repair-first behavior. Do not infer intent from resolved routes.
+  const hasJobFailureDestination = [
+    params.job.failureAlert,
+    params.job.delivery?.failureDestination,
+  ].some(
+    (route) =>
+      route &&
+      (route.channel !== undefined || route.to !== undefined || route.accountId !== undefined),
+  );
   // A recurring job's auto-disable notice goes straight to the route: a repair turn can
   // fail the same way the job did and leave the route silent.
   if (
     !repair &&
+    !hasJobFailureDestination &&
     !terminalRecurring &&
     (terminalOneShot || alertConfig.mode === "announce") &&
     params.status === "error" &&

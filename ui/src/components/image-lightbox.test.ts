@@ -397,8 +397,6 @@ it.each(["open", "closed", "reopened"] as const)(
   "reports failed downloads only in their mounted view: %s",
   async (state) => {
     const toast = container.appendChild(document.createElement("openclaw-toast-host"));
-    toast.toast = null;
-    toast.active = false;
     const original = createDeferred<Blob>();
     const readOriginalBlob = vi.fn(() => original.promise);
     const { modal } = await renderLightbox({ readOriginalBlob });
@@ -426,11 +424,10 @@ it.each(["open", "closed", "reopened"] as const)(
     original.reject(new Error("Image unavailable"));
     await vi.advanceTimersByTimeAsync(0);
     flush();
-    expect(toast.active).toBe(state === "open");
-    expect(toast.toast).toEqual(
+    expect(toast.toasts.map((entry) => entry.options)).toEqual(
       state === "open"
-        ? expect.objectContaining({ message: "Couldn’t download this image. Try again." })
-        : null,
+        ? [expect.objectContaining({ message: "Couldn’t download this image. Try again." })]
+        : [],
     );
     if (state === "open") {
       expect(download.disabled).toBe(false);

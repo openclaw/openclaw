@@ -51,13 +51,13 @@ export async function dispatchCapturedChatSlashCommand(
   switch (name) {
     case "new":
       if (!host.createChatSession) {
-        setChatError(host, t("chat.sendErrors.newSessionUnavailable"));
+        setChatError(host, t("chat.commandResults.newUnavailable"));
         return "failed";
       }
       return (await host.createChatSession()) ? "completed" : "cancelled";
     case "fork":
       if (!host.forkChatSession) {
-        setChatError(host, t("chat.sendErrors.forkUnavailable"));
+        setChatError(host, t("chat.commandResults.forkUnavailable"));
         return "failed";
       }
       return host.forkChatSession(args.trim() || undefined);
@@ -73,7 +73,7 @@ export async function dispatchCapturedChatSlashCommand(
         return confirmation;
       }
       if (!isChatCommandTargetCurrent(host, target)) {
-        setChatError(host, t("chat.sendErrors.connectionChanged"));
+        setChatError(host, t("chat.commandResults.connectionChanged"));
         return "failed";
       }
       if (!requireChatSessionAction(host, "reset")) {
@@ -117,8 +117,8 @@ export async function dispatchCapturedChatSlashCommand(
   }
 
   if (!target) {
-    setChatError(host, t("chat.sendErrors.disconnected"));
-    injectCommandResult(host, t("chat.sendErrors.commandDisconnected", { command: name }));
+    setChatError(host, t("chat.commandResults.notConnected"));
+    injectCommandResult(host, t("chat.commandResults.cannotRunDisconnected", { name }));
     scheduleChatScroll(host, false, false, {
       contentChanged: true,
     });
@@ -147,7 +147,7 @@ export async function dispatchCapturedChatSlashCommand(
   } catch (err) {
     if (targetIsCurrent()) {
       setChatError(host, formatUiError(err));
-      injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
+      injectCommandResult(host, t("chat.commandResults.failedUnexpectedly", { name }));
       scheduleChatScroll(host, false, false, {
         contentChanged: true,
       });
@@ -162,7 +162,7 @@ export async function dispatchCapturedChatSlashCommand(
   }
   if (result.failed) {
     if (targetIsCurrent()) {
-      setChatError(host, result.content || t("chat.sendErrors.commandFailed", { command: name }));
+      setChatError(host, result.content || t("chat.commandResults.failed", { name }));
       scheduleChatScroll(host, false, false, {
         contentChanged: Boolean(result.content),
       });
