@@ -142,7 +142,8 @@ describe("the burning annex: store maintenance past the cap", () => {
       });
 
       await maintain(forest, pass);
-      expect(rooms(forest)).toContain(relay.sessionKey);
+      // Soft: a lost room goes on to tell what it cost.
+      expect.soft(rooms(forest)).toContain(relay.sessionKey);
       expect(Object.values(ash).filter((key) => !rooms(forest).includes(key))).toEqual(
         evicted.map((age) => ash[age]),
       );
@@ -166,7 +167,7 @@ describe("the burning annex: store maintenance past the cap", () => {
     expect((await forest.record(runner))?.status).toBe("queued");
 
     await maintain(forest, { maxEntries: 2 });
-    expect(rooms(forest)).toContain(relay.sessionKey);
+    expect.soft(rooms(forest)).toContain(relay.sessionKey);
 
     await forest.advanceTo(NIGHTFALL_MS);
     await forest.expectForestHolds();
@@ -189,7 +190,7 @@ describe("the burning annex: store maintenance past the cap", () => {
     }
 
     await maintain(forest, { maxEntries: 2 });
-    expect(rooms(forest)).toContain(relay.sessionKey);
+    expect.soft(rooms(forest)).toContain(relay.sessionKey);
 
     await turns.release();
     await forest.advanceTo(NIGHTFALL_MS);
