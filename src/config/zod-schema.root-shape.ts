@@ -5,6 +5,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import {
+  addDuplicateAgentIdKeyIssues,
   AgentIdKeySchema,
   AgentsSchema,
   BindingsSchema,
@@ -447,6 +448,10 @@ export const OpenClawSchemaShape = {
       creators: z.record(z.string().trim().min(1), CronScopedDefaultsSchema).optional(),
     })
     .superRefine((val, ctx) => {
+      addDuplicateAgentIdKeyIssues(Object.keys(val.agents ?? {}), ctx, {
+        label: "cron.agents",
+        path: ["agents"],
+      });
       if (val.sessionRetention !== undefined && val.sessionRetention !== false) {
         try {
           parseDurationMs(normalizeStringifiedOptionalString(val.sessionRetention) ?? "", {

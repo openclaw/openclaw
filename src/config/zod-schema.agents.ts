@@ -12,6 +12,31 @@ export const AgentIdKeySchema = z
   .string()
   .regex(/^[a-z0-9_][a-z0-9_-]{0,63}$/i, "Invalid agent id");
 
+/**
+ * Rejects agent-keyed map keys that resolve to the same agent id (`ops` and
+ * `OPS`): lookups normalize case, so one entry would silently shadow the other.
+ */
+export function addDuplicateAgentIdKeyIssues(
+  keys: readonly string[],
+  ctx: z.RefinementCtx,
+  params: { label: string; path: readonly string[] },
+): void {
+  const firstKeyByAgentId = new Map<string, string>();
+  for (const key of keys) {
+    const agentId = normalizeAgentId(key);
+    const firstKey = firstKeyByAgentId.get(agentId);
+    if (!firstKey) {
+      firstKeyByAgentId.set(agentId, key);
+      continue;
+    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...params.path, key],
+      message: `${params.label} keys "${firstKey}" and "${key}" resolve to the same agent id "${agentId}"; rename one key so each agent has a unique id`,
+    });
+  }
+}
+
 const AgentEntryConfigSchema = z.preprocess(
   (value, ctx) => {
     if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -47,20 +72,11 @@ export const AgentsSchema = z
         message: "agents.entries must contain at least one configured agent",
       });
     }
-    const firstKeyByAgentId = new Map<string, string>();
-    for (const [key] of entries) {
-      const agentId = normalizeAgentId(key);
-      const firstKey = firstKeyByAgentId.get(agentId);
-      if (!firstKey) {
-        firstKeyByAgentId.set(agentId, key);
-        continue;
-      }
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["entries", key],
-        message: `agents.entries keys "${firstKey}" and "${key}" resolve to the same agent id "${agentId}"; rename one key so each agent has a unique id`,
-      });
-    }
+    addDuplicateAgentIdKeyIssues(
+      entries.map(([key]) => key),
+      ctx,
+      { label: "agents.entries", path: ["entries"] },
+    );
     const marked = entries.filter(([, entry]) => entry.default === true);
     if (marked.length > 1) {
       ctx.addIssue({
