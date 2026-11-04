@@ -1351,12 +1351,10 @@ openclaw-chat-video-player {
 
 .chat-audio-player__toggle:hover {
   background: var(--primary-hover);
-  color: var(--primary-hover-foreground);
 }
 
 .chat-audio-player__toggle:active {
   background: var(--primary-active);
-  color: var(--primary-active-foreground);
 }
 
 .chat-audio-player__toggle:focus-visible,

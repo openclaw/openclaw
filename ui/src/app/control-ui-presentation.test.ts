@@ -168,7 +168,6 @@ describe("Control UI accent presentation", () => {
       expect(style.getPropertyValue("--primary")).toBe("#fbbf24");
       // Hover must ride the accent too; dark Claw/Knot primary buttons read it.
       expect(style.getPropertyValue("--primary-hover")).toBe("#fccb4b");
-      expect(style.getPropertyValue("--primary-hover-foreground")).toBe("#000000");
       expect(style.getPropertyValue("--accent-foreground")).toBe("#000000");
       expect(style.getPropertyValue("--primary-foreground")).toBe("#000000");
 

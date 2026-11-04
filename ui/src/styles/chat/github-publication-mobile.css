@@ -245,12 +245,12 @@
 
 .github-publication-mobile__actions .chat-pr__create:hover:not(:disabled) {
   background: var(--primary-hover);
-  color: var(--primary-hover-foreground);
+  color: var(--primary-foreground);
 }
 
 .github-publication-mobile__actions .chat-pr__create:active:not(:disabled) {
   background: var(--primary-active);
-  color: var(--primary-active-foreground);
+  color: var(--primary-foreground);
 }
 
 .github-publication-mobile__actions .chat-pr__create:focus-visible {

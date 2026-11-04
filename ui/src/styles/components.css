@@ -617,13 +617,11 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .btn.primary:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--primary-hover);
-  color: var(--primary-hover-foreground);
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
 .btn.primary:active:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--primary-active);
-  color: var(--primary-active-foreground);
 }
 
 .btn.active {

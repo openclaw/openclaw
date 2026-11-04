@@ -573,12 +573,12 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 .settings-page.oc-app-surface .btn.oc-action.primary:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--primary-hover);
   background: var(--primary-hover);
-  color: var(--primary-hover-foreground);
+  color: var(--primary-foreground);
 }
 
 .settings-page.oc-app-surface .btn.oc-action.primary:active:not(:disabled, [aria-disabled="true"]) {
   background: var(--primary-active);
-  color: var(--primary-active-foreground);
+  color: var(--primary-foreground);
 }
 
 .settings-page.oc-app-surface .btn.btn--sm.oc-action,

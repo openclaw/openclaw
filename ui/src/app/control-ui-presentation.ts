@@ -14,17 +14,13 @@ const ACCENT_CSS_VARIABLES = [
   "--accent",
   "--accent-foreground",
   "--accent-hover",
-  "--accent-hover-foreground",
   "--accent-active",
-  "--accent-active-foreground",
   "--accent-muted",
   "--accent-subtle",
   "--accent-glow",
   "--primary",
   "--primary-hover",
-  "--primary-hover-foreground",
   "--primary-active",
-  "--primary-active-foreground",
   "--primary-foreground",
   "--focus",
   "--focus-ring",
@@ -259,7 +255,9 @@ export function applyControlUiAccent(userAccent?: string): void {
       if (color || state !== "normal") {
         root.style.setProperty("--" + family + suffix, pair.background);
       }
-      root.style.setProperty("--" + family + suffix + "-foreground", pair.foreground);
+      if (state === "normal") {
+        root.style.setProperty("--" + family + "-foreground", pair.foreground);
+      }
     }
   }
   const surfaces = [

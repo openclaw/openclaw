@@ -231,12 +231,12 @@
 
 .sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-hover-bg);
-  color: var(--accent-hover-foreground);
+  color: var(--accent-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:active:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-active-bg);
-  color: var(--accent-active-foreground);
+  color: var(--accent-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:focus-visible {

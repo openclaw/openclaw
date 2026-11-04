@@ -892,13 +892,13 @@
 /* Capture variants below own their hover fill independently of the primary action. */
 .chat-send-btn:hover:not(:disabled) {
   background: var(--primary-hover);
-  color: var(--primary-hover-foreground);
+  color: var(--primary-foreground);
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
 .chat-send-btn:active:not(:disabled, .chat-send-btn--voice, .chat-send-btn--stop) {
   background: var(--primary-active);
-  color: var(--primary-active-foreground);
+  color: var(--primary-foreground);
 }
 
 /* Outline (not box-shadow) so the hover rules' higher-specificity box-shadow
@@ -938,14 +938,14 @@
 .agent-chat__input
   .chat-send-btn:hover:not(:disabled, .chat-send-btn--voice, .chat-send-btn--stop) {
   background: var(--primary-hover);
-  color: var(--primary-hover-foreground);
+  color: var(--primary-foreground);
   box-shadow: none;
 }
 
 .agent-chat__input
   .chat-send-btn:active:not(:disabled, .chat-send-btn--voice, .chat-send-btn--stop) {
   background: var(--primary-active);
-  color: var(--primary-active-foreground);
+  color: var(--primary-foreground);
 }
 
 .agent-chat__input .chat-send-btn:disabled {
