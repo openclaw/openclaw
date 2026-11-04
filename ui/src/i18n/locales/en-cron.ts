@@ -339,12 +339,15 @@ const enCron = {
       noSummary: "No summary.",
       deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Run at",
-      transcript: "Run transcript",
-      viewTranscript: "View transcript",
-      transcriptEmpty: "No messages in this run yet.",
-      transcriptMissingMetadata: "This run is missing the identity needed to open its transcript.",
+      transcript: "Conversation transcript",
+      viewTranscript: "View conversation transcript",
+      transcriptScope:
+        "This is the conversation used by the selected run. Shared conversations can include messages from before and after that run.",
+      transcriptEmpty: "No messages in this conversation yet.",
+      transcriptMissingMetadata:
+        "This run is missing the identity needed to open its conversation.",
       transcriptUnavailable:
-        "The exact run transcript is unavailable or ambiguous. Refresh run history and try again.",
+        "The recorded conversation is unavailable or ambiguous. Refresh run history and try again.",
       next: "Next {rel}",
       due: "Due {rel}",
     },
