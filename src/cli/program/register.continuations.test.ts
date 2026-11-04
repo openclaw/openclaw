@@ -328,13 +328,10 @@ describe("openclaw continuations", () => {
     const drained = await fencedWake("agent:main:fence-drained");
     resetContinuationCustodyProjection();
     await closeOpenClawStateDatabaseAsync();
-    expect((await run("interrupt-fenced")).output).toMatchObject({
-      interrupted: 1,
-      records: [expect.objectContaining({ recordId: drained.recordId })],
-    });
+    const receipt = await run("interrupt-fenced");
     const after = await readRecord(drained.recordId);
 
-    // The drained wake under the pre-fence codec: terminal, never selected, never claimed.
+    // The drained wake under the pre-fence codec: never selected, never claimed, unchanged.
     world.preFenceCodec = true;
     vi.setSystemTime(Date.now() + RUNNING_RECOVERY_STALE_MS + 1);
     expect(await listPendingWorkSessionKeysForRecovery()).not.toContain("agent:main:fence-drained");
@@ -349,6 +346,11 @@ describe("openclaw continuations", () => {
     expect(row?.kind === "systemEvent" && row.text).toContain(
       `started its turn as run ${drained.runId}`,
     );
+    expect(after).toMatchObject({ status: "failed", failureReason: INTERRUPTED });
+    expect(receipt.output).toMatchObject({
+      interrupted: 1,
+      records: [expect.objectContaining({ recordId: drained.recordId, noticeDeliveryId: row?.id })],
+    });
     expect(world.turns).toBe(0);
   });
 });
