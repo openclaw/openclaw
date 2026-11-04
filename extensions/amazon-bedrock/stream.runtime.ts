@@ -88,7 +88,6 @@ import {
   resolveBedrockPromptCachePolicy,
   type BedrockOptions,
 } from "./bedrock-options.js";
-import { resolveBedrockSamplingConfig } from "./sampling-policy.js";
 import {
   isClaude5BedrockModel,
   resolveBedrockClaudeThinkingProfile,
@@ -426,7 +425,11 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         system: buildSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
         inferenceConfig: {
           ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
-          ...resolveBedrockSamplingConfig(model.id, sendsAdaptiveThinking, options.temperature),
+          // Grok 4.6 Converse profiles reject temperature rather than ignoring it.
+          ...(options.temperature !== undefined &&
+            !sendsAdaptiveThinking &&
+            model.id !== "us.xai.grok-4.6" &&
+            model.id !== "global.xai.grok-4.6" && { temperature: options.temperature }),
         },
         toolConfig,
         additionalModelRequestFields,
