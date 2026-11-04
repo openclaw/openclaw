@@ -43,7 +43,7 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 
 ## Session artifacts
 
-Open **Chat actions → Artifacts** to browse files shared in the current conversation,
+Tap **Artifacts** (the tray icon beside Chat actions) to browse files shared in the current conversation,
 including the main session. Search filters the returned collection by title; the
 Type menu narrows it to documents, images, or audio and video. Pull to refresh.
 

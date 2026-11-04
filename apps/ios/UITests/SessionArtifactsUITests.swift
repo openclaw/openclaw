@@ -22,9 +22,11 @@ final class SessionArtifactsUITests: XCTestCase {
         let composer = app.descendants(matching: .any)["chat-message-input"]
         XCTAssertTrue(composer.waitForExistence(timeout: 20), "Pair the isolated fixture Gateway before this proof")
         let draft = composer.value as? String
-        app.buttons["Chat actions"].tap()
         let openArtifacts = app.buttons["chat-session-artifacts"]
         XCTAssertTrue(openArtifacts.waitForExistence(timeout: 5))
+        XCTAssertTrue(openArtifacts.isHittable)
+        XCTAssertLessThanOrEqual(openArtifacts.frame.maxX, app.buttons["Chat actions"].frame.minX)
+        self.capture(app, named: "session-artifacts-toolbar")
         openArtifacts.tap()
 
         let project = self.rows(in: app, title: "Project brief.txt").firstMatch

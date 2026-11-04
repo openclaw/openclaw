@@ -18,7 +18,6 @@ struct ChatProTab: View {
 
     private enum PendingChatAction {
         case exportTranscript
-        case artifacts
         case gatewaySettings
         case newSessionOptions
     }
@@ -142,6 +141,10 @@ struct ChatProTab: View {
         }
         ToolbarItem(placement: .topBarLeading) {
             self.headerAgentIdentity
+        }
+        .sharedBackgroundVisibility(.hidden)
+        ToolbarItem(placement: .topBarTrailing) {
+            self.artifactsButton
         }
         .sharedBackgroundVisibility(.hidden)
         ToolbarItem(placement: .topBarTrailing) {
@@ -444,6 +447,28 @@ struct ChatProTab: View {
             isTalkActive: self.appModel.isTalkCaptureActive)
     }
 
+    private var artifactsButton: some View {
+        Button {
+            self.openArtifacts()
+        } label: {
+            Label {
+                Text("Artifacts").font(OpenClawType.body)
+            } icon: {
+                Image(systemName: "tray.full")
+                    .font(.system(size: 22))
+            }
+            .labelStyle(.iconOnly)
+            .foregroundStyle(OpenClawBrand.accent)
+        }
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+        .buttonStyle(.plain)
+        .disabled(self.viewModel == nil || !self.gatewayConnected)
+        .accessibilityLabel("Artifacts")
+        .accessibilityHint("Browse files shared in this conversation")
+        .accessibilityIdentifier("chat-session-artifacts")
+    }
+
     private var chatActionsMenu: some View {
         Button {
             self.showsChatActions.toggle()
@@ -512,15 +537,6 @@ struct ChatProTab: View {
                 .accessibilityIdentifier("chat-show-reasoning-toggle")
 
                 self.chatActionButton(
-                    title: "Artifacts",
-                    systemImage: "doc.on.doc",
-                    disabled: self.viewModel == nil || !self.gatewayConnected)
-                {
-                    self.pendingChatAction = .artifacts
-                }
-                .accessibilityIdentifier("chat-session-artifacts")
-
-                self.chatActionButton(
                     title: "Export transcript",
                     systemImage: "square.and.arrow.up",
                     disabled: self.viewModel == nil)
@@ -559,18 +575,6 @@ struct ChatProTab: View {
         guard let pendingChatAction else { return }
         self.pendingChatAction = nil
         switch pendingChatAction {
-        case .artifacts:
-            guard let viewModel,
-                  let transport = self.appModel.makeChatTransport() as? IOSGatewayChatTransport
-            else { return }
-            self.artifactsPresentation = ArtifactsPresentation(
-                sessionKey: viewModel.sessionKey,
-                title: viewModel.sessions.first { $0.key == viewModel.sessionKey }?.displayName ??
-                    (viewModel.sessionKey == self.appModel
-                        .mainSessionKey ? String(localized: "Main Session") : viewModel.sessionKey),
-                identity: self.artifactsIdentity,
-                controlUIInputs: self.appModel.activeGatewayConnectConfig?.controlUIInputs,
-                transport: transport)
         case .exportTranscript:
             self.exportTranscript()
         case .gatewaySettings:
@@ -578,6 +582,20 @@ struct ChatProTab: View {
         case .newSessionOptions:
             self.showsNewSessionOptions = true
         }
+    }
+
+    private func openArtifacts() {
+        guard self.gatewayConnected, let viewModel,
+              let transport = self.appModel.makeChatTransport() as? IOSGatewayChatTransport
+        else { return }
+        self.artifactsPresentation = ArtifactsPresentation(
+            sessionKey: viewModel.sessionKey,
+            title: viewModel.sessions.first { $0.key == viewModel.sessionKey }?.displayName ??
+                (viewModel.sessionKey == self.appModel
+                    .mainSessionKey ? String(localized: "Main Session") : viewModel.sessionKey),
+            identity: self.artifactsIdentity,
+            controlUIInputs: self.appModel.activeGatewayConnectConfig?.controlUIInputs,
+            transport: transport)
     }
 
     private var artifactsIdentity: String {
