@@ -1,10 +1,14 @@
-import { access, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as tempPath from "openclaw/plugin-sdk/temp-path";
 import { afterEach, expect, it, vi } from "vitest";
-import { closePluginTestAdmissions, createExecution, runPlugin } from "../../src/agents/cli-runner/execute-plugin.test-support.js";
+import { closePluginTestAdmissions, createExecution } from "../../src/agents/cli-runner/execute-plugin.test-support.js";
+import { executePluginOwnedProcess } from "../../src/agents/cli-runner/execute-plugin.js";
 import { executeClaudeCli } from "./cli.runtime.js";
+import { createClaudeCliTransport } from "./cli-transport.js";
+import { CLAUDE_RESTRICTED_SETTINGS } from "./cli-shared.js";
 import { createCliTestHarness, resultDetail } from "./cli-runtime.test-support.js";
 
 const hostPlatform = process.platform;
@@ -45,24 +49,72 @@ function injectWindowsLimit() {
  });
 }
 
+function runProbe(context: Awaited<ReturnType<typeof createExecution>>["context"], probe: Awaited<ReturnType<typeof harness.context>>, records: Record<string,unknown>[] = []) {
+ context.params.cliToolAvailability = {native:["Read"],openClaw:tools.map(name=>name.slice("mcp__openclaw__".length))};
+ return executePluginOwnedProcess({context:{...context,cwd:probe.cwd,workspaceDir:probe.cwd},execute:executeClaudeCli,
+  executionCommand:probe.command,executionArgs:[...probe.args,"--settings","{}","--allowedTools",tools.join(","),"--tools","Read","--disallowedTools","Write,Bash"],
+  env:probe.env,prompt:probe.prompt,useResume:false,noOutputTimeoutMs:60000,consumeStdout:chunk=>records.push(JSON.parse(chunk))});
+}
+
 it("retains real host policy at admitted Read and nearest-forbidden Write effects after relocation", async()=>{
  const {context}=await createExecution({nativeTools:["Read"],timeoutMs:60000,config:{tools:{exec:{security:"deny",ask:"off"}}}});
  const probe=await harness.context(fixture,{timeoutMs:60000,abortSignal:AbortSignal.timeout(60000)});
  await writeFile(path.join(probe.cwd,"admitted.txt"),"synthetic admitted content");
  if(hostPlatform!=="win32") injectWindowsLimit();
  const records:Record<string,unknown>[]=[];
- const exit=await runPlugin(context,async function*(execution){
-  for await(const record of executeClaudeCli({...probe,requestToolPermission:execution.requestToolPermission,assertCurrent:execution.assertCurrent,
-   args:[...probe.args,"--settings","{}","--allowedTools",tools.join(","),"--tools","Read","--disallowedTools","Write,Bash"]})){
-   records.push(record); yield record;
-  }
- },{noOutputTimeoutMs:60000});
+ const exit=await runProbe(context,probe,records);
  const result=resultDetail(records);
  expect(result).toMatchObject({admitted:{behavior:"allow",content:"synthetic admitted content"},forbidden:{behavior:"deny"},allow:tools});
  await expect(access(path.join(probe.cwd,"forbidden.txt"))).rejects.toThrow();
  expect(exit).toMatchObject({reason:"exit",exitCode:0});
  console.log(JSON.stringify({scenario:"relocated-host-policy",admittedRead:"allowed and read real file",forbiddenWrite:"denied; file absent",admittedMcpNames:tools.length,exactSettings:true}));
 },120000);
+
+it.skipIf(hostPlatform !== "win32")("real Claude consumes exactly the relocated grants and retains explicit denials without model credentials", async()=>{
+ const context=await harness.context("",{timeoutMs:180000,abortSignal:AbortSignal.timeout(180000)});
+ const npm=path.join(path.dirname(process.execPath),"node_modules/npm/bin/npm-cli.js");
+ await access(npm);
+ execFileSync(process.execPath,[npm,"install","--prefix",context.cwd,"--ignore-scripts","--no-package-lock","--omit=dev","@anthropic-ai/claude-code@2.1.280"],{timeout:180000,stdio:"pipe"});
+ const packageRoot=path.join(context.cwd,"node_modules/@anthropic-ai/claude-code");
+ const metadata=JSON.parse(await readFile(path.join(packageRoot,"package.json"),"utf8"));
+ const entry=path.join(packageRoot,typeof metadata.bin === "string" ? metadata.bin : metadata.bin.claude);
+ context.args=[entry,"--print","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-prompt-tool","stdio","--permission-mode","default","--setting-sources","","--no-session-persistence","--strict-mcp-config","--mcp-config","{}","--settings",JSON.stringify(CLAUDE_RESTRICTED_SETTINGS),"--allowedTools",tools.join(","),"--tools","Read","--disallowedTools","Write,Bash"];
+ let resolveRules:(value:unknown)=>void;
+ let rejectRules:(error:unknown)=>void;
+ const rules=new Promise<unknown>((resolve,reject)=>{resolveRules=resolve;rejectRules=reject;});
+ void rules.catch(()=>{});
+ let settingsFile:string|undefined;
+ const owned=processRuntime.createOwnedStdioProcess;
+ vi.spyOn(processRuntime,"createOwnedStdioProcess").mockImplementation(async options=>{
+  const child=await owned(options);
+  settingsFile=options.argv[options.argv.lastIndexOf("--settings")+1];
+  let pending="";
+  return new Proxy(child,{get(target,key){
+   if(key!=="onStdout") return Reflect.get(target,key);
+   return (callback:Parameters<typeof child.onStdout>[0])=>target.onStdout(async chunk=>{
+    pending+=chunk;
+    for(;;){const end=pending.indexOf("\n");if(end<0)break;const line=pending.slice(0,end);pending=pending.slice(end+1);
+     try {const value=JSON.parse(line);if(value.type==="control_response" && value.response?.request_id==="permission-probe") resolveRules(value.response);}catch{}
+    }
+    await callback(chunk);
+   });
+  }});
+ });
+ const transport=await createClaudeCliTransport({context,args:context.args,initialize:{},currentContext:()=>context,
+  onMessage:async()=>{},onRequest:async()=>()=>({behavior:"deny",message:"No model prompt in this probe."}),onError:error=>rejectRules(error)});
+ try {
+  await transport.initialize();
+  await transport.send({type:"control_request",request_id:"permission-probe",request:{subtype:"list_permission_rules"}});
+  const response=await rules;
+  const text=JSON.stringify(response);
+  expect(new Set(text.match(/mcp__openclaw__server_\d+__synthetic_action/g))).toEqual(new Set(tools));
+  expect(text).not.toContain("mcp__openclaw__*");
+  expect(text).toContain("flagSettings");expect(text).toContain('"Write"');expect(text).toContain('"Bash"');
+  expect(settingsFile).not.toBe(JSON.stringify(CLAUDE_RESTRICTED_SETTINGS));
+  console.log(JSON.stringify({scenario:"real-claude-permission-rules",version:metadata.version,admittedMcpNames:tools.length,exactNames:true,wildcardAdded:false,allowSource:"flagSettings",explicitDenials:["Write","Bash"],modelPrompts:0,modelCredentials:0}));
+ } finally {transport.close();await transport.waitForExit();}
+ await expect(access(settingsFile!)).rejects.toThrow();
+},240000);
 
 it("closes real run admission during the settings write and never starts the retry child", async()=>{
  const {context,admission}=await createExecution({nativeTools:["Read"],timeoutMs:60000});
@@ -77,8 +129,7 @@ it("closes real run admission during the settings write and never starts the ret
    const file=await created.writeJson(...args); admission.close(); return file;
   }};
  });
- const running=runPlugin(context,execution=>executeClaudeCli({...probe,assertCurrent:execution.assertCurrent,
-  requestToolPermission:execution.requestToolPermission,args:[...probe.args,"--settings","{}","--allowedTools",tools.join(",")]}),{noOutputTimeoutMs:60000});
+ const running=runProbe(context,probe);
  await expect(running).rejects.toThrow();
  expect(spawn).toHaveBeenCalledTimes(1);
  await expect(access(path.join(probe.cwd,"child.started"))).rejects.toThrow();
