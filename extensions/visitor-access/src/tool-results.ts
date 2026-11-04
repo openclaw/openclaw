@@ -4,7 +4,7 @@ const expiresAtSchema = Type.Union([Type.String(), Type.Null()], {
   description: "Null means an explicit forever grant.",
 });
 
-export const visitorAccountSeatsSchema = Type.Object(
+const visitorAccountSeatsSchema = Type.Object(
   {
     status: Type.Union([Type.Literal("available"), Type.Literal("full"), Type.Literal("unknown")]),
     capacity: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),

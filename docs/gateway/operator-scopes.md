@@ -87,6 +87,10 @@ reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
 and per-agent GitHub changes remain `operator.admin`.
 
+Session-scoped readers can load agent avatar images from the Control UI
+`/avatar/<agentId>` route, which serves the avatar URL that `agent.identity.get`
+already returns to them. Assistant media file reads still require `operator.read`.
+
 Session-scoped readers can read shared GitHub publication options and receipts
 for sessions they can view through `sessions.github.options` and
 `sessions.github.status`. For these narrow callers, the shared publication option

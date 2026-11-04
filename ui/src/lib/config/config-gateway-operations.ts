@@ -633,7 +633,7 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
       if (state.configAutoSaveStatus === "rejected") {
         state.configAutoSaveStatus = "error";
       }
-      showToast({ message: state.lastError });
+      showToast({ severity: "error", message: state.lastError });
     }
   };
   try {

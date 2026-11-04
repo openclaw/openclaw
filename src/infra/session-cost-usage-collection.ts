@@ -267,6 +267,12 @@ export async function readUsageCostTranscriptSourceStats(
   sources: readonly (UsageCostJsonlSource | UsageCostSqliteEntry)[],
   access: UsageCostCollectionAccess,
 ): Promise<UsageCostTranscriptFile[]> {
+  // An unreadable archive aborts refresh before any rollup can commit. Prepare
+  // files first so retries do not recount unrelated, uncheckpointed SQLite history.
+  const files = await materializeUsageCostTranscriptSources(
+    sources.filter((source) => source.kind === "jsonl"),
+    access,
+  );
   const sqliteFiles = await readUsageCostSqliteFiles(
     sources
       .filter((source) => source.kind === "sqlite")
@@ -274,11 +280,7 @@ export async function readUsageCostTranscriptSourceStats(
       .map((source) => parseSqliteSessionFileMarker(source.sourcePath)!),
     access,
   );
-  let sqliteIndex = 0;
-  return materializeUsageCostTranscriptSources(
-    sources.map((source) => (source.kind === "sqlite" ? sqliteFiles[sqliteIndex++] : source)),
-    access,
-  );
+  return [...files, ...sqliteFiles.filter((file) => file !== undefined)];
 }
 
 async function materializeUsageCostTranscriptSources(
