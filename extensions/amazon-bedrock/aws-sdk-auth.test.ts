@@ -1,72 +1,70 @@
-// Amazon Bedrock tests cover the AWS SDK auth choice.
-import { expect, it, vi } from "vitest";
+// Amazon Bedrock tests cover the AWS SDK auth choice at the setup boundary.
+import {
+  applyProviderAuthConfigPatch,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/provider-auth";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-markers";
+import { afterEach, expect, it, vi } from "vitest";
 
-const upsertProfileMock = vi.hoisted(() => vi.fn());
+const saveProfile = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/provider-auth-api-key", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-api-key")>()),
-  upsertAuthProfileWithLockOrThrow: upsertProfileMock,
+  upsertAuthProfileWithLockOrThrow: saveProfile,
 }));
 
 const { awsSdkAuthMethod, buildBedrockAwsSdkAuthResult } = await import("./aws-sdk-auth.js");
 
-const MARKER_CREDENTIAL = {
-  type: "api_key",
-  provider: "amazon-bedrock",
-  key: "aws-sdk-credentials",
-};
+const AGENT_DIR = "/tmp/openclaw-bedrock-test-agent";
+const PLATFORM = { provider: "openai", mode: "api_key" as const };
 
-it("saves a marker account and routes the provider through the AWS SDK chain", () => {
-  const result = buildBedrockAwsSdkAuthResult({});
+afterEach(() => vi.unstubAllEnvs());
 
-  expect(result.profiles).toEqual([
-    { profileId: "amazon-bedrock:aws-sdk", credential: MARKER_CREDENTIAL },
-  ]);
-  expect(result.configPatch).toEqual({
-    models: { providers: { "amazon-bedrock": { auth: "aws-sdk" } } },
+it("saves an account the host selects for Bedrock, storing no AWS credentials", async () => {
+  vi.stubEnv("AWS_REGION", "eu-central-1");
+  const saved = await awsSdkAuthMethod.runNonInteractive!({
+    authChoice: "amazon-bedrock-aws-sdk",
+    config: { auth: { profiles: { "openai:platform": PLATFORM } } },
+    baseConfig: {},
+    opts: {},
+    agentDir: AGENT_DIR,
+    runtime: { log: () => {}, error: () => {}, exit: () => undefined as never },
+    resolveApiKey: async () => null,
+    toApiKeyCredential: () => null,
   });
-  // Discovery follows an accepted region only.
-  expect(buildBedrockAwsSdkAuthResult({ region: " US-West-2 " }).configPatch?.plugins).toEqual({
-    entries: {
-      "amazon-bedrock": { config: { discovery: { enabled: true, region: "us-west-2" } } },
-    },
-  });
+  // The choice is accepted, so it patches the config and saves one account.
+  const config = saved ?? expect.unreachable("the aws-sdk choice returned no config");
+  const record = saveProfile.mock.calls[0]?.[0];
+  expect(record?.agentDir).toBe(AGENT_DIR);
+  // What the setup owes a scheduled run: an account the host resolves for Bedrock.
   expect(
-    buildBedrockAwsSdkAuthResult({ region: "not a region" }).configPatch?.plugins,
-  ).toBeUndefined();
+    resolveAuthProfileOrder({
+      cfg: config,
+      store: { version: 1, profiles: { [record.profileId]: record.credential } },
+      provider: "amazon-bedrock",
+    }),
+  ).toEqual([record.profileId]);
+  // The account holds a marker, and no AWS material reaches config either.
+  expect(isNonSecretApiKeyMarker(record.credential.key)).toBe(true);
+  expect(JSON.stringify(config)).not.toMatch(/AKIA|ASIA|SecretAccessKey|SessionToken/u);
+  // An account configured before this choice keeps its own credential.
+  expect(config.auth?.profiles?.["openai:platform"]).toEqual(PLATFORM);
+  expect(config.plugins?.entries?.["amazon-bedrock"]?.config).toEqual({
+    discovery: { enabled: true, region: "eu-central-1" },
+  });
 });
 
-it("persists the same account non-interactively, defaulting the region from the environment", async () => {
-  const previous = process.env.AWS_REGION;
-  process.env.AWS_REGION = "eu-central-1";
-  try {
-    const config = await awsSdkAuthMethod.runNonInteractive?.({
-      authChoice: "amazon-bedrock-aws-sdk",
-      config: {
-        auth: { profiles: { "openai:platform": { provider: "openai", mode: "api_key" } } },
-      },
-      baseConfig: {},
-      opts: {},
-      agentDir: "/tmp/openclaw-bedrock-test-agent",
-      runtime: { log: () => {}, error: () => {}, exit: () => undefined as never },
-      resolveApiKey: async () => null,
-      toApiKeyCredential: () => null,
-    });
+it("routes the provider through the chain and opts discovery in only for a usable region", () => {
+  const applied = (region?: string) =>
+    applyProviderAuthConfigPatch({}, buildBedrockAwsSdkAuthResult({ region }).configPatch);
 
-    expect(upsertProfileMock).toHaveBeenCalledWith({
-      profileId: "amazon-bedrock:aws-sdk",
-      credential: MARKER_CREDENTIAL,
-      agentDir: "/tmp/openclaw-bedrock-test-agent",
-    });
-    expect(config?.auth?.profiles).toEqual({
-      "openai:platform": { provider: "openai", mode: "api_key" },
-      "amazon-bedrock:aws-sdk": { provider: "amazon-bedrock", mode: "api_key" },
-    });
-    expect(config?.models?.providers?.["amazon-bedrock"]?.auth).toBe("aws-sdk");
-    expect(config?.plugins?.entries?.["amazon-bedrock"]?.config).toEqual({
-      discovery: { enabled: true, region: "eu-central-1" },
-    });
-    expect(JSON.stringify(config)).not.toContain("SecretAccessKey");
-  } finally {
-    process.env.AWS_REGION = previous;
+  expect(applied(" US-West-2 ").plugins?.entries?.["amazon-bedrock"]?.config).toEqual({
+    discovery: { enabled: true, region: "us-west-2" },
+  });
+  for (const region of [undefined, "not a region"]) {
+    const config = applied(region);
+    // An unusable answer still routes requests through the chain; it must not
+    // enable discovery against a guessed region.
+    expect(config.models?.providers?.["amazon-bedrock"]?.auth).toBe("aws-sdk");
+    expect(config.plugins?.entries?.["amazon-bedrock"]).toBeUndefined();
   }
 });

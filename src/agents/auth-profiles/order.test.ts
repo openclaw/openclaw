@@ -56,7 +56,6 @@ import {
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
   resolveAuthProfileOrderWithMetadata,
-  resolveStoredAwsSdkAuthProfileId,
 } from "./order.js";
 import { markAuthProfileSuccess } from "./profiles.js";
 
@@ -159,31 +158,6 @@ describe("resolveAuthProfileOrder", () => {
         profileId: "amazon-bedrock:default",
       }),
     ).toEqual({ eligible: true, reasonCode: "ok" });
-  });
-
-  it("resolves the stored marker account schedulers record for an AWS SDK route", () => {
-    const cfg = {
-      models: { providers: { "amazon-bedrock": { auth: "aws-sdk", ...bedrockRoute } } },
-    } satisfies OpenClawConfig;
-    const resolve = (params: { cfg: OpenClawConfig; store: AuthProfileStore }) =>
-      resolveStoredAwsSdkAuthProfileId({ ...params, provider: "amazon-bedrock" });
-
-    expect(resolve({ cfg, store: storeWith({ "amazon-bedrock:aws-sdk": awsSdkMarker }) })).toBe(
-      "amazon-bedrock:aws-sdk",
-    );
-    // A route the provider config does not declare has no account to record.
-    expect(
-      resolve({ cfg: {}, store: storeWith({ "amazon-bedrock:aws-sdk": awsSdkMarker }) }),
-    ).toBeUndefined();
-    // A real key is a credential, not an AWS SDK account.
-    expect(
-      resolve({
-        cfg,
-        store: storeWith({
-          "amazon-bedrock:key": createApiKeyCredential("amazon-bedrock", "sk-live"),
-        }),
-      }),
-    ).toBeUndefined();
   });
 
   it("falls back to stored profiles when a stored order only has missing credentials", async () => {
