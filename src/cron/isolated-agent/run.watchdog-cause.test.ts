@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.context.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
-import { resolveCronRecoveryClassification } from "./run-finalize.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as harness from "./run.test-harness.js";
 
@@ -53,29 +52,5 @@ describe("runCronIsolatedAgentTurn watchdog cause", () => {
       error: "Rate limited by anthropic; retrying in 30s.",
     });
     expect(result.failureNotificationDetail).toBeUndefined();
-  });
-});
-
-describe("resolveCronRecoveryClassification", () => {
-  it("keeps the classification for ordinary stall stops", () => {
-    expect(
-      resolveCronRecoveryClassification({
-        staleExpiryReason: "no_activity",
-        recoveryClassification: "blocked_tool_call",
-      }),
-    ).toBe("blocked_tool_call");
-  });
-
-  it("drops the classification when the stop happened during rate-limit backoff", () => {
-    expect(
-      resolveCronRecoveryClassification({
-        staleExpiryReason: "rate_limited",
-        recoveryClassification: "semantic_stall",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("returns undefined without a controller operation", () => {
-    expect(resolveCronRecoveryClassification(undefined)).toBeUndefined();
   });
 });
