@@ -1,2 +1,2 @@
-115
-# Persisted human waits, invalid-state rejection, and Gateway stop/resume regression.
+170
+# Persisted human waits, input correction, Gateway stop/resume, and native Codex decision-wait regression.

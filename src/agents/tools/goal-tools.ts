@@ -137,7 +137,9 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
           `status must be one of ${MODEL_UPDATABLE_SESSION_GOAL_STATUSES.join(", ")}`,
         );
       }
-      const note = readToolStringParam(params, "note");
+      const note = readToolStringParam(params, "note", {
+        required: status === "waiting_on_human",
+      });
       const scope = resolveGoalSessionScope(options);
       try {
         const goal = await updateSessionGoalStatus({

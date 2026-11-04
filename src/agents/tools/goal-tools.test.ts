@@ -101,17 +101,19 @@ describe("goal tools", () => {
     expect(readGoal()).toEqual(waiting);
   });
 
-  it("rejects a human wait without a decision note", async () => {
+  it("lets the caller correct a human wait missing its decision note", async () => {
     const { options, readGoal } = await createStoreConfig("global", { goal: makeGoal({}) });
     const original = readGoal();
-    const result = await createUpdateGoalTool(options).execute("wait", {
-      status: "waiting_on_human",
-    });
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: expect.stringContaining("requires a note"),
-    });
+    const tool = createUpdateGoalTool(options);
+    await expect(tool.execute("wait", { status: "waiting_on_human" })).rejects.toThrow(
+      "note required",
+    );
     expect(readGoal()).toEqual(original);
+    const corrected = await tool.execute("wait-with-note", {
+      status: "waiting_on_human",
+      note: "Approve the configuration change",
+    });
+    expect(corrected.details).toMatchObject({ status: "updated", goal: { status: "blocked" } });
   });
 
   it.each(["paused", "complete", "blocked", "budget_limited", "usage_limited"] as const)(

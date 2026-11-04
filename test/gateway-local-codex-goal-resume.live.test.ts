@@ -42,12 +42,21 @@ type GoalRow = {
   hasActiveRun?: boolean;
   lastRunId?: string;
   agentRuntime?: { id?: string };
-  goal?: { id: string; objective: string; createdAt: number; status: string };
+  goal?: {
+    id: string;
+    objective: string;
+    createdAt: number;
+    status: string;
+    continuationTurns: number;
+    lastStatusNote?: string;
+  };
 };
 
-it.skipIf(!enabled)(
-  "resumes the same paused local Codex Goal through the public RPC",
-  async () => {
+it.skipIf(!enabled).each(["paused", "human-decision"] as const)(
+  "resumes the same local Codex Goal after a %s wait through the public RPC",
+  async (waitKind) => {
+    const humanWait = waitKind === "human-decision";
+    const waitStatus = humanWait ? "blocked" : "paused";
     const model = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL;
     if (!model) {
       throw new Error("Set OPENCLAW_LIVE_CODEX_HARNESS_MODEL to an available native Codex model");
@@ -59,8 +68,9 @@ it.skipIf(!enabled)(
     let client: GatewayClient | undefined;
     const sessionKey = `agent:main:local-goal-resume-${randomUUID()}`;
     const marker = `GOAL_RESUMED_${randomUUID()}`;
-    const objective =
-      "This is a Goal Resume verification. Reply exactly GOAL_WAITING. The operator will pause this goal immediately after admission; do not update the goal status during this first turn. The operator will provide the next stage through a Goal edit before explicitly resuming. Do not use tools, write files, or send messages.";
+    const objective = humanWait
+      ? "This synthetic Goal requires an explicit human decision before any remaining work: ask the operator to approve the synthetic configuration check and wait. Do not perform the check, mark the Goal complete, write files, or send external messages. There is no other independent work to do."
+      : "This is a Goal Resume verification. Reply exactly GOAL_WAITING. The operator will pause this goal immediately after admission; do not update the goal status during this first turn. The operator will provide the next stage through a Goal edit before explicitly resuming. Do not use tools, write files, or send messages.";
     const editedObjective = `Read this goal through get_goal, then call update_goal with status complete and reply exactly ${marker}. This synthetic verification is complete after those two tool calls. Do not use other tools, write files, or send messages.`;
     try {
       instance.state.applyEnv();
@@ -121,17 +131,19 @@ it.skipIf(!enabled)(
         idempotencyKey: randomUUID(),
         intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
       });
-      // The ACK follows native input persistence, before provider completion.
-      // An operator pause prevents automatic follow-up while the first turn settles.
+      // The paused case exercises an operator stop; the human-wait case must
+      // let the real model choose and persist its own stopping status.
       const waiting = await row();
-      await client.request("sessions.goal.update", {
-        sessionKey,
-        sessionId: waiting.sessionId,
-        goalId: waiting.goal!.id,
-        action: "pause",
-        operationId: randomUUID(),
-        issuedAtMs: Date.now(),
-      });
+      if (!humanWait) {
+        await client.request("sessions.goal.update", {
+          sessionKey,
+          sessionId: waiting.sessionId,
+          goalId: waiting.goal!.id,
+          action: "pause",
+          operationId: randomUUID(),
+          issuedAtMs: Date.now(),
+        });
+      }
       const initialResult = await client.request("agent.wait", {
         runId: start.runId,
         timeoutMs: 180_000,
@@ -139,13 +151,47 @@ it.skipIf(!enabled)(
       expect(initialResult, JSON.stringify(initialResult)).toMatchObject({ status: "ok" });
       await vi.waitFor(
         async () =>
-          expect(await row()).toMatchObject({ hasActiveRun: false, goal: { status: "paused" } }),
+          expect(await row()).toMatchObject({ hasActiveRun: false, goal: { status: waitStatus } }),
         { timeout: 30_000, interval: 200 },
       );
       const initialPaused = await row();
-      expect(initialPaused.goal?.status).toBe("paused");
+      expect(initialPaused.goal?.status).toBe(waitStatus);
       expect(initialPaused.agentRuntime?.id).toBe("codex");
       expect(initialPaused.goal).toMatchObject({ objective });
+      if (humanWait) {
+        expect(initialPaused.goal).toMatchObject({
+          continuationTurns: 0,
+          lastStatusNote: expect.stringContaining("Waiting on human:"),
+        });
+        const unrelated = await client.request<{ runId: string }>("chat.send", {
+          sessionKey,
+          message:
+            "Unrelated message: reply exactly CONTEXT_ONLY. This is not approval or a request to resume the Goal. Do not use tools or continue the synthetic check.",
+          idempotencyKey: randomUUID(),
+        });
+        expect(
+          await client.request("agent.wait", { runId: unrelated.runId, timeoutMs: 180_000 }),
+        ).toMatchObject({ status: "ok" });
+        await vi.waitFor(
+          async () =>
+            expect(await row()).toMatchObject({
+              hasActiveRun: false,
+              lastRunId: unrelated.runId,
+              goal: { id: initialPaused.goal!.id, status: "blocked", continuationTurns: 0 },
+            }),
+          { timeout: 30_000, interval: 200 },
+        );
+        const history = await client.request<{ messages: HistoryMessage[] }>("chat.history", {
+          sessionKey,
+          limit: 100,
+        });
+        expect(
+          history.messages.some(
+            (message) => message.role === "toolResult" && message.toolName === "update_goal",
+          ),
+          "the native model must record its own wait through the Core Goal tool",
+        ).toBe(true);
+      }
       await client.request("sessions.goal.update", {
         sessionKey,
         sessionId: initialPaused.sessionId,
@@ -162,7 +208,7 @@ it.skipIf(!enabled)(
           id: initialPaused.goal!.id,
           objective: editedObjective,
           createdAt: initialPaused.goal!.createdAt,
-          status: "paused",
+          status: waitStatus,
         },
       });
       const before = await client.request<{ messages: HistoryMessage[] }>("chat.history", {
@@ -230,7 +276,14 @@ it.skipIf(!enabled)(
       ).toEqual(after.messages);
       console.log(
         JSON.stringify({
-          proof: "local-codex-same-goal-resume",
+          proof: humanWait ? "local-codex-human-decision-wait" : "local-codex-same-goal-resume",
+          ...(humanWait
+            ? {
+                modelRecordedWait: true,
+                continuationTurnsBeforeResume: 0,
+                unrelatedMessageKeptBlocked: true,
+              }
+            : {}),
           goalId: paused.goal!.id,
           sessionId: paused.sessionId,
           followedEditedObjective: true,
