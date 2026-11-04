@@ -70,16 +70,24 @@ export function createClawRouterConverseStream(
       endpoint: model.baseUrl,
       apiKey: auth.apiKey,
       async send(request, signal) {
+        // The native SDK's JsonCodec2 emits UTF-8 bytes, not necessarily a string.
+        const serialized =
+          typeof request.body === "string"
+            ? Buffer.from(request.body, "utf8")
+            : request.body instanceof Uint8Array
+              ? request.body
+              : undefined;
         if (
           request.method !== "POST" ||
           request.path !== sdkPath ||
           Object.keys(request.query).length ||
-          typeof request.body !== "string" ||
-          Buffer.byteLength(request.body) > MAX_BYTES
+          !serialized ||
+          serialized.byteLength > MAX_BYTES
         ) {
           throw new Error("ClawRouter Converse rejected the serialized SDK request");
         }
-        const payload: unknown = JSON.parse(request.body);
+        const json = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(serialized);
+        const payload: unknown = JSON.parse(json);
         const record = asOptionalRecord(payload);
         if (!record || "modelId" in record || "model" in record) {
           throw new Error("ClawRouter Converse model belongs to the selected path");
@@ -92,7 +100,7 @@ export function createClawRouterConverseStream(
                 query: {},
                 body: payload,
               })
-            : request.body;
+            : json;
         if (Buffer.byteLength(body) > MAX_BYTES) {
           throw new Error("ClawRouter Converse envelope exceeds the request limit");
         }
