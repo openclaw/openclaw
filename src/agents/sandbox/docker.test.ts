@@ -194,9 +194,7 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       await assertion;
       spawnState.podmanInfoDelayMs = 0;
-      await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).resolves.toMatchObject({
-        rootless: true,
-      });
+      expect((await podmanRuntime.resolvePodmanSandboxRuntimeInfo()).rootless).toBe(true);
     });
   });
 
