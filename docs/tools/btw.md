@@ -57,6 +57,12 @@ everything before it is inherited reference context, not active instructions,
 and that only messages after the boundary are live. `/btw` requires an
 existing Codex thread; send a normal message first.
 
+When a managed identity requires host-owned execution, Codex BTW uses a
+context-only fork with all tool calls blocked instead. It can answer from the
+conversation but cannot browse, inspect files, or run commands. This requires
+the native tool-denial hook relay and the parent's live Codex connection; if
+either is unavailable, the side question fails closed.
+
 Eligible Codex side questions can use the same OpenClaw Gateway shell tools as
 the main thread. Canceling a side question or reaching its timeout stops native
 background terminals owned by the side thread before releasing it. Main-thread

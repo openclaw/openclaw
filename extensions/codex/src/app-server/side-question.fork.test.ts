@@ -46,10 +46,13 @@ afterAll(() => clearRuntimeConfigSnapshot());
 
 useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
 
-async function createDeniedSideQuestion(options: Parameters<typeof createFakeClient>[0] = {}) {
+async function createDeniedSideQuestion(
+  options: Parameters<typeof createFakeClient>[0] = {},
+  hostExecutionRequired = false,
+) {
   const host = await createAdmittedHostCapabilityTestFixture(
     { runId: "run-side-1" },
-    { toolCalls: "deny" },
+    hostExecutionRequired ? {} : { toolCalls: "deny" },
   );
   const client = createFakeClient(options);
   ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
@@ -63,8 +66,18 @@ async function createDeniedSideQuestion(options: Parameters<typeof createFakeCli
     start: () =>
       runCodexAppServerSideQuestion(
         sideParams({
-          toolCalls: "deny",
-          hostCapabilities: host.hostCapabilities,
+          ...(hostExecutionRequired ? {} : { toolCalls: "deny" as const }),
+          hostCapabilities: hostExecutionRequired
+            ? {
+                ...host.hostCapabilities,
+                preparedEnvironment: () => ({
+                  credentialScrubEnv: {},
+                  localIdentityEnv: {},
+                  managedLocalIdentity: true,
+                  hostExecutionRequired: true,
+                }),
+              }
+            : host.hostCapabilities,
           opts: { runId: "run-side-1" },
         }),
         { nativeHookRelay: { enabled: true } },
@@ -79,9 +92,14 @@ async function createDeniedSideQuestion(options: Parameters<typeof createFakeCli
 
 describe("runCodexAppServerSideQuestion cache-parity fork", () => {
   useSideQuestionTestSetup();
-  it.each(["live", "cached", "indexed"])(
-    "denies tools with parent search=%s",
-    async (webSearch) => {
+  it.each([
+    ["live", false],
+    ["cached", false],
+    ["indexed", false],
+    ["live", true],
+  ] as const)(
+    "denies tools with parent search=%s and host-only execution=%s",
+    async (webSearch, hostExecutionRequired) => {
       const agentEnd = vi.fn();
       const beforeFinalize = vi.fn();
       initializeGlobalHookRunner(
@@ -91,10 +109,13 @@ describe("runCodexAppServerSideQuestion cache-parity fork", () => {
         ]),
       );
       const turnStarted = createDeferred<void>();
-      using fixture = await createDeniedSideQuestion({
-        completeTurn: false,
-        onTurnStart: () => turnStarted.resolve(),
-      });
+      using fixture = await createDeniedSideQuestion(
+        {
+          completeTurn: false,
+          onTurnStart: () => turnStarted.resolve(),
+        },
+        hostExecutionRequired,
+      );
       const { client, start } = fixture;
       const parentPolicy = {
         model: "gpt-5.5",

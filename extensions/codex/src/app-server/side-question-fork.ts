@@ -40,6 +40,21 @@ export const DENIED_DYNAMIC_TOOL_RESPONSE: JsonValue = {
   contentItems: [{ type: "inputText", text: "Tool calls are denied for this side question." }],
 };
 
+export function resolveCodexSideQuestionToolDenial(
+  params: AgentHarnessSideQuestionParamsV2,
+  relay: CodexRunAttemptOptions["nativeHookRelay"],
+): boolean {
+  // Managed credentials require host-owned execution. A context-only fork can
+  // still answer without exposing either native or dynamic tool execution.
+  const denyToolCalls =
+    params.toolCalls === "deny" ||
+    params.hostCapabilities.preparedEnvironment?.().hostExecutionRequired === true;
+  if (denyToolCalls && (!relay || relay.enabled === false)) {
+    throw new Error("Session fork tool denial requires the Codex native hook relay to be enabled.");
+  }
+  return denyToolCalls;
+}
+
 export async function resolveCodexSideQuestionRelayEvents(params: {
   denyToolCalls: boolean;
   client: CodexAppServerClient;
@@ -124,6 +139,16 @@ export function registerCodexSideQuestionRelay(
   }).channelId;
   return registerNativeHookRelayForBundledRuntime({
     ...registration,
+    runBeforeToolCall: params.denyToolCalls
+      ? async () => {
+          registration.assertActive?.();
+          return {
+            blocked: true,
+            kind: "veto",
+            reason: "Tool calls are denied for this side question.",
+          };
+        }
+      : registration.runBeforeToolCall,
     provider: "codex",
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: sideParams.sessionId,

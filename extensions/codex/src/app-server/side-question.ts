@@ -113,6 +113,7 @@ import {
   prepareCodexSideQuestionRelay,
   registerCodexSideQuestionRelay,
   resolveCodexSideQuestionRelayEvents,
+  resolveCodexSideQuestionToolDenial,
 } from "./side-question-fork.js";
 import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
 import {
@@ -155,10 +156,7 @@ export async function runCodexAppServerSideQuestion(
     agentId: params.agentId,
     config: params.cfg,
   });
-  const denyToolCalls = params.toolCalls === "deny";
-  if (denyToolCalls && (!options.nativeHookRelay || options.nativeHookRelay.enabled === false)) {
-    throw new Error("Session fork tool denial requires the Codex native hook relay to be enabled.");
-  }
+  const denyToolCalls = resolveCodexSideQuestionToolDenial(params, options.nativeHookRelay);
   const { binding, authority, release } = await resolveCodexSessionBinding({
     bindingStore: options.bindingStore,
     identity: bindingIdentity,
@@ -335,7 +333,7 @@ export async function runCodexAppServerSideQuestion(
     if (nativeExecutionBlock) {
       throw new Error(nativeExecutionBlock);
     }
-    if (!nativeToolSurfaceEnabled) {
+    if (!nativeToolSurfaceEnabled && !denyToolCalls) {
       throw new Error(
         "Codex-native /btw side-question mode is unavailable because the effective tool policy restricts Codex native tools for this session.",
       );
