@@ -1031,7 +1031,7 @@ const enSettings = {
   },
   modelProviders: {
     title: "Configured providers",
-    configureModels: "Set up models",
+    configureModels: "Set up a model",
     actionNamed: "{action}: {name}",
     login: {
       action: "Add account",

@@ -2,7 +2,7 @@
 
 import { flush } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { resolveDefaultModelPresentation } from "./data.ts";
@@ -621,7 +621,7 @@ describe("renderModelProviders", () => {
     );
 
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
-    expect(text(readiness)).toContain("Set up a model");
+    expect(text(readiness)).toContain(t("modelProviders.login.action"));
     expect(text(readiness)).toContain("Model required");
     expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
     // Setup has one way to connect; the access section offers its own again once it ends.
