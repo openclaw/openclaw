@@ -75,11 +75,13 @@ const ROOMS = annexRoomCount(SHAPE);
 const NIGHTFALL_MS = ATTIC_DELAY_MS + 1_000;
 const OVERFLOWING = "SQLite automatic session maintenance left the store over maxEntries";
 
-async function lightTheAnnex(): Promise<ContinuationForest> {
+async function lightTheAnnex(relayEndsItsTurn = true): Promise<ContinuationForest> {
   const forest = await annex.build(SHAPE);
   forest.childrenSettleOnReport = true;
   await forest.light();
-  await forest.endsItsTurn(forest.node("t0.0"));
+  if (relayEndsItsTurn) {
+    await forest.endsItsTurn(forest.node("t0.0"));
+  }
   return forest;
 }
 
@@ -203,7 +205,7 @@ describe("the burning annex: store maintenance past the cap", () => {
   });
 
   it("keeps a crane a report across is bound to while that report is on its way; it reaches the crane, then the room goes", async () => {
-    const forest = await lightTheAnnex();
+    const forest = await lightTheAnnex(false);
     const across = forest.electionOf(forest.node("t0.1"));
     const target = forest.acrossTarget(0);
     const report = forest.hold(`report:${across.id}`);
