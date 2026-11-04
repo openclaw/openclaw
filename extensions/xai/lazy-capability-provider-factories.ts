@@ -171,7 +171,9 @@ export function createLazyXaiVideoGenerationProvider(
 export function createLazyXaiSpeechProvider(
   context: Pick<
     PluginCapabilityCatalogHostContext,
-    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync"
+    | "isProviderAuthProfileConfigured"
+    | "isProviderAuthProfileConfiguredAsync"
+    | "resolveApiKeyForProvider"
   >,
 ): SpeechProviderPlugin {
   return {
@@ -210,7 +212,10 @@ export function createLazyXaiRealtimeTranscriptionProvider(
 export function createLazyXaiRealtimeVoiceProvider(
   context: Pick<
     PluginCapabilityCatalogHostContext,
-    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync" | "resolveAgentDir"
+    | "isProviderAuthProfileConfigured"
+    | "isProviderAuthProfileConfiguredAsync"
+    | "resolveApiKeyForProvider"
+    | "resolveAgentDir"
   >,
 ): RealtimeVoiceProviderPlugin {
   return {
