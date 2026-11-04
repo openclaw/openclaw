@@ -362,29 +362,26 @@ describe("Crabbox setup secret migration", () => {
     },
   );
 
-  it.each(["missing", "ready"] as const)(
-    "explains reserved-name recovery before inspecting a %s store entry",
-    async (status) => {
-      const inspect = vi.fn(async (names: readonly string[]) =>
-        names.map((name) => ({ name, status })),
-      );
-      const check = captureCrabboxDoctorCheck(CRABBOX_SETUP_SECRETS_CHECK_ID, inspect);
-      const ctx = context({
-        setup: "use $OPENCLAW_CW_TS_AUTHKEY",
-        setupEnv: ["OPENCLAW_CW_TS_AUTHKEY"],
-      });
-      const before = structuredClone(ctx.cfg);
-      const findings = await check.detect(ctx);
-      const result = await check.repair!(ctx, findings);
+  it("explains reserved-name recovery before inspecting the store", async () => {
+    const inspect = vi.fn(async () => {
+      throw new Error("Reserved names must be rejected before store inspection");
+    });
+    const check = captureCrabboxDoctorCheck(CRABBOX_SETUP_SECRETS_CHECK_ID, inspect);
+    const ctx = context({
+      setup: "use $OPENCLAW_CW_TS_AUTHKEY",
+      setupEnv: ["OPENCLAW_CW_TS_AUTHKEY"],
+    });
+    const before = structuredClone(ctx.cfg);
+    const findings = await check.detect(ctx);
+    const result = await check.repair!(ctx, findings);
 
-      expect(inspect).not.toHaveBeenCalled();
-      expect(findings).toMatchObject([{ message: expect.stringContaining("reserved") }]);
-      expectText(findings[0]?.fixHint, ["setupSecrets", "setup command", "store IDs", "setupEnv"]);
-      expectText(result.warnings?.join(" "), ["reserved", "setup command", "store IDs"]);
-      expect(result).toMatchObject({ status: "skipped", config: before, changes: [] });
-      expect(ctx.cfg).toEqual(before);
-    },
-  );
+    expect(inspect).not.toHaveBeenCalled();
+    expect(findings).toMatchObject([{ message: expect.stringContaining("reserved") }]);
+    expectText(findings[0]?.fixHint, ["setupSecrets", "setup command", "store IDs", "setupEnv"]);
+    expectText(result.warnings?.join(" "), ["reserved", "setup command", "store IDs"]);
+    expect(result).toMatchObject({ status: "skipped", config: before, changes: [] });
+    expect(ctx.cfg).toEqual(before);
+  });
 
   it.each(["conflicting", "compatible"])("preserves %s mappings during migration", async (kind) => {
     const conflict = kind === "conflicting";

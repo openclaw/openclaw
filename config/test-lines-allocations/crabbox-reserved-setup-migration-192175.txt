@@ -1,2 +1,2 @@
 # Diagnose reserved setup names before store lookup and keep legacy checkpoint cleanup available.
-25
+22
