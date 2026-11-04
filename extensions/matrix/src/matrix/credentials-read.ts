@@ -21,10 +21,12 @@ export { resolveMatrixCredentialsDir, resolveMatrixCredentialsPath } from "../st
 
 function matrixCredentialsStoreOptions(env: NodeJS.ProcessEnv) {
   const runtime = getOptionalMatrixRuntime();
-  const resolvedEnv =
-    env.OPENCLAW_STATE_DIR?.trim() || !runtime
-      ? env
-      : { ...env, OPENCLAW_STATE_DIR: runtime.state.resolveStateDir(env) };
+  // Writes must land in the store reads resolve through, and the installed runtime owns
+  // locality: capture-based reads already go through its resolver, so an explicit caller
+  // env override may not point the write path somewhere the runtime never reads.
+  const resolvedEnv = runtime
+    ? { ...env, OPENCLAW_STATE_DIR: runtime.state.resolveStateDir(env) }
+    : env;
   return {
     namespace: MATRIX_CREDENTIALS_NAMESPACE,
     maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
