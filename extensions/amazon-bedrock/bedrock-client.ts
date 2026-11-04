@@ -40,7 +40,7 @@ export async function createBedrockStreamClient(
             {
               method: request.method,
               path: request.path,
-              query: request.query,
+              query: request.query ?? {},
               headers: request.headers,
               body: request.body,
             },
