@@ -194,6 +194,60 @@ it("does not retain the caller that first imports source capture storage", () =>
   );
 });
 
+it("releases failed native loads only when their source capture is disposed", () => {
+  runChild(
+    `
+    import assert from "node:assert/strict";
+    import fs from "node:fs";
+    import path from "node:path";
+    import { setImmediate } from "node:timers/promises";
+    import { createPluginSourceCapture } from ${moduleSpecifier("metadataCapture")};
+    import { tryNativeRequireJavaScriptModule as load } from ${moduleSpecifier("nativeRequire")};
+    const captures = [createPluginSourceCapture(), createPluginSourceCapture()];
+    function fail(capture) {
+      const entry = path.join(capture.directory, "failed.cjs");
+      fs.writeFileSync(entry, 'throw Object.assign(new Error("fixture failure"), { payload: {} });');
+      try {
+        load(entry);
+        assert.fail("Expected the native load to throw");
+      } catch (error) {
+        assert.equal(error.message, "fixture failure");
+        return [new WeakRef(error), new WeakRef(error.payload)];
+      }
+    }
+    async function collect() {
+      for (let pass = 0; pass < 8; pass++) {
+        await setImmediate();
+        globalThis.gc();
+      }
+    }
+    const references = captures.map(fail);
+    try {
+      await collect();
+      for (const reference of references.flat()) assert.notEqual(reference.deref(), undefined);
+      captures[0].dispose();
+      await collect();
+      for (const reference of references[0]) {
+        assert.equal(reference.deref(), undefined, "Disposed capture retained its failed load");
+      }
+      for (const reference of references[1]) {
+        assert.notEqual(reference.deref(), undefined, "Live capture lost its original failure");
+      }
+      await captures[1].disposeAsync();
+      await collect();
+      for (const reference of references[1]) {
+        assert.equal(reference.deref(), undefined, "Async disposal retained its failed load");
+      }
+    } finally {
+      for (const capture of captures) await capture.disposeAsync();
+    }
+  `,
+    [],
+    0,
+    ["--expose-gc"],
+  );
+});
+
 function capturePaths(boundaryRoot: string, capturedFile: string, worker = false) {
   const captureRoot = worker ? path.dirname(boundaryRoot) : boundaryRoot;
   const instanceRoot = path.dirname(path.dirname(captureRoot));
