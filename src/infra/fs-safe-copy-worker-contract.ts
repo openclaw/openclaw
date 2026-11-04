@@ -10,6 +10,7 @@ export type FsSafeCopyRead =
 
 export type FsSafeCopyWrite =
   | { type: "create"; destination: string }
+  | { type: "remove"; destination: string }
   | { type: "copy"; source: string; destination: string };
 
 export type FsSafeProvisionCopy = {
