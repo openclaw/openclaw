@@ -68,7 +68,7 @@ function isStreamingStartBackedOff(accountId: string): boolean {
   if (backoffUntil === undefined) {
     return false;
   }
-  if (backoffUntil <= Date.now()) {
+  if (backoffUntil <= performance.now()) {
     streamingStartBackoffUntilByAccount.delete(accountId);
     return false;
   }
@@ -262,6 +262,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
   let lastPartial = "";
+  let previewText = "";
+  let previewBlockOffset = 0;
   let reasoningText = "";
   // The preview may store its projection, so the close needs the reasoning as written too.
   let authoredReasoningText = "";
@@ -368,24 +370,39 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     // Answer snapshots and mirrored blocks share authored text until display. Both arrival
     // orders must compare and merge that representation, never a rendered table.
-    // The block route compares only after this message has streamed a snapshot: a block with
-    // no partial of its own right after an assistant-message boundary is the new message's
-    // text even when it equals the tail of the message before it.
-    if (
-      nextText === lastPartial ||
-      (mode === "delta" &&
-        (tableMode === "off" || (lastPartial !== "" && answerTableNeedsPostPath(streamText))) &&
-        coreBlockStreamingEnabled &&
-        streamText.endsWith(`\n\n${nextText}`))
-    ) {
+    if (mode === "snapshot" && nextText === lastPartial) {
       return;
     }
-    lastPartial = nextText;
     if (mode === "delta") {
+      // Consume completed blocks in preview order, never by suffix overlap.
+      let offset = previewBlockOffset;
+      // Sentence chunks can omit the gap retained in the cumulative preview.
+      if (!previewText.startsWith(nextText, offset)) {
+        while (/\s/u.test(previewText.charAt(offset))) {
+          offset++;
+        }
+      }
+      if (previewText.startsWith(nextText, offset)) {
+        previewBlockOffset = offset + nextText.length;
+        return;
+      }
+      // A table route still drops a block the preview did not cover when it repeats the
+      // streamed tail. The block route compares only after this message has streamed a
+      // snapshot: a block with no partial of its own right after an assistant-message boundary
+      // is the new message's text even when it equals the tail of the message before it.
+      if (
+        (tableMode === "off" || (lastPartial !== "" && answerTableNeedsPostPath(streamText))) &&
+        coreBlockStreamingEnabled &&
+        streamText.endsWith(`\n\n${nextText}`)
+      ) {
+        return;
+      }
       streamText = `${streamText}${nextText}`;
     } else {
+      previewText = nextText;
       streamText = `${snapshotBaseText}${nextText}`;
     }
+    lastPartial = nextText;
     const answerPreview = previewAnswerText();
     if (answerPreview !== undefined) {
       flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, answerPreview));
@@ -424,7 +441,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       } catch (error) {
         streamingStartBackoffUntilByAccount.set(
           account.accountId,
-          Date.now() + STREAMING_START_FAILURE_BACKOFF_MS,
+          performance.now() + STREAMING_START_FAILURE_BACKOFF_MS,
         );
         params.runtime.error(
           `feishu[${account.accountId}]: streaming start failed; using non-streaming card fallback for ${
@@ -1478,6 +1495,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // source boundary so tool continuations cannot replace it.
             snapshotBaseText = streamText ? `${streamText}\n\n` : startNextMessage();
             lastPartial = "";
+            previewText = "";
+            previewBlockOffset = 0;
             modelWaitLine = "";
             return updateStreamingStatusLine("", false);
           }

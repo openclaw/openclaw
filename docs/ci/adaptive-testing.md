@@ -86,8 +86,31 @@ terminal outcomes and the frozen snapshot with all dependencies set to `null`,
 and emits a warning. Missing graph data still requires conservative selection.
 If that smaller export also exceeds the limit, the incomplete snapshot remains.
 
-This snapshot follows configuration evaluation and native test selection. It
-does not contain a prior graph, source diff, model ranking or selection decision.
+Before launching each observed Vitest child, the shard wrapper also writes
+`launch.json`. It records the actual checkout commit/tree and whether tracked or
+untracked changes exist, the preflight comparison base commit/tree, and a
+rename/deletion-aware diff. The comparison base is not necessarily the source of
+a prior dependency graph; consumers must retain both identities independently.
+Recording does not fetch Git history; an unavailable comparison commit is a data gap.
+The file hashes the finalized command arguments and pre/post-shard include-file
+contents without exporting absolute paths. A missing base, dirty checkout, or
+unreadable input records a fallback reason. Every launch record includes
+`no-prior-snapshot`: prior qualification happens later, when the reporter has
+the native inventory. The launch record itself does not resolve priors.
+
+The reporter freezes the launch file's SHA-256 hash when it initializes and
+retains it as `preExecution.launchInputs`. Consumers must match the hash to the
+same directory's uploaded `launch.json`, verify source/runtime identity, and
+check that recording preceded reporter initialization. A missing or mismatched
+record is a data gap. Both files use the existing sampled artifact upload;
+launch-only artifacts can survive a child that exits before producing inventory.
+Launch records are bounded to 1 MiB. Preparation is best effort and does not
+change the test command or result when it fails.
+
+The native snapshot follows configuration evaluation and native test selection;
+the launch record precedes them. Its `decision` field freezes a graph proposal
+before tests execute, using the full native inventory. `scheduledFiles` always
+contains that inventory; the proposal cannot change execution.
 Global setup can still change worker settings after capture. The local recording
 timestamp is not artifact availability: a later consumer must also retain the
 publication/download time before using an earlier run as predictive evidence.
@@ -109,6 +132,61 @@ the repository, lock, project/pool, runtime, platform and dependency-root identi
 retain source/diff provenance, and measure overlapping-file graph differences.
 The shadow selector still requires the original exact context. Matching graph
 inputs never grants permission to omit tests.
+
+### Published prior snapshots
+
+For sampled same-repository PRs and scheduled runs, preflight uses its existing
+read-only Actions permission to restore at most two observation archives from
+the five most recent completed scheduled main runs. Successful and failed
+workflows can contribute observations; cancelled runs cannot. An unrelated job
+failure does not erase complete file results, while missing, incomplete or
+failing file history still requires conservative selection. Restore verifies the exact
+run/attempt, source commit/tree, archive digest and paired launch/member hashes.
+The producer must have completed and published before the current run began.
+Restore has a shared ten-second deadline and does not retry requests. Missing
+history or unavailable APIs produce an empty bundle and preserve full execution.
+
+The bundle is shared through a same-run artifact. Test jobs download it without
+additional token permissions. Each bundle binds the current workflow run,
+attempt and actual checkout commit; the reporter also freezes the bundle hash.
+At the native inventory callback, the reporter selects the newest compatible
+prior and computes the complete prior-to-current Git diff, including both ends
+of renames. It does not substitute the launch record's comparison base.
+
+Exact configuration, lock, environment and runtime identities must match. The
+prior commit must be locally available and an ancestor; no test process fetches
+history. Unknown source, dirty checkout, stale bundle or incompatible inputs
+produce an explicit fallback. Different shard membership can still prevent a
+match; graph-input comparability alone does not relax the selector.
+
+The frozen decision records prior provenance, changed paths, graph candidates
+and the unchanged scheduled inventory.
+These are prospective proposals, not measured omission savings. Include restore,
+download, comparison and export costs in the eventual net-benefit calculation.
+
+### Owned model rankings
+
+When a compatible prior is available, the same inventory callback records raw
+CART scores in `decision.ranking`. The source-controlled model in
+`scripts/ci-adaptive-model.json` uses five structural features: basename match,
+path-token overlap, same directory, observed dependency membership and the
+logarithm of changed-path count. Recorded dependencies describe membership,
+not direct edges or graph distance. Current outcomes and durations never enter
+these features. Missing dependency evidence remains unknown for a model that
+uses it; invalid or unavailable models produce null scores with reasons.
+
+The record includes hashes of the actual model bytes, extractor source and
+scoring inputs, along with elapsed scoring time. Rows preserve the full native
+inventory and its order, including project and pool identity. There is no score
+threshold, network request, provider token use or change to test execution.
+
+The initial tiny tree was trained on 120 rows from controlled source mutations,
+with separate owner groups reserved for evaluation. Its manifest records the
+corpus and row hashes. The 64-row held-out result had ranking AUC 0.98276, but
+its predictions coincided with dependency membership on that narrow corpus.
+These class-balanced leaf scores are not calibrated failure probabilities or
+evidence of improved selection over the graph. Natural regression coverage and
+net CI savings still require full-run comparisons.
 
 The first readout compares usable-data coverage, native-Bun gaps, observed
 failures, fallback causes, and paired total job costs. Learned selection and

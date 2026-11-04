@@ -44,6 +44,7 @@ export class NewSessionDraft {
       );
     const showBlocked = (changed = false) =>
       showToast({
+        actionPrimary: true,
         message: t(changed ? "chat.privateDraftReload.changed" : "chat.privateDraftReload.blocked"),
         actionLabel: t("chat.privateDraftReload.review"),
         onAction: () => void review(),
@@ -101,7 +102,7 @@ export class NewSessionDraft {
         await retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...reloadOptions });
       } catch {
         if (currentOwner()) {
-          showToast({ message: t("chat.privateDraftReload.unavailable") });
+          showToast({ severity: "error", message: t("chat.privateDraftReload.unavailable") });
         }
       } finally {
         if (this.privateDraftReview?.controller === controller) {

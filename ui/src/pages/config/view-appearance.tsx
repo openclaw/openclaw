@@ -18,11 +18,11 @@ import {
   SettingsRow,
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
-import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
+import { formatThemeValidationError } from "./custom-theme-import.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SessionSources } from "./session-sources.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
@@ -173,7 +173,7 @@ export function AppearanceSection(props: ConfigProps) {
   const importedName = createMemo(() =>
     props.hasCustomTheme && props.customThemeLabel
       ? props.customThemeLabel
-      : t("configView.appearance.importedTheme"),
+      : t("configView.appearance.customTheme"),
   );
   const themeOptions = createMemo(
     (): Array<{ id: ThemeName; label: string; description: string }> => [
@@ -269,7 +269,7 @@ export function AppearanceSection(props: ConfigProps) {
             const status = () => {
               const error = catalog()?.error;
               if (error) {
-                throw new Error(error);
+                throw error instanceof Error ? error : new Error(error);
               }
               return undefined;
             };
@@ -277,7 +277,7 @@ export function AppearanceSection(props: ConfigProps) {
               <Errored
                 fallback={(error) => (
                   <p class="settings-status settings-status--error" role="alert">
-                    {formatUiError(error())}{" "}
+                    {formatThemeValidationError(error())}{" "}
                     <button
                       type="button"
                       class="btn btn--sm"
@@ -447,7 +447,7 @@ export function AppearanceSection(props: ConfigProps) {
                       class="settings-theme-import__message settings-theme-import__message--error"
                       role="alert"
                     >
-                      {formatUiError(error())}
+                      {formatThemeValidationError(error())}
                     </div>
                   )}
                 >

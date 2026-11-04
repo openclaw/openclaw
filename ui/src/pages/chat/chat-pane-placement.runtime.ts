@@ -128,7 +128,7 @@ export async function reclaimChatPanePlacement(params: {
           if (outcome.status === "failed" && params.isCurrent()) {
             params.publishError(outcome.error);
           } else if (params.isCurrent()) {
-            showToast({ message: t("sessionsView.workerStopped"), icon: "check" });
+            showToast({ message: t("sessionsView.workerStopped"), severity: "success" });
           }
         }
         return "close";
@@ -139,7 +139,7 @@ export async function reclaimChatPanePlacement(params: {
         params.publishError(error);
         showToast({
           message: error instanceof Error ? error.message : String(error),
-          icon: "alertTriangle",
+          severity: "error",
         });
         // A refresh failure must not offer to repeat a successful stop.
         return stopped ? "close" : "retry";

@@ -512,6 +512,7 @@ describe("gateway send conversation ownership", () => {
 
   it("does not share message.action idempotency results across authority origins", async () => {
     const context = makeContext();
+    const controller = new AbortController();
     const firstDeferred = createDeferred<{ details: { action: string } }>();
     const secondDeferred = createDeferred<{ details: { action: string } }>();
     mocks.dispatchChannelMessageAction
@@ -529,6 +530,7 @@ describe("gateway send conversation ownership", () => {
       { ...params, conversationReadOrigin: "direct-operator" },
       {
         context,
+        signal: controller.signal,
         requestId: "direct",
       },
     );
@@ -544,6 +546,7 @@ describe("gateway send conversation ownership", () => {
     await waitForCalls(mocks.dispatchChannelMessageAction, 2);
     expect(mocks.dispatchChannelMessageAction.mock.calls[0]?.[0]).toMatchObject({
       conversationReadOrigin: "direct-operator",
+      abortSignal: controller.signal,
     });
     expect(mocks.dispatchChannelMessageAction.mock.calls[1]?.[0]).toMatchObject({
       conversationReadOrigin: "delegated",
