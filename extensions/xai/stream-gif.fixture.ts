@@ -28,6 +28,7 @@ async function requestMime(provider: string): Promise<string> {
     const payload = { input };
     const pending = options?.onPayload?.(payload, model);
     return {
+      async *[Symbol.asyncIterator]() {},
       result: async () => {
         const resolved = ((await pending) ?? payload) as { input?: unknown };
         const wire = JSON.stringify(resolved);
@@ -39,9 +40,8 @@ async function requestMime(provider: string): Promise<string> {
         if (JSON.stringify(input) !== before) {
           mime = "history-mutated";
         }
-        return undefined as never;
       },
-    } as ReturnType<StreamFn>;
+    } as unknown as ReturnType<StreamFn>;
   };
   const wrapped = wrapXaiProviderStream({
     provider,
@@ -57,7 +57,8 @@ async function requestMime(provider: string): Promise<string> {
     id: "grok-4.6",
     baseUrl: provider === "openai" ? "https://api.openai.com/v1" : XAI_BASE_URL,
   });
-  await wrapped(model, { messages: [] }, { apiKey: "synthetic-test-key" }).result();
+  const started = wrapped(model, { messages: [] }, { apiKey: "synthetic-test-key" });
+  await (await started).result();
   return mime;
 }
 
