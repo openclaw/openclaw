@@ -199,14 +199,36 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `f81e2be8b5d9`: qualify setup-failure custody in
+Pinned main `f81e2be8b5d9`: close the native skills HTTP fixture when its
+configuration write rejects in
 `extensions/codex/src/app-server/run-attempt.skills.native.test.ts`.
-The unchanged helper starts a real loopback HTTP fixture before writing its
-configuration; callers receive the close handle only after those writes succeed.
-The primary remains byte-identical to the source census: all three cases, inputs
-and assertions are retained. A selected config-write failure and exact owned-server
-observation are pending native qualification; no observed leak or new source
-classification/support credit is claimed. Production is unchanged.
+The helper now awaits its existing close operation before rethrowing the original
+setup error. All three cases, inputs, assertions and normal successful cleanup
+remain unchanged; production is untouched. Five added test-file lines receive an
+exact separate allocation; the shared ceiling stays unchanged. Source census
+classifications and support credit remain unchanged.
+
+The untouched official native baseline and restored candidate each pass all three
+cases against the deterministic loopback Responses fixture. An identical temporary
+probe selects the existing first case and rejects exactly its model-catalog write
+with EIO after the real HTTP listener opens. At helper rejection, before diagnostic
+cleanup, the original preserves the error but leaves its one server listening with
+no close call or event. The candidate preserves the same error and joins one close
+call/event, leaving the server stopped. The independent closed-listener assertion
+fails only on the original. Proof-owned finally stops the original server after
+observation and performs no candidate stop. The two other cases are explicitly
+filtered during this probe; all three actual names match across both full runs and
+both controls. Temporary instrumentation and every production owner are restored
+exactly. The failure probe reaches no native Codex child, model request or Gateway;
+this is bounded fixture cleanup proof, not an observed persistent process leak.
+
+Scoped types, typed lint, formatting, ledger MDX and whitespace pass. The local
+test-line gate remains failed: frozen-base6,465,344 LF/6,465,148 effective ceiling
+and candidate6,465,349/6,465,153 both have196 lines of inherited debt. The exact
++5/+5 change preserves that deficit; unchanged policy rejects positive growth
+while over ceiling, even with matched allocation. Nonpositive changes can pass
+that policy, so this does not claim the same check failed on main. No gate or
+shared ceiling is relaxed; exact-head CI and fresh review remain separate gates.
 
 Batch99 [192770](https://github.com/openclaw/openclaw/pull/192770) merged;
 its native checkout was removed, while its managed checkout remains retained
