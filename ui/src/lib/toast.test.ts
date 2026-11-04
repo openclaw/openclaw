@@ -47,6 +47,32 @@ it("requires an explicit severity, including neutral outcomes", () => {
 });
 
 describe("shared toast", () => {
+  it("keeps redacted error details collapsed until opened", async () => {
+    const host = await mountHost();
+    showToast({
+      severity: undefined,
+      message: "Couldn’t save this setting. Try again.",
+      detail: "Request failed: token=sk-123456789012345678901234567890",
+      durationMs: 60_000,
+    });
+    await settleHost(host);
+    const details = host.querySelector("details")!;
+    expect(details).not.toBeNull();
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent).toBe("Show details");
+    expect(details.textContent).not.toContain("sk-123456789012345678901234567890");
+    details.querySelector("summary")!.click();
+    expect(details.open).toBe(true);
+    expect(host.querySelector('[role="status"]')).not.toBeNull();
+    showToast({
+      severity: undefined,
+      message: "Couldn’t save this setting. Try again.",
+      detail: "Request failed: token=sk-123456789012345678901234567890",
+      durationMs: 60_000,
+    });
+    await settleHost(host);
+    expect(host.querySelector("details")?.open).toBe(false);
+  });
   it("holds outcomes until a host can present them", async () => {
     expect(showToast({ severity: undefined, message: "Early" })).toBe(false);
     const host = await mountHost();

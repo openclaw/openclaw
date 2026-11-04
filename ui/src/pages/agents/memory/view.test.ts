@@ -367,7 +367,7 @@ describe("dreaming view", () => {
     expect(idleContainer.querySelector(".dreams__bubble")).toBeNull();
     expectElement(idleContainer, ".dreams--idle");
     expect(compactText(idleContainer.querySelector(".dreams-controls__status"))).toBe(
-      "Dreaming is a global setting; it is not scoped to this agent.",
+      "Dreaming applies to all agents.",
     );
 
     const engineOff = renderInto(
@@ -388,7 +388,7 @@ describe("dreaming view", () => {
       }),
     );
     expect(compactText(engineOff.querySelector(".dreams-controls__status"))).toBe(
-      "Memory engine is Off. Choose an engine in Settings to enable dreaming.",
+      "Memory engine is off. Choose an engine in Settings to turn on Dreaming.",
     );
     expect(engineOff.querySelector<HTMLInputElement>('input[role="switch"]')?.disabled).toBe(true);
 

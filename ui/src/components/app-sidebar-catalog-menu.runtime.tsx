@@ -95,6 +95,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
     const scope = { ...mutation, catalogGeneration: props.host.sessionData.sessionScopeGeneration };
     try {
       const confirmed = await showConfirmDialog({
+        title: t("chat.catalog.deleteSessionTitle"),
         message: t("chat.catalog.deleteSessionConfirm"),
         details: menu.name,
         confirmLabel: t("chat.catalog.deleteSession"),

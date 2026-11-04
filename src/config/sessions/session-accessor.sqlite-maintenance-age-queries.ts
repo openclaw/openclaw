@@ -1,4 +1,4 @@
-import { sql } from "kysely";
+import { sql, type InferResult } from "kysely";
 import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
 import {
   createSqliteQueryCache,
@@ -27,6 +27,7 @@ export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database
       "last_interaction_at",
       "session_started_at",
     ]);
+  type ActivityRow = InferResult<typeof projection>[number];
   const ordered = db
     .selectFrom(
       projection
@@ -104,7 +105,20 @@ export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database
         ),
     ),
     activity: prepareSqliteQueryIterator(database, () => ordered.selectAll("age_rows")),
+    activityBefore: prepareSqliteQueryIterator<number, ActivityRow>(database, (parameter) =>
+      ordered.selectAll("age_rows").where(
+        "updated_at",
+        "<",
+        parameter((maximum) => maximum),
+      ),
+    ),
     // Raw edits remain marked until the canonical owner validates their key/row shape.
     dashboards: prepareSqliteQueryIterator(database, () => dashboards.unionAll(uncertified)),
+    dashboardsBefore: prepareSqliteQueryIterator<number, ActivityRow>(database, (parameter) => {
+      const maximum = parameter((value) => value);
+      return dashboards
+        .where("age_rows.updated_at", "<", maximum)
+        .unionAll(uncertified.where("age_rows.updated_at", "<", maximum));
+    }),
   };
 });

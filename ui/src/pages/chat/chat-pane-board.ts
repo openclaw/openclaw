@@ -21,7 +21,6 @@ import {
 } from "../../lib/board/provider.ts";
 import { updateBoardSessionView } from "../../lib/board/settings.ts";
 import { currentDisplayConfig } from "../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
@@ -185,7 +184,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         this.publishHeaderError(error, scope.headerOutcomeOwner);
         showToast({
           severity: "error",
-          message: t("chat.sidePanel.defaultSaveError", { error: formatUiError(error) }),
+          message: t("chat.sidePanel.defaultSaveError"),
+          detail: error,
           anchor: this.element,
         });
       }

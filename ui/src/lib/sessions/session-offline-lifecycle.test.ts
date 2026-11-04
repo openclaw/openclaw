@@ -572,7 +572,7 @@ it("reports a preserved worktree after deferred deletion without removing it", a
   await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentDraining).toBe(false));
   expect(showToast).toHaveBeenCalledExactlyOnceWith({
     severity: undefined,
-    message: "Managed Worktrees:\nfeature/offline — live run or cleanup active",
+    message: "Managed worktrees:\nfeature/offline — live run or cleanup active",
   });
   expect(h.row()).toBeUndefined();
   expect(h.current().request.mock.calls.some(([method]) => method === "worktrees.remove")).toBe(
