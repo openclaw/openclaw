@@ -10,7 +10,6 @@ import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
 import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
-import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
@@ -88,9 +87,10 @@ export function buildDashboardSessionTitleSource(params: {
   attachments?: readonly ChatAttachment[];
 }): string {
   const visibleMessage = params.message.trim();
-  // Only real control commands skip the message body; pasted paths and other
-  // leading-slash task text still feed dashboard and worktree titles.
-  const slashCommand = Boolean(visibleMessage) && hasControlCommand(visibleMessage);
+  // Any leading slash prefers attachment text (PR #121467). Path-only slash
+  // messages with no usable attachment still fall through to visibleMessage so
+  // resolveSessionTitleSource can title pasted absolute paths.
+  const slashCommand = visibleMessage.startsWith("/");
   let source = slashCommand ? "" : visibleMessage;
   for (const attachment of params.attachments ?? []) {
     const separatorLength = source ? 1 : 0;
