@@ -673,6 +673,12 @@ by Doctor after backup, the maintenance scope owns the reader. Other sources use
 an artifact-preserving private copy with the existing unstable-source refusal.
 The helper owns cleanup; callbacks must not retain or close the connection.
 
+Optional metadata checks can use `isSqliteSnapshotCapacityError(error)` from the
+same facade to report an unavailable inspection when disposable snapshot storage
+runs out of space or quota. This classification excludes source-open failures and
+unsettled cleanup. It does not establish source corruption or authorize skipping
+backup, migration, schema, or write-admission checks.
+
 First-party imports of an external SQLite database can use
 `startSqliteReadOnlyLocationAsync(path, { signal })` from the private
 `sqlite-runtime` facade. Snapshot preparation, native flushes, and staging

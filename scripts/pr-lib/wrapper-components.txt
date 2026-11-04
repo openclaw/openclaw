@@ -538,6 +538,7 @@ src/commands/doctor/shared/legacy-config-compat.ts
 src/commands/doctor/shared/legacy-config-issues.ts
 src/commands/doctor/shared/legacy-config-migrations.audio.ts
 src/commands/doctor/shared/legacy-config-migrations.channels.ts
+src/commands/doctor/shared/legacy-config-migrations.plugin-prompts.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot-account.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
@@ -1277,6 +1278,7 @@ src/infra/sqlite-schema-lifetime.ts
 src/infra/sqlite-schema-mutation.ts
 src/infra/sqlite-schema-scope.ts
 src/infra/sqlite-schema-sql.ts
+src/infra/sqlite-snapshot-capacity-error.ts
 src/infra/sqlite-snapshot-diagnostics.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts

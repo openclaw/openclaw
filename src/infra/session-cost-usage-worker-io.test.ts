@@ -1,16 +1,13 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setImmediate } from "node:timers/promises";
-import { setEnvironmentData, Worker } from "node:worker_threads";
 import { expectDefined as requireValue } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
-import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { observeWorkerActivity } from "../../test/helpers/worker-activity.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   encodeSessionArchiveContent,
-  materializeSessionArchiveForRead,
+  resolveSessionArchiveReadPath,
 } from "../config/sessions/archive-compression.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -21,7 +18,6 @@ import {
 } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -46,10 +42,7 @@ import {
 } from "./session-cost-usage-fixtures.test-support.js";
 import { usageCostPartitionKey } from "./session-cost-usage-partitions.js";
 import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
-import {
-  observeUsageWorkerReads,
-  withUsageWorkerPreload,
-} from "./session-cost-usage-worker-io.test-support.js";
+import { observeUsageWorkerReads } from "./session-cost-usage-worker-io.test-support.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import {
   discoverAllSessions,
@@ -275,7 +268,7 @@ it("reads recorded usage across append, rewrite, and rollup replacement without 
 
 it("filters refresh work before reading historical transcripts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { archive, encoded } = await writeArchive(state.stateDir, "excluded-archive");
+    const { archive } = await writeArchive(state.stateDir, "excluded-archive");
     const { archive: recordedArchive } = await writeArchive(state.stateDir, "recorded-archive");
     const probe = await observeUsageWorkerReads(state.stateDir, [archive, recordedArchive]);
     await probe.run(async () => {
@@ -308,12 +301,6 @@ it("filters refresh work before reading historical transcripts", async () => {
           );
         });
       }
-      const oversized = encodeSessionArchiveContent("x".repeat(2 * 1024 * 1024));
-      await fs.writeFile(archive, oversized.bytes);
-      await probe.clear();
-      await expect(refreshUsage({ agentId: "main" })).rejects.toThrow(/decompressed bytes/);
-      await expectNoRead(probe, "transcript-stats");
-      await fs.writeFile(archive, encoded.bytes);
       const sessions = await writeSessions(
         await sessionsDirectory(state.stateDir),
         ["current", "quarter-gap", "removed"],
@@ -327,9 +314,11 @@ it("filters refresh work before reading historical transcripts", async () => {
         sessionFiles: [recorded.sessionFile, recordedArchive, ...sessionPaths(sessions)],
       });
       const retained = storedRollup(recorded.sessionFile);
-      const archiveReadPath = materializeSessionArchiveForRead(recordedArchive);
+      const archiveReadPath = resolveSessionArchiveReadPath(
+        recordedArchive,
+        await fs.stat(recordedArchive),
+      );
       const retainedArchive = storedRollup(archiveReadPath);
-      await fs.rm(archiveReadPath);
       const quarterKey = usageCostPartitionKey(gap.sessionFile, "2026-09-01");
       transact((owner) => {
         owner.db
@@ -387,6 +376,85 @@ it("filters refresh work before reading historical transcripts", async () => {
         }),
       ).toMatchObject({ summaries: [{ totalTokens: 17 }], cacheStatus: { status: "fresh" } });
     });
+  });
+});
+
+it("refreshes archives from their source and keeps the last usage of one that cannot be decoded", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sessionsDir = await sessionsDirectory(state.stateDir);
+    const header = (id: string) => ({ type: "session", version: 1, id });
+    // Past the scanner's bound, an archive record keeps its structure and short
+    // strings, so the usage on a huge assistant message still counts.
+    const transcripts = {
+      healthy: [
+        header("healthy"),
+        {
+          ...assistantEntry(5, { cost: 1, content: "x".repeat(33 * 1024 * 1024) }),
+          id: "a",
+          parentId: null,
+        },
+      ],
+      undecodable: [header("undecodable"), assistantEntry(6, { cost: 1 })],
+    };
+    const archives = await Promise.all(
+      Object.entries(transcripts).map(async ([sessionId, records]) => {
+        const encoded = encodeSessionArchiveContent(
+          `${records.map((r) => JSON.stringify(r)).join("\n")}\n`,
+        );
+        const archive = path.join(
+          sessionsDir,
+          `${sessionId}.jsonl.reset.2026-02-05T12-00-00.000Z${encoded.suffix}`,
+        );
+        await fs.writeFile(archive, encoded.bytes);
+        return archive;
+      }),
+    );
+    setRuntimeConfigSnapshot({});
+    const [live] = await writeSessions(sessionsDir, ["live"], () => assistantEntry(3, { cost: 1 }));
+    const [healthy, undecodable] = archives as [string, string];
+    const keyOf = async (archive: string) =>
+      resolveSessionArchiveReadPath(archive, await fs.stat(archive));
+    const read = (sessionFile: string) =>
+      loadCached({ agentId: "main", sessions: [{ sessionFile }], requestRefresh: false });
+    const totalOf = async (sessionFile: string) =>
+      (await read(sessionFile)).summaries[0]?.totalTokens;
+    expect(await refreshUsage({ agentId: "main" })).toBe("refreshed");
+    const healthyKey = await keyOf(healthy);
+    expect([await totalOf(healthy), await totalOf(undecodable)]).toEqual([5, 6]);
+    // Usage decodes archives as a stream; it never writes plaintext copies.
+    expect(existsSync(healthyKey) || existsSync(await keyOf(undecodable))).toBe(false);
+
+    // Upgrade: rows checkpointed against a decompressed copy rescan once from the source.
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const legacy = JSON.parse(storedRollup(healthyKey).valueJson);
+    legacy.checkpoint = { ...legacy.checkpoint, observedSize: 34 * 1024 * 1024, inode: 1 };
+    database.db
+      .prepare("UPDATE cache_entries SET value_json = ? WHERE key = ?")
+      .run(JSON.stringify(legacy), healthyKey);
+
+    // A damaged archive gets a new identity; its previous usage moves to it.
+    const bytes = await fs.readFile(undecodable);
+    bytes.write("oops", 0);
+    await fs.writeFile(undecodable, bytes);
+    await fs.utimes(undecodable, new Date(), new Date(Date.now() + 60_000));
+    await fs.appendFile(live!.sessionFile, `${JSON.stringify(assistantEntry(4, { cost: 1 }))}\n`);
+
+    // A targeted refresh alone must find the prior identity's totals.
+    expect(
+      await refreshUsage({ agentId: "main", sessionFiles: [undecodable, live!.sessionFile] }),
+    ).toBe("refreshed");
+    expect(await totalOf(undecodable)).toBe(6);
+    expect((await read(undecodable)).cacheStatus).toMatchObject({ staleFiles: 1 });
+    expect(await refreshUsage({ agentId: "main" })).toBe("refreshed");
+    expect(JSON.parse(storedRollup(healthyKey).valueJson).checkpoint).toMatchObject({
+      observedSize: (await fs.stat(healthy)).size,
+    });
+    expect([
+      await totalOf(healthy),
+      await totalOf(undecodable),
+      await totalOf(live!.sessionFile),
+    ]).toEqual([5, 6, 7]);
+    expect(readRows("main")).toHaveLength(3);
   });
 });
 
@@ -478,108 +546,6 @@ it.each(["zstd", "plain"] as const)(
     });
   },
 );
-
-it("joins compressed archive materialization before settling summary cancellation", async ({
-  signal,
-}) => {
-  const root = tempDirs.make("openclaw-usage-worker-native-archive-");
-  const { archive, encoded } = await writeArchive(root, "native-archive");
-  expect(encoded.suffix).toBe(".zst");
-  const entered = path.join(root, "native-entered");
-  const release = new Int32Array(new SharedArrayBuffer(4));
-  setEnvironmentData(entered, release.buffer);
-  const releaseNative = () => {
-    Atomics.store(release, 0, 1);
-    Atomics.notify(release, 0);
-  };
-  const completed = path.join(root, "native-completed");
-  const preload = path.join(root, "hold-archive-native.cjs");
-  await fs.writeFile(
-    preload,
-    `const fs = require("node:fs");
-const zlib = require("node:zlib");
-const { BroadcastChannel, getEnvironmentData, isMainThread, threadId } = require("node:worker_threads");
-if (!isMainThread) {
-  const compressed = Buffer.from(${JSON.stringify(encoded.bytes.toString("base64"))}, "base64");
-  const decompress = zlib.zstdDecompressSync;
-  zlib.zstdDecompressSync = function(bytes, ...args) {
-    if (!Buffer.from(bytes).equals(compressed)) return Reflect.apply(decompress, this, [bytes, ...args]);
-    fs.writeFileSync(${JSON.stringify(entered)}, String(threadId));
-    const activity = new BroadcastChannel(${JSON.stringify(`${entered}:activity`)});
-    activity.postMessage(threadId);
-    activity.close();
-    const release = new Int32Array(getEnvironmentData(${JSON.stringify(entered)}));
-    while (Atomics.load(release, 0) === 0) Atomics.wait(release, 0, 0);
-    const result = Reflect.apply(decompress, this, [bytes, ...args]);
-    fs.writeFileSync(${JSON.stringify(completed)}, "complete");
-    return result;
-  };
-  require("node:module").syncBuiltinESMExports();
-}
-`,
-  );
-  try {
-    await withUsageWorkerPreload(root, preload, async () => {
-      using terminate = vi.spyOn(Worker.prototype, "terminate");
-      const activeWorker = observeWorkerActivity(`${entered}:activity`);
-      const scope = new AsyncWorkScope();
-      const reason = new Error("summary owner closed");
-      let summarySettled = false;
-      let drainSettled = false;
-      const summary = scope.track(() =>
-        loadSessionCostSummary({ agentId: "main", sessionFile: archive }),
-      );
-      const outcome = Promise.allSettled([summary]).then(([result]) => {
-        summarySettled = true;
-        return result;
-      });
-      try {
-        // The durable marker precedes both the activity receipt and summary settlement.
-        const worker = await withinTest(
-          Promise.race([
-            activeWorker,
-            outcome.then(async () => {
-              expect(Number(await fs.readFile(entered, "utf8"))).toBeGreaterThan(0);
-              return activeWorker;
-            }),
-          ]),
-          signal,
-        );
-        expect(worker.threadId).toBe(Number(await fs.readFile(entered, "utf8")));
-        scope.beginClose(reason);
-        const draining = scope.drain().then(() => {
-          drainSettled = true;
-        });
-        await setImmediate();
-        const termination = terminate.mock.contexts.findIndex((owner) => owner === worker);
-        if (termination >= 0) {
-          await terminate.mock.results[termination]?.value;
-        }
-        expect({ summarySettled, drainSettled, termination }).toEqual({
-          summarySettled: false,
-          drainSettled: false,
-          termination: -1,
-        });
-        expect(worker.threadId).toBeGreaterThan(0);
-        releaseNative();
-        expect(await outcome).toMatchObject({ status: "rejected" });
-        await draining;
-        expect(await fs.readFile(completed, "utf8")).toBe("complete");
-        expect(worker.threadId).toBe(-1);
-        expect(scope.hasPendingWork).toBe(false);
-      } finally {
-        releaseNative();
-        scope.beginClose(reason);
-        await outcome;
-        await scope.drain();
-      }
-    });
-  } finally {
-    setEnvironmentData(entered, undefined);
-    await fs.rm(archive, { force: true });
-    expect(() => materializeSessionArchiveForRead(archive)).toThrow(/ENOENT/);
-  }
-}, 20_000);
 
 it("increments from the durable byte offset and rebuilds after truncation", async () => {
   const root = tempDirs.make("openclaw-usage-worker-incremental-");

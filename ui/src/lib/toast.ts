@@ -12,6 +12,8 @@ export type ToastOptions = {
   message: string | Node;
   /** Muted second line, for the sentence that follows the title. */
   description?: string;
+  /** Raw error shown only when expanded; redacted by the shared error renderer. */
+  detail?: unknown;
   /** Positions a compact toast at the top center of the owning panel. */
   anchor?: Element;
   /** Top center answers what the operator just did; top right holds arrivals they did

@@ -16,7 +16,7 @@ const catalog = {
     clawHubSubtitle: "Search and install skills from the registry",
     searchClawHub: "Search ClawHub skills…",
     searching: "Searching…",
-    disconnected: "Not connected to gateway.",
+    disconnected: "Disconnected",
     empty: "No skills found.",
     noClawHubResults: "No skills found on ClawHub.",
     notScannedByClawHub: "Not scanned by ClawHub",
