@@ -156,7 +156,9 @@ beforeEach(() => {
 });
 
 describe("resolvePodmanSandboxRuntimeInfo", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    podmanRuntime = await import("./podman-runtime.js");
     spawnState.infoAvailable.podman = true;
   });
 
@@ -282,43 +284,61 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
             target: { globalArgs: ["--url", uri, "--identity", identity] },
           });
           spawnState.podmanMachines = JSON.stringify([{ ...machine, Running: false }]);
-          await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
-            /active Podman connection is remote/u,
-          );
+          await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).resolves.toMatchObject({
+            machine: true,
+            target: { globalArgs: ["--url", uri, "--identity", identity] },
+          });
         },
       );
     },
   );
 
-  it("revalidates the active Podman connection on every resolution", async () => {
+  it("shares one process discovery across concurrent and later container preparations", async () => {
     spawnState.podmanInfo = "true\tfalse\t\t5.0.0\n";
     const remoteUri = "ssh://example.test/run/user/1000/podman/podman.sock";
     selectConnection("saved-remote", remoteUri);
-    await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).resolves.toEqual({
+    const [first, concurrent] = await Promise.all([
+      podmanRuntime.resolvePodmanSandboxRuntimeInfo(),
+      podmanRuntime.resolvePodmanSandboxRuntimeInfo(),
+    ]);
+    expect(first).toEqual({
       machine: false,
       rootless: true,
       version: "5.0.0",
       target: { key: "local", globalArgs: [] },
     });
+    expect(concurrent).toEqual(first);
+    expect(spawnState.calls.filter((call) => call.args[0] === "info")).toHaveLength(1);
 
     expect(spawnState.calls.some((call) => call.args[0] === "system")).toBe(false);
     spawnState.podmanInfo = "true\ttrue\t\t5.0.0\n";
     selectConnection("remote", remoteUri);
 
-    await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
-      /active Podman connection is remote/u,
-    );
+    await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).resolves.toEqual(first);
+    expect(spawnState.calls.filter((call) => call.args[0] === "info")).toHaveLength(1);
   });
 
-  it("rejects a different allowed Podman Machine after a runtime target is recorded", async () => {
+  it("retries a failed discovery without retaining the failure", async () => {
+    spawnState.infoAvailable.podman = false;
+    await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
+      /Failed to inspect Podman/u,
+    );
+    spawnState.infoAvailable.podman = true;
+    await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).resolves.toMatchObject({
+      rootless: true,
+    });
+  });
+
+  it("rejects a recorded target different from the process-owned Podman Machine", async () => {
     spawnState.podmanInfo = "true\ttrue\t\t5.0.0\n";
     selectMachine("first", 60001);
     const first = await podmanRuntime.resolvePodmanSandboxRuntimeInfo();
 
-    selectMachine("second", 60002);
-
     await expect(
-      docker.validateSandboxContainerEngineTarget(docker.PODMAN_SANDBOX_ENGINE, first.target),
+      podmanRuntime.validateSandboxContainerEngineTarget(docker.PODMAN_SANDBOX_ENGINE, {
+        ...first.target,
+        key: "machine:other",
+      }),
     ).rejects.toThrow(/active Podman connection changed/u);
   });
 });
