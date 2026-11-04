@@ -8,6 +8,41 @@ export type MethodSpec = {
   since: string | undefined;
   compatibilityRestored: boolean;
 };
+/** Object-row metadata must match runtime own-properties without evaluation or overrides. */
+function assertLiteralObjectMetadata(object: ts.ObjectLiteralExpression, location: string): void {
+  const seen = new Set<string>();
+  for (const property of object.properties) {
+    if (ts.isSpreadAssignment(property) || ts.isComputedPropertyName(property.name)) {
+      throw new Error(
+        location + " canonical object rows cannot use spreads or computed properties",
+      );
+    }
+    const key = getPropertyNameText(property.name);
+    if (key !== "name" && key !== "since" && key !== "compatibilityRestored") {
+      continue;
+    }
+    if (seen.has(key)) {
+      throw new Error(location + " duplicate canonical metadata property " + key);
+    }
+    seen.add(key);
+    if (!ts.isPropertyAssignment(property)) {
+      throw new Error(
+        location + " canonical metadata " + key + " must be a literal property assignment",
+      );
+    }
+    const value = property.initializer;
+    const literal =
+      key === "compatibilityRestored"
+        ? value.kind === ts.SyntaxKind.TrueKeyword || value.kind === ts.SyntaxKind.FalseKeyword
+        : ts.isStringLiteralLikeNode(value);
+    if (!literal) {
+      throw new Error(
+        location + " canonical metadata " + key + " must have its declared literal type",
+      );
+    }
+  }
+}
+
 function stringProperty(object: ts.ObjectLiteralExpression, key: string): string | undefined {
   for (const property of object.properties) {
     if (!ts.isPropertyAssignment(property)) {
@@ -38,6 +73,7 @@ function collectMethodSpec(
 ): MethodSpec {
   const line = sourceFile.getLineAndCharacterOfPosition(element.getStart(sourceFile)).line + 1;
   if (ts.isObjectLiteralExpression(element)) {
+    assertLiteralObjectMetadata(element, `${fileName}:${line}`);
     const name = stringProperty(element, "name");
     if (!name) {
       throw new Error(

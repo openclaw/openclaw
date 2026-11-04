@@ -146,3 +146,104 @@ describe("canonical method table static extraction", () => {
     ]);
   });
 });
+
+describe("canonical object-row metadata is static and unambiguous", () => {
+  const values = { name: '"new.method"', since: '"2026.10"', compatibilityRestored: "false" };
+  const defaults = { name: '"new.method"', since: '"2026.10"', compatibilityRestored: "false" };
+  const object = (key: keyof typeof defaults, field: string, first = false) => {
+    const other = Object.entries(defaults)
+      .filter(([name]) => name !== key)
+      .map(([name, value]) => name + ":" + value);
+    return "{" + [...(first ? [field] : []), ...other, ...(!first ? [field] : [])].join(",") + "}";
+  };
+  const parse = (
+    objectRow: string,
+    metadata = '{name:"old.method",since:"2026.9",compatibilityRestored:true}',
+  ) =>
+    scan({
+      [root]:
+        "const metadata:Record<string,unknown>=" +
+        metadata +
+        '; const key="since"; const name="new.method"; const since="2026.10"; const compatibilityRestored=false;' +
+        table(objectRow),
+    });
+  it.each(["name", "since", "compatibilityRestored"] as const)(
+    "rejects spread overrides of %s before or after literals",
+    (key) => {
+      const overridingValue =
+        key === "name" ? '"old.method"' : key === "since" ? '"2026.9"' : "true";
+      for (const first of [true, false]) {
+        const literal = Object.entries(values)
+          .map(([name, value]) => name + ":" + value)
+          .join(",");
+        expect(() =>
+          parse(
+            "{" + (first ? "...metadata," + literal : literal + ",...metadata") + "}",
+            "{" + key + ":" + overridingValue + "}",
+          ),
+        ).toThrow();
+      }
+    },
+  );
+  it.each(["name", "since", "compatibilityRestored"] as const)(
+    "rejects computed %s keys even when their value is literal",
+    (key) => {
+      for (const first of [true, false]) {
+        for (const computed of ['["' + key + '"]', "[key]"]) {
+          expect(() => parse(object(key, computed + ":" + values[key], first))).toThrow();
+        }
+      }
+    },
+  );
+  it.each(["name", "since", "compatibilityRestored"] as const)(
+    "rejects duplicate identifier/quoted %s properties in either order",
+    (key) => {
+      for (const first of [true, false]) {
+        const fields = first
+          ? key + ":" + values[key] + ',"' + key + '":' + values[key]
+          : '"' + key + '":' + values[key] + "," + key + ":" + values[key];
+        expect(() => parse(object(key, fields))).toThrow();
+      }
+    },
+  );
+  it.each(["name", "since", "compatibilityRestored"] as const)(
+    "rejects present dynamic or shorthand %s metadata",
+    (key) => {
+      for (const field of [key + ":" + key, key, key + ":undefined", key + ":null", key + ":0"]) {
+        expect(() => parse(object(key, field))).toThrow();
+      }
+    },
+  );
+  it.each(["name", "since", "compatibilityRestored"] as const)(
+    "rejects method/accessor %s metadata instead of treating it as absent",
+    (key) => {
+      for (const field of [
+        key + "(){return " + values[key] + ";}",
+        "get " + key + "(){return " + values[key] + ";}",
+        "set " + key + "(value){}",
+      ]) {
+        expect(() => parse(object(key, field))).toThrow();
+      }
+    },
+  );
+  it("preserves optional metadata absence, literal false, and historical literal true", () => {
+    const absent = parse('{name:"new.method",since:"2026.10"}');
+    expect(absent[0]?.compatibilityRestored).toBe(false);
+    expect(parse('{name:"new.method"}')[0]?.since).toBeUndefined();
+    expect(
+      parse('{name:"new.method",since:"2026.10",compatibilityRestored:false}')[0]
+        ?.compatibilityRestored,
+    ).toBe(false);
+    const restored = parse('{name:"restored.method",since:"<=2026.7",compatibilityRestored:true}');
+    expect(classifyMethodSpecs(restored, [], "2026.10").violations).toEqual([]);
+  });
+  it("rejects wrong literal metadata types", () => {
+    for (const invalidRow of [
+      '{name:true,since:"2026.10"}',
+      '{name:"new.method",since:false}',
+      '{name:"new.method",since:"2026.10",compatibilityRestored:"true"}',
+    ]) {
+      expect(() => parse(invalidRow)).toThrow();
+    }
+  });
+});
