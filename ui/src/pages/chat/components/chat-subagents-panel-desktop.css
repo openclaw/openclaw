@@ -79,7 +79,7 @@
   pointer-events: none;
 }
 
-.subagents-desktop__row:has(+ .subagents-desktop__row[data-depth="0"])::after {
+.subagents-desktop__row:has(+ [data-depth="0"])::after {
   position: absolute;
   right: 8px;
   bottom: 0;
@@ -90,14 +90,12 @@
   pointer-events: none;
 }
 
-.subagents-desktop__row:hover,
-.subagents-desktop__row:focus-within {
+.subagents-desktop__row:is(:hover, :focus-within) {
   --subagent-divider: transparent;
   background: var(--bg-accent);
 }
 
-.subagents-desktop__row:has(+ .subagents-desktop__row:hover),
-.subagents-desktop__row:has(+ .subagents-desktop__row:focus-within) {
+.subagents-desktop__row:has(+ :is(:hover, :focus-within)) {
   --subagent-divider: transparent;
 }
 
@@ -241,15 +239,12 @@
   stroke: none;
 }
 
-.subagents-desktop__row:hover .subagents-desktop__stop,
-.subagents-desktop__row:focus-within .subagents-desktop__stop,
-.subagents-desktop__row:hover .subagents-desktop__chevron,
-.subagents-desktop__row:focus-within .subagents-desktop__chevron {
+.subagents-desktop__row:is(:hover, :focus-within)
+  :is(.subagents-desktop__stop, .subagents-desktop__chevron) {
   opacity: 1;
 }
 
-.subagents-desktop__row:hover .subagents-desktop__stop:disabled,
-.subagents-desktop__row:focus-within .subagents-desktop__stop:disabled {
+.subagents-desktop__row:is(:hover, :focus-within) .subagents-desktop__stop:disabled {
   opacity: 0.45;
 }
 
