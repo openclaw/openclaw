@@ -46,11 +46,13 @@ Session, conversation and delegation-tool denies keep the native shell and file
 tools but disable native delegation for the turn: OpenClaw sets
 `agents.enabled=false` and turns off `features.multi_agent` and
 `features.multi_agent_v2`, so `spawn_agent`, `send_input`, `resume_agent`
-and the v2 cross-thread tools are not available. Managed Codex requirements
-that pin `multi_agent` or `multi_agent_v2` on make such a turn fail before
-inference instead of re-enabling delegation. Default OpenClaw children (hidden
-subagents) therefore keep native shell and file tools without native
-delegation.
+and the v2 cross-thread tools are not available. Managed Codex requirements or
+legacy managed config that pin `multi_agent` or `multi_agent_v2` on make such a
+turn fail before inference instead of re-enabling delegation. Default hidden
+OpenClaw children therefore keep native shell and file tools without native
+delegation. Visible spawned sessions do not get the built-in sub-agent denies,
+so they keep the full native surface, including delegation, unless another
+policy, such as an inherited parent restriction, restricts it.
 
 A child at its configured delegation depth cap also loses native collaboration,
 as do turns with an explicit native-tool deny, finite allowlist, or other unsafe

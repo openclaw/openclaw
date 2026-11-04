@@ -72,7 +72,7 @@ describe("Codex subagent native tool policy", () => {
 
   it.each([
     { name: "hidden child", key: "subagent", config: {} },
-    { name: "visible child", key: "dashboard", config: {} },
+    { name: "unstamped dashboard child", key: "dashboard", config: {} },
     {
       name: "leaf at the depth cap",
       key: "subagent",
@@ -112,5 +112,37 @@ describe("Codex subagent native tool policy", () => {
     for (const key of ["agents.enabled", "features.multi_agent", "features.multi_agent_v2"]) {
       expect(config[key], key).toBe(false);
     }
+  });
+
+  it.each([
+    { name: "an unrestricted parent", inheritedToolDeny: undefined, restricted: false },
+    { name: "a restricted parent", inheritedToolDeny: ["exec"], restricted: true },
+  ])("keeps native tools for a visible spawn from $name", async (testCase) => {
+    const sessionKey = "agent:main:dashboard:visible-child";
+    const store = path.join(tempDirs.make(), "sessions.json");
+    await replaceSessionEntry(
+      { sessionKey, storePath: store },
+      {
+        sessionId: "visible-child",
+        updatedAt: 1,
+        createdVia: "spawn",
+        spawnDepth: 1,
+        spawnedBy: "agent:main:main",
+        inheritedToolPolicyVersion: 1,
+        inheritedToolDeny: testCase.inheritedToolDeny,
+      },
+    );
+    const policy = await prepare({
+      sessionKey,
+      sessionId: "visible-child",
+      // Depth 1 is the leaf at this cap; visible spawns still skip the default denies.
+      config: { agents: { defaults: { subagents: { maxSpawnDepth: 1 } } }, session: { store } },
+    });
+    for (const tool of ["gateway", "sessions_send", "conversations_turn", "sessions_spawn"]) {
+      expect(isToolAllowedByPolicies(tool, policy.runtimePolicies), tool).toBe(true);
+    }
+    expect(isToolAllowedByPolicies("exec", policy.runtimePolicies)).toBe(!testCase.restricted);
+    expect(policy.toolPolicyRestricted).toBe(testCase.restricted);
+    expect(threadConfig(policy)["features.code_mode"]).toBe(!testCase.restricted);
   });
 });

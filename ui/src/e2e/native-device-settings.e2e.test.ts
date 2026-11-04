@@ -253,7 +253,7 @@ suite.define(() => {
 
         const sharing = devicePage.getByRole("switch", { name: "Desktop sharing", exact: true });
         const computerControl = devicePage.getByRole("switch", {
-          name: "Allow Computer Control",
+          name: "Allow computer control",
           exact: true,
         });
         await expect.poll(() => sharing.isChecked()).toBe(true);
@@ -336,7 +336,7 @@ suite.define(() => {
         }
 
         await sidebar.locator('a[href="/settings/updates"]').click();
-        await page.getByRole("button", { name: "Check for Updates…", exact: true }).click();
+        await page.getByRole("button", { name: "Check for updates…", exact: true }).click();
         await expect.poll(messages).toContainEqual({ type: "check-for-updates" });
       },
     );

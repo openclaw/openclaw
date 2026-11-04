@@ -620,6 +620,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
+.btn.primary:active:where(:not(:disabled, [aria-disabled="true"])) {
+  background: var(--primary-active);
+}
+
 .btn.active {
   border-color: var(--accent);
   background: var(--accent-subtle);
@@ -689,6 +693,10 @@ openclaw-toast-host[popover] {
   font-family: var(--font-body);
 }
 
+.app-toast--single-row {
+  padding-block: 8px;
+}
+
 .app-toast--action {
   --app-toast-row: 28px;
   padding-right: 10px;
@@ -699,7 +707,8 @@ openclaw-toast-host[popover] {
   padding-left: 12px;
 }
 
-.shell--chat {
+/* Other chat-like pages have no session toolbar to clear. */
+.shell--session {
   --app-toast-shell-top: calc(var(--safe-area-top) + var(--rail-header-height) + 12px);
 }
 
@@ -747,8 +756,9 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   width: min(360px, calc(100vw - 24px));
 }
 
-/* Arrivals are always blocks, never pills. */
+/* Arrivals keep their roomier block proportions, not compact feedback pills. */
 .app-toast-lane--top-right > .app-toast {
+  padding-block: 12px;
   border-radius: min(16px, calc(16px * var(--openclaw-corner-radius-scale)));
 }
 
@@ -1068,7 +1078,7 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
 /* On a phone both lanes share one column at the top: the center lane, then
  * arrivals. Each toast spans the screen between the gutters. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .shell--chat {
+  .shell--session {
     --app-toast-shell-top: calc(
       var(--safe-area-top) + var(--shell-topbar-height) + var(--chat-mobile-pane-header-height) +
         20px
@@ -3736,7 +3746,7 @@ select.data-table-pagination__size {
 }
 
 .sidebar-recent-session .hover-marquee {
-  --hover-marquee-fade-width: 24px;
+  --hover-marquee-fade-width: 6px;
 }
 
 /* Text on a tag fill keeps its readable tone; only icons take the quieter one. */

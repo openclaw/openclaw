@@ -368,7 +368,7 @@ suite.define(() => {
                 ).toBe(true);
               }
             } else if (route === "profile" && viewport.width <= 400) {
-              const name = "Help for Connected accounts";
+              const name = "Help for Saved accounts";
               const help = page.getByRole("button", { name, exact: true });
               await help.scrollIntoViewIfNeeded();
               const target = await help.boundingBox();

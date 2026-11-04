@@ -121,19 +121,18 @@ describe("Markdown table interactions", () => {
     restoreDialogPolyfill();
   });
 
-  it("tracks hidden columns in both scroll directions", () => {
+  it.each(["ltr", "rtl"])("tracks physical hidden edges in %s tables", (direction) => {
     const { shell, viewport } = interactiveOwner();
     const canScroll = (side: string) =>
       shell.classList.contains(`markdown-table--can-scroll-${side}`);
-    for (const [offset, left, right] of [
+    viewport.style.direction = direction;
+    for (const [position, left, right] of [
       [0, false, true],
       [100, true, true],
       [200, true, false],
     ] as const) {
-      viewport.scrollLeft = offset;
-      if (offset) {
-        viewport.dispatchEvent(new Event("scroll"));
-      }
+      viewport.scrollLeft = direction === "rtl" ? position - 200 : position;
+      viewport.dispatchEvent(new Event("scroll"));
       expect([canScroll("left"), canScroll("right")]).toEqual([left, right]);
     }
   });
@@ -221,25 +220,25 @@ describe("Markdown table interactions", () => {
     stubProperty(document, "execCommand", legacyCopy);
     const { shell, copy } = interactiveOwner();
     const statusText = () => shell.querySelector('[role="status"]')?.textContent;
-    await copyTable(copy, "Copied!");
-    expect(statusText()).toBe("Copied!");
+    await copyTable(copy, "Copied");
+    expect(statusText()).toBe("Copied");
 
     writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
-    await copyTable(copy, "Copy failed");
-    expect(statusText()).toBe("Copy failed");
+    await copyTable(copy, "Couldn’t copy. Try again.");
+    expect(statusText()).toBe("Couldn’t copy. Try again.");
 
     expect(writeText).toHaveBeenLastCalledWith("Name\tValue\nAlpha\tOne");
     expect(legacyCopy).toHaveBeenCalledExactlyOnceWith("copy");
     await vi.advanceTimersByTimeAsync(1500);
-    expect(copy.getAttribute("aria-label")).toBe("Copy failed");
+    expect(copy.getAttribute("aria-label")).toBe("Couldn’t copy. Try again.");
 
-    await copyTable(copy, "Copied!");
+    await copyTable(copy, "Copied");
     await vi.advanceTimersByTimeAsync(500);
-    expect(copy.getAttribute("aria-label")).toBe("Copied!");
+    expect(copy.getAttribute("aria-label")).toBe("Copied");
     await vi.advanceTimersByTimeAsync(1000);
     expectCopy(copy, "Copy table");
     writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
-    await copyTable(copy, "Copy failed");
+    await copyTable(copy, "Couldn’t copy. Try again.");
     await vi.advanceTimersByTimeAsync(2000);
     expect(statusText()).toBe("");
   });

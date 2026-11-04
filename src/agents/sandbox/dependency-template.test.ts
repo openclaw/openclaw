@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs/promises";
 import { performance } from "node:perf_hooks";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startChatSendDiagnostics } from "../../gateway/server-methods/chat-send-diagnostics.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -9,6 +10,7 @@ import {
   resolveSandboxDependencyTemplateIdentity,
   retireSandboxDependencyTemplate,
 } from "./dependency-template.js";
+import { bindPodmanSandboxEngine, resolvePodmanSandboxRuntimeInfo } from "./podman-runtime.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxConfig } from "./types.js";
 
@@ -96,6 +98,8 @@ beforeEach(() => {
     ],
   });
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn()) {
   const identity = await resolveSandboxDependencyTemplateIdentity(config, {
@@ -279,6 +283,84 @@ it("refuses to publish a template whose builder could not be retired", async () 
   mocks.retire.mockRejectedValue(new Error("writer is still live"));
   await expect(prepare()).rejects.toThrow("writer is still live");
 });
+
+it.each(["empty", "removed", "populated", "unreadable", "unresolved"] as const)(
+  "retires a local Podman builder using kernel evidence (%s)",
+  async (outcome) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const target = { key: "native", globalArgs: ["--remote=false"] };
+    vi.mocked(resolvePodmanSandboxRuntimeInfo).mockResolvedValue({
+      machine: false,
+      rootless: true,
+      version: "5.7.0",
+      target,
+    });
+    vi.mocked(bindPodmanSandboxEngine).mockReturnValue({
+      id: "podman",
+      command: "podman",
+      displayName: "Podman",
+      globalArgs: target.globalArgs,
+    });
+    const entry = (await mocks.registry()).entries[0];
+    mocks.registry.mockResolvedValue({
+      entries: [{ ...entry, backendId: "podman", backendTarget: target }],
+    });
+    let killed = false;
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => (clock += 5_001));
+    const filesystem = await fs.statfs(".");
+    filesystem.type = 0x63677270;
+    vi.spyOn(fs, "statfs").mockResolvedValue(filesystem);
+    const close = vi.fn().mockResolvedValue(undefined);
+    const opened = await fs.open(import.meta.filename, "r");
+    await opened.close();
+    vi.spyOn(opened, "close").mockImplementation(close);
+    vi.spyOn(opened, "read").mockImplementation(async (buffer) => {
+      if (!Buffer.isBuffer(buffer)) {
+        throw new Error("Expected a positional kernel read");
+      }
+      if (killed && (outcome === "removed" || outcome === "unreadable")) {
+        throw Object.assign(new Error("kernel read failed"), {
+          code: outcome === "removed" ? "ENODEV" : "EIO",
+        });
+      }
+      const bytesRead = Buffer.from(
+        `populated ${!killed || outcome === "populated" ? 1 : 0}\nfrozen 0\n`,
+      ).copy(buffer);
+      return { bytesRead, buffer };
+    });
+    vi.spyOn(fs, "open").mockResolvedValue(opened);
+    mocks.exec.mockImplementation(async (_engine, args: string[]) => {
+      if (args[0] === "kill") {
+        killed = true;
+      }
+      if (args[0] === "wait" && outcome !== "unresolved") {
+        throw new Error("conmon cleanup still owns the container lock");
+      }
+      return {
+        code: 0,
+        stdout:
+          args[0] === "image"
+            ? image
+            : args[2]?.includes("CgroupPath")
+              ? `${containerId}\n${outcome === "unresolved" ? "/" : `/user.slice/user-1000.slice/user@1000.service/user.slice/libpod-${containerId}.scope`}`
+              : containerId,
+        stderr: "",
+      };
+    });
+    const prepared = prepare({ ...cfg, backend: "podman" });
+    if (outcome === "populated" || outcome === "unreadable") {
+      await expect(prepared).rejects.toThrow(
+        outcome === "populated" ? "still populated; template retained" : "kernel read failed",
+      );
+    } else {
+      await expect(prepared).resolves.toEqual({ installed: true });
+    }
+    expect(killed).toBe(true);
+    expect(close).toHaveBeenCalledTimes(outcome === "unresolved" ? 0 : 1);
+    expect(mocks.retire).toHaveBeenCalledTimes(outcome === "unresolved" ? 1 : 0);
+  },
+);
 
 it.each([true, false])(
   "attributes retirement on the slow-send line (terminated=%s)",
