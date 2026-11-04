@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
@@ -25,6 +26,8 @@ import {
   NEW_SESSION_LIST_LOADING_MESSAGE,
 } from "./chat-pane-shared.ts";
 import { canCreateChatSession, resolveChatAgentId } from "./chat-state-route.ts";
+
+registerSessionNavigationEnglish();
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
@@ -97,6 +100,9 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     }
     if (catalogHost?.kind === "node") {
       return { text: t("chat.catalog.remoteViewOnly") };
+    }
+    if (catalogSession?.continuationUnavailableReasonCode === "source-handoff-required") {
+      return { text: t("chat.catalog.sourceHandoffRequired") };
     }
     if (catalogSession?.continuationUnavailableReason) {
       return { text: catalogSession.continuationUnavailableReason };
