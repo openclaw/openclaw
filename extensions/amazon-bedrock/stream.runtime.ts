@@ -88,6 +88,7 @@ import {
   resolveBedrockPromptCachePolicy,
   type BedrockOptions,
 } from "./bedrock-options.js";
+import { resolveBedrockSamplingConfig } from "./sampling-policy.js";
 import {
   isClaude5BedrockModel,
   resolveBedrockClaudeThinkingProfile,
@@ -425,8 +426,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         system: buildSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
         inferenceConfig: {
           ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
-          ...(options.temperature !== undefined &&
-            !sendsAdaptiveThinking && { temperature: options.temperature }),
+          ...resolveBedrockSamplingConfig(model.id, sendsAdaptiveThinking, options.temperature),
         },
         toolConfig,
         additionalModelRequestFields,
