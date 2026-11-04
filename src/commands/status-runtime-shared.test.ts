@@ -2,6 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
@@ -12,6 +13,7 @@ import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js
 
 const mocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn(),
+  resolveCommandConfigWithSecrets: vi.fn(),
   runSecurityAudit: vi.fn(),
   callGateway: vi.fn(),
   resolveGatewayService: vi.fn(),
@@ -21,6 +23,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../infra/provider-usage.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
+}));
+
+// mock-isolation: Command preparation returns explicit fixture configs without executing local providers.
+vi.mock("../cli/command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
 }));
 
 // mock-isolation: Usage status uses fixture auth labels without loading host profiles or CLI keys.
@@ -126,6 +133,10 @@ describe("status-runtime-shared", () => {
     vi.clearAllMocks();
     vi.spyOn(performance, "now").mockReturnValue(0);
     mocks.loadProviderUsageSummary.mockResolvedValue({ providers: [] });
+    mocks.resolveCommandConfigWithSecrets.mockImplementation(async ({ config }) => ({
+      resolvedConfig: config,
+      diagnostics: [],
+    }));
     mocks.runSecurityAudit.mockResolvedValue({ summary: { critical: 0 }, findings: [] });
     mocks.callGateway.mockResolvedValue({ ok: true });
     mocks.resolveGatewayService.mockReturnValue(createMockGatewayService());
@@ -167,25 +178,103 @@ describe("status-runtime-shared", () => {
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
+  it("prepares only usage API keys, preserves diagnostics, and spends the existing deadline", async () => {
+    const params = usageParams("openclaw");
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openrouter/fixture" } } },
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            models: [],
+            apiKey: { source: "exec", provider: "fixture", id: "key" },
+          },
+        },
+      },
+    };
+    const prepared = structuredClone(config);
+    prepared.models!.providers!.openrouter!.apiKey = "prepared-usage-key";
+    const diagnostics = ["status --usage: resolved command secrets locally."];
+    const reportDiagnostics = vi.fn();
+    mocks.resolveCommandConfigWithSecrets.mockImplementationOnce(async () => {
+      vi.spyOn(performance, "now").mockReturnValue(456);
+      return { resolvedConfig: prepared, diagnostics };
+    });
+    mocks.loadProviderUsageSummary.mockImplementationOnce(async ({ config: cfg }) =>
+      usageSummary(
+        1,
+        typeof cfg.models?.providers?.openrouter?.apiKey === "string" ? [openaiUsage(12)] : [],
+      ),
+    );
+    await expect(
+      resolveStatusUsageSummary({ ...params, config, onSecretDiagnostics: reportDiagnostics }),
+    ).resolves.toEqual(usageSummary(1, [openaiUsage(12)]));
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledExactlyOnceWith({
+      config,
+      commandName: "status --usage",
+      targetIds: new Set(["models.providers.*.apiKey"]),
+      mode: "read_only_status",
+      gatewaySecretResolveTimeoutMs: 3456,
+    });
+    expect(reportDiagnostics).toHaveBeenCalledExactlyOnceWith(diagnostics);
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledExactlyOnceWith({
+      timeoutMs: 3000,
+      config: prepared,
+      agentDir: params.agentDir,
+    });
+    expect(config.models?.providers?.openrouter?.apiKey).toEqual({
+      source: "exec",
+      provider: "fixture",
+      id: "key",
+    });
+  });
+
+  it("does not start credential preparation after the usage deadline", async () => {
+    const params = usageParams();
+    vi.spyOn(performance, "now").mockReturnValue(params.gatewayProbeDeadlineMs);
+    await resolveStatusUsageSummary(params);
+    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+    expect(mocks.resolveModelAuthLabelAsync).not.toHaveBeenCalled();
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledExactlyOnceWith({
+      timeoutMs: 0,
+      config: params.config,
+      agentDir: params.agentDir,
+    });
+  });
+
+  it("cancels credential subprocess ownership when the usage deadline expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const entered = Promise.withResolvers<AbortSignal | undefined>();
+      mocks.resolveCommandConfigWithSecrets.mockImplementationOnce(() => {
+        entered.resolve(resolveCommandProcessSignal());
+        return new Promise(() => {});
+      });
+      const pending = resolveStatusUsageSummary(usageParams());
+      const signal = await entered.promise;
+      expect(signal).toBeDefined();
+      vi.spyOn(performance, "now").mockReturnValue(3456);
+      await vi.advanceTimersByTimeAsync(3456);
+      await pending;
+      expect(signal?.aborted).toBe(true);
+      expect(mocks.resolveModelAuthLabelAsync).not.toHaveBeenCalled();
+      expect(mocks.loadProviderUsageSummary.mock.calls[0]?.[0].timeoutMs).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shares the usage deadline with Codex synthetic usage", async () => {
-    mocks.loadProviderUsageSummary
-      .mockImplementationOnce(async () => {
-        vi.spyOn(performance, "now").mockReturnValue(3456);
-        return usageSummary(1, [anthropicUsage()]);
-      })
-      .mockResolvedValueOnce(usageSummary(2, [openaiUsage(9)]));
+    mocks.loadProviderUsageSummary.mockImplementationOnce(async () => {
+      vi.spyOn(performance, "now").mockReturnValue(3456);
+      return usageSummary(1, [anthropicUsage()]);
+    });
 
     await expect(resolveStatusUsageSummary(usageParams())).resolves.toEqual(
-      usageSummary(1, [anthropicUsage(), openaiUsage(9)]),
+      usageSummary(1, [anthropicUsage()]),
     );
-
-    expect(mocks.loadProviderUsageSummary).toHaveBeenNthCalledWith(2, {
-      timeoutMs: 0,
-      providers: ["openai"],
-      auth: [{ provider: "openai", token: "codex-app-server", hookProvider: "codex" }],
-      config: expect.any(Object),
-      agentDir: "/tmp/status-agent",
-    });
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
+    expect(mocks.resolveModelAuthLabelAsync).not.toHaveBeenCalled();
   });
 
   it("keeps existing OpenAI usage when Codex synthetic usage has no windows", async () => {

@@ -310,8 +310,7 @@ export async function statusAllCommand(
       node: nodeService,
     });
     progress.tick();
-    const gatewaySnapshot = overview.gatewaySnapshot;
-    const runtimeDegradation = overview.runtimeDegradation;
+    const { gatewaySnapshot, runtimeDegradation } = overview;
     const [{ configPath, diagnosis }, prepared] = await Promise.all([
       resolveStatusAllLocalDiagnosis({
         overview,
@@ -336,6 +335,7 @@ export async function statusAllCommand(
     const usage = opts.usage
       ? await resolveStatusUsageSummary({
           config: overview.cfg,
+          onSecretDiagnostics: (diagnostics) => overview.secretDiagnostics.push(...diagnostics),
           timeoutMs: resolveStatusGatewayProbeTimeoutMs(opts),
           gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
           ...(opts.agent ? { agentId: opts.agent } : {}),

@@ -1,5 +1,6 @@
 import { ensureAuthProfileStoreAsync, type AuthProfileStore } from "../agents/auth-profiles.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { getProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import {
   listProviderUsagePluginDescriptors,
   resolveProviderUsageSnapshotWithPlugin,
@@ -8,6 +9,7 @@ import {
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { formatErrorMessage } from "./errors.js";
 import { wrapFetchWithAbortSignal } from "./fetch.js";
+import { withGuardedFetchBeforeRequest } from "./net/fetch-request-authority.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "./net/runtime-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
@@ -102,39 +104,43 @@ export async function loadProviderUsageSummary(
           if (!auth) {
             return undefined;
           }
-          const snapshot = await resolveProviderUsageSnapshotWithPlugin({
-            provider: auth.hookProvider ?? auth.provider,
-            config,
-            workspaceDir: opts.workspaceDir,
-            env,
-            context: {
+          const assertAuthCurrent = getProviderAuthAuthority(auth);
+          const snapshot = await withGuardedFetchBeforeRequest(assertAuthCurrent, () =>
+            resolveProviderUsageSnapshotWithPlugin({
+              provider: auth.hookProvider ?? auth.provider,
               config,
-              agentDir: opts.agentDir,
               workspaceDir: opts.workspaceDir,
               env,
-              provider: auth.provider,
-              token: auth.token,
-              accountId: auth.accountId,
-              authProfileId: auth.authProfileId,
-              subscriptionType: auth.subscriptionType,
-              authFlow: auth.authFlow,
-              rateLimitTier: auth.rateLimitTier,
-              email: auth.email,
-              timeoutMs,
-              signal,
-              fetchFn: (input, init) => {
-                signal.throwIfAborted();
-                const callerSignal =
-                  init?.signal === undefined && input instanceof Request
-                    ? input.signal
-                    : init?.signal;
-                return fetchFn(input, {
-                  ...init,
-                  signal: callerSignal ? AbortSignal.any([signal, callerSignal]) : signal,
-                });
+              context: {
+                config,
+                agentDir: opts.agentDir,
+                workspaceDir: opts.workspaceDir,
+                env,
+                provider: auth.provider,
+                token: auth.token,
+                accountId: auth.accountId,
+                authProfileId: auth.authProfileId,
+                subscriptionType: auth.subscriptionType,
+                authFlow: auth.authFlow,
+                rateLimitTier: auth.rateLimitTier,
+                email: auth.email,
+                timeoutMs,
+                signal,
+                fetchFn: (input, init) => {
+                  signal.throwIfAborted();
+                  assertAuthCurrent?.();
+                  const callerSignal =
+                    init?.signal === undefined && input instanceof Request
+                      ? input.signal
+                      : init?.signal;
+                  return fetchFn(input, {
+                    ...init,
+                    signal: callerSignal ? AbortSignal.any([signal, callerSignal]) : signal,
+                  });
+                },
               },
-            },
-          });
+            }),
+          );
           return (
             snapshot ?? {
               provider: auth.provider,
