@@ -27,6 +27,7 @@ const uiE2eIncludePatterns = [
 // These files own their server instead of leasing the global production bundle.
 // Keep any shared source-module optimizer cache under one worker.
 export const uiE2ePrivateServerTestFiles = [
+  "ui/src/e2e/toast-page-offset.e2e.test.ts",
   "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
@@ -39,6 +40,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-html-csp.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-html-publication.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-incognito-send.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-loading-geometry.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",

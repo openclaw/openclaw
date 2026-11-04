@@ -5,17 +5,25 @@ import {
 } from "../../../../src/infra/session-cost-usage-totals.js";
 import { t } from "../../i18n/index.ts";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
-import { formatCompactTokenCount } from "../../lib/format.ts";
+import {
+  createMsFormatter,
+  formatCompactTokenCount,
+  formatUsd,
+  formatTimeMs,
+} from "../../lib/format.ts";
 import type { UsageTotals } from "./types.ts";
 
 registerUsageEnglish();
 
 const CHARS_PER_TOKEN = 4;
 const DAY_MS = 86_400_000;
-const costFormatters: Partial<Record<2 | 4 | 6, Intl.NumberFormat>> = {};
-// These labels use the host realm's default locale, independently of the UI language.
-let dayLabelFormatter: Intl.DateTimeFormat | undefined;
-let fullDateFormatter: Intl.DateTimeFormat | undefined;
+const dayLabelFormatter = createMsFormatter({ month: "short", day: "numeric", timeZone: "UTC" });
+const fullDateFormatter = createMsFormatter({
+  month: "long",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
 
 function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
@@ -31,11 +39,7 @@ function formatUsageCost(n: number | undefined, decimals: 2 | 4 | 6 = 2): string
   if (n === undefined || !Number.isFinite(n)) {
     return "—";
   }
-  const formatter = (costFormatters[decimals] ??= new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  }));
-  return `$${formatter.format(n)}`;
+  return formatUsd(n, decimals);
 }
 
 export function formatAnalysisCost(value: number): string {
@@ -47,7 +51,7 @@ export function formatAnalysisCost(value: number): string {
 function formatHourLabel(hour: number): string {
   // The bucket hour is already zoned; a fixed UTC date avoids local DST normalization.
   const date = new Date(Date.UTC(1970, 0, 1, hour));
-  return date.toLocaleTimeString(undefined, { hour: "numeric", timeZone: "UTC" });
+  return formatTimeMs(date.getTime(), { hour: "numeric", timeZone: "UTC" });
 }
 
 function buildPeakErrorHours(hourMsgs: number[], hourErrors: number[]) {
@@ -93,12 +97,7 @@ function formatDayLabel(dateStr: string): string {
   if (!date) {
     return dateStr;
   }
-  dayLabelFormatter ??= new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
-  return dayLabelFormatter.format(date);
+  return dayLabelFormatter(date.getTime());
 }
 
 function formatFullDate(dateStr: string): string {
@@ -106,13 +105,7 @@ function formatFullDate(dateStr: string): string {
   if (!date) {
     return dateStr;
   }
-  fullDateFormatter ??= new Intl.DateTimeFormat(undefined, {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-  return fullDateFormatter.format(date);
+  return fullDateFormatter(date.getTime());
 }
 
 function buildUsageCostWindows(
