@@ -4,17 +4,21 @@ import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import * as custodyStore from "../../../auto-reply/continuation/custody/custody-store.js";
 import {
   createContinuationRecord,
   newContinuationRecordId,
 } from "../../../auto-reply/continuation/custody/custody-store.js";
 import { prepareSessionMaintenancePreservation } from "../../../config/sessions/store-maintenance-preserve.js";
+import * as deliveryRows from "../../../infra/session-delivery-queue-storage.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
@@ -51,13 +55,21 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
   };
 }
 
-async function protectedKeys() {
-  const prepared = await prepareSessionMaintenancePreservation(storePath);
+async function protectedKeys(store = storePath, env?: NodeJS.ProcessEnv) {
+  const prepared = await prepareSessionMaintenancePreservation(store, { env });
   try {
     return prepared.capture().providerKeys;
   } finally {
     prepared.dispose();
   }
+}
+
+/** A pending continuation row addressed to `sessionKey`, in the state root `env` names. */
+async function enqueueContinuationRow(sessionKey: string, env?: NodeJS.ProcessEnv) {
+  await deliveryRows.enqueuePostCompactionDelegateDelivery(
+    { sessionKey, delegate: { task: "carry state", createdAt: Date.now() }, sequence: 0 },
+    captureOpenClawStateWorkerContext({ env }),
+  );
 }
 
 beforeEach(() => {
@@ -73,6 +85,7 @@ afterEach(async () => {
   subagentRuns.clear();
   clearSubagentRunsReadCacheForTest();
   await closeOpenClawStateDatabaseAsync();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });
@@ -141,6 +154,35 @@ describe("subagent maintenance protection", () => {
       prepared.dispose();
     }
     expect(await protectedKeys()).toEqual([elector]);
+  });
+
+  it("reads continuation rows from the maintained store's state root, never the ambient one", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("subagent-maintenance-store-") };
+    await enqueueContinuationRow("agent:main:ambient-row");
+    await enqueueContinuationRow("agent:main:store-row", env);
+    expect(await protectedKeys(storePath, env)).toEqual(["agent:main:store-row"]);
+    expect(await protectedKeys()).toEqual(["agent:main:ambient-row"]);
+  });
+
+  it("keeps a memory store's live custody owners without reading rows or awaiting readiness", async () => {
+    const elector = "agent:main:subagent:elector";
+    await enqueueContinuationRow("agent:main:row");
+    await createContinuationRecord({
+      recordId: newContinuationRecordId(),
+      kind: "delegate",
+      ownerSessionKey: elector,
+      status: "queued",
+      createdAt: Date.now(),
+      stateJson: "{}",
+    });
+    const rows = vi.spyOn(deliveryRows, "listPendingContinuationSessionDeliveryKeys");
+    const readiness = vi.spyOn(custodyStore, "whenContinuationCustodyReady");
+    // The incognito store shares the Gateway's state root, whose database holds the row.
+    const memoryStore = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+    expect(await protectedKeys(memoryStore)).toEqual([elector]);
+    expect([rows.mock.calls.length, readiness.mock.calls.length]).toEqual([0, 0]);
+    expect(await protectedKeys()).toEqual(["agent:main:row", elector]);
+    expect([rows.mock.calls.length, readiness.mock.calls.length]).toEqual([1, 1]);
   });
 
   it("loads protection once without decoding retained task and reply text", async () => {

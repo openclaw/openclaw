@@ -14,6 +14,11 @@
  * read once while a pass prepares, because a replacement requires its captures to be equal.
  * Accepted edge: custody that begins after that read, on a session nothing else protects when the
  * pass captures its protection, waits for the next pass.
+ *
+ * Custody is read from the maintained store's own state root, never the process's ambient one. An
+ * incognito memory store owns no durable state and no row is addressed to its sessions (their
+ * elections are refused at the binding), so its pass keeps the live owners alone: it never opens
+ * the state database or waits for custody readiness.
  */
 import { whenContinuationCustodyReady } from "../../../auto-reply/continuation/custody/custody-store.js";
 import { listLiveContinuationCustodyOwners } from "../../../auto-reply/continuation/work-store.js";
@@ -44,20 +49,25 @@ function* protectedSubagentSessionKeys(
   yield* custodyHolders;
 }
 
-registerSessionMaintenancePreserveKeysProvider(async ({ native }) => {
+registerSessionMaintenancePreserveKeysProvider(async ({ native, env, memory }) => {
   const [prepared, pendingRowSessionKeys] = await Promise.all([
     prepareSubagentMaintenanceRunsSnapshotForRead(
       subagentRuns,
       native ? { live: true } : undefined,
     ),
-    listPendingContinuationSessionDeliveryKeys(captureOpenClawStateWorkerContext()),
+    memory
+      ? undefined
+      : listPendingContinuationSessionDeliveryKeys(captureOpenClawStateWorkerContext({ env })),
   ]);
   // No state database holds no custody; one that exists has its projection hydrated (phase A,
   // already done after the Gateway's custody boot) before it is read.
   if (pendingRowSessionKeys) {
-    await whenContinuationCustodyReady();
+    await whenContinuationCustodyReady({ env });
   }
-  const custodyHolders = [...listLiveContinuationCustodyOwners(), ...(pendingRowSessionKeys ?? [])];
+  const custodyHolders = [
+    ...listLiveContinuationCustodyOwners({ env }),
+    ...(pendingRowSessionKeys ?? []),
+  ];
   return {
     capture: () => protectedSubagentSessionKeys(prepared.capture(), custodyHolders),
     dispose() {},

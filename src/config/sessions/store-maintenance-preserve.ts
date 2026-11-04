@@ -26,6 +26,10 @@ type PreparedSessionMaintenancePreserveKeys = {
 
 type PrepareSessionMaintenancePreserveKeys = (options: {
   native?: boolean;
+  /** The maintained store's state environment; undefined is the process's own. */
+  env?: NodeJS.ProcessEnv;
+  /** The maintained store is an incognito memory store, which owns no durable state. */
+  memory: boolean;
 }) => Promise<PreparedSessionMaintenancePreserveKeys>;
 
 export type PreparedSessionMaintenancePreservation = {
@@ -70,7 +74,13 @@ export async function prepareSessionMaintenancePreservation(
   options: { native?: boolean; env?: NodeJS.ProcessEnv } = {},
 ): Promise<PreparedSessionMaintenancePreservation> {
   const target = resolveExplicitIncognitoAgentSqliteTarget(storePath, { env: options.env });
-  const personalPins = await preparePersonalSessionPins({ env: target?.env ?? options.env });
+  // Pins and providers read the maintained store's state, never the process's ambient root.
+  const store = {
+    native: options.native,
+    env: target?.env ?? options.env,
+    memory: target !== undefined,
+  };
+  const personalPins = await preparePersonalSessionPins({ env: store.env });
   const registrations = [...preserveKeysProviders];
   const prepared: PreparedSessionMaintenancePreserveKeys[] = [];
   let disposed = false;
@@ -96,7 +106,7 @@ export async function prepareSessionMaintenancePreservation(
   };
   try {
     for (const registration of registrations) {
-      prepared.push(await registration.prepare(options));
+      prepared.push(await registration.prepare(store));
       assertProvidersCurrent();
     }
     const capture = (

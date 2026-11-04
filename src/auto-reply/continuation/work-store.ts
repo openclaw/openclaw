@@ -17,6 +17,7 @@ import {
   listContinuationRecords,
   resolveContinuationCustodyDatabasePath,
   updateContinuationRecords,
+  type ContinuationCustodyStoreOptions,
 } from "./custody/custody-store.js";
 import type {
   ContinuationRecord,
@@ -823,8 +824,10 @@ export async function hasLiveContinuationCustody(sessionKey: string): Promise<bo
  * left unknown counts, and a delivered record left `running` by a crash counts until startup
  * recovery finalizes it. Empty before phase A.
  */
-export function listLiveContinuationCustodyOwners(): string[] {
-  const snapshot = readContinuationCustodySnapshot(resolveContinuationCustodyDatabasePath());
+export function listLiveContinuationCustodyOwners(
+  options?: ContinuationCustodyStoreOptions,
+): string[] {
+  const snapshot = readContinuationCustodySnapshot(resolveContinuationCustodyDatabasePath(options));
   if (snapshot.state === "unknown") {
     return [];
   }
