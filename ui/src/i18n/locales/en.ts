@@ -1099,9 +1099,9 @@ const startupEnglish = {
     heading: {},
     intro: {},
     required: {
-      title: "No AI provider configured",
-      body: "Connect a provider and choose a model to send messages.",
-      action: "Connect an AI provider",
+      title: "No model set up",
+      body: "Add an account or local model to send messages.",
+      action: "Set up a model",
     },
     loading: {},
     testing: {},
@@ -1142,7 +1142,7 @@ const startupEnglish = {
   memoryImport: {},
   onboarding: {
     memoryImport: {
-      title: "Bring your assistant memory with you",
+      title: "Bring your agent memory with you",
     },
   },
   assistantPanel: {

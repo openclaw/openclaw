@@ -28,9 +28,8 @@ it("keeps visible sign-out success quiet and preserves warnings", () => {
   expect(toastSpy).not.toHaveBeenCalled();
   showProfileLogoutSuccess("A shared account is still in use.");
   expect(toastSpy).toHaveBeenCalledWith({
-    placement: "bottom",
     message: "A shared account is still in use.",
-    icon: "alertTriangle",
+    severity: "warning",
   });
 });
 

@@ -268,7 +268,7 @@ describe("application agent creation", () => {
       "previous",
     );
     expect(toast.toasts[0]?.active).toBe(true);
-    expect(toast.querySelector(".app-toast__message")?.textContent).toContain(
+    expect(toast.querySelector(".app-toast__description")?.textContent).toContain(
       "Provider credentials expired",
     );
   });

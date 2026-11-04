@@ -256,7 +256,7 @@ suite.define(() => {
               requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
             }),
         );
-        await page.getByRole("button", { name: "Add account & use for this agent" }).click();
+        await page.getByRole("button", { name: "Add account for this agent" }).click();
         const activate = await gateway.waitForRequest(rpc.activate);
         expect(activate.params).toEqual({
           sessionId: expect.any(String),

@@ -6,9 +6,9 @@ const enModelSetup = {
     discovery: {
       title: "On this Gateway",
       description:
-        "Find saved accounts or prepare a local model for {agent}. Using a model here changes this agent, not the global defaults.",
+        "Find an account or set up a local model for {agent}. This changes only this agent’s model.",
       useForAgent: "Test & use for this agent",
-      connectForAgent: "Add account & use for this agent",
+      connectForAgent: "Add account for this agent",
       connectProvider: "Add account",
       returnToModels: "Return to Models",
       otherSoftware: "Other detected software",
@@ -42,7 +42,7 @@ const enModelSetup = {
       gatewayTooOld: "The Gateway is running an older OpenClaw version",
     },
     candidates: {
-      title: "Found on this Gateway",
+      title: "Available models",
       recommended: "Recommended",
       credentialsReady: "Account ready",
       detected: "Detected",
