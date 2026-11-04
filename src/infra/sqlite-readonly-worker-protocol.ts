@@ -9,6 +9,7 @@ import type {
   SqliteReadOnlyOperationCommand,
   SqliteReadOnlyOperationResult,
 } from "./sqlite-readonly-operation-types.js";
+import type { SqliteSnapshotReclamation } from "./sqlite-snapshot-reclamation.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 // Keep the one-shot execFile output limit when inspections use IPC.
@@ -31,17 +32,20 @@ export type SqliteReadOnlyWorkerMode =
   | "staging-create"
   | "staging-create-legacy"
   | "staging-reconcile"
+  | "staging-sweep"
   | "staging-retire";
 export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
   return (
     mode === "staging-create" ||
     mode === "staging-create-legacy" ||
     mode === "staging-reconcile" ||
+    mode === "staging-sweep" ||
     mode === "staging-retire"
   );
 }
 
 export type SqliteReadOnlyWorkerResult =
+  | { ok: true; reclamation: SqliteSnapshotReclamation }
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
   | { ok: true; generation: string }
@@ -145,6 +149,7 @@ export type SqliteReadOnlyWorkerOutput =
     }
   | { kind: "launch-failed"; error: Error };
 export type SqliteReadOnlyWorkerValue =
+  | SqliteSnapshotReclamation
   | string
   | SqliteAuthProfileRows
   | PreservedOrphanTaskDelivery
@@ -159,6 +164,12 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
     return false;
   }
   return (
+    (value.ok === true &&
+      "reclamation" in value &&
+      isRecord(value.reclamation) &&
+      [value.reclamation.removed, value.reclamation.bytes, value.reclamation.skipped].every(
+        (count) => typeof count === "number" && Number.isFinite(count) && count >= 0,
+      )) ||
     (value.ok === true && "location" in value && typeof value.location === "string") ||
     (value.ok === true &&
       "contentVersion" in value &&
@@ -283,6 +294,9 @@ export function readSqliteReadOnlyWorkerValue(
     "location" in result
   ) {
     return result.location;
+  }
+  if (mode === "staging-sweep" && "reclamation" in result) {
+    return result.reclamation;
   }
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;

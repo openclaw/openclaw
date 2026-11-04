@@ -1061,7 +1061,9 @@ describe("sessions page plugin actions", () => {
     menu.querySelector<HTMLElement>(actionSelector)!.click();
     await settleSessionMenu(menu);
     expect(run.mock.calls.length).toBe(1);
-    await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
+    await waitForFast(() =>
+      expect(page.textContent).toContain(i18n.t("pluginUi.actionUnavailableSession")),
+    );
 
     publish([{ ...current, archived: true }]);
     await page.updateComplete;
@@ -1080,7 +1082,9 @@ describe("sessions page plugin actions", () => {
       menu.querySelector<HTMLElement>(actionSelector)!.click();
       await settleSessionMenu(menu);
       expect(run.mock.calls.length).toBe(0);
-      await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
+      await waitForFast(() =>
+        expect(page.textContent).toContain(i18n.t("pluginUi.actionSessionUnavailable")),
+      );
     }
 
     expect(page.querySelector(actionSelector)).toBeNull();
