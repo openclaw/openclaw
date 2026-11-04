@@ -190,6 +190,15 @@ describe("cron default failure-alert route", () => {
     ).toMatchObject({ mode: "announce", channel: "telegram", to: "-100123456789", threadId: 1 });
   });
 
+  it("uses the primary default for implicit announce failures", () => {
+    expect(
+      resolve(
+        { delivery: globalDelivery },
+        makeCronJob({ agentId: "ops", sessionTarget: "isolated", delivery: undefined }),
+      ),
+    ).toMatchObject({ mode: "announce", channel: "telegram", to: "-100123456789", threadId: 1 });
+  });
+
   it("resolves primary and failure defaults independently", () => {
     const cronConfig: CronConfig = {
       delivery: globalDelivery,
