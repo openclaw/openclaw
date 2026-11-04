@@ -322,7 +322,7 @@ export async function maybeSpawnVisibleSession(params: {
     };
   }
 
-  const requesterPreferences = resolveRequesterPreferences({
+  const requesterPrefs = resolveRequesterPreferences({
     cfg,
     requesterAgentId,
     requesterEntry,
@@ -334,10 +334,10 @@ export async function maybeSpawnVisibleSession(params: {
     targetAgentConfig: resolveAgentConfig(cfg, targetAgentId),
     modelOverride,
     workspaceDir: spawnedWorkspaceDir,
-    callerThinkingRaw: params.options?.requesterThinkingLevel ?? requesterPreferences.thinkingLevel,
+    callerThinkingRaw: params.options?.requesterThinkingLevel ?? requesterPrefs.thinkingLevel,
     inheritedModel:
       targetAgentId === requesterAgentId
-        ? (params.options?.requesterModel ?? requesterPreferences.model)
+        ? (params.options?.requesterModel ?? requesterPrefs.model)
         : undefined,
   });
   if (modelPlan.status === "error") {
