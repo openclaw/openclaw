@@ -50,6 +50,10 @@ import {
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.gather.js";
+import {
+  hasGatewayBuildIdentity,
+  printGatewayBuildIdentity,
+} from "./status.print.build-identity.js";
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
@@ -257,9 +261,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       ? terminalText`${serviceInstallVersion} (${displayPath(status.service.layout.packageRoot)})`
       : terminalText`${serviceInstallVersion}`
     : null;
-  const runningBuildId = status.gateway?.buildId?.trim();
-  const installedBuildId = status.gateway?.installedBuildId?.trim();
-  if (gatewayVersion || serviceInstallLine || runningBuildId || installedBuildId) {
+  if (gatewayVersion || serviceInstallLine || hasGatewayBuildIdentity(status)) {
     if (cliVersionLine) {
       printInfo("CLI version:", cliVersionLine);
     }
@@ -294,25 +296,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         }
       }
     }
-    // A build that lands under a running Gateway leaves it serving an install it can no
-    // longer fully load: already-imported chunks keep working while every dynamic import
-    // it has not reached yet resolves against replaced files. Name that state here so it
-    // stops surfacing later as unrelated-looking module errors.
-    if (runningBuildId || installedBuildId) {
-      const onDisk =
-        installedBuildId && installedBuildId !== runningBuildId
-          ? `, on disk ${installedBuildId}`
-          : "";
-      printInfo("Gateway build:", terminalText`${runningBuildId ?? "unknown"}${onDisk}`);
-      if (status.gateway?.restartRequired) {
-        printWarning(
-          terminalText`Restart required: the running Gateway loaded build ${runningBuildId ?? "unknown"}, but the installation on disk is build ${installedBuildId ?? "unknown"}. Imports it has not already loaded will fail until it restarts.`,
-        );
-        // The restart has to reach the same Gateway this status read, and profile selection
-        // lives only in this process, so the printed command must carry it forward.
-        printWarning(`Restart it with: ${formatCliCommand("openclaw gateway restart")}`);
-      }
-    }
+    printGatewayBuildIdentity(status, { printInfo, printWarning });
     spacer();
   }
 
