@@ -11,6 +11,8 @@ import {
 } from "../../scripts/generate-postgres-schema.mts";
 import { catalog as readCatalog, portTables } from "../../scripts/lib/postgres-schema-catalog.mts";
 import { generateSqliteSchemaCatalogs } from "../../scripts/lib/sqlite-schema-generation.mts";
+import { expectedPostgresCatalog } from "../../src/infra/database-engine/postgres-catalog.js";
+import { createStatePostgresRuntime } from "../../src/state/postgres-schema.generated/runtime.js";
 import type statePortMetadata from "../../src/state/postgres-schema.generated/state-port.json";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -38,6 +40,16 @@ function fixture(sql: string) {
 }
 
 describe("PostgreSQL schema generation", () => {
+  it("constructs runtime data with canonical SQL, fragment order, and catalog", async () => {
+    const { files, report } = await generatePostgresSchemas(root);
+    const runtime = createStatePostgresRuntime();
+    expect(runtime.eagerSql).toBe(files["state.postgres.sql"]);
+    expect(runtime.fragments).toEqual(
+      report.fragments.map(({ file, ...fragment }) => ({ ...fragment, sql: files[file] })),
+    );
+    expect(runtime.expectedCatalog).toEqual(expectedPostgresCatalog(report.catalogs.state!));
+  });
+
   it("bounds state port metadata to compact allocation facts", async () => {
     const { files } = await generatePostgresSchemas(root);
     const metadata: typeof statePortMetadata = JSON.parse(files["state-port.json"]!);
