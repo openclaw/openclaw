@@ -562,7 +562,10 @@ The bottom-left account footer, including the Settings sidebar, shows **Suspendi
 Sidebar visibility belongs to the current tab and is not remembered across tabs, windows, or reloads; the sidebar's width is still remembered. On desktop, new tabs, direct links, bookmarks, and reloads start with the sidebar expanded. Middle-click or Cmd/Ctrl-click a session to open it in a new tab without changing the original tab. Press ⌘B on Mac or Ctrl+B on Windows/Linux to collapse or expand the sidebar in the current tab.
 
 Pending approvals also contribute to the rail’s **Inbox** attention badge.
-Open Inbox to inspect them and navigate to the Approvals page.
+Open Inbox to inspect them and navigate to the Approvals page. Command approvals
+show **Runs on** with **This computer** for the Gateway’s computer or the paired
+device’s name. Approval history keeps the recorded decision and resolution reason,
+including decisions made elsewhere.
 
 When an approval appears inline in a different session, **Approval requested by session**
 uses the requesting session's loaded title, not the open conversation's title. If that

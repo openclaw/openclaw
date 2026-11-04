@@ -250,6 +250,14 @@ Command failures explain what could not be done and what to try next. For exampl
 `/model` shows “Couldn’t load model details. Try again.” when model details cannot
 be loaded, followed by the diagnostic in a separate paragraph.
 
+## Command approvals
+
+When a command needs your approval, the session shows **Command approval needed**.
+Review the command and **Request details**, then choose **Allow once**, **Always allow**
+when offered, or **Deny**. A standalone approval link shows **Admin approval** above
+the request. You need approval access to record a decision; viewing a request does
+not grant that access. If disconnected, reconnect before deciding.
+
 ## Desktop message input
 
 Choose **Settings → Appearance → Chat → Send shortcut** to control how you submit
