@@ -31,6 +31,7 @@ import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-regis
 import { repairAuthProfileMigration } from "./auth-profile-repair.js";
 import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
+import { maybeCreateAwsSdkAuthProfileAccounts } from "./shared/aws-sdk-auth-account.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
 import {
   collectChannelDoctorCompatibilityMutations,
@@ -396,6 +397,14 @@ export async function runDoctorRepairSequence(params: {
     env,
   });
   applyMutation(staleAuthOrderRepair);
+  // Credentials are canonical by now, so an occupied id is a real conflict rather
+  // than an unmigrated shape. Scheduled-run adoption reads these accounts later.
+  const awsSdkAccountRepair = await maybeCreateAwsSdkAuthProfileAccounts({
+    cfg: state.candidate,
+    env,
+    shouldRepair: true,
+  });
+  appendRepairNotes(awsSdkAccountRepair);
   if (pluginInstallRepairConverged) {
     // Route retirement reads canonical credentials. Finish auth migration first,
     // and preserve model refs while configured plugin installation needs a retry.
@@ -431,6 +440,7 @@ export async function runDoctorRepairSequence(params: {
   const authProfilesRepaired =
     authFieldRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
+    awsSdkAccountRepair.changes.length > 0 ||
     authRepair.storeChanges.length > 0;
 
   return {

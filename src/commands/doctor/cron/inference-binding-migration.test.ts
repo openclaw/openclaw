@@ -748,42 +748,39 @@ it.each(["job edit", "account replacement", "backup failure"] as const)(
 );
 
 const bedrockModelId = "anthropic.claude-sonnet-4-20250514-v1:0";
-const bedrockProvider: ModelProviderConfig = {
-  auth: "aws-sdk",
-  api: "bedrock-converse-stream",
-  baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
-  models: [createTestModelDefinition(bedrockModelId)],
-};
-const bedrockConfig = (state: OpenClawTestState, declared: boolean): OpenClawConfig => ({
+const bedrockConfig = (state: OpenClawTestState): OpenClawConfig => ({
   agents: {
     entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
     defaults: { model: `amazon-bedrock/${bedrockModelId}` },
   },
-  models: { providers: { "amazon-bedrock": bedrockProvider } },
-  ...(declared
-    ? {
-        auth: {
-          profiles: {
-            "amazon-bedrock:aws-sdk": { provider: "amazon-bedrock", mode: "aws-sdk" as const },
-          },
-        },
-      }
-    : {}),
+  models: {
+    providers: {
+      "amazon-bedrock": {
+        auth: "aws-sdk",
+        api: "bedrock-converse-stream",
+        baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
+        models: [createTestModelDefinition(bedrockModelId)],
+      } satisfies ModelProviderConfig,
+    },
+  },
 });
 
 it.each([true, false])(
-  "migrates a legacy Bedrock automation onto a declared AWS SDK account: %s",
-  async (declared) => {
+  "adopts a stored AWS SDK account for a legacy Bedrock automation: %s",
+  async (stored) => {
     await withAccounts(async (state) => {
-      const cfg = await configure(state, bedrockConfig(state, declared));
+      const cfg = await configure(state, bedrockConfig(state));
+      if (stored) {
+        await saveProfiles(apiProfile("amazon-bedrock:aws-sdk", "aws-sdk-credentials"));
+      }
       const storePath = state.statePath("cron", "jobs.json");
       const job: CronStoredJob = { ...makeAccountJob("bedrock-legacy"), enabled: true };
       await saveJobs(storePath, job);
       await doctor.withDoctorConfigMaintenance(async () => {
         const result = await migrate(cfg);
         const [migrated] = await readJobs(storePath);
-        if (!declared) {
-          // Without a declared account the route stays ambient, so nothing is recorded.
+        if (!stored) {
+          // Without a stored account the route is ambient, so nothing is recorded.
           expect(result.changes).toEqual([]);
           contains(result.warnings.join("\n"), "ambient credential");
           expect(migrated).toEqual(job);

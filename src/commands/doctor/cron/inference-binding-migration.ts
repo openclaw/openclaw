@@ -8,10 +8,9 @@ import {
 import type { AuthProfileAuthorization } from "../../../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../../../agents/auth-profiles/authorization.js";
 import {
-  isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrderWithMetadata,
-  resolveConfiguredAwsSdkAuthProfileId,
+  resolveStoredAwsSdkAuthProfileId,
 } from "../../../agents/auth-profiles/order.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../../agents/auth-profiles/store-runtime.js";
 import { resolveProviderModelAuthPolicy } from "../../../agents/model-auth-policy.js";
@@ -257,19 +256,19 @@ export async function maybeRepairCronInferenceBindings(params: {
           continue;
         }
         if (firstSource?.kind === "direct") {
-          // An AWS SDK route resolves credentials from the host's chain on every request.
-          // When config declares an account for that route, record the declaration; it is a
-          // durable name for the same route, not an ambient credential Doctor picked up.
-          const declaredProfileId =
+          // An AWS SDK route resolves credentials from the host's chain on every request,
+          // so the planner takes it directly. Adopt its stored account: that record is a
+          // durable account Doctor can retain, not an ambient credential it picked up.
+          const awsSdkProfileId =
             firstSource.evidence === "aws-sdk"
-              ? resolveConfiguredAwsSdkAuthProfileId({ cfg, provider: selected.provider })
+              ? resolveStoredAwsSdkAuthProfileId({ cfg, provider: selected.provider, store })
               : undefined;
-          if (!declaredProfileId) {
+          if (!awsSdkProfileId) {
             throw new Error(
               "The current route uses an ambient credential, not a durable stored account.",
             );
           }
-          explicitProfileId = declaredProfileId;
+          explicitProfileId = awsSdkProfileId;
         }
         if (runtime === "codex" && firstSource?.kind !== "profile") {
           // Native/credentialless auth has no host account for Doctor to adopt.
@@ -320,23 +319,13 @@ export async function maybeRepairCronInferenceBindings(params: {
             });
             const [attempt] = prepared.attempts;
             const credential = store.profiles[profileId];
-            // A declared AWS SDK account stores no credential to read its mode from.
-            const mode =
-              credential?.type ??
-              (isConfiguredAwsSdkAuthProfileForProvider({
-                cfg,
-                provider: selected.provider,
-                profileId,
-              })
-                ? ("aws-sdk" as const)
-                : undefined);
             const authRequirement =
               attempt?.plan.modelRoute?.authRequirement ??
-              (mode &&
+              (credential &&
                 resolveProviderModelAuthPolicy({
                   provider: selected.provider,
-                  mode,
-                  authFlow: credential?.type === "oauth" ? credential.authFlow : undefined,
+                  mode: credential.type,
+                  authFlow: credential.type === "oauth" ? credential.authFlow : undefined,
                 }).authRequirement);
             if (attempt?.kind === "profile" && attempt.profileId === profileId && authRequirement) {
               candidates.push({ profileId, authRequirement });
