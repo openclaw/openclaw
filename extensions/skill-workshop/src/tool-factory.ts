@@ -14,7 +14,7 @@ const WORKSHOP_PLUGIN_ID = "skill-workshop";
  * Builds the Workshop tool for one run, or none. Sandboxed runs get none: Workshop writes the
  * host-side skills root. The run owner withholds the tool in personal-default library turns.
  */
-export function createConfiguredSkillWorkshopTool(ctx: OpenClawPluginToolContext<2>) {
+function createConfiguredSkillWorkshopTool(ctx: OpenClawPluginToolContext<2>) {
   if (resolveSkillWorkshopToolConstructionBlock({ sandboxed: ctx.sandboxed })) {
     return null;
   }

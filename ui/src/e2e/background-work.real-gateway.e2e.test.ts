@@ -450,7 +450,7 @@ suite.define(() => {
         expect(terminal.tail).toContain(fixture.output);
         await processes.getByText("Stopped", { exact: true }).waitFor();
         await processStop.waitFor({ state: "hidden" });
-        await processes.getByRole("button", { name: "Back to Processes", exact: true }).click();
+        await processes.getByRole("button", { name: "Back to processes", exact: true }).click();
         const finishedToggle = processes.getByRole("button", { name: "Finished 1", exact: true });
         await finishedToggle.waitFor();
         expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
@@ -461,7 +461,7 @@ suite.define(() => {
         await capture(
           page,
           "mobile-process-stopped-output",
-          processes.getByRole("button", { name: "Back to Processes", exact: true }),
+          processes.getByRole("button", { name: "Back to processes", exact: true }),
         );
         await assertParent();
         proof.processStop = {
@@ -487,7 +487,7 @@ suite.define(() => {
         await capture(
           page,
           "desktop-reloaded-process-output",
-          processes.getByRole("button", { name: "Back to Processes", exact: true }),
+          processes.getByRole("button", { name: "Back to processes", exact: true }),
         );
         await openChatSidePanelType(parent, "Subagents");
         await childOpen.click();

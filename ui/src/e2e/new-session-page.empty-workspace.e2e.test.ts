@@ -69,7 +69,7 @@ suite.define(() => {
           },
           { timeout: 10_000 },
         )
-        .toContain("Start in an empty folder for this session.");
+        .toContain("Start without existing files. The agent uses its default workspace.");
       await empty.click();
 
       await page.locator(".new-session-page__message").fill(message);

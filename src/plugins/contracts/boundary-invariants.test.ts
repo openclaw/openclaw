@@ -34,6 +34,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/onepassword/index.ts": ["before_tool_call"],
   "extensions/openshell/index.ts": ["before_prompt_build"],
   "extensions/qa-lab/src/gateway-registration.ts": ["before_agent_run"],
+  "extensions/skill-workshop/src/review-service.ts": ["agent_end", "run_stopped"],
   "extensions/visitor-access/index.ts": ["gateway_start"],
   "extensions/workboard/index.ts": ["agent_end", "gateway_start", "gateway_stop", "subagent_ended"],
   "extensions/x/src/work-origin.ts": ["before_prompt_build"],

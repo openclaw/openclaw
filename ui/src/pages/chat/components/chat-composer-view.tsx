@@ -52,7 +52,7 @@ const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx
 });
 const EmojiMenu = lazy(() => import("./chat-composer-emoji.tsx"), { export: "EmojiMenu" });
 // The reply strip loads with the first reply, outside the chat boot bundle.
-export const ReplyPreview = lazy(() => import("./chat-composer-reply-preview.tsx"), {
+const ReplyPreview = lazy(() => import("./chat-composer-reply-preview.tsx"), {
   export: "ComposerReplyPreview",
 });
 const ChatGoal = lazy(() => import("./chat-composer-goal.tsx"), { export: "ChatGoal" });
@@ -409,7 +409,7 @@ export function renderChatComposerView(
             ]}
             aria-busy={props.disabledReasonBusy ? "true" : "false"}
             data-composer-layout={mobileResting() ? "single-line" : undefined}
-            data-incognito={props.selectedSession?.incognito ? "true" : undefined}
+            data-incognito={props.incognito ? "true" : undefined}
             onOpenclaw-composer-dismiss-invocations={() => {
               context().state.slashMenu.reset();
               context().state.skillMenu.reset();

@@ -448,7 +448,7 @@ function runRunnerProfileFixture(options: {
   headRepository?: string;
   repository?: string;
   runAttempt?: number;
-  requestedProfile?: "default" | "hybrid" | "runson";
+  requestedProfile?: "default" | "hybrid" | "runson" | "boat";
   ciShape?: "default" | "main";
   qualificationDispatch?: boolean;
   targetSupportsRunson?: boolean;
@@ -5453,6 +5453,19 @@ describe("ci workflow guards", () => {
         requestedProfile: "default",
         admitted: true,
       },
+      { name: "Boat build", requestedProfile: "boat", admitted: true },
+      {
+        name: "Boat fork",
+        requestedProfile: "boat",
+        prRepository: "fork/openclaw",
+        admitted: false,
+      },
+      {
+        name: "Boat stale head",
+        requestedProfile: "boat",
+        prHead: "b".repeat(40),
+        admitted: false,
+      },
       { name: "main Spot", ciShape: "main", requestedProfile: "runson", admitted: true },
       { name: "different checkout", githubSha: "b".repeat(40), admitted: false },
       { name: "different PR branch", prBranch: "other-branch", admitted: false },
@@ -5560,6 +5573,86 @@ describe("ci workflow guards", () => {
       });
     },
   );
+
+  it("qualifies only the first-attempt Boat build and keeps sibling routing and caches", () => {
+    const fixture = {
+      configuredProfile: "hybrid",
+      eventName: "workflow_dispatch" as const,
+      requestedProfile: "boat" as const,
+      targetSupportsContract: true,
+    };
+    expect(runRunnerProfileFixture(fixture).status).not.toBe(0);
+    const admitted = runRunnerProfileFixture({ ...fixture, qualificationDispatch: true });
+    expect(admitted.status, admitted.output).toBe(0);
+    expect(admitted.outputs).toMatchObject({
+      runner_profile: "hybrid",
+      node_runner_backend: "hybrid",
+      qualification_runner_backend: "hybrid",
+      boat_build_qualification: "true",
+    });
+    const workflow = readCiWorkflow();
+    const context = {
+      eventName: "workflow_dispatch" as const,
+      repository: "openclaw/openclaw",
+      runnerBackend: "hybrid" as const,
+      runAttempt: 1,
+      runnerEnvironment: "self-hosted" as const,
+      matrix: { runner: "blacksmith-8vcpu-ubuntu-2404", check_name: "fixture", task: "build-play" },
+      preflightOutputs: admitted.outputs,
+    };
+    for (const name of Object.keys(workflow.jobs)) {
+      const job = workflow.jobs[name];
+      if (
+        !String(job.needs).includes("preflight") ||
+        typeof job["runs-on"] !== "string" ||
+        !job["runs-on"].startsWith("${{")
+      ) {
+        continue;
+      }
+      const control = {
+        ...context,
+        preflightOutputs: { ...admitted.outputs, boat_build_qualification: "false" },
+      };
+      expect(evaluateWorkflowExpression(job["runs-on"], context), name).toEqual(
+        name === "build-artifacts"
+          ? "boat-xlarge"
+          : evaluateWorkflowExpression(job["runs-on"], control),
+      );
+      for (const step of job.steps ?? []) {
+        if (step.with?.["dependency-cache"] === undefined) {
+          continue;
+        }
+        expect(
+          evaluateWorkflowExpression(step.with["dependency-cache"], { ...context, job: name }),
+          name,
+        ).toBe(
+          name === "build-artifacts"
+            ? "false"
+            : evaluateWorkflowExpression(step.with["dependency-cache"], { ...control, job: name }),
+        );
+      }
+    }
+    const retry = runRunnerProfileFixture({
+      ...fixture,
+      qualificationDispatch: true,
+      runAttempt: 2,
+    });
+    expect(retry.status, retry.output).toBe(0);
+    expect(retry.outputs.boat_build_qualification).toBe("false");
+    expect(
+      evaluateWorkflowExpression(workflow.jobs["build-artifacts"]["runs-on"], {
+        ...context,
+        runAttempt: 2,
+      }),
+    ).toBe("ubuntu-24.04");
+    expect(
+      runRunnerProfileFixture({
+        ...fixture,
+        configuredProfile: "boat",
+        requestedProfile: "default",
+      }).status,
+    ).not.toBe(0);
+  });
 
   it("resolves admitted main qualification profiles without changing ordinary main routing", () => {
     for (const [configuredProfile, backend] of (

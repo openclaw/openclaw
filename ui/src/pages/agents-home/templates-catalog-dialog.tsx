@@ -494,7 +494,7 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
         if (isCurrent()) {
           const entry = entries.find((candidate) => candidate.packageName === packageName);
           if (!entry) {
-            throw new Error(t("templatesCatalog.empty"));
+            throw new Error(t("templatesCatalog.unavailable"));
           }
           model.select(entry);
         }
