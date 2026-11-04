@@ -160,7 +160,7 @@ it.each([
         sandbox,
         permissionMode: "full",
         ...(scenario === "gateway-key"
-          ? { resolvedApiKey: "synthetic-conflicting-gateway-key" }
+          ? { resolvedApiKey: "synthetic-gateway-availability-key" }
           : {}),
         ...(scenario === "gateway-profile"
           ? { authProfileId: "worker-proof:gateway-profile" }
@@ -171,13 +171,13 @@ it.each([
         | Awaited<ReturnType<NonNullable<typeof connection>["attemptClientFactory"]>>
         | undefined;
       try {
-        if (scenario === "gateway-key" || scenario === "gateway-profile") {
+        if (scenario === "gateway-profile") {
           await expect(
             prepareCodexAttemptConnection({
               params,
               options: { runtime: worker.runtime, bindingStore, pluginConfig },
             }),
-          ).rejects.toThrow("clear Gateway auth profile/API key");
+          ).rejects.toThrow("clear the Gateway auth profile");
           expect(worker.opens).toBe(0);
         } else {
           connection = await prepareCodexAttemptConnection({
@@ -217,7 +217,7 @@ it.each([
             expect(captured.authority.signal?.aborted).not.toBe(true);
           }
           worker.continueAdmission();
-          if (scenario !== "allowed") {
+          if (scenario === "placement-revoked" || scenario === "model-revoked") {
             const error = await opening.then(
               (opened) => {
                 client = opened;
@@ -277,7 +277,7 @@ it.each([
         captured.release();
         await worker.close();
       }
-      if (scenario !== "allowed") {
+      if (scenario !== "allowed" && scenario !== "gateway-key") {
         expect(await worker.commandCount()).toBe(0);
         expect(worker.requests).toEqual([]);
         if (scenario === "placement-revoked") {

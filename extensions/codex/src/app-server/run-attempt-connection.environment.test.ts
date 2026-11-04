@@ -222,6 +222,8 @@ it.each(["api-key", "subscription", "native-command"] as const)(
       placementOwnerEpoch: 1,
     };
     params.sandbox = sandbox;
+    // The ordinary Gateway route resolves availability auth before worker placement.
+    params.resolvedApiKey = "synthetic-gateway-availability-key";
     const runtimePlan = createCodexRuntimePlanFixture();
     params.runtimePlan = {
       ...runtimePlan,
@@ -324,7 +326,7 @@ it.each(["api-key", "subscription", "native-command"] as const)(
   },
 );
 
-it.each(["explicit-profile", "forwarded-profile", "supervision", "resolved-api-key"] as const)(
+it.each(["explicit-profile", "forwarded-profile", "supervision"] as const)(
   "rejects worker hosting instead of silently replacing %s ownership",
   async (ownership) => {
     const params = createParams(path.join(tempDir, "owned.jsonl"), path.join(tempDir, "owned"));
@@ -336,9 +338,7 @@ it.each(["explicit-profile", "forwarded-profile", "supervision", "resolved-api-k
       placementNodeId: "worker-node",
     };
     params.sandbox = sandbox;
-    if (ownership === "resolved-api-key") {
-      params.resolvedApiKey = "synthetic-gateway-key";
-    } else if (ownership === "explicit-profile") {
+    if (ownership === "explicit-profile") {
       params.authProfileId = "openai:chosen";
     } else if (ownership === "forwarded-profile") {
       const plan = createCodexRuntimePlanFixture();
@@ -381,7 +381,7 @@ it.each(["explicit-profile", "forwarded-profile", "supervision", "resolved-api-k
     );
     expect(outcome).toBeInstanceOf(Error);
     expect(outcome).toMatchObject({
-      message: expect.stringContaining("detach supervision; clear Gateway auth profile/API key"),
+      message: expect.stringContaining("detach supervision and clear the Gateway auth profile"),
     });
   },
 );

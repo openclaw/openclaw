@@ -313,10 +313,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     params.runtimePlan?.auth.forwardedAuthProfileId ??
     params.authProfileId ??
     startupBinding?.authProfileId;
-  const gatewayAuthSelected =
-    usesSupervisionConnection || selectedAuthProfileId || params.resolvedApiKey;
-  if (workerHostedCloud && gatewayAuthSelected) {
-    throw new Error("Use worker auth: detach supervision; clear Gateway auth profile/API key.");
+  // A resolved key can describe Gateway model availability, not worker auth intent.
+  // Worker-owned handoff below never forwards it; explicit account choices still reject.
+  if (workerHostedCloud && (usesSupervisionConnection || selectedAuthProfileId)) {
+    throw new Error("Use worker auth: detach supervision and clear the Gateway auth profile.");
   }
   if (usesSupervisionConnection && isCodexResponsesOAuthRun(params)) {
     throw new Error(
@@ -528,9 +528,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     execution.assertCurrent();
   };
   try {
-    if (workerHostedCloud && nativeCommandAuth) {
-      // initialize can execute the worker auth command before turn-time model selection.
-      // Retain the requested model now; turn selection replaces this same guard.
+    if (workerHostedCloud) {
+      // Worker initialization can execute native auth before turn-time model selection,
+      // including when Gateway discovery selected an API-key/subscription availability route.
       bindModelExecution({ provider: params.provider, model: params.modelId });
     }
     const startupBindingBeforeRotation = startupBinding;
