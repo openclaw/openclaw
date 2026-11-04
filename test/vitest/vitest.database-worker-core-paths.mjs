@@ -932,6 +932,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/continuation/work-dispatch.finalization-2.test.ts",
   "src/auto-reply/continuation/work-dispatch.parent-lineage-and-restart.test.ts",
   "src/auto-reply/continuation/work-dispatch.retry-exhaustion.test.ts",
+  "src/auto-reply/continuation/work-dispatch.turn-start-fence.test.ts",
   "src/auto-reply/continuation/work-replacement-store.test.ts",
   "src/auto-reply/reply/agent-runner.direct-replies.test.ts",
   "src/agents/sessions/session-manager-target-capture.test.ts",

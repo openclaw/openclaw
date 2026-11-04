@@ -40,8 +40,11 @@ type PendingWorkDeliveryCommitResult = Readonly<
 >;
 
 type ContinuationWorkTurnFenceResult =
-  | { allowed: true }
+  | { allowed: true; work: PendingContinuationWork }
   | { allowed: false; reason: "cancelled" | "stale" };
+
+/** The stable failure reason of a wake whose turn started but whose delivery was never confirmed. */
+export const WORK_TURN_INTERRUPTED_REASON = "turn-started-delivery-unconfirmed";
 
 async function readWorkRecord(recordId: string): Promise<ContinuationRecord | undefined> {
   const record = (await listContinuationRecords({ recordIds: [recordId], kinds: ["work"] }))[0];
@@ -88,29 +91,75 @@ function statePatch(state: PendingWorkState): Pick<ContinuationRecordPatch, "sta
   return { stateJson: JSON.stringify(state), dueAt: workRecordDueAt(state) };
 }
 
-/** Re-read a claimed work record at the final boundary before turn admission. */
-export async function revalidatePendingWorkForTurn(
-  work: Pick<PendingContinuationWork, "flowId" | "expectedRevision">,
+/**
+ * The durable turn-start fence, the final boundary before a claimed wake's turn may run (RFC
+ * §5.4.2, at-most-once through a crash). One revision CAS on the claimed record writes `turnStart`
+ * under the run id the turn will run with; only a committed fence lets the turn start, and recovery
+ * never drives a fenced record again. A record that moved, ended or is cancel-fenced refuses it.
+ */
+export async function markPendingWorkTurnStarted(
+  work: PendingContinuationWork,
+  runId: string,
 ): Promise<ContinuationWorkTurnFenceResult> {
   if (!work.flowId || work.expectedRevision === undefined) {
     return { allowed: false, reason: "stale" };
   }
   const record = await readWorkRecord(work.flowId);
   if (
-    record &&
-    record.status === "running" &&
-    record.revision === work.expectedRevision &&
-    record.cancelRequestedAt === undefined
+    !record ||
+    record.status !== "running" ||
+    record.revision !== work.expectedRevision ||
+    record.cancelRequestedAt !== undefined
   ) {
-    return { allowed: true };
+    return {
+      allowed: false,
+      reason:
+        record?.status === "cancelled" || record?.cancelRequestedAt !== undefined
+          ? "cancelled"
+          : "stale",
+    };
   }
-  return {
-    allowed: false,
-    reason:
-      record?.status === "cancelled" || record?.cancelRequestedAt !== undefined
-        ? "cancelled"
-        : "stale",
-  };
+  const turnStart = { startedAt: Date.now(), runId };
+  const state = { ...(decodeWorkState(record) ?? buildFallbackWorkState(work)), turnStart };
+  const fenced = appliedRecord(
+    await writeWork(
+      record,
+      record.revision,
+      {
+        phase: "Continuation turn started (durable fence)",
+        stateJson: JSON.stringify(state),
+        updatedAt: turnStart.startedAt,
+      },
+      turnStart.startedAt,
+    ),
+  );
+  if (!fenced) {
+    log.warn(
+      `[continuation:work-turn-fence-not-committed] flowId=${work.flowId} expectedRevision=${work.expectedRevision}`,
+    );
+    return { allowed: false, reason: "stale" };
+  }
+  return { allowed: true, work: { ...work, turnStart, expectedRevision: fenced.revision } };
+}
+
+/**
+ * Fail a fenced, undelivered record as interrupted (RFC §5.4.2): its turn may have committed
+ * effects, so it never runs again, and the same CAS records the one notice its session is owed.
+ * The work kind's obligation value is `retry-exhausted` (the column's CHECK admits no other for
+ * work); the failure reason selects the interrupted notice. A lost CAS means another pass did it.
+ */
+async function interruptStartedWorkRecord(
+  record: ContinuationRecord,
+): Promise<PendingContinuationWork | undefined> {
+  const interrupted = appliedRecord(
+    await writeWork(record, record.revision, {
+      status: "failed",
+      phase: "Continuation turn interrupted: started, delivery never confirmed",
+      failureReason: WORK_TURN_INTERRUPTED_REASON,
+      terminalNoticePending: "retry-exhausted",
+    }),
+  );
+  return interrupted ? toNoticeWork(interrupted) : undefined;
 }
 
 async function finalizeDeliveredWorkRecord(
@@ -165,6 +214,8 @@ export async function consumePendingWork(
     includeRunningUpdatedAtOrBefore?: number;
     includeIdleRetry?: boolean;
     includeRunningIdleRetry?: boolean;
+    /** Receives each record this pass interrupted; handing off its owed notice is the caller's. */
+    onInterrupted?: (work: PendingContinuationWork) => void;
   } = {},
 ): Promise<PendingContinuationWork[]> {
   const now = Date.now();
@@ -211,6 +262,19 @@ export async function consumePendingWork(
       (options.includeIdleRetry === true ||
         (options.includeRunningIdleRetry === true && record.status === "running"));
     if (now < workRecordDueAt(state) && !idleRetryReady) {
+      continue;
+    }
+    // At-most-once (RFC §5.4.2): wherever a pass would drive a record, a durable turn-start fence
+    // without the delivered mark means the turn may already have run, so it is interrupted instead.
+    // Only a claim with no fence is retried.
+    if (state.turnStart) {
+      const interrupted = await interruptStartedWorkRecord(record);
+      if (interrupted) {
+        log.warn(
+          `[continuation:work-turn-interrupted] flowId=${record.recordId} session=${sessionKey} runId=${state.turnStart.runId} startedAt=${state.turnStart.startedAt}`,
+        );
+        options.onInterrupted?.(interrupted);
+      }
       continue;
     }
     const releasedAt = Date.now();
@@ -526,9 +590,11 @@ export async function requeuePendingWork(
     maxChainLength: work.maxChainLength,
     ...(work.recipientAuthority ? { recipientAuthority: work.recipientAuthority } : {}),
   };
+  // Only a turn that never started is requeued, so the requeue clears its turn-start fence.
   const {
     idleRetry: _idleRetry,
     recoveryDueAt: _recoveryDueAt,
+    turnStart: _turnStart,
     ...stateWithoutIdleRetry
   } = baseState;
   // Retries of an anchored record never move semantic `dueAt`; they write only
@@ -595,7 +661,13 @@ function toNoticeWork(record: ContinuationRecord): PendingContinuationWork | und
   }
   const state = decodeWorkState(record);
   return state
-    ? { ...workToRuntime(record, state, "running"), terminalNoticePending: "retry-exhausted" }
+    ? {
+        ...workToRuntime(record, state, "running"),
+        terminalNoticePending:
+          record.failureReason === WORK_TURN_INTERRUPTED_REASON
+            ? "turn-interrupted"
+            : "retry-exhausted",
+      }
     : undefined;
 }
 

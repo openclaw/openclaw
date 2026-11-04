@@ -61,7 +61,10 @@ import {
   peekSoonestRunningWorkRecoveryDueAt,
   peekSoonestUnmaturedWorkDueAt,
 } from "./work-store.js";
-import { drainPendingTerminalNotices } from "./work-terminal-notice.js";
+import {
+  deliverPendingTerminalNoticeWithRetry,
+  drainPendingTerminalNotices,
+} from "./work-terminal-notice.js";
 
 export { computeBusySkipBackoffMs } from "./work-dispatch-backoff.js";
 
@@ -566,12 +569,20 @@ export async function dispatchPendingContinuationWork(
   } else {
     await finalizeAnchorPendingWork(params.sessionKey, Date.now(), { matureOverdueAnchors: true });
   }
+  const interrupted: PendingContinuationWork[] = [];
   const works = await consumePendingWork(params.sessionKey, {
     includeRunning: recoverRunning && !runningRecoveryBlockedByActiveReply,
     includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
     includeIdleRetry: params.includeIdleRetry === true,
     includeRunningIdleRetry: params.includeRunningIdleRetry === true,
+    onInterrupted: (work) => interrupted.push(work),
   });
+  // A started wake whose delivery was never confirmed ended interrupted, owing one notice.
+  for (const work of interrupted) {
+    await clearIdleRetryForWork(work);
+    releaseWorkOperatorContinuation(work.flowId);
+    await deliverPendingTerminalNoticeWithRetry(work);
+  }
   // Guard 2: fold a stale backlog. Only matured works reach here, so a
   // batch of >1 means they piled up (the session was busy through the window);
   // on-time staggered elections drain one-per-poll and never co-arrive.
@@ -619,7 +630,7 @@ export async function dispatchPendingContinuationWork(
   }
 
   let dispatched = 0;
-  let failed = 0;
+  let failed = interrupted.length;
   let reaped = 0;
   let worksToGrant = worksToDrive;
   if (sessionActive) {

@@ -62,6 +62,15 @@ const PendingWorkStateSchema = z.object({
   // consume read-guard skips any flow carrying it so a crash in that window
   // never re-delivers (restart-gap dup cure). Two-axis legible: PRESENT=terminal.
   succeeded: z.object({ point: z.literal("optimal"), durability: z.literal("durable") }).optional(),
+  // The durable turn-start fence (RFC §5.4.2, at-most-once through a crash): one revision CAS on
+  // the claimed record writes it before the wake's turn can reach the provider or a tool. Present
+  // without `succeeded`, the turn may have committed effects whose delivery was never confirmed:
+  // recovery interrupts the record, never drives it again. A requeue clears it. One object, so a
+  // fence is present or absent whole; a malformed one fails the decode, so the record is rejected
+  // unrun. An older build strips it on decode and would re-drive such a record as unfenced.
+  turnStart: z
+    .object({ startedAt: z.number().int().nonnegative(), runId: z.string().min(1) })
+    .optional(),
   // F1: durable obligation to surface a terminal outcome to the agent. Written
   // in the SAME expected-revision CAS that terminalizes the row, so a crash
   // between "the wake permanently failed" and "the agent was told" cannot lose
@@ -80,6 +89,11 @@ export type PendingContinuationIdleRetry = {
   reasonCategory: ContinuationWorkReasonCategory;
   armedAt: number;
 };
+
+export type PendingContinuationTurnStart = { startedAt: number; runId: string };
+
+/** The terminal notice a work record owes its session. */
+export type ContinuationWorkTerminalNotice = "retry-exhausted" | "turn-interrupted";
 
 export type PendingContinuationWork = {
   sessionKey: string;
@@ -113,9 +127,12 @@ export type PendingContinuationWork = {
   // locus-3: durable delivered-mark (see schema). PRESENT once a wake was
   // confirmed delivered; the consume read-guard refuses to re-drive it.
   succeeded?: { point: "optimal"; durability: "durable" };
+  // The durable turn-start fence (see schema): the wake's turn may have started under `runId`.
+  turnStart?: PendingContinuationTurnStart;
   // F1: durable pending-notice obligation. PRESENT means the record
-  // terminalized but the agent has not yet been told.
-  terminalNoticePending?: "retry-exhausted";
+  // terminalized but the agent has not yet been told; the value names the
+  // notice owed (see work-store `toNoticeWork`).
+  terminalNoticePending?: ContinuationWorkTerminalNotice;
   /** Custody record ID (RFC §5.4.5 keeps `record_id = flow_id`). */
   flowId?: string;
   expectedRevision?: number;
@@ -207,6 +224,7 @@ export function buildFallbackWorkState(work: PendingContinuationWork): PendingWo
     ...(work.originTurnId ? { originTurnId: work.originTurnId } : {}),
     ...(work.operatorAuthorityRequired ? { operatorAuthorityRequired: true } : {}),
     ...(work.recipientAuthority ? { recipientAuthority: work.recipientAuthority } : {}),
+    ...(work.turnStart ? { turnStart: work.turnStart } : {}),
   };
 }
 
@@ -249,6 +267,7 @@ export function workToRuntime(
     ...(state.busySkipCount !== undefined ? { busySkipCount: state.busySkipCount } : {}),
     ...(state.idleRetry ? { idleRetry: state.idleRetry } : {}),
     ...(state.succeeded ? { succeeded: state.succeeded } : {}),
+    ...(state.turnStart ? { turnStart: state.turnStart } : {}),
     ...(state.terminalNoticePending ? { terminalNoticePending: state.terminalNoticePending } : {}),
     status,
     flowId: record.recordId,

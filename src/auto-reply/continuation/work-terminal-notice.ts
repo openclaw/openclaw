@@ -46,6 +46,28 @@ const log = createSubsystemLogger("continuation/work-terminal-notice");
 export const CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE =
   "[system:continuation-warning] continue_work permanently failed after exhausting its retries; the scheduled follow-up turn will not run. Reissue continue_work if the work is still needed.";
 
+export const CONTINUATION_WORK_TURN_INTERRUPTED_NOTICE_TAG = "[continuation:work-turn-interrupted]";
+
+/**
+ * The notice a record owes. A wake whose turn started but whose delivery was never confirmed is
+ * interrupted, never run again (RFC §5.4.2); its notice names the record and the run, in the
+ * delegate interrupted-spawn notice's shape, so the agent can check what the run did.
+ */
+function terminalNoticeText(work: PendingContinuationWork): string {
+  if (work.terminalNoticePending !== "turn-interrupted") {
+    return CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE;
+  }
+  const run = work.turnStart
+    ? ` as run ${work.turnStart.runId} at ${new Date(work.turnStart.startedAt).toISOString()}`
+    : "";
+  return [
+    CONTINUATION_WORK_TURN_INTERRUPTED_NOTICE_TAG,
+    `continue_work record ${work.flowId} started its turn${run}, and that turn's completion was never confirmed.`,
+    "Its effects may already have happened, so it was not run again.",
+    "Check what that run did, then reissue continue_work if the work is still needed.",
+  ].join("\n");
+}
+
 /** Record-stable so a replayed handoff reuses one durable row instead of adding another. */
 function continuationWorkTerminalNoticeIdempotencyKey(recordId: string): string {
   return `continuation-work-terminal-notice:${recordId}`;
@@ -62,12 +84,17 @@ const defaultDeps: ContinuationWorkTerminalNoticeDeps = {
   settleContinuationNotice,
 };
 
-function prepareTerminalNoticeEntry(flowId: string, sessionKey: string, now = Date.now()) {
+function prepareTerminalNoticeEntry(
+  flowId: string,
+  sessionKey: string,
+  text: string,
+  now = Date.now(),
+) {
   return prepareSessionDeliveryEnqueue(
     {
       kind: "systemEvent",
       sessionKey,
-      text: CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE,
+      text,
       idempotencyKey: continuationWorkTerminalNoticeIdempotencyKey(flowId),
       // The row must outlive the in-memory event and survive until the prompt
       // adopts it; see the delivery path's plain-event deferral.
@@ -92,7 +119,8 @@ export async function deliverPendingTerminalNotice(
     return false;
   }
   const now = Date.now();
-  const { bound } = prepareTerminalNoticeEntry(pending.flowId, pending.sessionKey, now);
+  const text = terminalNoticeText(pending);
+  const { bound } = prepareTerminalNoticeEntry(pending.flowId, pending.sessionKey, text, now);
   const settled = await deps.settleContinuationNotice({
     recordId: pending.flowId,
     ownerSessionKey: pending.sessionKey,
@@ -109,7 +137,7 @@ export async function deliverPendingTerminalNotice(
       entryId: settled.entryId,
       entryStatus: settled.entryStatus,
       sessionKey: pending.sessionKey,
-      text: CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE,
+      text,
       reason: "continuation-terminal-notice",
       ...(deps.queueContext ? { queueContext: deps.queueContext } : {}),
       ...(deps.stateDir ? { stateDir: deps.stateDir } : {}),
@@ -167,7 +195,7 @@ function armTerminalNoticeRetry(
           // The failed attempt's settle may have committed behind its error:
           // nothing is owed, but its row still needs a delivery timer.
           await scheduleCommittedContinuationNotice(
-            prepareTerminalNoticeEntry(flowId, work.sessionKey).id,
+            prepareTerminalNoticeEntry(flowId, work.sessionKey, terminalNoticeText(work)).id,
             deps,
             deps,
           );

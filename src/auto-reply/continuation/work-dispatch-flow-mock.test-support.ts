@@ -30,6 +30,11 @@ export type WorkDispatchCustodyHooks = {
   refuseUpdatesWith?: string;
   /** Put a real concurrent revision bump in front of the next N single-record updates. */
   revisionConflictsRemaining: number;
+  /**
+   * The Gateway dies as a matching update is issued: it never commits and the call never settles,
+   * so nothing after it runs in the dying process. A dead process has nothing in flight.
+   */
+  diesBefore?: (updates: readonly ContinuationRecordUpdate[]) => boolean;
 };
 
 /**
@@ -111,6 +116,7 @@ export function resetWorkDispatchCustodyHooks(): void {
   delete workDispatchCustodyHooks.onApplied;
   delete workDispatchCustodyHooks.beforeUpdate;
   delete workDispatchCustodyHooks.refuseUpdatesWith;
+  delete workDispatchCustodyHooks.diesBefore;
   workDispatchCustodyHooks.revisionConflictsRemaining = 0;
 }
 
@@ -178,6 +184,16 @@ export function wrapCustodyStoreForWorkDispatch(actual: CustodyStoreModule): Cus
       wrapped[name] = countInFlight(name, value as (...args: unknown[]) => Promise<unknown>);
     }
   }
+  const counted = countInFlight("updateContinuationRecords", updateContinuationRecords);
+  // Outside the in-flight accounting: the settle never waits on a dead process's write.
+  wrapped.updateContinuationRecords = ((updates, params, options) =>
+    workDispatchCustodyHooks.diesBefore?.(updates)
+      ? new Promise<never>(() => {})
+      : counted(
+          updates,
+          params,
+          options,
+        )) satisfies CustodyStoreModule["updateContinuationRecords"];
   // SAFETY: every export keeps its signature; functions only gain in-flight accounting.
   return wrapped as CustodyStoreModule;
 }

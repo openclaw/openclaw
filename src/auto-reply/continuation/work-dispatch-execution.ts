@@ -1,5 +1,6 @@
 /** Per-row execution for durable same-session continuation work. */
 
+import { randomUUID } from "node:crypto";
 import type { SubagentRunLiveness } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import {
   emitContinuationWorkFireSpan,
@@ -20,8 +21,8 @@ import {
   markPendingWorkReaped,
   markPendingWorkSuperseded,
   markPendingWorkTurnGranted,
+  markPendingWorkTurnStarted,
   reconcileUndeliverableGrantedWork,
-  revalidatePendingWorkForTurn,
   requeuePendingWork,
 } from "./work-store.js";
 import { deliverPendingTerminalNoticeWithRetry } from "./work-terminal-notice.js";
@@ -262,6 +263,13 @@ function buildFoldedProvenanceNote(works: readonly PendingContinuationWork[], no
   return `${header}\n\n${blocks.join("\n\n")}${tail}${guidance}`;
 }
 
+/**
+ * One claimed wake as its execution sees it: the record at its latest committed revision (the
+ * turn-start fence advances it), and whether its run reported a start. A started run is never
+ * requeued (RFC §5.4.2): it records its delivery, or its fenced record is left to recovery.
+ */
+type ContinuationWorkClaim = { work: PendingContinuationWork; runStarted: boolean };
+
 type ContinuationTurnGrantResult =
   | { status: "ran"; work: PendingContinuationWork }
   // Turn ran, but the durable delivered-mark lost the revision race and the row
@@ -270,11 +278,12 @@ type ContinuationTurnGrantResult =
   | { status: "skipped"; reason: string; retryTrigger?: ContinuationWorkIdleRetryTrigger };
 
 async function driveContinuationTurn(
-  work: PendingContinuationWork,
+  claim: ContinuationWorkClaim,
   wakeText: string,
   mainCommandLane: string,
   signal: AbortSignal,
 ): Promise<ContinuationTurnGrantResult> {
+  const { work } = claim;
   const [
     { getRuntimeConfig },
     { resolveSessionStorePathCore },
@@ -353,20 +362,27 @@ async function driveContinuationTurn(
   if ((await refuseStaleContinuationWork([work], "adoption")).length === 0) {
     return { status: "skipped", reason: CONTINUATION_TURN_RECIPIENT_REFUSED_REASON };
   }
-  const workFence = await revalidatePendingWorkForTurn(work);
-  // The fence read yielded; a reset in that window aborted this claim.
+  // The final fence is the durable turn-start fence, committed before getReplyFromConfig under the
+  // run id the turn will use. The run reports its start only through onPreparedAgentRunStart, a
+  // synchronous observer it never awaits, fired at the first execution phase; an inline tool command
+  // can run without ever firing it. So no later point is before every effect.
+  const turnFence = await markPendingWorkTurnStarted(work, randomUUID());
+  // The fence write yielded; a reset in that window aborted this claim. Accepted edge: a fence that
+  // committed first leaves a claim that never ran, which recovery interrupts with a notice.
   if (signal.aborted) {
     return { status: "skipped", reason: CONTINUATION_TURN_RESET_REASON };
   }
-  if (!workFence.allowed) {
+  if (!turnFence.allowed) {
     return {
       status: "skipped",
       reason:
-        workFence.reason === "cancelled"
+        turnFence.reason === "cancelled"
           ? CONTINUATION_TURN_RESET_REASON
           : CONTINUATION_TURN_STALE_CLAIM_REASON,
     };
   }
+  claim.work = turnFence.work;
+  const turnRunId = turnFence.work.turnStart!.runId;
   const currentSessionEntry = loadSessionEntry({
     clone: false,
     hydrateSkillPromptRefs: false,
@@ -399,6 +415,7 @@ async function driveContinuationTurn(
           ...(agentId ? { AgentId: agentId } : {}),
         },
         {
+          runId: turnRunId,
           continuationTrigger: "work-wake",
           abortSignal: signal,
           parentRunId: work.parentRunId,
@@ -407,6 +424,7 @@ async function driveContinuationTurn(
           suppressTyping: true,
           onPreparedAgentRunStart: ({ runId }) => {
             replyRunId = runId;
+            claim.runStarted = true;
             replyRunTerminalOutcome = undefined;
           },
           onAgentRunTerminalOutcome: (outcome) => {
@@ -431,7 +449,8 @@ async function driveContinuationTurn(
     return { status: "skipped", reason: CONTINUATION_TURN_REPLY_RUN_FAILED_REASON };
   }
   if (!hasNonDrainReplyPayload(reply)) {
-    if (isGatewayDraining()) {
+    // Only a turn that never started may be requeued; a completed run is a granted wake.
+    if (!replyRunId && isGatewayDraining()) {
       return { status: "skipped", reason: CONTINUATION_TURN_DRAINING_REASON };
     }
     log.info(
@@ -445,9 +464,9 @@ async function driveContinuationTurn(
   }
   // The provider ran. Persist the replay guard before finishing, then advance
   // only with the committed revision-bearing value returned by the CAS.
-  const deliveredMark = await markPendingWorkDelivered(work);
+  const deliveredMark = await markPendingWorkDelivered(claim.work);
   if (!deliveredMark.applied) {
-    await reconcileUndeliverableGrantedWork(work);
+    await reconcileUndeliverableGrantedWork(claim.work);
     return { status: "ran-finalized" };
   }
   return { status: "ran", work: deliveredMark.work };
@@ -611,6 +630,8 @@ export async function executePendingContinuationWork(
   policy: ContinuationWorkExecutionPolicy,
   signal: AbortSignal,
 ): Promise<ContinuationWorkExecutionDirective> {
+  // Store writes after the drive use the claim: the turn-start fence advanced its revision.
+  const claim: ContinuationWorkClaim = { work, runStarted: false };
   try {
     const fireDeferredMs = Date.now() - work.electedAt;
     const fireChainId = work.chainId ?? work.flowId ?? work.sessionKey;
@@ -628,7 +649,7 @@ export async function executePendingContinuationWork(
       `[continuation:work-wake] hop=${work.hop}/${work.maxChainLength} session=${work.sessionKey} reasonCategory=${policy.reasonCategory}`,
     );
     const result = await driveContinuationTurn(
-      work,
+      claim,
       formatContinuationWakeText(work),
       policy.mainCommandLane,
       signal,
@@ -659,7 +680,7 @@ export async function executePendingContinuationWork(
     }
     if (skippedReason === CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON) {
       await markPendingWorkSuperseded(
-        work,
+        claim.work,
         `No-op replay guard suppressed continuation turn (${skippedReason}).`,
       );
       return { kind: "failed" };
@@ -680,7 +701,7 @@ export async function executePendingContinuationWork(
           `[continuation:work-orphan-reaped] flowId=${work.flowId ?? "none"} session=${work.sessionKey} parentRunId=${work.parentRunId} — parent confident-terminal, can never rehydrate`,
         );
         await markPendingWorkReaped(
-          work,
+          claim.work,
           `Orphan continuation reaped: parent run ${work.parentRunId} is confident-terminal and can never rehydrate this flow.`,
         );
         return { kind: "reaped" };
@@ -688,7 +709,7 @@ export async function executePendingContinuationWork(
       const priorBusySkips = work.busySkipCount ?? 0;
       const retryDueAt =
         now + (result.retryTrigger ? policy.idleRetryHedgeMs : policy.busyRetryDelayMs);
-      const requeued = await requeuePendingWork(work, {
+      const requeued = await requeuePendingWork(claim.work, {
         dueAt: retryDueAt,
         summary: `Retryable continuation skip: ${skippedReason}`,
         busySkipCount: priorBusySkips + 1,
@@ -716,7 +737,7 @@ export async function executePendingContinuationWork(
       `[system:continuation-warning] continue_work turn was not granted (${skippedReason}).`,
       { sessionKey: work.sessionKey, trusted: true },
     );
-    await markPendingWorkFailed(work, `Continuation turn was not granted: ${skippedReason}`);
+    await markPendingWorkFailed(claim.work, `Continuation turn was not granted: ${skippedReason}`);
     return { kind: "failed" };
   } catch (err) {
     if (signal.aborted) {
@@ -726,13 +747,21 @@ export async function executePendingContinuationWork(
       return { kind: "cancelled" };
     }
     const message = formatErrorMessage(err);
+    if (claim.runStarted) {
+      // The run started, so its delivery is unconfirmed: never requeue it. The fenced record stays
+      // running for recovery, which interrupts it with one notice (RFC §5.4.2).
+      log.warn(
+        `[continuation:work-drive-error-after-start] flowId=${work.flowId ?? "none"} session=${work.sessionKey} error=${message} left to recovery`,
+      );
+      return { kind: "unchanged" };
+    }
     const retryCount = (work.retryCount ?? 0) + 1;
     if (retryCount <= MAX_TRANSIENT_ERROR_RETRY_COUNT) {
       const retryDueAt = Date.now() + TRANSIENT_ERROR_RETRY_MS;
       log.warn(
         `[continuation:work-drive-error-retry] flowId=${work.flowId ?? "none"} session=${work.sessionKey} retry=${retryCount}/${MAX_TRANSIENT_ERROR_RETRY_COUNT} error=${message}`,
       );
-      const requeued = await requeuePendingWork(work, {
+      const requeued = await requeuePendingWork(claim.work, {
         dueAt: retryDueAt,
         summary: `Transient continuation turn error: ${message}`,
         retryCount,
@@ -747,7 +776,7 @@ export async function executePendingContinuationWork(
     // the in-memory event queue. The CAS result stays the dedupe authority: a
     // re-entrant or recovered caller holding a stale claim loses it and reports
     // nothing.
-    const terminalized = await markPendingWorkFailed(work, message, {
+    const terminalized = await markPendingWorkFailed(claim.work, message, {
       terminalNoticePending: "retry-exhausted",
     });
     if (terminalized) {
@@ -757,7 +786,7 @@ export async function executePendingContinuationWork(
       // Hand the persisted obligation to the durable delivery queue. A failure
       // arms a bounded live retry and leaves the flag set, so the outcome never
       // depends on unrelated traffic or another restart.
-      await deliverPendingTerminalNoticeWithRetry(work);
+      await deliverPendingTerminalNoticeWithRetry(claim.work);
     }
     return { kind: "failed" };
   }
