@@ -74,6 +74,56 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       expect(getComputedStyle(icons[0]!).color).toBe(getComputedStyle(icons[1]!).color);
     });
 
+    it.each([
+      [true, "shared"],
+      [false, "read-only"],
+      [false, "suggest"],
+      [false, "draft"],
+      [false, "shared"],
+    ] as const)(
+      "keeps sharing icons compact (published=%s, visibility=%s)",
+      async (published, visibility) => {
+        const { container } = mountChatPaneHeader(containers, {
+          sharingControl: chatPaneHeaderSharing({
+            session: { ...chatPaneHeaderSharing().session!, visibility },
+            state: published
+              ? {
+                  loading: false,
+                  result: {
+                    sessionKey: "agent:main:test",
+                    members: [],
+                    identities: [],
+                    permissions: [],
+                    role: "owner",
+                    allowedVisibilities: ["shared"],
+                    publicShare: { token: `v1.${"a".repeat(96)}`, createdAt: 1 },
+                  },
+                }
+              : undefined,
+          }),
+        });
+        const trigger = container.querySelector<HTMLElement>(".chat-pane__sharing-trigger")!;
+        const state = trigger.querySelector<HTMLElement>(".chat-pane__sharing-trigger-state")!;
+        const icon = state.firstElementChild!;
+        const label = state.lastElementChild!;
+        const chevron = trigger.querySelector(".chat-pane__sharing-chevron")!;
+        if (published || visibility !== "shared") {
+          expect(label).not.toBe(icon);
+          const labelRect = label.getBoundingClientRect();
+          const iconRect = icon.getBoundingClientRect();
+          expect(labelRect.top + labelRect.height / 2).toBeCloseTo(
+            iconRect.top + iconRect.height / 2,
+          );
+          expect(labelRect.left - iconRect.right).toBeCloseTo(4);
+        } else {
+          expect(state.children).toHaveLength(1);
+        }
+        expect(
+          chevron.getBoundingClientRect().left - state.getBoundingClientRect().right,
+        ).toBeCloseTo(0);
+      },
+    );
+
     it.each([false, true])(
       "reserves the trailing header region before actions arrive (agent=%s)",
       async (agent) => {
