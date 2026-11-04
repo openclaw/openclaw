@@ -1,7 +1,7 @@
 // Continuation (karmaterminal/openclaw#1544): the sessions session-store maintenance keeps for live
 // continuation custody. Entry-cap eviction, age pruning and disk-budget cleanup never select one:
-// a deleted room loses the elections it owns ("source session owner is unavailable") and refuses
-// the returns owed to it, because its recipient authority advanced.
+// a deleted session loses the elections it owns ("source session owner is unavailable"), and the
+// returns owed to it are refused, because its recipient authority advanced.
 //
 // A session holds custody while it owns a live election (`hasLiveContinuationCustody`'s rule), while
 // a pending continuation row is addressed to it, or while an admitted continuation child still owes
@@ -10,8 +10,8 @@
 // the session as before. The named limit: a store full of live custody stays above `maxEntries`
 // until custody ends.
 //
-// Accepted edge: these are read once while a pass prepares. Custody that begins after that read,
-// and whose session no other protection covers by the capture, is seen by the next pass.
+// Accepted edge: these are read once while a pass prepares. Custody that begins after that read, on
+// a session nothing else protects when the pass captures its protection, waits for the next pass.
 import { listPendingContinuationSessionDeliveryKeys } from "../../infra/session-delivery-queue-storage.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { listLiveContinuationCustodyOwners } from "./work-store.js";

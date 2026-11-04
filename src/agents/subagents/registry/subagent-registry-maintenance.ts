@@ -1,7 +1,8 @@
 /**
  * Session-store maintenance protection for subagent runs.
  * Preserves child session keys while runs are active, pending delivery, or
- * awaiting completion announces so pruning cannot delete needed transcripts.
+ * awaiting completion announces so pruning cannot delete needed transcripts,
+ * and every session live continuation custody still needs (custody-holders.ts).
  */
 import { listContinuationCustodyHolders } from "../../../auto-reply/continuation/custody-holders.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "../../../config/sessions/store-maintenance-preserve.js";
