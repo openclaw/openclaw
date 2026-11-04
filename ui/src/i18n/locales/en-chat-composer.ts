@@ -261,6 +261,15 @@ const catalog = {
       selectionConfirmationFailed: "Voice change unconfirmed.",
     },
     sendErrors: {
+      disconnected: "Reconnect to continue.",
+      newSessionBusy:
+        "Wait for the current reply and queued messages before starting a new session.",
+      newSessionLoading: "Sessions are still loading. Try again in a moment.",
+      newSessionFailed: "Couldn’t create a new session. Try again.",
+      sendFailed: "Couldn’t send your message. Try again.",
+      messageNotAccepted: "Your message wasn’t accepted before the reply ended. Try again.",
+      detachedMessageNotAccepted:
+        "The current reply ended before your message was accepted. Try again.",
       outboxPayloadCapacity:
         "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
       outboxPayloadUnavailable:
