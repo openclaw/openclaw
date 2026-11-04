@@ -561,10 +561,12 @@ openclaw continuations interrupt-fenced [--json]
 `fence-status` is read-only: it counts wakes whose turn started but whose
 delivery was never confirmed, and interrupted-turn notices still owed, without
 writing the stopped store. `interrupt-fenced` ends each such wake as interrupted
-with its one notice, as crash recovery does, and never runs a turn. Both exit 0
-on success, 2 when a Gateway or embedded agent owns the state, and 1 when they
-cannot read or drain. `openclaw --version --json` lists the build's
-`capabilities`; `continuation-turn-start-fence` marks a build with the fence.
+with its one notice, as crash recovery does, and never runs a turn. Both report
+the `databasePath` they used. Both exit 0 on success, 2 when offline ownership
+is refused (`error.code` `OWNER_UNAVAILABLE`, for example a running Gateway),
+and 1 otherwise, including `STATE_DATABASE_MISSING` when the selected state root
+has no database. `openclaw --version --json` lists the build's `capabilities`;
+`continuation-turn-start-fence` marks a build with the fence.
 
 ## Chat slash commands
 
