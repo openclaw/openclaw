@@ -1,4 +1,4 @@
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
 import { tuiPtyTestFiles } from "../../test/vitest/vitest.test-shards.mjs";
@@ -74,6 +74,7 @@ import {
   DATABASE_WORKER_CONFIG,
   DATABASE_WORKER_TEST_JOB_FILE_LIMIT,
 } from "./extension-test-plan.mts";
+import { isPluginPublicationEnabled } from "./plugin-publication-target.mjs";
 import {
   mergeVitestPretestBuildModes,
   resolveVitestPretestBuildMode,
@@ -266,6 +267,46 @@ export function hasBuildArtifactAffectingChange(changedPaths: string[]) {
       (BUILD_INPUT_RE.test(changedPath) &&
         !isTestOnlyPath(changedPath) &&
         !isDocumentationPath(changedPath)),
+  );
+}
+
+// Inputs that move every packed plugin's bytes or the scan verdict: dependency
+// resolution, the plugin runtime bundler and its build plugins, the packer, and
+// the reviewed-finding scanner. Plugin-owned paths select only that plugin.
+const PLUGIN_NPM_SECURITY_SCAN_GLOBAL_INPUT_RE =
+  /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^scripts\/(?:check-plugin-npm-security-scan\.mts|plugin-npm-security-scan\.mts|plugin-npm-publish\.sh|plugin-publication-artifact\.mjs|generate-npm-package-lock\.m[jt]s)$|^scripts\/lib\/(?:plugin-npm-runtime-[^/]+|plugin-npm-package-manifest\.m[jt]s|bundled-plugin-build-entries\.mjs|standalone-source-module-urls\.mjs|state-schema-inline-plugin\.mts|plugin-inventory-module-refs\.mts|runtime-process-core-build-entries\.mts)$|^src\/skills\/security\/scanner\.ts$/u;
+
+/**
+ * Publishable npm plugin package dirs whose packed bytes a change can move.
+ * Null changed paths (scheduled, push, and dispatch runs) select every package.
+ */
+export function selectPluginNpmSecurityScanPackageDirs(
+  changedPaths: string[] | null,
+  options: CwdOptions = {},
+) {
+  const cwd = options.cwd ?? process.cwd();
+  const packageDirs = readdirSync(path.join(cwd, "extensions"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => `extensions/${entry.name}`)
+    .filter((packageDir) => {
+      const packageJsonPath = path.join(cwd, packageDir, "package.json");
+      return (
+        existsSync(packageJsonPath) &&
+        isPluginPublicationEnabled(JSON.parse(readFileSync(packageJsonPath, "utf8")), "npm")
+      );
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+  const sources = changedPaths?.filter(
+    (changedPath) => !isTestOnlyPath(changedPath) && !isDocumentationPath(changedPath),
+  );
+  if (
+    !sources ||
+    sources.some((changedPath) => PLUGIN_NPM_SECURITY_SCAN_GLOBAL_INPUT_RE.test(changedPath))
+  ) {
+    return packageDirs;
+  }
+  return packageDirs.filter((packageDir) =>
+    sources.some((changedPath) => changedPath.startsWith(`${packageDir}/`)),
   );
 }
 

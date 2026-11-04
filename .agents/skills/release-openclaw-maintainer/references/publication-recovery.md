@@ -266,6 +266,43 @@ child. Docker-only recovery does not recover canceled ClawHub publication;
 verify and recover that surface separately. Recover a failed Plugin ClawHub New
 bootstrap child through its [direct route](first-package.md), not a rerun.
 
+## Reviewed security-scan mismatch
+
+Plugin NPM Release repacks every plugin with the publisher tooling (P), checked
+out at `.release-tooling` from the run's `github.workflow_sha`, and scans that
+exact tarball. The Full Release Validation tarball was built with the
+candidate's toolchain, so it can pass while P's bundler produces different
+bytes. A `Scan exact plugin npm artifact` failure with `unreviewed critical
+findings in exact npm artifact`, where the finding's `contentSha256` differs
+from `REVIEWED_CRITICAL_FINDING_CONTENT_SHA256` in
+`scripts/plugin-npm-security-scan.mts`, is deterministic for that P. A redispatch
+from the same tooling tag rebuilds the same bytes and fails again.
+
+Before any redispatch, reproduce under P's toolchain. Use a clean checkout of
+the exact source SHA with frozen dependencies, then add P at `.release-tooling`
+inside it:
+
+```bash
+git -C <source-checkout> worktree add .release-tooling <P-workflow-sha>
+(cd <source-checkout>/.release-tooling && CI=true pnpm install --frozen-lockfile --ignore-scripts)
+cd <source-checkout>
+export TSX_TSCONFIG_PATH="$PWD/.release-tooling/tsconfig.json"
+OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR=/tmp/plugin-scan \
+  bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$PWD" --pack extensions/<id>
+node --import tsx .release-tooling/scripts/plugin-npm-security-scan.mts \
+  --package-name <package-name> --package-version <version> \
+  --tarball /tmp/plugin-scan/<tarball>.tgz
+```
+
+If the local scan fails the same way, compare the flagged file with the
+reviewed bytes. Record the new hash on `main` only after review confirms that the
+flagged logic is unchanged (see #192489), then publish from a protected tooling
+tag that contains the update. If the local scan passes, the failure is specific
+to the runner. Diagnose it before you dispatch again. Main CI's
+`check-plugin-npm-security-scan` row scans main-built packs when lockfile,
+bundler, scanner, or plugin inputs change, so a mismatch at publish points to a
+gap between P's toolchain and the candidate's.
+
 ## Docker mirror
 
 The Vercel Container Registry mirror is advisory and fails without failing the

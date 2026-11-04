@@ -7,6 +7,7 @@ import {
   hasPromptSnapshotAffectingChange as affectsPrompts,
   hasQaSmokeAffectingChange as affectsQa,
   resolveReleaseFastLaneScope as releaseScope,
+  selectPluginNpmSecurityScanPackageDirs as selectSecurityScan,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -139,4 +140,35 @@ it.each([
   if (precise) {
     expect(selectedFiles(createChangedNodeTestShards([file], { cwd }))).toEqual([]);
   }
+});
+
+it("selects plugin npm security scans from changed plugin build inputs", () => {
+  const cwd = argvTempDirs.make("plugin-npm-security-scan-");
+  const release = (publishToNpm: boolean) =>
+    JSON.stringify({ openclaw: { release: { publishToNpm } } });
+  write(cwd, "extensions/openshell/package.json", release(true));
+  write(cwd, "extensions/signal/package.json", release(true));
+  write(cwd, "extensions/qa-lab/package.json", release(false));
+  const all = ["extensions/openshell", "extensions/signal"];
+  const select = (paths: string[] | null) => selectSecurityScan(paths, { cwd });
+
+  expect(select(null)).toEqual(all);
+  for (const globalInput of [
+    "pnpm-lock.yaml",
+    "package.json",
+    "scripts/lib/plugin-npm-runtime-build.mts",
+  ]) {
+    expect(select(["extensions/openshell/src/index.ts", globalInput]), globalInput).toEqual(all);
+  }
+  expect(select(["extensions/openshell/src/worker-cli.ts", "src/index.ts"])).toEqual([
+    "extensions/openshell",
+  ]);
+  expect(
+    select([
+      "extensions/openshell/README.md",
+      "extensions/signal/src/daemon.test.ts",
+      "extensions/qa-lab/src/index.ts",
+      "src/index.ts",
+    ]),
+  ).toEqual([]);
 });
