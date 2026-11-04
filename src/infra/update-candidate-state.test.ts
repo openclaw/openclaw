@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -34,6 +35,7 @@ import {
 } from "./update-candidate-state.test-support.js";
 import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
 const rehearsals: Awaited<ReturnType<typeof prepareUpdateCandidateRehearsal>>[] = [];
 beforeEach(async () => {
@@ -587,9 +589,9 @@ it("copies external directory and file links under an aliased state root without
   const plugin = path.join(source, "extensions", "demo");
   const dependency = path.join(root, "dependency");
   const fileLinks = process.platform !== "win32";
-  const file = fileLinks
-    ? path.join(root, "assets", "config.txt")
-    : path.join(dependency, "config.txt");
+  // Keep this bare file outside the runner's enclosing package scope.
+  const assets = fileLinks ? tempDirs.make("candidate-assets-", "/tmp") : dependency;
+  const file = path.join(assets, "config.txt");
   const physical = path.join(root, "physical-state");
   const alias = path.join(root, "state-alias");
   await fs.mkdir(physical);
@@ -598,7 +600,7 @@ it("copies external directory and file links under an aliased state root without
   await writeText(dependency, "package.json", '{"name":"dependency"}');
   await writeText(path.dirname(file), path.basename(file), "source");
   if (fileLinks) {
-    await link(path.join(root, "missing-unrelated-target"), path.join(root, "assets", "unrelated"));
+    await link(path.join(root, "missing-unrelated-target"), path.join(assets, "unrelated"));
     await link(file, path.join(dependency, "config.txt"));
   }
   await link(dependency, path.join(plugin, "node_modules", "dependency"));
