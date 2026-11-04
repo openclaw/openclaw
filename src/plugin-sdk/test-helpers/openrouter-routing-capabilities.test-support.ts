@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ProviderRuntimeHooks } from "../../agents/embedded-agent-runner/model.provider-hooks.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { ProviderRuntimeContractPluginLoader } from "./provider-runtime-contract.js";
+import type { ProviderRuntimeContractPluginLoader } from "./provider-runtime-contract.types.js";
 
 export function describeOpenRouterRoutingCapabilitiesContract(
   load: ProviderRuntimeContractPluginLoader,
