@@ -330,3 +330,12 @@ scenario inputs, not invoice predictions; credits, discounts, minimums and
 storage charges need separate accounting. Workflow critical-path savings stay
 unknown until a dependency timeline is available. Do not label summed job time
 as developer wait time.
+
+## Declared file inputs
+
+Prefer module imports for JSON fixtures so Vitest records their dependencies
+without additional rules. Binary fixtures read through `node:fs` use the exact
+test-to-input mapping in `test/vitest/vitest.declared-inputs.ts`. The shared Vite
+plugin registers these inputs with native dependency recording and related-test
+selection. It does not intercept file reads or change the scheduled inventory.
+Undeclared file reads remain a graph coverage gap.
