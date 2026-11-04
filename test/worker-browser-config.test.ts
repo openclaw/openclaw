@@ -1,19 +1,19 @@
 import { expect, it } from "vitest";
-import { createAttachedBrowserToolRuntime } from "../../../extensions/browser/runtime-api.js";
-import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
-import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { createAttachedBrowserToolRuntime } from "../extensions/browser/runtime-api.js";
+import { createOpenClawCodingToolsInternalAsync } from "../src/agents/agent-tools.js";
+import type { SessionPlacementTurnParams } from "../src/agents/session-placement-admission.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
   readRuntimeConfig,
   setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createWorkerBrowserToolRuntime } from "../../worker/browser-runtime.js";
-import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
-import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
-import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
+} from "../src/config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../src/config/sessions/session-accessor.js";
+import { prepareWorkerDesktopLaunchPlan } from "../src/gateway/worker-environments/worker-desktop-launch-plan.js";
+import { resolveWorkerToolAuthority } from "../src/gateway/worker-environments/worker-tool-authority.js";
+import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+import { createWorkerBrowserToolRuntime } from "../src/worker/browser-runtime.js";
+import { createWorkerPlacementTools } from "../src/worker/worker-placement-tools.js";
 
 it("executes the admitted worker Browser with private config and no host authority", async () => {
   await withOpenClawTestState(
