@@ -252,7 +252,7 @@ suite.define(() => {
           const summary = alert.locator("summary");
           const copy = alert.getByRole("button", { name: "Copy error", exact: true });
           const diagnostic = alert.locator("pre");
-          const expected = `${failedState === "request" ? "" : "Runner failed: "}${workerFailureDiagnostic}`;
+          const expected = `${failedState === "request" ? "" : "Couldn’t continue this session. "}${workerFailureDiagnostic}`;
           expect(await summary.count()).toBe(1);
           expect(await diagnostic.isVisible()).toBe(false);
           for (const width of [1440, 320]) {

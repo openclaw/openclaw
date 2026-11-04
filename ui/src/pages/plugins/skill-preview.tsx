@@ -4,6 +4,7 @@ import type {
   PluginsSkillsReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
 import "../../components/modal-dialog.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
@@ -237,19 +238,29 @@ export function PluginSkillPreview(props: {
               label={props.state?.request.skillName ?? t("pluginsPage.detailTabs.skills")}
               onModal-cancel={() => props.preview.close()}
             >
-              <p role="alert">{formatUiError(error())}</p>
-              <openclaw-modal-actions>
-                <button
-                  type="button"
-                  class="btn oc-action oc-action-secondary"
-                  onClick={() => props.preview.close()}
-                >
-                  {t("common.close")}
-                </button>
-                <button type="button" class="btn oc-action oc-action-primary" onClick={reset}>
-                  {t("pluginsPage.tryAgain")}
-                </button>
-              </openclaw-modal-actions>
+              <div class="oc-dialog">
+                <DialogHeader
+                  title={props.state?.request.skillName ?? t("pluginsPage.detailTabs.skills")}
+                  onClose={() => props.preview.close()}
+                />
+                <div class="oc-dialog__body">
+                  <div class="callout danger" role="alert">
+                    {formatUiError(error())}
+                  </div>
+                </div>
+                <openclaw-modal-actions class="oc-dialog__footer">
+                  <button
+                    type="button"
+                    class="btn oc-action oc-action-secondary"
+                    onClick={() => props.preview.close()}
+                  >
+                    {t("common.close")}
+                  </button>
+                  <button type="button" class="btn primary" onClick={reset}>
+                    {t("pluginsPage.tryAgain")}
+                  </button>
+                </openclaw-modal-actions>
+              </div>
             </openclaw-modal-dialog>
           )}
         >
@@ -259,16 +270,15 @@ export function PluginSkillPreview(props: {
                 label={props.state?.request.skillName ?? t("pluginsPage.detailTabs.skills")}
                 onModal-cancel={() => props.preview.close()}
               >
-                <SettingsLoadingSkeleton rows={5} />
-                <openclaw-modal-actions>
-                  <button
-                    type="button"
-                    class="btn oc-action oc-action-secondary"
-                    onClick={() => props.preview.close()}
-                  >
-                    {t("common.close")}
-                  </button>
-                </openclaw-modal-actions>
+                <div class="oc-dialog">
+                  <DialogHeader
+                    title={props.state?.request.skillName ?? t("pluginsPage.detailTabs.skills")}
+                    onClose={() => props.preview.close()}
+                  />
+                  <div class="oc-dialog__body">
+                    <SettingsLoadingSkeleton rows={5} />
+                  </div>
+                </div>
               </openclaw-modal-dialog>
             }
           >

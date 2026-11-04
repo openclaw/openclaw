@@ -65,7 +65,7 @@ describe("machine connection presentation", () => {
     await waitForSolid(() =>
       expect(view.getByRole("status").textContent).toBe("Creating a secure connection link…"),
     );
-    expect(view.getByRole<HTMLButtonElement>("button", { name: "Dismiss" }).disabled).toBe(false);
+    expect(view.getByRole<HTMLButtonElement>("button", { name: "Close" }).disabled).toBe(false);
     await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
     initial.resolve(code("first"));
     await waitForSolid(() => expect(view.getByText(code("first").command)).toBeDefined());
@@ -104,7 +104,7 @@ describe("machine connection presentation", () => {
         .mockReturnValueOnce(retired.promise);
       view.getByRole<HTMLButtonElement>("button", { name: "Connect" }).click();
       await waitForSolid(() => expect(originalRequest).toHaveBeenCalledOnce());
-      view.getByRole<HTMLButtonElement>("button", { name: "Dismiss" }).click();
+      view.getByRole<HTMLButtonElement>("button", { name: "Close" }).click();
       await waitForSolid(() =>
         expect(view.container.querySelector("openclaw-modal-dialog")).toBeNull(),
       );

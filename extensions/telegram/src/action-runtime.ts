@@ -690,6 +690,7 @@ export async function handleTelegramAction(
       token,
       replyToMessageId,
       messageThreadId,
+      silent: readBooleanParam(params, "silent"),
     });
     notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({

@@ -66,6 +66,20 @@ text replaces the instructions after the read-only heading. End the notice with
 a space and an absolute HTTP or HTTPS URL to add a **Learn more** link. For
 example, `Edit the deployment manifest and redeploy. https://example.org/gateway`.
 
+## Edit a failed message
+
+If a model rejects a message (for example, because it contains too many images),
+choose **Edit message** on the latest failed reply. Confirm the rewind to return
+that message and its attachments to the composer, remove or change attachments,
+and send again. The rejected turn remains in a saved conversation branch, but is
+excluded from the active model context.
+
+Send or clear any existing composer draft first; recovery never replaces it.
+Editing requires permission to rewind the conversation and is unavailable while
+a run is active. **Try again** still continues the existing conversation without
+replaying the original message, because earlier actions may already have run.
+Rewinding does not undo external actions.
+
 ## Command palette file attachments
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
@@ -269,7 +283,7 @@ In **My sessions**, choosing an agent from the switcher resumes that agent's new
 
 The sidebar’s **Unsent draft** pencil covers saved text, attachments, replies, and goals, including drafts saved in another tab or before a reload, without reopening the conversation. A newer edit or clear always replaces an older saved draft. Incognito conversations never show a saved-draft pencil. Outbox attention badges also count queued messages with attachments that need review once the connection finishes restoring.
 
-If this browser has saved drafts or messages that could not be restored to a chat, a **saved drafts** or **saved messages to review** notice shows their content and attachment names. Empty records are not counted. The original chat is named only when it can be identified from your available conversations. Choose **Review in this chat** in a non-Incognito chat with an empty message box and no pending messages; confirmation restores the saved copy without sending it. Messages with unconfirmed delivery stay paused—check the original chat before retrying. **Delete saved copy** asks for confirmation and removes only the saved draft, messages, and attachments shown together, not messages already sent to a chat.
+If this browser has saved drafts or messages that could not be restored to a chat, a **saved drafts** or **saved messages to review** notice shows their content and attachment names. Empty records are not counted. The original chat is named only when it can be identified from your available conversations. Choose **Review in this session** in a non-Incognito session with an empty message box and no pending messages; confirmation restores the saved copy without sending it. Messages with unconfirmed delivery stay paused—check the original chat before retrying. **Delete saved copy** asks for confirmation and removes only the saved draft, messages, and attachments shown together, not messages already sent to a chat.
 
 With sidebar previews enabled, running sessions show a small, static tool icon beside the progress text on the second row beneath the session name. The title row stays unchanged, and the tool name is available only in the icon’s tooltip and accessible label rather than repeated as visible text. The compact one-row sidebar and team roster add no tool icon or tool text, so tool changes do not shift the list. Tool progress uses only explicitly public progress text from the Gateway, never argument-derived metadata or raw command output. If a call’s progress becomes hidden, its displayed progress is withdrawn. Pending questions and other critical status keep their existing priority. The existing session indicator remains the only activity animation, and tool state clears when its live subscription ends.
 

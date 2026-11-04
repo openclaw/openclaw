@@ -1246,7 +1246,7 @@ describe("loadChatHistory retry handling", () => {
       expect(state.chatLoading).toBe(false);
       expect(getChatHistoryLoadState(state)).toMatchObject({
         phase: "failed",
-        message: expect.stringContaining("timed out"),
+        message: expect.stringContaining("in time"),
       });
     }
     expect(request.mock.calls[1]?.[2]?.signal.aborted).toBe(true);
@@ -1440,8 +1440,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatVerboseLevel).toBeNull();
     expect(getChatHistoryLoadState(state)).toMatchObject({
       phase: "failed",
-      message:
-        "You don't have permission to view existing chat history. Ask the person who manages OpenClaw for access.",
+      message: "Couldn’t view session history. Ask an admin to grant read access.",
       retryable: false,
     });
     expect(state.lastError).toBeNull();

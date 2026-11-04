@@ -35,6 +35,13 @@ export type CuratedSettingsField = {
     }
 );
 
+export type CuratedSettingsDisclosure = {
+  titleKey: string;
+  descriptionKey: string;
+  /** The first field is the row's switch. */
+  fields: readonly CuratedSettingsField[];
+};
+
 export type CuratedSettingsPresentation = {
   id: string;
   /** Source ownership; this is not the selected runtime config owner. */
@@ -44,8 +51,10 @@ export type CuratedSettingsPresentation = {
   unsupported: { titleKey: string; rowTitleKey: string; descriptionKey: string };
   sections: readonly {
     titleKey: string;
-    descriptionKey: string;
-    fields: readonly CuratedSettingsField[];
+    descriptionKey?: string;
+    fields?: readonly CuratedSettingsField[];
+    /** One switch per row; each row's remaining fields open on demand. */
+    disclosures?: readonly CuratedSettingsDisclosure[];
   }[];
 };
 

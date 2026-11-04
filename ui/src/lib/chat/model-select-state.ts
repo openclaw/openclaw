@@ -295,7 +295,7 @@ export function resolveChatModelSelectState(
   return {
     currentOverride,
     defaultModel,
-    defaultLabel: defaultModel ? `Default (${defaultLabel})` : "Default model",
+    defaultLabel: defaultModel ? `Default (${defaultLabel})` : t("chat.modelControls.defaultModel"),
     modelOverrideSource: resolveModelOverrideSource(state),
     options,
   };
