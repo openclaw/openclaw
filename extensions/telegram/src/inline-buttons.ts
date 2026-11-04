@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds } from "./accounts.js";
+import { resolveTelegramTargetChatType } from "./targets.js";
 
 const DEFAULT_INLINE_BUTTONS_SCOPE: TelegramInlineButtonsScope = "allowlist";
 
@@ -58,4 +59,32 @@ export function isTelegramInlineButtonsEnabled(params: {
   );
 }
 
-export { resolveTelegramTargetChatType } from "./targets.js";
+export function assertTelegramInlineButtonsAllowedForTarget(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  target: string;
+}): void {
+  const scope = resolveTelegramInlineButtonsScope(params);
+  if (scope === "off") {
+    throw new Error(
+      'Telegram inline buttons are disabled. Set channels.telegram.capabilities.inlineButtons to "dm", "group", "all", or "allowlist".',
+    );
+  }
+  if (scope !== "dm" && scope !== "group") {
+    return;
+  }
+  const targetType = resolveTelegramTargetChatType(params.target);
+  if (targetType === "unknown") {
+    throw new Error(
+      `Telegram inline buttons require a numeric chat id when inlineButtons="${scope}".`,
+    );
+  }
+  if (scope === "dm" && targetType !== "direct") {
+    throw new Error('Telegram inline buttons are limited to DMs when inlineButtons="dm".');
+  }
+  if (scope === "group" && targetType !== "group") {
+    throw new Error('Telegram inline buttons are limited to groups when inlineButtons="group".');
+  }
+}
+
+export { resolveTelegramTargetChatType };

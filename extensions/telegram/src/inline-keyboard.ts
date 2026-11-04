@@ -18,6 +18,9 @@ export function buildInlineKeyboard(
           if (button.url) {
             return { ...label, url: button.url };
           }
+          if (button.copy_text?.text) {
+            return { ...label, copy_text: button.copy_text };
+          }
           if (button.callback_data) {
             return { ...label, callback_data: button.callback_data };
           }

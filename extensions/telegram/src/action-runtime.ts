@@ -43,6 +43,7 @@ import type { TelegramDraftPreview } from "./draft-stream-message.js";
 import { readTelegramHistoryAction } from "./history-read.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 import {
+  assertTelegramInlineButtonsAllowedForTarget,
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
 } from "./inline-buttons.js";
@@ -157,6 +158,9 @@ export async function handleTelegramAction(
 ): Promise<AgentToolResult<unknown>> {
   rejectTelegramNativeButtonParams(params);
   const action = normalizeTelegramActionName(readStringParam(params, "action", { required: true }));
+  if (params.copyTextButtons !== undefined && action !== "sendMessage") {
+    throw new Error("Telegram copyTextButtons are supported only for send.");
+  }
   const accountId = readStringParam(params, "accountId");
   const isActionEnabled = createTelegramActionGate({
     cfg,
@@ -357,6 +361,7 @@ export async function handleTelegramAction(
     const firstMediaUrl = mediaUrls[0];
     const location = normalizeOutboundLocation(params.location);
     const presentation = normalizeMessagePresentation(params.presentation);
+    const hasCopyTextButtons = params.copyTextButtons !== undefined;
     const buttons = resolveButtons(to, presentation);
     const hasButtons = Array.isArray(buttons) && buttons.length > 0;
     const hasLocation = Boolean(location);
@@ -385,6 +390,9 @@ export async function handleTelegramAction(
       (presentationText?.trim() ? presentationText : undefined) ??
       explicitContent ??
       (interactiveText?.trim() ? interactiveText : undefined);
+    if (hasCopyTextButtons && preparedContent == null && !firstMediaUrl) {
+      throw new Error("Telegram copyTextButtons require message or media content.");
+    }
     if (preparedContent == null && !firstMediaUrl && !hasButtons && !hasLocation) {
       throw new Error("content required.");
     }
@@ -409,23 +417,7 @@ export async function handleTelegramAction(
       throw new Error("Telegram video notes require exactly one media attachment.");
     }
     if (buttons) {
-      const inlineButtonsScope = requireInlineButtonsScope();
-      if (inlineButtonsScope === "dm" || inlineButtonsScope === "group") {
-        const targetType = resolveTelegramTargetChatType(to);
-        if (targetType === "unknown") {
-          throw new Error(
-            `Telegram inline buttons require a numeric chat id when inlineButtons="${inlineButtonsScope}".`,
-          );
-        }
-        if (inlineButtonsScope === "dm" && targetType !== "direct") {
-          throw new Error('Telegram inline buttons are limited to DMs when inlineButtons="dm".');
-        }
-        if (inlineButtonsScope === "group" && targetType !== "group") {
-          throw new Error(
-            'Telegram inline buttons are limited to groups when inlineButtons="group".',
-          );
-        }
-      }
+      assertTelegramInlineButtonsAllowedForTarget({ cfg, accountId, target: to });
     }
     const replyToMessageId = readTelegramReplyToMessageId(params);
     const messageThreadId = readTelegramThreadId(params);

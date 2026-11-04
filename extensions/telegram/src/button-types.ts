@@ -13,6 +13,7 @@ import {
   resolveAskUserQuestionOptionIndex,
   type AskUserQuestionOptionIndices,
 } from "openclaw/plugin-sdk/reply-payload";
+import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildTelegramApprovalCallbackData,
   TELEGRAM_CALLBACK_DATA_MAX_BYTES,
@@ -39,6 +40,7 @@ export function normalizeTelegramButtonStyle(style: unknown): TelegramButtonStyl
 type TelegramInlineButton = {
   text: string;
   callback_data?: string;
+  copy_text?: { text: string };
   url?: string;
   web_app?: { url: string };
   style?: TelegramButtonStyle;
@@ -49,6 +51,58 @@ export type TelegramCallbackButton = Pick<TelegramInlineButton, "text" | "style"
 };
 
 export type TelegramInlineButtons = ReadonlyArray<ReadonlyArray<TelegramInlineButton>>;
+
+const TELEGRAM_COPY_TEXT_MAX_CHARACTERS = 256;
+const TELEGRAM_COPY_TEXT_MAX_BUTTONS = 100;
+
+function countUnicodeScalars(value: string): number | undefined {
+  let count = 0;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+      return undefined;
+    }
+    count += 1;
+  }
+  return count;
+}
+
+function assertBoundedCopyTextValue(value: unknown, field: "label" | "text", index: number) {
+  const text = readStringValue(value);
+  const length = text === undefined ? undefined : countUnicodeScalars(text);
+  const maximum = field === "text" ? TELEGRAM_COPY_TEXT_MAX_CHARACTERS : 64;
+  if (text === undefined || length === undefined || length < 1 || length > maximum) {
+    throw new Error(
+      `Telegram copyTextButtons[${index}].${field} must be a valid Unicode string with 1-${maximum} characters.`,
+    );
+  }
+  if (field === "label" && !text.trim()) {
+    throw new Error(`Telegram copyTextButtons[${index}].label must not be blank.`);
+  }
+  return text;
+}
+
+export function readTelegramCopyTextButtons(value: unknown): TelegramInlineButtons | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.length < 1 || value.length > TELEGRAM_COPY_TEXT_MAX_BUTTONS) {
+    throw new Error(
+      `Telegram copyTextButtons must contain 1-${TELEGRAM_COPY_TEXT_MAX_BUTTONS} buttons.`,
+    );
+  }
+  return value.map((entry, index) => {
+    const button = asNonArrayRecord(entry);
+    if (!button || Object.keys(button).some((key) => key !== "label" && key !== "text")) {
+      throw new Error(
+        `Telegram copyTextButtons[${index}] must contain only label and text strings.`,
+      );
+    }
+    const label = assertBoundedCopyTextValue(button.label, "label", index);
+    const text = assertBoundedCopyTextValue(button.text, "text", index);
+    return [{ text: label, copy_text: { text } }];
+  });
+}
 
 export type TelegramDroppedControl = {
   label: string;
@@ -257,6 +311,15 @@ export function resolveTelegramButtonsFromParams(
   presentation = normalizeMessagePresentation(params.presentation),
   options?: TelegramButtonBuildOptions,
 ) {
+  const copyTextButtons = readTelegramCopyTextButtons(params.copyTextButtons);
+  if (copyTextButtons && (presentation || normalizeLegacyInteractiveReply(params.interactive))) {
+    throw new Error(
+      "Telegram copyTextButtons cannot be combined with presentation or interactive controls.",
+    );
+  }
+  if (copyTextButtons) {
+    return copyTextButtons;
+  }
   return resolveTelegramInlineButtons(
     {
       presentation,

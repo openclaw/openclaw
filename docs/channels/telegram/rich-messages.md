@@ -108,6 +108,20 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 }
 ```
 
+    Native copy-button example:
+
+```json5
+{
+  action: "send",
+  channel: "telegram",
+  to: "123456789",
+  message: "Deployment token:",
+  copyTextButtons: [{ label: "Copy token", text: "TOKEN-7319" }],
+}
+```
+
+    `copyTextButtons` preserves each copied value exactly, supports 1–256 characters, and places each button on its own row. It is Telegram-only and send-only. Include normal message or media content, and do not combine it with `presentation` or legacy `interactive` controls.
+
     Mini App button example:
 
 ```json5

@@ -22,7 +22,11 @@ import {
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { TELEGRAM_MESSAGE_ACTION_MAP } from "./action-names.js";
-import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
+import { readTelegramCopyTextButtons } from "./button-types.js";
+import {
+  assertTelegramInlineButtonsAllowedForTarget,
+  isTelegramInlineButtonsEnabled,
+} from "./inline-buttons.js";
 import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 
 const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
@@ -191,6 +195,39 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         visibility: "all-configured",
       });
     }
+    if (sendEnabled && discovery.buttonsEnabled) {
+      schema.push({
+        properties: {
+          copyTextButtons: Type.Optional(
+            Type.Array(
+              Type.Object(
+                {
+                  label: Type.String({
+                    description: "Visible Telegram copy-button label.",
+                    minLength: 1,
+                    maxLength: 64,
+                  }),
+                  text: Type.String({
+                    description: "Exact text copied by Telegram; preserved without trimming.",
+                    minLength: 1,
+                    maxLength: 256,
+                  }),
+                },
+                { additionalProperties: false },
+              ),
+              {
+                description:
+                  "Telegram-native copy buttons for exact values. One button per row; requires message or media and cannot be combined with presentation or interactive controls.",
+                minItems: 1,
+                maxItems: 100,
+              },
+            ),
+          ),
+        },
+        actions: ["send"],
+        visibility: "all-configured",
+      });
+    }
     return {
       actions,
       capabilities: discovery.buttonsEnabled ? ["presentation", "delivery-pin"] : ["delivery-pin"],
@@ -207,24 +244,55 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
     delete: { aliases: ["messageId"], deliveryTargetAliases: [] },
   },
-  prepareSendPayload: async ({ ctx, payload }) => {
+  prepareSendPayload: async ({ ctx, to, payload }) => {
     rejectTelegramNativeButtonParams(ctx.params);
+    const copyTextButtons = readTelegramCopyTextButtons(ctx.params.copyTextButtons);
+    if (copyTextButtons && (payload.presentation || payload.interactive)) {
+      throw new Error(
+        "Telegram copyTextButtons cannot be combined with presentation or interactive controls.",
+      );
+    }
     if (
       ctx.action !== "send" ||
-      (!payload.presentation && !payload.location && payload.videoAsNote !== true)
+      (!payload.presentation &&
+        !payload.location &&
+        payload.videoAsNote !== true &&
+        !copyTextButtons)
     ) {
       return null;
     }
+    if (
+      copyTextButtons &&
+      !payload.text?.trim() &&
+      !payload.mediaUrl &&
+      !payload.mediaUrls?.length
+    ) {
+      throw new Error("Telegram copyTextButtons require message or media content.");
+    }
+    if (copyTextButtons) {
+      assertTelegramInlineButtonsAllowedForTarget({
+        cfg: ctx.cfg,
+        accountId: ctx.accountId,
+        target: to,
+      });
+    }
     const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
-    if (!quoteText) {
+    if (!quoteText && !copyTextButtons) {
       return payload;
     }
     const telegramData = asNonArrayRecord(payload.channelData?.telegram);
+    if (copyTextButtons && telegramData?.buttons !== undefined) {
+      throw new Error("Telegram copyTextButtons cannot replace existing Telegram controls.");
+    }
     return {
       ...payload,
       channelData: {
         ...payload.channelData,
-        telegram: { ...telegramData, quoteText },
+        telegram: {
+          ...telegramData,
+          ...(copyTextButtons ? { buttons: copyTextButtons } : {}),
+          ...(quoteText ? { quoteText } : {}),
+        },
       },
     };
   },
