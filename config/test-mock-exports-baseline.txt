@@ -4749,7 +4749,6 @@
 ["src/gateway/server-methods/send.test.ts","../../infra/outbound/targets.js","343b75387f1b787de507a430195889d197b0752492f179da8348e0a41d775d49",1]
 ["src/gateway/server-methods/send.test.ts","../../plugins/loader.js","ade61d558e751fae91118e68222769d4a8c5c139afe9a7fe68c5f2d7c77c29ba",1]
 ["src/gateway/server-methods/session-catalog-gateway-copy.test.ts","../../plugins/session-catalog-history-import.js","9bda5531a03ac058465c1d8debb9bf9343bb5878521ddeb8632ec046bea3a1c7",1]
-["src/gateway/server-methods/session-catalog-gateway-copy.test.ts","../session-create-service.js","584ff1ed437f5ebe2fa334d179f72265d36a32101ab532b0a475dd5c5d5175da",1]
 ["src/gateway/server-methods/session-catalog-gateway-copy.test.ts","./models-list-result.js","4ad1b0aeb33f48f5636f279340f084841ab6f8f6805e3c2985a51c42c26f34fd",1]
 ["src/gateway/server-methods/session-catalog-import.test.ts","../../plugin-sdk/session-transcript-runtime.js","d292dd9c37059fd200b703e91502f0756feecb8dc475e1097700c214223583db",1]
 ["src/gateway/server-methods/session-catalog-import.test.ts","../../sessions/session-state-events.js","a0398f784ebe5eeb33affe58c61828c4362a773f492be8777eab1d175f627f4f",1]
