@@ -64,7 +64,7 @@ export async function resolveSessionCatalogGatewayConversation(params: {
     allowProcessHomeFallback: false,
     assertCurrent: params.assertCurrent,
   });
-  using _source = {
+  using sourceLease = {
     [Symbol.dispose]() {
       binding?.release();
     },
@@ -79,7 +79,7 @@ export async function resolveSessionCatalogGatewayConversation(params: {
     method: "chat.history",
     requestParams: { sessionKey: binding.sessionKey, agentId: binding.agentId },
   });
-  using _destination = {
+  using destinationLease = {
     [Symbol.dispose]() {
       admitted.authorization?.release?.();
     },
@@ -321,7 +321,7 @@ export async function copySessionCatalogToGateway(params: {
     assertCurrent: assertSourceCurrent,
   });
   const continuation = gatewayCopy.continuation;
-  using _continuationLease = {
+  using continuationLease = {
     [Symbol.dispose]() {
       continuation?.release();
     },

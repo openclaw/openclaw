@@ -219,7 +219,7 @@ it("retries an unclaimed or proven rolled-back creation at the same key, but nev
 it.each(["complete", "rollback"] as const)(
   "settles an exact %s claim after snapshot removal without restoring it",
   async (action) => {
-    const { store, keyedStore, close } = await persistentBeamTestStore();
+    const { store, keyedStore, handoffStore, close } = await persistentBeamTestStore();
     const releases: Array<() => void> = [];
     let current = true;
     try {
@@ -232,6 +232,11 @@ it.each(["complete", "rollback"] as const)(
       });
       releases.push(owner.release);
       expect(await owner.beginCreate(() => {})).toBe(true);
+      const claimed = (await handoffStore.lookup(source.beamId))!.continuation!;
+      expect(claimed).toMatchObject({
+        ...owner.session.continuation,
+        creating: expect.any(String),
+      });
       await store.delete(source.beamId);
       const retained = (await store.get(source.beamId))!;
       expect(retained.items).toEqual([]);
@@ -256,12 +261,30 @@ it.each(["complete", "rollback"] as const)(
         await reconciled.complete(() => {});
         expect((await store.get(source.beamId))?.continuation?.ready).toBe(true);
         await expect(reconciled.rollback()).rejects.toThrow("did not create");
-        await expect(owner.rollback()).rejects.toThrow("cannot be recreated");
+        const before = await handoffStore.lookup(source.beamId);
+        expect(before?.continuation).toEqual({ ...claimed, ready: true });
+        await expect(owner.rollback()).rejects.toMatchObject({
+          name: "PluginStateStoreError",
+          code: "PLUGIN_STATE_WRITE_FAILED",
+          operation: "register",
+        });
+        expect(await handoffStore.lookup(source.beamId)).toEqual(before);
       } else {
         current = false;
         await owner.rollback();
         expect((await store.get(source.beamId))?.continuation?.creating).toBeUndefined();
-        await expect(reconciled.complete(() => {})).rejects.toThrow("creation attempt changed");
+        const before = await handoffStore.lookup(source.beamId);
+        expect(before?.continuation).toEqual({
+          id: claimed.id,
+          agentId: claimed.agentId,
+          sessionKey: claimed.sessionKey,
+        });
+        await expect(reconciled.complete(() => {})).rejects.toMatchObject({
+          name: "PluginStateStoreError",
+          code: "PLUGIN_STATE_WRITE_FAILED",
+          operation: "register",
+        });
+        expect(await handoffStore.lookup(source.beamId)).toEqual(before);
       }
       expect(await keyedStore.lookup(source.beamId)).toBeUndefined();
       expect(await store.upload(sampleUpload(), staffReceipt(400))).toMatchObject({

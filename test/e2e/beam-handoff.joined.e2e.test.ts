@@ -19,6 +19,7 @@ import {
   createGatewayProxy,
   gatewayProxyRoute,
 } from "../../ui/src/e2e/gateway-proxy.test-support.js";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
@@ -32,7 +33,16 @@ import { runCleanups, runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.
 
 it("continues one released Beam conversation through real client, Gateway, restart and revocation", async ({
   signal,
+  onTestFinished,
 }) => {
+  const commands = createFixtureLifetime();
+  const commandOwner = new AbortController();
+  let commandCleanup: Promise<void> | undefined;
+  const drainCommands = () => {
+    commandOwner.abort();
+    return (commandCleanup ??= commands.cleanup());
+  };
+  onTestFinished(drainCommands);
   let instance: OpenClawTestInstance | undefined;
   const proxies: ViteDevServer[] = [];
   let calls = 0;
@@ -226,42 +236,55 @@ it("continues one released Beam conversation through real client, Gateway, resta
         profiles.push(dir);
       }
       await instance.startGateway();
-      const execute = async (args: string[], profile = profiles[0]!) => {
-        let stdout = "",
-          stderr = "";
-        const outputLimit = new AbortController();
-        const status = await runManagedCommand({
-          bin: process.execPath,
-          args,
-          cwd: process.cwd(),
-          env: {
-            ...instance!.env,
-            OPENCLAW_STATE_DIR: profile,
-            OPENCLAW_CONFIG_PATH: path.join(profile, "openclaw.json"),
-            OPENCLAW_GATEWAY_TOKEN: "",
-            OPENCLAW_GATEWAY_PASSWORD: "",
-            OPENCLAW_GATEWAY_URL: "",
-            OPENCLAW_GATEWAY_PORT: "",
-          },
-          stdio: ["ignore", "pipe", "pipe"],
-          signal: AbortSignal.any([signal, outputLimit.signal]),
-          timeoutMs: 130_000,
-          requireProcessTreeExit: true,
-          onReady(child) {
-            child.stdout?.on("data", (chunk) => {
-              stdout += chunk;
-              if (stdout.length > 4_000_000) {
-                outputLimit.abort(new Error("fixture stdout bound"));
-              }
-            });
-            child.stderr?.on("data", (chunk) => {
-              stderr = (stderr + chunk).slice(-16_000);
-            });
-          },
+      const execute = (args: string[], profile = profiles[0]!, requestSignal = signal) => {
+        commandOwner.signal.throwIfAborted();
+        return commands.run(async () => {
+          let stdout = "",
+            stderr = "";
+          const outputLimit = new AbortController();
+          const status = await runManagedCommand({
+            bin: process.execPath,
+            args,
+            cwd: process.cwd(),
+            env: {
+              ...instance!.env,
+              OPENCLAW_STATE_DIR: profile,
+              OPENCLAW_CONFIG_PATH: path.join(profile, "openclaw.json"),
+              OPENCLAW_GATEWAY_TOKEN: "",
+              OPENCLAW_GATEWAY_PASSWORD: "",
+              OPENCLAW_GATEWAY_URL: "",
+              OPENCLAW_GATEWAY_PORT: "",
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+            signal: AbortSignal.any([
+              signal,
+              requestSignal,
+              commandOwner.signal,
+              outputLimit.signal,
+            ]),
+            timeoutMs: 130_000,
+            requireProcessTreeExit: true,
+            onReady(child) {
+              child.stdout?.on("data", (chunk) => {
+                stdout += chunk;
+                if (stdout.length > 4_000_000) {
+                  outputLimit.abort(new Error("fixture stdout bound"));
+                }
+              });
+              child.stderr?.on("data", (chunk) => {
+                stderr = (stderr + chunk).slice(-16_000);
+              });
+            },
+          });
+          return { status, stdout, stderr };
         });
-        return { status, stdout, stderr };
       };
-      const rpc = async (method: string, params: unknown, index = 0): Promise<any> => {
+      const rpc = async (
+        method: string,
+        params: unknown,
+        index = 0,
+        requestSignal = signal,
+      ): Promise<any> => {
         const out = await execute(
           [
             cli,
@@ -277,6 +300,7 @@ it("continues one released Beam conversation through real client, Gateway, resta
             JSON.stringify(params),
           ],
           profiles[index],
+          requestSignal,
         );
         expect(
           out.status,
@@ -338,15 +362,30 @@ it("continues one released Beam conversation through real client, Gateway, resta
       const before = await rpc("chat.history", { sessionKey: bound.sessionKey });
       expect(JSON.stringify(before.messages)).toContain("Original source answer");
       const send = { sessionKey: bound.sessionKey, sessionId: before.sessionId };
+      // sessionId belongs to the messageId selector; current history
+      // is read by canonical key, then checked against the adopted identity.
+      const history = async (requestSignal = signal) => {
+        const result = await rpc(
+          "chat.history",
+          { sessionKey: bound.sessionKey },
+          0,
+          requestSignal,
+        );
+        expect(result.sessionId).toBe(before.sessionId);
+        return result;
+      };
       await rpc("chat.send", {
         ...send,
         message: "Team-only continuation",
         idempotencyKey: "joined-team-turn",
       });
       await expect
-        .poll(async () => JSON.stringify((await rpc("chat.history", send)).messages), {
-          timeout: 30_000,
-        })
+        .poll(
+          async ({ signal: pollSignal }) => JSON.stringify((await history(pollSignal)).messages),
+          {
+            timeout: 30_000,
+          },
+        )
         .toContain("Joined Team response 1");
       const destinationArgs = ["--beam-id", beamId, "--profile-dir", profiles[0]!];
       const read = await beam("read", destinationArgs);
@@ -364,9 +403,12 @@ it("continues one released Beam conversation through real client, Gateway, resta
         expect(continued.status, continued.stderr).toBe(0);
       }
       await expect
-        .poll(async () => JSON.stringify((await rpc("chat.history", send)).messages), {
-          timeout: 30_000,
-        })
+        .poll(
+          async ({ signal: pollSignal }) => JSON.stringify((await history(pollSignal)).messages),
+          {
+            timeout: 30_000,
+          },
+        )
         .toContain("Joined Team response 2");
       expect(calls).toBe(2);
       await instance.stopGateway();
@@ -389,9 +431,7 @@ it("continues one released Beam conversation through real client, Gateway, resta
         expect(late.status, late.stderr).toBe(0);
         expect(late.stdout).toContain("Source Beam is retired");
       }
-      expect(JSON.stringify((await rpc("chat.history", send)).messages)).not.toContain(
-        "Late source marker",
-      );
+      expect(JSON.stringify((await history()).messages)).not.toContain("Late source marker");
       await rpc("users.setRole", { profileId: publisher.id, role: "blocked" }, 1);
       for (const command of ["read", "continue"]) {
         const denied = await beam(
@@ -403,7 +443,7 @@ it("continues one released Beam conversation through real client, Gateway, resta
         expect(denied.status).not.toBe(0);
       }
       expect(calls).toBe(2);
-      const final = await rpc("chat.history", send, 1);
+      const final = await rpc("chat.history", { sessionKey: bound.sessionKey }, 1);
       expect(JSON.stringify(final.messages)).not.toContain("Revoked source");
       expect(final.sessionId).toBe(before.sessionId);
       console.log(
@@ -418,13 +458,21 @@ it("continues one released Beam conversation through real client, Gateway, resta
         }),
       );
     },
+    // Poll deadlines can finish before their callbacks; join every CLI before
+    // retiring its Gateway or removing any state used by that process tree.
+    drainCommands,
     () => instance?.stopGateway(),
     () =>
       runCleanups(
         proxies.map((proxy) => () => proxy.close()),
         "proxy cleanup failed",
       ),
-    () => instance?.cleanup(),
+    async () => {
+      // A failed join remains terminal even when another cleanup phase retries.
+      // Retain state while any command's process tree is still unverified.
+      await drainCommands();
+      await instance?.cleanup();
+    },
     () => provider.close(),
   );
 }, 240_000);
