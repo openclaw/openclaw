@@ -34,11 +34,7 @@ it.each([
   ["apply_patch", {}, "generic"],
   ["fetch", {}, "generic"],
   ["mcp__openclaw__exec", { command: "ls", workdir: "/repo", timeout: 1, yieldMs: 1 }, "command"],
-  [
-    "mcp__openclaw__apply_patch",
-    { input: "*** Begin Patch\n*** Update File: a.ts\n@@\n-old\n+new\n*** End Patch" },
-    "edit",
-  ],
+  ["mcp__openclaw__tool_call", { id: "exec", args: { command: "ls" } }, "command"],
 ] as const)("classifies %s with args %o as %s", (name, args, kind) => {
   expect(resolve(name, args).kind).toBe(kind);
 });
