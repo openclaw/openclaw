@@ -114,46 +114,34 @@ describe("slackPlugin actions", () => {
     { to: "channel:C123", provider: "slack", workspaceAware: true },
     { to: "team:T123:channel:C123", provider: undefined, workspaceAware: false },
     { to: "channel:C999", provider: undefined, workspaceAware: false },
-  ])("selects the workspace-aware send path for $to", ({ to, provider, workspaceAware }) => {
-    const payload = { text: "hello" };
-    const prepared = slackPlugin.actions!.prepareSendPayload!({
-      ctx: {
-        action: "send",
-        channel: "slack",
-        cfg: {},
-        params: {},
-        toolContext: {
-          currentChannelId: "team:T123:channel:C123",
-          currentChannelProvider: provider,
-        },
-      },
-      to,
-      payload,
-    } as never);
-    expect(prepared).toBe(workspaceAware ? null : payload);
-  });
-
-  it("forces the plugin action path when replyBroadcast is set on an ordinary channel", () => {
-    const payload = { text: "hello" };
-    const prepared = slackPlugin.actions!.prepareSendPayload!({
-      ctx: {
-        action: "send",
-        channel: "slack",
-        cfg: {},
-        params: { replyBroadcast: true, threadId: "111.222" },
-        toolContext: {
-          // Ordinary unqualified context: without replyBroadcast this target
-          // would keep prepareSendPayload's payload; with it, force plugin path.
-          currentChannelId: "C999",
-          currentChannelProvider: "slack",
-        },
-      },
+    {
       to: "channel:C999",
-      payload,
-    } as never);
-    expect(prepared).toBeNull();
-  });
-
+      provider: "slack",
+      workspaceAware: true,
+      replyBroadcast: true,
+      channelId: "C999",
+    },
+  ])(
+    "selects the workspace-aware send path for $to",
+    ({ to, provider, workspaceAware, replyBroadcast, channelId }) => {
+      const payload = { text: "hello" };
+      const prepared = slackPlugin.actions!.prepareSendPayload!({
+        ctx: {
+          action: "send",
+          channel: "slack",
+          cfg: {},
+          params: replyBroadcast ? { replyBroadcast: true, threadId: "111.222" } : {},
+          toolContext: {
+            currentChannelId: channelId ?? "team:T123:channel:C123",
+            currentChannelProvider: provider,
+          },
+        },
+        to,
+        payload,
+      } as never);
+      expect(prepared).toBe(workspaceAware ? null : payload);
+    },
+  );
   it.each([
     { accountId: "work", id: "U12345678", token: "xoxb-work", qualified: false },
     { accountId: "org", id: "team:T12345678:user:U12345678", token: "xoxb-org", qualified: true },
