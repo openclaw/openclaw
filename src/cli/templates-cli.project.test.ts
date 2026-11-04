@@ -88,12 +88,12 @@ describe("Template project CLI", () => {
     [runTemplatesCreateCommand, { agentId: "" }, "Project", "invalid_agent_id"],
     [runTemplatesBuildCommand, {}, "Build", undefined],
     [runTemplatesDevCommand, {}, "Dev", undefined],
-  ] as const)("reports failure %#", async ([run, opts, kind, code]) => {
-    const root = join(tempDirs.make("openclaw-template-errors-"), "missing");
-    await expect(run(root, { ...opts, json: true })).rejects.toThrow("__exit__:1");
+  ] as const)("reports failure %#", async ([run, ids, kind, code]) => {
+    const dir = join(tempDirs.make("openclaw-template-errors-"), "missing");
+    await expect(run(dir, { ...ids, out: `${dir}.tgz`, json: true })).rejects.toThrow("__exit__:1");
     const schemaVersion = `openclaw.template${kind}.v1`;
     expect(payloads()).toMatchObject([{ schemaVersion, ok: false }]);
     expect(payloads()[0]).toMatchObject({ error: { code: code ?? expect.any(String) } });
-    expect(existsSync(root)).toBe(false);
+    expect(existsSync(dir)).toBe(false);
   });
 });
