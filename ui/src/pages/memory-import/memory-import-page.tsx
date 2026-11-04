@@ -268,15 +268,11 @@ export function MemoryImportPage() {
     publish();
   }
 
-  function refresh(): Promise<void> {
+  async function refresh(): Promise<void> {
     const agentId = currentAgentId();
     if (context.agents.state.agentsError) {
-      return context.agents.refreshList().then(() => {
-        if (currentAgentId() === agentId) {
-          return loadPlan();
-        }
-        return undefined;
-      });
+      await context.agents.refreshList();
+      return currentAgentId() === agentId ? loadPlan() : undefined;
     }
     return agentId ? loadPlan() : context.agents.ensureList().then(() => undefined);
   }
@@ -486,10 +482,14 @@ export function MemoryImportPage() {
             return;
           }
           if (chunk.candidates > 0 && chunk.cursor?.advanced !== true) {
-            throw new Error(`${t("memoryImport.backfillNotAdvancing")}\nServer cursor did not advance.`);
+            throw new Error(
+              `${t("memoryImport.backfillNotAdvancing")}\nServer cursor did not advance.`,
+            );
           }
           if (chunk.candidates === 0 && chunk.cursor?.exhausted !== true) {
-            throw new Error(`${t("memoryImport.backfillIncomplete")}\nServer cursor was not exhausted.`);
+            throw new Error(
+              `${t("memoryImport.backfillIncomplete")}\nServer cursor was not exhausted.`,
+            );
           }
           for (const day of chunk.perDay) {
             processedDays.add(day.day);

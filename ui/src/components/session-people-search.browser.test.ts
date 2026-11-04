@@ -125,9 +125,12 @@ it.each(["assignment", "compact assignment", "members"] as const)(
     await expect.element(input).toHaveValue("pc");
     await expect
       .element(
-        page.getByText(members ? "No people found" : "No matching people or agents", {
-          exact: true,
-        }),
+        page.getByText(
+          members ? "No people match your search." : "No people or agents match your search.",
+          {
+            exact: true,
+          },
+        ),
       )
       .toBeVisible();
     await userEvent.keyboard("{Escape}");

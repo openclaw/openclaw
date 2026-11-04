@@ -9,8 +9,7 @@ const enProfile = {
       title: "Discord account",
       description:
         "Connect your Discord identity to this profile. Your existing permissions and channel access rules still apply.",
-      unavailable:
-        "Discord account linking is not configured. Ask your Gateway administrator to enable it.",
+      unavailable: "Discord account linking is not configured. Ask an admin to enable it.",
       gatewayAccount: "Discord gateway account",
       connect: "Connect Discord",
       connectShort: "Connect",
@@ -22,7 +21,7 @@ const enProfile = {
     },
     access: {
       title: "Your access",
-      admin: "You have permission to manage this server.",
+      admin: "You have admin access.",
       write: "You have permission to send messages and make changes.",
       read: "You have permission to view server information.",
       sessionWrite: "You have permission to work in your own sessions.",
@@ -30,18 +29,17 @@ const enProfile = {
       limited: "This connection has a limited set of permissions.",
       limits: "Sessions, browsers, and tools may have additional restrictions.",
       help: "Missing something you need?",
-      nextStep:
-        "Ask your server administrator to review your access. Reconnect after they make changes.",
+      nextStep: "Ask your admin to review your access. Reconnect after they make changes.",
       reconnect: "Reconnect",
-      adminRequest: "Administrator access",
+      adminRequest: "Admin access",
       adminRequestHint:
-        "Request administrator access for this browser. An administrator must approve this device separately.",
+        "Request admin access for this browser. An admin must approve this device separately.",
       connecting: "Connecting… Your access will appear when the connection is ready.",
-      details: "Technical details",
+      details: "Show details",
       description:
         "These permissions were granted when you connected. A role can limit them, but does not grant extra permissions.",
       scopes: "Granted scopes",
-      unknown: "Your permissions could not be confirmed.",
+      unknown: "Couldn’t confirm your permissions. Reconnect to try again.",
       none: "This connection has no permissions.",
     },
     identity: {

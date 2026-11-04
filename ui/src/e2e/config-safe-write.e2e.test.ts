@@ -3,7 +3,10 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
   objectSchema,
@@ -252,11 +255,17 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "Synthetic config file is read-only",
       });
-      await expectSaveStatus(page, "Save failed");
+      await expectSaveStatus(page, "Couldn’t save settings. Try again.");
       expect(await endpoint.inputValue()).toBe("kept-after-failure");
       expect(await indicator.locator(".settings-save-indicator__reason").textContent()).toBe(
         "Synthetic config file is read-only",
       );
+      if (proof.enabled) {
+        await writeFile(
+          path.join(proof.directory(), "05-save-failed.png"),
+          await takeControlUiElementScreenshot(page, indicator, [indicator]),
+        );
+      }
 
       // Discard asks first; cancelling keeps the edit.
       await button(page, "Discard changes").click();
@@ -266,7 +275,9 @@ suite.define(() => {
       await button(page, "Discard changes").click();
       await confirm.getByRole("button", { name: "Discard changes", exact: true }).click();
       await expect.poll(() => endpoint.inputValue()).toBe("before-failure");
-      await expect.poll(() => indicator.textContent()).not.toContain("Save failed");
+      await expect
+        .poll(() => indicator.textContent())
+        .not.toContain("Couldn’t save settings. Try again.");
     });
   });
 
@@ -463,7 +474,9 @@ suite.define(() => {
         message: "QA configuration save failed",
       });
       const saveIndicator = page.locator("openclaw-settings-save-indicator");
-      await expect.poll(() => saveIndicator.textContent()).toContain("Save failed");
+      await expect
+        .poll(() => saveIndicator.textContent())
+        .toContain("Couldn’t save settings. Try again.");
       await button(page, "Raw").click();
       await page.locator(".config-raw-field textarea").fill(JSON.stringify(initialConfig, null, 2));
       await button(page, "Form").click();

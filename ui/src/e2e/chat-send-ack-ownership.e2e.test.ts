@@ -89,7 +89,9 @@ suite.define(() => {
       });
       if (status === "timeout") {
         await page
-          .getByTitle("The run ended before the message was accepted.", { exact: true })
+          .getByTitle("Your message wasn’t accepted before the reply ended. Try again.", {
+            exact: true,
+          })
           .waitFor();
       } else {
         await gateway.waitForRequest("chat.history", { after: historyRequests });

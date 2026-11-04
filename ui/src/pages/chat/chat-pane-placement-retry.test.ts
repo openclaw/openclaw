@@ -140,7 +140,7 @@ describe("durable placement move retry", () => {
     const retried = run();
     const confirmation = await waitForConfirmDialogActions();
     expect(document.body.textContent).toContain(
-      "Unsynced device files and in-flight work may be lost",
+      "Unsynced device files and work in progress may be lost",
     );
     answerConfirmDialog(confirmation, "confirm");
     await retried;
