@@ -49,7 +49,7 @@ import type { ChatComposerCapabilityMenuSource } from "./chat-composer-plus-menu
 import type { SkillMenu } from "./chat-composer-skill-menu-state.ts";
 import type { SlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
-import type { ReplyLine } from "./chat-reply-attribution.ts";
+import type { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 
 type ChatQueuedEditProps = {
   editingId: string | null;
@@ -108,6 +108,8 @@ export type ChatSessionProgressProps = import("../chat-spawned-subagent.ts").Sub
   onClearSavedProgressCard?: (card: ProgressCard) => void;
   messages: unknown[];
 };
+
+type ReplyAuthorProps = Parameters<typeof createReplyPreviewResolver>[1];
 
 export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
@@ -193,8 +195,13 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   attachmentReadRevision?: number;
   getPendingAttachmentReads?: () => number;
   replyTarget?: ChatReplyTarget | null;
-  /** The reply target's author, resolved by the owning thread. */
-  replyLine?: ReplyLine | null;
+  /** Thread facts that name a reply target's author, as its transcript line does. */
+  userId?: ReplyAuthorProps["userId"];
+  userName?: ReplyAuthorProps["userName"];
+  assistantAvatar?: ReplyAuthorProps["assistantAvatar"];
+  assistantAvatarUrl?: ReplyAuthorProps["assistantAvatarUrl"];
+  assistantAvatarSource?: ReplyAuthorProps["assistantAvatarSource"];
+  senderAgentAvatars?: ReplyAuthorProps["senderAgentAvatars"];
   mediaReadAllowed?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   chatMessageMaxWidth?: string | null;

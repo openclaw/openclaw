@@ -15,14 +15,14 @@ import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/
 import { connectedElementRef, elementRef } from "../../lib/reactive/element-ref.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../lib/reactive/presentation.ts";
+import { orderSessionPullRequests } from "../../lib/session-pull-request-presentation.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
-import { createChatComposerActivities } from "./chat-composer-activities.ts";
-import { createChatComposerReplyLine } from "./chat-composer-reply-line.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
-import { hasTerminalRunStatus } from "./chat-run-working.ts";
+import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
+import { listSubagents, projectProgressCardRuntime } from "./chat-subagent-wait.ts";
 import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
 import {
   renderChatComposerNotices as ChatComposerNoticesView,
@@ -221,12 +221,58 @@ function ChatFooterContent(
 }
 
 function ChatComposerView(input: ChatViewInput) {
-  const activities = createChatComposerActivities(input);
-  const replyLine = createChatComposerReplyLine(input);
+  const activities = createMemo((): ChatActivityPillsProps | undefined => {
+    if (!input.props.mobileComposer) {
+      return undefined;
+    }
+    const destinations = input.props.mobileActivities;
+    const goal = input.props.selectedSession?.goal;
+    const card = input.props.progressCard;
+    return {
+      presented: input.presented,
+      approvalPending: Boolean(input.props.inlineApproval),
+      subagents: destinations?.onOpenSubagents
+        ? { activities: listSubagents(input.props), onOpen: destinations.onOpenSubagents }
+        : undefined,
+      goal:
+        goal && destinations?.goal
+          ? { ...destinations.goal, value: goal, recovery: input.props.goalRecovery }
+          : undefined,
+      // The pane's chat projection already applies the single Show in chat preference.
+      progress:
+        card && destinations?.onOpenProgress
+          ? {
+              card,
+              sessionStatus: input.props.selectedSession?.status,
+              startedAt: input.props.selectedSession?.startedAt,
+              endedAt: input.props.selectedSession?.endedAt,
+              hasActiveRun: isChatRunWorking(input.props),
+              runtime: projectProgressCardRuntime(
+                input.props.selectedSession,
+                input.props,
+                card.updatedAt,
+                input.props.connected,
+              ),
+              refresh: input.props.progressCardRefresh?.state,
+              onOpen: destinations.onOpenProgress,
+            }
+          : undefined,
+      pullRequests: destinations?.onOpenPullRequest
+        ? {
+            items: orderSessionPullRequests(input.props.pullRequests ?? []),
+            status: input.props.pullRequestsStatus ?? "ready",
+            onOpen: destinations.onOpenPullRequest,
+          }
+        : undefined,
+      publication:
+        input.props.githubPublication && destinations?.publication?.eligible
+          ? { view: input.props.githubPublication, onOpen: destinations.publication.onOpen }
+          : undefined,
+    };
+  });
   return (
     <ChatComposer
       {...input.props}
-      replyLine={replyLine()}
       questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
       getScrollToLatestElement={input.getScrollToLatestElement}

@@ -32,8 +32,12 @@ import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
-import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
-import { ComposerReplyPreview } from "./chat-composer-reply-preview.tsx";
+import {
+  ComposerQueue,
+  ComposerInputScope,
+  ComposerProgress,
+  ComposerReplyPreview,
+} from "./chat-composer-regions.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
@@ -485,14 +489,7 @@ export function renderChatComposerView(
                 avatarUrls={context().state.mentionMenu.selectedAvatarUrls}
               />
               <Show when={props.replyTarget}>
-                {(target) => (
-                  <ComposerReplyPreview
-                    target={target()}
-                    line={props.replyLine}
-                    mediaReadAllowed={props.mediaReadAllowed}
-                    onClear={() => props.onClearReply?.()}
-                  />
-                )}
+                {(target) => <ComposerReplyPreview composer={props} target={target()} />}
               </Show>
               {props.sessionAdmitted === false ? undefined : (
                 <McpAppContextStrip sessionKey={props.sessionKey} agentId={props.currentAgentId} />
