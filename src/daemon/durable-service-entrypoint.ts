@@ -8,14 +8,22 @@ import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-pref
 const realpathOrResolve = (target: string) => fs.realpath(target).catch(() => path.resolve(target));
 
 /**
- * npx (`_npx`), pnpm dlx (`dlx`), and bunx (`<tmp>/bunx-<uid>-<package>`) own their
- * copies and may evict them, so a service must never point into one or keep one on its
- * PATH. Other temp-dir paths are not runner caches. Takes a realpath.
+ * One-off runners own their copies and may evict them, so a service must never point into
+ * one or keep one on its PATH: npx (`<cache>/_npx/<hash>`), pnpm 9+ dlx
+ * (`<cache>/dlx/<key>`), Yarn Berry and pnpm 7-8 dlx (`dlx-<pid>`, removed on exit), and
+ * bunx (`.bunx-<uid>` on POSIX, `<tmp>\\bunx-<uid>-<package>` on Windows). Other temp-dir
+ * paths are not runner caches. Takes a realpath.
  */
 export function isDisposableInstallPath(resolved: string): boolean {
   return resolved
     .split(path.sep)
-    .some((segment) => segment === "_npx" || segment === "dlx" || segment.startsWith("bunx-"));
+    .some(
+      (segment) =>
+        segment === "_npx" ||
+        segment === "dlx" ||
+        /^dlx-\d+$/u.test(segment) ||
+        /^\.?bunx-/u.test(segment),
+    );
 }
 
 export async function isDisposableEntrypoint(entrypoint: string): Promise<boolean> {

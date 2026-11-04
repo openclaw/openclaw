@@ -87,7 +87,9 @@ describe("resolveDaemonServicePathDirs", () => {
   it.each([
     ["npx", [".npm", "_npx", "abc", "node_modules", ".bin"]],
     ["pnpm dlx", [".cache", "pnpm", "dlx", "abc", "node_modules", ".bin"]],
-    ["bunx", ["tmp", "bunx-501-openclaw", "bin"]],
+    ["yarn dlx", ["tmp", "xfs-1a2b3c4d", "dlx-4242", "node_modules", ".bin"]],
+    ["bunx", ["tmp", ".bunx-501", "openclaw@latest", "node_modules", ".bin"]],
+    ["bunx on Windows", ["tmp", "bunx-501-openclaw", "bin"]],
   ])("leaves %s off the service PATH", (_name, segments) => {
     const shim = entrypoint(path.join(...segments));
     const binDir = path.dirname(shim);
