@@ -10,6 +10,7 @@ import {
   createPostgresEngineTestFixture,
   openPostgresEngineTestStore,
 } from "./engine-store.test-support.js";
+import { getPostgresPhysicalFacts } from "./physical-facts.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -56,6 +57,7 @@ describe.skipIf(!connection)("read-only PostgreSQL admission", () => {
       });
       const writer = fixture.open();
       writer.exec("UPDATE openclaw_schema_meta SET fingerprint = NULL, ddl_hash = NULL");
+      fixture.invalidate();
       const before = writer.prepare("SELECT * FROM openclaw_schema_meta").all();
       expect(() =>
         openPostgresEngineTestStore({
@@ -67,6 +69,40 @@ describe.skipIf(!connection)("read-only PostgreSQL admission", () => {
       expect(writer.prepare("SELECT * FROM openclaw_schema_meta").all()).toEqual(before);
     });
   });
+  it("refuses cached unsealed inspection facts without modifying metadata", () => {
+    withEngineStoreAdmission(() => {
+      using fixture = createPostgresEngineTestFixture({
+        directory: dirs.make("pg-readonly-inspected-"),
+        connection: connection!,
+        schemaPrefix: "readonly",
+        schema,
+      });
+      const writer = fixture.open();
+      writer.exec(
+        "UPDATE openclaw_schema_meta SET fingerprint = NULL, ddl_hash = NULL, server_major = NULL",
+      );
+      fixture.invalidate();
+      const inspection = fixture.open(schema, true);
+      expect(getPostgresPhysicalFacts(inspection)).toBeDefined();
+      expect(getPostgresPhysicalFacts(writer)).toBeDefined();
+      const metadata = writer.prepare("SELECT * FROM openclaw_schema_meta").all();
+      expect(metadata[0]?.ddl_hash).toBeNull();
+      let reader: ReturnType<typeof openPostgresEngineTestStore> | undefined;
+      try {
+        expect(() => {
+          reader = openPostgresEngineTestStore({
+            anchor: writer.anchor,
+            schema,
+            input: { connection: connection!, schemaPrefix: "readonly", readOnly: true },
+          });
+        }).toThrow(/matching schema seal/);
+        expect(writer.prepare("SELECT * FROM openclaw_schema_meta").all()).toEqual(metadata);
+      } finally {
+        reader?.close();
+      }
+    });
+  });
+
   it("reads a sealed store without admitting mutations or changing its writer", () => {
     withEngineStoreAdmission(() => {
       using fixture = createPostgresEngineTestFixture({
@@ -124,6 +160,8 @@ describe.skipIf(!connection)("read-only PostgreSQL admission", () => {
         schema,
       });
       const seed = fixture.open();
+      fixture.invalidate();
+      fixture.open(schema, true);
       const opened: Array<ReturnType<typeof openPostgresEngineTestStore>> = [];
       const open = (readOnly: boolean) => {
         const db = openPostgresEngineTestStore({
@@ -177,6 +215,16 @@ describe.skipIf(!connection)("read-only PostgreSQL admission", () => {
       });
       const writer = fixture.open();
       const metadata = writer.prepare("SELECT * FROM openclaw_schema_meta").all();
+      expect(() =>
+        openPostgresEngineTestStore({
+          anchor: writer.anchor,
+          schema: {
+            ...schema,
+            postgres: schema.postgres + "; ALTER TABLE items ADD COLUMN other TEXT",
+          },
+          input: { connection: connection!, schemaPrefix: "readonly", readOnly: true },
+        }),
+      ).toThrow(/matching schema seal/);
       const nextDdl = `${schema.postgres}; ALTER TABLE items ADD COLUMN next TEXT`;
       const upgraded: StoreSchema = {
         ...schema,

@@ -129,6 +129,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/postgres-text-search-schema.postgres.test.ts",
   "src/infra/database-engine/postgres-vector-search-schema.postgres.test.ts",
   "src/infra/database-engine/search-extension.postgres.test.ts",
+  "src/infra/database-engine/readonly-admission.postgres.test.ts",
   "src/infra/database-engine/multi-namespace.postgres.test.ts",
   "src/infra/database-engine/usage-cost-partitions.postgres.test.ts",
   "src/infra/worker-task-pool.sqlite-idle.test.ts",
