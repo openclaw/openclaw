@@ -123,7 +123,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent("sessions.changed", { reason: "update" });
       // Cross the full refresh window and deliver its nested mock response timer.
       await page.clock.runFor(5_001);
-      await showText(current, "Could not load active sessions.");
+      await showText(current, "Couldn’t load active sessions. Try again.");
       await page.clock.resume();
       await gateway.setMethodResponse("sessions.list", listing([]));
       await current.getByRole("button", { name: "Retry", exact: true }).click();

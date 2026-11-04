@@ -4,11 +4,19 @@ import { en } from "./en.ts";
 const catalog = {
   chat: {
     detailPanel: {
+      filePreviewUnavailable: "This file is not previewable inline.",
+      filePreviewPath: "- Path: {path}",
+      filePreviewType: "- Type: {type}",
+      filePreviewSize: "- Size: {size}",
+      filePreviewUpdated: "- Updated: {date}",
+      sameOrigin: "File downloads require a same-origin Gateway connection.",
+      invalidUrl: "Invalid file download URL",
       close: "Close sidebar",
       copyPath: "Copy path",
       copyRelativePath: "Copy relative path",
       downloadToView: "Download this file to view it on your device.",
       discard: "Discard",
+      discardBody: "If you discard them, they’re lost.",
       editFile: "Edit file",
       downloadFile: "Download file",
       downloading: "Downloading…",

@@ -116,11 +116,9 @@ it("keeps a configured missing engine selected and labels it unavailable", () =>
     engineSelection: { kind: "pinned", pluginId: "retired-memory" },
   });
 
-  const input = container.querySelector<HTMLInputElement>('input[value="retired-memory"]');
-  expect(input?.closest(".settings-segmented__btn")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-    "retired-memory (Unavailable)",
-  );
-  expect(input?.checked).toBe(true);
+  const select = container.querySelector<HTMLSelectElement>("select[aria-label='Memory engine']");
+  expect(select?.selectedOptions[0]?.textContent).toBe("retired-memory (Unavailable)");
+  expect(select?.value).toBe("retired-memory");
 });
 
 it("renders the shared editor only on Settings", () => {
