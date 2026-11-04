@@ -77,7 +77,7 @@ Treat this as a deliberate operational choice, especially on a primary personal 
 
 If `openclaw channels status --probe` reports the channel as `works` but specific actions throw "iMessage `<action>` requires the imsg private API bridge" at dispatch time, run `imsg launch` again — the helper can fall out (Messages.app restart, OS update, etc.) and the cached `available: true` status will keep advertising actions until the next check refreshes.
 
-Each of those checks waits on `imsg` with `channels.imessage.probeTimeoutMs` (milliseconds, default `10000`), the same budget used for the status probe, the cached private-API check that gates actions, the monitor's startup probe, and the `watch.subscribe` request that starts inbound watching. Raise it when the Gateway reaches the Messages Mac through an SSH-wrapped `cliPath`, where a slow round trip can time out an otherwise healthy bridge. Set it under `channels.imessage`, or per account under `channels.imessage.accounts.<id>`.
+Each of those `imsg` calls is bounded by `channels.imessage.probeTimeoutMs` (milliseconds, default `10000`): the monitor's startup readiness probe, the cached private-API check that gates actions, and the `watch.subscribe` request that starts inbound watching. Raise it when the Gateway reaches the Messages Mac through an SSH-wrapped `cliPath`, where a slow round trip can time out an otherwise healthy bridge. Set it under `channels.imessage`, or per account under `channels.imessage.accounts.<id>`. The status check above is not one of them: `openclaw channels status --probe` always supplies its own budget through `--timeout <ms>` (default `60000`), which takes precedence over this key, so raise `--timeout` when only that command is slow.
 
 ### When SIP stays enabled
 
