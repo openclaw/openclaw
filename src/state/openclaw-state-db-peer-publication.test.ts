@@ -4,19 +4,17 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { getStateSchemaVersionAdmission } from "./openclaw-state-db-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
 import {
   admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
 } from "./openclaw-state-db-schema-version.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { withLeaseWriteTransaction } from "./openclaw-state-lease-storage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -25,8 +23,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it("adopts a peer process publication on a retained connection", async () => {
-  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("state-peer-publication-") } };
+async function openDeferredState(options: { env: NodeJS.ProcessEnv }) {
   const { db } = openOpenClawStateDatabase(options);
   const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
   db.prepare(
@@ -34,9 +31,13 @@ it("adopts a peer process publication on a retained connection", async () => {
   ).run("state.schema.contentVersion", String(OPENCLAW_STATE_SCHEMA_VERSION), Date.now());
   db.exec(`PRAGMA user_version = 15;
     UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';`);
-
   await closeOpenClawStateDatabaseAsync();
-  const opened = openOpenClawStateDatabase(options);
+  return { run, opened: openOpenClawStateDatabase(options) };
+}
+
+it("adopts a peer process publication on a retained connection", async () => {
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("state-peer-publication-") } };
+  const { run, opened } = await openDeferredState(options);
   const retained = requireNativeSqliteDatabase(opened.db);
   expect(getStateSchemaVersionAdmission(opened.db)?.userVersion).toBe(15);
   const finishedAtMs = Date.now() - 10 * 60_000;
@@ -81,29 +82,8 @@ it("adopts a peer process publication on a retained connection", async () => {
 
 it("admits a peer process publication for existing-schema writes", async () => {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("state-peer-existing-write-") } };
-  const { db } = openOpenClawStateDatabase(options);
-  createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
-  db.prepare(
-    "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-  ).run("state.schema.contentVersion", String(OPENCLAW_STATE_SCHEMA_VERSION), Date.now());
-  db.exec(`PRAGMA user_version = 15;
-    UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';`);
-  await closeOpenClawStateDatabaseAsync();
-  const opened = openOpenClawStateDatabase(options);
-  expect(getStateSchemaVersionAdmission(opened.db)?.userVersion).toBe(15);
-  const leaseSchema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "state_leases", {
-    endMarker: ") STRICT;",
-    errorMessage: "lease schema",
-  });
-  const write = () =>
-    runExistingOpenClawStateWriteTransaction(() => true, options, {
-      schemaSql: leaseSchema,
-      operationLabel: "peer-publication lease write",
-    });
-  expect(write()).toBe(true);
-
-  // The Gateway's watcher publishes the deferred version from another process while
-  // a plugin lifecycle lease write waits for its write lock.
+  const { opened } = await openDeferredState(options);
+  // The Gateway's watcher publishes the deferred version while a plugin lease write waits to BEGIN.
   const peer = spawn(
     process.execPath,
     [
@@ -117,8 +97,13 @@ it("admits a peer process publication for existing-schema writes", async () => {
     ],
     { stdio: ["ignore", "pipe", "inherit"] },
   );
-  const exited = once(peer, "exit");
   await once(peer.stdout, "data");
-  expect(write()).toBe(true);
-  expect((await exited)[0]).toBe(0);
+  const write = withLeaseWriteTransaction(
+    { scope: "shared", options, schemaPolicy: "existing" },
+    "peer-publication lease write",
+    () => true,
+    5_000,
+  );
+  expect(write).toBe(true);
+  expect((await once(peer, "exit"))[0]).toBe(0);
 });
