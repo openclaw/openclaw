@@ -91,10 +91,16 @@ append, so a requester waiting on its child can resume. These tagged mirrors
 record history without closing an open keyed input; ordinary final replies still
 close the turn. Mirrors remain best-effort bookkeeping after a successful send.
 
-Completion failures retain the concrete delivery error in the run's delivery state
-without queuing a system notice into the parent session. A confirmed handoff remains delivered even if its receipt
-callback fails; cleanup must not replay an already consumed result. Failures before
-a delivery result is reported follow the same retryability policy as direct sends.
+Completion failures retain the concrete delivery error in the run's delivery state.
+If a requester turn stalls after accepting a completed child, OpenClaw retains the
+child result and attempts a bounded, delivery-only fallback with a visible stall
+notice and the retained result. It does not rerun the child or replay the requester
+turn. Intentional Stop, changed ownership, and uncertain sends are not reopened
+by this recovery path.
+
+A confirmed handoff remains delivered even if its receipt callback fails; cleanup
+must not replay an already consumed result. Failures before a delivery result is
+reported follow the same retryability policy as direct sends.
 
 Restart checkpoint reconciliation retains the confirmed delivery evidence before
 clearing the active recovery claim. Delivered replies, intentionally suppressed

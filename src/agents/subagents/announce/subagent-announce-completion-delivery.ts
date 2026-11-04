@@ -374,17 +374,22 @@ export async function deliverCompletionDirect(params: {
   };
   internalEvents?: readonly AgentInternalEvent[];
   contentKind: "completed_result" | "failed_notice";
+  /** Deterministic recovery notice, not model-generated completion output. */
+  preparedNotice?: string;
   signal?: AbortSignal;
   agentResult?: { payloads?: unknown };
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onDeliveryError?: (error: unknown) => void;
   isSourceSessionEffectsAllowed?: () => boolean;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
-  const completionContent = collectDirectCompletionContent({
-    agentResult: params.agentResult,
-    events: params.internalEvents,
-    contentKind: params.contentKind,
-  });
+  const completionContent: DirectCompletionContent | undefined =
+    params.preparedNotice === undefined
+      ? collectDirectCompletionContent({
+          agentResult: params.agentResult,
+          events: params.internalEvents,
+          contentKind: params.contentKind,
+        })
+      : { content: params.preparedNotice, mediaUrls: [] };
   // A failed completion must not deliver partial child media as its result.
   const content = completionContent?.content;
   const mediaUrls = completionContent?.mediaUrls ?? [];

@@ -1,7 +1,9 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import { deliverRequesterStallFallback } from "./subagent-announce.requester-settle-fallback.js";
 import {
   sessionStore,
   setSessionStore,
@@ -18,6 +20,10 @@ import {
   completeBatchSpy,
   deliveredCallArg,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
+vi.mock("./subagent-announce.requester-settle-fallback.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-announce.requester-settle-fallback.js")>()),
+  deliverRequesterStallFallback: vi.fn(),
+}));
 
 const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
@@ -95,6 +101,178 @@ function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   return params.onBeforeDispatch();
 }
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
+  it("exhausts bounded stall delivery retries without replaying the parent", async () => {
+    const fallback = vi.mocked(deliverRequesterStallFallback).mockReset();
+    fallback.mockResolvedValue({
+      delivered: false,
+      path: "none",
+      disposition: "retryable",
+      reason: "visible_reply_missing",
+      error: "transcript busy",
+    });
+    const [settledChild] = setChildren([
+      makeSettledChild({
+        runId: "run-b",
+        completion: completion("retained successful child result"),
+        requesterSettleWake: {
+          ...wakeState(),
+          status: "pending",
+          attemptCount: 1,
+          requesterStallFallback: "transcript",
+        },
+      }),
+    ]);
+    const child = expectDefined(settledChild, "settled child fixture");
+    expect(await wake()).toBe(false);
+    expect(child.requesterSettleWake).toMatchObject({
+      status: "pending",
+      attemptCount: 2,
+      requesterStallFallback: "transcript",
+    });
+    expect(completeBatchSpy).not.toHaveBeenCalled();
+    child.requesterSettleWake!.nextAttemptAt = 0;
+    expect(await wake()).toBe(false);
+    expect(fallback).toHaveBeenCalledTimes(2);
+    expect(expectDefined(fallback.mock.calls[0], "fallback call 0")[0].idempotencyKey).toBe(
+      expectDefined(fallback.mock.calls[1], "fallback call 1")[0].idempotencyKey,
+    );
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
+      ["run-b"],
+      1,
+      expect.objectContaining({
+        delivered: false,
+        disposition: "permanent_failure",
+        error: expect.stringContaining("recovery exhausted; child results retained"),
+      }),
+    );
+    expect(deliverSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "uses only a generic notice for private or mixed findings (mixed=%s)",
+    async (mixed) => {
+      const fallback = vi.mocked(deliverRequesterStallFallback).mockReset();
+      fallback.mockResolvedValue({ delivered: true, path: "direct" });
+      setChildren([
+        ...(mixed
+          ? [makeSettledChild({ runId: "run-a", completion: completion("public sibling result") })]
+          : []),
+        makeSettledChild({
+          runId: "run-b",
+          completionTarget: "parent",
+          completionRequesterSessionId: "sess-main",
+          completion: completion("private child findings"),
+          requesterSettleWake: wakeState(),
+        }),
+      ]);
+      deliverSpy.mockImplementationOnce(async (params) => {
+        await prepareDispatch(params);
+        throw Object.assign(new Error("parent-only watchdog"), {
+          code: "OPENCLAW_SESSION_WATCHDOG",
+        });
+      });
+      expect(await wake()).toBe(true);
+      expect(deliverSpy).toHaveBeenCalledOnce();
+      expect(fallback).toHaveBeenCalledOnce();
+      expect(expectDefined(fallback.mock.calls[0], "fallback call 0")[0].findings).toBeUndefined();
+      expect(completeBatchSpy).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not resend a restored external dispatch whose receipt is unknown", async () => {
+    const fallback = vi.mocked(deliverRequesterStallFallback).mockReset();
+    setChildren([
+      makeSettledChild({
+        runId: "run-b",
+        completion: completion("retained result"),
+        requesterSettleWake: {
+          ...wakeState(),
+          status: "dispatching",
+          attemptCount: 2,
+          requesterStallFallback: "external",
+        },
+      }),
+    ]);
+    expect(await wake()).toBe(false);
+    expect(fallback).not.toHaveBeenCalled();
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
+      ["run-b"],
+      1,
+      expect.objectContaining({
+        disposition: "ambiguous",
+        error: expect.stringContaining("not resent"),
+      }),
+    );
+  });
+
+  it("settles one terminal delivery after a transient append and the next sweep", async () => {
+    const fallback = vi.mocked(deliverRequesterStallFallback).mockReset();
+    fallback
+      .mockResolvedValueOnce({
+        delivered: false,
+        path: "none",
+        disposition: "retryable",
+        reason: "visible_reply_missing",
+      })
+      .mockResolvedValueOnce({
+        delivered: true,
+        path: "direct",
+        requesterVisibleFinalDelivered: true,
+      });
+    const [settledChild] = setChildren([
+      makeSettledChild({
+        runId: "run-b",
+        completion: completion("retained result"),
+        requesterSettleWake: {
+          ...wakeState(),
+          status: "pending",
+          attemptCount: 1,
+          requesterStallFallback: "transcript",
+        },
+      }),
+    ]);
+    const child = expectDefined(settledChild, "settled child fixture");
+    expect(await wake()).toBe(false);
+    expect(completeBatchSpy).not.toHaveBeenCalled();
+    child.requesterSettleWake!.nextAttemptAt = 0;
+    expect(await wake()).toBe(true);
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
+      ["run-b"],
+      1,
+      expect.objectContaining({ delivered: true }),
+    );
+    expect(expectDefined(fallback.mock.calls[0], "fallback call 0")[0].idempotencyKey).toBe(
+      expectDefined(fallback.mock.calls[1], "fallback call 1")[0].idempotencyKey,
+    );
+    expect(deliverSpy).not.toHaveBeenCalled();
+  });
+
+  it("never retries an ambiguous stall-fallback receipt", async () => {
+    const fallback = vi.mocked(deliverRequesterStallFallback).mockReset();
+    fallback.mockResolvedValue({ delivered: false, path: "direct", disposition: "ambiguous" });
+    setChildren([
+      makeSettledChild({
+        runId: "run-b",
+        completion: completion("retained successful child result"),
+        requesterSettleWake: {
+          ...wakeState(),
+          status: "pending",
+          attemptCount: 1,
+          requesterStallFallback: "transcript",
+        },
+      }),
+    ]);
+    expect(await wake()).toBe(false);
+    expect(fallback).toHaveBeenCalledOnce();
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
+      ["run-b"],
+      1,
+      expect.objectContaining({ disposition: "ambiguous" }),
+    );
+    expect(deliverSpy).not.toHaveBeenCalled();
+  });
+
   it("preserves route notices from compacted completed siblings in the requester message", async () => {
     const { compactSubagentRunForMemory } = await import("../registry/subagent-registry-memory.js");
     const { buildRequesterSettleWakeMessage } =

@@ -1040,6 +1040,7 @@ describe("requester settle wake product flow", () => {
   registerRequesterWakeSettlementBoundaryTests({
     ...requesterFixture,
     callGatewayMock,
+    sendMessageMock,
     flushAsync,
     setReleaseAgentCallGate: (release) => {
       releaseAgentCallGate = release;

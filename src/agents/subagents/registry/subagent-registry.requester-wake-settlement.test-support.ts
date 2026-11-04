@@ -1,12 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi, type Mock } from "vitest";
+import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { errorShapeFromError } from "../../../gateway/error-shape.js";
+import { unwrapGatewayMethodDispatchResponse } from "../../../gateway/server-in-process-dispatch.js";
+import { createAbortError } from "../../../infra/abort-signal.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { buildScopedSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
+import { readFullSubagentRuns } from "./subagent-registry-read-cache.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import {
   createRequesterYieldTool,
@@ -22,6 +29,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
   wakeRequester,
   flushAsync,
   callGatewayMock,
+  sendMessageMock,
   setReleaseAgentCallGate,
   spawnVisibleChild,
   settleTurn,
@@ -33,8 +41,10 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
   createGatewayContext,
   getLifecycleHandler,
   useGlobalSessionScope,
+  getFixture,
 }: RequesterWakeFixture & {
   callGatewayMock: Mock<(request: GatewayRequest) => Promise<Response>>;
+  sendMessageMock: Mock<typeof import("../../../infra/outbound/message.js").sendMessage>;
   flushAsync: () => Promise<void>;
   setReleaseAgentCallGate: (release: () => void) => void;
   useGlobalSessionScope: () => void;
@@ -260,6 +270,112 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
         agentId,
       ).countActiveDescendantRuns(requesterSessionKey);
     expect([activeDescendants(), activeDescendants("main")]).toEqual([1, 0]);
+  });
+
+  it("retains completed child delivery after an accepted parent watchdog failure without replay", async () => {
+    const to = "user:123456789012345678";
+    const { sessionStore, sessionStorePath } = getFixture();
+    const requester = expectDefined(sessionStore[requesterSessionKey], "requester exists");
+    const delivery = requester.delivery;
+    if (delivery?.kind !== "external") {
+      throw new Error("Expected the external requester fixture");
+    }
+    // The generic fixture uses an opaque target; direct fallback needs an explicit DM route.
+    requester.delivery = {
+      ...delivery,
+      route: { ...delivery.route, target: { ...delivery.route.target, to } },
+      context: { ...delivery.context, to },
+      origin: { ...delivery.origin, to },
+    };
+    await replaceSessionEntry(
+      { storePath: sessionStorePath, sessionKey: requesterSessionKey },
+      requester,
+    );
+    await registry.initSubagentRegistry();
+    await registry.activateSubagentRegistry(createGatewayContext);
+    const requesterTurnRunId = "requester-watchdog-failure";
+    const child = visibleChild("completed-before-parent-watchdog");
+    const resultText = "The child completed its one requested operation.";
+    const parentStarted = createDeferred();
+    const releaseParent = createDeferred();
+    // Match the terminal abort emitted by the production session watchdog.
+    const watchdogError = Object.assign(createAbortError("Reply operation stalled"), {
+      code: "OPENCLAW_SESSION_WATCHDOG",
+    });
+    const respond = callGatewayMock.getMockImplementation()!;
+    let parentExecutions = 0;
+    callGatewayMock.mockImplementation(async (request) => {
+      if (
+        request.method === "agent" &&
+        request.params?.idempotencyKey?.startsWith("announce:requester-settle:")
+      ) {
+        parentExecutions++;
+        parentStarted.resolve();
+        await releaseParent.promise;
+        unwrapGatewayMethodDispatchResponse("agent", {
+          ok: false,
+          error: errorShapeFromError(ErrorCodes.UNAVAILABLE, watchdogError),
+        });
+      }
+      return respond(request);
+    });
+
+    await spawnVisibleChild({ ...child, requesterTurnRunId });
+    await settleYield(requesterTurnRunId, [child]);
+    emitCompleted(child.runId, child.childSessionKey, resultText);
+    const completion = flushOwnedWork();
+    try {
+      await awaitGateBeforeSettlement(
+        parentStarted.promise,
+        completion,
+        "child completion settled without starting its parent continuation",
+      );
+      // The real requester dispatch owns this attempt before its execution fails.
+      expect(readRun(child.runId)?.requesterSettleWake?.status).toBe("dispatching");
+      expect(getRequesterWakeCalls()).toHaveLength(1);
+    } finally {
+      releaseParent.resolve();
+      await completion;
+    }
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await registry.testing.sweepOnceForTests();
+    await flushOwnedWork();
+    expect(parentExecutions).toBe(1);
+    expect(getAgentCalls()).toHaveLength(1);
+    const completed = expectDefined(
+      (
+        await readFullSubagentRuns(
+          captureOpenClawStateWorkerContext(),
+          { kind: "ids", runIds: [child.runId] },
+          { current: true },
+        )
+      ).get(child.runId),
+      "completed child survives parent failure",
+    );
+    expect(completed.execution).toMatchObject({
+      status: "terminal",
+      outcome: { status: "ok" },
+    });
+    expect(completed.completion?.resultText).toBe(resultText);
+    // A spent public parent cannot be replayed. Its owner must either finish
+    // delivery without another agent turn or leave an observable live obligation.
+    expect(
+      completed.delivery?.status,
+      `parent failure must not orphan the completed child: ${JSON.stringify({ delivery: completed.delivery, wake: completed.requesterSettleWake, sends: sendMessageMock.mock.calls.length })}`,
+    ).toMatch(/^(pending|in_progress|delivered)$/);
+    if (completed.delivery?.status !== "delivered") {
+      expect(completed.suppressCompletionDelivery).not.toBe(true);
+    }
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to,
+        content: expect.stringContaining(resultText),
+      }),
+    );
+    expect(sendMessageMock.mock.calls[0]?.[0].content).toContain("The follow-up turn stalled.");
   });
 
   it("wakes a yielded parent once after one running child is stopped", async () => {
