@@ -29,12 +29,14 @@ type ReaderLogger = { info: (message: string) => void; warn: (message: string) =
 /**
  * Applies one message; returns the authority results for its statements. `settle`
  * runs for each result before the next statement is applied, so a committed change
- * gets its effects even when a later statement in the same message fails.
+ * gets its effects even when a later statement in the same message fails. Once
+ * `signal` is aborted no further statement is submitted.
  */
 export async function applyMailboxMessage(
   message: MailboxMessage,
   sink: Pick<MailboxSink, "submit" | "redeem">,
   settle: (result: AuthorityAccepted | AuthorityRefusal) => Promise<void> = async () => {},
+  signal?: AbortSignal,
 ): Promise<Array<AuthorityAccepted | AuthorityRefusal>> {
   const payload = message.payload;
   // SAFETY: widening a readonly tuple of string literals to readonly string[] for includes() is lossless.
@@ -62,6 +64,9 @@ export async function applyMailboxMessage(
     await record(await sink.submit(payload.revocation));
   } else if (payload.kind === "root_statement") {
     for (const statement of payload.statements) {
+      if (signal?.aborted) {
+        break;
+      }
       await record(await sink.submit(statement));
     }
   }
@@ -110,22 +115,29 @@ export function startMailboxReader(params: {
           if (controller.signal.aborted) {
             return;
           }
-          await applyMailboxMessage(message, params.sink, async (result) => {
-            if (!result.ok) {
-              params.log.warn(
-                `openclaw-id: mailbox ${message.payload.kind} refused (${result.code})`,
-              );
-              await params
-                .onRefused?.(message, result)
-                .catch((error: unknown) =>
-                  params.log.warn(`openclaw-id: mailbox refusal handling failed: ${String(error)}`),
+          await applyMailboxMessage(
+            message,
+            params.sink,
+            async (result) => {
+              if (!result.ok) {
+                params.log.warn(
+                  `openclaw-id: mailbox ${message.payload.kind} refused (${result.code})`,
                 );
-            }
-            // A committed change always gets its local effects (closing sessions, revoking tokens).
-            if (result.ok) {
-              await params.onEffects(result.events);
-            }
-          });
+                await params
+                  .onRefused?.(message, result)
+                  .catch((error: unknown) =>
+                    params.log.warn(
+                      `openclaw-id: mailbox refusal handling failed: ${String(error)}`,
+                    ),
+                  );
+              }
+              // A committed change always gets its local effects (closing sessions, revoking tokens).
+              if (result.ok) {
+                await params.onEffects(result.events);
+              }
+            },
+            controller.signal,
+          );
         }
         if (batch.messages.length > 0 && !controller.signal.aborted) {
           await params.client.ackMail(params.clawId, batch.cursor);

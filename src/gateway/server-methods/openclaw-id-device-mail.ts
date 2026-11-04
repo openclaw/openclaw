@@ -52,6 +52,18 @@ export async function handleOpenClawIdDeviceMail(
     deny();
     return;
   }
+  // The caller and the exact certificate it signed with are still current.
+  const stillAuthorized = async () => {
+    if (!owner()) {
+      return false;
+    }
+    const live = await service.linkStatus();
+    return Boolean(
+      owner() &&
+      live.clawId === link.clawId &&
+      live.ownerDevices?.some((device) => isDeepStrictEqual(device.cert, request.certificate)),
+    );
+  };
   try {
     const result = await relayDeviceMail({
       baseUrl,
@@ -59,14 +71,11 @@ export async function handleOpenClawIdDeviceMail(
       // SAFETY: relayDeviceMail validates the operation and every field before relaying.
       request: request as DeviceMailRequest,
       activeCertificates: (link.ownerDevices ?? []).map((device) => device.cert),
+      stillAuthorized,
       signal: opts.client?.connectionSignal,
     });
     // Recheck D as well as the transport: loopback stays privileged after its old D is revoked.
-    const settled = await service.linkStatus();
-    const deviceStillActive =
-      settled.clawId === link.clawId &&
-      settled.ownerDevices?.some((device) => isDeepStrictEqual(device.cert, request.certificate));
-    if (!owner() || !deviceStillActive || opts.client?.connectionSignal?.aborted) {
+    if (!(await stillAuthorized()) || opts.client?.connectionSignal?.aborted) {
       deny();
       return;
     }

@@ -14,6 +14,8 @@ export async function relayDeviceMail(params: {
   clawId: string;
   request: DeviceMailRequest;
   activeCertificates: SignedStatement<"OwnerDeviceCert">[];
+  /** Rechecked immediately before the request leaves: the caller and its certificate are still active. */
+  stillAuthorized: () => Promise<boolean>;
   signal?: AbortSignal;
 }) {
   const r = params.request;
@@ -52,6 +54,10 @@ export async function relayDeviceMail(params: {
     ),
     "content-type": "application/json",
   };
+  // Removal or turning the switch off during verification must stop the request here.
+  if (!(await params.stillAuthorized()) || params.signal?.aborted) {
+    throw new Error("the owner device is no longer active");
+  }
   const response = await fetch(`${params.baseUrl.replace(/\/+$/, "")}${route.path}`, {
     method: route.method,
     headers,

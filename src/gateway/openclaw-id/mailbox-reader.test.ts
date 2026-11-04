@@ -115,4 +115,27 @@ describe("mailbox reader callbacks", () => {
     ).rejects.toThrow("disk full");
     expect(settled).toEqual([{ ok: true, status: "accepted", events: removal }]);
   });
+
+  it("submits no further statement of a message once the reader is stopped", async () => {
+    const message = {
+      ...rootMail,
+      payload: { kind: "root_statement" as const, statements: [{} as never, {} as never] },
+    };
+    const stop = new AbortController();
+    const submit = vi.fn(async () => ({
+      ok: true as const,
+      status: "accepted" as const,
+      events: [],
+    }));
+    await applyMailboxMessage(
+      message,
+      { submit, redeem: vi.fn() },
+      async () => {
+        // Remote access is turned off while the first statement's effects settle.
+        stop.abort();
+      },
+      stop.signal,
+    );
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
 });

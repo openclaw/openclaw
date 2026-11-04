@@ -37,6 +37,7 @@ describe("owner-device mailbox relay", () => {
         clawId: claw.clawId,
         request,
         activeCertificates: [claw.cert],
+        stillAuthorized: async () => true,
       }),
     ).toEqual({ status: 200, body: '{"sent":true}' });
     expect(fetchMock).toHaveBeenCalledWith(
@@ -63,6 +64,7 @@ describe("owner-device mailbox relay", () => {
           clawId: claw.clawId,
           request: invalid as DeviceMailRequest,
           activeCertificates: [claw.cert],
+          stillAuthorized: async () => true,
         }),
       ).rejects.toThrow();
     }
@@ -73,8 +75,20 @@ describe("owner-device mailbox relay", () => {
         clawId: claw.clawId,
         request,
         activeCertificates: [],
+        stillAuthorized: async () => true,
       }),
     ).rejects.toThrow();
+    // Removed during signature verification: nothing reaches Discovery.
+    await expect(
+      relayDeviceMail({
+        baseUrl: "https://discovery.test",
+        clawId: claw.clawId,
+        request,
+        activeCertificates: [claw.cert],
+        stillAuthorized: async () => false,
+      }),
+    ).rejects.toThrow("no longer active");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns approval context only to direct loopback or an active owner, never a member", async () => {
