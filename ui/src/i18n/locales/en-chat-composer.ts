@@ -217,6 +217,8 @@ const catalog = {
         needsReview: "Needs review",
       },
       imageCount: "Image ({count})",
+      annotationCount: "{count} annotation",
+      annotationsCount: "{count} annotations",
     },
     mentions: {
       menu: "Mention a person",
