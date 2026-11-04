@@ -1216,9 +1216,20 @@ it.each(["budget", "sink", "truncate"])(
   },
 );
 
+// Report the first package qualification failure before dependent creation assertions.
+function packageRecords(f: ReturnType<typeof fixture>) {
+  const failure = path.join(f.spec.directory, "observer-failed.json");
+  if (fs.existsSync(failure)) {
+    assert.fail(fs.readFileSync(failure, "utf8"));
+  }
+  const rows = f.records();
+  expect(rows).toContainEqual(expect.objectContaining({ event: "heartbeat-package" }));
+  return rows;
+}
+
 function publishedHelperFixture() {
   const f = fixture();
-  const root = path.join(f.root, "openclaw");
+  const root = path.join(f.root, "prefix/openclaw");
   const helpers: {
     sourceCommit: string;
     files: Record<string, { source: string; sha256: string }>;
@@ -1347,7 +1358,7 @@ it.skipIf(process.platform !== "linux").each(["normal", "killed"])(
     expect(plain.status, plain.stderr).toBe(0);
     expect(observed.status, observed.stderr).toBe(0);
     expect(observed.stdout).toBe(plain.stdout);
-    const rows = f.records();
+    const rows = packageRecords(f);
     expect(rows.filter((row) => row.event === "startup")).toHaveLength(1);
     const created = rows.filter((row) => row.event === "thread" || row.event === "spawn");
     expect(created).toHaveLength(3);
@@ -1517,7 +1528,9 @@ it.skipIf(process.platform !== "linux")(
         continue;
       }
       expect(observed.status, observed.stderr).toBe(0);
-      const launches = f.records().filter((row) => row.event === "thread" || row.event === "spawn");
+      const launches = packageRecords(f).filter(
+        (row) => row.event === "thread" || row.event === "spawn",
+      );
       const target =
         (mode.endsWith("loader") && mode !== "worker-loader") || mode.startsWith("progress-")
           ? launches.at(-1)
@@ -1715,7 +1728,7 @@ it.each([false, true])(
   "qualifies only successful package-owned pre-handoff Node entries (historical=%s)",
   async (historical) => {
     const f = fixture();
-    const packageRoot = path.join(f.root, "openclaw");
+    const packageRoot = path.join(f.root, "prefix/openclaw");
     const sqliteRelative = "dist/infra/sqlite-readonly-location.worker.js";
     const checkRelative = "dist/infra/update-migrated-finalize.worker.js";
     const heartbeatRelative = "dist/state/openclaw-state-lease-heartbeat.worker.js";
@@ -1822,7 +1835,7 @@ it.each([false, true])(
     expect(observed.status, observed.stderr).toBe(0);
     expect(plain.status, plain.stderr).toBe(0);
     expect(observed.stdout).toBe(plain.stdout);
-    const rows = f.records();
+    const rows = packageRecords(f);
     expect(rows.filter((row) => row.event === "startup")).toHaveLength(1);
     const launchesObserved = rows.filter((row) => row.event === "spawn");
     expect(launchesObserved).toHaveLength(launches.length);
