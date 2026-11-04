@@ -903,15 +903,21 @@ AFTER_CD
         ["workflow_dispatch", false, "failure", false, false],
         ["workflow_dispatch", false, "success", true, false],
       ] as const) {
+        const context = {
+          eventName,
+          draft,
+          cancelled,
+          additionalNeeds: { admission: { outputs: { runner: "admitted-arm" }, result } },
+        };
         expect(
-          evaluateWorkflowExpression(workflow.jobs[jobName].if, {
-            eventName,
-            draft,
-            cancelled,
-            additionalNeeds: { admission: { outputs: {}, result } },
-          }),
+          evaluateWorkflowExpression(workflow.jobs[jobName].if, context),
           `${workflowPath}: ${eventName}, admission=${result}, cancelled=${cancelled}`,
         ).toBe(admitted);
+        if (jobName === "check-arm") {
+          expect(evaluateWorkflowRunner(workflow.jobs[jobName]["runs-on"], context)).toBe(
+            eventName === "pull_request" ? "ubuntu-24.04-arm" : "admitted-arm",
+          );
+        }
       }
     }
   });

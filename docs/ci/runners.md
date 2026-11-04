@@ -66,6 +66,9 @@ the idle limit is not a substitute for caller cleanup.
 | Build artifacts       | 16-vCPU Ubuntu x64    | 35 minutes      | 35 minutes                |
 | Windows               | 8- or 16-vCPU Windows | 75 minutes      | 75 minutes                |
 
+The ARM workflow's pull-request setup check uses `ubuntu-24.04-arm`. Manual
+dispatches retain the admitted ARM Testbox profile above.
+
 Routine remote proof uses the 16-class. The explicit high-memory workflow can
 use only four of the shared 32 slots; it does not add four more slots. Normal
 leases can also occupy those slots, so hash collisions may queue high-memory
