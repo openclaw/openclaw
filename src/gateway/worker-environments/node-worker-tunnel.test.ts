@@ -35,6 +35,7 @@ import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
 import type { WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
@@ -57,6 +58,8 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+useAgedWorkspaceHashClock();
 
 describe("node worker tunnel manager", () => {
   it.for<[string, boolean]>([

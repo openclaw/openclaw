@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
+import { useAgedWorkspaceHashClock } from "../gateway/worker-environments/workspace-hash-memo.test-support.js";
 import { serializeWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
 import { runCommandBuffered, runExec } from "../process/exec.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
@@ -40,6 +41,8 @@ async function git(root: string, args: string[]): Promise<string> {
   });
   return result.stdout.trim();
 }
+
+useAgedWorkspaceHashClock();
 
 describe("node worker Git transfers", () => {
   it.runIf(process.platform === "win32")(
