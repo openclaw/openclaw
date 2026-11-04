@@ -1,3 +1,4 @@
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildGoogleMusicGenerationBody,
   parseGoogleMusicGenerationResponse,
@@ -317,16 +318,30 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
         headers.set("Accept", "text/event-stream");
       }
       req.signal?.throwIfAborted();
+      const openRouterTimeoutMs = openRouter ? timeoutMs() : undefined;
+      const operation = openRouter
+        ? buildTimeoutAbortSignal({
+            timeoutMs: openRouterTimeoutMs,
+            signal: req.signal,
+            operation: "clawrouter.music",
+          })
+        : undefined;
+      const signal = operation?.signal ?? req.signal;
       let attempted = false;
       try {
         const { response, release } = await fetchWithSsrFGuard({
           url: selected.url,
-          init: { method: "POST", headers, body: wire, signal: req.signal },
+          init: { method: "POST", headers, body: wire, signal },
           beforeRequest: () => {
-            req.signal?.throwIfAborted();
+            signal?.throwIfAborted();
+            if (openRouter) {
+              timeoutMs();
+            }
             attempted = true;
           },
-          timeoutMs: timeoutMs(),
+          // The retained signal owns the OpenRouter deadline, including the response body.
+          timeoutMs: openRouter ? undefined : timeoutMs(),
+          streamTimeoutMs: openRouterTimeoutMs,
           maxRedirects: 0,
           policy: mergeSsrFPolicies(
             context.ssrfPolicy,
@@ -350,8 +365,12 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
             );
           }
           if (openRouter) {
-            const result = await readClawRouterOpenRouterMusic(response, req, timeoutMs);
-            req.signal?.throwIfAborted();
+            const result = await readClawRouterOpenRouterMusic(
+              response,
+              { ...req, signal },
+              timeoutMs,
+            );
+            signal?.throwIfAborted();
             return { ...result, model: req.model };
           }
           const bytes = await readResponseWithLimit(response, JSON_LIMIT, {
@@ -377,15 +396,19 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
           await release();
         }
       } catch (cause) {
+        // Undici can lose the abort cause after headers; retain the owned signal's actual reason.
+        const failure: unknown = operation?.signal?.aborted ? operation.signal.reason : cause;
         // This says only that replay is unsafe, not whether the operation was billed/refunded.
         const error =
-          cause instanceof Error
-            ? cause
-            : new Error("ClawRouter music operation failed", { cause });
+          failure instanceof Error
+            ? failure
+            : new Error("ClawRouter music operation failed", { cause: failure });
         if (attempted) {
           recordModelFallbackStop(error);
         }
         throw error;
+      } finally {
+        operation?.cleanup();
       }
     },
   };

@@ -1,9 +1,4 @@
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import {
-  collectErrorGraphCandidates,
-  readErrorCauses,
-  readErrorName,
-} from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withResponseBodyTimeout } from "../infra/http-response-body-timeout.js";
@@ -251,17 +246,6 @@ export async function readOpenRouterAudioStream(
         return finishOpenRouterMusicStream();
       },
     });
-  } catch (error) {
-    if (
-      options?.requireEof &&
-      collectErrorGraphCandidates(error, readErrorCauses).some(
-        (cause) => readErrorName(cause) === "TimeoutError",
-      )
-    ) {
-      // Guarded fetch can wrap its actual deadline cause as a generic body termination.
-      throw new Error("OpenRouter music generation timed out", { cause: error });
-    }
-    throw error;
   } finally {
     // A capture tee can keep cancellation pending until its sibling finishes.
     // Release the reader without waiting so the request owner can abort transport.
