@@ -136,7 +136,7 @@ describe("adaptive CI prior restore", () => {
       createdAt: earlier,
       archiveSha256: sha256(f.archive),
       memberPath: "node/observations.json",
-      memberSha256: sha256(f.files["node/observations.json"]),
+      memberSha256: sha256(JSON.stringify(f.exported)),
       observations: f.exported,
     });
     expect(JSON.stringify(bundle)).not.toContain(env.GITHUB_TOKEN);
