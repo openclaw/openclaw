@@ -4,7 +4,7 @@
 export const NATIVE_COOWNED_GENERATED_I18N_RE =
   /^apps\/android\/app\/src\/main\/res\/values\/(?:assistant|strings)\.xml$/;
 export const NATIVE_HARD_GENERATED_I18N_RE =
-  /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/java\/ai\/openclaw\/app\/i18n\/NativeStringResources\.kt|apps\/android\/app\/src\/main\/res\/values-[^/]+\/(?:assistant|strings)\.xml|apps\/android\/app\/src\/thirdParty\/res\/values-[^/]+\/accessibility_strings\.xml|apps\/android\/wear\/src\/main\/res\/values-[^/]+\/strings\.xml|apps\/ios\/Resources\/Localizable\.xcstrings|apps\/macos\/Sources\/OpenClaw\/Resources\/Localizable\.xcstrings|apps\/ios\/(?:Sources|WatchApp|ShareExtension|ActivityWidget)\/[^/]+\.lproj\/InfoPlist\.strings)$/;
+  /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/java\/ai\/openclaw\/app\/i18n\/NativeStringResources\.kt|apps\/android\/app\/src\/main\/res\/values-[^/]+\/(?:assistant|strings)\.xml|apps\/android\/app\/src\/thirdParty\/res\/values-[^/]+\/accessibility_strings\.xml|apps\/android\/wear\/src\/main\/res\/values-[^/]+\/strings\.xml|apps\/ios\/Resources\/Localizable\.xcstrings|apps\/macos\/Sources\/OpenClaw\/Resources\/Localizable\.xcstrings|apps\/ios\/(?:Sources|WatchApp|ShareExtension|ActivityWidget)\/[^/]+\.lproj\/InfoPlist\.strings|apps\/linux\/ui\/i18n\/catalog\.(?:json|js))$/;
 
 /** @param {string[] | null} changedPaths */
 export function isNativeGeneratedOnlyChange(changedPaths) {

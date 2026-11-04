@@ -8,6 +8,14 @@ with a local Windows Gateway through bundled Bun or a remote Gateway connection.
 
 On macOS, the Tauri build is named **OpenClaw-Tauri** so it can be installed alongside the native **OpenClaw** app. It retains its separate bundle identity when updated and requires macOS 26.2 or later.
 
+## Desktop language
+
+`apps/linux/i18n/en.json` declares shell messages. The native-app producer projects reviewed PT-PT entries into `apps/linux/ui/i18n/catalog.json`; check that projection with `node --import ./scripts/tsx.mjs scripts/tauri-app-i18n.ts check` and validate the native catalogs with `node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts check`.
+
+The shell selects its language from the operating system at launch. Explicit `pt-PT` and `pt_PT.UTF-8` select Portuguese (Portugal); `pt-BR`, bare `pt`, and unsupported languages fall back to English. Changing the operating-system language takes effect on the next launch. The connected Control UI keeps its own language preference, separate from the shell. New native message IDs use explicit English fallbacks in other locale catalogs until those translations are reviewed.
+
+Ordinary Cargo builds embed the checked-in English declaration and use the generated shell catalog when it is packaged. If the generated catalog is absent, the shell uses English until the native locale refresh produces it; malformed packaged data fails startup. Cargo does not run Node or translation providers. `native-app-i18n verify` validates source-only locale inputs without requiring generated artifacts, while `native-app-i18n check` requires the complete generated locale set and current Tauri projection.
+
 Dashboard widgets and browser panels load inside the app. Browser tabs belong to their conversation and support back, forward, reload, stop, snapshots, element inspection, and saving the current page or asset. Opening the same address in a conversation reuses its tab; other conversations keep their own tabs. Popups opened by a browser tab stay in that conversation.
 
 Reading tabs share a private browser session, isolated from the dashboard's native commands and authentication scripts. Closing every reading tab, switching Gateways, or quitting the app ends that private session. Reloading the dashboard retains its tabs. Sign-in links and **Open in browser** continue to use your system browser.
@@ -201,6 +209,13 @@ cd apps/linux/src-tauri
 cargo run
 cargo build
 ```
+
+For packaged macOS QA, use `tauri build --debug`. The Tauri CLI enables
+`tauri/custom-protocol`; a plain `cargo build` followed by bundle-only packaging
+can retain the development embedded partial plist. To build with Cargo against
+already staged assets from `apps/linux/src-tauri`, run
+`cargo build --locked --features tauri/custom-protocol`. This build-mode
+distinction does not establish the cause of CUA discovery behavior.
 
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 

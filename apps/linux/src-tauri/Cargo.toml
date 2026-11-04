@@ -71,14 +71,14 @@ zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 block2 = "0.6.2"
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSBitmapImageRep", "NSEvent", "NSImage", "NSImageRep", "NSPanel", "NSResponder", "NSSavePanel", "NSToolbar", "NSView", "NSWindow"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSDictionary", "NSError", "NSKeyValueObserving", "NSString"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSKeyValueObserving", "NSLocale", "NSString"] }
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["WKDownload", "WKDownloadDelegate", "WKFrameInfo", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration", "WKNavigation", "WKNavigationDelegate", "WKScriptMessage", "WKScriptMessageHandler", "WKUserContentController", "objc2-app-kit", "block2"] }
 security-framework = "3.7.0"
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "35d04a6af588a5d5d438da0320c7d95a877cfe14", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.39.1"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # The windows::core::implement macro emits direct windows_core paths; keep both versions aligned.
 windows-core = "0.62.2"
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "35d04a6af588a5d5d438da0320c7d95a877cfe14" }

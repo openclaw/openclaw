@@ -16,12 +16,18 @@ import type { translateNativeEntries } from "./control-ui-i18n.ts"; // Verificat
 import { compareAscii as compareCodePoints } from "./lib/canonical-json.mjs";
 import type { GlossaryEntry } from "./lib/control-ui-i18n-sync-plan.ts";
 import {
+  type NativeI18nCandidate,
   type NativeI18nInventoryEntry,
-  type NativeI18nSite,
+  type NativeI18nSourceSurface,
   type NativeI18nSurface,
   serializeNativeI18nInventory,
 } from "./native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
+import {
+  assertTauriPlaceholderParity,
+  collectTauriNativeI18nCandidates,
+  writeTauriShellCatalog,
+} from "./tauri-app-i18n.ts";
 
 export { NATIVE_I18N_LOCALES };
 
@@ -36,13 +42,10 @@ type NativeInterpolation = {
   value: string;
 };
 
-type Candidate = NativeI18nSite &
-  Pick<NativeI18nEntry, "source" | "surface" | "sourceContext"> & {
-    line: number;
-  };
+type Candidate = NativeI18nCandidate;
 type CandidateContext = {
   entries: Candidate[];
-  surface: NativeI18nSurface;
+  surface: NativeI18nSourceSurface;
   repoPath: string;
   source: string;
 };
@@ -92,7 +95,7 @@ const OUTPUT_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");
 const TRANSLATIONS_DIR = path.join(ROOT, "apps", ".i18n", "native");
 const TOOL_DISPLAY_SOURCE =
   "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json";
-const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
+const SOURCE_ROOTS: Record<NativeI18nSourceSurface, string[]> = {
   android: [
     path.join(ROOT, "apps", "android", "app", "src", "main"),
     path.join(ROOT, "apps", "android", "app", "src", "play"),
@@ -418,7 +421,7 @@ function readMultilineStringLiteral(
 }
 
 function readNativeStringLiteral(
-  surface: NativeI18nSurface,
+  surface: NativeI18nSourceSurface,
   source: string,
   openingQuote: number,
 ): { end: number; value: string } | null {
@@ -473,7 +476,7 @@ function readNativeStringLiteral(
 }
 
 function readAdjacentStringLiterals(
-  surface: NativeI18nSurface,
+  surface: NativeI18nSourceSurface,
   source: string,
   openingQuote: number,
 ): { end: number; fragments: number; value: string } | null {
@@ -770,7 +773,7 @@ function addBranchCandidates(
 }
 
 export function extractNativeI18nCandidates(
-  surface: NativeI18nSurface,
+  surface: NativeI18nSourceSurface,
   repoPath: string,
   source: string,
   uiCallNames: ReadonlySet<string> = new Set([
@@ -944,7 +947,7 @@ export function extractNativeI18nCandidates(
   return unique;
 }
 
-async function walkFiles(root: string, surface: NativeI18nSurface): Promise<string[]> {
+async function walkFiles(root: string, surface: NativeI18nSourceSurface): Promise<string[]> {
   const entries = await readdir(root, { withFileTypes: true });
   const nested = await Promise.all(
     entries.map(async (entry): Promise<string[]> => {
@@ -983,7 +986,10 @@ export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEn
     { source: string; surface: NativeI18nSurface; sites: Map<string, Candidate> }
   >();
   for (const candidate of entries) {
-    const identity = nativeEntryIdentity(candidate);
+    const identity =
+      candidate.surface === "tauri"
+        ? JSON.stringify([candidate.surface, candidate.kind, candidate.source])
+        : nativeEntryIdentity(candidate);
     let entry = entriesByIdentity.get(identity);
     if (!entry) {
       entry = { source: candidate.source, surface: candidate.surface, sites: new Map() };
@@ -1051,19 +1057,21 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
       stopOnError: true,
     },
   );
-  return collectNativeI18nEntriesFromSources(sources);
+  return collectNativeI18nEntriesFromSources(sources).concat(
+    assignNativeI18nIds(await collectTauriNativeI18nCandidates()),
+  );
 }
 
 export function collectNativeI18nEntriesFromSources(
   sources: ReadonlyArray<{
     repoPath: string;
     source: string;
-    surface: NativeI18nSurface;
+    surface: NativeI18nSourceSurface;
   }>,
 ): NativeI18nEntry[] {
   // Learned UI helpers belong to their platform. A Swift View helper named
   // header must not enroll Kotlin HTTP header names in translation resources.
-  const uiCallNames: Record<NativeI18nSurface, Set<string>> = {
+  const uiCallNames: Record<NativeI18nSourceSurface, Set<string>> = {
     android: new Set([...APPLE_BUILTIN_UI_CALLS, ...ANDROID_BUILTIN_UI_CALLS]),
     apple: new Set([...APPLE_BUILTIN_UI_CALLS, ...ANDROID_BUILTIN_UI_CALLS]),
   };
@@ -1080,7 +1088,7 @@ export function collectNativeI18nEntriesFromSources(
       }
     }
   }
-  const entries = sources.flatMap(({ repoPath, source, surface }) =>
+  const entries: Candidate[] = sources.flatMap<Candidate>(({ repoPath, source, surface }) =>
     repoPath === TOOL_DISPLAY_SOURCE
       ? [...collectToolDisplaySources(JSON.parse(source))].map((text) => ({
           source: text,
@@ -1117,6 +1125,7 @@ async function syncNativeI18n(options: {
     for (const finding of findings) {
       process.stdout.write(`native-app-i18n: advisory=${JSON.stringify(finding)}\n`);
     }
+    await writeTauriShellCatalog(false);
     process.stdout.write(
       `native-app-i18n: locale-artifacts=${NATIVE_I18N_LOCALES.length} advisories=${findings.length}\n`,
     );
@@ -1285,6 +1294,12 @@ export function validateNativeLocaleArtifact(
       errors.push(`missing translation for ${entry.id}`);
     } else if (!translated.trim()) {
       errors.push(`translation must be nonempty for ${entry.id}`);
+    } else if (entry.surface === "tauri") {
+      try {
+        assertTauriPlaceholderParity(entry.source, translated, entry.id);
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error));
+      }
     } else if (structuralTokenSignature(entry.source) !== structuralTokenSignature(translated)) {
       errors.push(formatNativeTranslationStructureError(locale, entry.id));
     }
@@ -1597,6 +1612,9 @@ async function main() {
       import("./android-app-i18n.ts"),
       import("./apple-app-i18n.ts"),
     ]);
+    const tauri = await import("./tauri-app-i18n.ts");
+    await tauri.syncTauriLocaleSlots();
+    await tauri.writeTauriShellCatalog(true);
     await syncAndroidAppI18n();
     const apple = await syncAppleAppI18n();
     process.stdout.write(

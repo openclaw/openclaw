@@ -654,7 +654,9 @@ async function validateRuntimeInterpolationPaths(): Promise<void> {
   }
 }
 
-async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
+async function readNativeTranslations(
+  options: { allowMissingLocales?: boolean } = {},
+): Promise<NativeTranslationArtifact[]> {
   const expectedFiles = NATIVE_I18N_LOCALES.map((locale) => `${locale}.json`).toSorted();
   const actualFiles = (
     await readdir(path.join(ROOT, NATIVE_TRANSLATIONS_DIR), {
@@ -664,16 +666,27 @@ async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
     .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
     .map((entry) => entry.name)
     .toSorted();
-  if (JSON.stringify(actualFiles) !== JSON.stringify(expectedFiles)) {
+  const unexpectedFiles = actualFiles.filter((file) => !expectedFiles.includes(file));
+  if (
+    unexpectedFiles.length > 0 ||
+    (!options.allowMissingLocales && JSON.stringify(actualFiles) !== JSON.stringify(expectedFiles))
+  ) {
     throw new Error(
       `Apple/native locale parity drift: expected ${JSON.stringify(expectedFiles)}, got ${JSON.stringify(actualFiles)}`,
     );
   }
-  return Promise.all(
+  const artifacts = await Promise.all(
     NATIVE_I18N_LOCALES.map(async (locale) => {
-      const artifact = JSON.parse(
-        await readFile(path.join(ROOT, NATIVE_TRANSLATIONS_DIR, `${locale}.json`), "utf8"),
-      ) as NativeTranslationArtifact;
+      const raw = await readOptionalFile(
+        path.join(ROOT, NATIVE_TRANSLATIONS_DIR, `${locale}.json`),
+      );
+      if (raw === null) {
+        if (options.allowMissingLocales) {
+          return undefined;
+        }
+        throw new Error(`missing Apple/native locale artifact ${locale}`);
+      }
+      const artifact = JSON.parse(raw) as NativeTranslationArtifact;
       if (artifact.locale !== locale) {
         throw new Error(
           `native Apple translation artifact ${locale} declares locale ${artifact.locale}`,
@@ -682,11 +695,15 @@ async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
       return artifact;
     }),
   );
+  return artifacts.filter(
+    (artifact): artifact is NativeTranslationArtifact => artifact !== undefined,
+  );
 }
 
 async function readAppleCatalogBuild(
   catalogPath: string,
   buildCatalog: typeof buildIosCatalog,
+  options: { allowMissingLocales?: boolean } = {},
 ): Promise<AppleCatalogBuild> {
   const existingCatalog = JSON.parse(
     await readFile(path.join(ROOT, catalogPath), "utf8"),
@@ -694,7 +711,7 @@ async function readAppleCatalogBuild(
   const nativeSource = parseNativeI18nInventory(
     await readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
   );
-  const translations = await readNativeTranslations();
+  const translations = await readNativeTranslations(options);
   return buildCatalog(existingCatalog, nativeSource, translations);
 }
 
@@ -889,7 +906,15 @@ export async function verifyAppleAppI18n() {
     }
   }
 
-  const macosBuild = await readAppleCatalogBuild(MACOS_CATALOG_PATH, buildMacosCatalog);
+  const [existingCatalog, nativeSource] = await Promise.all([
+    readFile(path.join(ROOT, MACOS_CATALOG_PATH), "utf8"),
+    readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
+  ]);
+  const macosBuild = buildMacosCatalog(
+    JSON.parse(existingCatalog) as Catalog,
+    parseNativeI18nInventory(nativeSource),
+    [],
+  );
   const macosKeys = validateCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);
 
   process.stdout.write(`apple-app-i18n: sourceMacosKeys=${macosKeys}\n`);
@@ -925,13 +950,17 @@ export async function compileMacosLocalizations(outputDir: string) {
   // post-merge refresh. Package from the derived catalog so source changes
   // cannot ship stale localization coverage before that refresh lands.
   await verifyAppleAppI18n();
-  const catalog = (await readAppleCatalogBuild(MACOS_CATALOG_PATH, buildMacosCatalog)).catalog;
+  const catalog = (
+    await readAppleCatalogBuild(MACOS_CATALOG_PATH, buildMacosCatalog, {
+      allowMissingLocales: true,
+    })
+  ).catalog;
   if (!catalog.strings) {
     throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG_PATH}`);
   }
   const [nativeSource, translations, infoPlistSource] = await Promise.all([
     readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8").then(parseNativeI18nInventory),
-    readNativeTranslations(),
+    readNativeTranslations({ allowMissingLocales: true }),
     readFile(path.join(ROOT, MACOS_INFO_PLIST_PATH), "utf8"),
   ]);
   const sourceIds = infoPlistSourceIds(nativeSource);

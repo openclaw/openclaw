@@ -660,7 +660,7 @@ describe("native app i18n inventory", () => {
     ]);
   });
 
-  it("collects stable Android and Apple UI entries", async () => {
+  it("collects stable Android, Apple, and Tauri UI entries", async () => {
     const entries = await collectNativeI18nEntries();
     const expectSourceAtSite = (
       source: string,
@@ -725,7 +725,7 @@ describe("native app i18n inventory", () => {
       expect(sources.has(source), source).toBe(false);
     }
     expect(entries.length).toBeGreaterThan(100);
-    expect(surfaces).toEqual(new Set(["android", "apple"]));
+    expect(surfaces).toEqual(new Set(["android", "apple", "tauri"]));
     expect(entries.every((entry) => entry.id.startsWith(`native.${entry.surface}.`))).toBe(true);
     expect(new Set(entries.map((entry) => entry.id)).size).toBe(entries.length);
     expect(
@@ -934,8 +934,9 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some((entry) => hasSite(entry, (site) => site.path.endsWith("Info.plist"))),
     ).toBe(true);
-    expect(NATIVE_I18N_LOCALES).toHaveLength(21);
+    expect(NATIVE_I18N_LOCALES).toHaveLength(22);
     expect(NATIVE_I18N_LOCALES).toContain("sv");
+    expect(NATIVE_I18N_LOCALES).toContain("pt-PT");
   });
 
   it("migrates v1 translations deterministically and drops stale IDs after a source edit", async () => {

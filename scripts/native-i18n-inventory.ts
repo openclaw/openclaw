@@ -1,8 +1,15 @@
 import { createHash } from "node:crypto";
 import { compareAscii } from "./lib/canonical-json.mjs";
 
-export type NativeI18nSurface = "android" | "apple";
+export type NativeI18nSurface = "android" | "apple" | "tauri";
+export type NativeI18nSourceSurface = Exclude<NativeI18nSurface, "tauri">;
 export type NativeI18nSite = { kind: string; path: string };
+export type NativeI18nCandidate = NativeI18nSite & {
+  line: number;
+  source: string;
+  sourceContext?: string;
+  surface: NativeI18nSurface;
+};
 export type NativeI18nInventoryEntry = {
   id: string;
   source: string;
@@ -82,7 +89,7 @@ export function parseNativeI18nInventory(raw: string): NativeI18nInventoryEntry[
       !("source" in row) ||
       typeof row.source !== "string" ||
       !("surface" in row) ||
-      (row.surface !== "android" && row.surface !== "apple")
+      (row.surface !== "android" && row.surface !== "apple" && row.surface !== "tauri")
     ) {
       invalidInventory("invalid site row");
     }

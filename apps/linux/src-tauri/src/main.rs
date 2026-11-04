@@ -37,6 +37,7 @@ mod quickchat;
 mod quickchat_widgets;
 mod remote_gateway;
 mod runtime_action;
+mod shell_i18n;
 mod test_profile;
 mod tray;
 mod updater;
@@ -3026,20 +3027,21 @@ pub(crate) async fn confirm_gateway_primary(app: &AppHandle, name: &str) -> Resu
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
     let (sender, receiver) = tokio::sync::oneshot::channel();
     app.dialog()
-        .message(format!(
-            "Set {name} as Primary? Quick Chat and the desktop connection will use this Gateway. Other saved Gateway windows stay open."
+        .message(crate::shell_i18n::format(
+            "gateway.primaryConfirmMessage",
+            &[("name", name)],
         ))
-        .title("Change Primary Gateway")
+        .title(crate::shell_i18n::text("gateway.primaryConfirmTitle"))
         .buttons(MessageDialogButtons::OkCancelCustom(
-            "Set as Primary".into(),
-            "Cancel".into(),
+            crate::shell_i18n::text("gateway.primaryConfirmAction"),
+            crate::shell_i18n::text("common.cancel"),
         ))
         .show(move |accepted| {
             let _ = sender.send(accepted);
         });
     receiver
         .await
-        .map_err(|_| "Primary Gateway confirmation was closed.".into())
+        .map_err(|_| crate::shell_i18n::text("gateway.primaryConfirmClosed"))
 }
 
 // Called on the native thread after the window owner retires the failed document.
@@ -3465,6 +3467,7 @@ fn main() {
         );
 
     let builder = builder.setup(move |app| {
+        shell_i18n::initialize_catalog(app.handle())?;
         test_profile::prepare(app.handle())?;
         let namespace = remote_gateway::config_path()?
             .to_string_lossy()
@@ -3609,6 +3612,8 @@ fn main() {
             move |status| tray::publish_keep_awake(&power_app, status),
         )?);
         if let Some(menu) = app.menu() {
+            #[cfg(target_os = "macos")]
+            shell_i18n::localize_default_macos_menu(&menu)?;
             menu.append(&gateway_windows::menu(app.handle())?)?;
         }
         app.on_menu_event(|app, event| {

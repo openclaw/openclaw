@@ -4,13 +4,27 @@
   if (base && location.pathname !== base && !location.pathname.startsWith(base + "/")) return;
 
   const invoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+  const actionFailure = config.chrome?.gatewayActionFailed || "Gateway action failed: {error}";
+  const failureArguments = new Set(
+    [...actionFailure.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu)].map(([, name]) => name),
+  );
+  if (failureArguments.size !== 1 || !failureArguments.has("error")) {
+    throw new TypeError("Gateway action failure copy must declare only the error argument");
+  }
+  const actionFailureText = (error) =>
+    actionFailure.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu, (_token, name) => {
+      if (name !== "error") {
+        throw new TypeError(`Unexpected Gateway action argument ${name}`);
+      }
+      return String(error);
+    });
   let token;
   let noticeVersion = 0;
   window.addEventListener("openclaw:gateway-notice", () => { noticeVersion += 1; });
   const queued = [];
   const showError = (error) => {
     window.dispatchEvent(new CustomEvent("openclaw:gateway-notice", {
-      detail: { message: `Gateway action failed: ${String(error)}` },
+      detail: { message: actionFailureText(error) },
     }));
   };
   const post = async (message) => {

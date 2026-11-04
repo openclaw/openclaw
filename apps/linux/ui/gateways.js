@@ -1,3 +1,7 @@
+const shellI18n = window["__OPENCLAW_TAURI_I18N_READY__"]
+  ? await window["__OPENCLAW_TAURI_I18N_READY__"]
+  : { text: (_key, args = {}, fallback = _key) => fallback.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu, (token, name) => Object.hasOwn(args, name) ? String(args[name]) : token) };
+const t = (key, fallback, args = {}) => shellI18n.text(key, args, fallback);
 const { invoke } = window.__TAURI__.core;
 const elements = Object.fromEntries([
   "add-gateway", "gateway-status", "gateway-error", "retry-load", "profiles", "gateway-list", "gateway-empty", "gateway-editor", "title",
@@ -54,7 +58,9 @@ const syncTransport = () => {
 const revealCredential = (revealed) => {
   for (const id of ["gateway-token", "gateway-password"]) elements[id].type = revealed ? "text" : "password";
   elements["toggle-credential"].setAttribute("aria-pressed", String(revealed));
-  elements["toggle-credential"].setAttribute("aria-label", revealed ? "Hide credential" : "Show credential");
+  elements["toggle-credential"].setAttribute("aria-label", revealed
+    ? t("setup.hideCredential", "Hide credential")
+    : t("setup.showCredential", "Show credential"));
 };
 const syncAuthentication = () => {
   const password = elements["gateway-auth-method"].value === "password";
@@ -81,7 +87,9 @@ const editProfile = (profile) => {
   clearError();
   resetEditor();
   editingId = profile?.id;
-  elements["editor-title"].textContent = profile ? "Edit Gateway" : "Add Gateway";
+  elements["editor-title"].textContent = profile
+    ? t("gateways.editGateway", "Edit Gateway")
+    : t("gateways.addGateway", "Add Gateway");
   elements["gateway-name"].value = profile?.name ?? "";
   elements["gateway-transport"].value = profile?.transport ?? "direct";
   elements["gateway-url"].value = profile?.url ?? "";
@@ -91,8 +99,8 @@ const editProfile = (profile) => {
   elements["gateway-advanced"].open = Boolean(profile?.tlsFingerprint);
   elements["gateway-auth-method"].value = profile?.hasPassword ? "password" : "token";
   elements["credential-hint"].textContent = profile?.hasToken || profile?.hasPassword
-    ? "Saved credentials stay hidden. Leave blank to keep them for the same connection."
-    : "Only needed if your Gateway requires a token or password.";
+    ? t("gateways.savedCredentialsHint", "Saved credentials stay hidden. Leave blank to keep them for the same connection.")
+    : t("setup.credentialHint", "Only needed if your Gateway requires a token or password.");
   syncTransport();
   syncAuthentication();
   elements["gateway-status"].textContent = "";
@@ -154,31 +162,32 @@ const renderProfiles = (selectedId) => {
     if (profile.id === selectedId) {
       const current = document.createElement("span");
       current.className = "gateway-selected";
-      current.textContent = "Selected Gateway";
+      current.textContent = t("gateways.selectedGateway", "Selected Gateway");
       copy.append(current);
     }
     const actions = document.createElement("div");
     actions.className = "gateway-profile-actions";
-    for (const [label, action] of [
-      ["Open", () => void perform(async () => {
+    for (const [key, action] of [
+      ["open", () => void perform(async () => {
         await request({ action: "open", id: profile.id });
-        elements["gateway-status"].textContent = `Opened ${profile.name} in a separate window.`;
+        elements["gateway-status"].textContent = t("gateways.openedProfile", "Opened {name} in a separate window.", { name: profile.name });
       })],
-      ["Edit", () => editProfile(profile)],
-      ["Remove", () => {
+      ["edit", () => editProfile(profile)],
+      ["remove", () => {
         removingId = profile.id;
-        elements["remove-description"].textContent = `Remove “${profile.name}” from this computer? Its Gateway will keep running.`;
+        elements["remove-description"].textContent = t("gateways.removeDescription", "Remove “{name}” from this computer? Its Gateway will keep running.", { name: profile.name });
         elements["remove-dialog"].showModal();
         modalState(true);
       }],
     ]) {
+      const label = t(`gateways.${key}`, { open: "Open", edit: "Edit", remove: "Remove" }[key]);
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = label;
-      button.setAttribute("aria-label", `${label} ${profile.name}`);
-      if (label === "Remove") {
+      button.setAttribute("aria-label", t("gateways.actionProfile", "{action} {name}", { action: label, name: profile.name }));
+      if (key === "remove") {
         button.className = "gateway-remove";
-        button.title = `Remove ${profile.name}`;
+        button.title = t("gateways.removeProfile", "Remove {name}", { name: profile.name });
         button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" /></svg>';
       }
       button.addEventListener("click", action);
@@ -200,19 +209,21 @@ const load = async () => {
     renderProfiles(result.selectedId);
     elements["gateway-empty"].hidden = profiles.length > 0;
     elements["gateway-status"].textContent = profiles.length && elements["gateway-editor"].hidden
-      ? `${profiles.length} saved ${profiles.length === 1 ? "Gateway" : "Gateways"}`
+      ? profiles.length === 1
+        ? t("gateways.profilesSaved", "{count} saved Gateway", { count: profiles.length })
+        : t("gateways.profilesSavedOther", "{count} saved Gateways", { count: profiles.length })
       : "";
     const recovery = window.__OPENCLAW_GATEWAY_RECOVERY__;
     if (recovery && recoveryId && editingId === recoveryId) editingId = recovery.id;
     if (editingId && !profiles.some((profile) => profile.id === editingId)) {
       editingId = undefined;
-      elements["editor-title"].textContent = "Add Gateway";
-      elements["credential-hint"].textContent = "Only needed if your Gateway requires a token or password.";
-      elements["gateway-status"].textContent = "This saved Gateway was removed elsewhere. Your draft is preserved; Save adds it again.";
+      elements["editor-title"].textContent = t("gateways.addGateway", "Add Gateway");
+      elements["credential-hint"].textContent = t("setup.credentialHint", "Only needed if your Gateway requires a token or password.");
+      elements["gateway-status"].textContent = t("gateways.profileRemovedElsewhere", "This saved Gateway was removed elsewhere. Your draft is preserved; Save adds it again.");
     }
     profilesReady = true;
   } catch (error) {
-    elements["gateway-status"].textContent = "Could not load saved Gateways.";
+    elements["gateway-status"].textContent = t("gateways.loadFailed", "Could not load saved Gateways.");
     elements["retry-load"].hidden = false;
     throw error;
   }
@@ -239,7 +250,7 @@ elements["gateway-name"].addEventListener("input", () => elements["gateway-name"
 elements["gateway-editor"].addEventListener("submit", (event) => {
   event.preventDefault();
   const name = elements["gateway-name"].value.trim();
-  elements["gateway-name"].setCustomValidity(name ? "" : "Enter a Gateway name.");
+  elements["gateway-name"].setCustomValidity(name ? "" : t("gateways.enterName", "Enter a Gateway name."));
   const passwordAuth = elements["gateway-auth-method"].value === "password";
   const token = passwordAuth ? "" : elements["gateway-token"].value.trim();
   const password = passwordAuth ? elements["gateway-password"].value : "";
@@ -259,7 +270,7 @@ elements["gateway-editor"].addEventListener("submit", (event) => {
     await request({ action: "save", id: editingId, name, connection });
     closeEditor();
     await load();
-    elements["gateway-status"].textContent = `Saved ${name}.`;
+    elements["gateway-status"].textContent = t("gateways.profileSaved", "Saved {name}.", { name });
   });
 });
 elements["cancel-remove"].addEventListener("click", () => elements["remove-dialog"].close());

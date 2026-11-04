@@ -20,6 +20,7 @@ const ANDROID_PLAY_SOURCE_ROOT = path.join(ROOT, "apps", "android", "app", "src"
 const ANDROID_THIRD_PARTY_ROOT = path.join(ROOT, "apps", "android", "app", "src", "thirdParty");
 const ANDROID_THIRD_PARTY_RESOURCE_ROOT = path.join(ANDROID_THIRD_PARTY_ROOT, "res");
 const ANDROID_THIRD_PARTY_SOURCE_ROOT = path.join(ANDROID_THIRD_PARTY_ROOT, "java");
+const APP_MAIN_STRINGS_REPO_PATH = "apps/android/app/src/main/res/values/strings.xml";
 const ANDROID_WEAR_MAIN_ROOT = path.join(ROOT, "apps", "android", "wear", "src", "main");
 const WEAR_RESOURCE_ROOT = path.join(ANDROID_WEAR_MAIN_ROOT, "res");
 const WEAR_SOURCE_ROOT = path.join(ANDROID_WEAR_MAIN_ROOT, "java");
@@ -66,6 +67,7 @@ const ANDROID_QUALIFIERS: Record<string, string> = {
   "zh-CN": "zh-rCN",
   "zh-TW": "zh-rTW",
   "pt-BR": "pt-rBR",
+  "pt-PT": "pt-rPT",
   "ja-JP": "ja",
 };
 const localeDirectory = (locale: string) => `values-${ANDROID_QUALIFIERS[locale] ?? locale}`;
@@ -108,6 +110,16 @@ export type GeneratedCatalog = {
   kotlin: string;
   resources: Map<string, string>;
   sources: Set<string>;
+};
+
+type AndroidSourceFacts = {
+  inventory: NativeI18nInventoryEntry[];
+  baseStrings: Map<string, ResourceString>;
+  thirdPartyBaseStrings: Map<string, ResourceString>;
+  wearBaseStrings: Map<string, ResourceString>;
+  sourceFiles: Awaited<ReturnType<typeof readAllAndroidSource>>;
+  sources: Set<string>;
+  sourceToKey: Map<string, string>;
 };
 
 export type AndroidUiLiteralFinding = {
@@ -296,6 +308,10 @@ async function readStrings(
 ): Promise<Map<string, ResourceString>> {
   const source = await readFile(path.join(resourceRoot, locale, fileName), "utf8");
   return new Map(parseStrings(source).map((entry) => [entry.key, entry]));
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 async function readAndroidSource(
@@ -1010,13 +1026,22 @@ async function readInventory(): Promise<NativeI18nInventoryEntry[]> {
   );
 }
 
-async function readArtifacts(): Promise<Map<string, NativeTranslations>> {
+async function readArtifacts(
+  options: { allowMissingLocales?: boolean } = {},
+): Promise<Map<string, NativeTranslations>> {
   return new Map(
     await Promise.all(
       NATIVE_I18N_LOCALES.map(async (locale) => {
-        const parsed = JSON.parse(
-          await readFile(path.join(ARTIFACT_ROOT, `${locale}.json`), "utf8"),
-        ) as { translations?: NativeTranslations };
+        let raw: string;
+        try {
+          raw = await readFile(path.join(ARTIFACT_ROOT, `${locale}.json`), "utf8");
+        } catch (error) {
+          if (options.allowMissingLocales && isMissingFileError(error)) {
+            return [locale, {}] as const;
+          }
+          throw error;
+        }
+        const parsed = JSON.parse(raw) as { translations?: NativeTranslations };
         return [locale, parsed.translations ?? {}] as const;
       }),
     ),
@@ -1122,33 +1147,22 @@ function renderKotlin(sourceToKey: ReadonlyMap<string, string>): string {
   ].join("\n");
 }
 
-export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
-  const inventory = await readInventory();
+async function readAndroidSourceFacts(): Promise<AndroidSourceFacts> {
   const [
-    artifacts,
+    inventory,
     baseStrings,
     thirdPartyBaseStrings,
     wearBaseStrings,
     sourceFiles,
     toolDisplaySources,
   ] = await Promise.all([
-    readArtifacts(),
+    readInventory(),
     readStrings("values"),
     readStrings("values", ANDROID_THIRD_PARTY_RESOURCE_ROOT, THIRD_PARTY_STRINGS_FILE),
     readStrings("values", WEAR_RESOURCE_ROOT),
     readAllAndroidSource(),
     readToolDisplaySources(),
   ]);
-  const wearInventoryBySource = new Map(
-    inventory
-      .filter((entry) => entry.sites.some((site) => site.path === WEAR_STRINGS_REPO_PATH))
-      .map((entry) => [entry.source, entry]),
-  );
-  const thirdPartyInventoryBySource = new Map(
-    inventory
-      .filter((entry) => entry.sites.some((site) => site.path === THIRD_PARTY_STRINGS_REPO_PATH))
-      .map((entry) => [entry.source, entry]),
-  );
   const manualBase = [...baseStrings.values()].filter(
     (entry) => !entry.key.startsWith(MANAGED_PREFIX),
   );
@@ -1170,6 +1184,40 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
   for (const source of sources) {
     sourceToKey.set(source, manualSourceToKey.get(source) ?? resourceKey(source));
   }
+  return {
+    inventory,
+    baseStrings,
+    thirdPartyBaseStrings,
+    wearBaseStrings,
+    sourceFiles,
+    sources,
+    sourceToKey,
+  };
+}
+
+export async function buildAndroidAppI18nCatalog(
+  options: { allowMissingLocaleArtifacts?: boolean } = {},
+): Promise<GeneratedCatalog> {
+  const [facts, artifacts] = await Promise.all([
+    readAndroidSourceFacts(),
+    readArtifacts({ allowMissingLocales: options.allowMissingLocaleArtifacts }),
+  ]);
+  const { inventory, thirdPartyBaseStrings, wearBaseStrings, sources, sourceToKey } = facts;
+  const appMainInventoryBySource = new Map(
+    inventory
+      .filter((entry) => entry.sites.some((site) => site.path === APP_MAIN_STRINGS_REPO_PATH))
+      .map((entry) => [entry.source, entry]),
+  );
+  const wearInventoryBySource = new Map(
+    inventory
+      .filter((entry) => entry.sites.some((site) => site.path === WEAR_STRINGS_REPO_PATH))
+      .map((entry) => [entry.source, entry]),
+  );
+  const thirdPartyInventoryBySource = new Map(
+    inventory
+      .filter((entry) => entry.sites.some((site) => site.path === THIRD_PARTY_STRINGS_REPO_PATH))
+      .map((entry) => [entry.source, entry]),
+  );
   const renderGeneratedStrings = (translations?: ReadonlyMap<string, string>) => {
     const generated = new Map<string, { source: string; value: string }>();
     for (const [source, key] of sourceToKey) {
@@ -1183,6 +1231,25 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
   for (const locale of NATIVE_I18N_LOCALES) {
     const localeTranslations = artifacts.get(locale) ?? {};
     const artifactTranslationsBySource = translationsBySource(inventory, localeTranslations);
+    try {
+      await readFile(path.join(RESOURCE_ROOT, localeDirectory(locale), "strings.xml"), "utf8");
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error;
+      }
+      resources.set(
+        path.join(GENERATED_RESOURCE_ROOT, localeDirectory(locale), "strings.xml"),
+        renderStringsXml(
+          localizeManualStrings(
+            facts.baseStrings,
+            appMainInventoryBySource,
+            localeTranslations,
+            "App",
+          ),
+          new Map(),
+        ),
+      );
+    }
     resources.set(
       path.join(GENERATED_RESOURCE_ROOT, localeDirectory(locale), "native_strings.xml"),
       renderGeneratedStrings(artifactTranslationsBySource),
@@ -1222,7 +1289,8 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     "utf8",
   );
   const assistantItems = parseArrays(assistantSource).get("ask_openclaw_query_patterns") ?? [];
-  for (const [locale, localeTranslations] of artifacts) {
+  for (const locale of NATIVE_I18N_LOCALES) {
+    const localeTranslations = artifacts.get(locale) ?? {};
     const translatedBySource = translationsBySource(inventory, localeTranslations);
     const translatedItems = assistantItems.map(
       (source) => translatedBySource.get(source) || source,
@@ -1248,7 +1316,7 @@ function formatProblems(problems: Array<readonly [string, string[]]>): string {
 }
 
 async function generateAndroidAppI18n() {
-  const catalog = await buildAndroidAppI18nCatalog();
+  const catalog = await buildAndroidAppI18nCatalog({ allowMissingLocaleArtifacts: true });
   await rm(GENERATED_ROOT, { recursive: true, force: true });
   await mkdir(path.dirname(GENERATED_KOTLIN_PATH), { recursive: true });
   await writeFile(GENERATED_KOTLIN_PATH, catalog.kotlin);
@@ -1297,32 +1365,25 @@ export async function syncAndroidAppI18n(
 }
 
 export async function verifyAndroidAppI18n(catalog?: GeneratedCatalog) {
-  const generated = catalog ?? (await buildAndroidAppI18nCatalog());
-  const [
-    sourceFiles,
-    base,
-    referenceSource,
-    thirdPartyBase,
-    thirdPartyReferenceSource,
-    wearBase,
-    wearReferenceSource,
-  ] = await Promise.all([
-    readAllAndroidSource(),
-    readStrings("values"),
+  const facts = await readAndroidSourceFacts();
+  const generatedKotlin = catalog?.kotlin ?? renderKotlin(facts.sourceToKey);
+  const [referenceSource, thirdPartyReferenceSource, wearReferenceSource] = await Promise.all([
     readAndroidResourceReferences(),
-    readStrings("values", ANDROID_THIRD_PARTY_RESOURCE_ROOT, THIRD_PARTY_STRINGS_FILE),
     readAndroidResourceReferences(ANDROID_THIRD_PARTY_ROOT),
-    readStrings("values", WEAR_RESOURCE_ROOT),
     readAndroidResourceReferences(ANDROID_WEAR_MAIN_ROOT),
   ]);
   const surfaces = [
     {
       label: "App",
-      strings: base,
-      references: [...referenceSource, { path: GENERATED_KOTLIN_PATH, source: generated.kotlin }],
+      strings: facts.baseStrings,
+      references: [...referenceSource, { path: GENERATED_KOTLIN_PATH, source: generatedKotlin }],
     },
-    { label: "Third-party", strings: thirdPartyBase, references: thirdPartyReferenceSource },
-    { label: "Wear", strings: wearBase, references: wearReferenceSource },
+    {
+      label: "Third-party",
+      strings: facts.thirdPartyBaseStrings,
+      references: thirdPartyReferenceSource,
+    },
+    { label: "Wear", strings: facts.wearBaseStrings, references: wearReferenceSource },
   ];
   const problems: Array<readonly [string, string[]]> = surfaces.map(({ label, strings }) => [
     `${label} English syntax`,
@@ -1334,7 +1395,7 @@ export async function verifyAndroidAppI18n(catalog?: GeneratedCatalog) {
     );
     problems.push([`${label} English unused`, findUnusedAndroidResourceKeys(keys, references)]);
   }
-  const uiFindings = sourceFiles.flatMap((file) =>
+  const uiFindings = facts.sourceFiles.flatMap((file) =>
     findUnlocalizedAndroidUiLiterals(file.source, file.path),
   );
   problems.push([
@@ -1345,7 +1406,7 @@ export async function verifyAndroidAppI18n(catalog?: GeneratedCatalog) {
     throw new Error(formatProblems(problems));
   }
   process.stdout.write(
-    `android-app-i18n: appSourceKeys=${base.size} thirdPartySourceKeys=${thirdPartyBase.size} wearSourceKeys=${wearBase.size}\n`,
+    `android-app-i18n: appSourceKeys=${facts.baseStrings.size} thirdPartySourceKeys=${facts.thirdPartyBaseStrings.size} wearSourceKeys=${facts.wearBaseStrings.size}\n`,
   );
 }
 
@@ -1354,7 +1415,21 @@ export async function checkAndroidAppI18n(options: { tolerateManagedPending?: bo
   await verifyAndroidAppI18n(catalog);
   const localeStrings = await Promise.all(
     LOCALES.map(async (locale) => {
-      const manual = await readStrings(locale);
+      let manual: Map<string, ResourceString>;
+      try {
+        manual = await readStrings(locale);
+      } catch (error) {
+        if (!isMissingFileError(error) || locale === "values") {
+          throw error;
+        }
+        const generatedMain = catalog.resources.get(
+          path.join(GENERATED_RESOURCE_ROOT, locale, "strings.xml"),
+        );
+        if (generatedMain === undefined) {
+          throw new Error(`Android app-main strings are missing for ${locale}`, { cause: error });
+        }
+        manual = new Map(parseStrings(generatedMain).map((entry) => [entry.key, entry]));
+      }
       const generated = catalog.resources.get(
         path.join(GENERATED_RESOURCE_ROOT, locale, "native_strings.xml"),
       );

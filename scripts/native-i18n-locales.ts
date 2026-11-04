@@ -8,6 +8,7 @@ export const NATIVE_I18N_LOCALES = [
   "zh-CN",
   "zh-TW",
   "pt-BR",
+  "pt-PT",
   "de",
   "es",
   "ja-JP",

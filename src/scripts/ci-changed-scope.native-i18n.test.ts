@@ -12,12 +12,17 @@ const canonicalArtifacts = [
   "apps/android/wear/src/main/res/values-sv/strings.xml",
   "apps/ios/Resources/Localizable.xcstrings",
   "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
+  "apps/linux/ui/i18n/catalog.json",
+  "apps/linux/ui/i18n/catalog.js",
 ];
 const sharedOwners = [
   "scripts/ci-changed-scope.mjs",
   "scripts/native-app-i18n.ts",
   "scripts/android-app-i18n.ts",
+  "scripts/apple-app-i18n.ts",
+  "scripts/tauri-app-i18n.ts",
   "test/scripts/native-app-i18n.test.ts",
+  "test/scripts/tauri-native-i18n.test.ts",
   "src/scripts/ci-changed-scope.native-i18n.test.ts",
 ];
 
@@ -38,6 +43,8 @@ describe("native i18n changed scope", () => {
     [["apps/android/app/src/play/java/ai/openclaw/app/PlayBilling.kt"], false],
     [["apps/android/app/src/thirdParty/res/values/accessibility_strings.xml"], false],
     [["apps/ios/Sources/RootTabs.swift", nativeSource], false],
+    [["apps/linux/src-tauri/src/shell_i18n.rs"], false],
+    [["apps/linux/i18n/en.json"], false],
     [null, true],
     ...canonicalArtifacts.map((file): [string[], boolean] => [[file], true]),
     [["apps/android/app/src/thirdParty/res/values-sv/accessibility_strings.xml"], true],
@@ -90,5 +97,17 @@ describe("native i18n changed scope", () => {
       "apps/android/app/src/main/res/values-de/strings.xml",
     ];
     expectMixed(migration);
+  });
+
+  it("isolates generated Tauri catalogs from their source declaration", () => {
+    expectAllowed(["apps/linux/ui/i18n/catalog.json", "apps/linux/ui/i18n/catalog.js"]);
+    expectMixed([
+      ...sharedOwners,
+      "apps/linux/i18n/en.json",
+      "apps/linux/src-tauri/src/shell_i18n.rs",
+      "test/scripts/tauri-native-i18n.test.ts",
+      "apps/linux/ui/i18n/catalog.json",
+      "apps/linux/ui/i18n/catalog.js",
+    ]);
   });
 });

@@ -919,7 +919,8 @@ fn ensure_quickchat_window(app: &AppHandle) -> Result<Window, String> {
         QUICKCHAT_LABEL,
         WebviewUrl::App("quickchat.html".into()),
     )
-    .title("Quick Chat")
+    .initialization_script(crate::window_chrome::locale_initialization_script())
+    .title(crate::shell_i18n::text("quickChat.windowTitle"))
     .inner_size(QUICKCHAT_WIDTH, QUICKCHAT_COMPACT_WINDOW_HEIGHT)
     .decorations(false)
     .transparent(true)

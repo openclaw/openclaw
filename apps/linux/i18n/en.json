@@ -1,0 +1,1281 @@
+{
+  "version": 1,
+  "messages": {
+    "chrome.closeWindow": {
+      "source": "Close window",
+      "args": []
+    },
+    "chrome.dismissGatewayNotice": {
+      "source": "Dismiss Gateway notice",
+      "args": []
+    },
+    "chrome.dismissUpdate": {
+      "source": "Dismiss update notice",
+      "args": []
+    },
+    "chrome.maximizeWindow": {
+      "source": "Maximize window",
+      "args": []
+    },
+    "chrome.minimizeWindow": {
+      "source": "Minimize window",
+      "args": []
+    },
+    "chrome.restoreWindow": {
+      "source": "Restore window",
+      "args": []
+    },
+    "chrome.windowActionFailed": {
+      "source": "Window action failed: {error}",
+      "args": [
+        "error"
+      ]
+    },
+    "chrome.windowControls": {
+      "source": "Window controls",
+      "args": []
+    },
+    "common.back": {
+      "source": "Back",
+      "args": []
+    },
+    "common.cancel": {
+      "source": "Cancel",
+      "args": []
+    },
+    "common.continue": {
+      "source": "Continue",
+      "args": []
+    },
+    "common.optional": {
+      "source": "(optional)",
+      "args": []
+    },
+    "common.reset": {
+      "source": "Reset",
+      "args": []
+    },
+    "common.retry": {
+      "source": "Retry",
+      "args": []
+    },
+    "common.tryAgain": {
+      "source": "Try again",
+      "args": []
+    },
+    "gateway.primaryConfirmAction": {
+      "source": "Set as Primary",
+      "args": []
+    },
+    "gateway.primaryConfirmClosed": {
+      "source": "Primary Gateway confirmation was closed.",
+      "args": []
+    },
+    "gateway.primaryConfirmMessage": {
+      "source": "Set {name} as Primary? Quick Chat and the desktop connection will use this Gateway. Other saved Gateway windows stay open.",
+      "args": [
+        "name"
+      ]
+    },
+    "gateway.primaryConfirmTitle": {
+      "source": "Change Primary Gateway",
+      "args": []
+    },
+    "gateway.statusCliRequired": {
+      "source": "CLI required",
+      "args": []
+    },
+    "gateway.statusConnected": {
+      "source": "Connected",
+      "args": []
+    },
+    "gateway.statusNotInstalled": {
+      "source": "Not installed",
+      "args": []
+    },
+    "gateway.statusOpeningRemote": {
+      "source": "Opening remote dashboard",
+      "args": []
+    },
+    "gateway.statusReconnecting": {
+      "source": "Reconnecting",
+      "args": []
+    },
+    "gateway.statusRemoteUnavailable": {
+      "source": "Remote connection unavailable",
+      "args": []
+    },
+    "gateway.statusSetupRequired": {
+      "source": "Setup required",
+      "args": []
+    },
+    "gateway.statusStopped": {
+      "source": "Stopped",
+      "args": []
+    },
+    "gateway.statusUnavailable": {
+      "source": "Unavailable",
+      "args": []
+    },
+    "gatewaySwitch.actionFailed": {
+      "source": "Gateway action failed: {error}",
+      "args": [
+        "error"
+      ]
+    },
+    "gateways.actionProfile": {
+      "source": "{action} {name}",
+      "args": [
+        "action",
+        "name"
+      ]
+    },
+    "gateways.addGateway": {
+      "source": "Add Gateway",
+      "args": []
+    },
+    "gateways.addHelp": {
+      "source": "Connect to OpenClaw on another computer.",
+      "args": []
+    },
+    "gateways.advancedSettings": {
+      "source": "Advanced connection settings",
+      "args": []
+    },
+    "gateways.backToGateways": {
+      "source": "Back to Gateways",
+      "args": []
+    },
+    "gateways.connectionType": {
+      "source": "Connection type",
+      "args": []
+    },
+    "gateways.connections": {
+      "source": "Gateway connections",
+      "args": []
+    },
+    "gateways.editGateway": {
+      "source": "Edit Gateway",
+      "args": []
+    },
+    "gateways.emptyHelp": {
+      "source": "Add OpenClaw on another computer to switch between your connections.",
+      "args": []
+    },
+    "gateways.emptyTitle": {
+      "source": "Your Gateways, in one place",
+      "args": []
+    },
+    "gateways.enterName": {
+      "source": "Enter a Gateway name.",
+      "args": []
+    },
+    "gateways.gatewayPassword": {
+      "source": "Gateway password",
+      "args": []
+    },
+    "gateways.gatewayToken": {
+      "source": "Gateway token",
+      "args": []
+    },
+    "gateways.loadFailed": {
+      "source": "Could not load saved Gateways.",
+      "args": []
+    },
+    "gateways.loading": {
+      "source": "Loading saved Gateways…",
+      "args": []
+    },
+    "gateways.manage": {
+      "source": "Manage Gateways",
+      "args": []
+    },
+    "gateways.manageMenu": {
+      "source": "Manage Gateways…",
+      "args": []
+    },
+    "gateways.managerWindowTitle": {
+      "source": "Gateways — {appName}",
+      "args": [
+        "appName"
+      ]
+    },
+    "gateways.menuTitle": {
+      "source": "Gateways",
+      "args": []
+    },
+    "gateways.name": {
+      "source": "Name",
+      "args": []
+    },
+    "gateways.namePlaceholder": {
+      "source": "Home studio",
+      "args": []
+    },
+    "gateways.newWindow": {
+      "source": "Open {name} in New Window",
+      "args": [
+        "name"
+      ]
+    },
+    "gateways.openedProfile": {
+      "source": "Opened {name} in a separate window.",
+      "args": [
+        "name"
+      ]
+    },
+    "gateways.profileRemovedElsewhere": {
+      "source": "This saved Gateway was removed elsewhere. Your draft is preserved; Save adds it again.",
+      "args": []
+    },
+    "gateways.profileSaved": {
+      "source": "Saved {name}.",
+      "args": [
+        "name"
+      ]
+    },
+    "gateways.profilesSaved": {
+      "source": "{count} saved Gateway",
+      "args": [
+        "count"
+      ]
+    },
+    "gateways.profilesSavedOther": {
+      "source": "{count} saved Gateways",
+      "args": [
+        "count"
+      ]
+    },
+    "gateways.remove": {
+      "source": "Remove Gateway",
+      "args": []
+    },
+    "gateways.removeDescription": {
+      "source": "Remove “{name}” from this computer? Its Gateway will keep running.",
+      "args": [
+        "name"
+      ]
+    },
+    "gateways.removeProfile": {
+      "source": "Remove {name}",
+      "args": [
+        "name"
+      ]
+    },
+    "gateways.removeQuestion": {
+      "source": "Remove Gateway?",
+      "args": []
+    },
+    "gateways.save": {
+      "source": "Save Gateway",
+      "args": []
+    },
+    "gateways.savedCredentialsHint": {
+      "source": "Saved credentials stay hidden. Leave blank to keep them for the same connection.",
+      "args": []
+    },
+    "gateways.savedGateways": {
+      "source": "Saved Gateways",
+      "args": []
+    },
+    "gateways.savedHelp": {
+      "source": "Open a saved connection, or add another Gateway.",
+      "args": []
+    },
+    "gateways.savedOnComputer": {
+      "source": "Connections are saved on this computer.",
+      "args": []
+    },
+    "gateways.selectedGateway": {
+      "source": "Selected Gateway",
+      "args": []
+    },
+    "gateways.tlsFingerprint": {
+      "source": "TLS fingerprint (optional)",
+      "args": []
+    },
+    "gateways.windowTitle": {
+      "source": "{name} — {appName}",
+      "args": [
+        "name",
+        "appName"
+      ]
+    },
+    "install.cliBuild": {
+      "source": "CLI build",
+      "args": []
+    },
+    "install.controlUiBuild": {
+      "source": "Control UI build",
+      "args": []
+    },
+    "install.done": {
+      "source": "✓ Installed{version}",
+      "args": [
+        "version"
+      ]
+    },
+    "install.gatewayService": {
+      "source": "Gateway service",
+      "args": []
+    },
+    "install.gitCheckout": {
+      "source": "Git checkout",
+      "args": []
+    },
+    "install.nodeRuntime": {
+      "source": "Node runtime",
+      "args": []
+    },
+    "install.openClawCli": {
+      "source": "OpenClaw CLI",
+      "args": []
+    },
+    "install.stepDone": {
+      "source": "✓ {name}",
+      "args": [
+        "name"
+      ]
+    },
+    "install.stepSkipped": {
+      "source": "– {name} skipped{reason}",
+      "args": [
+        "name",
+        "reason"
+      ]
+    },
+    "install.stepStart": {
+      "source": "→ {name}{version}…",
+      "args": [
+        "name",
+        "version"
+      ]
+    },
+    "install.stepWarning": {
+      "source": "! {name}{reason}",
+      "args": [
+        "name",
+        "reason"
+      ]
+    },
+    "nativeMenu.about": {
+      "source": "About",
+      "args": []
+    },
+    "nativeMenu.aboutNamed": {
+      "source": "About {appName}",
+      "args": [
+        "appName"
+      ]
+    },
+    "nativeMenu.closeWindow": {
+      "source": "Close Window",
+      "args": []
+    },
+    "nativeMenu.copy": {
+      "source": "Copy",
+      "args": []
+    },
+    "nativeMenu.cut": {
+      "source": "Cut",
+      "args": []
+    },
+    "nativeMenu.edit": {
+      "source": "Edit",
+      "args": []
+    },
+    "nativeMenu.file": {
+      "source": "File",
+      "args": []
+    },
+    "nativeMenu.fullscreen": {
+      "source": "Toggle Full Screen",
+      "args": []
+    },
+    "nativeMenu.help": {
+      "source": "Help",
+      "args": []
+    },
+    "nativeMenu.hide": {
+      "source": "Hide",
+      "args": []
+    },
+    "nativeMenu.hideNamed": {
+      "source": "Hide {appName}",
+      "args": [
+        "appName"
+      ]
+    },
+    "nativeMenu.hideOthers": {
+      "source": "Hide Others",
+      "args": []
+    },
+    "nativeMenu.maximize": {
+      "source": "Zoom",
+      "args": []
+    },
+    "nativeMenu.minimize": {
+      "source": "Minimize",
+      "args": []
+    },
+    "nativeMenu.paste": {
+      "source": "Paste",
+      "args": []
+    },
+    "nativeMenu.quit": {
+      "source": "Quit",
+      "args": []
+    },
+    "nativeMenu.quitNamed": {
+      "source": "Quit {appName}",
+      "args": [
+        "appName"
+      ]
+    },
+    "nativeMenu.redo": {
+      "source": "Redo",
+      "args": []
+    },
+    "nativeMenu.selectAll": {
+      "source": "Select All",
+      "args": []
+    },
+    "nativeMenu.services": {
+      "source": "Services",
+      "args": []
+    },
+    "nativeMenu.undo": {
+      "source": "Undo",
+      "args": []
+    },
+    "nativeMenu.view": {
+      "source": "View",
+      "args": []
+    },
+    "nativeMenu.window": {
+      "source": "Window",
+      "args": []
+    },
+    "quickChat.agentDefault": {
+      "source": "Agent",
+      "args": []
+    },
+    "quickChat.agentReply": {
+      "source": "Agent reply",
+      "args": []
+    },
+    "quickChat.agents": {
+      "source": "Agents",
+      "args": []
+    },
+    "quickChat.chooseAgent": {
+      "source": "Choose agent",
+      "args": []
+    },
+    "quickChat.collapseReply": {
+      "source": "Collapse reply",
+      "args": []
+    },
+    "quickChat.connectionLost": {
+      "source": "Connection lost before the reply completed.",
+      "args": []
+    },
+    "quickChat.credentialRequired": {
+      "source": "Gateway requires a credential — open the dashboard on the gateway host",
+      "args": []
+    },
+    "quickChat.error": {
+      "source": "Error",
+      "args": []
+    },
+    "quickChat.expandReply": {
+      "source": "Expand reply",
+      "args": []
+    },
+    "quickChat.gatewayUnreachable": {
+      "source": "Gateway unreachable — retrying",
+      "args": []
+    },
+    "quickChat.incomplete": {
+      "source": "Incomplete",
+      "args": []
+    },
+    "quickChat.incompleteHelp": {
+      "source": "Reply text is incomplete. Open the dashboard to recover it.",
+      "args": []
+    },
+    "quickChat.interrupted": {
+      "source": "Interrupted",
+      "args": []
+    },
+    "quickChat.messageAgent": {
+      "source": "Message {name}",
+      "args": [
+        "name"
+      ]
+    },
+    "quickChat.messageDefault": {
+      "source": "Message Agent",
+      "args": []
+    },
+    "quickChat.messageLabel": {
+      "source": "Quick Chat message",
+      "args": []
+    },
+    "quickChat.openDashboard": {
+      "source": "Open dashboard",
+      "args": []
+    },
+    "quickChat.openDashboardFailed": {
+      "source": "Could not open the dashboard.",
+      "args": []
+    },
+    "quickChat.openSettingsFailed": {
+      "source": "Could not open Quick Chat settings.",
+      "args": []
+    },
+    "quickChat.pairingRequired": {
+      "source": "Approve this device in the dashboard (Nodes)",
+      "args": []
+    },
+    "quickChat.pressKeys": {
+      "source": "Press keys…",
+      "args": []
+    },
+    "quickChat.pressNewShortcut": {
+      "source": "Press new shortcut",
+      "args": []
+    },
+    "quickChat.recoveryFailed": {
+      "source": "The completed reply could not be recovered.",
+      "args": []
+    },
+    "quickChat.replyFailed": {
+      "source": "Gateway reply failed.",
+      "args": []
+    },
+    "quickChat.selectAgentFailed": {
+      "source": "Could not select that agent.",
+      "args": []
+    },
+    "quickChat.sendFailed": {
+      "source": "Could not send the message.",
+      "args": []
+    },
+    "quickChat.sendMessage": {
+      "source": "Send message",
+      "args": []
+    },
+    "quickChat.shortcutSettings": {
+      "source": "Quick Chat shortcut",
+      "args": []
+    },
+    "quickChat.shortcutSettingsLabel": {
+      "source": "Quick Chat shortcut settings",
+      "args": []
+    },
+    "quickChat.stopped": {
+      "source": "Stopped",
+      "args": []
+    },
+    "quickChat.stoppedMarker": {
+      "source": "(stopped)",
+      "args": []
+    },
+    "quickChat.thinking": {
+      "source": "Thinking…",
+      "args": []
+    },
+    "quickChat.tlsFailure": {
+      "source": "Gateway TLS trust failed — check the certificate fingerprint",
+      "args": []
+    },
+    "quickChat.updateShortcutFailed": {
+      "source": "Could not update the Quick Chat shortcut.",
+      "args": []
+    },
+    "quickChat.widget": {
+      "source": "Widget",
+      "args": []
+    },
+    "quickChat.widgetRenderFailed": {
+      "source": "Could not render the widget.",
+      "args": []
+    },
+    "quickChat.widgetUnavailable": {
+      "source": "Widget unavailable until the Gateway reconnects.",
+      "args": []
+    },
+    "quickChat.windowTitle": {
+      "source": "Quick Chat",
+      "args": []
+    },
+    "setup.anotherComputer": {
+      "source": "On another computer",
+      "args": []
+    },
+    "setup.authentication": {
+      "source": "Authentication",
+      "args": []
+    },
+    "setup.bundledAot": {
+      "source": "BUNDLED AOT · EXPERIMENTAL",
+      "args": []
+    },
+    "setup.bundledJit": {
+      "source": "BUNDLED JIT",
+      "args": []
+    },
+    "setup.bundledLocalSubtitle": {
+      "source": "Bundled with app v{version} · {flavor}. Installs and starts automatically.",
+      "args": [
+        "version",
+        "flavor"
+      ]
+    },
+    "setup.bundledRuntimeLabel": {
+      "source": "Bundled with app v{version} · {flavor}",
+      "args": [
+        "version",
+        "flavor"
+      ]
+    },
+    "setup.channelBeta": {
+      "source": "Beta",
+      "args": []
+    },
+    "setup.channelDevelopment": {
+      "source": "Development",
+      "args": []
+    },
+    "setup.channelStable": {
+      "source": "Stable",
+      "args": []
+    },
+    "setup.checkingLocalServices": {
+      "source": "Checking local services…",
+      "args": []
+    },
+    "setup.chooseGatewayEyebrow": {
+      "source": "CHOOSE YOUR GATEWAY",
+      "args": []
+    },
+    "setup.chooseGatewayTitle": {
+      "source": "Where should your assistant live?",
+      "args": []
+    },
+    "setup.cliRequired": {
+      "source": "CLI REQUIRED",
+      "args": []
+    },
+    "setup.closeToTray": {
+      "source": "CLOSE TO TRAY",
+      "args": []
+    },
+    "setup.complete": {
+      "source": "COMPLETE",
+      "args": []
+    },
+    "setup.connectFailed": {
+      "source": "CONNECT FAILED",
+      "args": []
+    },
+    "setup.connectToGateway": {
+      "source": "Connect to Gateway",
+      "args": []
+    },
+    "setup.connecting": {
+      "source": "Connecting to OpenClaw",
+      "args": []
+    },
+    "setup.connectionIssue": {
+      "source": "CONNECTION ISSUE",
+      "args": []
+    },
+    "setup.connectionNeedsAttention": {
+      "source": "Connection needs attention",
+      "args": []
+    },
+    "setup.connectionSettings": {
+      "source": "Connection Settings",
+      "args": []
+    },
+    "setup.credentialHint": {
+      "source": "Only needed if your Gateway requires a token or password.",
+      "args": []
+    },
+    "setup.desktopCompanion": {
+      "source": "DESKTOP COMPANION",
+      "args": []
+    },
+    "setup.editConnection": {
+      "source": "Edit connection",
+      "args": []
+    },
+    "setup.enterGatewayPortRange": {
+      "source": "Enter a Gateway port between 1 and 65535.",
+      "args": []
+    },
+    "setup.enterGatewayUrl": {
+      "source": "Enter a Gateway URL to continue.",
+      "args": []
+    },
+    "setup.enterPassword": {
+      "source": "Enter password",
+      "args": []
+    },
+    "setup.enterSshTarget": {
+      "source": "Enter an SSH target to continue.",
+      "args": []
+    },
+    "setup.enterToken": {
+      "source": "Enter token",
+      "args": []
+    },
+    "setup.failed": {
+      "source": "FAILED",
+      "args": []
+    },
+    "setup.featureChatBody": {
+      "source": "This app, WhatsApp, Telegram, Discord, Slack — your choice.",
+      "args": []
+    },
+    "setup.featureChatTitle": {
+      "source": "Chat wherever you like",
+      "args": []
+    },
+    "setup.featureControlBody": {
+      "source": "Everything runs where you decide, with permissions you grant.",
+      "args": []
+    },
+    "setup.featureControlTitle": {
+      "source": "Stay in control",
+      "args": []
+    },
+    "setup.featureTasksBody": {
+      "source": "Give your assistant tasks and let it help across your computer.",
+      "args": []
+    },
+    "setup.featureTasksTitle": {
+      "source": "Ask, create, and automate",
+      "args": []
+    },
+    "setup.freeBsdChoiceHelp": {
+      "source": "On FreeBSD, install the CLI if needed, then start your Gateway with the openclaw package service or run openclaw gateway run in a terminal. Connect here using the same account you used for onboarding.",
+      "args": []
+    },
+    "setup.freeBsdLocalSubtitle": {
+      "source": "Connect to a Gateway you start with the FreeBSD service or in a terminal.",
+      "args": []
+    },
+    "setup.gatewayConnectionDropped": {
+      "source": "The Gateway connection dropped. OpenClaw will restore the dashboard automatically.",
+      "args": []
+    },
+    "setup.gatewayEyebrow": {
+      "source": "GATEWAY",
+      "args": []
+    },
+    "setup.gatewayNoDirectConnection": {
+      "source": "This gateway does not advertise a direct connection.",
+      "args": []
+    },
+    "setup.gatewayOffline": {
+      "source": "GATEWAY OFFLINE",
+      "args": []
+    },
+    "setup.gatewayPassword": {
+      "source": "Gateway password",
+      "args": []
+    },
+    "setup.gatewayPort": {
+      "source": "Gateway port",
+      "args": []
+    },
+    "setup.gatewayStopped": {
+      "source": "GATEWAY STOPPED",
+      "args": []
+    },
+    "setup.gatewayStoppedDescription": {
+      "source": "The Gateway is stopped. The desktop companion will remain available in the tray.",
+      "args": []
+    },
+    "setup.gatewayToken": {
+      "source": "Gateway token",
+      "args": []
+    },
+    "setup.gatewayUrl": {
+      "source": "Gateway URL",
+      "args": []
+    },
+    "setup.gatewaysFound": {
+      "source": "{count} FOUND",
+      "args": [
+        "count"
+      ]
+    },
+    "setup.gatewaysOnNetwork": {
+      "source": "GATEWAYS ON THIS NETWORK",
+      "args": []
+    },
+    "setup.getStarted": {
+      "source": "Get started",
+      "args": []
+    },
+    "setup.hideCredential": {
+      "source": "Hide credential",
+      "args": []
+    },
+    "setup.installBundled": {
+      "source": "Install bundled OpenClaw",
+      "args": []
+    },
+    "setup.installBundledHint": {
+      "source": "Installs this app's bundled OpenClaw runtime in ~/.openclaw. Update the desktop app to change versions.",
+      "args": []
+    },
+    "setup.installCliDescription": {
+      "source": "Install the OpenClaw CLI to connect to a local Gateway.",
+      "args": []
+    },
+    "setup.installCliHint": {
+      "source": "Installs the CLI and managed Node runtime in ~/.openclaw.",
+      "args": []
+    },
+    "setup.installFreeBsdHint": {
+      "source": "Installs the CLI in ~/.openclaw using your system Node.js and npm.",
+      "args": []
+    },
+    "setup.installHint": {
+      "source": "Installs OpenClaw and its managed runtime in ~/.openclaw.",
+      "args": []
+    },
+    "setup.installLog": {
+      "source": "INSTALL LOG",
+      "args": []
+    },
+    "setup.installOpenClaw": {
+      "source": "Install OpenClaw",
+      "args": []
+    },
+    "setup.installingBundledRuntime": {
+      "source": "This app's bundled OpenClaw runtime is being installed in your home directory.",
+      "args": []
+    },
+    "setup.installingEyebrow": {
+      "source": "INSTALLING",
+      "args": []
+    },
+    "setup.installingFreeBsdCli": {
+      "source": "Installing the CLI requires a compatible system Node.js and npm. Start the Gateway with the package service or in a terminal after installation.",
+      "args": []
+    },
+    "setup.installingOpenClaw": {
+      "source": "Installing OpenClaw…",
+      "args": []
+    },
+    "setup.installingRuntime": {
+      "source": "OpenClaw and its managed runtime are being installed in your home directory.",
+      "args": []
+    },
+    "setup.issueEyebrow": {
+      "source": "SETUP ISSUE",
+      "args": []
+    },
+    "setup.lastGatewayActionFailed": {
+      "source": "The last Gateway action failed. Check the service, then retry.",
+      "args": []
+    },
+    "setup.localChoiceHelp": {
+      "source": "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background.",
+      "args": []
+    },
+    "setup.localGateway": {
+      "source": "LOCAL GATEWAY",
+      "args": []
+    },
+    "setup.localSubtitle": {
+      "source": "Private to this computer. Installs and starts automatically.",
+      "args": []
+    },
+    "setup.lookingNearby": {
+      "source": "Looking for nearby OpenClaw gateways…",
+      "args": []
+    },
+    "setup.nearbyGatewaysFound": {
+      "source": "Nearby Gateways found: {count}",
+      "args": [
+        "count"
+      ]
+    },
+    "setup.needsAttention": {
+      "source": "OpenClaw needs attention",
+      "args": []
+    },
+    "setup.needsCli": {
+      "source": "OpenClaw needs the CLI",
+      "args": []
+    },
+    "setup.oneMoment": {
+      "source": "One moment",
+      "args": []
+    },
+    "setup.openingRemoteDashboard": {
+      "source": "Opening the remote dashboard…",
+      "args": []
+    },
+    "setup.operationFailed": {
+      "source": "OpenClaw could not complete the operation.",
+      "args": []
+    },
+    "setup.password": {
+      "source": "Password",
+      "args": []
+    },
+    "setup.permissionsNotice": {
+      "source": "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
+      "args": []
+    },
+    "setup.preparingCompanion": {
+      "source": "Preparing your companion",
+      "args": []
+    },
+    "setup.preparingControlUi": {
+      "source": "Finding your gateway and preparing the Control UI.",
+      "args": []
+    },
+    "setup.preparingRemoteDashboard": {
+      "source": "Preparing the remote dashboard…",
+      "args": []
+    },
+    "setup.profileLabel": {
+      "source": "· PROFILE {profile}",
+      "args": [
+        "profile"
+      ]
+    },
+    "setup.recommended": {
+      "source": "Recommended",
+      "args": []
+    },
+    "setup.reconnecting": {
+      "source": "Reconnecting",
+      "args": []
+    },
+    "setup.releaseChannel": {
+      "source": "Release channel",
+      "args": []
+    },
+    "setup.remoteConnection": {
+      "source": "Remote connection",
+      "args": []
+    },
+    "setup.remoteConnectionHelp": {
+      "source": "Connect with a Gateway address or an SSH tunnel.",
+      "args": []
+    },
+    "setup.remoteConnectionType": {
+      "source": "Remote connection type",
+      "args": []
+    },
+    "setup.remoteGateway": {
+      "source": "REMOTE GATEWAY",
+      "args": []
+    },
+    "setup.remoteRetryHelp": {
+      "source": "Open Connection Settings to check the remote Gateway.",
+      "args": []
+    },
+    "setup.remoteSubtitle": {
+      "source": "Connect to a Gateway running elsewhere.",
+      "args": []
+    },
+    "setup.restartingGateway": {
+      "source": "Restarting Gateway…",
+      "args": []
+    },
+    "setup.retryingEveryFewSeconds": {
+      "source": "Retrying every few seconds…",
+      "args": []
+    },
+    "setup.running": {
+      "source": "RUNNING",
+      "args": []
+    },
+    "setup.runtimeVersion": {
+      "source": "OpenClaw {version}",
+      "args": [
+        "version"
+      ]
+    },
+    "setup.savedCredentialsHint": {
+      "source": "Saved credentials stay hidden. Leave blank to keep them for the same connection.",
+      "args": []
+    },
+    "setup.searching": {
+      "source": "SEARCHING",
+      "args": []
+    },
+    "setup.showCredential": {
+      "source": "Show credential",
+      "args": []
+    },
+    "setup.sshTarget": {
+      "source": "SSH target",
+      "args": []
+    },
+    "setup.sshTunnel": {
+      "source": "SSH tunnel",
+      "args": []
+    },
+    "setup.standingBy": {
+      "source": "OpenClaw is standing by",
+      "args": []
+    },
+    "setup.startGateway": {
+      "source": "Start Gateway",
+      "args": []
+    },
+    "setup.startingGateway": {
+      "source": "Starting Gateway…",
+      "args": []
+    },
+    "setup.stepProgress": {
+      "source": "Step 2 of 2",
+      "args": []
+    },
+    "setup.stepProgressShort": {
+      "source": "2 of 2",
+      "args": []
+    },
+    "setup.thisComputer": {
+      "source": "On this computer",
+      "args": []
+    },
+    "setup.token": {
+      "source": "Token",
+      "args": []
+    },
+    "setup.unavailable": {
+      "source": "UNAVAILABLE",
+      "args": []
+    },
+    "setup.updateRemoteConnection": {
+      "source": "Update the remote Gateway address or authentication.",
+      "args": []
+    },
+    "setup.updateTitle": {
+      "source": "OpenClaw update",
+      "args": []
+    },
+    "setup.waitingForGateway": {
+      "source": "OpenClaw is waiting for the local Gateway to become healthy.",
+      "args": []
+    },
+    "setup.welcomeDescription": {
+      "source": "Your personal AI assistant, living wherever you choose. It answers questions, works with your files and apps, and can chat with you wherever you are.",
+      "args": []
+    },
+    "setup.welcomeEyebrow": {
+      "source": "WELCOME",
+      "args": []
+    },
+    "setup.welcomeTitle": {
+      "source": "Welcome to OpenClaw",
+      "args": []
+    },
+    "setup.windowOpened": {
+      "source": "WINDOW OPENED",
+      "args": []
+    },
+    "tray.bundledRuntime": {
+      "source": "Bundled runtime: {flavor}",
+      "args": [
+        "flavor"
+      ]
+    },
+    "tray.checkUpdates": {
+      "source": "Check for Updates",
+      "args": []
+    },
+    "tray.connectionSettings": {
+      "source": "Connection Settings",
+      "args": []
+    },
+    "tray.gatewayChecking": {
+      "source": "Gateway: Checking…",
+      "args": []
+    },
+    "tray.gatewayStatus": {
+      "source": "Gateway: {status}",
+      "args": [
+        "status"
+      ]
+    },
+    "tray.isolatedProfile": {
+      "source": "Isolated profile: {profile}",
+      "args": [
+        "profile"
+      ]
+    },
+    "tray.keepAwake": {
+      "source": "Keep computer awake",
+      "args": []
+    },
+    "tray.keepAwakeInactive": {
+      "source": "Keep computer awake (inactive)",
+      "args": []
+    },
+    "tray.noUpdateAction": {
+      "source": "No update action available",
+      "args": []
+    },
+    "tray.openDashboard": {
+      "source": "Open Dashboard",
+      "args": []
+    },
+    "tray.openDownloadPage": {
+      "source": "Open download page",
+      "args": []
+    },
+    "tray.pendingApprovalOne": {
+      "source": "Gateway: {gateway} · 1 approval pending",
+      "args": [
+        "gateway"
+      ]
+    },
+    "tray.pendingApprovals": {
+      "source": "Gateway: {gateway} · {count} approvals pending",
+      "args": [
+        "gateway",
+        "count"
+      ]
+    },
+    "tray.quickChat": {
+      "source": "Quick Chat",
+      "args": []
+    },
+    "tray.quitOpenClaw": {
+      "source": "Quit OpenClaw",
+      "args": []
+    },
+    "tray.restartGateway": {
+      "source": "Restart Gateway",
+      "args": []
+    },
+    "tray.restartToUpdate": {
+      "source": "Restart to update",
+      "args": []
+    },
+    "tray.runtimeDialogAction": {
+      "source": "Use bundled runtime",
+      "args": []
+    },
+    "tray.runtimeDialogMessage": {
+      "source": "Current runtime: {currentRuntime}\n\nUse this app's bundled {flavor} runtime for the Gateway? This reinstalls and restarts the service. Future app updates will ask you to choose this action again.",
+      "args": [
+        "currentRuntime",
+        "flavor"
+      ]
+    },
+    "tray.runtimeDialogTitle": {
+      "source": "Use bundled runtime",
+      "args": []
+    },
+    "tray.runtimeNoInstalledService": {
+      "source": "No installed Gateway service",
+      "args": []
+    },
+    "tray.savedGateways": {
+      "source": "Saved Gateways",
+      "args": []
+    },
+    "tray.setupChromeExtension": {
+      "source": "Set Up Chrome Extension…",
+      "args": []
+    },
+    "tray.startAtLogin": {
+      "source": "Start at Login",
+      "args": []
+    },
+    "tray.startGateway": {
+      "source": "Start Gateway",
+      "args": []
+    },
+    "tray.stopGateway": {
+      "source": "Stop Gateway",
+      "args": []
+    },
+    "tray.useBundledRuntime": {
+      "source": "Use bundled runtime…",
+      "args": []
+    },
+    "update.available": {
+      "source": "Update available v{version}",
+      "args": [
+        "version"
+      ]
+    },
+    "update.checkFailed": {
+      "source": "Update check failed",
+      "args": []
+    },
+    "update.downloadProgress": {
+      "source": "{downloaded} of {total}",
+      "args": [
+        "downloaded",
+        "total"
+      ]
+    },
+    "update.downloaded": {
+      "source": "{size} downloaded",
+      "args": [
+        "size"
+      ]
+    },
+    "update.downloading": {
+      "source": "Downloading in the background…",
+      "args": []
+    },
+    "update.downloadingVersion": {
+      "source": "Update available v{version} — downloading…",
+      "args": [
+        "version"
+      ]
+    },
+    "update.manualMessage": {
+      "source": "Install the latest system package from the release page.",
+      "args": []
+    },
+    "update.noneAvailable": {
+      "source": "No update is available.",
+      "args": []
+    },
+    "update.openDownloadPage": {
+      "source": "Open download page",
+      "args": []
+    },
+    "update.openPageFailed": {
+      "source": "Could not open release page",
+      "args": []
+    },
+    "update.ready": {
+      "source": "Update ready",
+      "args": []
+    },
+    "update.readyMessage": {
+      "source": "Version v{version} is installed and ready.",
+      "args": [
+        "version"
+      ]
+    },
+    "update.restartToUpdate": {
+      "source": "Restart to update",
+      "args": []
+    },
+    "update.upToDate": {
+      "source": "OpenClaw is up to date",
+      "args": []
+    }
+  }
+}

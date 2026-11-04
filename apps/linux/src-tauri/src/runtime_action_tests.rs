@@ -569,7 +569,13 @@ fn read_only_inspection_offers_current_runtime_without_installing() {
     let fixture = Fixture::new();
     let cli = fixture.cli();
     let before = inspect(&cli).unwrap();
-    assert!(before.current_runtime().contains("/operator/node"));
+    assert!(before
+        .current_runtime()
+        .is_some_and(|label| label.contains("/operator/node")));
+    assert_eq!(
+        Observation(serde_json::json!({"service": {"command": null}})).current_runtime(),
+        None
+    );
     assert!(!before.uses_runtime_path(&fixture.runtime().executable));
     fixture.write_state(&fixture.healthy());
     assert!(inspect(&cli)

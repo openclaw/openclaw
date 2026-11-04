@@ -1,5 +1,9 @@
-// Pure stream helpers stay above browser bindings so the Node regression test can exercise the
-// Gateway-compatible assembler without constructing a WebView.
+let shellI18n = {
+  locale: "en",
+  text: (_key, args = {}, fallback = _key) => fallback.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu, (token, name) => Object.hasOwn(args, name) ? String(args[name]) : token),
+};
+const t = (key, fallback, args = {}) => shellI18n.text(key, args, fallback);
+
 function chatMessageText(message) {
   const content = message?.content;
   if (Array.isArray(content)) {
@@ -129,7 +133,9 @@ function coerceInlineWidgetPreview(block) {
     key: boundedWidgetKey(
       typeof preview.viewId === "string" && preview.viewId.trim() ? preview.viewId.trim() : target,
     ),
-    title: typeof preview.title === "string" && preview.title.trim() ? preview.title.trim() : "Widget",
+    title: typeof preview.title === "string" && preview.title.trim()
+      ? preview.title.trim()
+      : t("quickChat.widget", "Widget"),
     target,
     preferredHeight,
     sandbox: preview.sandbox,
@@ -207,6 +213,7 @@ function resolveInlineWidgetUrl(rawSurfaceUrl, rawTarget) {
 }
 
 const tauri = window["__TAURI__"];
+const nativeI18nReady = window["__OPENCLAW_TAURI_I18N_READY__"];
 const { invoke } = tauri.core;
 const { listen } = tauri.event;
 const rendererSessionId =
@@ -288,7 +295,7 @@ function clearPendingChat() {
   pendingChatOverflow = false;
 }
 
-function friendlyError(error, fallback = "Could not send the message.") {
+function friendlyError(error, fallback = t("quickChat.sendFailed", "Could not send the message.")) {
   if (typeof error === "string") {
     return error;
   }
@@ -301,9 +308,9 @@ function setError(message = "") {
 }
 
 const GATEWAY_STATUS_MESSAGES = new Map([
-  ["pairing-required", "Approve this device in the dashboard (Nodes)"],
-  ["credential-required", "Gateway requires a credential — open the dashboard on the gateway host"],
-  ["tls-failure", "Gateway TLS trust failed — check the certificate fingerprint"],
+  ["pairing-required", { key: "quickChat.pairingRequired", fallback: "Approve this device in the dashboard (Nodes)" }],
+  ["credential-required", { key: "quickChat.credentialRequired", fallback: "Gateway requires a credential — open the dashboard on the gateway host" }],
+  ["tls-failure", { key: "quickChat.tlsFailure", fallback: "Gateway TLS trust failed — check the certificate fingerprint" }],
 ]);
 
 function renderStatus() {
@@ -311,7 +318,10 @@ function renderStatus() {
     setError(sendError);
     return;
   }
-  const fallback = GATEWAY_STATUS_MESSAGES.get(gatewayState) || "Gateway unreachable — retrying";
+  const statusMessage = GATEWAY_STATUS_MESSAGES.get(gatewayState);
+  const fallback = statusMessage
+    ? t(statusMessage.key, statusMessage.fallback)
+    : t("quickChat.gatewayUnreachable", "Gateway unreachable — retrying");
   setError(gatewayState === "tls-failure" ? fallback : gatewayNotice || fallback);
 }
 
@@ -378,13 +388,13 @@ function nameHue(name) {
 }
 
 function renderAvatarFallback(target, identity) {
-  const name = identity?.name?.trim() || identity?.id?.trim() || "Agent";
+  const name = identity?.name?.trim() || identity?.id?.trim() || t("quickChat.agentDefault", "Agent");
   const initial = [...name][0]?.toUpperCase() || "A";
   target.replaceChildren(document.createTextNode(identity?.emoji?.trim() || initial));
 }
 
 function renderAvatar(target, identity) {
-  const name = identity?.name?.trim() || identity?.id?.trim() || "Agent";
+  const name = identity?.name?.trim() || identity?.id?.trim() || t("quickChat.agentDefault", "Agent");
   target.style.setProperty("--agent-hue", nameHue(name));
   const avatarUrl = identity?.avatarUrl?.trim();
   if (!avatarUrl || !/^(?:https?:|data:)/i.test(avatarUrl)) {
@@ -434,8 +444,11 @@ function renderReplyPresentation() {
   elements.composer.classList.toggle("has-reply", expanded);
   elements.toggleReply.disabled = activeReply === null;
   elements.toggleReply.setAttribute("aria-expanded", String(expanded));
-  elements.toggleReply.setAttribute("aria-label", expanded ? "Collapse reply" : "Expand reply");
-  elements.toggleReply.title = expanded ? "Collapse reply" : "Expand reply";
+  const label = expanded
+    ? t("quickChat.collapseReply", "Collapse reply")
+    : t("quickChat.expandReply", "Expand reply");
+  elements.toggleReply.setAttribute("aria-label", label);
+  elements.toggleReply.title = label;
 }
 
 function toggleReply() {
@@ -575,7 +588,7 @@ function drainWidgetSync() {
         await invoke("quickchat_sync_widgets", snapshot);
       } catch (error) {
         if (sequence === widgetSyncSequence && widgetSyncIsCurrent(snapshot)) {
-          sendError = friendlyError(error, "Could not render the widget.");
+          sendError = friendlyError(error, t("quickChat.widgetRenderFailed", "Could not render the widget."));
           renderStatus();
         }
       }
@@ -694,7 +707,7 @@ function renderReplyWidgets() {
       !resolveInlineWidgetUrl(canvasSurfaceUrl, widget.target)) {
     const unavailable = document.createElement("div");
     unavailable.className = "inline-widget-unavailable";
-    unavailable.textContent = "Widget unavailable until the Gateway reconnects.";
+    unavailable.textContent = t("quickChat.widgetUnavailable", "Widget unavailable until the Gateway reconnects.");
     card.append(unavailable);
   } else {
     const host = document.createElement("div");
@@ -742,8 +755,8 @@ function terminalizeDisconnectedReply() {
   activeReply.terminal = true;
   elements.replyThinking.hidden = true;
   elements.reply.classList.add("has-error", "is-terminal");
-  elements.replyState.textContent = "Interrupted";
-  elements.replyError.textContent = "Connection lost before the reply completed.";
+  elements.replyState.textContent = t("quickChat.interrupted", "Interrupted");
+  elements.replyError.textContent = t("quickChat.connectionLost", "Connection lost before the reply completed.");
   scrollReplyToEnd();
 }
 
@@ -769,9 +782,9 @@ function startReply(target, identity, runId, prompt, expanded) {
   };
   replyExpanded = expanded;
   resetReplyPresentation(prompt);
-  elements.replyThinking.textContent = reducedMotion.matches ? "…" : "Thinking…";
+  elements.replyThinking.textContent = reducedMotion.matches ? "…" : t("quickChat.thinking", "Thinking…");
   elements.replyThinking.hidden = false;
-  elements.replyAgentName.textContent = identity?.name?.trim() || "Agent";
+  elements.replyAgentName.textContent = identity?.name?.trim() || t("quickChat.agentDefault", "Agent");
   void invoke("quickchat_set_expanded", { expanded });
   scheduleWidgetSync();
 }
@@ -819,22 +832,22 @@ function applyChatEvent(payload) {
   if (payload.state === "final") {
     if (activeReply.textIncomplete) {
       elements.reply.classList.add("has-error");
-      elements.replyState.textContent = "Incomplete";
-      elements.replyError.textContent = "Reply text is incomplete. Open the dashboard to recover it.";
+      elements.replyState.textContent = t("quickChat.incomplete", "Incomplete");
+      elements.replyError.textContent = t("quickChat.incompleteHelp", "Reply text is incomplete. Open the dashboard to recover it.");
     } else {
       elements.replyState.textContent = "";
     }
   } else if (payload.state === "aborted") {
-    activeReply.text = `${activeReply.text || ""}${activeReply.text ? "\n\n" : ""}(stopped)`;
-    elements.replyState.textContent = "Stopped";
+    activeReply.text = `${activeReply.text || ""}${activeReply.text ? "\n\n" : ""}${t("quickChat.stoppedMarker", "(stopped)")}`;
+    elements.replyState.textContent = t("quickChat.stopped", "Stopped");
     renderReplyText();
   } else {
     elements.reply.classList.add("has-error");
-    elements.replyState.textContent = "Error";
+    elements.replyState.textContent = t("quickChat.error", "Error");
     elements.replyError.textContent =
       typeof payload.errorMessage === "string" && payload.errorMessage.trim()
         ? payload.errorMessage
-        : "Gateway reply failed.";
+        : t("quickChat.replyFailed", "Gateway reply failed.");
     scrollReplyToEnd();
   }
   updateSendButton();
@@ -843,7 +856,7 @@ function applyChatEvent(payload) {
 function applyRecoveredReply(result) {
   if ((activeReply?.terminal && !activeReply.textIncomplete) || result.status !== "ok") return;
   if (!Array.isArray(result.recoveredMessages) || result.recoveredMessages.length === 0) {
-    throw new Error("The completed reply could not be recovered.");
+    throw new Error(t("quickChat.recoveryFailed", "The completed reply could not be recovered."));
   }
   const content = [];
   for (const message of result.recoveredMessages) {
@@ -925,11 +938,11 @@ function handleChatEvent(payload) {
 }
 
 function renderIdentity(identity) {
-  const name = identity?.name?.trim() || "Agent";
+  const name = identity?.name?.trim() || t("quickChat.agentDefault", "Agent");
   activeIdentity = { ...identity, name };
   renderAvatar(elements.agentAvatar, activeIdentity);
   elements.agentChip.title = name;
-  elements.input.placeholder = `Message ${name}`;
+  elements.input.placeholder = t("quickChat.messageAgent", "Message {name}", { name });
   renderAgentList();
 }
 
@@ -1006,7 +1019,7 @@ async function selectAgent(agentId) {
     closePopover();
   } catch (error) {
     if (gatewayGeneration !== owner) return;
-    sendError = friendlyError(error, "Could not select that agent.");
+    sendError = friendlyError(error, t("quickChat.selectAgentFailed", "Could not select that agent."));
     renderStatus();
   } finally {
     selectingAgent = false;
@@ -1016,7 +1029,7 @@ async function selectAgent(agentId) {
 
 function resetShortcutCapture() {
   capturingShortcut = false;
-  elements.shortcutCapture.textContent = "Press new shortcut";
+  elements.shortcutCapture.textContent = t("quickChat.pressNewShortcut", "Press new shortcut");
 }
 
 function setPopoverVisibility(kind) {
@@ -1043,7 +1056,7 @@ async function openNamedPopover(kind) {
   try {
     await invoke("quickchat_set_expanded", { expanded: true });
   } catch (error) {
-    sendError = friendlyError(error, "Could not open Quick Chat settings.");
+    sendError = friendlyError(error, t("quickChat.openSettingsFailed", "Could not open Quick Chat settings."));
     renderStatus();
     return;
   }
@@ -1142,7 +1155,7 @@ async function saveShortcut(accelerator) {
   } catch (error) {
     elements.shortcutError.textContent = friendlyError(
       error,
-      "Could not update the Quick Chat shortcut.",
+      t("quickChat.updateShortcutFailed", "Could not update the Quick Chat shortcut."),
     );
     resetShortcutCapture();
     elements.shortcutCapture.focus();
@@ -1315,7 +1328,7 @@ async function showDashboard() {
   try {
     await invoke("quickchat_show_dashboard");
   } catch (error) {
-    sendError = friendlyError(error, "Could not open the dashboard.");
+    sendError = friendlyError(error, t("quickChat.openDashboardFailed", "Could not open the dashboard."));
     renderStatus();
   }
 }
@@ -1356,7 +1369,7 @@ elements.shortcutSettingsButton.addEventListener("click", () => {
 elements.shortcutCapture.addEventListener("click", () => {
   capturingShortcut = true;
   elements.shortcutError.textContent = "";
-  elements.shortcutCapture.textContent = "Press keys…";
+  elements.shortcutCapture.textContent = t("quickChat.pressKeys", "Press keys…");
   elements.shortcutCapture.focus();
 });
 elements.shortcutReset.addEventListener("click", () => {
@@ -1419,6 +1432,9 @@ document.addEventListener("pointerdown", (event) => {
 });
 
 async function initializeRenderer() {
+  if (nativeI18nReady) {
+    shellI18n = await nativeI18nReady;
+  }
   await listen("quickchat:shown", () => {
     reveal();
   });
