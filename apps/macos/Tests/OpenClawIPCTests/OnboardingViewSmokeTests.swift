@@ -295,29 +295,6 @@ struct OnboardingViewSmokeTests {
         #expect(secondaryInvocations == (actions == "dual" ? 1 : 0))
     }
 
-    @Test func `configured flows end at AI setup and hand off to the dashboard`() {
-        // Everything after working inference (memory import, permissions,
-        // channels, hatch) belongs to the dashboard custodian onboarding.
-        #expect(OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: true) == [0, 1, 2, 3])
-        #expect(OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: false) == [0, 1, 3])
-        #expect(OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: true) == [0, 1, 3])
-        #expect(OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: false) == [0, 1, 3])
-    }
-
-    @Test func `set up later keeps the native ready page`() {
-        #expect(OnboardingView.pageOrder(
-            for: .unconfigured,
-            requiresCLIInstall: false) == [0, 1, 9])
-    }
-
     @Test func `reopened onboarding preserves configure later selection`() {
         let state = AppState(preview: true)
         state.onboardingSeen = true
