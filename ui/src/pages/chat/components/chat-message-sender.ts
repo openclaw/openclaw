@@ -6,6 +6,7 @@ import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-sessio
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 
 registerChatSessionEnglish();
@@ -29,18 +30,6 @@ export function isSourceOnlyUserGroup(
   );
 }
 
-/** Agent senders show the agent's current display name, not their opaque sender id. */
-function resolveAgentSenderName(
-  agentId: string,
-  opts: { agentId?: string; agents?: AgentsListResult["agents"]; assistantName?: string },
-): string {
-  return (
-    (agentId === opts.agentId ? opts.assistantName?.trim() : undefined) ||
-    opts.agents?.find((agent) => agent.id === agentId)?.identity?.name?.trim() ||
-    agentId
-  );
-}
-
 export function resolveMessageGroupSenderLabel(
   group: Pick<MessageGroup, "role" | "sender" | "senderLabel" | "sourceClients"> & {
     messages: ReadonlyArray<{ message: unknown }>;
@@ -52,6 +41,7 @@ export function resolveMessageGroupSenderLabel(
     userId?: string | null;
     userName?: string | null;
   },
+  currentAgentId = opts.agentId ?? DEFAULT_AGENT_ID,
 ): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   if (isSourceOnlyUserGroup(group)) {
@@ -84,7 +74,9 @@ export function resolveMessageGroupSenderLabel(
   const userLabel = group.senderLabel?.trim();
   return normalizedRole === "user"
     ? senderAgentId
-      ? resolveAgentSenderName(senderAgentId, opts)
+      ? (senderAgentId === currentAgentId ? opts.assistantName?.trim() : undefined) ||
+        opts.agents?.find((agent) => agent.id === senderAgentId)?.identity?.name?.trim() ||
+        senderAgentId
       : isOwnSenderGroup(group, opts.userId)
         ? resolvedUserName
         : (userLabel ?? t("chat.messages.unattributedSender"))

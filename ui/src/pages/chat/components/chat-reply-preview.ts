@@ -85,11 +85,7 @@ function projectResolvedReplyPreview(
       ? normalized.senderLabel?.trim() ||
         props.agents?.find((agent) => agent.id === agentId)?.identity?.name?.trim() ||
         null
-      : (loaded?.senderLabel ??
-        resolveMessageGroupSenderLabel(group, {
-          ...props,
-          agentId: props.currentAgentId ?? DEFAULT_AGENT_ID,
-        }));
+      : (loaded?.senderLabel ?? resolveMessageGroupSenderLabel(group, props, props.currentAgentId));
   return {
     messageId: loaded?.messageId ?? sourceMessageId,
     sourceMessageId: loaded ? replyToId : sourceMessageId,

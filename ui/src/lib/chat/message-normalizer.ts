@@ -140,7 +140,7 @@ function readMessageDelivery(value: unknown): MessageDelivery | undefined {
 /** Identifies the agent that wrote a session's opening message. */
 function resolveAgentOpeningSender(message: Record<string, unknown>): SenderIdentity | null {
   const provenance = asOptionalRecord(message.provenance);
-  const sourceTool = readStringField(provenance, "sourceTool");
+  const sourceTool = provenance?.sourceTool;
   if (
     message.role !== "user" ||
     provenance?.kind !== "inter_session" ||
@@ -151,7 +151,7 @@ function resolveAgentOpeningSender(message: Record<string, unknown>): SenderIden
   const agentId = parseAgentSessionKeyParts(
     readStringField(provenance, "sourceSessionKey") ?? "",
   )?.agentId;
-  return agentId ? { identity: { type: "agent", id: agentId }, id: `agent:${agentId}` } : null;
+  return agentId ? { identity: { type: "agent", id: agentId } } : null;
 }
 
 export function readMessageSenderSession(value: unknown): NormalizedMessage["senderSession"] {
