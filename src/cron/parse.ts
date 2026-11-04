@@ -9,15 +9,14 @@ export function parseAbsoluteTimeMs(input: string): number | null {
     return null;
   }
   if (/^\d+$/.test(raw)) {
-    // Compact calendar datetimes (yyyyMMddHHmmss) are also pure digits. Any
-    // digit string past 13 characters exceeds the epoch-ms range reachable
-    // within the far-future scheduling cap, so treat it as a misread compact
-    // date and reject it rather than schedule centuries off.
-    if (raw.length > 13) {
-      return null;
-    }
     const n = parseStrictPositiveInteger(raw);
-    if (n !== undefined && Number.isFinite(new Date(n).getTime())) {
+    // Compact calendar datetimes (yyyyMMddHHmmss) are also pure digits and
+    // land far beyond any schedulable epoch-ms value, so reject them rather
+    // than schedule centuries off. Compare the parsed value, not the digit
+    // count, so zero-padded epochs for valid dates (01798761600000 =
+    // 2027-01-01 UTC) keep parsing. Accepted edge: genuine epoch-ms values
+    // cross this bound after year 2286 and are rejected too.
+    if (n !== undefined && n < 10_000_000_000_000 && Number.isFinite(new Date(n).getTime())) {
       return n;
     }
     return null;
