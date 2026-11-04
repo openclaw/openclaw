@@ -40,7 +40,7 @@ describe("telegram native approval adapter", () => {
   ] as const)(
     "resolves the turn-source target for %s",
     async (session, source, to, threadId, approvalKind) => {
-      const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+      const target = await telegramApprovalCapability.nativeAsync?.resolveOriginTarget?.({
         cfg,
         accountId: "default",
         approvalKind,
@@ -80,7 +80,7 @@ describe("telegram native approval adapter", () => {
       },
     });
 
-    const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+    const target = await telegramApprovalCapability.nativeAsync?.resolveOriginTarget?.({
       cfg: { ...cfg, session: { store: storePath } },
       accountId: "default",
       approvalKind: "plugin",
