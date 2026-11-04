@@ -83,7 +83,7 @@ it.each([
   });
   if (outcome === "empty") {
     expect(container.querySelector(selector)?.textContent).toContain(
-      "Dashboards created in your tasks will appear here",
+      "Dashboards created in your sessions appear here.",
     );
   }
   if (outcome === "error") {
