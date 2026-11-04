@@ -5,6 +5,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
+import { setActiveNodeContexts } from "../../../infra/active-node-context.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { addSession, appendOutput, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
@@ -303,20 +304,19 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       messages: [...messages, active.runtimeContextMessageForCurrentTurn!],
     });
     expect(empty.systemPromptForHook).toBe(active.systemPromptForHook);
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "No active exec-tool sessions in this scope at turn start.",
-    );
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).not.toContain("exec-z");
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "persistent automations and other background work are not included.",
-    );
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "## Active Subagents\nnone",
-    );
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "- tool=image_generate; none",
-    );
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).not.toContain("image-1");
+    const content = empty.runtimeContextMessageForCurrentTurn?.content;
+    expect(content).toContain("No active exec-tool sessions in this scope at turn start.");
+    expect(content).not.toContain("exec-z");
+    expect(content).toContain("persistent automations and other background work are not included.");
+    expect(content).toContain("## Active Subagents\nnone");
+    expect(content).toContain("- tool=image_generate; none");
+    expect(content).not.toContain("image-1");
+  });
+
+  it("refreshes presence before projecting the active-node hint", async () => {
+    setActiveNodeContexts([{ nodeId: "mac", prepare: async () => setActiveNodeContexts([]) }]);
+    const result = await prepareContext(createInput().input);
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("active_node=unknown");
   });
 
   it("quotes producer data in the new-session model prompt while retaining transcript bytes", async () => {

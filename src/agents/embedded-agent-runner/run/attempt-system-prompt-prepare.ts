@@ -12,7 +12,10 @@ import { settleCurrentReadPreparations } from "../../../shared/current-read-auth
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { prepareTtsPreferences } from "../../../tts/tts-preferences.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import {
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
@@ -226,6 +229,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
           currentThreadTs: attempt.currentThreadTs,
         },
         chatType: attempt.chatType,
+        requesterProfileId: readAdmittedRunOperatorAuthority(attempt.admittedRunContext)?.profileId,
         blind: attempt.blindPrompt,
       }),
       params.referencePaths ??
