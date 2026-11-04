@@ -597,7 +597,8 @@ function openAgentDatabaseBackend(
       const nativeBindings =
         command.type === "session.nativeBindings.delete"
           ? command.input
-          : command.type === "session.messageCut.commit"
+          : command.type === "session.messageCut.commit" ||
+              command.type === "session.lifecycle.delete"
             ? command.input.nativeBindings
             : command.type === "session.entries.replace" ||
                 command.type === "session.agentPurge.commit" ||

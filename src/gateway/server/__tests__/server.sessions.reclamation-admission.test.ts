@@ -226,6 +226,13 @@ test("sessions.delete admits unrelated same-store patches during Worker validati
     },
     storePath,
   });
+  // A nonempty transcript selects the archive reclaimer whose validation is held below.
+  await seedLinearSessionTranscript({
+    sessionId: "validation-delete",
+    sessionKey: targetKey,
+    storePath,
+    contents: ["retained transcript"],
+  });
   const { ws } = await openClient();
   const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
   // Seed a host handle; the worker interceptor expires proof after executor preparation.

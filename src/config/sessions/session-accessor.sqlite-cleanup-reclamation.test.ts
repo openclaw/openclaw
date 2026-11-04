@@ -100,6 +100,8 @@ describe("SQLite lifecycle cleanup reclamation", () => {
       const current = scope("queued-entry-deletion");
       const entry = { sessionId: current.sessionId, updatedAt: Date.now() };
       await replaceSessionEntry(current, entry);
+      // This contract fences the archive reclaimer, not the empty-entry metadata executor.
+      await replaceTranscriptEvents(current, [{ type: "session", id: current.sessionId }]);
       await closeOpenClawAgentDatabaseByPathAsync(database().path);
       const databasePath = database().path;
       const target = { canonicalKey: current.sessionKey, storeKeys: [current.sessionKey] };
@@ -144,8 +146,14 @@ describe("SQLite lifecycle cleanup reclamation", () => {
             });
           } else {
             expect(
-              (await deleteSessionEntryLifecycle({ archiveTranscript: false, storePath, target }))
-                .deleted,
+              (
+                await deleteSessionEntryLifecycle({
+                  archiveTranscript: false,
+                  deleteTranscriptWithoutArchive: true,
+                  storePath,
+                  target,
+                })
+              ).deleted,
             ).toBe(true);
           }
         },
@@ -155,6 +163,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         await entered.promise;
         deletion = deleteSessionEntryLifecycle({
           archiveTranscript: false,
+          deleteTranscriptWithoutArchive: true,
           storePath,
           target,
         });

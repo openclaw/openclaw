@@ -39,6 +39,7 @@ import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
 
@@ -84,6 +85,10 @@ describe("SQLite session deletion receipts", () => {
 
   it("releases deleted session scopes without reviving old receipts or invalidating another session", async () => {
     await seed();
+    // Empty entries use the metadata executor; retain history to exercise reclamation cleanup.
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
+      { type: "session", id: sessionId },
+    ]);
     const unrelatedSessionId = "unrelated-session";
     await replaceSessionEntry(
       { sessionKey: baseKey, storePath },

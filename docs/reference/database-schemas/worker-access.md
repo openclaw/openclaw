@@ -3498,7 +3498,9 @@ migration owner, and missing required tables at the current schema remain an
 admission error.
 
 Durable entry deletion can carry prepared Agents API and Codex binding participants
-through the same executing worker. Binding deletion still commits in shared state
+through the same executing worker. Empty-entry deletion prepares the native binding
+codec in that worker before transaction entry, just like archive reclamation.
+Binding deletion still commits in shared state
 before the agent transaction commits, and can veto that transaction. Confirmed agent
 rollback conditionally restores the actual removed binding without replacing a
 successor. Binding renewal continues during queue waits, drains before transaction
