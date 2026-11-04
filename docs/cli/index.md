@@ -159,6 +159,9 @@ openclaw [--dev] [--profile <name>] <command>
     ownership
       status
       claim
+  continuations
+    fence-status
+    interrupt-fenced
   completion
   doctor
   triage
@@ -541,6 +544,29 @@ returning to SQLite, run a new `--to sqlite` port; completed manifests are not a
 undo mechanism. Reverse-port before a raw package-manager downgrade. See the
 [port runbook](/reference/database-engines#port-existing-stores) for
 backup contents, interruption recovery, and restart guidance.
+
+## Continuations
+
+`openclaw continuations` inspects and drains durable `continue_work` custody
+while the Gateway is stopped. A build without the turn-start fence would run a
+wake whose turn already started again, so a seat must hold none before such a
+build starts (the drain rule in `docs/design/continue-work-signal-v2.md`
+§5.4.2).
+
+```bash
+openclaw continuations fence-status [--json]
+openclaw continuations interrupt-fenced [--json]
+```
+
+`fence-status` is read-only: it counts wakes whose turn started but whose
+delivery was never confirmed, and interrupted-turn notices still owed, without
+writing the stopped store. `interrupt-fenced` ends each such wake as interrupted
+with its one notice, as crash recovery does, and never runs a turn. Both report
+the `databasePath` they used. Both exit 0 on success, 2 when offline ownership
+is refused (`error.code` `OWNER_UNAVAILABLE`, for example a running Gateway),
+and 1 otherwise, including `STATE_DATABASE_MISSING` when the selected state root
+has no database. `openclaw --version --json` lists the build's `capabilities`;
+`continuation-turn-start-fence` marks a build with the fence.
 
 ## Chat slash commands
 

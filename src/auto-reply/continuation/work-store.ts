@@ -148,7 +148,7 @@ export async function markPendingWorkTurnStarted(
  * The work kind's obligation value is `retry-exhausted` (the column's CHECK admits no other for
  * work); the failure reason selects the interrupted notice. A lost CAS means another pass did it.
  */
-async function interruptStartedWorkRecord(
+export async function interruptStartedWorkRecord(
   record: ContinuationRecord,
 ): Promise<PendingContinuationWork | undefined> {
   const interrupted = appliedRecord(
@@ -652,7 +652,8 @@ export async function markPendingWorkFailed(
   return result.outcome === "applied";
 }
 
-function toNoticeWork(record: ContinuationRecord): PendingContinuationWork | undefined {
+/** A failed record's outstanding notice obligation, or undefined when nothing is owed. */
+export function toNoticeWork(record: ContinuationRecord): PendingContinuationWork | undefined {
   if (!isContinuationWorkFlow(record) || record.status !== "failed") {
     return undefined;
   }

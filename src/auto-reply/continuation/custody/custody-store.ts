@@ -489,6 +489,31 @@ export function listContinuationRecords(
 }
 
 /**
+ * The same listing over an existing store with no worker and no writer: a CLI one-shot read of an
+ * artifact-preserving snapshot, so the store's bytes and its WAL and shared-memory files stay as they
+ * were (`openclaw continuations fence-status`, refused while a Gateway owns the state). Undefined
+ * when the state database does not exist.
+ */
+export async function listContinuationRecordsReadOnly(
+  query: ContinuationRecordQuery,
+  options?: ContinuationCustodyStoreOptions,
+): Promise<ContinuationRecord[] | undefined> {
+  const [
+    { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync },
+    { tableExists },
+    { CONTINUATION_RECORDS_TABLE, selectRecords },
+  ] = await Promise.all([
+    import("../../../state/openclaw-state-db-readonly.js"),
+    import("../../../state/openclaw-state-db-schema-helpers.js"),
+    import("./custody-store.kernel.js"),
+  ]);
+  return await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+    ({ db }) => (tableExists(db, CONTINUATION_RECORDS_TABLE) ? selectRecords(db, query) : []),
+    { env: options?.env ?? process.env },
+  );
+}
+
+/**
  * Hydrate the hot-path projection from one committed read (phase A), even when
  * already hydrated. Mutations run it on demand.
  */

@@ -101,6 +101,11 @@ describe("command-path-policy", () => {
     ["configure", { configGuard: "skip", stateStoreGuard: "run" }],
     ["config file", { ...skip, ensureCliPath: false, ownsProtocolStdout: true }],
     ["plugins update", { hideBanner: true }],
+    // The fence count must find the stopped store untouched; startup must not initialize it first.
+    [
+      "continuations fence-status|continuations interrupt-fenced",
+      { ...skip, loadPlugins: "never", stateStoreGuard: "skip", ownsProtocolStdout: true },
+    ],
     ["plugins list|plugins lint", { ...skip, ensureCliPath: false }],
     [
       "memory index",
