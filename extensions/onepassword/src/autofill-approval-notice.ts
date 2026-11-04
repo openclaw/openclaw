@@ -11,22 +11,32 @@ type Captured = { agentId: string; sessionKey: string; expectedTarget: EventTarg
 type FinishedApproval = {
   state: string;
   requestId: string;
-  entries: Array<{ entryId: string; granted: boolean }>;
+  entries: Array<{ entryId: string; granted: boolean; website?: string }>;
 };
 
-// Agent-facing text that resumes the task once a request leaves the pending state.
+const host = (website: string | undefined) => (website ? new URL(website).hostname : "the site");
+
+// Shown in the chat as well as waking the agent, so it stays one short sentence each.
+// fill defaults to the newest request and its only granted login, so no ids are needed.
 function approvalNoticeText(approval: FinishedApproval): string {
-  const granted = approval.entries.filter((entry) => entry.granted).map((entry) => entry.entryId);
-  const head = `1Password approval for requestId=${approval.requestId} finished with state=${approval.state}.`;
+  const granted = approval.entries.filter((entry) => entry.granted);
+  const sites = [...new Set(approval.entries.map((entry) => host(entry.website)))].join(", ");
   if (granted.length === 0) {
-    return `${head} No logins were granted. Tell the user and do not retry without asking.`;
+    return `1Password sign-in for ${sites} wasn't approved. Don't ask again unless the user wants to.`;
   }
-  return [
-    head,
-    `Granted entryIds: ${granted.join(", ")}.`,
-    "Continue the task that requested this login: open the sign-in page in the managed browser,",
-    "then call onepassword_autofill fill with this requestId, the entryId and the tab.",
-  ].join(" ");
+  return `1Password approved sign-in for ${granted.map((entry) => host(entry.website)).join(", ")}. Continue: open the sign-in page and fill it.`;
+}
+
+// Short, person-readable reasons for the codes a connect card can end with.
+function connectFailure(code: string | undefined): string {
+  switch (code) {
+    case "disconnectExistingConnectionFirst":
+      return "another account is already connected";
+    case "connectExpired":
+      return "the link expired";
+    default:
+      return "it wasn't completed";
+  }
 }
 
 /**
@@ -74,8 +84,8 @@ export class ApprovalNotifier {
     await this.enqueue(
       captured,
       connect.state === "connected"
-        ? "1Password is now connected. Continue the task that needed it: call onepassword_autofill request_logins for the logins it needs."
-        : `1Password connect did not complete (code=${connect.code ?? "connectDeclined"}). Tell the user; start connect again only if they ask.`,
+        ? "1Password connected. Continue with the logins this task needs."
+        : `1Password didn't connect: ${connectFailure(connect.code)}. Connect again only if the user asks.`,
       `onepassword-connect:${connect.sessionId}`,
     );
   }

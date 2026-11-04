@@ -20,41 +20,29 @@ const toolInput = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("check_status"),
-      requestId: id,
+      requestId: id.optional(),
       approvalOpened: z.boolean().optional(),
     })
     .strict(),
   z
     .object({
       action: z.literal("fill"),
-      requestId: id,
-      entryId: id,
+      requestId: id.optional(),
+      entryId: id.optional(),
       tab: z.object({ targetId: id, profile: id.optional() }).strict(),
     })
     .strict(),
 ]);
 
-// Model-facing text for a new request. The approval link stays in the private view;
-// the request and entry ids are lookup keys the agent needs for check_status and fill.
-function approvalSummary(request: {
-  requestId: string;
-  entries: Array<{ entryId: string; website: string }>;
-}): string {
+// Shown to the person and the model alike, so it reads as one plain sentence. The agent
+// needs no ids: check_status and fill default to this chat's newest request.
+function approvalSummary(request: { entries: Array<{ website: string }> }): string {
   const hosts = request.entries.map((entry) => new URL(entry.website).hostname).join(", ");
-  const entries = request.entries
-    .map((entry) => `${new URL(entry.website).hostname} entryId=${entry.entryId}`)
-    .join("; ");
-  return [
-    `1Password approval requested for ${hosts}. Approve it in OpenClaw.`,
-    `requestId=${request.requestId}; ${entries}.`,
-    "After the user approves, use requestId with check_status, then fill with the granted entryId.",
-  ].join(" ");
+  return `Requested your 1Password login for ${hosts}.`;
 }
 
-// Shown to both the person and the model above the card, so it stays short. The card holds
-// the link and code; the service resumes this chat with a notice when consent finishes.
-function connectSummary(sessionId: string): string {
-  return `1Password connect started (sessionId=${sessionId}). Finish it from the Connect 1Password card; the agent is told when it's done.`;
+function connectSummary(): string {
+  return "Started connecting your 1Password account.";
 }
 
 /** Optional sibling: never broadens the service-account tool's curated-secret policy hook. */
@@ -132,8 +120,14 @@ export function createAutofillTool(
             },
           },
         },
-        requestId: { type: "string" },
-        entryId: { type: "string" },
+        requestId: {
+          type: "string",
+          description: "Defaults to the newest login request in this chat.",
+        },
+        entryId: {
+          type: "string",
+          description: "Defaults to the only granted login; required when several were granted.",
+        },
         approvalOpened: {
           type: "boolean",
           description:
@@ -170,7 +164,7 @@ export function createAutofillTool(
             return inlineView(
               "connect",
               { sessionId: session.sessionId },
-              { version: 1, summary: connectSummary(session.sessionId) },
+              { version: 1, summary: connectSummary() },
             );
           }
           case "disconnect":
@@ -189,7 +183,7 @@ export function createAutofillTool(
           case "check_status":
             return jsonResult(
               await service.checkStatus(
-                input.requestId,
+                input.requestId ?? (await service.latestRequestId(scope, invocation)),
                 scope,
                 input.approvalOpened === true,
                 invocation,
@@ -197,7 +191,13 @@ export function createAutofillTool(
             );
           case "fill":
             return jsonResult(
-              await service.fill(input.requestId, input.entryId, input.tab, scope, invocation),
+              await service.fill(
+                input.requestId ?? (await service.latestRequestId(scope, invocation)),
+                input.entryId,
+                input.tab,
+                scope,
+                invocation,
+              ),
             );
           default:
             throw new AutofillError("invalidRequest");
@@ -214,7 +214,7 @@ export function createAutofillTool(
               : code === "extensionNotReady"
                 ? autofillBrowserGuidance
                 : code === "browserObserved"
-                  ? "1Password will not fill while the browser is being watched or recorded. Ask the user to close the Control UI Browser panel or any live view of this browser, and stop any trace, then retry fill with the same requestId. The approval is still valid."
+                  ? "1Password will not fill while the browser is being watched or recorded. Ask the user to close the Control UI Browser panel or any live view of this browser, and stop any trace, then retry fill. The approval is still valid."
                   : "The operation did not complete. Check Agentic Autofill setup or reconnect; no secret details were returned.",
         });
       }

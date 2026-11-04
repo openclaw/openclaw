@@ -10,8 +10,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Private 1Password inline approval" });
 const sessionKey = "agent:main:approval-proof";
 const appLink = "onepassword://grant-brokered-access?synthetic-private-proof";
-const summary =
-  "1Password approval requested for the-internet.herokuapp.com. Approve it in OpenClaw.";
+const summary = "Requested your 1Password login for the-internet.herokuapp.com.";
 const metadata = {
   goal: "Sign in to the demo site to check your account.",
   entries: [

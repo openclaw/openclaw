@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AutofillRequest } from "./autofill-contract.js";
 import { AutofillError } from "./autofill-relay.js";
 
 const plainText = (max: number) =>
@@ -68,4 +69,20 @@ export function decodeConnectionPath(integrationKey: string): { path: string; us
 export function isAgenticAutofillEnabled(config: unknown): boolean {
   return z.object({ agenticAutofill: z.object({ enabled: z.literal(true) }) }).safeParse(config)
     .success;
+}
+
+/** Model-facing request projection: ids, websites and grant flags, never references. */
+export function publicRequest(record: AutofillRequest) {
+  return {
+    state: record.status.state,
+    requestId: record.request.id,
+    entries: record.request.entries.map((entry) => ({
+      entryId: entry.id,
+      website: entry.parameters.website,
+      label: entry.reason ?? "Login",
+      granted:
+        record.status.state === "resolved" &&
+        record.status.resolved.some((grant) => grant.entryId === entry.id),
+    })),
+  };
 }

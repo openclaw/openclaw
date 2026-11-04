@@ -207,8 +207,8 @@ it("keeps tokens, keys, links and references outside tool results through connec
   // The agent needs these lookup keys to check status and fill after approval.
   expect(card(sessionId, scope)).toEqual({ state: "connected" });
   const summary = JSON.parse(outputs[1]!).content[0].text as string;
-  expect(summary).toContain("requestId=request");
-  expect(summary).toContain("entryId=entry");
+  // The person-facing line carries no ids; fill below relies on this chat's defaults.
+  expect(summary).toBe("Requested your 1Password login for example.com.");
   outputs.push(await execute({ action: "check_status", requestId: "request" }));
   expect(s.extension.getAccessRequestStatus).not.toHaveBeenCalled();
   outputs.push(
@@ -239,8 +239,6 @@ it("keeps tokens, keys, links and references outside tool results through connec
   outputs.push(
     await execute({
       action: "fill",
-      requestId: "request",
-      entryId: "entry",
       tab: { targetId: "tab" },
     }),
   );

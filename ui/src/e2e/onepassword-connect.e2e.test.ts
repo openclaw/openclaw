@@ -10,7 +10,7 @@ const suite = createControlUiE2eSuite({ name: "1Password connect card" });
 const sessionKey = "agent:main:connect-proof";
 const sessionId = "XJnbsrHDk8TXKSpyi0YeTQ";
 const connectUrl = `https://connect.openclaw.ai/1password/start/${sessionId}`;
-const summary = `1Password connect started (sessionId=${sessionId}). Finish it from the Connect 1Password card; the agent is told when it's done.`;
+const summary = "Started connecting your 1Password account.";
 const pending = { state: "pending", connectUrl, confirmationCode: "M8AQ-KEGP" };
 
 suite.define(() => {

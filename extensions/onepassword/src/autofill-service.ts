@@ -10,7 +10,7 @@ import type {
   AutofillRequest,
   ExtResult,
 } from "./autofill-contract.js";
-import { accessRequestInputSchema, decodeConnectionPath } from "./autofill-input.js";
+import { accessRequestInputSchema, decodeConnectionPath, publicRequest } from "./autofill-input.js";
 import { autofillClock, pollAutofillDecision, type AutofillClock } from "./autofill-poll.js";
 import {
   AutofillError,
@@ -462,7 +462,7 @@ export class AutofillService {
       });
       this.assertCurrent(authority);
       this.approvalLinks.remember(record.request.id, created.appLink);
-      return this.publicRequest(record);
+      return publicRequest(record);
     });
   }
 
@@ -558,27 +558,26 @@ export class AutofillService {
   }
 
   // Deliberately project, never spread upstream objects: references and link text stay host-only.
-  private publicRequest(record: AutofillRequest) {
-    return {
-      state: record.status.state,
-      requestId: record.request.id,
-      entries: record.request.entries.map((entry) => ({
-        entryId: entry.id,
-        website: entry.parameters.website,
-        label: entry.reason ?? "Login",
-        granted:
-          record.status.state === "resolved" &&
-          record.status.resolved.some((grant) => grant.entryId === entry.id),
-      })),
-    };
-  }
 
   /** Check only after the user says they opened the link. Finished requests are read locally. */
+  /** The chat's newest request, so the agent need not echo ids shown to the person. */
+  async latestRequestId(scope: string, authority: AutofillAuthority): Promise<string> {
+    const entries = (await this.options.stores.requests.entries()).filter(
+      (entry) => entry.value.scope === scope,
+    );
+    this.assertCurrent(authority);
+    const latest = entries.toSorted((a, b) => b.createdAt - a.createdAt)[0];
+    if (!latest) {
+      throw new AutofillError("requestNotFound");
+    }
+    return latest.key;
+  }
+
   async checkStatus(id: string, scope: string, opened: boolean, authority: AutofillAuthority) {
     const record = await this.request(id, scope, authority);
     if (record.status.state !== "pending" || !opened) {
       return {
-        ...this.publicRequest(record),
+        ...publicRequest(record),
         guidance:
           record.status.state === "pending"
             ? record.openedAt === undefined
@@ -589,7 +588,7 @@ export class AutofillService {
     }
     if (this.checkers.has(id)) {
       return {
-        ...this.publicRequest(record),
+        ...publicRequest(record),
         guidance: "A status checker is already running for this request.",
       };
     }
@@ -627,7 +626,7 @@ export class AutofillService {
     });
     if (record.status.state !== "pending") {
       return {
-        ...this.publicRequest(record),
+        ...publicRequest(record),
         guidance: "Request finished; it will not be checked again.",
       };
     }
@@ -635,7 +634,7 @@ export class AutofillService {
       // After the automatic window, an explicit user acknowledgement permits exactly one check.
       const final = await this.checkOnce(record, authority);
       return {
-        ...this.publicRequest(final),
+        ...publicRequest(final),
         guidance:
           final.status.state === "pending"
             ? "Still pending. Ask the user before creating a new request."
@@ -672,7 +671,7 @@ export class AutofillService {
     });
     this.finalStatuses.delete(id);
     return {
-      ...this.publicRequest(settled),
+      ...publicRequest(settled),
       guidance: status
         ? "Request finished."
         : "Polling stopped after two minutes. Tell me when you have approved; then I can check once more.",
@@ -736,7 +735,7 @@ export class AutofillService {
   /** Fill only a matched grant from this task's request; no caller-supplied references. */
   async fill(
     id: string,
-    entryId: string,
+    entryId: string | undefined,
     tab: { targetId: string; profile?: string },
     scope: string,
     authority: AutofillAuthority,
@@ -744,8 +743,12 @@ export class AutofillService {
     const request = await this.request(id, scope, authority);
     return this.serialize(request.connectionPath, async () => {
       const current = await this.request(id, scope, authority, false);
-      const entry = current.request.entries.find((candidate) => candidate.id === entryId);
-      const grant = current.status.resolved.find((candidate) => candidate.entryId === entryId);
+      // Without an entry id, use the only granted login; several grants stay ambiguous.
+      const chosen =
+        entryId ??
+        (current.status.resolved.length === 1 ? current.status.resolved[0]?.entryId : "");
+      const entry = current.request.entries.find((candidate) => candidate.id === chosen);
+      const grant = current.status.resolved.find((candidate) => candidate.entryId === chosen);
       if (current.status.state !== "resolved" || !entry || !grant) {
         throw new AutofillError("loginNotGranted");
       }
@@ -768,7 +771,7 @@ export class AutofillService {
       return {
         state: result.status,
         website: entry.parameters.website,
-        entryId,
+        entryId: entry.id,
         guidance:
           "The form was filled and submitted. Check the page to see whether sign-in succeeded.",
       };

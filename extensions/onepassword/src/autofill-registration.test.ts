@@ -223,8 +223,7 @@ it("starts a single service-owned checker from the click with retained authority
   expect(f.system.captureSessionEventTarget).toHaveBeenCalledWith("main", "agent:main:chat");
   expect(f.system.enqueueSessionEvent).toHaveBeenCalledTimes(1);
   const [text, eventOptions] = vi.mocked(f.system.enqueueSessionEvent).mock.calls[0]!;
-  expect(text).toContain("requestId=request");
-  expect(text).toContain("Granted entryIds: entry.");
+  expect(text).toContain("approved sign-in for example.com");
   expect(text).not.toContain("onepassword://");
   expect(eventOptions).toMatchObject({
     agentId: "main",
@@ -309,7 +308,7 @@ it("runs one connect checker from the card click and resumes the chat when conse
   expect(pickup).toHaveBeenCalledTimes(3);
   expect(f.retained.release).toHaveBeenCalledTimes(1);
   const [text, options] = vi.mocked(f.system.enqueueSessionEvent).mock.calls[0]!;
-  expect(text).toContain("1Password is now connected");
+  expect(text).toBe("1Password connected. Continue with the logins this task needs.");
   expect(options).toMatchObject({ contextKey: `onepassword-connect:${sessionId}` });
   f.options.client!.internal!.authenticatedControlUi = undefined;
   expect(await f.connectView(f.options)).toEqual({ state: "error", code: "gatewayOwnerRequired" });

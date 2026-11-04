@@ -4,7 +4,7 @@ import { ApprovalNotifier } from "./autofill-approval-notice.js";
 const finished = (granted: boolean, state = "resolved") => ({
   state,
   requestId: "request",
-  entries: [{ entryId: "entry", granted }],
+  entries: [{ entryId: "entry", granted, website: "https://example.com/login" }],
 });
 
 function setup(capture: () => Promise<unknown> = async () => ({})) {
@@ -25,8 +25,10 @@ it("tells the agent how to continue only when a login was granted", async () => 
   await s.notifier.notify(captured, finished(true));
   await s.notifier.notify(captured, finished(false, "denied"));
   const texts = s.events.enqueueSessionEvent.mock.calls.map((call) => call[0]);
-  expect(texts[0]).toContain("fill with this requestId");
-  expect(texts[1]).toContain("No logins were granted");
+  expect(texts[0]).toBe(
+    "1Password approved sign-in for example.com. Continue: open the sign-in page and fill it.",
+  );
+  expect(texts[1]).toContain("sign-in for example.com wasn't approved");
 });
 
 it("never wakes the session for a request that is still pending or was not captured", async () => {
