@@ -65,7 +65,7 @@ registerSessionMaintenancePreserveKeysProvider(async ({ native, env, memory }) =
     await whenContinuationCustodyReady({ env });
   }
   const custodyHolders = [
-    ...listLiveContinuationCustodyOwners({ env }),
+    ...listLiveContinuationCustodyOwners(env),
     ...(pendingRowSessionKeys ?? []),
   ];
   return {

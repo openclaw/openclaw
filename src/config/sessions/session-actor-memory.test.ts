@@ -488,7 +488,7 @@ describe("memory actor effect adapters", () => {
       for (const [index, name] of ["holder", "older", "writer"].entries()) {
         clock.mockReturnValue(now + index * 1_000);
         await upsertSessionEntryCore(
-          { ...source, sessionKey: key(name), sessionId: name },
+          { ...source, sessionKey: key(name) },
           { sessionId: name, updatedAt: now, incognito: true },
         );
       }

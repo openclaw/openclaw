@@ -17,7 +17,6 @@ import {
   listContinuationRecords,
   resolveContinuationCustodyDatabasePath,
   updateContinuationRecords,
-  type ContinuationCustodyStoreOptions,
 } from "./custody/custody-store.js";
 import type {
   ContinuationRecord,
@@ -822,12 +821,11 @@ export async function hasLiveContinuationCustody(sessionKey: string): Promise<bo
  * Every session that owns live custody, by the same rule, from the hot-path projection (session
  * maintenance, karmaterminal/openclaw#1544). Erring toward retention, an owner an unresolved write
  * left unknown counts, and a delivered record left `running` by a crash counts until startup
- * recovery finalizes it. Empty before phase A.
+ * recovery finalizes it. Empty before phase A. Read from the state root `env` names, the process's
+ * own by default.
  */
-export function listLiveContinuationCustodyOwners(
-  options?: ContinuationCustodyStoreOptions,
-): string[] {
-  const snapshot = readContinuationCustodySnapshot(resolveContinuationCustodyDatabasePath(options));
+export function listLiveContinuationCustodyOwners(env?: NodeJS.ProcessEnv): string[] {
+  const snapshot = readContinuationCustodySnapshot(resolveContinuationCustodyDatabasePath({ env }));
   if (snapshot.state === "unknown") {
     return [];
   }
