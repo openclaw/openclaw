@@ -135,6 +135,7 @@ export async function prepareCrabboxGuestNetwork(params: {
   assertCurrent: () => void;
   configureMetadata?: true;
   resourceReceipt?: WorkerResourceReceipt;
+  recordResourceReceipt?: (receipt: WorkerResourceReceipt) => Promise<void>;
 }): Promise<GuestNetworkBinding> {
   params.assertCurrent();
   if (!params.configureMetadata && !isGatewayAwsGuestReceipt(params.resourceReceipt)) {
@@ -160,6 +161,7 @@ export async function prepareCrabboxGuestAllocation(params: {
   signal?: AbortSignal;
   assertCurrent: () => void;
   resourceReceipt?: WorkerResourceReceipt;
+  recordResourceReceipt?: (receipt: WorkerResourceReceipt) => Promise<void>;
 }): Promise<{ env: NodeJS.ProcessEnv; network: GuestNetworkBinding } | undefined> {
   if (!params.untrustedWorkload) {
     return undefined;

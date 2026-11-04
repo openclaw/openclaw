@@ -213,7 +213,11 @@ export function createCrabboxWorkerProvider(
     }
     let resourceReceipt: WorkerResourceReceipt | undefined = options?.resourceReceipt;
     const stopProvisionLease = (context: LeaseCommandContext) =>
-      stopLease({ ...context, resourceReceipt, assertCurrent });
+      stopLease({
+        ...context,
+        resourceReceipt: resourceReceipt ?? context.guestNetwork?.receipt,
+        assertCurrent,
+      });
     const nodeRuntimeIdentity = options?.nodeRuntimeIdentity;
     if (parsed.warmImage && !nodeRuntimeIdentity) {
       throw new WorkerProviderError("Crabbox warm images require a prepared node runtime identity");
@@ -252,6 +256,12 @@ export function createCrabboxWorkerProvider(
       untrustedWorkload: options?.untrustedWorkload,
       env: resourceEnv,
       resourceReceipt: options?.resourceReceipt,
+      recordResourceReceipt: recordResourceReceipt
+        ? async (value) => {
+            await recordResourceReceipt(value);
+            resourceReceipt = value;
+          }
+        : undefined,
       signal: preparationSignal,
       assertCurrent,
     });
@@ -386,8 +396,9 @@ export function createCrabboxWorkerProvider(
           }
           if (resourceReceipt) {
             assertCrabboxResourceReceipt(resourceReceipt, observed);
+          } else {
+            await recordResourceReceipt(observed);
           }
-          await recordResourceReceipt(observed);
           assertCurrent();
           resourceReceipt = observed;
         }

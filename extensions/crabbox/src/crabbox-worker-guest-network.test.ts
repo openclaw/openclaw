@@ -7,6 +7,7 @@ vi.mock("./crabbox-worker-gateway-aws.js", () => ({
   isGatewayAwsGuestReceipt: (receipt: unknown) => receipt !== undefined,
 }));
 const boundary = {
+  imageId: "ami-0123456789abcdef0",
   region: "us-east-1",
   accountId: "123456789012",
   groupId: "sg-0123456789abcdef0",

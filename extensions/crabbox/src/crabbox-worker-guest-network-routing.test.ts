@@ -17,9 +17,17 @@ const account = "123456789012",
   subnetId = "subnet-0123456789abcdef0",
   vpcId = "vpc-0123456789abcdef0",
   resourceId = "i-0123456789abcdef0";
-function fixture(options: { denied?: boolean; managed?: boolean } = {}) {
+function fixture(
+  options: {
+    denied?: boolean;
+    managed?: boolean;
+    unsafeImage?: boolean;
+    actualDataNondelete?: boolean;
+  } = {},
+) {
   let allocated = false,
     metadataDisabled = false;
+  let retainedDataVolume = false;
   const events: string[] = [];
   let leaseId = "";
   const config = {
@@ -27,7 +35,13 @@ function fixture(options: { denied?: boolean; managed?: boolean } = {}) {
     coordinator: options.managed ? "https://example.invalid" : "",
     brokerMode: options.managed ? "managed" : "direct",
     tailscale: false,
-    aws: { region: "us-east-1", securityGroupId: groupId, subnetId, instanceProfile: "" },
+    aws: {
+      region: "us-east-1",
+      securityGroupId: groupId,
+      subnetId,
+      instanceProfile: "",
+      ami: "ami-0123456789abcdef0",
+    },
     env: { allow: [] },
     cache: { pnpm: false, npm: false, docker: false, git: false, volumes: [] },
   };
@@ -38,6 +52,55 @@ function fixture(options: { denied?: boolean; managed?: boolean } = {}) {
       let value: unknown = {};
       if (op === "get-caller-identity") {
         value = { Account: account };
+      } else if (op === "describe-images") {
+        value = {
+          Images: [
+            {
+              ImageId: "ami-0123456789abcdef0",
+              State: "available",
+              RootDeviceType: "ebs",
+              RootDeviceName: "/dev/sda1",
+              BlockDeviceMappings: [
+                { DeviceName: "/dev/sda1", Ebs: { DeleteOnTermination: true } },
+                ...(options.unsafeImage
+                  ? [{ DeviceName: "/dev/sdf", Ebs: { DeleteOnTermination: false } }]
+                  : []),
+              ],
+            },
+          ],
+        };
+      } else if (op === "describe-volumes") {
+        const id = argv[argv.indexOf("--volume-ids") + 1]!;
+        if (
+          (id === "vol-11111111111111111" && !retainedDataVolume) ||
+          (id !== "vol-11111111111111111" && !allocated)
+        ) {
+          return reply(
+            255,
+            "",
+            "An error occurred (InvalidVolume.NotFound) when calling DescribeVolumes",
+          );
+        }
+        value = {
+          Volumes: [
+            {
+              VolumeId: id,
+              State: allocated ? "in-use" : "available",
+              Tags: [{ Key: "lease", Value: leaseId }],
+              Attachments: allocated
+                ? [
+                    {
+                      InstanceId: resourceId,
+                      Device: id === "vol-11111111111111111" ? "/dev/sdf" : "/dev/sda1",
+                      State: "attached",
+                    },
+                  ]
+                : [],
+            },
+          ],
+        };
+      } else if (op === "delete-volume") {
+        retainedDataVolume = false;
       } else if (op === "describe-subnets") {
         value = {
           Subnets: [{ SubnetId: subnetId, VpcId: vpcId, OwnerId: account, State: "available" }],
@@ -115,6 +178,21 @@ function fixture(options: { denied?: boolean; managed?: boolean } = {}) {
               Instances: [
                 {
                   InstanceId: resourceId,
+                  ImageId: "ami-0123456789abcdef0",
+                  BlockDeviceMappings: [
+                    {
+                      DeviceName: "/dev/sda1",
+                      Ebs: { VolumeId: "vol-0123456789abcdef0", DeleteOnTermination: true },
+                    },
+                    ...(options.actualDataNondelete
+                      ? [
+                          {
+                            DeviceName: "/dev/sdf",
+                            Ebs: { VolumeId: "vol-11111111111111111", DeleteOnTermination: false },
+                          },
+                        ]
+                      : []),
+                  ],
                   Tags: [{ Key: "lease", Value: leaseId }],
                   SubnetId: subnetId,
                   VpcId: vpcId,
@@ -167,6 +245,7 @@ function fixture(options: { denied?: boolean; managed?: boolean } = {}) {
     }
     if (action === "warmup") {
       allocated = true;
+      retainedDataVolume = options.actualDataNondelete === true;
       leaseId = argv[argv.indexOf("--lease-id") + 1]!;
       expect(argv).toContain("--profile=");
       return reply(0, "");
@@ -224,7 +303,11 @@ const profile = {
   ttl: "24h",
   idleTimeout: "60m",
 };
-const options = (recordResourceReceipt = async () => {}) => ({
+const options = (
+  recordResourceReceipt: (
+    receipt: import("openclaw/plugin-sdk/plugin-entry").WorkerResourceReceipt,
+  ) => Promise<void> = async () => {},
+) => ({
   recordResourceReceipt,
   untrustedWorkload: true as const,
   beginNodeEnrollment: async () =>
@@ -275,3 +358,42 @@ it.each([{ denied: true }, { managed: true }])(
     expect(f.events).not.toContain("cbx:run");
   },
 );
+
+it("rejects unsafe AMI data disks before warmup", async () => {
+  const f = fixture({ unsafeImage: true });
+  const provider = createProvider({ runCommand: f.run });
+  await expect(provider.provision!(profile, "unsafe-image", options())).rejects.toThrow(
+    "before allocation",
+  );
+  expect(f.events).not.toContain("cbx:warmup");
+});
+it("persists launch data volume custody before actual-map rejection and a restarted provider cleans it without guest bootstrap", async () => {
+  const f = fixture({ actualDataNondelete: true });
+  const provider = createProvider({ runCommand: f.run });
+  let receipt: import("openclaw/plugin-sdk/plugin-entry").WorkerResourceReceipt | undefined;
+  await expect(
+    provider.provision!(
+      profile,
+      "postlaunch-disk-reject",
+      options(async (value) => {
+        receipt = structuredClone(value);
+      }),
+    ),
+  ).rejects.toMatchObject({
+    cause: { message: "AWS guest actual launch volume is not delete-on-termination" },
+  });
+  if (!receipt) {
+    throw new Error("actual producer failed to persist exact volume custody");
+  }
+  expect(receipt.identity.launchVolumes).toContain("vol-11111111111111111");
+  expect(f.events).not.toContain("cbx:run");
+  await provider.dispose();
+  const restarted = createProvider({ runCommand: f.run });
+  await restarted.destroy!({
+    leaseId: receipt.leaseId,
+    profile,
+    resourceReceipt: receipt,
+    assertCurrent: () => {},
+  });
+  expect(f.events).toContain("aws:delete-volume");
+});

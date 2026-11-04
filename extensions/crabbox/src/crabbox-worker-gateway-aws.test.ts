@@ -17,19 +17,27 @@ const config = {
   provider: "aws",
   coordinator: "",
   brokerMode: "direct",
-  aws: { region: "us-east-1", securityGroupId: groupId, subnetId, instanceProfile: "" },
+  aws: {
+    region: "us-east-1",
+    securityGroupId: groupId,
+    subnetId,
+    instanceProfile: "",
+    ami: "ami-0123456789abcdef0",
+  },
 };
 let group: Record<string, unknown>,
   instance: Record<string, unknown>,
   current: boolean,
   deleted: boolean;
+let volumes: Map<string, Record<string, unknown>>;
+let image: Record<string, unknown>;
 let hook: ((operation: string) => Promise<void>) | undefined;
 const assertCurrent = () => {
   if (!current) {
     throw new Error("lease owner revoked");
   }
 };
-const authority = () => ({ provider: "aws", assertCurrent });
+const authority = () => ({ provider: "aws", assertCurrent, recordResourceReceipt: async () => {} });
 beforeEach(() => {
   current = true;
   deleted = false;
@@ -43,7 +51,32 @@ beforeEach(() => {
     ],
     IpPermissionsEgress: [{ IpProtocol: "-1", IpRanges: [{ CidrIp: "1.0.0.0/8" }] }],
   };
+  image = {
+    ImageId: "ami-0123456789abcdef0",
+    State: "available",
+    RootDeviceType: "ebs",
+    RootDeviceName: "/dev/sda1",
+    BlockDeviceMappings: [{ DeviceName: "/dev/sda1", Ebs: { DeleteOnTermination: false } }],
+  };
+  volumes = new Map([
+    [
+      "vol-0123456789abcdef0",
+      {
+        VolumeId: "vol-0123456789abcdef0",
+        State: "in-use",
+        Tags: [{ Key: "lease", Value: "cbx_gateway_fixture" }],
+        Attachments: [{ InstanceId: resourceId, Device: "/dev/sda1", State: "attached" }],
+      },
+    ],
+  ]);
   instance = {
+    ImageId: "ami-0123456789abcdef0",
+    BlockDeviceMappings: [
+      {
+        DeviceName: "/dev/sda1",
+        Ebs: { VolumeId: "vol-0123456789abcdef0", DeleteOnTermination: true },
+      },
+    ],
     InstanceId: resourceId,
     Tags: [{ Key: "lease", Value: "cbx_gateway_fixture" }],
     SubnetId: subnetId,
@@ -69,6 +102,24 @@ beforeEach(() => {
     let value: unknown = {};
     if (operation === "get-caller-identity") {
       value = { Account: account };
+    } else if (operation === "describe-images") {
+      value = { Images: [image] };
+    } else if (operation === "describe-volumes") {
+      const id = argv[argv.indexOf("--volume-ids") + 1]!;
+      const volume = volumes.get(id);
+      if (!volume) {
+        return {
+          stdout: "",
+          stderr: "An error occurred (InvalidVolume.NotFound) when calling DescribeVolumes",
+          code: 255,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      value = { Volumes: [volume] };
+    } else if (operation === "delete-volume") {
+      volumes.delete(argv[argv.indexOf("--volume-id") + 1]!);
     } else if (operation === "describe-subnets") {
       value = {
         Subnets: [{ SubnetId: subnetId, VpcId: vpcId, OwnerId: account, State: "available" }],
@@ -130,13 +181,25 @@ beforeEach(() => {
       instance.MetadataOptions = { HttpEndpoint: "disabled", State: "applied" };
     } else if (operation === "terminate-instances") {
       deleted = true;
+      if (Array.isArray(instance.BlockDeviceMappings)) {
+        for (const row of instance.BlockDeviceMappings) {
+          const mapping = row.Ebs;
+          const volume = volumes.get(mapping.VolumeId);
+          if (mapping.DeleteOnTermination) {
+            volumes.delete(mapping.VolumeId);
+          } else if (volume) {
+            volume.Attachments = [];
+            volume.State = "available";
+          }
+        }
+      }
       instance.State = { Name: "terminated" };
       value = { TerminatingInstances: [{ InstanceId: resourceId }] };
     } else if (operation !== "wait") {
       throw new Error("unexpected mock control-plane request");
     }
     return {
-      stdout: operation === "wait" ? "" : JSON.stringify(value),
+      stdout: operation === "wait" || operation === "delete-volume" ? "" : JSON.stringify(value),
       stderr: "",
       code: 0,
       signal: null,
@@ -436,3 +499,201 @@ it.each(["public-vpc", "peering", "transit", "gateway-endpoint", "ambiguous"])(
     ).toThrow();
   },
 );
+
+it("rejects a nondeleting AMI-derived data device before any allocation or metadata effect", async () => {
+  image.BlockDeviceMappings = [
+    { DeviceName: "/dev/sda1", Ebs: { DeleteOnTermination: false } },
+    { DeviceName: "/dev/sdf", Ebs: { DeleteOnTermination: false } },
+  ];
+  await expect(prepareGatewayAwsGuestBoundary(config, authority())).rejects.toThrow(
+    "before allocation",
+  );
+  expect(
+    run.mock.calls.every(
+      ([argv]) =>
+        !["modify-instance-metadata-options", "terminate-instances", "delete-volume"].includes(
+          argv[2]!,
+        ),
+    ),
+  ).toBe(true);
+});
+it("requires explicit AMI before provisioning rather than trusting unresolved image defaults", async () => {
+  await expect(
+    prepareGatewayAwsGuestBoundary({ ...config, aws: { ...config.aws, ami: "" } }, authority()),
+  ).rejects.toThrow("AMI");
+  expect(run).not.toHaveBeenCalled();
+});
+function addDataVolume(autodelete: boolean) {
+  const volumeId = "vol-11111111111111111";
+  instance.BlockDeviceMappings = [
+    {
+      DeviceName: "/dev/sda1",
+      Ebs: { VolumeId: "vol-0123456789abcdef0", DeleteOnTermination: true },
+    },
+    { DeviceName: "/dev/sdf", Ebs: { VolumeId: volumeId, DeleteOnTermination: autodelete } },
+  ];
+  volumes.set(volumeId, {
+    VolumeId: volumeId,
+    State: "in-use",
+    Tags: [{ Key: "lease", Value: "cbx_gateway_fixture" }],
+    Attachments: [{ InstanceId: resourceId, Device: "/dev/sdf", State: "attached" }],
+  });
+  return volumeId;
+}
+it("persists the exact owned data volume before rejecting actual nondelete mapping; restart cleanup deletes and observes absence", async () => {
+  const boundary = await prepareGatewayAwsGuestBoundary(config, authority());
+  const volumeId = addDataVolume(false);
+  const record = vi.fn<
+    (receipt: import("openclaw/plugin-sdk/plugin-entry").WorkerResourceReceipt) => Promise<void>
+  >(async () => {});
+  await expect(
+    qualifyGatewayAwsGuestResource({
+      ...authority(),
+      recordResourceReceipt: record,
+      boundary,
+      leaseId: "cbx_gateway_fixture",
+      resourceId,
+      configureMetadata: true,
+    }),
+  ).rejects.toThrow("not delete-on-termination");
+  expect(record).toHaveBeenCalledOnce();
+  expect(run.mock.calls.every(([argv]) => argv[2] !== "modify-instance-metadata-options")).toBe(
+    true,
+  );
+  const receipt = structuredClone(record.mock.calls[0]![0]);
+  expect(receipt.identity.launchVolumes).toContain(volumeId);
+  run.mockClear();
+  await deleteGatewayAwsGuestResource({ ...authority(), receipt });
+  expect(volumes.size).toBe(0);
+  expect(
+    run.mock.calls.some(([argv]) => argv[2] === "delete-volume" && argv.includes(volumeId)),
+  ).toBe(true);
+  // A restart retries durable custody after instance termination/volume absence.
+  await expect(deleteGatewayAwsGuestResource({ ...authority(), receipt })).resolves.toBeUndefined();
+});
+it("accepts all-delete actual mappings and confirms every volume absent before cleanup success", async () => {
+  addDataVolume(true);
+  const receipt = await provision();
+  run.mockClear();
+  await deleteGatewayAwsGuestResource({ ...authority(), receipt });
+  expect(volumes.size).toBe(0);
+  expect(run.mock.calls.filter(([argv]) => argv[2] === "describe-volumes")).toHaveLength(4);
+  expect(run.mock.calls.some(([argv]) => argv[2] === "delete-volume")).toBe(false);
+});
+it.each(["foreign-tag", "foreign-attachment", "substituted-id", "permission"])(
+  "preserves cleanup ownership without deleting a borrowed/unknown disk: %s",
+  async (reason) => {
+    const boundary = await prepareGatewayAwsGuestBoundary(config, authority());
+    const volumeId = addDataVolume(false);
+    let receipt: import("openclaw/plugin-sdk/plugin-entry").WorkerResourceReceipt | undefined;
+    await expect(
+      qualifyGatewayAwsGuestResource({
+        ...authority(),
+        recordResourceReceipt: async (value) => {
+          receipt = value;
+        },
+        boundary,
+        leaseId: "cbx_gateway_fixture",
+        resourceId,
+        configureMetadata: true,
+      }),
+    ).rejects.toThrow("not delete-on-termination");
+    if (!receipt) {
+      throw new Error("test requires persisted custody");
+    }
+    const volume = volumes.get(volumeId)!;
+    if (reason === "foreign-tag") {
+      volume.Tags = [{ Key: "lease", Value: "other-lease" }];
+    } else if (reason === "foreign-attachment") {
+      volume.Attachments = [
+        { InstanceId: "i-11111111111111111", Device: "/dev/sdf", State: "attached" },
+      ];
+    } else if (reason === "substituted-id") {
+      instance.BlockDeviceMappings = [
+        {
+          DeviceName: "/dev/sdf",
+          Ebs: { VolumeId: "vol-22222222222222222", DeleteOnTermination: false },
+        },
+      ];
+    } else {
+      hook = async (operation) => {
+        if (operation === "describe-volumes") {
+          throw new Error("permission denied");
+        }
+      };
+    }
+    run.mockClear();
+    await expect(deleteGatewayAwsGuestResource({ ...authority(), receipt })).rejects.toThrow();
+    expect(
+      run.mock.calls.every(
+        ([argv]) => argv[2] !== "terminate-instances" && argv[2] !== "delete-volume",
+      ),
+    ).toBe(true);
+    expect(volumes.has(volumeId)).toBe(true);
+  },
+);
+it("unknown volume deletion outcome does not resolve cleanup and retry consumes only recorded IDs", async () => {
+  const boundary = await prepareGatewayAwsGuestBoundary(config, authority());
+  const volumeId = addDataVolume(false);
+  let receipt: import("openclaw/plugin-sdk/plugin-entry").WorkerResourceReceipt | undefined;
+  await expect(
+    qualifyGatewayAwsGuestResource({
+      ...authority(),
+      recordResourceReceipt: async (value) => {
+        receipt = value;
+      },
+      boundary,
+      leaseId: "cbx_gateway_fixture",
+      resourceId,
+      configureMetadata: true,
+    }),
+  ).rejects.toThrow();
+  if (!receipt) {
+    throw new Error("missing test custody");
+  }
+  hook = async (operation) => {
+    if (operation === "delete-volume") {
+      throw new Error("uncertain delete");
+    }
+  };
+  await expect(deleteGatewayAwsGuestResource({ ...authority(), receipt })).rejects.toThrow(
+    "uncertain delete",
+  );
+  expect(deleted).toBe(true);
+  expect(volumes.has(volumeId)).toBe(true);
+  hook = undefined;
+  await expect(deleteGatewayAwsGuestResource({ ...authority(), receipt })).resolves.toBeUndefined();
+  expect(volumes.has(volumeId)).toBe(false);
+});
+
+it("keeps cleanup unresolved when deletion succeeded but the required absence observation is denied", async () => {
+  const boundary = await prepareGatewayAwsGuestBoundary(config, authority());
+  const volumeId = addDataVolume(false);
+  let receipt: import("openclaw/plugin-sdk/plugin-entry").WorkerResourceReceipt | undefined;
+  await expect(
+    qualifyGatewayAwsGuestResource({
+      ...authority(),
+      recordResourceReceipt: async (value) => {
+        receipt = value;
+      },
+      boundary,
+      leaseId: "cbx_gateway_fixture",
+      resourceId,
+      configureMetadata: true,
+    }),
+  ).rejects.toThrow();
+  if (!receipt) {
+    throw new Error("missing custody");
+  }
+  hook = async (operation) => {
+    if (operation === "describe-volumes" && deleted && !volumes.has(volumeId)) {
+      throw new Error("absence permission unavailable");
+    }
+  };
+  await expect(deleteGatewayAwsGuestResource({ ...authority(), receipt })).rejects.toThrow(
+    "absence permission unavailable",
+  );
+  expect(volumes.has(volumeId)).toBe(false);
+  hook = undefined;
+  await expect(deleteGatewayAwsGuestResource({ ...authority(), receipt })).resolves.toBeUndefined();
+});

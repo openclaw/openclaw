@@ -226,7 +226,7 @@ box. Existing machine classes and allowed CPU, RAM, Linux OS, region, and disk
 selections still drive per-request allocation.
 
 A trusted operator must select a released Crabbox executable and configure an
-explicit AWS subnet and existing security group in the ordinary Crabbox AWS
+explicit trusted AMI, AWS subnet, and existing security group in the ordinary Crabbox AWS
 configuration. The Gateway also needs AWS CLI access to the same AWS account.
 No network changes or cloud provisioning are performed merely by enabling a
 profile or reading this configuration. Development/candidate executables and
@@ -251,7 +251,12 @@ Gateway verifies the exact AWS instance, account, VPC, subnet, network interface
 and security group; rejects instance profiles; disables the instance metadata
 HTTP endpoint; and waits for effective API readback. It records the resource and
 semantic network-rule and effective-topology digest through the existing Gateway resource-receipt owner
-before node bootstrap. Subsequent guest access rechecks live AWS facts against
+before node bootstrap. The explicit AMI must expose a complete EBS root mapping and
+all additional EBS mappings must request deletion on termination before allocation;
+the released CLI forces root deletion. The Gateway records the exact attached,
+lease-tagged launch volume IDs durably before postallocation qualification. Actual
+nondeleting or unknown mappings reject guest access but keep disk custody for cleanup.
+Subsequent guest access rechecks live AWS facts against
 that durable identity and digest. The session and allocation owners recheck
 current grant, attachment, and owner epoch after awaited qualification and before
 node effects. Missing, conflicting, changed, or unavailable facts do not authorize
@@ -264,7 +269,10 @@ provider credentials remain on the Gateway; only the existing lease-scoped node
 bootstrap material is delivered. Ordinary trusted worker flows are unchanged.
 
 Trusted cleanup uses the recorded AWS account and exact instance identity, not
-current guest network permission or a revoked guest grant. AWS confirms deletion;
+current guest network permission or a revoked guest grant. AWS confirms instance and every recorded launch-volume absence. A retained data
+volume is deleted only by its recorded ID after independent lease-tag and detached
+state checks; borrowed or unknown volumes are never detached or deleted. Missing
+volume facts or partial deletion retain cleanup ownership. AWS confirms deletion;
 Crabbox's host-local claim is a derived projection that can remain stale until its
 next status refresh. A missing original account credential or unconfirmed deletion
 retains cleanup ownership instead of claiming success.

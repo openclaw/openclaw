@@ -9,6 +9,12 @@ import {
   onlyAwsRecord,
   requireAwsRecord,
 } from "./crabbox-worker-gateway-aws-policy.js";
+import {
+  assertDisposableAwsImage,
+  launchVolumeMappings,
+  assertOwnedLaunchVolume,
+  receiptVolumes,
+} from "./crabbox-worker-gateway-aws-volumes.js";
 
 export type GatewayAwsAuthority = {
   env?: NodeJS.ProcessEnv;
@@ -16,6 +22,7 @@ export type GatewayAwsAuthority = {
   assertCurrent: () => void;
 };
 export type GatewayAwsBoundary = {
+  imageId: string;
   region: string;
   accountId: string;
   groupId: string;
@@ -24,6 +31,7 @@ export type GatewayAwsBoundary = {
   rulesDigest: string;
 };
 class GatewayAwsResourceAbsentError extends Error {}
+class GatewayAwsVolumeAbsentError extends Error {}
 const RECEIPT_OWNER = "openclaw-gateway-aws-network-v1";
 export function isGatewayAwsGuestReceipt(receipt: WorkerResourceReceipt | undefined): boolean {
   return receipt?.identity.gatewayOwner === RECEIPT_OWNER;
@@ -63,6 +71,13 @@ async function awsJson(
   if (result.code !== 0 || result.termination !== "exit") {
     if (
       service === "ec2" &&
+      operation === "describe-volumes" &&
+      /\(InvalidVolume.NotFound\)/u.test(result.stderr)
+    ) {
+      throw new GatewayAwsVolumeAbsentError("Recorded launch volume is absent");
+    }
+    if (
+      service === "ec2" &&
       operation === "describe-instances" &&
       /\(InvalidInstanceID.NotFound\)/u.test(result.stderr)
     ) {
@@ -74,7 +89,7 @@ async function awsJson(
         ")",
     );
   }
-  if (operation === "wait" && result.stdout.trim() === "") {
+  if ((operation === "wait" || operation === "delete-volume") && result.stdout.trim() === "") {
     return {};
   }
   try {
@@ -95,9 +110,14 @@ function requiredId(value: unknown, pattern: RegExp, label: string): string {
 }
 async function readBoundary(
   params: GatewayAwsAuthority,
-  fields: { region: string; groupId: string; subnetId: string },
+  fields: { region: string; groupId: string; subnetId: string; imageId: string },
 ): Promise<GatewayAwsBoundary> {
   const caller = await awsJson(params, fields.region, "sts", "get-caller-identity");
+  const image = await awsJson(params, fields.region, "ec2", "describe-images", [
+    "--image-ids",
+    fields.imageId,
+  ]);
+  assertDisposableAwsImage(image.Images, fields.imageId);
   const accountId = requiredId(caller.Account, /^\d{12}$/u, "AWS account");
   const subnets = await awsJson(params, fields.region, "ec2", "describe-subnets", [
     "--subnet-ids",
@@ -178,7 +198,8 @@ export async function prepareGatewayAwsGuestBoundary(
   const region = requiredId(aws.region, /^[a-z]{2}-[a-z]+-\d$/u, "commercial AWS region");
   const groupId = requiredId(aws.securityGroupId, /^sg-[a-f0-9]{8,17}$/u, "AWS security group");
   const subnetId = requiredId(aws.subnetId, /^subnet-[a-f0-9]{8,17}$/u, "AWS subnet");
-  return await readBoundary(params, { region, groupId, subnetId });
+  const imageId = requiredId(aws.ami, /^ami-[a-f0-9]{8,17}$/u, "explicit trusted AWS AMI");
+  return await readBoundary(params, { region, groupId, subnetId, imageId });
 }
 function assertInstance(
   value: unknown,
@@ -240,21 +261,85 @@ export async function qualifyGatewayAwsGuestResource(
     leaseId: string;
     resourceId: string;
     expected?: WorkerResourceReceipt;
+    recordResourceReceipt?: (receipt: WorkerResourceReceipt) => Promise<void>;
     configureMetadata?: boolean;
   },
 ): Promise<WorkerResourceReceipt> {
   const resourceId = requiredId(params.resourceId, /^i-[a-f0-9]{8,17}$/u, "AWS instance identity");
-  let instance = await readInstance(params, params.boundary, resourceId);
+  // Released Crabbox applies its exact lease tag to instances and RunInstances
+  // volumes. Capture only those exact attached IDs, never a tag-wide volume scan.
+  const result = await awsJson(params, params.boundary.region, "ec2", "describe-instances", [
+    "--instance-ids",
+    resourceId,
+  ]);
+  let instance = onlyAwsRecord(
+    onlyAwsRecord(result.Reservations, "reservation").Instances,
+    "instance",
+  );
   const leaseTags = Array.isArray(instance.Tags)
     ? instance.Tags.filter((tag) => requireAwsRecord(tag, "instance tag").Key === "lease")
     : [];
   if (
+    instance.InstanceId !== resourceId ||
+    instance.ImageId !== params.boundary.imageId ||
     leaseTags.length !== 1 ||
     requireAwsRecord(leaseTags[0], "lease tag").Value !== params.leaseId
   ) {
     throw new WorkerProviderError(
-      "AWS instance is not tagged for the exact Gateway allocation lease",
+      "AWS instance identity does not match the exact Gateway allocation lease and AMI",
     );
+  }
+  const volumes = launchVolumeMappings(instance);
+  for (const volume of volumes) {
+    const observed = await awsJson(params, params.boundary.region, "ec2", "describe-volumes", [
+      "--volume-ids",
+      volume.volumeId,
+    ]);
+    assertOwnedLaunchVolume(observed.Volumes, volume, params.leaseId, resourceId, true);
+  }
+  const receipt: WorkerResourceReceipt = {
+    version: 1,
+    leaseId: params.leaseId,
+    identity: {
+      gatewayOwner: RECEIPT_OWNER,
+      provider: "aws",
+      resourceId,
+      accountId: params.boundary.accountId,
+      region: params.boundary.region,
+      securityGroupId: params.boundary.groupId,
+      subnetId: params.boundary.subnetId,
+      vpcId: params.boundary.vpcId,
+      rulesDigest: params.boundary.rulesDigest,
+      imageId: params.boundary.imageId,
+      launchVolumes: JSON.stringify(volumes),
+    },
+  };
+  if (params.expected) {
+    if (!isDeepStrictEqual(receipt, params.expected)) {
+      throw new WorkerProviderError("Gateway-owned AWS guest resource receipt changed");
+    }
+  } else {
+    if (!params.configureMetadata || !params.recordResourceReceipt) {
+      throw new WorkerProviderError(
+        "AWS guest launch volumes require durable custody before qualification",
+      );
+    }
+    await params.recordResourceReceipt(receipt);
+    params.assertCurrent();
+  }
+  assertInstance(instance, resourceId, params.boundary);
+  // Qualification failures after custody settlement retain exact disks for trusted
+  // teardown. Never silently repair a non-disposable launch into guest admission.
+  if (!Array.isArray(instance.BlockDeviceMappings)) {
+    throw new WorkerProviderError("AWS guest block-device mappings missing");
+  }
+  for (const item of instance.BlockDeviceMappings) {
+    if (
+      requireAwsRecord(requireAwsRecord(item, "device").Ebs, "EBS mapping").DeleteOnTermination !==
+      true
+    ) {
+      throw new WorkerProviderError("AWS guest actual launch volume is not delete-on-termination");
+    }
   }
   let metadata = requireAwsRecord(instance.MetadataOptions, "metadata options");
   if (metadata.HttpEndpoint !== "disabled" && params.configureMetadata && !params.expected) {
@@ -287,24 +372,6 @@ export async function qualifyGatewayAwsGuestResource(
   if (!isDeepStrictEqual(live, params.boundary)) {
     throw new WorkerProviderError("AWS guest network boundary or account changed");
   }
-  const receipt: WorkerResourceReceipt = {
-    version: 1,
-    leaseId: params.leaseId,
-    identity: {
-      gatewayOwner: RECEIPT_OWNER,
-      provider: "aws",
-      resourceId,
-      accountId: live.accountId,
-      region: live.region,
-      securityGroupId: live.groupId,
-      subnetId: live.subnetId,
-      vpcId: live.vpcId,
-      rulesDigest: live.rulesDigest,
-    },
-  };
-  if (params.expected && !isDeepStrictEqual(receipt, params.expected)) {
-    throw new WorkerProviderError("Gateway-owned AWS guest resource receipt changed");
-  }
   params.assertCurrent();
   return receipt;
 }
@@ -327,39 +394,83 @@ export async function deleteGatewayAwsGuestResource(
   if (account.Account !== receipt.identity.accountId) {
     throw new WorkerProviderError("AWS cleanup credentials do not belong to the recorded account");
   }
+  const volumes = receiptVolumes(receipt.identity.launchVolumes);
+  let terminated: boolean;
   try {
-    const existing = await awsJson(params, region, "ec2", "describe-instances", [
+    const result = await awsJson(params, region, "ec2", "describe-instances", [
       "--instance-ids",
       resourceId,
     ]);
     const instance = onlyAwsRecord(
-      onlyAwsRecord(existing.Reservations, "cleanup reservation").Instances,
+      onlyAwsRecord(result.Reservations, "cleanup reservation").Instances,
       "cleanup instance",
     );
     if (instance.InstanceId !== resourceId) {
       throw new WorkerProviderError("AWS cleanup resource identity changed");
     }
-    if (requireAwsRecord(instance.State, "cleanup state").Name === "terminated") {
-      return;
+    terminated = requireAwsRecord(instance.State, "cleanup state").Name === "terminated";
+    if (!terminated) {
+      if (!isDeepStrictEqual(launchVolumeMappings(instance), volumes)) {
+        throw new WorkerProviderError("AWS cleanup instance volume set changed; custody retained");
+      }
+      for (const volume of volumes) {
+        const observed = await awsJson(params, region, "ec2", "describe-volumes", [
+          "--volume-ids",
+          volume.volumeId,
+        ]);
+        assertOwnedLaunchVolume(observed.Volumes, volume, receipt.leaseId, resourceId, true);
+      }
     }
   } catch (error) {
     if (error instanceof GatewayAwsResourceAbsentError) {
-      return;
+      terminated = true;
+    } else {
+      throw error;
     }
-    throw error;
   }
-  const accepted = await awsJson(params, region, "ec2", "terminate-instances", [
-    "--instance-ids",
-    resourceId,
-  ]);
-  if (onlyAwsRecord(accepted.TerminatingInstances, "termination").InstanceId !== resourceId) {
-    throw new WorkerProviderError("AWS did not acknowledge the bound guest resource termination");
+  if (!terminated) {
+    const accepted = await awsJson(params, region, "ec2", "terminate-instances", [
+      "--instance-ids",
+      resourceId,
+    ]);
+    if (onlyAwsRecord(accepted.TerminatingInstances, "termination").InstanceId !== resourceId) {
+      throw new WorkerProviderError("AWS did not acknowledge the bound guest resource termination");
+    }
+    params.onCleanupAccepted?.();
+    await awsJson(params, region, "ec2", "wait", [
+      "instance-terminated",
+      "--instance-ids",
+      resourceId,
+    ]);
   }
-  params.onCleanupAccepted?.();
-  await awsJson(params, region, "ec2", "wait", [
-    "instance-terminated",
-    "--instance-ids",
-    resourceId,
-  ]);
+  // Original launch disks remain custody after instance absence. Delete only an
+  // exact recorded, lease-tagged, independently detached volume; verify absence.
+  for (const volume of volumes) {
+    try {
+      const observed = await awsJson(params, region, "ec2", "describe-volumes", [
+        "--volume-ids",
+        volume.volumeId,
+      ]);
+      assertOwnedLaunchVolume(observed.Volumes, volume, receipt.leaseId, resourceId, false);
+      await awsJson(params, region, "ec2", "delete-volume", ["--volume-id", volume.volumeId]);
+      try {
+        await awsJson(params, region, "ec2", "describe-volumes", ["--volume-ids", volume.volumeId]);
+      } catch (error) {
+        if (error instanceof GatewayAwsVolumeAbsentError) {
+          continue;
+        }
+        throw error;
+      }
+      throw new WorkerProviderError(
+        "AWS launch volume deletion unconfirmed; cleanup remains owned",
+      );
+    } catch (error) {
+      if (error instanceof GatewayAwsVolumeAbsentError) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
   params.assertCurrent();
 }

@@ -12,6 +12,7 @@ export type GuestNetworkBinding = GatewayAwsAuthority & {
   boundary: GatewayAwsBoundary;
   configureMetadata?: true;
   receipt?: WorkerResourceReceipt;
+  recordResourceReceipt?: (receipt: WorkerResourceReceipt) => Promise<void>;
 };
 export async function verifyGuestInspect(
   inspect: ParsedInspect | undefined,
@@ -35,6 +36,13 @@ export async function verifyGuestInspect(
     leaseId,
     resourceId: inspect.providerResourceId ?? "",
     expected: binding.receipt,
+    recordResourceReceipt: async (value) => {
+      if (!binding.recordResourceReceipt) {
+        throw new WorkerProviderError("AWS guest disk custody persistence unavailable");
+      }
+      await binding.recordResourceReceipt(value);
+      binding.receipt = value;
+    },
   });
   binding.assertCurrent();
   binding.receipt = receipt;
