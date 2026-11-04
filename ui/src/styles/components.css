@@ -620,6 +620,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
+.btn.primary:active:where(:not(:disabled, [aria-disabled="true"])) {
+  background: var(--primary-active);
+}
+
 .btn.active {
   border-color: var(--accent);
   background: var(--accent-subtle);
