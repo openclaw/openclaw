@@ -20,7 +20,11 @@ For an unmapped repository secret, add its name to the selected profile's
 secret and set its exact HTTPS destination with
 `openclaw secrets store set <NAME> --allow-host <host>`. If a profile still uses
 `setupEnv`, run `openclaw doctor --fix` and resolve its reported missing bindings
-or conflicting values before retrying. Existing leases remain releasable.
+or conflicting values before retrying. Reserved names such as `OPENCLAW_*` need a
+manual environment-key and setup-command rename; the protected store ID can stay
+unchanged. See [setup secret migration](/gateway/doctor/config-migrations#cloud-setup-secret-migration).
+Existing leases remain releasable, and retained-checkpoint maintenance continues
+while a legacy profile awaits repair.
 
 ## Troubleshooting
 

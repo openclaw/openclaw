@@ -221,6 +221,8 @@ Apply narrow mutations without freeform page surgery:
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
 
+Metadata updates preserve comments and numeric spellings on untouched keys in ordinary string-keyed YAML mappings. Pages containing anchors, aliases, explicit tags, or non-string keys retain the existing value-rendering behavior instead; their parsed values remain authoritative, but source formatting is not preserved.
+
 Refreshing a synthesis without `--status` preserves its existing status. New synthesis pages default to `active`; an explicit `--status` sets or replaces the value.
 
 For `apply synthesis`, pass the summary with `--body <text>` or `--body-file <path>`.

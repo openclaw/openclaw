@@ -155,7 +155,7 @@ it.each(["unusable", "too-detailed"] as const)(
     await view.finish();
     await waitForFast(() =>
       expect(view.query('[role="alert"]')?.textContent).toContain(
-        reason === "too-detailed" ? "too detailed" : "That image can’t be used",
+        reason === "too-detailed" ? "Couldn’t save that avatar" : "Couldn’t use that image",
       ),
     );
     expect(view.props.onSelect).not.toHaveBeenCalled();

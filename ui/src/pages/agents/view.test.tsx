@@ -603,7 +603,7 @@ describe("renderAgents", () => {
     expect(skillsTab.querySelector(".hub-tab__badge--count")).toBeNull();
   });
 
-  it("localizes agent tabs and the channel subtitle", async () => {
+  it("localizes agent tabs and falls back to the current English channel subtitle", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("zh-CN");
     const container = document.createElement("div");
@@ -637,7 +637,7 @@ describe("renderAgents", () => {
           Array.from(container.querySelectorAll(".settings-section__desc"), (desc) =>
             desc.textContent?.replace(/\s+/gu, " ").trim(),
           ),
-        ).toContain(chinese.get("agents.channels.subtitle")),
+        ).toContain("Channel status across OpenClaw."),
       );
     } finally {
       await i18n.setLocale("en");

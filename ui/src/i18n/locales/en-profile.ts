@@ -30,8 +30,7 @@ const enProfile = {
       limited: "This connection has a limited set of permissions.",
       limits: "Sessions, browsers, and tools may have additional restrictions.",
       help: "Missing something you need?",
-      nextStep:
-        "Ask your server administrator to review your access. Reconnect after they make changes.",
+      nextStep: "Ask an admin to review your access. Reconnect after they make changes.",
       reconnect: "Reconnect",
       adminRequest: "Administrator access",
       adminRequestHint:

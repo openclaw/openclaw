@@ -7,6 +7,7 @@ import { isBunRuntime } from "../../daemon/runtime-binary.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
 import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidate-snapshot.js";
 import {
@@ -16,11 +17,7 @@ import {
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
-import {
-  compareSemverStrings,
-  resolveExtendedStablePackage,
-  resolveNpmChannelTag,
-} from "../../infra/update-check.js";
+import { resolveExtendedStablePackage, resolveNpmChannelTag } from "../../infra/update-check.js";
 import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
 import {
   canResolveRegistryVersionForPackageTarget,

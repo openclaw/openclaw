@@ -52,6 +52,15 @@ export function installSessionActorMemoryEntry(
   } else {
     delete next.profileInvolvement;
   }
+  // Authenticated sources follow this logical node like durable writes; a new node starts without.
+  const operatorSources = Object.hasOwn(entry, "operatorSources")
+    ? entry.operatorSources
+    : previous?.operatorSources;
+  if (operatorSources && previous) {
+    next.operatorSources = operatorSources;
+  } else {
+    delete next.operatorSources;
+  }
   // Publication never follows a copied transcript; only its lifecycle owner may select an audience.
   delete next.publicShare;
   if (previous && !sameWindow) {
