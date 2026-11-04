@@ -1,2 +1,2 @@
 # xAI-only GIF->JPEG regression: fresh, replayed, and non-xAI passthrough in one test.
-29
+36

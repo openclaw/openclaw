@@ -50,7 +50,7 @@ function createXaiGrokOAuthHeadersWrapper(
 // xAI rejects GIF and other formats outside JPG/PNG/WebP/ICO, even within size limits.
 // Other providers keep GIF pass-through; convert only xAI-bound requests, including replay.
 const XAI_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
-const xaiJpegCache = new Map<string, string | null>();
+const xaiJpegCache = new Map<string, string>();
 
 type XaiImageBlock = { type: "image"; data: string; mimeType: string };
 
@@ -70,17 +70,20 @@ async function transcodeForXai(block: XaiImageBlock) {
     const buffer = Buffer.from(block.data, "base64");
     jpeg = await resizeToJpeg({ buffer, maxSide: 4096, quality: 85, withoutEnlargement: true })
       .then((out) => out.toString("base64"))
-      .catch(() => null);
-    const oldest = xaiJpegCache.size >= 64 ? xaiJpegCache.keys().next().value : undefined;
-    if (oldest !== undefined) {
-      xaiJpegCache.delete(oldest);
+      .catch(() => undefined);
+    // Cache successes only; a transient encoder failure is retried on the next request.
+    if (jpeg !== undefined) {
+      const oldest = xaiJpegCache.size >= 64 ? xaiJpegCache.keys().next().value : undefined;
+      if (oldest !== undefined) {
+        xaiJpegCache.delete(oldest);
+      }
+      xaiJpegCache.set(block.data, jpeg);
     }
-    xaiJpegCache.set(block.data, jpeg);
   }
-  return jpeg === null
+  return jpeg === undefined
     ? {
         type: "text" as const,
-        text: `[omitted image payload: xAI does not accept ${block.mimeType}]`,
+        text: `[omitted image: could not convert ${block.mimeType} to a format xAI accepts; ask the user to resend it as PNG or JPEG]`,
       }
     : { ...block, data: jpeg, mimeType: "image/jpeg" };
 }

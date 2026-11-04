@@ -1,11 +1,17 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple, type Model, type ModelThinkingLevel } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { resizeToJpeg } from "openclaw/plugin-sdk/media-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { resolveFastModeSupport } from "./provider-policy-api.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import { captureXaiRequest, xaiModel } from "./test-helpers.js";
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+  return { ...actual, resizeToJpeg: vi.fn(actual.resizeToJpeg) };
+});
 
 function patchPayload<T extends Record<string, unknown>>(
   payload: T,
@@ -115,7 +121,7 @@ describe("xai stream wrappers", () => {
       { role: "toolResult", content: [gif] },
       { role: "user", content: [gif] },
     ] as unknown as Parameters<StreamFn>[1]["messages"]; // SAFETY: minimal message fixtures.
-    const send = async (provider: string) => {
+    const send = async (provider: string, msgs = messages) => {
       let seen: unknown[] = [];
       const streamFn: StreamFn = (_model, ctx) => {
         seen = ctx.messages.flatMap((msg): unknown[] =>
@@ -125,13 +131,14 @@ describe("xai stream wrappers", () => {
       };
       await wrapXaiProviderStream({ provider: "xai", modelId: "grok-4", streamFn })?.(
         xaiModel({ provider }),
-        {
-          messages,
-        },
+        { messages: msgs },
       );
       return seen;
     };
     const jpeg = { type: "image", mimeType: "image/jpeg", data: expect.stringMatching(/^\/9j\//) };
+    vi.mocked(resizeToJpeg).mockRejectedValueOnce(new Error("worker exited"));
+    const resend = expect.stringContaining("resend it as PNG or JPEG");
+    expect(await send("xai", messages.slice(1))).toEqual([{ type: "text", text: resend }]);
     expect(await send("xai")).toEqual([jpeg, jpeg]);
     expect(await send("openai")).toEqual([gif, gif]);
   });
