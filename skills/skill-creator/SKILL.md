@@ -25,9 +25,10 @@ description: "Author or review AgentSkills: create, repair, validate, or restruc
    - **Done when:** every planned resource has one purpose and a direct pointer from `SKILL.md`.
 
 4. Draft and persist.
-   - Live workspace skill: use `skill_workshop` to create or revise a pending proposal; keep live files unchanged until apply.
+   - Live workspace skill: use `skill_workshop` to create or revise the skill. A personal create/update publishes
+     immediately (there is no pending proposal and no separate apply step), so finish the draft before you write it.
    - Repository-owned skill source: use the repository's normal edit and review workflow.
-   - **Done when:** the proposal or source diff implements every branch from step 1 and contains every resource from step 3.
+   - **Done when:** the published skill or source diff implements every branch from step 1 and contains every resource from step 3.
 
 5. Validate.
    - Run `python {baseDir}/scripts/quick_validate.py <skill-directory>` and execute every touched helper's focused test.
