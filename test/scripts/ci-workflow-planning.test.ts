@@ -3148,10 +3148,28 @@ describe("ci workflow guards", () => {
       expect(actual).not.toContain("check-plan");
       expect(ordinary.outputs.split_pr_guards).toBe("true");
       expect(qualification.outputs.split_pr_guards).toBe("false");
-      expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
-        // Qualification retains platform rows; ordinary PRs add one parallel guard row.
-        Number(ordinary.outputs.hybrid_hosted_base_rows) + 2 + 3 + 2 + 1 + 5 - 1,
-      );
+      for (const [manifest, eventName] of [
+        [ordinary, "pull_request"],
+        [qualification, "workflow_dispatch"],
+      ] as const) {
+        const { hybrid_hosted_base_rows: reportedBaseRows, ...inventoryOutputs } = manifest.outputs;
+        const baseRows = emittedHostedRows(
+          {
+            ...inventoryOutputs,
+            node_runner_backend: "runson",
+            hybrid_hosted_offload: "false",
+            hybrid_hosted_checks: "false",
+            hybrid_hosted_main_checks: "false",
+          },
+          {
+            eventName,
+            releaseGate: eventName === "workflow_dispatch",
+            runnerBackend: "runson",
+            runnerProfile: "hybrid",
+          },
+        );
+        expect(Number(reportedBaseRows)).toBe(baseRows.length);
+      }
       expect(Number(qualification.outputs.hybrid_hosted_total_rows)).toBe(actual.length);
     });
 
