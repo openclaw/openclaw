@@ -1,6 +1,5 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { userEvent } from "vitest/browser";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createContext,
   createGateway,
@@ -11,13 +10,17 @@ import "./command-palette.tsx";
 import "../styles.css";
 
 it("keeps an idle search settled across usage updates and still accepts command changes", async () => {
-  const refresh = createDeferred<{
-    skills: { skillKey: string; name: string; description: string }[];
-  }>();
-  let refreshing = false;
+  let skillName = "zzidlequery old skill";
+  let modelName = "zzidlequery old model";
   const request = vi.fn(async (method: string) => {
     if (method === "skills.status") {
-      return refreshing ? refresh.promise : { skills: [] };
+      return { skills: [{ skillKey: "idle", name: skillName, description: "Command" }] };
+    }
+    if (method === "models.list") {
+      return { models: [{ provider: "fixture", id: "idle", name: modelName }] };
+    }
+    if (method === "plugins.list") {
+      return { plugins: [{ id: "idle", name: "zzidlequery plugin", description: "Tools" }] };
     }
     if (method === "sessions.search") {
       return { results: [], sessions: [], archivedTranscriptsExcluded: 146 };
@@ -25,7 +28,7 @@ it("keeps an idle search settled across usage updates and still accepts command 
     return { models: [], plugins: [] };
   });
   const harness = createGateway(true, {
-    methods: ["skills.status", "models.list", "sessions.search"],
+    methods: ["skills.status", "models.list", "plugins.list", "sessions.search"],
     request,
   });
   const roster = createSessionResult("agent:main:fixture", "Fixture session");
@@ -39,14 +42,13 @@ it("keeps an idle search settled across usage updates and still accepts command 
   input.focus();
   await userEvent.keyboard("zzidlequery");
   await expect
-    .poll(() => request.mock.calls.filter(([method]) => method === "sessions.search").length)
-    .toBe(1);
-  await expect
     .poll(() => palette.textContent)
     .toContain("Archived sessions are not included in message search.");
   await expect.poll(() => palette.textContent).not.toMatch(/Searching (commands|sessions)/);
+  expect(palette.textContent).toContain("zzidlequery old skill");
+  expect(palette.textContent).toContain("zzidlequery old model");
+  expect(palette.textContent).toContain("zzidlequery plugin");
   const initialReads = request.mock.calls.length;
-  refreshing = true;
   for (let update = 0; update < 3; update++) {
     harness.emit("chat.metadata.changed", {
       modelCatalogChanged: false,
@@ -64,10 +66,24 @@ it("keeps an idle search settled across usage updates and still accepts command 
   expect(palette.textContent).not.toContain("Searching commands");
   expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).not.toBe("true");
   expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1);
+  skillName = "zzidlequery skill";
   harness.emit("chat.metadata.changed", { modelCatalogChanged: false, authChanged: false });
   await expect.poll(() => request.mock.calls.length).toBeGreaterThan(initialReads);
-  refresh.resolve({
-    skills: [{ skillKey: "idle", name: "zzidlequery skill", description: "Updated command" }],
-  });
+
   await expect.poll(() => palette.textContent).toContain("zzidlequery skill");
+  expect(palette.textContent).not.toContain("zzidlequery old skill");
+  expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+  expect(palette.textContent).toContain("zzidlequery old model");
+  const refreshedReads = request.mock.calls.length;
+  modelName = "zzidlequery new model";
+  harness.emit("chat.metadata.changed", {
+    modelCatalogChanged: true,
+    commandsChanged: false,
+    authChanged: false,
+  });
+  await expect.poll(() => palette.textContent).toContain(modelName);
+  expect(palette.textContent).not.toContain("zzidlequery old model");
+  expect(palette.textContent).toContain("zzidlequery skill");
+  expect(palette.textContent).toContain("zzidlequery plugin");
+  expect(request.mock.calls).toHaveLength(refreshedReads + 1);
 });
