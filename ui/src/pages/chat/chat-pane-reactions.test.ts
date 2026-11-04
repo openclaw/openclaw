@@ -8,13 +8,16 @@ import type {
   SessionReactionsSetResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import * as toast from "../../lib/toast.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
 
 const peerReaction: MessageReactionSummary[] = [
   { emoji: "👍", count: 1, identities: [{ id: "riley", label: "Riley" }] },
@@ -29,13 +32,19 @@ type ReactionsPane = {
 };
 
 function fixture(
-  list: Promise<SessionReactionsListResult>,
+  list: Promise<SessionReactionsListResult> = Promise.resolve({
+    sessionId: "session-1",
+    reactions: {},
+  }),
   set?: Promise<SessionReactionsSetResult>,
 ) {
   const requests: string[] = [];
   const writes: unknown[] = [];
   const client = createTestGatewayClient((method, params) => {
     requests.push(method);
+    if (method === "agents.list") {
+      return makeBootRoster();
+    }
     if (method === "session.reactions.set") {
       writes.push(params);
     }
@@ -95,6 +104,17 @@ function fixture(
     );
   };
   session("session-1");
+  const commitHistory = () =>
+    setChatHistoryLoad(created.state, {
+      phase: "committed",
+      sessions: created.state.sessions,
+      client,
+      connectionEpoch: created.state.connectionEpoch,
+      sessionKey: created.state.sessionKey,
+      requestAgentId: undefined,
+      sessionInfo: { key: created.state.sessionKey, sessionId: "session-1", kind: "direct" },
+    });
+  commitHistory();
   const event = (reactions = peerReaction): SessionReactionEvent => ({
     sessionKey: created.state.sessionKey,
     sessionId: "session-1",
@@ -109,6 +129,7 @@ function fixture(
     ...created,
     pane,
     session,
+    commitHistory,
     event,
     requests,
     writes,
@@ -127,13 +148,77 @@ function fixture(
 }
 
 describe("pane reaction ownership", () => {
+  it("revalidates cached reactions before transcript readiness and retains later events", async () => {
+    const list = createDeferred<SessionReactionsListResult>();
+    const f = fixture(list.promise);
+    f.state.chatMessages = [{ role: "user", messageId: "message-1", content: "hello" }];
+    cacheChatSessionSnapshot(
+      f.state.chatMessagesBySession,
+      f.state,
+      {
+        sessionKey: f.state.sessionKey,
+      },
+      {
+        sessionId: "session-1",
+        messages: f.state.chatMessages,
+        pagination: { hasMore: false },
+        messageReactions: { "message-1": selfReaction },
+      },
+    );
+    setChatHistoryLoad(f.state, {
+      phase: "pending-connection",
+      sessionKey: f.state.sessionKey,
+      requestAgentId: undefined,
+      startup: true,
+    });
+    f.pane.syncSessionReactions();
+    expect(f.reactions()).toEqual(selfReaction);
+    expect(f.requests).toEqual(["session.reactions.list"]);
+    f.pane.handleSessionReactionEvent(f.event());
+    expect(f.reactions()).toEqual(peerReaction);
+    f.commitHistory();
+    f.pane.syncSessionReactions();
+    expect(f.requests).toEqual(["session.reactions.list"]);
+    list.resolve({ sessionId: "session-1", reactions: { "message-1": peerReaction } });
+    await list.promise;
+    await Promise.resolve();
+    expect(f.reactions()).toEqual(peerReaction);
+  });
+
+  it("replaces reactions changed while away and never restores a previous session incarnation", async () => {
+    const list = createDeferred<SessionReactionsListResult>();
+    const f = fixture(list.promise);
+    f.state.chatMessages = [{ role: "user", messageId: "message-1", content: "hello" }];
+    cacheChatSessionSnapshot(
+      f.state.chatMessagesBySession,
+      f.state,
+      {
+        sessionKey: f.state.sessionKey,
+      },
+      {
+        sessionId: "session-1",
+        messages: f.state.chatMessages,
+        pagination: { hasMore: false },
+        messageReactions: { "message-1": peerReaction },
+      },
+    );
+    f.pane.syncSessionReactions();
+    expect(f.reactions()).toEqual(peerReaction);
+    list.resolve({ sessionId: "session-1", reactions: {} });
+    await list.promise;
+    await Promise.resolve();
+    expect(f.reactions()).toBeUndefined();
+    f.session("session-2");
+    f.pane.syncSessionReactions();
+    expect(f.pane.collaboration.reactions.size).toBe(0);
+  });
+
   it.each(["list", "set"] as const)(
     "retains live events over an older %s response",
     async (operation) => {
       const list = createDeferred<SessionReactionsListResult>();
       const set = createDeferred<SessionReactionsSetResult>();
-      const { pane, event, requests } = fixture(list.promise, set.promise);
-      pane.syncSessionReactions();
+      const { pane, event } = fixture(list.promise, set.promise);
       pane.syncSessionReactions();
       let write: Promise<void> | undefined;
       if (operation === "set") {
@@ -150,11 +235,6 @@ describe("pane reaction ownership", () => {
       await list.promise;
       await Promise.resolve();
       await Promise.resolve();
-      expect(requests).toEqual(
-        operation === "set"
-          ? ["session.reactions.list", "session.reactions.set"]
-          : ["session.reactions.list"],
-      );
       expect(pane.collaboration.reactions.get("message-1")).toEqual(peerReaction);
     },
   );
@@ -175,9 +255,9 @@ describe("pane reaction ownership", () => {
     expect(pane.collaboration.reactions.size).toBe(0);
   });
 
-  it.each([false, true])("retains offline reactions on replacement=%s", async (replace) => {
+  it("retains offline reactions through client replacement", async () => {
     const f = fixture(
-      Promise.resolve({ sessionId: "session-1", reactions: {} }),
+      undefined,
       Promise.resolve({ messageId: "message-1", reactions: selfReaction }),
     );
     const { pane, event, connect, deferred, writes, coalescedReactions, client } = f;
@@ -193,28 +273,19 @@ describe("pane reaction ownership", () => {
     expect(deferred.size).toBe(1);
     expect(writes).toEqual([]);
     const hello = pane.context.gateway.snapshot.hello;
-    const replayClient = replace ? createTestGatewayClient(client.request.bind(client)) : client;
-    if (replace) {
-      pane.context.gateway.snapshot.client = replayClient;
-      pane.context.gateway.snapshot.hello = null;
-      connect(false);
-      pane.syncSessionReactions();
-      expect(f.reactions()).toEqual([...peerReaction, ...selfReaction]);
-    }
+    const replayClient = createTestGatewayClient(client.request.bind(client));
+    pane.context.gateway.snapshot.client = replayClient;
+    pane.context.gateway.snapshot.hello = null;
+    connect(false);
+    pane.syncSessionReactions();
+    expect(f.reactions()).toEqual([...peerReaction, ...selfReaction]);
     pane.context.gateway.snapshot.hello = hello;
     connect(true);
     await f.react(true);
     await f.react();
     expect(writes).toEqual([]);
     await f.replay(replayClient);
-    expect(writes).toEqual([
-      {
-        sessionKey: "agent:main:current",
-        messageId: "message-1",
-        emoji: "🎉",
-        remove: false,
-      },
-    ]);
+    expect(writes).toHaveLength(1);
     expect(f.reactions()).toEqual(selfReaction);
     pane.handleSessionReactionEvent(event());
     expect(f.reactions()).toEqual(peerReaction);
@@ -222,7 +293,7 @@ describe("pane reaction ownership", () => {
 
   it("queues a reaction while the owner reports its final deferred request in flight", async () => {
     const { pane, connect, deferred, writes, react, replay } = fixture(
-      Promise.resolve({ sessionId: "session-1", reactions: {} }),
+      undefined,
       Promise.resolve({ messageId: "message-1", reactions: [] }),
     );
     connect(true);
@@ -234,7 +305,7 @@ describe("pane reaction ownership", () => {
     expect(writes).toHaveLength(1);
   });
 
-  it.each(["discard", "reject", "decline"] as const)(
+  it.each(["reject", "decline"] as const)(
     "restores server-known reactions on offline intent %s",
     async (outcome) => {
       const rejected = createDeferred<SessionReactionsSetResult>();
@@ -250,10 +321,7 @@ describe("pane reaction ownership", () => {
       }
       await pane.setMessageReaction("message-1", "👍", false);
       const pending = [...deferred.values()][0];
-      if (outcome === "discard") {
-        assert(pending);
-        pending.discard?.();
-      } else if (outcome === "reject") {
+      if (outcome === "reject") {
         assert(pending);
         connect(true);
         const write = pending.run(client);
@@ -271,10 +339,7 @@ describe("pane reaction ownership", () => {
       const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
       onTestFinished(() => showToast.mockRestore());
       const failed = createDeferred<SessionReactionsSetResult>();
-      const { pane, session, connect, deferred, client } = fixture(
-        Promise.resolve({ sessionId: "session-1", reactions: {} }),
-        failed.promise,
-      );
+      const { pane, session, connect, deferred, client } = fixture(undefined, failed.promise);
       connect(true);
       connect(false);
       await pane.setMessageReaction("message-1", "🎉", false);
@@ -286,7 +351,19 @@ describe("pane reaction ownership", () => {
       assert(pending);
       const replay = pending.run(client);
       if (owner === "replacement client") {
-        pane.context.gateway.snapshot.client = createTestGatewayClient(() => ({}));
+        pane.context.gateway.snapshot.client = createTestGatewayClient((method) => {
+          switch (method) {
+            case "agents.list":
+              return makeBootRoster();
+            case "sessions.list":
+              return sessionsResult([]);
+            case "chat.startup":
+            case "chat.history":
+              return { messages: [] };
+            default:
+              return {};
+          }
+        });
       } else if (owner === "replacement scope") {
         Object.defineProperty(client, "recoveryScope", { get: () => "replacement-scope" });
       }

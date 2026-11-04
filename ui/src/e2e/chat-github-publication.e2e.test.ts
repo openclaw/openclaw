@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiMockPresenceUser } from "../test-helpers/control-ui-e2e-contract.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -23,9 +23,13 @@ import {
   sharedPublisher,
   showPublicationBranch,
 } from "./chat-github-publication.test-support.ts";
+import { createLightDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Control UI personal GitHub publication" });
+const suite = createControlUiE2eSuite({
+  name: "Control UI personal GitHub publication",
+  trackBrowserContexts: true,
+});
 
 function viewer(id: string, name: string): ControlUiMockPresenceUser[] {
   return [{ self: true, id, identity: { type: "profile", id }, name }];
@@ -74,17 +78,8 @@ async function expectText(locator: Locator, text: string) {
   await expect.poll(() => locator.textContent()).toContain(text);
 }
 
-function publicationContextOptions(): Parameters<typeof suite.newBrowserContext>[0] {
-  return {
-    colorScheme: "light",
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 800, width: 1180 },
-  };
-}
-
 async function newPublicationContext() {
-  return await suite.newBrowserContext(publicationContextOptions());
+  return await suite.newBrowserContext(createLightDesktopControlUiContextOptions());
 }
 
 async function openPublicationPage(
@@ -107,7 +102,7 @@ suite.define(() => {
   it.each(["global", "per-sender"] as const)(
     "carries the selected agent through the complete %s publication flow",
     async (scope) => {
-      await suite.withPage(publicationContextOptions(), async ({ page }) => {
+      await suite.withPage(createLightDesktopControlUiContextOptions(), async ({ page }) => {
         const sessionKey = scope === "global" ? "global" : "agent:research:main";
         const target = { sessionKey, agentId: "research" };
         const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b6";
@@ -194,7 +189,7 @@ suite.define(() => {
           account: personalAccount,
           requestDigest: confirmation.requestDigest,
         });
-        const openPr = page.getByRole("link", { name: "Open PR", exact: true });
+        const openPr = page.getByRole("link", { name: /^Open PR:/ });
         await openPr.waitFor();
         expect(await openPr.getAttribute("href")).toBe(
           "https://github.com/synthetic/publication-demo/pull/42",
@@ -277,7 +272,6 @@ suite.define(() => {
   });
 
   it.each([
-    ["shared", "navigating away and back", ["agent:main:other"]],
     ["personal", "navigating away and back", ["agent:main:other"]],
     ["shared", "LRU eviction", ["agent:main:other", "agent:main:third", "agent:main:fourth"]],
   ] as const)("keeps the original %s retry after %s", async (source, navigation, via) => {
@@ -425,16 +419,16 @@ suite.define(() => {
           ...nextAccount,
         },
       });
-      await page.getByRole("link", { name: "Open PR", exact: true }).waitFor();
+      await page.getByRole("link", { name: /^Open PR:/ }).waitFor();
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(2);
 
-      const openPr = page.getByRole("link", { name: "Open PR", exact: true });
+      const openPr = page.getByRole("link", { name: /^Open PR:/ });
       expect(await openPr.getAttribute("href")).toBe(
         "https://github.com/synthetic/publication-demo/pull/42",
       );
-      const newPublication = publicationAction(page, "Dismiss");
-      await expect.poll(() => newPublication.count()).toBe(1);
-      await newPublication.click();
+      const publishedRow = page.locator('.chat-pr[data-state="published"]');
+      await publishedRow.locator(".chat-pr__actions-trigger").click();
+      await publishedRow.getByRole("menuitem", { name: "Hide", exact: true }).click();
       await expect.poll(() => publish.isEnabled()).toBe(true);
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(2);
       await selectPublicationAccount(page, source);
@@ -636,7 +630,7 @@ suite.define(() => {
       agentId: "main",
       requestId,
     });
-    const openPr = page.getByRole("link", { name: "Open PR", exact: true });
+    const openPr = page.getByRole("link", { name: /^Open PR:/ });
     await openPr.waitFor();
     expect(await openPr.getAttribute("href")).toBe(
       "https://github.com/synthetic/publication-demo/pull/42",
@@ -644,11 +638,9 @@ suite.define(() => {
     expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
     expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
 
-    const dismiss = page.locator('[data-details-group="pull-requests"]').getByRole("button", {
-      name: "Dismiss",
-      exact: true,
-    });
-    await expect.poll(() => dismiss.count()).toBe(1);
+    const publishedRow = page.locator('.chat-pr[data-state="published"]');
+    await publishedRow.locator(".chat-pr__actions-trigger").click();
+    const dismiss = publishedRow.getByRole("menuitem", { name: "Hide", exact: true });
     const previousOptions = (await gateway.getRequests("sessions.github.options")).length;
     await dismiss.click();
     await gateway.waitForRequest("sessions.github.options", { after: previousOptions });

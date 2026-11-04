@@ -46,7 +46,7 @@ export {
   inspectTlsCertificateError,
   type TlsCertificateErrorDetails,
   type TlsCertificateErrorKind,
-} from "@openclaw/ai/internal/shared";
+} from "../infra/tls-certificate-errors.js";
 export {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,

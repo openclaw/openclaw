@@ -1,7 +1,7 @@
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
-import { getGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime-context.js";
+import { getGatewayLifecycleRuntime } from "../../gateway/server-lifecycle-runtime-context.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
@@ -17,11 +17,13 @@ const PENDING_DELIVERY_NOTICE =
 export async function deliverPendingDeliveryNotice(
   sessionKey: string,
   storePath: string,
+  agentId?: string,
 ): Promise<void> {
+  const resolvedAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const pending = await withSessionEntriesFromStoresInWorker(
     [
       {
-        agentId: resolveAgentIdFromSessionKey(sessionKey),
+        agentId: resolvedAgentId,
         storePath,
         sessionKeys: [sessionKey],
         projection: "full",
@@ -31,7 +33,7 @@ export async function deliverPendingDeliveryNotice(
       const entry = read?.result.entries[0]?.entry;
       const notice = entry?.pendingDeliveryNotice;
       const context = normalizeDeliveryContext(notice?.context);
-      const runtime = getGatewayRecoveryRuntime();
+      const runtime = getGatewayLifecycleRuntime();
       if (
         !entry ||
         !runtime ||
@@ -48,7 +50,7 @@ export async function deliverPendingDeliveryNotice(
       read?.assertCurrent();
       const idempotencyKey = `main-session-restart-recovery:pending-final:${notice.intentId}`;
       const delivery = runtime
-        .sendRecoveryNotice({
+        .sendNotice({
           channel: context.channel,
           to: context.to,
           accountId: context.accountId,
@@ -80,9 +82,11 @@ export async function deliverPendingDeliveryNotice(
     delivered &&
     !(
       await appendAssistantMessageToSessionTranscript({
+        agentId: resolvedAgentId,
         sessionKey,
         storePath,
         expectedSessionId: entry.sessionId,
+        expectedLifecycleRevision: entry.lifecycleRevision ?? null,
         text: PENDING_DELIVERY_NOTICE,
         idempotencyKey,
       })
@@ -91,9 +95,10 @@ export async function deliverPendingDeliveryNotice(
     return;
   }
   await updateSessionEntry(
-    { sessionKey, storePath },
+    { agentId: resolvedAgentId, sessionKey, storePath },
     (current) =>
       current.sessionId === entry.sessionId &&
+      (current.lifecycleRevision ?? null) === (entry.lifecycleRevision ?? null) &&
       current.pendingDeliveryNotice?.intentId === notice.intentId &&
       current.pendingDeliveryNotice.state !== "acknowledged"
         ? {

@@ -78,8 +78,7 @@ describe("Gateway timed work", () => {
     job("second", { delayMs: 30_000, everyMs: 30_000, phase: "maintenance" }, second, scope);
     expect(scheduler.nextWakeAtMs).toBe(30_000);
     const wake = time.advanceTo(30_000);
-    expect(first).toHaveBeenCalledOnce();
-    expect(second).toHaveBeenCalledOnce();
+    expectCalls([first, 1], [second, 1]);
     await at(95_000, [first, 1], [second, 2]);
     gate.resolve();
     await wake;
@@ -91,11 +90,9 @@ describe("Gateway timed work", () => {
 
   it("leaves exact expiry and liveness cadences outside the maintenance phase", async () => {
     const { scheduler, job, at } = fixture();
-    const expiry = vi.fn();
-    const keepalive = vi.fn();
     job("maintenance", { delayMs: 30_000, everyMs: 30_000, phase: "maintenance" });
-    job("expiry", { atMs: 31_001 }, expiry);
-    job("keepalive", { delayMs: 25_000, everyMs: 25_000 }, keepalive);
+    const expiry = job("expiry", { atMs: 31_001 });
+    const keepalive = job("keepalive", { delayMs: 25_000, everyMs: 25_000 });
     await at(26_000, [keepalive, 1]);
     await at(30_000, [expiry, 0]);
     await at(31_001, [expiry, 1]);
@@ -118,50 +115,31 @@ describe("Gateway timed work", () => {
     await scheduler.stop();
   });
 
-  it.each(["root", "scope"] as const)(
+  it.each(["root", "scope", "scope-after-parent"] as const)(
     "releases the retiring caller while its %s abort signal remains reachable",
     async (kind) => {
       class RetiredOwner {
         close() {
           const { scheduler } = fixture();
           const owner = kind === "root" ? scheduler : scheduler.scope();
+          if (kind === "scope-after-parent") {
+            scheduler.beginClose();
+          }
           owner.beginClose();
-          return owner.signal;
+          return owner;
         }
       }
-      const signals = withNativeErrorStacks(() =>
+      const owners = withNativeErrorStacks(() =>
         Array.from({ length: 12 }, () => new RetiredOwner().close()),
       );
       // Collect after the closing call's execution frame has unwound.
       await nextTurn();
       expect(queryObjects(RetiredOwner)).toBe(0);
-      for (const signal of signals) {
-        expect(signal).toMatchObject({ aborted: true, reason: { name: "AbortError" } });
+      for (const owner of owners) {
+        expect(owner.signal).toMatchObject({ aborted: true, reason: { name: "AbortError" } });
       }
     },
   );
-
-  it("releases a scope's closing caller after its parent already aborted", async () => {
-    class RetiredCaller {
-      close(scope: ReturnType<GatewayScheduler["scope"]>) {
-        scope.beginClose();
-      }
-    }
-    const scopes = withNativeErrorStacks(() =>
-      Array.from({ length: 12 }, () => {
-        const { scheduler } = fixture();
-        const scope = scheduler.scope();
-        scheduler.beginClose();
-        new RetiredCaller().close(scope);
-        return scope;
-      }),
-    );
-    await nextTurn();
-    expect(queryObjects(RetiredCaller)).toBe(0);
-    for (const scope of scopes) {
-      expect(scope.signal).toMatchObject({ aborted: true, reason: { name: "AbortError" } });
-    }
-  });
 
   it("does not wake or allocate async resources before a fractional deadline", async () => {
     const time = createGatewaySchedulerClock(1_000);
@@ -208,14 +186,14 @@ describe("Gateway timed work", () => {
   });
 
   it("preserves equal-deadline dispatch order when replacing a waiting registration", async () => {
-    const { time, scheduler } = fixture();
+    const { time, scheduler, job } = fixture();
     const seen: string[] = [];
     const record = (value: string) => () => {
       seen.push(value);
     };
-    scheduler.schedule({ id: "first", delayMs: 100, run: record("retired") });
-    scheduler.schedule({ id: "second", delayMs: 100, run: record("second") });
-    scheduler.schedule({ id: "first", delayMs: 100, run: record("replacement") });
+    job("first", { delayMs: 100 }, record("retired"));
+    job("second", { delayMs: 100 }, record("second"));
+    job("first", { delayMs: 100 }, record("replacement"));
     await time.advanceBy(100);
     expect(seen).toEqual(["replacement", "second"]);
     await scheduler.stop();
@@ -238,46 +216,46 @@ describe("Gateway timed work", () => {
     expect(active.signal.aborted).toBe(true);
   });
 
-  it("joins replaced callbacks and tracked descendants after one-shot dispatch", async () => {
-    const { time, scheduler, job } = fixture();
-    const scope = scheduler.scope();
-    const first = createDeferredCore();
-    const second = createDeferredCore();
-    const run = vi.fn();
-    job(
-      "maintenance",
-      { delayMs: 0, everyMs: 100 },
-      () => {
+  it.each(["root", "scope"] as const)(
+    "joins %s descendants and replaced callbacks while unrelated jobs progress",
+    async (kind) => {
+      const { time, scheduler, job, at } = fixture();
+      const owner = kind === "root" ? scheduler : scheduler.scope();
+      const schedule = (timing: JobTiming, run: Job["run"]) =>
+        job("maintenance", timing, run, owner);
+      const first = createDeferredCore();
+      const second = createDeferredCore();
+      const run = vi.fn();
+      const firstRun = vi.fn(() => {
         void trackAsyncWork(() => first.promise);
-      },
-      scope,
-    );
-    const firstWake = time.wake();
-    job(
-      "maintenance",
-      { delayMs: 0 },
-      async () => {
+      });
+      schedule({ delayMs: 0, everyMs: 100 }, firstRun);
+      const firstWake = time.wake();
+      const other = job("other", { atMs: 1_100 });
+      await at(1_100, [other, 1], [firstRun, 1]);
+      schedule({ delayMs: 0 }, async () => {
         await second.promise;
-        scope.schedule({ id: "late", delayMs: 0, run });
-      },
-      scope,
-    );
-    const secondWake = time.wake();
-    scope.schedule({ id: "waiting", delayMs: 100, run });
-    const stopped = vi.fn();
-    const stop = scope.stop().then(stopped);
-    expect(scope.signal.aborted).toBe(true);
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    second.resolve();
-    await secondWake;
-    expect(stopped).not.toHaveBeenCalled();
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    first.resolve();
-    await Promise.all([firstWake, stop, scope.stop()]);
-    expect(stopped).toHaveBeenCalledOnce();
-    expect(run).not.toHaveBeenCalled();
-    await scheduler.stop();
-  });
+        owner.schedule({ id: "late", delayMs: 0, run });
+      });
+      const secondWake = time.wake();
+      job("waiting", { delayMs: 100 }, run, owner);
+      const stopped = vi.fn();
+      const stop = owner.stop().then(stopped);
+      expect(owner.signal.aborted).toBe(true);
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      expect(time.armedAtMs).toBeNull();
+      expect(stopped).not.toHaveBeenCalled();
+      second.resolve();
+      await secondWake;
+      expect(stopped).not.toHaveBeenCalled();
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      first.resolve();
+      await Promise.all([firstWake, stop, owner.stop()]);
+      expectCalls([stopped, 1], [other, 1]);
+      expect(run).not.toHaveBeenCalled();
+      await scheduler.stop();
+    },
+  );
 
   it("fences scoped jobs when a due sibling closes their owner", async () => {
     const { time, scheduler } = fixture();
@@ -293,8 +271,8 @@ describe("Gateway timed work", () => {
 
   it("coalesces sleep and forward jumps into one pass while retaining absolute deadlines", async () => {
     const { scheduler, job, at } = fixture();
-    const periodic = vi.fn();
     const deadline = vi.fn();
+    const periodic = vi.fn();
     job("approval", { atMs: 5_000 }, deadline);
     job("health", { atMs: 2_000, everyMs: 1_000 }, periodic);
     await at(301_000, [periodic, 1], [deadline, 1]);
@@ -394,10 +372,8 @@ describe("Gateway timed work", () => {
 
   it("keeps cadence on a backward host wake without expiring durable deadlines early", async () => {
     const { time, scheduler, job, at } = fixture();
-    const cadence = vi.fn();
-    const deadline = vi.fn();
-    job("sample", { atMs: 2_000, everyMs: 1_000 }, cadence);
-    job("lease-expiry", { atMs: 2_000 }, deadline);
+    const cadence = job("sample", { atMs: 2_000, everyMs: 1_000 });
+    const deadline = job("lease-expiry", { atMs: 2_000 });
     time.setTime(1_500);
     await time.wake();
     expect(cadence).toHaveBeenCalledTimes(1);
@@ -420,48 +396,19 @@ describe("Gateway timed work", () => {
     await scheduler.stop();
   });
 
-  it("keeps unrelated jobs progressing and joins descendants before shutdown completes", async () => {
-    const { time, scheduler, job, at } = fixture();
-    const child = createDeferredCore();
-    const run = vi.fn(() => {
-      void trackAsyncWork(() => child.promise);
-    });
-    job("cleanup", { atMs: 1_000, everyMs: 100 }, run);
-    const firstWake = time.wake();
-    const other = job("other", { atMs: 1_100 });
-    await at(1_100, [other, 1], [run, 1]);
-    const stopped = vi.fn();
-    const stop = scheduler.stop().then(stopped);
-    expect(time.armedAtMs).toBeNull();
-    expect(stopped).not.toHaveBeenCalled();
-    job("late", { atMs: 1_100 }, other);
-    child.resolve();
-    await Promise.all([stop, firstWake]);
-    expect(stopped).toHaveBeenCalledTimes(1);
-    expect(other).toHaveBeenCalledTimes(1);
-  });
-
   it("preserves registration context and permits a deadline owner to rearm while running", async () => {
-    const { time, scheduler } = fixture();
+    const { time, scheduler, job } = fixture();
     const context = new AsyncLocalStorage<string>();
     const gate = createDeferredCore();
     const seen: Array<string | undefined> = [];
     context.run("cron-owner", () =>
-      scheduler.schedule({
-        id: "cron",
-        atMs: 1_000,
-        run: async () => {
+      job("cron", { atMs: 1_000 }, async () => {
+        seen.push(context.getStore());
+        job("cron", { atMs: 1_100 }, () => {
           seen.push(context.getStore());
-          scheduler.schedule({
-            id: "cron",
-            atMs: 1_100,
-            run: () => {
-              seen.push(context.getStore());
-            },
-          });
-          await gate.promise;
-          throw new Error("run failed");
-        },
+        });
+        await gate.promise;
+        throw new Error("run failed");
       }),
     );
     const initial = time.wake();

@@ -45,11 +45,12 @@ async function renderToast(
     host.querySelector<HTMLElement>(`.app-toast${name ? `__${name}` : ""}`)!;
   await waitForSolid(() => expect(part()).not.toBeNull());
   const toast = part(),
+    body = part("body"),
     message = part("message"),
     action = part("action"),
     dismiss = part("dismiss");
   await Promise.all(toast.getAnimations().map((animation) => animation.finished));
-  return { host, toast, message, action, dismiss };
+  return { host, toast, body, message, action, dismiss };
 }
 type ToastFixture = Awaited<ReturnType<typeof renderToast>>;
 async function expectFocusPreserved({ host }: ToastFixture, link: HTMLAnchorElement) {
@@ -76,23 +77,65 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     }
   });
 
-  it("uses the error theme tone only for error feedback", async () => {
-    const { host, toast, action, dismiss } = await renderToast();
-    const neutral = getComputedStyle(toast).color;
-    showToast({ ...host.toast!, severity: "error", icon: "alertTriangle" });
-    await waitForSolid(() => expect(toast.classList.contains("app-toast--error")).toBe(true));
-    const tone = document.createElement("span");
-    tone.style.color = "var(--danger)";
-    toast.append(tone);
-    const danger = getComputedStyle(tone).color;
-    tone.remove();
-    expect(getComputedStyle(toast).color).toBe(danger);
-    expect(getComputedStyle(action).color).toBe(danger);
-    expect(getComputedStyle(dismiss).color).toBe(danger);
-    expect(getComputedStyle(host.querySelector(".app-toast__icon")!).color).toBe(danger);
-    showToast({ message: "Saved" });
-    await waitForSolid(() => expect(toast.classList.contains("app-toast--error")).toBe(false));
-    expect(getComputedStyle(toast).color).toBe(neutral);
+  it("signals severity only through the leading icon color and the live role", async () => {
+    const { host, toast, action } = await renderToast();
+    const neutral = {
+      card: getComputedStyle(toast).backgroundColor,
+      text: getComputedStyle(toast).color,
+    };
+    expect(host.querySelector(".app-toast__icon")).toBeNull();
+    expect(toast.getAttribute("role")).toBe("status");
+    const tone = (value: string) => {
+      const probe = toast.appendChild(document.createElement("span"));
+      probe.style.color = value;
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    for (const [severity, token] of [
+      ["success", "var(--ok)"],
+      ["info", "var(--info)"],
+      ["warning", "var(--warn)"],
+      ["error", "var(--danger)"],
+    ] as const) {
+      showToast({ ...host.toast!, severity });
+      await waitForSolid(() =>
+        expect(toast.classList.contains(`app-toast--${severity}`)).toBe(true),
+      );
+      expect(getComputedStyle(host.querySelector(".app-toast__icon")!).color).toBe(tone(token));
+      expect(getComputedStyle(toast).backgroundColor).toBe(neutral.card);
+      expect(getComputedStyle(toast).color).toBe(neutral.text);
+      expect(getComputedStyle(action).color).toBe(neutral.text);
+      expect(toast.getAttribute("role")).toBe(severity === "error" ? "alert" : "status");
+    }
+  });
+
+  it("splits the title and description and keeps one line a pill", async () => {
+    await useViewport(1280);
+    const { host, toast, action } = await renderToast({ placement: "top-center" });
+    const height = rect(toast).height;
+    expect(Number.parseFloat(getComputedStyle(toast).borderTopLeftRadius)).toBeGreaterThanOrEqual(
+      height / 2,
+    );
+    expect(rect(toast).width).toBeGreaterThanOrEqual(240);
+    expect(rect(action).top).toBeLessThan(rect(toast).top + height / 2);
+    showToast({
+      ...host.toast!,
+      message: "A pending message is only saved in this tab.",
+      description:
+        "Keep this tab open until it is sent, or copy it before discarding it and reloading.",
+      actionLabel: "Review pending input",
+      actionPrimary: true,
+    });
+    await waitForSolid(() =>
+      expect(host.querySelector(".app-toast__description")?.textContent).toContain("Keep this tab"),
+    );
+    const block = rect(toast);
+    expect(block.width).toBeCloseTo(360, 0);
+    expect(rect(action).top).toBeGreaterThan(rect(host.querySelector(".app-toast__body")!).bottom);
+    expect(rect(action).right).toBeCloseTo(block.right - 10, 0);
+    expect(getComputedStyle(toast).borderTopLeftRadius).toBe("28px");
+    expect(action.classList.contains("app-toast__action--primary")).toBe(true);
   });
 
   it("shows the selected agent avatar at notification size without crowding the action", async () => {
@@ -104,7 +147,7 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     const avatarImage = () => host.querySelector<HTMLImageElement>(".app-toast__avatar img")!;
     await waitForSolid(() => expect(avatarImage().naturalWidth).toBeGreaterThan(0));
     expect(avatarImage().getAttribute("src")).toBe(avatar);
-    expect(rect(avatarImage())).toMatchObject({ width: 28, height: 28 });
+    expect(rect(avatarImage())).toMatchObject({ width: 32, height: 32 });
     const action = host.querySelector("button")!;
     expect(rect(action).right).toBeLessThanOrEqual(390);
     action.click();
@@ -113,15 +156,27 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
 
   it("keeps a toast usable inside a native modal and returns it to the shell on dismissal", async () => {
     const shell = document.body.appendChild(document.createElement("div"));
-    shell.className = "shell";
+    shell.className = "shell shell--chat";
     const host = shell.appendChild(document.createElement("openclaw-toast-host"));
+    await useViewport(1280);
+    const { toast: restingToast } = await renderToast({ message: "Saved" }, host);
+    const restingBounds = rect(restingToast);
     const controller = new AbortController();
     const confirmation = showConfirmDialog({ message: "Keep?", signal: controller.signal });
     try {
       const { modal, dialog } = await waitForRenderedModalDialog(document.body);
       const onAction = vi.fn();
-      const { action } = await renderToast({ message: "Saved", onAction }, host);
+      const { toast, action } = await renderToast({ message: "Saved", onAction }, host);
+      expect(rect(toast).top).toBeCloseTo(restingBounds.top, 0);
+      expect(rect(toast).right).toBeCloseTo(restingBounds.right, 0);
       expect(host.parentElement).toBe(modal.getOverlayContainer());
+      await Promise.all([
+        new Promise<void>((resolve) => {
+          window.addEventListener("resize", () => resolve(), { once: true });
+        }),
+        useViewport(390),
+      ]);
+      const narrowBounds = rect(toast);
       action.focus();
       expect(document.activeElement).toBe(action);
       expect(dialog.open).toBe(true);
@@ -131,6 +186,8 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
       await confirmation;
       await host.updateComplete;
       expect(host.parentElement).toBe(shell);
+      expect(rect(toast).top).toBeCloseTo(narrowBounds.top, 0);
+      expect(rect(toast).right).toBeCloseTo(narrowBounds.right, 0);
       expect(host.textContent).toContain("Saved");
       host.querySelector<HTMLElement>(".app-toast__action")!.click();
       expect(onAction).toHaveBeenCalledOnce();
@@ -150,7 +207,8 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     root.style.setProperty("--safe-area-bottom", "24px");
     const { toast, action, dismiss } = await renderToast({ placement });
     const bounds = rect(toast);
-    expect(rect(dismiss).height).toBe(width === 390 ? 44 : 32);
+    expect(dismiss.offsetHeight).toBe(22);
+    expect(rect(action).height).toBe(28);
     if (placement === "bottom") {
       expect(bounds).toMatchObject({
         bottom: expect.closeTo(800, 0),
@@ -170,8 +228,7 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
           right: expect.closeTo(378, 0),
         });
         expect(rect(action).left).toBeGreaterThan(bounds.left + bounds.width * 0.6);
-        expect(rect(dismiss).right).toBeLessThanOrEqual(bounds.right - 7);
-        expect(rect(action).height).toBeGreaterThanOrEqual(44);
+        expect(dismiss.offsetLeft + dismiss.offsetWidth).toBe(toast.offsetWidth + 8);
       } else {
         expect(bounds.width).toBeLessThan(320);
         expect(bounds.height).toBeLessThan(60);
@@ -188,13 +245,13 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
   it("keeps oversized errors scrollable with actions inside a short phone viewport", async () => {
     await useViewport(320, 400);
     for (const placement of ["top", "bottom"] as const) {
-      const { host, toast, message } = await renderToast({
+      const { host, toast, body } = await renderToast({
         placement,
         message: "Lost. ".repeat(1000),
       });
-      expect(message.scrollHeight).toBeGreaterThan(message.clientHeight);
-      message.scrollTop = message.scrollHeight;
-      expect(message.scrollTop).toBeGreaterThan(0);
+      expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
+      body.scrollTop = body.scrollHeight;
+      expect(body.scrollTop).toBeGreaterThan(0);
       for (const element of [toast, ...host.querySelectorAll("button")]) {
         expect(rect(element).top).toBeGreaterThanOrEqual(0);
         expect(rect(element).bottom).toBeLessThanOrEqual(400);
@@ -213,14 +270,14 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
         actionLabel: "Discard unsaved changes and reload",
         ...(placement === "anchored" ? { anchor } : { placement }),
       });
-      const { host, toast, message, action, dismiss } = fixture;
+      const { host, toast, body, message, action } = fixture;
       host.style.setProperty("--control-ui-text-scale", "1.3");
       expect(rect(toast).left).toBeGreaterThanOrEqual(0);
       expect(rect(toast).right).toBeLessThanOrEqual(width);
       expect(action.clientHeight).toBeGreaterThanOrEqual(action.scrollHeight);
-      if (message.scrollHeight > message.clientHeight) {
-        message.scrollTop = message.scrollHeight;
-        expect(message.scrollTop).toBeGreaterThan(0);
+      if (body.scrollHeight > body.clientHeight) {
+        body.scrollTop = body.scrollHeight;
+        expect(body.scrollTop).toBeGreaterThan(0);
       }
       for (const element of [message, action]) {
         expect(element.clientWidth).toBeGreaterThanOrEqual(element.scrollWidth);
@@ -228,11 +285,11 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
       }
       const textBox = rect(message);
       const actionBox = rect(action);
-      expect(actionBox.right).toBeLessThanOrEqual(rect(dismiss).left);
+      expect(actionBox.right).toBeLessThanOrEqual(rect(toast).right);
       expect(textBox.right <= actionBox.left || textBox.bottom <= actionBox.top).toBe(true);
       expect(message.querySelector("a")).toBe(recovery.link);
       await expectFocusPreserved(fixture, recovery.link);
-      expect(actionBox.height).toBeGreaterThanOrEqual(width < 768 ? 44 : 32);
+      expect(actionBox.height).toBeGreaterThanOrEqual(28);
       const replacement = linkedMessage("Sidebar", "Hidden. ");
       showToast({ ...host.toast!, message: replacement.message });
       await waitForSolid(() => expect(replacement.link.isConnected).toBe(true));

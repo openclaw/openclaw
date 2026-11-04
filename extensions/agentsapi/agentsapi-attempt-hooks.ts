@@ -69,7 +69,6 @@ export function createAgentsApiAttemptHooks(
           { ...params, agentId },
           params.agentDir ?? resolveAgentDir(params.config ?? {}, agentId),
         ),
-        skillWorkshopAvailable: false,
         compacted: false,
       },
     };

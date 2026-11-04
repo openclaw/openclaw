@@ -1,0 +1,2 @@
+63
+# Manifest-driven filesystem regression for sticky-protected Kubernetes temp storage.

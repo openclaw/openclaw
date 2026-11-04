@@ -16,7 +16,7 @@ import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agen
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
   executeExistingOpenClawStateRead,
-  getActiveOpenClawStateDatabaseReadSnapshot,
+  hasActiveOpenClawStateDatabaseReadSnapshot,
   isArtifactPreservingStateRead,
 } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -233,7 +233,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
     return { store: rows.store, state: rows.state, cacheable: rows.cacheable };
   };
   const cachedReader =
-    isMainThread && !uncached && !getActiveOpenClawStateDatabaseReadSnapshot({ env })
+    isMainThread && !uncached && !hasActiveOpenClawStateDatabaseReadSnapshot({ env })
       ? runtimeAuthProfileRowsCache.prepare(
           databasePath,
           {
@@ -304,12 +304,13 @@ async function readAgentAuthProfileRows(
           admission: createSqliteWorkerOperationAdmission((request, grant) => {
             binding.authorize(request);
             assertCurrent();
+            const publication = isRecord(request.facts) ? request.facts.publication : undefined;
             if (
               request.stage === "prepare" &&
-              isRecord(request.facts) &&
-              request.facts.kind === "auth-store-read"
+              isRecord(publication) &&
+              publication.kind === "auth-store-read"
             ) {
-              rows = receiveAuthProfileReadRows(request.facts.port, rows);
+              rows = receiveAuthProfileReadRows(publication.port, rows);
             }
             if (!grant()) {
               throw new Error("Auth profile read authority expired");
@@ -379,7 +380,7 @@ export async function readSharedAuthProfileRows(
     !isMainThread ||
     artifactPreserving ||
     context.maintenanceScope ||
-    getActiveOpenClawStateDatabaseReadSnapshot({ env: context.environment })
+    hasActiveOpenClawStateDatabaseReadSnapshot({ env: context.environment })
   ) {
     return read();
   }

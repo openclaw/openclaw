@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Download } from "playwright-core";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
@@ -12,7 +13,9 @@ type BrowserDownloadCaptureState = {
 
 type BrowserDownloadPage = {
   on(event: "download", handler: (download: Download) => void): unknown;
+  on(event: "close", handler: () => void): unknown;
   off(event: "download", handler: (download: Download) => void): unknown;
+  off(event: "close", handler: () => void): unknown;
 };
 
 export type BrowserDownloadCaptureOptions = {
@@ -51,7 +54,7 @@ export async function saveBrowserDownload(
     throw error;
   }
   opts.signal?.throwIfAborted();
-  const requestedPath = opts.outputPath?.trim();
+  const requestedPath = readNonBlankString(opts.outputPath);
   const implicitRoot = opts.outputRoot ?? DEFAULT_DOWNLOAD_DIR;
   const managedPath = requestedPath || buildManagedDownloadPath(implicitRoot, suggestedFilename);
   const savedPath = await writeExternalFileWithinOutputRoot({
@@ -101,11 +104,14 @@ export function createDownloadCaptureForPage(
   let handler: ((download: Download) => void) | undefined;
   let activeDownload: Download | undefined;
   let abort = () => {};
+  let onClose = () => {};
 
   const releaseWaiter = () => {
     if (handler) {
       state.downloadWaiterDepth = Math.max(0, state.downloadWaiterDepth - 1);
       page.off("download", handler);
+      // An accepted transfer can outlive its page; close only interrupts the event wait.
+      page.off("close", onClose);
       handler = undefined;
     }
   };
@@ -147,6 +153,8 @@ export function createDownloadCaptureForPage(
         .finally(cleanup)
         .then(resolve, reject);
     };
+    onClose = () => rejectCapture(new Error("Page closed before download started."));
+    page.on("close", onClose);
     page.on("download", handler);
     timer = setTimeout(
       () => {

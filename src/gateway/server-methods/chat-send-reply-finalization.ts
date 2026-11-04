@@ -4,11 +4,11 @@ import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/rep
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
+import { combineNonStreamingReplyParts } from "../../shared/text/trim-code-text.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import {
-  combineNonStreamingReplyParts,
   extractAssistantDisplayText,
   hasAssistantDisplayMediaContent,
   hasManagedOutgoingAssistantContent,

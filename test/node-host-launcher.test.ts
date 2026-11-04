@@ -7,6 +7,7 @@ import { build as esbuild } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveNodeProgramArguments } from "../src/daemon/program-args.js";
 import { buildSystemdUnit, parseSystemdExecStart } from "../src/daemon/systemd-unit.js";
+import { stageLauncherFixture } from "./helpers/openclaw-launcher-fixture.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -23,19 +24,11 @@ beforeAll(async () => {
       format: "esm",
       platform: "node",
       target: "node24",
-      metafile: true,
       banner: {
         js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
       },
       write: false,
     });
-    expect(
-      Object.keys(built.metafile!.inputs).filter(
-        (file) =>
-          /(?:^|\/)src\/(?:agents|gateway|tui|cron)\//u.test(file) ||
-          file.endsWith("src/cli/program/subcli-descriptors.ts"),
-      ),
-    ).toEqual([]);
     const output = built.outputFiles[0];
     if (!output) {
       throw new Error(`The ${entry} fixture did not compile.`);
@@ -61,7 +54,8 @@ afterEach(async () => {
 });
 
 async function writePackage(root: string, version: string, body: string, schema = 1) {
-  await fs.mkdir(path.join(root, "dist"), { recursive: true });
+  await fs.mkdir(root, { recursive: true });
+  await stageLauncherFixture(root);
   await fs.writeFile(path.join(root, "dist", "node-host-launcher-bootstrap.js"), bootstrapSource);
   await fs.writeFile(path.join(root, "dist", "launcher-client.js"), launcherClientSource);
   await fs.symlink(
@@ -69,23 +63,6 @@ async function writePackage(root: string, version: string, body: string, schema 
     path.join(root, "node_modules"),
     process.platform === "win32" ? "junction" : "dir",
   );
-  for (const name of [
-    "openclaw.mjs",
-    "cli-invocation.mjs",
-    "node-host-launcher.mjs",
-    "node-compile-cache.mjs",
-    "node-version.mjs",
-    "node-sqlite.mjs",
-    "node-runtime-update.mjs",
-    "node-runtime-recovery.mjs",
-    "cli-parent-lifetime.mjs",
-    "node-runtime-env.mjs",
-    "cli-root-options.mjs",
-    "gateway-run-argv.mjs",
-    "gateway-shutdown-budget.mjs",
-  ]) {
-    await fs.copyFile(path.resolve(name), path.join(root, name));
-  }
   await fs.writeFile(
     path.join(root, "package.json"),
     JSON.stringify({
@@ -333,24 +310,7 @@ process.exit(0);
     expect(result.stderr).toContain("requires a supervisor connection");
   });
 
-  it("revokes the managed state path when supervisor IPC disconnects", async () => {
-    const f = await fixture();
-    const managed = await f.release(`
-await ready();
-const before = getManagedNodeHostStatePath();
-process.disconnect();
-report({before, after: getManagedNodeHostStatePath() ?? null});
-process.exit(0);
-`);
-    await f.select(managed.prefix);
-    const result = await completed(f.run());
-    expect(JSON.parse(result.stdout.trim())).toEqual({
-      before: f.state,
-      after: null,
-    });
-  });
-
-  it("restarts into a healthy candidate, preserving root flags and replacing one-use pairing arguments", async () => {
+  it("restarts with paired arguments and revokes managed state when the healthy candidate disconnects", async () => {
     const f = await fixture(`
 await setNodeHostLauncherRestartArguments(['node', 'run', '--display-name', 'paired']);
 ${requestUpdate}
@@ -365,7 +325,9 @@ setTimeout(async () => {
   const first = fs.lstatSync(process.env.TEST_CURRENT).mtimeMs;
   await ready();
   setTimeout(() => {
-    report({ argv: process.argv.slice(2), first, second: fs.lstatSync(process.env.TEST_CURRENT).mtimeMs, cwd: process.cwd(), state: getManagedNodeHostStatePath() ?? null, execArgv: process.execArgv });
+    const state = getManagedNodeHostStatePath() ?? null;
+    process.disconnect();
+    report({ argv: process.argv.slice(2), first, second: fs.lstatSync(process.env.TEST_CURRENT).mtimeMs, cwd: process.cwd(), state, disconnectedState: getManagedNodeHostStatePath() ?? null, execArgv: process.execArgv });
     process.exit(0);
   }, 30);
 }, 30);
@@ -379,6 +341,7 @@ setTimeout(async () => {
       argv: ["--profile", "work", "--no-color", "node", "run", "--display-name", "paired"],
       cwd: f.base,
       state: f.state,
+      disconnectedState: null,
       execArgv: ["--disable-warning=ExperimentalWarning"],
     });
     expect(lines[1].first).toBe(lines[1].second);

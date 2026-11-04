@@ -12,7 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
@@ -28,12 +28,14 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
 import { dispatchInboundMessageMock, testState, writeSessionStore } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { handleChatSend } from "./chat-send-handler.js";
+import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 export function setClientProfile(
@@ -41,12 +43,7 @@ export function setClientProfile(
   profile: { id: string; updatedAt: number },
   displayName: string | null = null,
 ) {
-  client.authenticatedUserProfile = {
-    profileId: profile.id,
-    displayName,
-    hasAvatar: false,
-    updatedAt: profile.updatedAt,
-  };
+  client.authenticatedUserProfile = gatewayProfile(profile.id, displayName, profile.updatedAt);
 }
 
 export function setNativeIosClient(client: GatewayClient) {
@@ -224,13 +221,9 @@ export function useBrowserFollowupFixture() {
     });
     const client: GatewayClient = {
       connId: "browser-custody-client",
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.read", "operator.write", "operator.admin"],
-        client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
-      },
+      connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"], {
+        platform: "web",
+      }),
     };
     const params: Static<typeof ChatSendParamsSchema> = {
       sessionKey: scope.sessionKey,
@@ -257,13 +250,19 @@ export function useBrowserFollowupFixture() {
         isWebchatConnect: () => true,
       } as const;
       if (binding) {
-        await handleGatewayRequest({
-          ...request,
-          req: { ...request.req, expectedProfileId: binding.expectedProfileId },
-          signal: binding.signal,
-          sessionMutationCommitGuard: binding.sessionMutationCommitGuard,
-          extraHandlers: { "chat.send": handler },
-        });
+        await handleGatewayRequest(
+          bindInProcessRequestMutationAuthority(
+            {
+              ...request,
+              req: { ...request.req, expectedProfileId: binding.expectedProfileId },
+              signal: binding.signal,
+              sessionMutationCommitGuard: binding.sessionMutationCommitGuard,
+              extraHandlers: { "chat.send": handler },
+            },
+            undefined,
+            undefined,
+          ),
+        );
       } else {
         await withPluginRuntimeGatewayRequestScope(
           { context, isWebchatConnect: request.isWebchatConnect },

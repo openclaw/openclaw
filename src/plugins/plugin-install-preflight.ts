@@ -1,4 +1,3 @@
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 
@@ -19,22 +18,9 @@ type PluginInstallPreflightResult =
       installedVersion: string;
     };
 
-type InstalledClawHubPluginResolution =
-  | { status: "missing" }
-  | { status: "ambiguous"; pluginIds: string[] }
-  | {
-      status: "found";
-      pluginId: string;
-      record: PluginInstallRecord;
-      installedVersion?: string;
-    };
-
 /** Resolves one installed plugin by its stable ClawHub package identity. */
-export async function resolveInstalledClawHubPlugin(params: {
-  clawhubPackage: string;
-  loadInstallRecords?: typeof loadInstalledPluginIndexInstallRecords;
-}): Promise<InstalledClawHubPluginResolution> {
-  const records = await (params.loadInstallRecords ?? loadInstalledPluginIndexInstallRecords)();
+export async function resolveInstalledClawHubPlugin(params: { clawhubPackage: string }) {
+  const records = await loadInstalledPluginIndexInstallRecords();
   const matches = Object.entries(records).filter(
     ([, record]) =>
       (record.clawhubPackage ??
@@ -42,14 +28,17 @@ export async function resolveInstalledClawHubPlugin(params: {
         parseClawHubPluginSpec(record.resolvedSpec ?? "")?.name) === params.clawhubPackage,
   );
   if (matches.length === 0) {
-    return { status: "missing" };
+    return { status: "missing" as const };
   }
   if (matches.length > 1) {
-    return { status: "ambiguous", pluginIds: matches.map(([pluginId]) => pluginId).toSorted() };
+    return {
+      status: "ambiguous" as const,
+      pluginIds: matches.map(([pluginId]) => pluginId).toSorted(),
+    };
   }
   const [pluginId, record] = matches[0]!;
   return {
-    status: "found",
+    status: "found" as const,
     pluginId,
     record,
     installedVersion: record.resolvedVersion ?? record.version,
@@ -59,9 +48,8 @@ export async function resolveInstalledClawHubPlugin(params: {
 export async function preflightPluginInstall(params: {
   clawhubPackage: string;
   expectedVersion: string;
-  loadInstallRecords?: typeof loadInstalledPluginIndexInstallRecords;
 }): Promise<PluginInstallPreflightResult> {
-  const records = await (params.loadInstallRecords ?? loadInstalledPluginIndexInstallRecords)();
+  const records = await loadInstalledPluginIndexInstallRecords();
   const installedEntry = Object.entries(records).find(
     ([, record]) =>
       (record.clawhubPackage ?? parseClawHubPluginSpec(record.spec ?? "")?.name) ===

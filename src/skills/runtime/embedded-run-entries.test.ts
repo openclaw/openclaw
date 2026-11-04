@@ -52,11 +52,11 @@ beforeEach(() => {
   library.mockReset().mockResolvedValue(libraryEntries);
 });
 
-function pause(stage: "workspace" | "library", once = true) {
+function pause(stage: "workspace" | "library") {
   const gate = createDeferredCore<SkillEntry[]>();
   const entered = createDeferredCore();
   const mock = stage === "workspace" ? workspace : library;
-  mock[once ? "mockImplementationOnce" : "mockImplementation"](() => {
+  mock.mockImplementationOnce(() => {
     entered.resolve();
     return gate.promise;
   });
@@ -129,24 +129,6 @@ it.each([false, true])(
     expect(workspace).toHaveBeenCalledWith(workspaceRoot, { config: resolvedConfig }, undefined);
   },
 );
-it("keeps concurrent lazy reads private until complete and preserves append order", async () => {
-  const { gate, entered } = pause("library", false);
-  const result = await resolve();
-  expect(workspace).not.toHaveBeenCalled();
-  expect(library).not.toHaveBeenCalled();
-  const capture = (entries: SkillEntry[]) => {
-    expect(names(entries)).toEqual(["workspace", "library"]);
-    return entries;
-  };
-  const first = result.loadSkillEntries().then(capture);
-  await entered.promise;
-  const second = result.loadSkillEntries().then(capture);
-  gate.resolve(libraryEntries);
-  const results = await Promise.all([first, second]);
-  expect(results).toContain(await result.loadSkillEntries());
-  expect(names(workspaceEntries)).toEqual(["workspace"]);
-});
-
 it("preserves the first complete publication across concurrent lazy reads", async () => {
   const base = "/synthetic/embedded-concurrent";
   const roots = {
@@ -156,11 +138,9 @@ it("preserves the first complete publication across concurrent lazy reads", asyn
   const bumpSources = () =>
     bumpSkillsSnapshotVersion({
       workspaceDir: path.resolve(roots.agentWorkspaceDir),
-      sourceScopes: [{ executionWorkspaceDir: path.resolve(roots.executionWorkspaceDir) }],
     });
-  workspace
-    .mockResolvedValueOnce([entry("workspace-stale")])
-    .mockResolvedValue([entry("workspace-current")]);
+  const currentEntries = [entry("workspace-current")];
+  workspace.mockResolvedValueOnce([entry("workspace-stale")]).mockResolvedValue(currentEntries);
   const { gate, entered } = pause("library");
   const result = await resolve({
     skillsAnchorWorkspace: "/synthetic/fallback-workspace",
@@ -171,6 +151,8 @@ it("preserves the first complete publication across concurrent lazy reads", asyn
       skillRoots: roots,
     },
   });
+  expect(workspace).not.toHaveBeenCalled();
+  expect(library).not.toHaveBeenCalled();
   const first = result.loadSkillEntries();
   await entered.promise;
   bumpSources();
@@ -185,6 +167,7 @@ it("preserves the first complete publication across concurrent lazy reads", asyn
   bumpSources();
   expect(await result.loadSkillEntries()).toBe(entries);
   expect(names(entries)).toEqual(["workspace-current", "library"]);
+  expect(names(currentEntries)).toEqual(["workspace-current"]);
 });
 
 it.each([

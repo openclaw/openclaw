@@ -2,13 +2,11 @@ import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import {
-  SsrFBlockedError,
-  ssrfPolicyFromPrivateNetworkOptIn,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchWithSsrFGuard, type RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
+import { buildNextcloudTalkOcsOptions } from "./guarded-response.js";
 
 const ROOM_CACHE_TTL_MS = 5 * 60 * 1000;
 const ROOM_CACHE_ERROR_TTL_MS = 30 * 1000;
@@ -85,18 +83,8 @@ export async function resolveNextcloudTalkRoomKind(params: {
   try {
     guarded = await fetchWithSsrFGuard({
       url: `${baseUrl}/ocs/v2.php/apps/spreed/api/v4/room/${roomToken}`,
-      init: {
-        method: "GET",
-        headers: {
-          Authorization: `Basic ${auth}`,
-          "OCS-APIRequest": "true",
-          Accept: "application/json",
-        },
-      },
+      ...buildNextcloudTalkOcsOptions(auth, account.config.network?.dangerouslyAllowPrivateNetwork),
       auditContext: "nextcloud-talk.room-info",
-      policy: ssrfPolicyFromPrivateNetworkOptIn(
-        account.config.network?.dangerouslyAllowPrivateNetwork,
-      ),
       timeoutMs: params.timeoutMs ?? NEXTCLOUD_TALK_ROOM_INFO_TIMEOUT_MS,
     });
   } catch (error) {

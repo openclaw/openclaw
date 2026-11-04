@@ -1,5 +1,22 @@
 import { spawnSync } from "node:child_process";
 
+export function runStreamedInstallerHelp(bash: string, script: string, tmp: string) {
+  return spawnSync(bash, ["-s", "--", "--help"], {
+    input: script,
+    encoding: "utf8",
+    timeout: 10_000,
+    env: {
+      ...process.env,
+      HOME: tmp,
+      TMPDIR: tmp,
+      BASH_ENV: "",
+      ENV: "",
+      OPENCLAW_INSTALL_SH_NO_RUN: "0",
+      OPENCLAW_INSTALL_CLI_SH_NO_RUN: "0",
+    },
+  });
+}
+
 export function findDarwinReexecBash(): string | undefined {
   if (process.platform !== "darwin") {
     return undefined;

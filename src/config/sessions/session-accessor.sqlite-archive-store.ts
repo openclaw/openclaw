@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
@@ -26,6 +25,7 @@ import {
   publishPreparedSessionStateArchives,
   publishSessionStateArchivesInWorker,
 } from "./session-archive-publication.js";
+import { ARCHIVE_RETENTION_BATCH_SIZE } from "./session-history-archive-pruning.types.js";
 
 /** Publishes derived archive files after their canonical rows and deletions commit. */
 export async function publishSessionStateArchives(
@@ -166,11 +166,12 @@ export async function publishSessionStateArchives(
   });
 }
 
-/** Removes canonical rows only after retention has removed their derived files. */
+/** The archive owner expires published files and rows together, preserving live references. */
 export async function prunePublishedSessionArchivesByRetention(params: {
   nowMs?: number;
   rules: readonly { olderThanMs: number; reason: "deleted" | "reset" }[];
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">;
+  assertCurrent?: () => void;
 }): Promise<number> {
   const rules = new Map(
     params.rules
@@ -183,37 +184,60 @@ export async function prunePublishedSessionArchivesByRetention(params: {
   return withSqliteSessionPageReclamation(
     toDatabaseOptions(params.scope),
     async (_reclaim, assertCurrent, _options, archives) => {
-      const candidates = await archives.readRetentionCandidates();
-      assertCurrent();
       const now = params.nowMs ?? Date.now();
       const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(params.scope);
-      const removable = candidates.filter((row) => {
-        const olderThanMs = rules.get(row.reason as "deleted" | "reset");
-        if (olderThanMs === undefined || now - row.created_at <= olderThanMs) {
-          return false;
-        }
-        const archivePath = path.resolve(archiveDirectory, row.archive_name);
-        return (
-          path.dirname(archivePath) === path.resolve(archiveDirectory) &&
-          path.basename(archivePath) === row.archive_name &&
-          !fs.existsSync(archivePath)
-        );
-      });
       let removed = 0;
-      // Small reference sets use narrowed rechecks; each batch returns FIFO custody.
-      for (let offset = 0; offset < removable.length; offset += 16) {
-        if (offset > 0) {
-          await setImmediate();
+      let offset = 0;
+      // Drain bounded pages so an older retained prefix cannot starve later eligible rows.
+      while (true) {
+        const candidates = await archives.readRetentionCandidates(offset);
+        assertCurrent();
+        if (candidates.length === 0) {
+          break;
         }
-        removed += await archives.withWriter(() => {
-          assertCurrent();
-          return archives.pruneRetention({
-            candidates: removable.slice(offset, offset + 16),
-            archiveDirectory,
-          });
+        const removable = candidates.filter((row) => {
+          const olderThanMs = rules.get(row.reason as "deleted" | "reset");
+          return olderThanMs !== undefined && now - row.created_at > olderThanMs;
         });
+        let removedFromPage = 0;
+        // Small reference sets use narrowed rechecks; each batch returns FIFO custody.
+        for (let batch = 0; batch < removable.length; batch += 16) {
+          if (batch > 0) {
+            await setImmediate();
+          }
+          removedFromPage += await archives.withWriter(() => {
+            assertCurrent();
+            return archives.pruneRetention({
+              candidates: removable.slice(batch, batch + 16),
+              archiveDirectory,
+            });
+          });
+        }
+        removed += removedFromPage;
+        // Remaining rows shift forward; skip only the intentionally retained prefix.
+        offset += candidates.length - removedFromPage;
+        if (candidates.length < ARCHIVE_RETENTION_BATCH_SIZE) {
+          break;
+        }
       }
+      const { cleanupArchivedSessionTranscripts } =
+        await import("../../gateway/session-archive.runtime.js");
+      await cleanupArchivedSessionTranscripts({
+        directories: [archiveDirectory],
+        rules: params.rules,
+        nowMs: now,
+        removeFile: (filePath) =>
+          archives.withWriter(async () => {
+            assertCurrent();
+            if ((await archives.removeLegacy(filePath)) === "failed") {
+              throw new Error(
+                "Session archive retention could not remove a legacy file; retry maintenance",
+              );
+            }
+          }),
+      });
       return removed;
     },
+    params.assertCurrent,
   );
 }

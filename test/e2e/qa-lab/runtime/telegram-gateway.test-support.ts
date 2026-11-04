@@ -104,20 +104,6 @@ export async function readTelegramRequest(req: IncomingMessage) {
   return text;
 }
 
-export function mapTelegramSse(payload: string, rewrite: (event: Record<string, unknown>) => void) {
-  return payload
-    .split("\n")
-    .map((line) => {
-      if (!line.startsWith("data: ") || line === "data: [DONE]") {
-        return line;
-      }
-      const event = JSON.parse(line.slice(6)) as Record<string, unknown>;
-      rewrite(event);
-      return `data: ${JSON.stringify(event)}`;
-    })
-    .join("\n");
-}
-
 export function succeedTelegram(res: ServerResponse, result: unknown = true) {
   writeJson(res, 200, { ok: true, result });
 }

@@ -8,17 +8,15 @@ import type { ClientCredentialDatabase } from "./client-credential-schema.js";
 import type { ClientCredentialCustody } from "./client-credential-store.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
-export type ClientCredentialLegacyImport = {
-  key: ClientCredentialLegacyKey;
-  sha256: string | null;
-  identity?: ClientIdentityRecord;
-  tokens?: ClientTokenRecord[];
-};
-
 /** Validated rows and their immutable consumed claim commit under the same owner. */
 export function importClientCredentialLegacy(
   owner: ClientCredentialCustody,
-  input: ClientCredentialLegacyImport,
+  input: {
+    key: ClientCredentialLegacyKey;
+    sha256: string | null;
+    identity?: ClientIdentityRecord;
+    tokens?: ClientTokenRecord[];
+  },
 ): boolean {
   return owner.transaction(() => {
     const stored = readClientCredentialReceipt(owner.database);

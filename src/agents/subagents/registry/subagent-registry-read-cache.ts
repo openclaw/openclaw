@@ -29,12 +29,12 @@ import {
 import {
   freezeSubagentRunReadRecord,
   immutableSubagentRun,
-  isSubagentRunPayloadEvicted,
   restoreSubagentRunPayload,
 } from "./subagent-registry-memory.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 type SubagentRunChange<T> = { entry: T | undefined };
@@ -62,7 +62,7 @@ type SubagentRunsCacheState<T extends SubagentRunReadRecord> = (
 
 export type SubagentRunsCache<T extends SubagentRunReadRecord> = {
   state: SubagentRunsCacheState<T>;
-  copy: (entry: SubagentRunRecord) => T;
+  copy: (entry: SubagentRunRecord) => T | undefined;
   project: (entry: SubagentRunRecord) => T;
 };
 
@@ -178,7 +178,10 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   }
   const snapshot = previous.snapshot;
   if (!changedRunIds) {
-    const replacement = new Map([...runs].map(([runId, entry]) => [runId, cache.copy(entry)]));
+    const replacement = new Map<string, T>();
+    for (const [runId, entry] of runs) {
+      setOrDeleteRun(replacement, runId, cache.copy(entry));
+    }
     if (previous.pending?.changes) {
       previous.pending.replacement = replacement;
       previous.pending.changes.clear();

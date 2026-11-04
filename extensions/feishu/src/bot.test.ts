@@ -5,7 +5,16 @@ import {
   type BuiltChannelInboundEventContext,
   type ChannelInboundSupplementalResolutionOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  consumeChannelAdmissionEvidence,
+  readChannelContextAdmissionEvidence,
+  withRegisteredChannelIngress,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  isControlCommandMessage,
+  shouldComputeCommandAuthorized,
+} from "openclaw/plugin-sdk/command-detection";
 import type {
   ensureConfiguredBindingRouteReady,
   getSessionBindingService,
@@ -15,6 +24,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveAgentRoute, type ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./bot.cleanup.test-support.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -27,9 +37,15 @@ import {
   createFeishuTestConfig,
   createFeishuTestEvent,
   createFeishuTestRoute,
+  replyDispatcher,
+  senderClient,
+  historyMessage,
+  fetchedMessage,
+  mergeForwardItem,
   sentMessage,
   withFeishuRuntimeDefaults,
 } from "./bot.test-support.js";
+import { feishuPlugin } from "./channel.js";
 import { parseMergeForwardContent } from "./message-content.js";
 import { setFeishuRuntime } from "./runtime.js";
 
@@ -65,19 +81,6 @@ function unboundRoute({
   route: NonNullable<ConfiguredBindingRoute>["route"];
 }): ConfiguredBindingRoute {
   return { bindingResolution: null, route };
-}
-
-function replyDispatcher(ensureNoVisibleReplyFallback = vi.fn()) {
-  return {
-    dispatcherOptions: {},
-    delivery: { deliver: vi.fn(async () => undefined) },
-    replyOptions: {},
-    ensureNoVisibleReplyFallback,
-  };
-}
-
-function senderClient(get = vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } })) {
-  return { contact: { user: { get } } };
 }
 
 function savedMedia(id: string, contentType: string, size: number, path = `/tmp/${id}`) {
@@ -368,32 +371,6 @@ function rejectSenderPermission(msg: string) {
     senderClient(vi.fn().mockRejectedValue({ response: { data: { code: 99991672, msg } } })),
   );
 }
-function historyMessage(senderId: string, content: string, offset = 0, senderType = "user") {
-  return { senderId, senderType, content, createTime: 1710000000000 + offset * 1000 };
-}
-
-function fetchedMessage(
-  messageId: string,
-  content: string,
-  fields: Partial<NonNullable<Awaited<ReturnType<typeof getMessage>>>> = {},
-) {
-  return { messageId, chatId: "oc-group", content, contentType: "text", ...fields };
-}
-
-function mergeForwardItem(
-  text: string,
-  fields: Partial<Parameters<typeof parseMergeForwardContent>[0][number]> & {
-    message_id?: string;
-  } = {},
-) {
-  return {
-    msg_type: "text",
-    upper_message_id: "container",
-    body: { content: JSON.stringify({ text }) },
-    ...fields,
-  };
-}
-
 function expectDispatcher(options: Partial<Parameters<typeof createReplyDispatcher>[0]>) {
   expect(createReplyDispatcher).toHaveBeenCalledWith(expect.objectContaining(options));
 }
@@ -578,6 +555,46 @@ describe("handleFeishuMessage command authorization", () => {
       },
     });
     setFeishuRuntime(botRuntime);
+  });
+
+  it("retains host admission for a DM with distinct sender and chat IDs", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = createFeishuTestConfig(
+        { dmPolicy: "allowlist", allowFrom: ["ou_sender"] },
+        { session: { dmScope: "per-channel-peer" } },
+      );
+      await withRegisteredChannelIngress(
+        { plugin: feishuPlugin, config: cfg, setRuntime: setFeishuRuntime },
+        async (runtime) => {
+          botRuntime.channel.inbound.ingress = runtime.channel.inbound.ingress;
+          botRuntime.channel.inbound.buildContext = runtime.channel.inbound.buildContext;
+          botRuntime.channel.routing.resolveAgentRoute = runtime.channel.routing.resolveAgentRoute;
+          setFeishuRuntime(botRuntime);
+          await receiveConfigured(
+            { messageId: "msg-dm-admission", senderOpenId: "ou_sender", chatId: "oc_chat" },
+            cfg,
+          );
+          const context = dispatchReply.mock.calls[0]?.[0].ctx;
+          expect(context).toMatchObject({
+            SessionKey: "agent:main:feishu:direct:ou_sender",
+            SenderId: "ou_sender",
+            MessageSid: "msg-dm-admission",
+            NativeChannelId: "oc_chat",
+          });
+          expect(
+            consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(context)),
+          ).toMatchObject({
+            ingressState: "present",
+            invoker: {
+              state: "present",
+              kind: "person",
+              rawPrincipalRef: JSON.stringify(["feishu", "default", "ou_sender"]),
+            },
+            decisionCoverage: "enforced",
+          });
+        },
+      );
+    });
   });
 
   it.each([
@@ -803,15 +820,81 @@ describe("handleFeishuMessage command authorization", () => {
     expect(sendMessage.mock.calls[0]![0].to).toBe("chat:oc_dm_chat_1");
   });
 
+  it.each<{
+    command: string;
+    allowFrom?: string[];
+    mentioned?: boolean;
+    authorized: boolean;
+    rootId?: string;
+  }>([
+    { command: "/new", authorized: false },
+    { command: "/status", allowFrom: [], mentioned: true, authorized: false },
+    { command: "/model", allowFrom: ["ou-admin"], authorized: false, rootId: "om-command-root" },
+    { command: "/status", allowFrom: ["ou-admin"], authorized: true },
+    { command: "please explain /model", authorized: false },
+  ])(
+    "handles group $command with authorized=$authorized",
+    async ({ command, allowFrom, mentioned, authorized, rootId }) => {
+      computeCommandAccess.mockImplementation(shouldComputeCommandAuthorized);
+      botRuntime.channel.commands.isControlCommandMessage = isControlCommandMessage;
+      const senderOpenId = authorized ? "ou-admin" : "ou-visitor";
+      const mentions = mentioned
+        ? [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }]
+        : undefined;
+      await receiveGroup(
+        {
+          messageId: `msg-command-${command}-${authorized}`,
+          senderOpenId,
+          text: mentioned ? `@_bot ${command}` : command,
+          message: { mentions, root_id: rootId },
+        },
+        { replyInThread: rootId ? "enabled" : undefined },
+        { allowFrom },
+        { commands: { useAccessGroups: true } },
+      );
+      expect(computeCommandAccess).toHaveBeenCalledWith(command, currentRuntimeConfig);
+      if (!authorized && isControlCommandMessage(command)) {
+        expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            to: "chat:oc-group",
+            accountId: "default",
+            replyToMessageId: rootId ?? `msg-command-${command}-${authorized}`,
+            text: expect.stringMatching(/not authorized.*allowFrom/s),
+          }),
+        );
+        expect(buildInboundContext).not.toHaveBeenCalled();
+        expect(dispatchReply).not.toHaveBeenCalled();
+        return;
+      }
+      const context = inboundContext();
+      expect(context).toMatchObject({
+        ChatType: "group",
+        CommandAuthorized: authorized,
+        SenderId: senderOpenId,
+        GroupRequireMention: false,
+        From: `feishu:${senderOpenId}`,
+        To: "chat:oc-group",
+        OriginatingChannel: "feishu",
+        OriginatingTo: "chat:oc-group",
+        NativeChannelId: "oc-group",
+      });
+      expect(resolveGroupSessionKey(context as never)).toMatchObject({
+        channel: "feishu",
+        id: "oc-group",
+        key: "feishu:group:oc-group",
+      });
+      expect(dispatchReply).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each([
     ["ou-attacker", false],
     ["ou-admin", true],
   ] as const)("computes group command authorization for %s", async (senderOpenId, authorized) => {
+    botRuntime.channel.commands.isControlCommandMessage = isControlCommandMessage;
     const allowFrom = authorized ? [senderOpenId] : undefined;
-    const mentions = authorized
-      ? undefined
-      : [{ key: "@_user_1", id: { open_id: "ou-bot" }, name: "Bot" }];
-    const text = authorized ? "/status" : "@_user_1/status";
+    const mentions = [{ key: "@_user_1", id: { open_id: "ou-bot" }, name: "Bot" }];
+    const text = "@_user_1/status";
     computeCommandAccess.mockReturnValue(true);
     await receiveGroup(
       {
@@ -824,10 +907,21 @@ describe("handleFeishuMessage command authorization", () => {
       { allowFrom },
       { commands: { useAccessGroups: true } },
     );
-    const context = inboundContext();
     expect(computeCommandAccess).toHaveBeenCalledWith("/status", currentRuntimeConfig);
+    if (!authorized) {
+      expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ text: expect.stringMatching(/not authorized.*allowFrom/s) }),
+      );
+      expect(buildInboundContext).not.toHaveBeenCalled();
+      expect(dispatchReply).not.toHaveBeenCalled();
+      return;
+    }
+    const context = inboundContext();
     expect(context).toMatchObject({
       ChatType: "group",
+      RawBody: '<at user_id="ou-bot">Bot</at>/status',
+      CommandBody: "/status",
+      BodyForCommands: "/status",
       CommandAuthorized: authorized,
       SenderId: senderOpenId,
       GroupRequireMention: false,
@@ -837,6 +931,7 @@ describe("handleFeishuMessage command authorization", () => {
       OriginatingTo: "chat:oc-group",
       NativeChannelId: "oc-group",
     });
+    expect(context.BodyForAgent).toContain('<at user_id="ou-bot">Bot</at>/status');
     expect(resolveGroupSessionKey(context as never)).toMatchObject({
       channel: "feishu",
       id: "oc-group",

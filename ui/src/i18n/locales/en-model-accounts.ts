@@ -1,6 +1,8 @@
 import type { TranslationMap } from "../lib/types.ts";
+import { registerModelAccountListEnglish } from "./en-model-account-list.ts";
 import { en } from "./en.ts";
 
+const accountList = registerModelAccountListEnglish.catalog.profilePage.modelAccounts;
 const enModelAccounts = {
   profilePage: {
     modelAccounts: {
@@ -14,8 +16,6 @@ const enModelAccounts = {
       person: "Person",
       currentPerson: "Current person",
       noPerson: "Not identified",
-      scope: "Scope",
-      personal: "Personal",
       personalDescription:
         "Sign-in saves an account for this person on this Gateway. System and agent credentials are unchanged.",
       signInUnavailable: "Sign-in not ready",
@@ -28,17 +28,15 @@ const enModelAccounts = {
         profile:
           "Wait for your identity profile to load. If it does not appear, use Refresh or Set identity above to retry.",
       },
-      description:
-        "Choose the account new chats prefer. Existing chats keep their account choice. Gateway fallback rules still apply; this preference is not a billing guarantee.",
+      description: "Choose the account new chats prefer.",
+      descriptionMore:
+        "Existing chats keep their account choice. Gateway fallback rules still apply; this preference is not a billing guarantee.",
       empty: "No personal default selected. New chats use the gateway's default account.",
-      linkedDescription:
-        "Preferred for new chats with this provider. Clearing the default keeps the saved credential and existing chat choices.",
       linkedStatus: "New chat default",
       gatewayAccount: "Selected saved account",
-      selectAction: "Use for new chats",
       savedAccounts: "Saved accounts",
-      loadMore: "Load more saved accounts",
-      inventoryFailed: "Could not load saved accounts. Refresh to retry.",
+      loadMore: accountList.loadMore,
+      inventoryFailed: accountList.inventoryFailed,
       authTypes: {
         oauth: "Browser sign-in · saved account",
         token: "Token · saved account",

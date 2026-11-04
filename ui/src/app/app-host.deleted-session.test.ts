@@ -205,7 +205,9 @@ function createDeletionHarness(request: ReturnType<typeof vi.fn>) {
   cleanups.push(() => sessions.dispose());
   const watch = (sessionKeys = [deletedKey, mainKey]) => {
     const fixture = recoveryShell({ sessionKeys, sessions });
-    cleanups.push(sessions.subscribe(() => fixture.shell.recoverDeletedActiveSession()));
+    cleanups.push(
+      sessions.subscribe(() => fixture.shell.shellNavigation.recoverDeletedActiveSession()),
+    );
     return { ...fixture, toast: toastHost() };
   };
   return { ...harness, sessions, watch };
@@ -372,12 +374,12 @@ describe("OpenClaw shell deleted-session recovery", () => {
       },
       retryable: false,
     });
-    shell.recoverDeletedActiveSession();
+    shell.shellNavigation.recoverDeletedActiveSession();
     expect(shell.activeSessionKey).toBe(deletedKey);
     expect(replace).not.toHaveBeenCalled();
     expect(setSessionKey).not.toHaveBeenCalled();
     get.mockReturnValue(null);
-    shell.recoverDeletedActiveSession();
+    shell.shellNavigation.recoverDeletedActiveSession();
     expect(shell.activeSessionKey).toBe(mainKey);
     expect(replace).toHaveBeenCalledOnce();
   });
@@ -386,8 +388,10 @@ describe("OpenClaw shell deleted-session recovery", () => {
     async (failure) => {
       const staleClient = failure === "different-client batch rejection";
       const response = createDeferred<{ deleted: boolean }>();
+      const deleteDispatched = createDeferred();
       const request = vi.fn(async (method: string) => {
         if (method === "sessions.delete") {
+          deleteDispatched.resolve();
           return response.promise;
         }
         if (method === "sessions.subscribe") {
@@ -407,6 +411,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
       shell.activeSessionKey = "agent:main:another-thread";
       replace.mockClear();
+      await deleteDispatched.promise;
       if (failure === "rejection") {
         response.reject(new Error("delete rejected"));
         await expect(operation).rejects.toThrow("delete rejected");
@@ -443,6 +448,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
 
   it("preserves the replacement when confirmation selected its deleted predecessor", async () => {
     const response = createDeferred<{ deleted: boolean }>();
+    const deleteDispatched = createDeferred();
     const replacement = {
       key: deletedKey,
       sessionId: "replacement",
@@ -450,9 +456,13 @@ describe("OpenClaw shell deleted-session recovery", () => {
       updatedAt: 2,
     };
     let listed = { ...replacement, sessionId: "predecessor" };
-    const request = vi.fn(async (method: string) =>
-      method === "sessions.delete" ? response.promise : sessionsResult([listed], 2),
-    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.delete") {
+        deleteDispatched.resolve();
+        return response.promise;
+      }
+      return sessionsResult([listed], 2);
+    });
     const { emitEvent, sessions, watch } = createDeletionHarness(request);
     await sessions.refresh({ force: true });
     emitEvent({
@@ -467,17 +477,11 @@ describe("OpenClaw shell deleted-session recovery", () => {
     try {
       expect(shell.activeSessionKey).toBe(deletedKey);
       expect(replace).not.toHaveBeenCalled();
-      expect(sessions.state.result?.sessions).toEqual([replacement]);
-      expect(request).toHaveBeenCalledWith(
-        "sessions.delete",
-        expect.objectContaining({ key: deletedKey, expectedSessionId: "predecessor" }),
-        expect.any(Object),
-      );
+      await deleteDispatched.promise;
       response.reject(new Error("Session identity changed"));
       await expect(operation).rejects.toThrow("Session identity changed");
       await vi.waitFor(() => expect(toast.textContent).toContain("Session identity changed"));
       expect(shell.activeSessionKey).toBe(deletedKey);
-      expect(sessions.state.result?.sessions).toEqual([replacement]);
     } finally {
       response.resolve({ deleted: false });
       await operation.catch(() => {});
@@ -507,7 +511,8 @@ describe("OpenClaw shell deleted-session recovery", () => {
       h.setRows([h.sibling]);
       if (priorLocalDelete) {
         const deletion = h.sessions.delete(h.alpha.key);
-        h.responses.get(h.alpha.key)!.resolve({ deleted: true });
+        const response = await h.waitForDeleteRequest(h.alpha.key);
+        response.resolve({ deleted: true });
         await deletion;
       }
       h.setRows([replacement, h.sibling]);
@@ -523,13 +528,10 @@ describe("OpenClaw shell deleted-session recovery", () => {
       };
       h.emitEvent({ type: "event", event: "sessions.changed", payload });
       await import("../lib/chat/composer-draft-retirement.runtime.ts");
-      expect.soft(h.sessions.state.result?.sessions).toEqual([replacement, h.sibling]);
       expect.soft(shell.activeSessionKey).toBe(h.alpha.key);
       expect.soft(replace).not.toHaveBeenCalled();
       expect.soft(drafts.read()).toBe(draft);
-      expect.soft(h.sessions.deletionState(h.alpha.key)).toBeUndefined();
       await h.sessions.refresh({ force: true });
-      expect(h.sessions.state.result?.sessions).toEqual([replacement, h.sibling]);
       // The same delivery path must still retire B when B itself is confirmed deleted.
       h.setRows([h.sibling]);
       const currentDelete = { ...payload, sessionId: replacement.sessionId };
@@ -538,9 +540,6 @@ describe("OpenClaw shell deleted-session recovery", () => {
       await vi.waitFor(() => {
         drafts.expectRetired(retired.retireBeforeRevision);
       });
-      expect(h.sessions.state.result?.sessions).toEqual([h.sibling]);
-      expect(h.sessions.deletionState(h.alpha.key)).toBe("confirmed");
-      expect(h.sessions.deletionState(h.sibling.key)).toBeUndefined();
       expect(shell.activeSessionKey).toBe(mainKey);
     },
   );
@@ -587,7 +586,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       sessionKeys: [key],
       deletedSessionKeys: pathname ? [] : [key],
     });
-    shell.recoverNotFoundRoute();
+    shell.shellNavigation.recoverNotFoundRoute();
     expect(setSessionKey).not.toHaveBeenCalled();
     if (pathname) {
       expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname });

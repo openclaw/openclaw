@@ -15,7 +15,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { applyMediaUnderstanding } from "./apply.js";
-import { MediaAttachmentCache } from "./attachments.js";
+import { MediaAttachmentCache } from "./attachments.cache.js";
 import { resolveScopeDecision } from "./resolve.js";
 import { resolveMediaAttachmentLocalRoots } from "./runner.attachments.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";

@@ -3,17 +3,18 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
-  createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
   getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import {
   chatPaneHeaderSessionMenu,
   mountChatPaneHeader,
+  selectNativeMenu,
   renderPaneHeaderInto,
 } from "./components/chat-pane-header.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
@@ -181,18 +182,12 @@ it("retains focused session menu controls through header refresh and restores fo
   const menu = mounted.container.querySelector("openclaw-chat-header-session-menu")!;
   await menu.updateComplete;
   const trigger = menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!;
-  trigger.click();
-  await waitForSolid(() =>
-    expect(menu.querySelector(".chat-header-session-menu__panel")?.matches(":popover-open")).toBe(
-      true,
-    ),
-  );
-  menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')!.click();
+  await selectNativeMenu(menu, "submenu:advanced");
   await waitForSolid(() =>
     expect(menu.querySelector('[data-value="submenu:open-in"]')).not.toBeNull(),
   );
   const openIn = menu.querySelector<HTMLButtonElement>('[data-value="submenu:open-in"]')!;
-  openIn.click();
+  await selectNativeMenu(menu, "submenu:open-in");
   await waitForSolid(() => expect(menu.querySelector('[data-value="split-right"]')).not.toBeNull());
   const split = menu.querySelector<HTMLButtonElement>('[data-value="split-right"]')!;
   split.focus();
@@ -228,7 +223,7 @@ it("renders a native external link in the main panel header", () => {
   const mounted = mountChatPaneHeader([], {
     sidebarLayout: promoteSidebarPanel(openSlot({ columns: [] }, "workspace"), "workspace"),
     panelDefinitions,
-    panelActionDestinations: { main: true, side: false, dashboard: false },
+    panelActionDestinations: { main: true, side: false },
   });
   onTestFinished(mounted.unmount);
   const link = mounted.container.querySelector<HTMLAnchorElement>('a[aria-label="Open panel"]')!;

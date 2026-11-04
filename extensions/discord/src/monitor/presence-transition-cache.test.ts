@@ -42,13 +42,15 @@ describe("DiscordPresenceBaselineCache", () => {
 
   it("replaces only one guild scope", () => {
     const cache = new DiscordPresenceBaselineCache(3);
-    cache.observeOnline("guild-a", "member");
-    cache.observeOnline("guild-b", "member");
+    cache.observeOnline("guild-a", "guild-a:member");
+    cache.observeOnline("guild-b", "guild-b:member");
+    expect(cache.isOnline("guild-a", "guild-a:member")).toBe(true);
+    expect(cache.isOnline("guild-b", "guild-b:member")).toBe(true);
 
     cache.clearScope("guild-a");
 
-    expect(cache.isOnline("guild-a", "member")).toBe(false);
-    expect(cache.isOnline("guild-b", "member")).toBe(true);
+    expect(cache.isOnline("guild-a", "guild-a:member")).toBe(false);
+    expect(cache.isOnline("guild-b", "guild-b:member")).toBe(true);
   });
 
   it("bounds aggregate entries and reports the affected guild", () => {

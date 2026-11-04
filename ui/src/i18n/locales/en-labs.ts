@@ -3,12 +3,26 @@ import { en } from "./en.ts";
 
 const enLabs = {
   labsPage: {
+    swarm: {
+      title: en.labsPage.swarm.title,
+      groupTitle: "Parallel tasks",
+      defaultPhase: en.labsPage.swarm.defaultPhase,
+      progress: "{complete} of {total}",
+      active: "{running} running · {queued} queued · {failed} failed or stopped",
+      finished: "{done} completed · {failed} failed or stopped",
+      completed: "{done} completed",
+      failedOrStopped: "Failed or stopped",
+      childOutcome: "Child runs finished. Check the conversation for the final response.",
+      childOutcomeProcessing: "Child runs finished. The parent is processing their results.",
+      details: "Child details",
+      detailsUnavailable: "Child details are unavailable. Counts include all accepted workers.",
+      otherGroups: "{count} more active groups",
+    },
     configure: "Configure",
     configureFeature: "Configure {name}",
     decisionAssistance: {
       title: "Decision assistance",
-      description:
-        "Enable experimental assistance from your configured Decision model. See the documentation for supported uses, setup, and data handling.",
+      description: "Enable experimental assistance from your configured Decision model.",
       optedIn: "Preference saved.",
       loading: "Loading setting…",
       unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
@@ -50,14 +64,9 @@ const enLabs = {
       description:
         "Try speech bubbles with compact tool activity. Home uses bubbles by default while enabled; each browser keeps its explicit conversation choices. Disabling this lab restores the standard view without clearing those choices.",
     },
-    customPluginUi: {
-      title: "Custom plugin UI",
-      description:
-        "Let installed plugins add pages, widgets, and custom views. Their JavaScript runs with your signed-in permissions, so enable only plugins you trust. Bundled plugin views remain available. Reload this tab to clear previously loaded plugin code.",
-    },
-    claws: {
-      title: "Claws",
-      description: "Claws are ready-made agents for specific tasks.",
+    templates: {
+      title: "Templates",
+      description: "Templates are ready-made agents for specific tasks.",
     },
     hostDesktop: {
       title: "Host Desktop",
@@ -73,6 +82,10 @@ const enLabs = {
 } satisfies TranslationMap;
 
 export const registerLabsEnglish = Object.assign(
-  () => Object.assign(en.labsPage, enLabs.labsPage),
+  () => {
+    const { swarm, ...labsPage } = enLabs.labsPage;
+    Object.assign(en.labsPage, labsPage);
+    Object.assign(en.labsPage.swarm, swarm);
+  },
   { catalog: enLabs },
 );

@@ -1,8 +1,7 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
-import type { GatewayAgentRow } from "../api/types.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -28,7 +27,9 @@ import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
 import { retireSessionPaneHandoffs } from "../pages/chat/chat-pane-handoff-lifecycle.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
+import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ApplicationContext } from "./context.ts";
+import { isNativeMobileHost } from "./native-web-chrome.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
 import { profilePreferencesState } from "./server-prefs-profile.ts";
 import { flushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
@@ -57,28 +58,11 @@ export interface ShellGatewayHost {
   desktopNavigationExpanded: boolean;
   lastLocalePrefSignature: string | null;
   readonly outboxStoreImport: { load: () => Promise<unknown> };
-  recoverDeletedActiveSession(): void;
-  selectChatSession(sessionKey: string, agentId?: string | null): void;
+  readonly shellNavigation: Pick<
+    ShellNavigationCapability,
+    "recoverDeletedActiveSession" | "selectChatSession" | "synchronizeSessionUrl"
+  >;
   invalidate(): void;
-}
-
-function diffAgentRoster(
-  previous: readonly GatewayAgentRow[],
-  next: readonly GatewayAgentRow[],
-): { invalidatedIds: string[]; changedIds: string[] } {
-  const nextById = new Map(next.map((agent) => [agent.id, agent]));
-  const invalidatedIds: string[] = [];
-  const changedIds: string[] = [];
-  for (const agent of previous) {
-    const replacement = nextById.get(agent.id);
-    if (!replacement) {
-      invalidatedIds.push(agent.id);
-    } else if (JSON.stringify(replacement) !== JSON.stringify(agent)) {
-      invalidatedIds.push(agent.id);
-      changedIds.push(agent.id);
-    }
-  }
-  return { invalidatedIds, changedIds };
 }
 
 export class ShellGatewayOwner {
@@ -115,7 +99,8 @@ export class ShellGatewayOwner {
         return;
       }
       this.observeDeletedSessions(sessions.state);
-      this.host.recoverDeletedActiveSession();
+      this.host.shellNavigation.recoverDeletedActiveSession();
+      this.host.shellNavigation.synchronizeSessionUrl();
       synchronizeTitle();
     };
     synchronize();
@@ -253,7 +238,7 @@ export class ShellGatewayOwner {
       return;
     }
     if (needsRefresh) {
-      await runtimeConfig.refresh();
+      await runtimeConfig.refreshDisplay();
       return;
     }
     if (retainedLocal) {
@@ -297,7 +282,7 @@ export class ShellGatewayOwner {
       );
     }
     if (event.event === "sessions.changed") {
-      this.host.recoverDeletedActiveSession();
+      this.host.shellNavigation.recoverDeletedActiveSession();
       return;
     }
     if (event.event === "agent.identity.changed") {
@@ -315,7 +300,7 @@ export class ShellGatewayOwner {
         (runtimeConfig.state.configSnapshot || !runtimeConfig.state.bootstrapConfig)
       ) {
         // Save notifications reconcile in place so active editors keep focus and stay interactive.
-        void runtimeConfig.refresh({ background: true });
+        void runtimeConfig.refreshDisplay({ background: true });
       }
       this.scheduleAgentRosterRefresh();
       return;
@@ -333,7 +318,7 @@ export class ShellGatewayOwner {
       }
       return;
     }
-    if (event.event !== "ui.command" || !event.payload) {
+    if (event.event !== "ui.command" || !event.payload || isNativeMobileHost()) {
       return;
     }
     const context = this.host.context;
@@ -343,6 +328,15 @@ export class ShellGatewayOwner {
     const commandParams = event.payload as UiCommandParams;
     const { command } = commandParams;
     if (!command) {
+      return;
+    }
+    if (command.kind === "agent-github-settings") {
+      const agentId = commandParams.agentId?.trim();
+      if (agentId) {
+        context.navigate("agents", {
+          pathname: pathForAgentPanel(agentId, "tools", context.basePath),
+        });
+      }
       return;
     }
     if (command.kind === "sidebar") {
@@ -364,7 +358,7 @@ export class ShellGatewayOwner {
             commandParams.agentId !== undefined &&
             commandParams.agentId !== context.agentSelection.state.selectedId))
       ) {
-        this.host.selectChatSession(sessionKey, commandParams.agentId);
+        this.host.shellNavigation.selectChatSession(sessionKey, commandParams.agentId);
       }
       const panelEvent = new CustomEvent(
         {
@@ -389,6 +383,7 @@ export class ShellGatewayOwner {
               : {}),
             ...(sessionKey ? { sessionKey } : {}),
             ...(command.dock ? { dock: command.dock } : {}),
+            ...(command.expanded !== undefined ? { expanded: command.expanded } : {}),
             ...(command.panel === "terminal" && command.terminalSessionId
               ? { terminalSessionId: command.terminalSessionId }
               : {}),
@@ -415,7 +410,7 @@ export class ShellGatewayOwner {
       new CustomEvent(UI_COMMAND_EVENT, { detail: commandParams, cancelable: true }),
     );
     if (!handled && (command.kind === "navigate" || command.kind === "split")) {
-      this.host.selectChatSession(command.sessionKey, commandParams.agentId);
+      this.host.shellNavigation.selectChatSession(command.sessionKey, commandParams.agentId);
     }
   }
 
@@ -441,13 +436,25 @@ export class ShellGatewayOwner {
     if (!next || this.host.context !== context) {
       return;
     }
-    const rosterDiff = diffAgentRoster(previous?.agents ?? [], next.agents);
-    if (rosterDiff.invalidatedIds.length > 0) {
-      context.agents.invalidateFiles(rosterDiff.invalidatedIds);
-      context.agentIdentity.invalidate(rosterDiff.invalidatedIds);
+    const previousAgents = previous?.agents ?? [];
+    const nextById = new Map(next.agents.map((agent) => [agent.id, agent]));
+    const invalidatedIds: string[] = [];
+    const changedIds: string[] = [];
+    for (const agent of previousAgents) {
+      const replacement = nextById.get(agent.id);
+      if (!replacement) {
+        invalidatedIds.push(agent.id);
+      } else if (JSON.stringify(replacement) !== JSON.stringify(agent)) {
+        invalidatedIds.push(agent.id);
+        changedIds.push(agent.id);
+      }
     }
-    if (rosterDiff.changedIds.length > 0) {
-      void context.agentIdentity.ensure(rosterDiff.changedIds);
+    if (invalidatedIds.length > 0) {
+      context.agents.invalidateFiles(invalidatedIds);
+      context.agentIdentity.invalidate(invalidatedIds);
+    }
+    if (changedIds.length > 0) {
+      void context.agentIdentity.ensure(changedIds);
     }
     const nextIds = new Set(next.agents.map((agent) => agent.id));
     if (
@@ -465,7 +472,7 @@ export class ShellGatewayOwner {
     this.previousGatewayPhase = snapshot.phase;
     this.updateGatewaySessionKey(snapshot);
     const context = this.host.context;
-    this.host.recoverDeletedActiveSession();
+    this.host.shellNavigation.recoverDeletedActiveSession();
     if (snapshot.phase === "connected" && context) {
       const connectionBootstrap = context.connectionBootstrap;
       void connectionBootstrap.run("runtime-config", () =>
@@ -520,7 +527,7 @@ export class ShellGatewayOwner {
     const context = this.host.context;
     const generation = ++this.preferenceGeneration;
     this.runtimeConfigReady = (
-      runtimeConfig.state.bootstrapConfig ? Promise.resolve() : runtimeConfig.ensureLoaded()
+      runtimeConfig.state.bootstrapConfig ? Promise.resolve() : runtimeConfig.ensureDisplayLoaded()
     ).then(async () => {
       if (
         this.host.context !== context ||

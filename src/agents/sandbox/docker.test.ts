@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
@@ -16,6 +16,7 @@ const { spawnState, freshSpawnState } = vi.hoisted(() => {
     infoAvailable: { docker: false, podman: false },
     podmanConnections: "[]\n",
     podmanInfo: "true\tfalse\t\t5.0.0\n",
+    podmanInfoDelayMs: 0,
     podmanMachines: "[]\n",
     podmanClientVersion: "podman version 5.0.0\n",
     podmanVersionExitCode: 0,
@@ -61,9 +62,25 @@ function selectMachine(label: string, port: number) {
   ]);
 }
 
-async function spawnDockerProcess(commandAndArgs: string[]) {
+async function spawnDockerProcess(commandAndArgs: string[], opts?: { cancelSignal?: AbortSignal }) {
   const [command = "", ...args] = commandAndArgs;
   spawnState.calls.push({ command, args });
+  if (command === "podman" && args[0] === "info" && spawnState.podmanInfoDelayMs > 0) {
+    const canceled = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), spawnState.podmanInfoDelayMs);
+      opts?.cancelSignal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          resolve(true);
+        },
+        { once: true },
+      );
+    });
+    if (canceled) {
+      return { ...processResult(1), isCanceled: true };
+    }
+  }
   if (spawnState.executionError) {
     throw spawnState.executionError;
   }
@@ -119,6 +136,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 }));
 
 let docker: typeof import("./docker.js");
+let podmanRuntime: typeof import("./podman-runtime.js");
 let containerImage: typeof import("./container-image.js");
 
 beforeAll(async () => {
@@ -128,6 +146,7 @@ beforeAll(async () => {
     spawnCommand: spawnDockerProcess,
   }));
   docker = await import("./docker.js");
+  podmanRuntime = await import("./podman-runtime.js");
   containerImage = await import("./container-image.js");
 });
 
@@ -141,12 +160,46 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
     spawnState.infoAvailable.podman = true;
   });
 
+  describe("on a busy host", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      // Node's AbortSignal.timeout ignores fake timers; route it through the fake clock.
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new DOMException("timed out", "TimeoutError")), ms);
+        return controller.signal;
+      });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("waits for a slow but healthy podman info", async () => {
+      spawnState.podmanInfoDelayMs = 12_000;
+      const assertion = expect(
+        podmanRuntime.resolvePodmanSandboxRuntimeInfo(),
+      ).resolves.toMatchObject({ rootless: true, version: "5.0.0" });
+      await vi.advanceTimersByTimeAsync(12_000);
+      await assertion;
+    });
+
+    it("names the unresponsive Podman command when the probe times out", async () => {
+      spawnState.podmanInfoDelayMs = 60_000;
+      const assertion = expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
+        /^Podman did not answer `podman info` within 30s\./u,
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      await assertion;
+    });
+  });
+
   it("allows rootful Podman Machine connections", async () => {
     const uri = "ssh://root@127.0.0.1:60000/run/podman/podman.sock";
     spawnState.podmanInfo = "false\ttrue\t\t5.0.0\n";
     selectConnection("podman-machine-default-root", uri, "/tmp/podman-machine-default");
     spawnState.podmanMachines = JSON.stringify([machineInfo()]);
-    await expect(docker.resolvePodmanSandboxRuntimeInfo()).resolves.toEqual({
+    await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).resolves.toEqual({
       machine: true,
       rootless: false,
       version: "5.0.0",
@@ -162,7 +215,7 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
     spawnState.podmanClientVersion = "podman-remote.exe version 4.8.0-dev\n";
     selectConnection("named", "unix:///tmp/named.sock");
     await withEnvAsync({ CONTAINER_CONNECTION: "named", CONTAINER_HOST: "" }, async () => {
-      const runtime = await docker.resolvePodmanSandboxRuntimeInfo();
+      const runtime = await podmanRuntime.resolvePodmanSandboxRuntimeInfo();
       expect(runtime).toMatchObject({
         machine: false,
         rootless: true,
@@ -197,7 +250,7 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
       remote ? "ssh://example.test/run/user/1000/podman/podman.sock" : "unix:///tmp/named.sock",
     );
     await withEnvAsync({ CONTAINER_CONNECTION: name, CONTAINER_HOST: host }, async () => {
-      await expect(docker.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(error);
+      await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(error);
     });
   });
 
@@ -224,12 +277,12 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
           CONTAINER_SSHKEY: hostWins ? identity : "/tmp/losing-host-key",
         },
         async () => {
-          await expect(docker.resolvePodmanSandboxRuntimeInfo()).resolves.toMatchObject({
+          await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).resolves.toMatchObject({
             machine: true,
             target: { globalArgs: ["--url", uri, "--identity", identity] },
           });
           spawnState.podmanMachines = JSON.stringify([{ ...machine, Running: false }]);
-          await expect(docker.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
+          await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
             /active Podman connection is remote/u,
           );
         },
@@ -241,7 +294,7 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
     spawnState.podmanInfo = "true\tfalse\t\t5.0.0\n";
     const remoteUri = "ssh://example.test/run/user/1000/podman/podman.sock";
     selectConnection("saved-remote", remoteUri);
-    await expect(docker.resolvePodmanSandboxRuntimeInfo()).resolves.toEqual({
+    await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).resolves.toEqual({
       machine: false,
       rootless: true,
       version: "5.0.0",
@@ -252,7 +305,7 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
     spawnState.podmanInfo = "true\ttrue\t\t5.0.0\n";
     selectConnection("remote", remoteUri);
 
-    await expect(docker.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
+    await expect(podmanRuntime.resolvePodmanSandboxRuntimeInfo()).rejects.toThrow(
       /active Podman connection is remote/u,
     );
   });
@@ -260,7 +313,7 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
   it("rejects a different allowed Podman Machine after a runtime target is recorded", async () => {
     spawnState.podmanInfo = "true\ttrue\t\t5.0.0\n";
     selectMachine("first", 60001);
-    const first = await docker.resolvePodmanSandboxRuntimeInfo();
+    const first = await podmanRuntime.resolvePodmanSandboxRuntimeInfo();
 
     selectMachine("second", 60002);
 

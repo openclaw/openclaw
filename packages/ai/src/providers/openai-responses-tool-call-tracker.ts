@@ -14,10 +14,6 @@ type ResponsesToolCallEvent = {
   item_id?: unknown;
 };
 
-function readEventIdentity(event: ResponsesToolCallEvent): ResponsesToolCallIdentity {
-  return { itemId: normalizeOptionalString(event.item_id) };
-}
-
 export function readResponsesToolCallItemIdentity(item: {
   id?: unknown;
   call_id?: unknown;
@@ -90,7 +86,7 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
 
     resolve(
       event: ResponsesToolCallEvent,
-      identity: ResponsesToolCallIdentity = readEventIdentity(event),
+      identity: ResponsesToolCallIdentity = { itemId: normalizeOptionalString(event.item_id) },
       allowUnmatchedIdentity = true,
     ): TState | undefined {
       const outputIndex = readResponsesOutputIndex(event);

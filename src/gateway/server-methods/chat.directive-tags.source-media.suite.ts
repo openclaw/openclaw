@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { buildSourceReplyPayloadState } from "../../agents/embedded-agent-runner/run/source-reply-payloads.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { appendUsageLine } from "../../auto-reply/reply/agent-runner-usage-line.js";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -17,6 +18,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentAssistantSourceReceipt } from "../../infra/agent-events.types.js";
 import type { InternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractFirstTextBlock } from "../../shared/chat-message-content.js";
 import type { ChatCanvasBlock } from "../chat-display-projection.canvas.js";
@@ -45,6 +47,7 @@ type SourceMediaFixture = {
     idempotencyKey?: string;
     model?: string;
     provider?: string;
+    now?: number;
   }) => ReturnType<typeof appendTranscriptMessage>;
   createMainSourceReply: (params: {
     idempotencyKey: string;
@@ -53,10 +56,15 @@ type SourceMediaFixture = {
     transcriptOwner?: true;
   }) => SourceReply;
   setAgentRunReplies: (replies: SourceReply[]) => void;
+  setRuntimeAssistantMessages: (
+    messages: Array<{ text: string; source?: AgentAssistantSourceReceipt }>,
+  ) => void;
+  onAfterAgentRunStart: (run: () => Promise<unknown>) => void;
   send: (params: {
     idempotencyKey: string;
-    message: string;
+    message?: string;
     expectBroadcast?: boolean;
+    waitFor?: "dedupe";
   }) => Promise<unknown>;
   sendLate: (params: {
     runId: string;
@@ -240,7 +248,21 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
             expect(broadcast).toMatchObject({ state: "final", runId });
             expect(asOptionalRecord(broadcast)?.message).toBeUndefined();
           }
-          expect(loadTranscriptEventsSync(scope)).toEqual(before);
+          const after = loadTranscriptEventsSync(scope);
+          expect(after.slice(0, before.length)).toEqual(before);
+          expect(after.slice(before.length)).toEqual(
+            delivery === "direct"
+              ? [
+                  expect.objectContaining({
+                    message: expect.objectContaining({
+                      role: "user",
+                      content: "Send the probe attachment.",
+                      idempotencyKey: `${runId}:user`,
+                    }),
+                  }),
+                ]
+              : [],
+          );
           const previousConfig = getRuntimeConfigSnapshot();
           setRuntimeConfigSnapshot(cfg);
           try {
@@ -279,7 +301,7 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
         const mirrorIdempotencyKey = "idem-agent-source-reply-deduped:internal-source-reply:0";
         const originalText =
           resolveMirroredTranscriptText({ text: replyText, mediaUrls: [mediaUrl] }) ?? "media";
-        await appendSourceReplyMirrorEntry({ text: originalText });
+        fixture.onAfterAgentRunStart(() => appendSourceReplyMirrorEntry({ text: originalText }));
         setAgentRunReplies([
           createMainSourceReply({
             idempotencyKey: mirrorIdempotencyKey,
@@ -322,10 +344,12 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
         writeSavedPng(fixtureDir, "source-reply-missing.png");
         const backedMirrorKey = "idem-agent-source-reply-partial:internal-source-reply:0";
         const missingMirrorKey = "idem-agent-source-reply-partial:internal-source-reply:1";
-        await appendSourceReplyMirrorEntry({
-          idempotencyKey: backedMirrorKey,
-          text: "Backed source reply",
-        });
+        fixture.onAfterAgentRunStart(() =>
+          appendSourceReplyMirrorEntry({
+            idempotencyKey: backedMirrorKey,
+            text: "Backed source reply",
+          }),
+        );
         setAgentRunReplies([
           createMainSourceReply({
             idempotencyKey: backedMirrorKey,
@@ -368,18 +392,20 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
           writeSavedPng(fixtureDir, "source-reply.png");
           const mirrorKey = "idem-source-rewrite-refusal:internal-source-reply:0";
           const text = collision ? "Existing assistant content" : "Source reply with media";
-          await appendSourceReplyMirrorEntry({
-            idempotencyKey: mirrorKey,
-            text,
-            ...(collision ? { model: "gateway-injected" } : {}),
-          });
-          if (!collision) {
+          fixture.onAfterAgentRunStart(async () => {
             await appendSourceReplyMirrorEntry({
-              idempotencyKey: "later-assistant-entry",
-              text: "Later assistant content",
-              model: "gateway-injected",
+              idempotencyKey: mirrorKey,
+              text,
+              ...(collision ? { model: "gateway-injected" } : {}),
             });
-          }
+            if (!collision) {
+              await appendSourceReplyMirrorEntry({
+                idempotencyKey: "later-assistant-entry",
+                text: "Later assistant content",
+                model: "gateway-injected",
+              });
+            }
+          });
           setAgentRunReplies([
             createMainSourceReply({
               idempotencyKey: mirrorKey,
@@ -456,5 +482,174 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
         expect(broadcastJson).not.toContain("/api/chat/media/outgoing/");
       },
     );
+  });
+
+  it("rewrites a reply whose only MEDIA directive was rejected instead of appending a copy", async () => {
+    await withTranscriptFixtureState("openclaw-chat-send-rejected-media-", async () => {
+      const text =
+        "Here is the movie.\nMEDIA:http://192.168.1.138:64384/movie.mp4?openclaw_portal=synthetic";
+      const parsed = parseReplyDirectives(text);
+      const source = { itemId: "rejected-directive-reply" };
+      fixture.setRuntimeAssistantMessages([{ text, source }]);
+      setAgentRunReplies([
+        {
+          kind: "final",
+          payload: setReplyPayloadMetadata(
+            { text: parsed.text },
+            {
+              assistantMessageIndex: 1,
+              assistantTranscriptSource: source,
+              assistantMediaFailures: parsed.mediaFailures,
+            },
+          ),
+        },
+      ]);
+      await fixture.send({
+        idempotencyKey: "idem-rejected-media",
+        expectBroadcast: false,
+        waitFor: "dedupe",
+      });
+
+      const messages = await readActiveAssistantTranscriptMessages();
+      expect(messages).toHaveLength(1);
+      expect((await readRawActiveAssistantTranscriptMessages())[0]?.content).toEqual([
+        { type: "text", text },
+      ]);
+      expect(JSON.stringify(messages)).not.toContain(":assistant-media");
+      const content = getMessageContent({ message: messages[0] });
+      expect(content.filter((block) => block.type === "attachment_error")).toEqual([
+        {
+          type: "attachment_error",
+          attachment: { code: "invalid-reference", kind: "document", label: "Media not attached" },
+        },
+      ]);
+    });
+  });
+
+  it("materializes latest media payloads once in first-seen order", async () => {
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-multiple-assistant-media-",
+      async (fixtureDir) => {
+        const firstMediaUrl = writeSavedPng(fixtureDir, "first.png");
+        const secondMediaUrl = writeSavedPng(fixtureDir, "second.png");
+        await appendSourceReplyMirrorEntry({
+          text: "Older assistant reply",
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          now: Date.now(),
+        });
+        const firstSource = { itemId: "first-media-reply" };
+        const secondSource = { itemId: "second-media-reply" };
+        fixture.setRuntimeAssistantMessages([
+          { text: `First image\nMEDIA:${firstMediaUrl}`, source: firstSource },
+          { text: `Second image\nMEDIA:${secondMediaUrl}`, source: secondSource },
+        ]);
+        setAgentRunReplies([
+          {
+            kind: "block",
+            payload: setReplyPayloadMetadata(
+              { text: "Draft first image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
+              {
+                assistantMessageIndex: 1,
+                assistantTranscriptSource: firstSource,
+                assistantTranscriptMediaUrls: [firstMediaUrl],
+              },
+            ),
+          },
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              { text: "Second image", mediaUrl: secondMediaUrl, mediaUrls: [secondMediaUrl] },
+              {
+                assistantMessageIndex: 2,
+                assistantTranscriptSource: secondSource,
+                assistantTranscriptMediaUrls: [secondMediaUrl],
+              },
+            ),
+          },
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              { text: "First image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
+              {
+                assistantMessageIndex: 1,
+                assistantTranscriptSource: firstSource,
+                assistantTranscriptMediaUrls: [firstMediaUrl],
+              },
+            ),
+          },
+        ]);
+        await fixture.send({
+          idempotencyKey: "idem-multiple-assistant-media",
+          expectBroadcast: false,
+          waitFor: "dedupe",
+        });
+
+        const messages = await readActiveAssistantTranscriptMessages();
+        expect(messages).toHaveLength(3);
+        expect(messages[0]?.content).toEqual([{ type: "text", text: "Older assistant reply" }]);
+        expect(
+          (await readRawActiveAssistantTranscriptMessages()).slice(1).map((row) => row.content),
+        ).toEqual([
+          [{ type: "text", text: `First image\nMEDIA:${firstMediaUrl}` }],
+          [{ type: "text", text: `Second image\nMEDIA:${secondMediaUrl}` }],
+        ]);
+        for (const [index, expectedText] of ["First image", "Second image"].entries()) {
+          const message = messages[index + 1];
+          const content = getMessageContent({ message });
+          expect(content.filter((block) => block.type === "text")).toEqual([
+            { type: "text", text: expectedText },
+          ]);
+          expect(content.filter((block) => block.type === "image")).toHaveLength(1);
+          expect(JSON.stringify(content)).not.toContain("MEDIA:");
+        }
+        expect(JSON.stringify(messages)).not.toContain(":assistant-media");
+        const mediaMessageIds = loadTranscriptEventsSync(fixture.session().scope)
+          .map((entry) => asOptionalRecord(entry))
+          .filter((entry) => asOptionalRecord(entry?.message)?.role === "assistant")
+          .slice(1)
+          .map((entry) => entry?.id);
+        expect(
+          fixture
+            .publishedUpdates()
+            .filter((update) => mediaMessageIds.includes(update.messageId))
+            .map((update) => update.messageId),
+        ).toEqual(mediaMessageIds);
+      },
+    );
+  });
+
+  it("enriches receipted queued tool media without recreating saved runtime text", async () => {
+    await withTranscriptFixtureState("openclaw-chat-send-queued-media-", async (fixtureDir) => {
+      const mediaUrl = writeSavedPng(fixtureDir, "fetched.png");
+      const text = "The directory fetch is complete.";
+      const source = { itemId: "queued-tool-media-reply" };
+      fixture.setRuntimeAssistantMessages([{ text, source }]);
+      setAgentRunReplies([
+        {
+          kind: "final",
+          payload: setReplyPayloadMetadata(
+            { text, mediaUrl, mediaUrls: [mediaUrl], trustedLocalMedia: true },
+            { assistantMessageIndex: 1, assistantTranscriptSource: source },
+          ),
+        },
+      ]);
+      await fixture.send({
+        idempotencyKey: "idem-queued-tool-media",
+        expectBroadcast: false,
+        waitFor: "dedupe",
+      });
+
+      const messages = await readActiveAssistantTranscriptMessages();
+      expect(messages).toHaveLength(1);
+      expect((await readRawActiveAssistantTranscriptMessages())[0]?.content).toEqual([
+        { type: "text", text },
+      ]);
+      expect(messages[0]?.content).toEqual([
+        { type: "text", text },
+        expect.objectContaining({ type: "image" }),
+      ]);
+      expect(JSON.stringify(messages)).not.toContain(":assistant-media");
+    });
   });
 }

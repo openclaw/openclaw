@@ -12,9 +12,9 @@ import {
 } from "../../../../src/auto-reply/reply/directive-handling.parse.js";
 import type { IconName } from "../../components/icon-data.ts";
 import { t } from "../../i18n/index.ts";
-import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
+import { registerChatCommandsEnglish } from "../../i18n/locales/en-chat-commands.ts";
 
-registerCommandPaletteEnglish();
+registerChatCommandsEnglish();
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -83,6 +83,7 @@ const COMMAND_PRESENTATION: Partial<Record<string, Pick<SlashCommandDef, "icon" 
   skill: { icon: "zap", category: "tools" },
   commands: { icon: "book", category: "tools" },
   new: { icon: "plus", category: "session" },
+  fork: { icon: "copy", category: "session" },
   reset: { icon: "refresh", category: "session" },
   compact: { icon: "loader", category: "session" },
   stop: { icon: "stop", category: "session" },
@@ -109,6 +110,7 @@ const LOCAL_COMMANDS = new Set([
   "btw",
   "help",
   "new",
+  "fork",
   "reset",
   "stop",
   "compact",
@@ -153,12 +155,12 @@ const COMMAND_OVERRIDES: Partial<
   Record<string, Pick<SlashCommandDef, "description" | "descriptionKey" | "args">>
 > = {
   steer: {
-    description: registerCommandPaletteEnglish.catalog.chat.commands.steerDescription,
+    description: registerChatCommandsEnglish.catalog.chat.commands.steerDescription,
     descriptionKey: "chat.commands.steerDescription",
     args: "<message>",
   },
   "export-session": {
-    description: registerCommandPaletteEnglish.catalog.chat.commands.exportDescription,
+    description: registerChatCommandsEnglish.catalog.chat.commands.exportDescription,
     descriptionKey: "chat.commands.exportDescription",
     args: undefined,
   },
@@ -352,13 +354,11 @@ function getSlashCommandRelevance(command: SlashCommandDef, filter: string): num
 export function getSlashCommandCompletions(
   filter: string,
   options?: {
-    showAll?: boolean;
     inlineOnly?: boolean;
     allowImmediateInlineCommands?: boolean;
   },
 ): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter);
-  const showAll = options?.showAll ?? false;
   let commands = options?.inlineOnly
     ? SLASH_COMMANDS.filter(
         (command) =>
@@ -371,10 +371,6 @@ export function getSlashCommandCompletions(
         (command) => getSlashCommandRelevance(command, lower) < NON_MATCHING_COMMAND_RANK,
       )
     : commands;
-
-  if (!lower && !showAll) {
-    commands = commands.filter((cmd) => (cmd.tier ?? "standard") !== "power");
-  }
 
   return commands.toSorted(
     (a, b) =>
@@ -432,21 +428,27 @@ export function getSkillDisplayName(command: SlashCommandDef): string {
 }
 
 export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
-  const lower = normalizeLowercaseStringOrEmpty(filter);
+  const lower = normalizeLowercaseStringOrEmpty(filter).normalize("NFC");
   const normalized = lower.replace(/[\s_]+/gu, "-");
   return SLASH_COMMANDS.filter(
     (command) => command.source === "skill" && command.skillModelVisible === true,
   )
     .filter((command) => {
-      const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command));
+      const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command)).normalize(
+        "NFC",
+      );
       const displayLookup = displayName.replace(/[\s_]+/gu, "-");
-      const commandLookup = normalizeLowercaseStringOrEmpty(command.name).replace(/[\s_]+/gu, "-");
+      const commandLookup = normalizeLowercaseStringOrEmpty(command.name)
+        .normalize("NFC")
+        .replace(/[\s_]+/gu, "-");
       return (
         !lower ||
         displayName.includes(lower) ||
         displayLookup.includes(normalized) ||
         commandLookup.startsWith(normalized) ||
-        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower)
+        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command))
+          .normalize("NFC")
+          .includes(lower)
       );
     })
     .toSorted((left, right) => getSkillDisplayName(left).localeCompare(getSkillDisplayName(right)));

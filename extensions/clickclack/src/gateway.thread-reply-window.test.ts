@@ -1,10 +1,9 @@
 import { createServer } from "node:http";
-import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import type { ClickClackMessage, ResolvedClickClackAccount } from "./types.js";
-
-type GatewayContext = ChannelGatewayContext<ResolvedClickClackAccount>;
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
+import { createGatewayContext, type GatewayContext } from "./gateway.test-support.js";
+import type { ClickClackMessage } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   handleClickClackInbound: vi.fn(),
@@ -82,18 +81,7 @@ async function startClickClackTestServer() {
     }
     json(404, { error: `unhandled ${url.pathname}` });
   });
-  const port = await new Promise<number>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
+  const port = await listenOnLoopback(server);
   const wss = new WebSocketServer({ server, path: "/api/realtime/ws" });
   const sockets = new Set<import("ws").WebSocket>();
   wss.on("connection", (socket) => {
@@ -139,30 +127,6 @@ async function startClickClackTestServer() {
   };
 }
 
-function createGatewayContext(apiBaseUrl: string, abortSignal: AbortSignal): GatewayContext {
-  return {
-    cfg: {
-      channels: {
-        clickclack: {
-          baseUrl: "https://clickclack.example",
-          apiBaseUrl,
-          token: "test-token",
-          workspace: "main",
-          reconnectMs: 5,
-          commandMenu: false,
-        },
-      },
-    } as GatewayContext["cfg"],
-    accountId: "default",
-    account: {} as ResolvedClickClackAccount,
-    runtime: {} as GatewayContext["runtime"],
-    abortSignal,
-    log: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    getStatus: () => ({ accountId: "default" }) as ReturnType<GatewayContext["getStatus"]>,
-    setStatus: vi.fn(),
-  };
-}
-
 describe("ClickClack gateway thread reply resolution", () => {
   async function expectDispatch(id: string, body: string) {
     await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
@@ -185,7 +149,11 @@ describe("ClickClack gateway thread reply resolution", () => {
     });
     testServer = await startClickClackTestServer();
     abort = new AbortController();
-    ctx = createGatewayContext(testServer.apiBaseUrl, abort.signal);
+    ctx = createGatewayContext(abort.signal, {
+      apiBaseUrl: testServer.apiBaseUrl,
+      reconnectMs: 5,
+      commandMenu: false,
+    });
     run = startClickClackGatewayAccount(ctx);
   });
 

@@ -8,6 +8,7 @@ import {
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "../commands/channel-setup/plugin-install.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { makeCatalogEntry, makeMeta } from "../flows/channel-setup.test-helpers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -77,20 +78,12 @@ function runSetupChannels(
 }
 
 function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
-  return {
-    id: "external-chat",
+  return makeCatalogEntry("external-chat", "External Chat", {
     pluginId: "@openclaw/external-chat-plugin",
-    meta: {
-      id: "external-chat",
-      label: "External Chat",
-      selectionLabel: "External Chat",
-      docsPath: "/channels/external-chat",
+    meta: makeMeta("external-chat", "External Chat", {
       blurb: "external chat channel",
-    },
-    install: {
-      npmSpec: "@openclaw/external-chat",
-    },
-  };
+    }),
+  });
 }
 
 function createMSTeamsPluginRegistryEntry(params?: { includeSetupWizard?: boolean }) {

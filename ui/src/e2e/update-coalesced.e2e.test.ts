@@ -49,7 +49,7 @@ function watchPageErrors(page: Page) {
 }
 async function announceUpdate(page: Page, gateway: MockGatewayControls, mobile = false) {
   expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
-  await gateway.waitForRequest("chat.startup");
+  await gateway.waitForRequest("sessions.messages.subscribe");
   if (mobile) {
     await page.getByRole("button", { name: "Expand sidebar" }).click();
   }
@@ -161,7 +161,10 @@ suite.define(() => {
       await startUpdate(page);
       await button(page, "Updating…").waitFor();
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      await button(page, "Close").click();
+      await page
+        .locator("openclaw-modal-dialog openclaw-modal-actions")
+        .getByRole("button", { name: "Close", exact: true })
+        .click();
       const updateIssue = await openUpdateIssue(page);
       await text(updateIssue, restartingText).first().waitFor();
       await updateIssue.locator(".sidebar-update-card__action").click();

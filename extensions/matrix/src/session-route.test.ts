@@ -48,24 +48,19 @@ function createStoredDirectDmSession(
   const accountId = params.accountId === null ? undefined : (params.accountId ?? "ops");
   const to = params.to ?? "room:!dm:example.org";
   const chatType = params.chatType ?? "direct";
-  const accountMetadata = accountId ? { accountId } : {};
-  const nativeMetadata = {
-    ...(params.nativeChannelId ? { nativeChannelId: params.nativeChannelId } : {}),
-    ...(params.nativeDirectUserId ? { nativeDirectUserId: params.nativeDirectUserId } : {}),
-  };
   return {
     sessionId: "sess-1",
     updatedAt: Date.now(),
     chatType,
     delivery: normalizeSessionDeliveryState({
       origin: {
+        ...params,
+        accountId,
         chatType,
         from: params.from ?? "matrix:@alice:example.org",
         to,
-        ...nativeMetadata,
-        ...accountMetadata,
       },
-      context: { channel: "matrix", to, ...accountMetadata },
+      context: { channel: "matrix", to, accountId },
     }),
   };
 }
@@ -80,7 +75,7 @@ function resolveUserRoute(params: {
   return resolveMatrixOutboundSessionRoute({
     cfg: params.cfg,
     agentId: "main",
-    ...(params.accountId ? { accountId: params.accountId } : {}),
+    accountId: params.accountId,
     currentSessionKey: params.currentSessionKey ?? currentDmSessionKey,
     target,
     resolvedTarget: { to: target, kind: "user", source: "normalized" },

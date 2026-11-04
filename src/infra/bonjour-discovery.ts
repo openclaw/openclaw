@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import pLimit from "p-limit";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { formatHostForUrl } from "./net/hostname.js";
 import { isTailnetIPv4 } from "./tailnet.js";
 import { MAX_TCP_PORT, parseTcpPort } from "./tcp-port.js";
 import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
@@ -38,7 +39,7 @@ export type GatewayDiscoveryResolvedEndpoint = {
 export function resolveGatewayDiscoveryEndpoint(
   beacon: GatewayBonjourBeacon,
 ): GatewayDiscoveryResolvedEndpoint | null {
-  const host = beacon.host?.trim();
+  const host = beacon.host?.trim().replace(/^\[([^\]]+)\]$/, "$1");
   const port = beacon.port;
   if (
     !host ||
@@ -54,7 +55,7 @@ export function resolveGatewayDiscoveryEndpoint(
     host,
     port,
     gatewayTlsFingerprintSha256: beacon.gatewayTlsFingerprintSha256,
-    wsUrl: `${scheme}://${host}:${port}`,
+    wsUrl: `${scheme}://${formatHostForUrl(host)}:${port}`,
   };
 }
 
@@ -94,17 +95,6 @@ function decodeDnsSdEscapes(value: string): string {
   }
   parts.push(Buffer.from(value.slice(offset), "utf8"));
   return Buffer.concat(parts).toString("utf8");
-}
-
-function parseDigTxt(stdout: string): string[] {
-  // Each dig +short TXT line contains one or more quoted strings.
-  return stdout
-    .split("\n")
-    .flatMap((line) =>
-      Array.from(line.matchAll(/"([^"]*)"/g), (match) =>
-        (match[1] ?? "").replaceAll("\\\\", "\\").replaceAll('\\"', '"').replaceAll("\\n", "\n"),
-      ),
-    );
 }
 
 function parseDigSrv(stdout: string): { host: string; port: number } | null {
@@ -404,7 +394,14 @@ async function discoverWideAreaViaTailnetDns(
       ["dig", "+short", "+time=1", "+tries=1", nameserverArg, ptrName, "TXT"],
       { timeoutMs: Math.max(1, Math.min(350, txtBudget)), signal: opts.signal },
     ).catch(() => null);
-    const txtTokens = txt ? parseDigTxt(txt.stdout) : [];
+    // Each dig +short TXT line contains one or more quoted strings.
+    const txtTokens = (txt?.stdout ?? "")
+      .split("\n")
+      .flatMap((line) =>
+        Array.from(line.matchAll(/"([^"]*)"/g), (match) =>
+          (match[1] ?? "").replaceAll("\\\\", "\\").replaceAll('\\"', '"').replaceAll("\\n", "\n"),
+        ),
+      );
     const txtMap = txtTokens.length > 0 ? parseTxtTokens(txtTokens) : {};
 
     beacon.displayName = txtMap.displayName || beacon.displayName;

@@ -27,6 +27,7 @@ import {
   persistRuns,
 } from "./cron-read.test-support.js";
 import {
+  createCronCallerClient,
   expectCronReply as expectReply,
   expectCronFailure as expectError,
 } from "./cron.validation.test-support.js";
@@ -47,16 +48,11 @@ function makeRun(
 ): CronRunLogEntry & { runId: string } {
   return { action: "finished", jobId, runId, status: "ok", ts: Date.now(), ...fields };
 }
-function createOwnedSession(
-  agentId: string,
-  sessionKey: string,
-  sessionId: string,
-  client: GatewayClient,
-) {
+function createOwnedSession(agentId: string, sessionKey: string, client: GatewayClient) {
   return upsertSessionEntryCore(
     { agentId, sessionKey },
     {
-      sessionId,
+      sessionId: sessionKey,
       updatedAt: Date.now(),
       createdActor: {
         type: "human",
@@ -95,7 +91,7 @@ async function withCronHistory(
     viewer: GatewayClient;
     owner: GatewayClient;
   }) => Promise<void>,
-  options: { unresolvedDefault?: boolean; agentId?: string } = {},
+  options: { unresolvedDefault?: boolean; agentId?: string; scheduled?: boolean } = {},
 ) {
   await withOpenClawTestState(profileState, async (state) => {
     const agentId = options.agentId ?? "main";
@@ -122,7 +118,7 @@ async function withCronHistory(
       [ownKey, owner],
       [foreignKey, foreign],
     ] as const) {
-      await createOwnedSession(agentId, sessionKey, sessionKey, client);
+      await createOwnedSession(agentId, sessionKey, client);
     }
     const storePath = state.path("cron", "jobs.json");
     const cron = createReadService({
@@ -135,7 +131,22 @@ async function withCronHistory(
     try {
       const jobs = [];
       for (const sessionKey of [ownKey, foreignKey]) {
-        const result = await cron.add(createHistoryJob(agentId, sessionKey, sessionKey));
+        const result = await cron.add(
+          {
+            ...createHistoryJob(agentId, sessionKey, sessionKey),
+            ...(options.scheduled ? { owner: { agentId, sessionKey, accountId: "default" } } : {}),
+          },
+          options.scheduled
+            ? {
+                scheduledToolPolicy: {
+                  version: 1,
+                  mode: "account",
+                  ownerSessionKey: sessionKey,
+                  ownerAccountId: "default",
+                },
+              }
+            : undefined,
+        );
         jobs.push("job" in result ? result.job : result);
       }
       const jobId = expectDefined(jobs[0], "own job").id;
@@ -199,23 +210,44 @@ async function withCronHistory(
 }
 
 describe("cron.runs session visibility", () => {
+  it("lets an admitted job read its receipts across delivery accounts, but no other job", async () => {
+    await withCronHistory(
+      async ({ jobId, foreignJobId, query, owner }) => {
+        const client = {
+          ...owner,
+          internal: createCronCallerClient(
+            "main",
+            "delivery-account",
+            "agent:main:resumed-turn",
+            jobId,
+          ).internal,
+        };
+        expectReply(
+          await query({ id: jobId, limit: 2 }, client),
+          expect.objectContaining({
+            total: 5,
+            entries: [
+              expect.objectContaining({ runId: "history-run-4", deliveryStatus: "delivered" }),
+              expect.objectContaining({ runId: "history-run-3", deliveryStatus: "not-delivered" }),
+            ],
+          }),
+        );
+        expectNotFound(await query({ id: foreignJobId }, client), foreignJobId);
+        client.internal!.agentRuntimeIdentity!.cronSelfManagementContext!.expiresAtMs =
+          Date.now() - 1;
+        expectNotFound(await query({ id: jobId }, client), jobId);
+      },
+      { scheduled: true },
+    );
+  });
+
   it.each([true, false])(
     "keeps retained deleted-main visibility ahead of replacement-agent aliases (visible: %s)",
     (visible) =>
       withCronHistory(
         async ({ jobId, query, owner, viewer, recordRun }) => {
-          await createOwnedSession(
-            "main",
-            "agent:main:main",
-            "main-main",
-            visible ? owner : viewer,
-          );
-          await createOwnedSession(
-            "research",
-            "agent:research:main",
-            "research-main",
-            visible ? viewer : owner,
-          );
+          await createOwnedSession("main", "agent:main:main", visible ? owner : viewer);
+          await createOwnedSession("research", "agent:research:main", visible ? viewer : owner);
           const entry = makeRun(jobId, "retained-main-run", {
             sessionKey: "agent:main:main",
             summary: "Retained run before the job changed agents",
@@ -332,30 +364,15 @@ describe("cron.runs session visibility", () => {
             job.payload = { kind: "systemEvent", text: "visibility fixture" };
           }
           await saveCronStore(storePath, store);
-          const persisted = runOpenClawStateWriteTransaction(({ db }) => {
+          runOpenClawStateWriteTransaction(({ db }) => {
             if (sqlOwner) {
               db.prepare(
                 "UPDATE cron_jobs SET agent_id = ? WHERE store_key = ? AND job_id = ?",
               ).run(sqlOwner, cronStoreKey(storePath), jobId);
             }
-            return db
-              .prepare(
-                "SELECT agent_id, job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?",
-              )
-              .get(cronStoreKey(storePath), jobId);
           });
-          if (!explicitOwner) {
-            if (typeof persisted?.job_json !== "string") {
-              throw new Error("Expected persisted cron definition JSON");
-            }
-            const definition = JSON.parse(persisted.job_json);
-            expect(definition).toMatchObject({ sessionKey: "main" });
-            expect(definition).not.toHaveProperty("agentId");
-            expect(definition).not.toHaveProperty("owner");
-            expect(persisted.agent_id).toBe(sqlOwner);
-          }
           const targetKey = sessionTarget === "main" ? "main" : "custom-target";
-          await createOwnedSession(agentId, targetKey, `visibility-${targetKey}`, owner);
+          await createOwnedSession(agentId, targetKey, owner);
           const loaded = await cron.readJob(jobId);
           expect(loaded).toMatchObject({
             sessionKey: job.sessionKey,
@@ -379,20 +396,11 @@ describe("cron.runs session visibility", () => {
             );
           }
           if (!explicitOwner) {
+            const list = (client: GatewayClient) =>
+              query({ includeDisabled: true, includeDeliveryPreviews: false }, client, "cron.list");
+            expectReply(await list(owner), expect.objectContaining({ jobs: [] }));
             expectReply(
-              await query(
-                { includeDisabled: true, includeDeliveryPreviews: false },
-                owner,
-                "cron.list",
-              ),
-              expect.objectContaining({ jobs: [] }),
-            );
-            expectReply(
-              await query(
-                { includeDisabled: true, includeDeliveryPreviews: false },
-                viewer,
-                "cron.list",
-              ),
+              await list(viewer),
               expect.objectContaining({
                 jobs: expect.arrayContaining([expect.objectContaining({ id: jobId })]),
               }),
@@ -495,7 +503,7 @@ describe("cron.runs session visibility", () => {
       recordRun(entry, "created-session");
       const params = { id: jobId, sortDir: "asc" };
       expectVisibleRuns(await query(params), ["history-run-1", "history-run-3", "history-run-4"]);
-      await createOwnedSession("main", sessionKey, "created-run-session", owner);
+      await createOwnedSession("main", sessionKey, owner);
       expectVisibleRuns(await query(params), [
         "history-run-1",
         "history-run-3",

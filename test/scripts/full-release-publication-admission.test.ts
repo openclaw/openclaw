@@ -35,6 +35,7 @@ import { createCommandTest, type CommandFixture } from "../helpers/command-fixtu
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
 import {
   publicationSelectionFixture,
@@ -70,6 +71,7 @@ const templateDirs = useAutoCleanupTempDirTracker(afterAll);
 let toolingTemplate: { loose: string; packed: string };
 const repo = resolve(".");
 const nodeExecutable = realpathSync(requireNodeTool("node"));
+const workflowBash = process.platform === "darwin" ? resolveWorkflowBash() : "bash";
 const workflowPath = ".github/workflows/full-release-validation.yml";
 type Step = {
   name: string;
@@ -301,6 +303,9 @@ console.log('{"status":"identical"}');
         check(identityIndex).toBeLessThan(
           resolveTarget.steps.findIndex((step) => step.id === "resolve"),
         );
+        check(resolveTarget.steps[identityIndex]?.run).toContain(
+          '${admission_args[@]+"${admission_args[@]}"}',
+        );
         let status = 0;
         let stderr = "";
         const completed: string[] = [];
@@ -324,7 +329,7 @@ console.log('{"status":"identical"}');
           };
           Object.assign(env, workflowEnv(step.env, context));
           const result = await processFixture.run(
-            "bash",
+            workflowBash,
             ["-c", expectDefined(step.run, "transport command")],
             {
               cwd: root,
@@ -436,6 +441,7 @@ async function fixture(
       | "healthy"
       | "npm-empty-history"
       | "npm-error"
+      | "clawhub-error"
       | "prepared-trust"
       | "npm-absent"
       | "clawhub-absent"
@@ -759,7 +765,7 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.origin === "https://registry.npmjs.org") {
     if (${JSON.stringify(options.registry)} === "advisory-deadline" && url.pathname === "/demo-runtime") {
       const now = Date.now;
-      Date.now = () => now() + 300001;
+      Date.now = () => now() + 600001;
     }
     if (${JSON.stringify(options.registry)} === "required-budget" ||
         (${JSON.stringify(options.registry)} === "advisory-budget" && url.pathname.startsWith("/advisory-"))) {
@@ -783,6 +789,7 @@ globalThis.fetch = async (input, init = {}) => {
     const versions = ${JSON.stringify(options.registry)} === "npm-empty-history" ? {} : { "2026.9.3": {} };
     return response({ versions, "dist-tags": { latest: url.pathname === "/demo-runtime" ? "1.2.4" : "2026.9.3" } });
   }
+  if (${JSON.stringify(options.registry)} === "clawhub-error") return response("denied", 403);
   if (${JSON.stringify(options.registry)} === "clawhub-absent") return response("", 404);
   if (url.pathname.endsWith("/publication")) {
     const name = decodeURIComponent(url.pathname.split("/")[4]);
@@ -1161,7 +1168,7 @@ process.stdout.write(${JSON.stringify(
         `const OriginalDate = Date;
 globalThis.Date = class extends OriginalDate {
   constructor(...args) {
-    super(...(args.length ? args : [${Date.parse(observation.prerequisitesCompletedAt) + 300_001}]));
+    super(...(args.length ? args : [${Date.parse(observation.collectionCompletedAt) + 300_001}]));
   }
 };
 `,
@@ -1184,8 +1191,8 @@ globalThis.Date = class extends OriginalDate {
     };
     const result =
       options.registry === "parent-interrupt"
-        ? spawnSync("bash", ["-c", step.run], commandOptions)
-        : await processFixture.run("bash", ["-c", step.run], commandOptions);
+        ? spawnSync(workflowBash, ["-c", step.run], commandOptions)
+        : await processFixture.run(workflowBash, ["-c", step.run], commandOptions);
     if (result.error !== undefined && !(result.error instanceof Error)) {
       throw new Error("Unexpected publication command failure", { cause: result.error });
     }
@@ -1385,6 +1392,71 @@ function npmBootstrap(
   } as const;
 }
 
+describe("FRV publication source metadata acquisition", () => {
+  publicationIt(
+    "fetches missing blob:none metadata in one batch instead of per-blob lazy fetches",
+    { timeout: 30_000 },
+    withCommand(async (processFixture, check) => {
+      const root = processFixture.createTempDir("frv-publication-metadata-");
+      const source = join(root, "source");
+      const target = join(root, "target");
+      mkdirSync(source);
+      git(source, "init", "-q");
+      git(source, "config", "uploadpack.allowFilter", "true");
+      writeJson(source, "package.json", { name: "openclaw" });
+      for (const id of ["alpha", "beta"]) {
+        writeJson(source, `extensions/${id}/package.json`, { name: id });
+        write(source, `extensions/${id}/README.md`, `# ${id}\n`);
+      }
+      git(source, "add", "-A");
+      git(source, "commit", "-qm", "fixture");
+      const sha = git(source, "rev-parse", "HEAD");
+      git(
+        root,
+        "clone",
+        "-q",
+        "--filter=blob:none",
+        "--no-checkout",
+        pathToFileURL(source).href,
+        target,
+      );
+      const missing = () =>
+        git(target, "rev-list", "--objects", "--missing=print", sha)
+          .split("\n")
+          .filter((line) => line.startsWith("?"));
+      check(missing()).toHaveLength(5);
+      const step = expectDefined(
+        workflow.jobs.resolve_target?.steps.find(
+          (candidate) => candidate.name === "Acquire publication source metadata",
+        ),
+        "publication metadata step",
+      );
+      // Lazy fetches stay disabled, so success proves the batched prefetch supplied every blob.
+      const result = await processFixture.run(
+        workflowBash,
+        ["-c", expectDefined(step.run, "publication metadata command")],
+        {
+          cwd: root,
+          env: {
+            PATH: [dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
+            HOME: root,
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_NO_LAZY_FETCH: "1",
+            PUBLICATION_TARGET_ROOT: target,
+            PUBLICATION_TARGET_SHA: sha,
+          },
+          encoding: "utf8",
+          timeout: 20_000,
+        },
+      );
+      check(result.status, result.stderr).toBe(0);
+      check(result.stdout).not.toContain("::warning::");
+      check(missing()).toEqual([]);
+    }),
+  );
+});
+
 describe("FRV required registry admission", () => {
   publicationIt.concurrent.for([
     undefined,
@@ -1421,6 +1493,7 @@ describe("FRV required registry admission", () => {
     ["healthy", "normal", stable, "latest", ["normal_ci", "prepare_npm_package"]],
     ["npm-empty-history", "normal", stable, "latest", []],
     ["npm-error", "normal", stable, "latest", []],
+    ["clawhub-error", "normal", stable, "latest", []],
     ["prepared-trust", "prepared", stable, "latest", []],
   ] as const)(
     "keeps selected fanout closed for %s through %s",
@@ -1462,6 +1535,9 @@ describe("FRV required registry admission", () => {
         }
         check(result.firstHopJobs, result.stderr).toEqual(expectedJobs);
         check(result.status, result.stderr).toBe(registry === "healthy" ? 0 : 1);
+        if (registry === "clawhub-error") {
+          check(result.stderr).toContain("required ClawHub observation http-403");
+        }
       },
     ),
   );
@@ -2430,18 +2506,27 @@ describe("publication source intent and durable binding", () => {
       const historical = createPublicationSourceFact(historicalRequest, null, null);
       const retained = structuredClone(historical);
       retained.coverage.known_flaky_jobs_json = "[]";
+      retained.coverage.telegram_waiver = "";
       refreshDigest(retained);
       for (const fact of [historical, retained]) {
         const bytes = publicationSourceJson(fact);
         expect(bindSource(fact)).toBe(fact);
         expect(publicationSourceJson(fact)).toBe(bytes);
       }
-      expect(() =>
-        bindSource({
-          ...retained,
-          coverage: { ...retained.coverage, known_flaky_jobs_json: '["normalCi:test"]' },
-        }),
-      ).toThrow("known_flaky_jobs_json must be empty");
+      for (const [key, value] of [
+        ["known_flaky_jobs_json", '["normalCi:test"]'],
+        ["telegram_waiver", "legacy-omission"],
+      ] as const) {
+        expect(() =>
+          bindSource({
+            ...retained,
+            coverage: { ...retained.coverage, [key]: value },
+          }),
+        ).toThrow(`${key} must be empty`);
+      }
+      const withoutLegacyField = structuredClone(retained);
+      delete withoutLegacyField.coverage.telegram_waiver;
+      expect(() => bindSource(withoutLegacyField)).toThrow("source admission digest mismatch");
       expect(() =>
         bindSource(historical, {
           validationInputs: {

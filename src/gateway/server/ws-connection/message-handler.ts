@@ -5,10 +5,6 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../../packages/gateway-protocol/src/client-info.js";
-import {
   type ConnectParams,
   type ResponseFrame,
   ErrorCodes,
@@ -22,6 +18,10 @@ import {
   GATEWAY_SUSPEND_UNAVAILABLE_REASON,
 } from "../../../../packages/gateway-protocol/src/restart-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
+import {
+  withDevicePairingWaitObservation,
+  type DevicePairingWaitObservation,
+} from "../../../infra/device-pairing-lock.js";
 import {
   releaseNodePairingCleanupClaim,
   type NodePairingCleanupClaim,
@@ -49,6 +49,7 @@ import {
 } from "../../ingress-attribution.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
+import { broadcastRejectedNodePairing } from "../../pairing-events.js";
 import {
   MAX_PREAUTH_PAYLOAD_BYTES,
   MAX_QUEUED_GATEWAY_PREAUTH_FRAMES,
@@ -58,7 +59,7 @@ import { truncateCloseReason } from "../close-reason.js";
 import type { GatewayConnectionFrame } from "../connection-transport.js";
 import { resolveGatewayWsBrowserOrigin } from "../ws-origin-policy.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
-import { isStartupNodeConnect } from "./connect-admission.js";
+import { claimsWorkerConnectionIdentity, isStartupNodeConnect } from "./connect-admission.js";
 import { authenticateGatewayConnect } from "./connect-auth.js";
 import { authorizeGatewayConnectDevice } from "./connect-device-pairing.js";
 import { publishConnectModelCatalog } from "./connect-model-catalog.js";
@@ -74,15 +75,6 @@ export type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
 const GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS = 1_000;
 const GATEWAY_WORK_ADMISSION_CLOSE_CODE = 1013;
-function claimsWorkerConnectionIdentity(value: unknown): boolean {
-  const connect = asOptionalObjectRecord(value);
-  if (connect?.role === "worker") {
-    return true;
-  }
-  const client = asOptionalObjectRecord(connect?.client);
-  return client?.id === GATEWAY_CLIENT_IDS.WORKER || client?.mode === GATEWAY_CLIENT_MODES.WORKER;
-}
-
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
   const remoteIngress = getRemoteControlUiIngressContext(params.upgradeReq);
   let waitingForPairing = false;
@@ -236,16 +228,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       const context = buildRequestContext();
       const resolvedAt = Date.now();
       for (const superseded of result.created ? (result.superseded ?? []) : []) {
-        context.broadcast(
-          "node.pair.resolved",
-          {
-            requestId: superseded.requestId,
-            nodeId: superseded.nodeId,
-            decision: "rejected",
-            ts: resolvedAt,
-          },
-          { dropIfSlow: true },
-        );
+        broadcastRejectedNodePairing(context.broadcast, superseded, resolvedAt);
       }
       if (result.created) {
         context.broadcast("node.pair.requested", result.request, {
@@ -337,6 +320,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           Record<"auth_validated" | "session_attached" | "hello_payload_prepared", number>
         > = {};
         const attachTimes: Partial<Record<GatewayConnectAttachTiming, number>> = {};
+        const pairingWait: DevicePairingWaitObservation = {};
         logWs("in", "req", { connId, id: frame.id, method: "connect" });
         const recordHandshakeResponse = (ok: boolean, bytes?: number, sendMs?: number) => {
           diagnostics?.response(ok ? "ok" : "error", bytes);
@@ -349,6 +333,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             sendMs,
             ...(!ok ? { failurePhase: connectPhase, failureCause: connectFailureCause } : {}),
             ...attachTimes,
+            pairingLockWait: pairingWait.longestWait,
             authMs: phaseTimes.auth_validated,
             attachMs:
               phaseTimes.session_attached === undefined
@@ -470,36 +455,39 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         } satisfies GatewayConnectPhaseContext;
         await GatewayRpcDiagnostics.runHandler(
           "connect",
-          async () => {
-            try {
-              connectPhase = "auth";
-              const authenticated = await authenticateGatewayConnect(phaseContext);
-              if (!authenticated) {
-                return;
+          () =>
+            withDevicePairingWaitObservation(pairingWait, async () => {
+              try {
+                connectPhase = "auth";
+                const authenticated = await authenticateGatewayConnect(phaseContext);
+                if (!authenticated) {
+                  return;
+                }
+                const deviceStartedAt = performance.now();
+                connectPhase = "device";
+                const deviceAuthorized = await authorizeGatewayConnectDevice(
+                  phaseContext,
+                  authenticated,
+                );
+                phaseContext.recordAttachTiming("deviceAuthorizationMs", deviceStartedAt);
+                if (!deviceAuthorized) {
+                  return;
+                }
+                connectPhase = "attach";
+                await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
+                runDetachedConnectWork(
+                  () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
+                  (error) =>
+                    logGateway.debug(
+                      `connection model catalog unavailable: ${formatForLog(error)}`,
+                    ),
+                );
+              } finally {
+                if (rejectionWrite) {
+                  await rejectionWrite;
+                }
               }
-              const deviceStartedAt = performance.now();
-              connectPhase = "device";
-              const deviceAuthorized = await authorizeGatewayConnectDevice(
-                phaseContext,
-                authenticated,
-              );
-              phaseContext.recordAttachTiming("deviceAuthorizationMs", deviceStartedAt);
-              if (!deviceAuthorized) {
-                return;
-              }
-              connectPhase = "attach";
-              await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
-              runDetachedConnectWork(
-                () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
-                (error) =>
-                  logGateway.debug(`connection model catalog unavailable: ${formatForLog(error)}`),
-              );
-            } finally {
-              if (rejectionWrite) {
-                await rejectionWrite;
-              }
-            }
-          },
+            }),
           diagnostics,
         );
         return;

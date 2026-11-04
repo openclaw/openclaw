@@ -33,9 +33,9 @@ export function createRecallStateFixture() {
         },
       );
       const recordTimeout = recallState.recordCircuitBreakerTimeout;
-      vi.spyOn(recallState, "recordCircuitBreakerTimeout").mockImplementation((key, cooldownMs) => {
+      vi.spyOn(recallState, "recordCircuitBreakerTimeout").mockImplementation((key) => {
         circuitKeys.add(key);
-        recordTimeout(key, cooldownMs);
+        recordTimeout(key);
       });
     },
     async cleanup() {
