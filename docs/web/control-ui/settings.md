@@ -18,7 +18,20 @@ In **Search settings**, Escape clears the search before leaving Settings. While 
 
 Use **Search settings** to find pages and configuration fields. Search for **Typography**, **font**, or **Chat prose** to jump to the Interface and Chat prose font controls in Appearance. Authored schema tags remain searchable with `tag:<name>` but are not displayed as field badges. Tags are not inferred from setting names, sensitivity, or complexity. For a field authored with a `storage` tag, combine it with text such as `Log tag:storage File`. Multiple tags require a field to match every tag.
 
-Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
+Configuration field text and `tag:` comparisons ignore case and match canonically equivalent composed and decomposed Unicode text. Search normalizes only comparison copies; field values, labels, and stored tags keep their original text.
+
+People search in **Session access**, the **New Session → Where** picker, and provider
+search also match equivalent composed and decomposed Unicode text without changing
+the original labels or identifiers. Filtering does not change sharing permissions.
+The **Connect provider** search and command palette session-settings workspace
+search use the same comparison-only matching. Filtering does not start sign-in or
+change the selected provider, machine, or project.
+
+Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact. Where custom entry is supported, choose **Custom model…** to enter a provider/model reference.
+
+Custom model text stays in the field while background data refreshes, without
+saving before the field's normal commit event. A newly committed model value
+still replaces the displayed value.
 
 When the Gateway rejects an invalid setting, **Settings not applied** keeps your draft and offers **Show reason**, **Retry**, and **Discard draft and reload**. Discard removes all unsaved configuration edits and reloads the saved settings. Edits entered while Discard waits for an earlier save remain pending; newer Form edits resume autosaving, and newer Raw edits remain available to save. Clearing a text field is an edit, not a discard: settings that accept an empty string keep that explicit value.
 
@@ -28,17 +41,25 @@ Global model defaults apply to every agent. Switching the Settings agent while s
 
 In **Models**, thinking choices follow the primary model's reported reasoning levels, including provider-specific levels. Fast-mode choices follow its reported speed capabilities, with **Ultrafast** shown separately from **On**. A saved preference that is no longer supported stays visible but cannot be selected anew. A saved account-pinned model does not borrow speed capabilities from another account's catalog; unverified speed preferences remain visible but unavailable for new selections. Switching models does not rewrite a saved preference; choose another supported value or **Default** to return to model policy. **Auto** is a timed fast-mode preference, not inheritance.
 
-Configuration edits, including reverting a value while a save is pending, survive refreshes and reconnects. If a save's outcome is unknown, the UI keeps your draft and pauses unrelated settings writes until a refresh confirms the saved revision or you explicitly retry the save or discard the draft. Even when a reverted draft looks unchanged, the save indicator keeps **Retry** available and prevents managed UI reloads from losing the unresolved draft. **Retry** repeats the failed Save or Apply operation. Seeing the old saved value after reconnect does not confirm that an earlier write has stopped; the UI keeps the uncertainty visible so a later commit cannot erase your revert. Changes from another writer retain the original draft and report a conflict instead of silently replacing your edits. Raw-editor drafts remain manual-save-only.
+Configuration edits, including reverting a value while a save is pending, survive configuration refreshes and reconnects. If a save's outcome is unknown, the UI keeps your draft and pauses unrelated settings writes until a refresh confirms the saved revision or you explicitly retry the save or discard the draft. Even when a reverted draft looks unchanged, the save indicator keeps **Retry** available and prevents managed UI reloads from losing the unresolved draft. **Retry** repeats the failed Save or Apply operation. Seeing the old saved value after reconnect does not confirm that an earlier write has stopped; the UI keeps the uncertainty visible so a later commit cannot erase your revert. Changes from another writer retain the original draft and report a conflict instead of silently replacing your edits. Raw-editor drafts remain manual-save-only. Unsaved configuration edits live only in the open page: while an edit is unsaved or a save is still in flight, the browser asks for confirmation before an ordinary reload or tab close. Cancel keeps the draft; confirming discards it without saving.
 
 An unsettled Save or Apply stays bound to its original Gateway. Switching Gateways does not transfer that pending change: reconnect to the original Gateway to retry it, or discard the retained draft before editing the new Gateway.
 
-In **Models**, **Connect provider** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide the provider, choose **Show all provider models** or **Keep current restrictions**; saving a credential alone does not widen access. Choose **Models → Connect provider → On this Gateway** to find existing connections or open [setup and explicit model activation](/start/onboarding). Saving credentials does not activate a model; testing and using a model remains a separate choice for the selected agent. If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved credentials.
+In Memory's **Settings** tab, unfinished number text such as `1e` restores the last accepted value when you leave the field, without removing its override. Deliberately clearing the field still removes the override, and valid edits save normally.
+
+In **Models**, **Connect provider** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide every model of the provider, saving its API key or sign-in adds `<provider>/*` to them so its models appear in the model picker; restrictions that already name some of its models stay unchanged. Choose **Models → Connect provider → On this Gateway** to find existing connections or open [setup and explicit model activation](/start/onboarding). Saving credentials does not activate a model; testing and using a model remains a separate choice for the selected agent. If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved credentials.
 
 Model pickers show the authentication methods available to the selected agent. In **Models** settings, this muted information appears on the right of each open option row; the closed control shows only the model name and icon. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
+
+Inbox account alerts distinguish **Sign in** from **Update API key**. Accounts without a known recovery method show **Review account**. These actions open **Models** so you can repair the saved account.
 
 Open panels share provider sign-in status. Configuration edits keep that status until the Gateway publishes updated authentication information; credential changes, reconnects, and expiry deadlines still refresh it.
 
 During first-run **Model Setup**, reloading the browser resumes an unfinished provider wizard on the same running Gateway without repeating your answers. Continue from its current question, or choose **Cancel** to release provider choices once the Gateway confirms cancellation. Unsubmitted input is not saved. If the Gateway restarted or no longer has the wizard, **Check again** refreshes the current setup without starting another provider attempt; the recovery guard remains until a model can be verified or the pending attempt expires.
+
+If a provider rejects a text reply, the wizard returns keyboard focus to that field so you can correct it without clicking back. Your draft is kept, and sensitive replies remain masked.
+
+Channel setup also restores focus to a rejected text field while preserving its draft and masking, unless you have moved focus to another control while the reply was pending.
 
 ## Environment identity
 
@@ -131,7 +152,7 @@ Gateway in this browser without reconnecting. Session edits and connection edits
 have independent Save/Apply and Discard actions. Switching Gateways restores
 that Gateway's saved session selection.
 
-Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a ten-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery and state-directory disk space reuse thirty-second snapshots. Machine name, CPU count, and CPU model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
+Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a ten-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery and state-directory disk space reuse thirty-second snapshots. Machine name, CPU count, and CPU model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Disk paths, including the state directory, are returned only to `operator.admin` connections; read-only connections receive the state volume's total and free space without a path, so the card shows no per-disk meters. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
 
 The **Connection** card also shows average ping and p50, p95, and p99 round-trip
 times in milliseconds. It samples every ten seconds while the page is visible
@@ -160,12 +181,12 @@ including Gateway request handling. It is not ICMP ping or model response time.
 
 The Control UI localizes itself on first load based on your browser locale. To override it later, open **Settings → Appearance → Language**.
 
-- Supported locales: `en`, `ar`, `de`, `es`, `fa`, `fr`, `hi`, `id`, `it`, `ja-JP`, `ko`, `nl`, `pl`, `pt-BR`, `ru`, `sv`, `th`, `tr`, `uk`, `vi`, `zh-CN`, `zh-TW`
+- Supported locales: `en`, `ar`, `ca`, `de`, `es`, `fa`, `fr`, `hi`, `id`, `it`, `ja-JP`, `ko`, `nl`, `pl`, `pt-BR`, `ru`, `sv`, `th`, `tr`, `uk`, `vi`, `zh-CN`, `zh-TW`
 - Non-English translations are lazy-loaded in the browser.
 - The selected locale is saved in browser storage and reused on future visits.
-- Missing translation keys fall back to English.
+- Missing translation keys fall back to English. Catalan (`ca`) uses English until its first post-merge locale refresh completes.
 
-Docs translations are generated for the same non-English locale set, including Swedish (`sv`) once its first translation refresh completes. The custom docs website supports these locales, including Thai (`th`) and Persian (`fa`).
+Docs translations are generated for the same non-English locale set except Catalan, including Swedish (`sv`) once its first translation refresh completes. The custom docs website supports these locales, including Thai (`th`) and Persian (`fa`).
 
 ## Appearance themes
 
@@ -435,6 +456,21 @@ Form edits save automatically. If the connection changes while edits are pending
 autosave pauses until you choose **Save** to keep them or **Reload Config** to
 discard them and load the current configuration. A successful reload resumes
 autosave for new edits; an offline reload keeps the pending draft.
+
+**Channels** are the exception: channel settings save only when you select
+**Save**. They hold connection settings such as bot tokens, and writing a
+half-typed value can restart the channel against it, so they don't autosave.
+While a channel has edits, its dialog footer shows **Unsaved changes** with
+**Discard** and **Save**. Closing the dialog with Escape, a click outside it,
+or the close button asks whether to save, discard, or keep editing; **Run
+setup** asks the same before setup starts. Leaving the page keeps the edits
+without saving them: a notice names every channel with edits, and each of those
+channels shows **Unsaved changes** in the list until you save or discard.
+If a field you edited was changed elsewhere in the meantime, Save writes
+nothing and names the field: **Reload** takes the newer value, **Overwrite**
+keeps yours. If the connection drops during Save, the dialog checks the saved
+configuration once reconnected and shows whether the change was saved.
+
 Devices node-binding controls also pause while configuration reloads, so a pending
 read cannot overwrite a new selection.
 
@@ -704,6 +740,7 @@ Open **Activity** from the sidebar’s **Pages** view, or visit `/activity` unde
 - The pulse card above the list describes the selected time window: hourly bars for **Last 24 hours**, daily bars for **Last 7 days** and **Last 30 days**, and monthly bars for the last 12 months under **All time**, using local time. Its counts of active sessions, sessions started in the window (omitted for All time), associated people, and sessions running now follow the current filters and include matches beyond the 100-row window; All time counts every match even though its bars cover 12 months. Each session contributes to the bar of its latest activity.
 - Each session can show a rolling recap in one to three sentences: what was done and where the work stands. Recaps use the agent's [utility model](/gateway/config-agents/models#agents-defaults-model) and are shared across clients and Gateway restarts. Initial loading uses shimmer placeholders; an existing recap shimmers while refreshing. A failed refresh keeps the last recap and identifies the refresh failure. **Retry recap** requests another attempt after the Gateway's cooldown. Read-only viewers can read cached recaps but cannot request generation. On a page with mixed permissions, view-only sessions do not block recap generation for writable sessions.
 - Sessions with a GitHub checkout show associated branch PRs and their added/removed line counts. Hover or keyboard-focus a PR to preview its details, or select it to open GitHub. Before an open PR exists, the branch shows its diff against the default branch, including uncommitted work. These are checkout/PR statistics, not cumulative session edit counts; unavailable counts stay hidden, and retained stale data carries a warning.
+- Branch PR cache and quota-backoff windows use elapsed time, so wall-clock corrections do not shorten or extend them.
 - Sessions can show up to four transcript images in one compact horizontal row. On narrow screens, scroll the previews sideways to see the remaining images. Select an image to expand it in the image viewer. Previews load as rows approach the viewport, reading bounded recent transcript pages; **Older images** continues when more history remains. Existing thumbnails remain visible during refreshes and failed retries. Changing the session or connection clears the previous gallery.
 - **Live activity** shows running and queued sessions above the ephemeral browser-local tool stream. The session snapshot comes from the Gateway; the tool stream uses the same `session.tool` and tool events that power Chat tool cards.
 - **Run inspector** is deep-link only and reads the Gateway's durable, immutable `audit.run.inspect` safe-only projection. The RPC contains required `decisionDisplays` and never a raw `decisions` field. Use **Inspect run** on an active session or the run ID link in Live activity, or open `/activity?view=run&run=<percent-encoded-run-id>` directly. Reloading or revisiting the link queries the Gateway again; it never reconstructs identity from Live activity.
@@ -725,6 +762,8 @@ To find an older archived conversation, choose **Sessions**, **All time**, and *
 **Active sessions** loads when you open Live activity and refreshes after reconnecting, so sessions already running or queued appear before new tool events arrive. It shows up to 100 sessions you are allowed to see, including work on other agents and agent-owned global sessions. A limit notice appears when more sessions match. Select a linked row to open that session. Reserved `unknown` sessions show status without a conversation link; raw `global` sessions do the same outside global session scope, where the Home URL addresses a different session. Changes update this snapshot while the view is open; disconnected or failed reads show a visible status instead of claiming that sessions are idle. **Clear** only clears the received-event list. It does not clear or stop active sessions.
 
 Live activity keeps up to 100 bounded summaries with truncated output previews. Preview text is not secret-masked and can contain credentials. Tool argument values are not stored in Activity state; the UI shows that arguments are hidden and records only the argument field count.
+
+Live activity search is case-insensitive and matches equivalent composed and decomposed Unicode text, such as either spelling of an accented character. Only the local comparison is normalized; displayed output and identifiers remain unchanged.
 
 Live activity collects events only while this view is open and the browser tab is visible. It watches the bounded, authorized **Active sessions** roster and releases those subscriptions when you hide the tab or leave the view. Activity from before you opened the view is not shown. Use the search, tool, and status filters to narrow received entries. Leaving the Activity page, reloading, changing Gateway or authentication context, and **Clear** reset the list. Ordinary reconnects preserve received entries and expansion state, then resume subscriptions from the refreshed roster. This browser-local feed is not a durable record of work performed while the view was closed, hidden, or disconnected.
 

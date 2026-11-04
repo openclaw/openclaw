@@ -141,6 +141,14 @@ symlinks intact. Dangling output symlinks create their targets if the target par
 exist. Missing target parents and symlink cycles fail before either output is replaced.
 The v1-only writer is unchanged.
 
+Optional `--out-v3 <v3-file>` includes canonical model `inference` declarations,
+including native-only Decision rows, in a separate v3 wire. V1/v2 retain their
+released chat-only shape. All selected output paths must be distinct; validation,
+size checks, and recovery preparation cover every output before publication.
+The same separate-file replacement and recovery rules below apply to all selected
+outputs. Keep the set unserved until publication succeeds. This does not change
+the default hosted feed or the plugin execution contract.
+
 Each file is replaced separately: this is **not** a multi-file atomic transaction.
 Use a single publisher and do not serve or deploy the pair until the command succeeds.
 If publication fails or the process stops between replacements, inspect the
@@ -228,6 +236,9 @@ GitHub Copilot's model `vendor`. The family appears on `models.list` rows and in
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
 
 After a provider gains credentials, list and picker surfaces show its declared manifest rows while account discovery is still pending, in every discovery mode. Once discovery publishes for that provider, its account result replaces them.
+
+Default picker views honor that replacement rather than re-adding static fallback
+rows. Explicitly configured rows and retained current selections remain listed.
 
 Catalog refresh plans keep manual root declarations separate from generated provider inventory. A plugin owning the same provider ID does not turn a manual model into disposable cache data. Merge mode preserves those declarations and auth-only records; explicit replace mode retains its replacement contract. Generated catalogs still follow current ownership, endpoint eligibility, and authoritative replacement rules.
 

@@ -152,6 +152,7 @@ export async function finishGatewayStartup(params: {
       pluginSurfaceScheme: gatewayTls.enabled ? "https" : "http",
       getPluginNodeCapabilities,
       getResolvedAuth,
+      gatewayExposure: { bindHost, tailscaleMode: runtime.tailscaleMode },
       getRequiredSharedGatewaySessionGeneration: sharedGatewaySessionGenerationState.reader,
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
@@ -182,6 +183,7 @@ export async function finishGatewayStartup(params: {
     if (databaseStartupAdmission && !opts.updateCanary && !lifecycle.closePreludeStarted) {
       activateGatewayAgentDatabaseStartup({
         admission: databaseStartupAdmission,
+        context: gatewayRequestContext,
         preparationReady: databasePreparationReady.promise,
         waitForPostReadyWork: params.waitForPostReadyWork,
         getConfig: getRuntimeConfig,
@@ -236,6 +238,8 @@ export async function finishGatewayStartup(params: {
     const operation = Promise.resolve().then(() => run(runtime.connectionWork.signal));
     return runtime.connectionWork.track(() => operation);
   };
+  let postAttachSpanSettled = false;
+  let postAttachSidecarsReady = false;
   const postAttachHandles = await trackStartupWork(() =>
     startupTrace.measure("runtime.post-attach", () =>
       import("./server-startup-post-attach.js").then(({ startGatewayPostAttachRuntime }) =>
@@ -342,7 +346,10 @@ export async function finishGatewayStartup(params: {
               : null;
           },
           onSidecarsReady: () => {
-            kernel.markSidecarsReady();
+            postAttachSidecarsReady = true;
+            if (sidecarStartup === "defer" || postAttachSpanSettled) {
+              kernel.markSidecarsReady();
+            }
             activateScheduledServicesWhenReady();
           },
           getReadiness,
@@ -355,6 +362,10 @@ export async function finishGatewayStartup(params: {
       ),
     ),
   );
+  postAttachSpanSettled = true;
+  if (postAttachSidecarsReady && sidecarStartup !== "defer") {
+    kernel.markSidecarsReady();
+  }
   kernel.setPostAttachHandles(postAttachHandles);
   if (minimalTestGateway) {
     databasePreparationReady.resolve();
@@ -367,9 +378,10 @@ export async function finishGatewayStartup(params: {
   ]);
   if (getReadiness().ready) {
     startupTrace.mark("ready");
-    if (sidecarStartup === "defer") {
-      logGatewayReady({ getReadiness, log });
-    }
+    logGatewayReady(
+      { getReadiness, log },
+      opts.updateCanary ? "candidate gateway ready; autonomous sidecars suppressed" : undefined,
+    );
   }
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
   if (opts.updateCanary) {
@@ -640,6 +652,7 @@ export async function finishGatewayStartup(params: {
           await cleanupGatewayRetiredPluginArtifacts({
             log,
             startupInstallPaths,
+            startupConfig: cfgAtStart,
             signal: runtime.connectionWork.signal,
             assertCurrent: () => {
               if (lifecycle.closePreludeStarted) {
@@ -650,24 +663,6 @@ export async function finishGatewayStartup(params: {
         },
         log,
         errorMessage: "retained npm generation cleanup failed",
-      }),
-    );
-    registerGatewayLifetimeSidecars(
-      gatewayRuntimeServices.scheduleGatewayIdleTask({
-        id: "maintenance:sqlite-snapshots",
-        scheduler: runtime.scheduler,
-        delayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
-        retryDelayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
-        isClosing: () => lifecycle.closePreludeStarted,
-        isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
-        repeatDelayMs: 15 * 60_000,
-        run: async () => {
-          const { reclaimAbandonedSqliteSnapshotsAsync } =
-            await import("../infra/sqlite-snapshot-reclamation.js");
-          await reclaimAbandonedSqliteSnapshotsAsync();
-        },
-        log,
-        errorMessage: "SQLite snapshot staging cleanup failed",
       }),
     );
   } else {

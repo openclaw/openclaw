@@ -94,7 +94,7 @@ suite.define(() => {
         has: page.locator(".session-worker-stop"),
       });
       const dialog = await waitForConfirmModal(page, workerStopConfirmation);
-      expect(menuText).toBe("Stop device worker…");
+      expect(menuText).toBe("Stop work on device…");
       expect(
         await dialog.getByRole("heading", { name: "Stop worker?", exact: true }).textContent(),
       ).toBe("Stop worker?");
@@ -113,13 +113,13 @@ suite.define(() => {
       await (
         await waitForConfirmModal(page, workerStopConfirmation)
       )
-        .getByRole("button", { name: "Stop worker", exact: true })
+        .getByRole("button", { name: "Stop", exact: true })
         .click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
       expect(reclaim.params).toEqual({ key, agentId: "main" });
-      const stopNotice = page.getByRole("alert").filter({ hasText: "Worker stop requested." });
+      const stopNotice = page.getByRole("alert").filter({ hasText: "Device stop requested." });
       await pollText(stopNotice).toContain(
-        "Worker stop requested. Review the initial message before retrying.",
+        "Device stop requested. Review the initial message before retrying.",
       );
       await gateway.resolveDeferred("sessions.dispatch", {
         sessionId: `session:${key}`,
@@ -136,7 +136,7 @@ suite.define(() => {
         },
       });
       await pollText(stopNotice).toContain(
-        "Worker stop requested. Review the initial message before retrying.",
+        "Device stop requested. Review the initial message before retrying.",
       );
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);

@@ -162,6 +162,125 @@ suite.define(() => {
     await pollText(pill).toContain("Publish failed");
   });
 
+  it("keeps one mobile pill across a PR's publication lifecycle", async () => {
+    const published = {
+      requestId: "publication-lifecycle",
+      publisher: sharedPublisher,
+      status: "published",
+      url: "https://github.com/openclaw/openclaw/pull/4321",
+      repository: "openclaw/openclaw",
+      branch: "openclaw/lifecycle",
+      headCommit: "a".repeat(40),
+    };
+    const { page, gateway, watchedKey } = await openPublicationChat(
+      { "sessions.github.publish": published },
+      {},
+      { viewport: { width: 393, height: 852 } },
+    );
+    await closeChatDetails(page);
+    await gateway.waitForRequest("sessions.github.options");
+    const pills = page.locator(".activity-pill");
+    const publication = page.locator('.activity-pill[data-family="publication"]');
+    const pullRequestPill = page.locator('.activity-pill[data-family="pull-request"]');
+
+    await emitPullRequests(gateway, watchedKey, publicationState("openclaw/lifecycle"));
+    await pollText(publication).toContain("Publish PR");
+    await publication.click();
+    await page.getByRole("button", { name: "Publish PR", exact: true }).click();
+    await closeChatDetails(page);
+    // Until the PR snapshot lists it, the receipt bridges as that PR's number.
+    await pollText(publication).toContain("#4321");
+    await pollCount(pills).toBe(1);
+
+    // The Gateway omits branch facts once the checkout has a live PR.
+    const listed = pullRequest(4321, {
+      branch: "openclaw/lifecycle",
+      state: "open",
+      additions: 2,
+      deletions: 1,
+    });
+    await emitPullRequests(gateway, watchedKey, {
+      pullRequests: [listed],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pollCount(publication).toBe(0);
+    await pollCount(pullRequestPill).toBe(1);
+    await pollCount(pills).toBe(1);
+    await pollAttr(pullRequestPill, "data-tone").toBe("ok");
+    // Details continues the publication as the PR row, not a second entry.
+    const group = await openDetailsPullRequests(page);
+    await pollCount(group.locator('[data-details-destination="publication"]')).toBe(0);
+    await closeChatDetails(page);
+
+    await emitPullRequests(gateway, watchedKey, {
+      pullRequests: [{ ...listed, state: "merged" }],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pollAttr(pullRequestPill, "data-tone").toBe("purple");
+    await pollCount(pills).toBe(1);
+
+    // Another session PR still gets its own pill.
+    await emitPullRequests(gateway, watchedKey, {
+      pullRequests: [{ ...listed, state: "merged" }, pullRequest(4400, { state: "draft" })],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pollCount(pullRequestPill).toBe(2);
+    await pollCount(publication).toBe(0);
+
+    // New work after the merge starts the next PR's lifecycle beside the merged one.
+    await emitPullRequests(gateway, watchedKey, {
+      ...publicationState("openclaw/lifecycle"),
+      pullRequests: [{ ...listed, state: "merged" }],
+    });
+    await pollText(publication).toContain("Publish PR");
+    await pollCount(pullRequestPill).toBe(1);
+    await pollCount(pills).toBe(2);
+  });
+
+  it("hides a published PR's single mobile pill without reviving its receipt", async () => {
+    const published = {
+      requestId: "publication-hide",
+      publisher: sharedPublisher,
+      status: "published",
+      url: "https://github.com/openclaw/openclaw/pull/4500",
+      repository: "openclaw/openclaw",
+      branch: "openclaw/hide",
+      headCommit: "b".repeat(40),
+    };
+    const { page, gateway, watchedKey } = await openPublicationChat(
+      { "sessions.github.publish": published },
+      {},
+      { viewport: { width: 393, height: 852 } },
+    );
+    await closeChatDetails(page);
+    await gateway.waitForRequest("sessions.github.options");
+    const pills = page.locator(".activity-pill");
+    const publication = page.locator('.activity-pill[data-family="publication"]');
+    await emitPullRequests(gateway, watchedKey, publicationState("openclaw/hide"));
+    await publication.click();
+    await page.getByRole("button", { name: "Publish PR", exact: true }).click();
+    await closeChatDetails(page);
+    await pollText(publication).toContain("#4500");
+
+    await emitPullRequests(gateway, watchedKey, {
+      pullRequests: [pullRequest(4500, { branch: "openclaw/hide", state: "open" })],
+      rateLimited: false,
+      status: "ready",
+    });
+    const pullRequestPill = page.locator('.activity-pill[data-family="pull-request"]');
+    await pollCount(pills).toBe(1);
+    await pullRequestPill.click();
+    const page4500 = page.locator(
+      '.chat-mobile-details-page[data-details-page="pull-request"]:visible',
+    );
+    await page4500.locator(".chat-pr-mobile__hide").click();
+    await closeChatDetails(page);
+    await pollCount(pills).toBe(0);
+  });
+
   it("shows detected PRs in Details with rate-limit staleness", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
@@ -309,14 +428,28 @@ suite.define(() => {
             .closest(".chat-mobile-host, .chat-details")!
             .getBoundingClientRect();
           const stackBounds = element.getBoundingClientRect();
+          const scrollPort = element.closest(".chat-details-desktop-body") ?? element;
           return {
             detailsBottom: detailsBounds.bottom,
+            detailsLeft: detailsBounds.left,
+            detailsRight: detailsBounds.right,
             stackLeft: stackBounds.left,
             stackWidth: stackBounds.width,
-            fitsHorizontally: element.scrollWidth <= element.clientWidth + 1,
+            fitsHorizontally: scrollPort.scrollWidth <= scrollPort.clientWidth + 1,
             rows: [...element.children].map((row) => {
               const rect = row.getBoundingClientRect();
-              return { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width };
+              const style = getComputedStyle(row);
+              const paddingLeft = Number.parseFloat(style.paddingLeft);
+              const paddingRight = Number.parseFloat(style.paddingRight);
+              return {
+                top: rect.top,
+                bottom: rect.bottom,
+                left: rect.left,
+                right: rect.right,
+                width: rect.width,
+                contentLeft: rect.left + paddingLeft,
+                contentWidth: rect.width - paddingLeft - paddingRight,
+              };
             }),
           };
         });
@@ -325,8 +458,11 @@ suite.define(() => {
         for (const row of bounds.rows) {
           expect(row.top).toBeGreaterThanOrEqual(previousBottom);
           expect(row.bottom).toBeLessThanOrEqual(bounds.detailsBottom);
-          expect(row.left).toBeCloseTo(bounds.stackLeft, 1);
-          expect(row.width).toBeCloseTo(bounds.stackWidth, 1);
+          expect(row.left).toBeGreaterThanOrEqual(bounds.detailsLeft);
+          expect(row.right).toBeLessThanOrEqual(bounds.detailsRight);
+          // Desktop hover surfaces extend into padding; their content stays on the heading axis.
+          expect(mobile ? row.left : row.contentLeft).toBeCloseTo(bounds.stackLeft, 1);
+          expect(mobile ? row.width : row.contentWidth).toBeCloseTo(bounds.stackWidth, 1);
           previousBottom = row.bottom;
         }
       }
@@ -456,7 +592,10 @@ suite.define(() => {
             rowBox.x + rowBox.width <= detailsBox.x + detailsBox.width &&
             detailsBox.x >= 0 &&
             detailsBox.x + detailsBox.width <= viewport.width &&
-            (await row.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)),
+            (await row.evaluate((element) => {
+              const scrollPort = element.closest(".chat-details-desktop-body") ?? element;
+              return scrollPort.scrollWidth <= scrollPort.clientWidth + 1;
+            })),
           );
         })
         .toBe(true);

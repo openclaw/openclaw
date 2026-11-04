@@ -147,6 +147,33 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it("explains how to recover when a shallow checkout cannot resolve the beta merge base", () => {
+    const origin = tempDirs.make("openclaw-shallow-release-origin-");
+    git(origin, ["init", "-q", "-b", "main"]);
+    git(origin, ["config", "commit.gpgsign", "false"]);
+    commitAll(origin, "chore: baseline");
+    git(origin, ["tag", "--no-sign", "v2026.7.1"]);
+    commitAll(origin, "chore: candidate");
+
+    const cloneParent = tempDirs.make("openclaw-shallow-release-clone-");
+    const cwd = join(cloneParent, "repo");
+    git(cloneParent, ["clone", "-q", "--depth=1", "--no-tags", `file://${origin}`, cwd]);
+    git(cwd, ["fetch", "-q", "--depth=1", "origin", "tag", "v2026.7.1"]);
+
+    const result = runVerifier(cwd, {
+      base: "v2026.7.1",
+      target: "HEAD",
+      version: "2026.7.2-beta.1",
+      mainRef: null,
+      write: false,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "this checkout is shallow; fetch complete history (for example, git fetch --unshallow origin) and retry",
+    );
+  });
+
   it("rejects an off-branch generation target before release-note discovery", () => {
     const cwd = tempDirs.make("openclaw-off-branch-notes-");
     git(cwd, ["init", "-q", "-b", "main"]);
@@ -1148,9 +1175,11 @@ console.log(JSON.stringify({ data }));
     const entryPath = join(cwd, "CHANGELOG/2026.7.1.md");
     const section = readFileSync(entryPath, "utf8");
     expect(section).toContain(
-      "- **PR #21** Related #20. Thanks @steipete and @original-helper and @reporter.",
+      "- **PR #21** Related #20. Authored by @steipete. Thanks @original-helper and @reporter.",
     );
-    expect(section).toContain("(#21) Thanks @steipete, @original-helper, and @reporter.");
+    expect(section).toContain(
+      "(#21) Authored by @steipete. Thanks @original-helper and @reporter.",
+    );
     expect(section).not.toContain("@RomneyDa");
     expect(section).not.toContain("@release-operator");
     const checked = run(false);
@@ -1158,7 +1187,7 @@ console.log(JSON.stringify({ data }));
     writeReleaseChangelog({
       rootDir: cwd,
       version: "2026.7.1",
-      section: section.replaceAll("Thanks @steipete", "Thanks @RomneyDa and @steipete"),
+      section: section.replaceAll("Authored by @steipete", "Authored by @RomneyDa and @steipete"),
     });
     const rejected = run(false);
     expect(rejected.status).toBe(1);
@@ -1515,7 +1544,12 @@ console.log(JSON.stringify({ data }));
     mkdirSync(privateTmp);
     const index = join(cwd, git(cwd, ["rev-parse", "--git-path", "index"]));
     const originalIndex = readFileSync(index);
-    const originalObjects = git(cwd, ["count-objects", "-v"]);
+    // Packing or pruning duplicate loose copies must not affect object isolation.
+    const originalObjects = git(cwd, [
+      "cat-file",
+      "--batch-all-objects",
+      "--batch-check=%(objectname)",
+    ]);
     const hooks = join(cwd, "test-hooks");
     mkdirSync(hooks);
     const hook = join(hooks, "post-index-change");
@@ -1535,7 +1569,9 @@ console.log(JSON.stringify({ data }));
     });
     expect(readFileSync(index)).toEqual(originalIndex);
     expect(git(cwd, ["rev-parse", "HEAD"])).toBe(target);
-    expect(git(cwd, ["count-objects", "-v"])).toBe(originalObjects);
+    expect(git(cwd, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname)"])).toBe(
+      originalObjects,
+    );
     expect(readdirSync(privateTmp)).toEqual([]);
     expect(readdirSync(cwd)).not.toContain("hook-fired");
     if (

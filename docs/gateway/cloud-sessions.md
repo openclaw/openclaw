@@ -9,6 +9,8 @@ doc-schema-version: 1
 
 A cloud session is an ordinary session whose coding work runs on another machine. It appears in the sidebar, streams into chat, and keeps its transcript exactly like a local session — the Gateway stays the owner of the conversation, the reconciled workspace, model credentials, and placement records, while commands, file edits, and tool work execute remotely. The session and its durable state survive a remote failure. Reclaimed or suspended cloud workers restart on the next message. A previously active worker that fails also restarts on the next message once cleanup is complete and its saved workspace is ready. Gateway updates retain attached cloud machines and refresh their worker runtime in place. An offline paired device keeps its placement and waits for the device to return.
 
+In **New session**, choose a device under **Cloud**. The picker labels the Gateway’s device **This computer** and a cloud device’s size **Device size**.
+
 Sessions can run in three places, and every one of them uses the same session, the same chat, and the same Place picker:
 
 | Destination       | The machine                                                                       | Best for                                                    | Scope to dispatch |
@@ -127,6 +129,8 @@ An offline paired device keeps its placement active and waits to reconnect. **Co
 Repository-only checkpoint history remains until session deletion. While a worker runs, **Files** and diffs use its checkout. After Stop, changed-file previews remain available from the accepted checkpoint; editing, unchanged upstream files, and full diffs require restarting the worker. Publication can use an accepted Git-normalized checkpoint without a Gateway checkout. See [what survives a dead machine](/gateway/cloud-workers#what-survives-a-dead-machine).
 
 Reset keeps the repository and accepted changes but ends unfinished publication requests from the previous session lifecycle. Review the retained changes and request publication again after reset. Existing GitHub commits and pull requests remain unchanged.
+
+Completed publication receipts remain readable by request ID after reset. A pending transcript report from the previous lifecycle is retired instead of being appended to the reset session.
 
 ## Related
 

@@ -1,3 +1,4 @@
+import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
@@ -46,6 +47,8 @@ export type ChromeCdpDiagnostic =
       wsUrl?: string;
       message: string;
       elapsedMs: number;
+      /** Nothing is listening, as distinct from a listener that has not answered yet. */
+      connectionRefused?: true;
     };
 
 export type ChromeVersion = {
@@ -68,6 +71,13 @@ export function safeChromeCdpErrorMessage(error: unknown): string {
     return redactSensitiveText(`${message}: ${causeMessage}`);
   }
   return redactSensitiveText(message || "unknown error");
+}
+
+function isConnectionRefused(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, ({ cause, errors }) => [
+    cause,
+    ...(Array.isArray(errors) ? errors : []),
+  ]).some((candidate) => extractErrorCode(candidate) === "ECONNREFUSED");
 }
 
 async function readChromeVersion(
@@ -198,6 +208,7 @@ async function diagnoseCdpHealthCommand(
             : kind === "protocol"
               ? "Browser.getVersion returned no result object"
               : safeChromeCdpErrorMessage(error),
+      error,
     } as const;
   } finally {
     clearTimeout(timer);
@@ -263,6 +274,7 @@ export async function diagnoseChromeCdp(
     code: ChromeCdpDiagnosticCode,
     message: string,
     wsUrl?: string,
+    error?: unknown,
   ): ChromeCdpDiagnostic => ({
     ok: false,
     cdpUrl,
@@ -270,6 +282,7 @@ export async function diagnoseChromeCdp(
     code,
     message: redactSensitiveText(message),
     elapsedMs: elapsedSince(startedAt),
+    ...(isConnectionRefused(error) ? { connectionRefused: true as const } : {}),
   });
   const diagnoseEndpoint = async (
     wsUrl: string,
@@ -286,7 +299,7 @@ export async function diagnoseChromeCdp(
           browser: version?.Browser ?? health.version?.Browser,
           elapsedMs: elapsedSince(startedAt),
         }
-      : failure(health.code, health.message, wsUrl);
+      : failure(health.code, health.message, wsUrl, health.error);
   };
   let configuredPin: CdpEndpointPin | undefined;
   try {
@@ -318,7 +331,7 @@ export async function diagnoseChromeCdp(
       return await diagnoseEndpoint(cdpUrl, configuredPin?.lookup);
     }
     const classified = classifyChromeVersionError(err);
-    return failure(classified.code, classified.message);
+    return failure(classified.code, classified.message, undefined, err);
   }
 
   signal?.throwIfAborted();

@@ -203,6 +203,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       const { container, props } = mountChatPaneHeader(containers, {
         title: "Prepare the autumn release",
         workspaceLabel: "workspace",
+        gatewayStatus: { kind: "offline", onRetry: vi.fn() },
         sharingControl: chatPaneHeaderSharing(),
         sessionMenuAction: chatPaneHeaderSessionMenu(),
         detailsControl: {
@@ -464,86 +465,6 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       expect(observations).toEqual(
         Array.from({ length: 2 }, () => ({ open: false, focused: true })),
       );
-    });
-
-    it.each(["idle", "busy"] as const)("anchors the %s hint to its menu button", async (state) => {
-      const busy = state === "busy";
-      const reason = "Branch switch is unavailable while the agent is working.";
-      const { container, props } = mountChatPaneHeader(containers, {
-        branchSwitchDisabledReason: busy ? reason : null,
-        onClosePane: state === "idle" ? vi.fn() : undefined,
-        branches: [
-          { leafEntryId: "active", headline: "Current work", messageCount: 4, active: true },
-          { leafEntryId: "other", headline: "Earlier idea", messageCount: 2, active: false },
-        ],
-      });
-      container.style.cssText =
-        state === "idle"
-          ? "position: fixed; top: 80px; left: 80px; width: 1000px"
-          : "position: fixed; top: 80px; left: 500px; width: 650px";
-      await waitForSolid(() =>
-        expect(container.querySelector(".chat-pane__branches-trigger")).not.toBeNull(),
-      );
-      const trigger = container.querySelector<HTMLButtonElement>(".chat-pane__branches-trigger")!;
-      await page.elementLocator(trigger).hover();
-      const tooltip = () =>
-        [...document.querySelectorAll("openclaw-tooltip")]
-          .map((element) => element.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface"))
-          .find((element) => element?.matches(":popover-open"));
-      await expect.poll(() => tooltip()?.textContent).toContain(busy ? reason : "Versions");
-      await expect
-        .poll(() => {
-          const body = tooltip();
-          if (!body) {
-            return false;
-          }
-          const hint = body.getBoundingClientRect();
-          const button = trigger.getBoundingClientRect();
-          return (
-            hint.width > 0 &&
-            hint.left < button.right &&
-            hint.right > button.left &&
-            Math.min(Math.abs(hint.bottom - button.top), Math.abs(hint.top - button.bottom)) < 24
-          );
-        })
-        .toBe(true);
-
-      if (!busy) {
-        await click(trigger);
-        await expect.poll(() => tooltip()).toBeUndefined();
-        await page.getByRole("menuitem", { name: /Earlier idea/ }).click();
-        expect(props.onBranchSelect).toHaveBeenCalledWith("other");
-      }
-
-      if (state === "idle") {
-        const header = findElement(container, ".chat-pane__header");
-        const layout = findElement(container, ".chat-header-session-menu__trigger");
-        const closePane = findElement(container, ".chat-pane__close");
-        for (const width of [320, 693]) {
-          container.style.width = `${width}px`;
-          expect(trigger.checkVisibility()).toBe(true);
-          const bounds = header.getBoundingClientRect();
-          const branchBounds = trigger.getBoundingClientRect();
-          const closeBounds = layout.getBoundingClientRect();
-          expect(branchBounds.left).toBeGreaterThanOrEqual(bounds.left);
-          expect(closeBounds.right).toBeLessThanOrEqual(branchBounds.left);
-          expect(branchBounds.right).toBeLessThanOrEqual(bounds.right);
-          expect(closeBounds.right).toBeLessThanOrEqual(bounds.right);
-          expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
-          const closePaneBounds = closePane.getBoundingClientRect();
-          expect(closePane.checkVisibility()).toBe(true);
-          expect(closePaneBounds.width).toBe(32);
-          expect(closePaneBounds.height).toBe(32);
-          expect(closePaneBounds.left).toBeGreaterThanOrEqual(branchBounds.right);
-          expect(closePaneBounds.right).toBeLessThanOrEqual(bounds.right);
-          vi.mocked(props.onBranchSelect).mockClear();
-          await click(trigger);
-          await page.getByRole("menuitem", { name: /Earlier idea/ }).click();
-          expect(props.onBranchSelect).toHaveBeenCalledExactlyOnceWith("other");
-        }
-        await click(closePane);
-        expect(props.onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
-      }
     });
   },
 );

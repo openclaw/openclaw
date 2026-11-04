@@ -58,7 +58,9 @@ it.each(["assignment", "compact assignment", "members"] as const)(
         }
       };
       await shown;
-      await expect.element(page.getByText("Assign to…", { exact: true })).toBeVisible();
+      await expect
+        .element(page.getByRole("menuitem", { name: "Assign to…", exact: true }))
+        .toBeVisible();
       const assignment = menuItem(root, "Assign to…");
       // A resting pointer opens the submenu first; Enter on its owner must not select a row.
       await userEvent.hover(assignment);
@@ -79,13 +81,17 @@ it.each(["assignment", "compact assignment", "members"] as const)(
       name: members ? "Search people…" : "Search people and agents…",
     });
     const sharingSearch = page.getByRole("button", { name: "Search people…", exact: true });
+    const assignmentSearch = page.getByRole("button", {
+      name: "Search people and agents…",
+      exact: true,
+    });
     if (members) {
       await expect.element(sharingSearch).toHaveAttribute("aria-expanded", "false");
     } else {
-      await expect.element(input).toBeVisible();
+      await expect.element(assignmentSearch).toBeVisible();
     }
     if (surface === "assignment") {
-      const style = getComputedStyle(input.element().closest('[role="menu"]')!);
+      const style = getComputedStyle(assignmentSearch.element().closest('[role="menu"]')!);
       expect(style).toMatchObject({ width: "320px", maxHeight: "420px", overflowY: "auto" });
     }
     const selector = !members
@@ -110,12 +116,10 @@ it.each(["assignment", "compact assignment", "members"] as const)(
     await reopen();
     if (members) {
       await userEvent.click(sharingSearch);
-    }
-    await expect.element(input).toBeVisible();
-    if (members) {
+      await expect.element(input).toBeVisible();
       await userEvent.click(input);
     }
-    // Assignment typing must enter the visible search without a separate click.
+    // Assignment typing must open the search without a separate click.
     await userEvent.keyboard("pc");
     expect(onAction).not.toHaveBeenCalled();
     await expect.element(input).toHaveValue("pc");
@@ -131,6 +135,9 @@ it.each(["assignment", "compact assignment", "members"] as const)(
       await expect.element(sharingSearch).toHaveAttribute("aria-expanded", "false");
       expect(document.activeElement).toBe(sharingSearch.element());
       await userEvent.click(sharingSearch);
+    } else {
+      expect(document.activeElement).toBe(assignmentSearch.element());
+      await userEvent.keyboard("{Enter}");
     }
     await expect.element(input).toHaveValue("");
     await expect.element(input).toBeVisible();

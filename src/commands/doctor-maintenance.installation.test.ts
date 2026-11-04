@@ -657,7 +657,14 @@ async function runInstallationCase(params: {
           finishError = error;
         }
         if (params.nativePolicy) {
-          if (params.nativePolicy === "disabled-before") {
+          if (params.nativePolicy === "disabled-before" && params.platform === "win32") {
+            // A disabled Scheduled Task cannot run; Doctor names the start command instead.
+            expect(finishError).toBeUndefined();
+            expectOriginal(["stop", "repair-state"], false);
+            expect(runtime.log).toHaveBeenCalledWith(
+              expect.stringContaining("Scheduled Task is disabled"),
+            );
+          } else if (params.nativePolicy === "disabled-before") {
             expect(finishError).toBeUndefined();
             expectOriginal(["stop", "repair-state", "restart"], true);
           } else {
@@ -742,6 +749,9 @@ async function runInstallationCase(params: {
           ]);
           expect(maintenance?.warnings).toEqual([
             expect.stringContaining("openclaw gateway install --force --port 19989"),
+            ...(outcome === "recovery-pending"
+              ? [expect.stringContaining("Keep the Gateway stopped until Doctor")]
+              : []),
           ]);
           expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(outcome));
           expect(mocks.health).not.toHaveBeenCalled();
@@ -878,6 +888,14 @@ it.each<InstallationCase>([
 ])("repairs installation drift with doctor --fix (%j)", async (scenario) =>
   runInstallationCase({ ...scenario, mode: "direct" }),
 );
+
+it("leaves a disabled Windows Scheduled Task stopped and names the start command", async () =>
+  runInstallationCase({
+    platform: "win32",
+    mode: "maintenance",
+    definitionRepair: "not-needed",
+    nativePolicy: "disabled-before",
+  }));
 
 it.each([
   "disabled-before",

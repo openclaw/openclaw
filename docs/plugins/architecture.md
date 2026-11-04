@@ -140,6 +140,8 @@ Failed registrations remain visible in plugin diagnostics after their contributi
 
 Runtime preparation checks pending data migrations through the shared-state read worker before registering plugins. Once checked, the process reuses that ledger result across plugin generations until a committed deferred-migration write invalidates it. Unrelated state writes do not repeat the check. Explicit artifact-preserving inspection keeps its isolated snapshot, and plugins with pending data migrations remain blocked until Doctor completes them.
 
+Gateway startup confirms completed plugin migrations through the admitted live database reader, so checking a small migration ledger does not copy the entire shared database. Offline Doctor inspection retains its artifact-preserving snapshots.
+
 Gateway startup and reload yield to the event loop between plugin registrations so health probes and existing requests can run. Registration order is unchanged, and the Gateway publishes the registry only after the complete generation is ready. Each plugin's module evaluation and `register()` remain synchronous; plugins should defer expensive work to their asynchronous service lifecycle or load execution-only modules on first asynchronous use. Register callable hooks before readiness, even when their implementations load lazily.
 
 The llama.cpp plugin follows this split for setup, server management, embeddings, image descriptions, and streaming. Registration exposes its capabilities and embedding index identities immediately; the corresponding asynchronous operation loads its implementation on first use.
@@ -151,6 +153,11 @@ Web-provider discovery honors exact prepared generations, including empty select
 One `PluginCache` starts on the first plugin metadata access, including CLI preflight before Gateway startup, and fills progressively as metadata and artifacts are needed. Gateway startup retains that owner and builds its immutable `PluginMetadataSnapshot`. The snapshot includes plugin metadata from all configured agent workspaces, including disabled plugins, with source precedence and workspace provenance preserved. It stores the installed plugin index, manifest registry, manifest diagnostics, owner maps, and a plugin id normalizer. Package contents and lazily loaded module exports belong to other typed views of the same cache, not the snapshot itself.
 
 Plugin-aware config validation, startup auto-enable, and Gateway plugin bootstrap consume that snapshot instead of rebuilding manifest/index metadata independently. `PluginLookUpTable` is derived from the same snapshot and adds the startup plugin plan for the current runtime config.
+
+Startup auto-enable also retains the snapshot's scoped managed-install facts when
+reusing its manifest registry and discovery. Managed native binaries keep their
+existing reference admission; unmanaged captures and metadata isolation keep their
+existing policies.
 
 On POSIX, successful checked entry opens also publish their canonical paths to the metadata cache. For ordinary metadata paths, discovery resolves each parent directory once and reuses it for non-symlink children. These path facts last until the owner invalidates metadata; symlinks retain filesystem resolution, and actual file opens retain their descriptor-bound security checks. Windows keeps separate path resolution because admission can return a trusted root alias rather than the native spelling.
 
@@ -180,9 +187,15 @@ Plugin reload reconciles config watcher events after asynchronous metadata prepa
 
 Ordinary plugin source captures use independent files, including copies reached through aliases. On filesystems with copy-on-write support, these captures can share storage without sharing file identity, reducing data writes for large plugins. File containment and receipt validation run during capture; later source edits take effect on the next reload rather than invalidating the existing snapshot.
 
+Managed installs publish an immutable, unexecuted source snapshot before the matching install record becomes visible. The installed index binds it to the install revision, content and dependency-closure digests, platform and ABI, capture format, and resolution options. Native admission, callbacks, and live instances remain independently owned. Install, update, uninstall, and rollback publication retire displaced source snapshots; active readers keep their generation until release.
+
+Staging paths cannot be acquired, even with complete receipts. After an interrupted publication, cleanup reclaims staged source only after its writer's custody token is released; completed snapshots remain protected by the installed index and their readers. Before leaving staging, the installed-index SQLite owner journals the completed candidate, including on the first install. The index commit atomically takes ownership from that journal. If the installer exits before commit, lifecycle cleanup can reclaim the unreferenced candidate after writer custody releases.
+
 Source capture preserves referenced URL assets, including directory URLs that the plugin uses. Unused standalone URL calculations do not cause the surrounding directory to be copied into the plugin generation.
 
 Asynchronous host loading prepares selected non-bundled plugin sources and bundled state-operation import closures in a shared worker before evaluating or registering plugin code. Bundled operation captures preserve the same immutable bytes and recovery ownership without retaining the source transpiler in the Gateway main thread. Selection, trust checks, and entry-path validation happen first; the host checks inventory retirement and the expected source digest before installing the prepared capture. Each artifact keeps its own source, admission facts, callbacks, and recovery custody inside that worker. Synchronous source resolution services sibling callbacks and completed tasks, so a sibling's pending host publication does not hold the worker slot. Existing registry and plugin-instance caching provide reuse; the worker retires after its last artifact and recovery snapshot are disposed. A failed acquisition records that plugin's load error without discarding successfully prepared siblings. Unexpected worker exit invalidates its captures and queued preparation; subsequent preparation starts a new worker. Synchronous CLI loading and loading inside an existing compute worker retain their inline acquisition path. Plugin evaluation and registration still run in their original owner; moving source preparation does not make arbitrary plugin initialization nonblocking.
+
+Model-runtime build diagnostics report source preparation work next to `runtimePluginMs`, under `pluginPreparation.*`. The counters distinguish captures and retained-source reuse, selected plugin and dependency files, logical original and copied byte volumes, and receipt validation reads and passes. `hashReadBytes` counts bytes read for content hashing, including capture and receipt verification. Original bytes exclude reused ordinary source files; copied bytes include completed retained-source tree copies and may use filesystem cloning, so neither field measures physical disk traffic. `workerMs` measures worker operations and `hostMs` measures host request-and-settlement time. They overlap and must not be added together. Metrics cover the measured preparation phase; later lazy imports do not change an already reported startup result.
 
 Legacy session-key migration selects plugins that declare that capability before checking channel presence. Owners already eligible under migration policy do not need a channel-presence check. Scoped selections check persisted credentials only for their channel owners, so unrelated authentication modules stay unloaded during Doctor repairs. This credential scope does not limit environment-based presence signals: configured channels with missing plugins still produce installation and recovery hints.
 
@@ -202,7 +215,9 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 - plugin config schema and channel config schema validation
 - startup auto-enable decisions
 
-Startup and hot replacement share one prepared registry publisher and the same inventory across all configured agent workspaces. Reload preserves workspace provenance so an unchanged linked plugin is not replaced when another plugin changes. Replacement retains unchanged plugin instances and validates candidate metadata before draining affected services and channels. A retained instance keeps its original registration and `api` object; it is not registered again. Plugin-wide runtime capabilities such as `api.runtime.llm.complete` select the committed plugin inventory when each call starts, so a retained context engine can still start new completions after another plugin is replaced, including from work that restores an earlier turn's context. Reordering object keys in equivalent metadata or settings does not replace a registration; changed values, ordered lists, and explicit reload requests still do. It stops and disposes the previous registration before registering its replacement, then publishes runtime methods and metadata together. Connected clients refresh their plugin capabilities after publication. If replacement fails before publication and cleanup succeeds, recovery registers captured previous code and configuration with fresh resource ownership. A failure after publication reports the committed generation. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
+Startup and hot replacement share one prepared registry publisher and the same inventory across all configured agent workspaces. Reload preserves workspace provenance so an unchanged linked plugin is not replaced when another plugin changes. Replacement retains unchanged plugin instances and validates candidate metadata before draining affected services and channels. A retained instance keeps its original registration and `api` object; it is not registered again. Plugin-wide runtime capabilities such as `api.runtime.llm.complete` select the committed plugin inventory when each call starts, so a retained context engine can still start new completions after another plugin is replaced, including from work that restores an earlier turn's context. Reordering object keys in equivalent metadata or settings does not replace a registration; changed registration settings, ordered lists, and explicit reload requests still do. It stops and disposes the previous registration before registering its replacement, then publishes runtime methods and metadata together. Connected clients refresh their plugin capabilities after publication. If replacement fails before publication and cleanup succeeds, recovery registers captured previous code and configuration with fresh resource ownership. A failure after publication reports the committed generation. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
+
+When an accepted in-place config change retains a plugin, newly prepared agent runtimes borrow its running service only when their plugin settings match the Gateway's committed config. Pending edits and differently scoped settings do not borrow that service, even when they match its original registration settings. Plugins with hot or no-op config policies must read those settings from the current runtime config; their original `api.pluginConfig` snapshot remains unchanged.
 
 Config-only service reloads keep a pending restart when cleanup exceeds the five-second observation deadline. The Gateway logs the deferred restart, retains the original cleanup work, and automatically starts the replacement after cleanup succeeds. Newer config reloads and registry handoffs supply the replacement configuration; shutdown cancels the pending restart. Rejected cleanup remains a visible service failure and never permits a replacement to acquire its resources.
 
@@ -282,6 +297,14 @@ updated bundled, host, or SDK code, and
 rebuild first when the installation loads compiled output. Embedded executable code
 changes require a newly built executable. External on-disk plugins continue to
 capture updated source and dependencies on explicit reload.
+
+For development, `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1` lets an explicit reload
+capture a bundled plugin's own code: its package tree and the build chunks that
+`dist/runtime-dependency-ownership.json` lists for that plugin. Those chunks are used
+only by plugins, though other plugins may share them. Imports of host,
+SDK, and core-shared chunks resolve to the Gateway's loaded modules, including from
+captured Workers. Standalone executables ignore the variable. See
+[Development: reload edited bundled code](/cli/plugins/uninstall-and-update#development-reload-edited-bundled-code).
 
 WebAssembly libraries remain ordinary captured assets even when they use a `.so`
 filename. Directory asset references reuse an active capture walk; filesystem
@@ -505,6 +528,12 @@ system-temporary instance and reports a warning. Normal disposal still removes
 that instance; automatic cleanup does not scan unrelated system-temporary roots.
 There is no total disk quota, and an active instance may legitimately exceed the
 one-hour cleanup grace period.
+Before allocating a capture or staging an installed source snapshot, OpenClaw
+checks the destination volume and refuses when less than 512 MiB is available.
+The error asks the operator to free space and retry. State-volume refusal keeps
+the existing temporary-volume fallback; setup preparation records source failure
+without stopping startup. Unavailable disk statistics keep best-effort loading.
+This preflight is a free-space floor, not a size reservation for an in-flight copy.
 If its payload directory is removed while the instance still holds custody, the
 next capture recreates that directory under the same lease. This does not restore
 previously deleted captured files or recreate a missing ownership directory.

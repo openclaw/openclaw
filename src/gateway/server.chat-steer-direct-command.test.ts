@@ -88,15 +88,16 @@ installGatewayTestHooks({
   },
 });
 
-it.for([
-  { source: "browser", disposition: "steered" },
-  { source: "system", disposition: "followup" },
-] as const)(
-  "routes browser corrections to a $source direct command as $disposition",
-  async ({ source, disposition: expectedDisposition }, { signal }) => {
+it.for(["browser", "system"] as const)(
+  "keeps caller custody for browser corrections to a %s direct command",
+  async (source, { signal }) => {
+    const steered = source === "browser";
+    const expectedReply = steered ? "result-required" : "optional";
+    const expectedAnswer = steered ? "Correction applied." : "Completed.";
     const sessionKey = `agent:main:direct-steering-${source}`;
     const sessionId = `direct-steering-session-${source}`;
     const runId = `announce:direct-steering-${source}`;
+    const correction = "Stop waiting and use the corrected approach.";
     const model = makeProviderModelFixture<"openai-responses">({
       id: "mock-1",
       name: "Steering fixture",
@@ -192,7 +193,7 @@ it.for([
       disposition.resolve("followup");
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
     });
-    runAttempt.mockImplementation(async (attempt) => {
+    runAttempt.mockReset().mockImplementation(async (attempt) => {
       const modelStream = createAssistantMessageEventStream();
       streamMocks.streamSimple
         .mockImplementation(() =>
@@ -234,10 +235,17 @@ it.for([
         modelStream.push({ type: "done", reason: "stop", message: assistant });
         modelStream.end();
         await prompt;
+        const lastAssistant = session.messages.at(-1);
+        if (lastAssistant?.role !== "assistant") {
+          throw new Error("Steered command did not produce an assistant answer");
+        }
+        expect(JSON.stringify(session.messages).includes(correction)).toBe(steered);
+        expect(lastAssistant.content).toEqual([{ type: "text", text: expectedAnswer }]);
+        expect(session.getSteeringMessages()).toEqual([]);
         return makeEmbeddedRunnerAttempt({
           sessionIdUsed: sessionId,
-          lastAssistant: assistant,
-          assistantTexts: ["Completed."],
+          lastAssistant,
+          assistantTexts: [expectedAnswer],
           messagesSnapshot: session.messages,
         });
       } finally {
@@ -337,10 +345,11 @@ it.for([
       );
       expect(registration?.delegatedAuthority).toBeDefined();
       expect(getAgentRunContext(runId)?.isControlUiVisible).toBe(true);
+      expect(handle.terminalReplyExpectation).toBe(expectedReply);
       const response = await rpcReq(harness.ws, "chat.send", {
         sessionKey,
         sessionId,
-        message: "Stop waiting and use the corrected approach.",
+        message: correction,
         idempotencyKey: `browser-direct-command-correction-${source}`,
         queueMode: "steer",
       });
@@ -350,10 +359,9 @@ it.for([
           (result) => result.type === "return" && result.value?.runId === runId,
         )?.value,
       ).toMatchObject({ runId, sourceTurnId: runId });
-      expect(await withinTest(disposition.promise, signal)).toBe(expectedDisposition);
-      if (expectedDisposition === "steered") {
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      }
+      expect(await withinTest(disposition.promise, signal)).toBe(steered ? "steered" : "followup");
+      expect(handle.terminalReplyExpectation).toBe(expectedReply);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(steered ? 0 : 1);
     } finally {
       // The fixture prevents completion until release; only then does its response budget begin.
       const settled =
@@ -364,5 +372,12 @@ it.for([
       const outcomes = await settled;
       expect.soft(outcomes.filter((outcome) => outcome.status === "rejected")).toEqual([]);
     }
+    const terminal = await original;
+    expect(isGatewayResponseFrame(terminal) ? terminal.payload : terminal).toMatchObject({
+      status: "ok",
+    });
+    expect(JSON.stringify(terminal)).toContain(expectedAnswer);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(steered ? 0 : 1);
+    expect(runAttempt).toHaveBeenCalledOnce();
   },
 );

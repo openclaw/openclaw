@@ -141,10 +141,10 @@ describe("chat pane startup worker copy", () => {
 
 describe("chat pane worker stop", () => {
   it.each([
-    [0, "device", "Runs on device", "Stop device worker…"],
-    [0, "profile", "Runs on Cloud", "Stop cloud worker…"],
-    [2, "profile", "device-service · device-profile", "Stop cloud worker…"],
-    [3, undefined, "Runs on worker", "Stop worker…"],
+    [0, "device", "Runs on device", "Stop work on device…"],
+    [0, "profile", "Runs on Cloud", "Stop cloud device…"],
+    [2, "profile", "device-service · device-profile", "Stop cloud device…"],
+    [3, undefined, "Runs on device", "Stop cloud device…"],
   ] as const)("presents startup worker %s/%s", (index, targetKind, label, stopLabel) => {
     const placement = startupPlacements[index];
     expect(
@@ -192,14 +192,14 @@ describe("chat pane worker stop", () => {
       ).toBe(true),
     );
     const stop = container.querySelector<HTMLButtonElement>(".chat-pane__placement-reclaim");
-    expect(stop?.textContent?.trim()).toBe("Stop device worker…");
+    expect(stop?.textContent?.trim()).toBe("Stop work on device…");
     stop?.click();
     const actions = await waitForConfirmDialogActions();
     expect(document.querySelector("openclaw-modal-dialog")?.textContent).toContain(
       "This will save workspace changes and stop this session’s worker",
     );
     expect(actions.querySelector(".btn.danger [aria-hidden=false]")?.textContent?.trim()).toBe(
-      "Stop worker",
+      "Stop",
     );
     answerConfirmDialog(actions, "confirm");
     await reclaim;
@@ -254,7 +254,7 @@ describe("chat pane worker stop", () => {
       answerConfirmDialog(actions, "confirm");
       await reclaim;
 
-      expect(actionText).toContain("Stop worker");
+      expect(actionText).toContain("Stop");
       expect(confirmation).toContain("Stop worker?");
       expect(confirmation).toContain("Send a new message to continue.");
       expect(pausesBeforeConfirmation).toBe(0);
@@ -265,7 +265,7 @@ describe("chat pane worker stop", () => {
       );
       expect(pane.context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
         session.key,
-        "Worker stop requested. Review the initial message before retrying.",
+        "Device stop requested. Review the initial message before retrying.",
         expect.objectContaining({
           readSessionPlacementRecovery: expect.any(Function),
           pauseSessionPlacementRecovery: expect.any(Function),

@@ -11,7 +11,7 @@ export type SessionRowAttention =
       icon: NonNullable<SessionAgentStatus["attention"]>;
       sourceSessionKey: string;
     }
-  | { kind: "error"; reason: string; sourceSessionKey: string; childLabel?: string };
+  | { kind: "error"; reason: string; sourceSessionKey: string };
 
 export function activeSessionAgentStatus(
   row: Pick<GatewaySessionRow, "agentStatus">,

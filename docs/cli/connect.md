@@ -15,7 +15,7 @@ in the existing node-host state, and runs the same runtime as
 
 ## Create a join command
 
-On the Gateway host, use admin credentials to mint a single-use join URL:
+On the Gateway’s computer, use an admin account to mint a single-use join URL:
 
 ```bash
 openclaw devices join-code

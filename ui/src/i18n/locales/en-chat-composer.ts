@@ -17,7 +17,7 @@ const catalog = {
         "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It will not be sent automatically.",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
-      emptyHint: "Write a message to send.",
+      emptyHint: "Type a message first.",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",
       sendingMessage: "Sending message...",
@@ -62,18 +62,18 @@ const catalog = {
         toolAccess: {
           loadFailed: "Couldn’t load tools.",
         },
-        offlineBlocked: "Connect to the gateway to change session capabilities.",
+        offlineBlocked: "Reconnect to change tools for this session.",
         adminBlocked: "Admin access is required to manage MCP servers.",
-        savingBlocked: "Wait for the current session capability change to finish.",
+        savingBlocked: "Saving… try again in a moment.",
       },
       overrides: {
         count: "{count} overrides",
         countOne: "{count} override",
-        clear: "Clear session overrides",
+        clear: "Reset this session’s changes",
       },
       contextUsage: {
         title: "Context usage details",
-        open: "Open context usage details",
+        percentUsed: "Context: {pct}% used",
         summary: "Session context usage: {used} of {limit} ({pct}%)",
         contextWindow: "Context window",
         promptBudget: "Prompt budget",
@@ -92,6 +92,10 @@ const catalog = {
         limitWeekly: "Weekly",
         limitDaily: "Daily",
         limitHours: "{hours}-hour",
+        compact: "Compact",
+        compacting: "Compacting",
+        compactDescription: "Summarizes older messages to free up space.",
+        compactAfterRun: "Available after this reply finishes.",
       },
       takePhoto: "Take photo",
       cameraAccessFailed: "Unable to access the camera.",
@@ -129,8 +133,8 @@ const catalog = {
       openRealtimeTalkSettings: "Talk settings",
       openDictationSettings: "Transcription setup",
       configureCapability: "Configure",
-      holdToRecordSetting: "Hold microphone button to start dictation",
-      holdToDictate: "Hold to start dictation",
+      holdToRecordSetting: "Hold the mic button to dictate",
+      holdToDictate: "Hold to dictate",
       holdToRecordSettingDescription:
         "Hold until dictation starts, then release and keep speaking. Tap Stop to insert the transcript.",
       dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
@@ -155,7 +159,7 @@ const catalog = {
       selectedCameraUnavailable:
         "The selected camera is unavailable. Choose another camera or System default.",
       startVoiceInput: "Start voice input",
-      voiceGestureHint: "Tap to talk · Hold to start dictation",
+      voiceGestureHint: "Tap for voice chat · Hold to dictate",
       stillListening: "Still listening",
       stopVoiceInput: "Stop voice input",
       systemDefaultMicrophone: "System default",
@@ -197,6 +201,9 @@ const catalog = {
         "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
+      resume: "Resume",
+      clearPaused: "Clear",
+      clearPausedQueue: "Clear paused messages",
       removeQueuedMessage: "Remove queued message",
       reorderQueuedMessage: "Reorder queued message with the arrow keys",
       reorderUnavailable: "This message holds its place and cannot be reordered",
@@ -204,15 +211,19 @@ const catalog = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
-        applyingSettings: "Applying chat settings",
+        applyingSettings: "Applying session settings",
         blockedByReview:
           "Queue paused. Review or discard the earlier held message in the conversation.",
+        pausedByStop: "Queue paused",
+        pausedByStopReason: "You stopped the run",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         editing: "Editing",
         needsReview: "Needs review",
       },
       imageCount: "Image ({count})",
+      annotationCount: "{count} annotation",
+      annotationsCount: "{count} annotations",
     },
     mentions: {
       menu: "Mention a person",
@@ -223,7 +234,7 @@ const catalog = {
       unavailable: "Could not load people. Try again.",
       accessDenied: "Mention access denied. Sign in or contact an admin.",
       profileUnavailable: "Profile unverified. Reconnect or contact an admin.",
-      rejected: "Mention search rejected. Check access or use another chat.",
+      rejected: "Mention search rejected. Check access or use another session.",
       limit: "You can mention up to 10 people per message.",
       selectedLabel: "Will notify",
       selected: "Will notify: {names}",
@@ -231,7 +242,7 @@ const catalog = {
       restoreFailed:
         "Mention selection could not be restored. Edit this message and select its recipients again.",
       unsupported:
-        "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
+        "Human mentions are not available in this mode. Remove the selected mentions or send from a normal session.",
     },
     permissions: {},
     voice: {
@@ -255,11 +266,11 @@ const catalog = {
         "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",
     },
-    outboxRecoveryReviewTitle: "Review in this chat?",
+    outboxRecoveryReviewTitle: "Review in this session?",
     outboxRecoveryConfirm: "Add this saved copy to “{chat}” for review? Nothing will be sent.",
     outboxRecoveryRestore: "Restore",
     outboxRecoveryConflict:
-      "Keep or clear the draft and pending messages in this chat first, or open another non-Incognito chat. Your saved copy is unchanged.",
+      "Keep or clear the draft and pending messages in this session first, or open another non-Incognito session. Your saved copy is unchanged.",
     outboxRecoveryStorageFailed:
       "We could not access your saved messages. Reload to try again. Do not clear browser site data if you want to keep them.",
     outboxRecoveryFull:
@@ -276,7 +287,7 @@ const catalog = {
     outboxRecoveryDelete: "Delete",
     outboxRecoveryDeleteTitle: "Delete this saved copy?",
     outboxRecoveryDeleteConfirm:
-      "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a chat will not be deleted.",
+      "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a session will not be deleted.",
     outboxRecoveryDeleteConflict:
       "This saved copy changed while you were reviewing it. Nothing was deleted. Reload and review it again.",
     attachments: {
@@ -286,6 +297,7 @@ const catalog = {
       download: "Download",
       expand: "Open {filename} in the side panel",
       open: "Open",
+      chooseLinkedFile: "Browse Files to choose “{path}”. This attachment stays open.",
       previewUnavailable: "Preview unavailable",
       textPreviewUnavailable:
         "Could not preview this file. Text previews require UTF-8 files up to 256 KiB. Download it to read the full file.",
@@ -309,6 +321,9 @@ const catalog = {
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
       failureDeliveryFailed: "Delivery failed. Try sending this file again.",
+      failureFileTooLarge: "Too large to attach. Look for this file in Files.",
+      findInFiles: "Find in Files",
+      findInFilesFor: "Find {name} in Files",
       failureInvalidReference:
         "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",

@@ -4,14 +4,15 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection-shared.js";
 import {
-  buildConfiguredModelCatalog,
-  resolveConfiguredModelRef,
-} from "../agents/model-selection-shared.js";
-import { resolveConfiguredThinkingDefaultCore } from "../agents/model-thinking-default-core.js";
+  buildThinkingCatalog,
+  resolveConfiguredThinkingDefaultCore,
+} from "../agents/model-thinking-default-core.js";
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatGatewayNodePrefixStartupWarning } from "../daemon/node-version-prefix.js";
 import {
   inspectGatewayServiceInstallationDrift,
   summarizeGatewayServiceLayout,
@@ -93,6 +94,17 @@ export async function logGatewayStartup(params: {
     }
   } catch {
     // Optional PATH/package inspection must never prevent Gateway startup.
+  }
+  try {
+    const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+    const nodePrefixSkew = packageRoot
+      ? formatGatewayNodePrefixStartupWarning({ nodePath: process.execPath, packageRoot })
+      : undefined;
+    if (nodePrefixSkew) {
+      params.log.warn(nodePrefixSkew);
+    }
+  } catch {
+    // Version-prefix detection must never prevent Gateway startup.
   }
   const sqliteLibrary = ensureSqliteLibrarySelected();
   params.log.info(
@@ -210,7 +222,7 @@ function formatAgentModelStartupDetails(params: {
   const soleAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
   let thinking = resolveConfiguredThinkingDefaultCore({ ...params, agentId: soleAgentId });
   if (thinking === undefined) {
-    const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+    const configuredCatalog = buildThinkingCatalog(params);
     // Catalog reasoning=false is authoritative; avoid loading provider policy artifacts
     // only to discard their default below.
     if (

@@ -94,7 +94,7 @@ describe("ModelProvidersPage profile actions", () => {
 
     await waitForSolid(() => {
       expect(page.view.props.authStatus?.unavailable?.code).toBe("PREPARED_MODEL_AUTH_UNAVAILABLE");
-      expect(toast.toast?.message).toBe(warning);
+      expect(toast.toasts[0]?.options.message).toBe(warning);
     });
     await toast.updateComplete;
     await vi.dynamicImportSettled();
@@ -275,7 +275,7 @@ describe("ModelProvidersPage profile actions", () => {
       const { modal: initialModal, dialog } = await openConfirmation();
       let modal = initialModal;
       expect(page.renderRoot.contains(modal)).toBe(false);
-      expect(dialog.getAttribute("aria-label")).toBe("Log out work@example.com");
+      expect(dialog.getAttribute("aria-label")).toBe("Log out work@example.com?");
       expectContent(modal, ["work@example.com"]);
       expect(requestCount(request, "models.authLogout")).toBe(0);
       click(modal, "button[autofocus]");
@@ -583,7 +583,7 @@ describe("Models account recovery", () => {
         await waiting.promise;
         if (outcome === "cancel") {
           await waitForText(page, "openclaw-modal-dialog", "Checking your model setup");
-          click(page, ".model-setup-wizard__footer button");
+          click(page, ".model-setup-wizard .oc-dialog__close");
           await waitForSolid(() => expectAbsent(page, "openclaw-modal-dialog"));
         } else {
           h.setConfiguredModel(newSelection);
@@ -628,9 +628,9 @@ describe("Models account recovery", () => {
       if (outcome === "cancel") {
         await waitForSolid(() => {
           expect(requestCount(request, "wizard.next")).toBe(1);
-          expectPresent(page, ".model-setup-wizard__footer button");
+          expectPresent(page, ".model-setup-wizard .oc-dialog__close");
         });
-        click(page, ".model-setup-wizard__footer button");
+        click(page, ".model-setup-wizard .oc-dialog__close");
         await waitForSolid(() => expectAbsent(page, "openclaw-modal-dialog"));
         expect(requestCount(request, "wizard.cancel")).toBeGreaterThan(0);
       } else {

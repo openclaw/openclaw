@@ -11,10 +11,8 @@ import type {
 } from "../../state/worker-operation-registry.js";
 import type { PreparedEnvironmentSelection } from "./environment-record.js";
 import type { PlacementLifecycleReceipt } from "./placement-lifecycle.types.js";
-import {
-  createPlacementMoveOps,
-  readWorkerPlacementMovesReadOnly,
-} from "./placement-move-intent.js";
+import { createPlacementMoveOps } from "./placement-move-intent.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-row-codec.js";
 import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
 import {
   nextGeneration,

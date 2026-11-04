@@ -16,6 +16,7 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
 import {
@@ -70,7 +71,6 @@ import { withMessageOperationRoute } from "./message-operation-route.js";
 import { respondError } from "./response.js";
 import {
   resolveGatewayOutboundTarget,
-  resolveMessageActionRuntimeConfig,
   resolveRequestedChannel,
 } from "./send-channel-resolution.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -82,6 +82,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     respond,
     context,
     client,
+    signal,
     sessionMutationCommitGuard,
   }) => {
     if (!assertValidParams(request, validateMessageActionParams, "message.action", respond)) {
@@ -151,8 +152,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         const { cfg: selectedCfg, channel } = resolved;
-        const cfg =
-          trustedContext.messageActionConfig ?? resolveMessageActionRuntimeConfig(selectedCfg);
+        const cfg = trustedContext.messageActionConfig ?? selectLiveRuntimeConfig(selectedCfg);
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         const canonicalAction =
           ((request.action === "send" &&
@@ -299,6 +299,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 action: request.action as never,
                 cfg,
                 params: request.params,
+                abortSignal: signal,
                 reply: request.reply,
                 accountId,
                 // Only the model's message tool mints an agent-runtime turn context, and

@@ -398,6 +398,27 @@ it("keeps unresolved, project, external and artifact homonyms distinct", () => {
   expect(workspaceCatalogSearch(listing, "")).toEqual([]);
 });
 
+it("searches local Files candidates with sigma equivalence and literal separators", () => {
+  const file = "ΕΛΕΓΧΟΣ/A  B.md";
+  const listing = catalogListing([workspaceFile(file, "modified")], {
+    artifacts: [artifact("report", "ΕΛΕΓΧΟΣ")],
+    browser: {
+      path: "",
+      search: "unrelated",
+      entries: [{ path: "stale.md", name: "stale.md", kind: "file" }],
+    },
+  });
+  for (const query of ["Σ", "σ", "ς", "  Σ  "]) {
+    expect(workspaceCatalogSearch(listing, query).map((entry) => entry.path)).toEqual([
+      file,
+      "ΕΛΕΓΧΟΣ",
+    ]);
+  }
+  expect(workspaceCatalogSearch(listing, "A  B.md")).toHaveLength(1);
+  expect(workspaceCatalogSearch(listing, "A B.md")).toEqual([]);
+  expect(workspaceCatalogSearch(listing, "A--B.md")).toEqual([]);
+});
+
 it.each([
   ["types.d.ts", "types", ".d.ts"],
   ["backup.tar.gz", "backup", ".tar.gz"],

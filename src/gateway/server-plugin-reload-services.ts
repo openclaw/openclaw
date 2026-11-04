@@ -17,8 +17,11 @@ export function createPluginReloadServices(
     | "pluginMetadataSnapshot"
   >,
   stopServices: ReturnType<typeof createPluginReloadCleanup>["stopPreviousServices"],
+  previousConfig: OpenClawConfig,
 ) {
   const generation = runtime.kernel.pluginRuntimeGeneration;
+  const previousServices = generation.currentServices();
+  const previousRegistry = runtime.pluginRuntime.registry;
   const start = (
     registry: PluginRegistry,
     config: OpenClawConfig,
@@ -44,6 +47,32 @@ export function createPluginReloadServices(
     // The still-published metadata cache retires at publication with its lazily loaded registries.
     prepareMemory: (previous: PluginRegistry, next: PluginRegistry) =>
       prepareMemoryRuntimeReload(previous, next, runtime.pluginMetadataSnapshot),
+    stopForReplacement(
+      pluginIds: ReadonlySet<string>,
+      restartMemoryIds: ReadonlySet<string>,
+      hasResourceHandoff: boolean,
+      stopOwner: (strict: boolean, label: string, run: () => Promise<void>) => Promise<void>,
+    ) {
+      const strict = hasResourceHandoff || restartMemoryIds.size > 0;
+      const selected = new Set([...pluginIds, ...restartMemoryIds]);
+      return stopOwner(strict, "Plugin service cleanup failed", () =>
+        stopServices(generation.currentServices(), strict, selected),
+      );
+    },
+    prepareRetirement(pluginIds: ReadonlySet<string>, stopHooks: () => Promise<void>) {
+      // Never resolve current services from a delayed predecessor cleanup.
+      return async () => {
+        await stopServices(previousServices, true, pluginIds);
+        await stopHooks();
+      };
+    },
+    async retainFailedCandidate(candidate: PluginServicesHandle, restorePrevious: boolean) {
+      // Retained attempts moved here; preserve custody even if restoration fails.
+      generation.setServices(candidate);
+      if (restorePrevious) {
+        await start(previousRegistry, previousConfig, (handle) => generation.setServices(handle));
+      }
+    },
     async resumeMemory(
       memory: ReturnType<typeof prepareMemoryRuntimeReload> | undefined,
       config: OpenClawConfig,

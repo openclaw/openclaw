@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
@@ -22,8 +23,10 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
+import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
+import { recordSessionOperatorSource } from "../session-operator-sources.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
@@ -35,7 +38,7 @@ import { createChatSendDashboardAuthority } from "./chat-send-dashboard-authorit
 import { readChatSendDiagnostics, startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
-import { acknowledgeWorkerGoal } from "./chat-send-goal-ack.js";
+import { acknowledgeCodexGoal } from "./chat-send-goal-ack.js";
 import {
   createChatSendGoalCommitGuard,
   requiresRuntimeApprovedChatInput,
@@ -52,6 +55,7 @@ import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.j
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mediaDocumentContextLoader = createLazyImportLoader(
@@ -116,10 +120,10 @@ export async function handleChatSendWithStorage(
     lifecycleGeneration,
     messageInjectionTarget,
   } = admission;
+  diagnostics.setRunIdentity(admittedSessionId, clientRunId);
   const phase = diagnostics.scope("attachments");
   const preparedAttachments = await prepareChatSendAttachments({
     ...setup,
-    client,
     respond,
     context,
   });
@@ -216,9 +220,9 @@ export async function handleChatSendWithStorage(
           sessionMutationCommitGuard,
         })
       : undefined;
-    const workerGoalCommitted = admission.workerGoalAdmission ? createDeferredCore() : undefined;
+    const codexGoalCommitted = admission.codexGoalAdmission ? createDeferredCore() : undefined;
     const userTurn = createGatewayChatUserTurnController({
-      onMessagePersisted: workerGoalCommitted?.resolve,
+      onMessagePersisted: codexGoalCommitted?.resolve,
       ...setup,
       client,
       commitInitialInput,
@@ -329,7 +333,7 @@ export async function handleChatSendWithStorage(
     phase?.mark("persist");
     let approvedInput: PersistedUserTurnMessage | undefined;
     const stageInput =
-      admission.workerGoalAdmission ||
+      admission.codexGoalAdmission ||
       Boolean(
         entry?.sessionId &&
         userTurn.baseInput.display !== false &&
@@ -450,6 +454,14 @@ export async function handleChatSendWithStorage(
         return;
       }
     }
+    // Steering and queued input never reach agent preparation; existing entries record here.
+    await recordSessionOperatorSource({
+      agentId: session.agentId,
+      sessionKey,
+      storePath,
+      authority: admission.operatorAuthority,
+      log: context.logGateway,
+    });
     if (approvedInput) {
       preparedUserTurn.applyApprovedText(
         extractTextFromChatContent(approvedInput.content, {
@@ -570,11 +582,15 @@ export async function handleChatSendWithStorage(
     admission.setDiscardAbandonedPreparedMedia(undefined);
     phase?.mark("response");
     admission.markInputAccepted();
-    if (!admission.workerGoalAdmission) {
+    if (readGatewayRequestMutationAuthority(handlerOptions).family === "worker") {
+      acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
+    }
+    if (!admission.codexGoalAdmission) {
       respond(true, ackPayload, undefined, { runId: clientRunId });
     }
     phase?.finish();
     diagnostics.acknowledge();
+    using dispatchHandoff = diagnostics.scope("detail.dispatch.accepted_handoff");
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     // Dispatch owns execution from this point, including deferred and collected turns.
@@ -629,16 +645,19 @@ export async function handleChatSendWithStorage(
         persistBestEffort: persistGatewayUserTurnTranscriptBestEffort,
       },
     };
-    // Accepted work retains its source authority; the spawning tool and turn no longer
-    // own reply preparation while the new runtime establishes its own caller context.
-    const dispatched = withoutGatewayToolCallerIdentity(() =>
-      runOutsideOperatorToolGatewayAuthority(() => startChatDispatch(dispatch)),
+    // Accepted input owns source authority, not the spawning turn's finite plugin lease.
+    // Preserve the admitting Gateway while the child establishes its own runtime custody.
+    const dispatched = runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+      withoutGatewayToolCallerIdentity(() =>
+        runOutsideOperatorToolGatewayAuthority(() => startChatDispatch(dispatch)),
+      ),
     );
+    dispatchHandoff?.finish();
     admittedCleanup.dispatched = true;
-    if (workerGoalCommitted) {
-      await acknowledgeWorkerGoal({
+    if (codexGoalCommitted) {
+      await acknowledgeCodexGoal({
         dispatch,
-        committed: workerGoalCommitted.promise,
+        committed: codexGoalCommitted.promise,
         dispatched,
         ackPayload,
         respond,
