@@ -131,7 +131,7 @@ describe("system.info", () => {
     eventLoop.cpuCoreRatio = 0.6;
     readCpus.mockReturnValue([]);
     vi.mocked(Date.now).mockReturnValue(sampleTime + 1_999);
-    vi.mocked(performance.now).mockReturnValue(sampleElapsed + 1_999);
+    vi.spyOn(performance, "now").mockReturnValue(sampleElapsed + 1_999);
     await request();
 
     expect(respond).toHaveBeenCalledTimes(2);
