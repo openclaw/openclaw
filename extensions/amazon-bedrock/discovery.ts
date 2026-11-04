@@ -93,6 +93,8 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "zai.glm-5": 128_000,
   "zai.glm-4.7": 128_000,
   "zai.glm-4.7-flash": 128_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-5-3.html
+  "zai.glm-5.3": 1_000_000,
   "qwen.qwen3-coder-next": 256_000,
   "qwen.qwen3-coder-30b-a3b-v1:0": 256_000,
   "qwen.qwen3-32b-v1:0": 128_000,

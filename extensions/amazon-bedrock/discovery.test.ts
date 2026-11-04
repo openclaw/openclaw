@@ -393,6 +393,16 @@ it("uses the plugin default when both region env overrides are blank", async () 
   expectModel(provider?.models ?? [], "xai.grok-4.6", { contextWindow: 500_000, maxTokens: 4096 });
 });
 
+it("uses the documented GLM 5.3 context window for base and prefixed profile ids", async () => {
+  const models = await discoverFixture(
+    [foundation("zai.glm-5.3")],
+    [profile("us.zai.glm-5.3", ["zai.glm-5.3"])],
+    { region: "us-east-1" },
+  );
+  expectModel(models, "zai.glm-5.3", { contextWindow: 1_000_000, maxTokens: 4096 });
+  expectModel(models, "us.zai.glm-5.3", { contextWindow: 1_000_000, maxTokens: 4096 });
+});
+
 // Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix
 it("resolves au. and apac. prefixes for regional inference profiles", async () => {
   const models = await discoverFixture(
