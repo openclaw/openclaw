@@ -38,6 +38,16 @@ export function projectWorkerAssistantContent(part: AssistantMessage["content"][
 }
 
 export function projectWorkerTokenUsage(usage: Usage) {
+  const cost: Usage["cost"] = {};
+  for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
+    const amount = usage.cost[key];
+    if (amount !== undefined) {
+      cost[key] = amount;
+    }
+  }
+  if (usage.cost.totalOrigin) {
+    cost.totalOrigin = usage.cost.totalOrigin;
+  }
   return {
     input: usage.input,
     output: usage.output,
@@ -45,13 +55,6 @@ export function projectWorkerTokenUsage(usage: Usage) {
     cacheWrite: usage.cacheWrite,
     totalTokens: usage.totalTokens,
     ...(usage.usageReport ? { usageReport: { ...usage.usageReport } } : {}),
-    cost: {
-      input: usage.cost.input,
-      output: usage.cost.output,
-      cacheRead: usage.cost.cacheRead,
-      cacheWrite: usage.cost.cacheWrite,
-      total: usage.cost.total,
-      ...(usage.cost.totalOrigin ? { totalOrigin: usage.cost.totalOrigin } : {}),
-    },
+    cost,
   };
 }

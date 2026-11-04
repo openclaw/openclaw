@@ -1,3 +1,4 @@
 # Exact owned qualification coverage beyond the three prepared E01 stages.
 # 33 real chat UI + 30 typed-fixture/persistence lines; 104 net endpoint/usage/worker/registry qualification lines.
-167
+# 36 partial-cost JSON wire/launch identity regression lines.
+203
