@@ -31,6 +31,7 @@ import type {
   WorkerPlacementAuthorization,
   WorkerPlacementDispatchRequest,
 } from "./service-contract.js";
+import { requireWorkerProfile } from "./service-validation.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
@@ -427,7 +428,11 @@ export function createWorkerPlacementDispatchStartup(options: {
       }
       assertWorkspaceCurrent();
       const runProjectLifecycleCommand = environments.runProjectLifecycleCommand;
-      if (preparation?.recipe && preparation.runSetupScript !== false) {
+      if (
+        preparation?.recipe &&
+        preparation.runSetupScript !== false &&
+        requireWorkerProfile(params.environment.profileSnapshot.settings).runSetupScript !== false
+      ) {
         params.markPhase?.("lifecycleCommands");
         await runWorkerProjectLifecycle({
           recipe: preparation.recipe,

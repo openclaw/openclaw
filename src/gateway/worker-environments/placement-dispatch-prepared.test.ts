@@ -83,6 +83,7 @@ async function preparedHarness(
     protocolFeatures?: string[];
     executionMode?: WorkerPlacementExecutionMode;
     emptyWorkspace?: boolean;
+    runSetupScript?: boolean;
     repository?: SessionRepositoryWorkspaceRecord & { baseCommit: string };
     recipe?: EnvironmentRecipe;
     lifecycleFailure?: boolean;
@@ -146,7 +147,8 @@ async function preparedHarness(
         },
       }
     : { key: "d".repeat(64), baseCommit: "e".repeat(40), root: "/gateway/workspace" };
-  const profile = { settings: { region: "test" }, executionMode };
+  const settings = { region: "test", runSetupScript: options.runSetupScript };
+  const profile = { settings, executionMode };
   const intent: WorkerProviderPreparedIntent = {
     providerId: "fake",
     profileSnapshot: options.emptyWorkspace
@@ -513,12 +515,15 @@ describe("prepared worker dispatch", () => {
     postStart: ["post-start"],
   };
 
-  it.each([true, false])(
-    "runs first-binding lifecycle after session sync and before activation (reserve=%s)",
-    async (reserve) => {
+  it.each([true, false, "disabled"] as const)(
+    "runs admitted lifecycle after sync before activation (reserve=%s)",
+    async (reserveMode) => {
+      const reserve = reserveMode === true;
+      const runSetupScript = reserveMode !== "disabled";
       const { harness, request, ready, store } = await preparedHarness({
         reserve,
         recipe: lifecycleRecipe,
+        runSetupScript,
       });
       const previousDiagnostics = areDiagnosticsEnabledForProcess();
       setDiagnosticsEnabledForProcess(true);
@@ -574,7 +579,9 @@ describe("prepared worker dispatch", () => {
           }),
         }),
       );
-      expect(harness.log.filter((phase) => phases.includes(phase))).toEqual(phases);
+      expect(harness.log.filter((phase) => phases.includes(phase))).toEqual(
+        phases.filter((phase) => runSetupScript || !phase.startsWith("lifecycle:")),
+      );
       const tunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]!.value;
       expect(tunnel.launchTurn).not.toHaveBeenCalled();
     },
