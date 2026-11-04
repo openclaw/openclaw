@@ -2,7 +2,7 @@ import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
-export const POSITION_RAIL_MARKER_HEIGHT = 12;
+export const POSITION_RAIL_MARKER_HEIGHT = 10;
 const POSITION_RAIL_MARKER_OVERSCAN = 6;
 
 export function positionRailWindowIndexes(

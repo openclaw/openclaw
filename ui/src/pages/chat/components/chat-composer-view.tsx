@@ -409,7 +409,7 @@ export function renderChatComposerView(
             ]}
             aria-busy={props.disabledReasonBusy ? "true" : "false"}
             data-composer-layout={mobileResting() ? "single-line" : undefined}
-            data-incognito={props.selectedSession?.incognito ? "true" : undefined}
+            data-incognito={props.incognito ? "true" : undefined}
             onOpenclaw-composer-dismiss-invocations={() => {
               context().state.slashMenu.reset();
               context().state.skillMenu.reset();

@@ -69,12 +69,12 @@ type AgentCapabilityState = {
 
 export type AgentCapability = ReturnType<typeof createAgentCapability>;
 
-function resolveAgentReadErrorMessage(
+async function resolveAgentReadErrorMessage(
   err: unknown,
   target: "agent list" | "effective tools",
-): string {
+): Promise<string> {
   return isMissingOperatorReadScopeError(err)
-    ? formatMissingOperatorReadScopeMessage(target)
+    ? await formatMissingOperatorReadScopeMessage(target, formatUiError(err))
     : formatUiError(err);
 }
 
@@ -87,7 +87,7 @@ export async function readToolsEffective(
   try {
     return await client.request<ToolsEffectiveResult>("tools.effective", params);
   } catch (error) {
-    throw new Error(resolveAgentReadErrorMessage(error, "effective tools"), { cause: error });
+    throw new Error(await resolveAgentReadErrorMessage(error, "effective tools"), { cause: error });
   }
 }
 
@@ -194,14 +194,18 @@ export function createAgentCapability(gateway: AgentGateway) {
             complete({ result });
           }
         },
-        (err: unknown) => {
+        async (err: unknown) => {
           if (agentsRequest === request) {
+            const message = await resolveAgentReadErrorMessage(err, "agent list");
+            if (agentsRequest !== request) {
+              return;
+            }
             if (isMissingOperatorReadScopeError(err)) {
               state.agentsList = null;
               retireFileRequests();
               files.clear();
             }
-            state.agentsError = resolveAgentReadErrorMessage(err, "agent list");
+            state.agentsError = message;
             complete({ error: state.agentsError });
           }
         },

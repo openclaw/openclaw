@@ -16,6 +16,7 @@ const catalog = {
       copyRelativePath: "Copy relative path",
       downloadToView: "Download this file to view it on your device.",
       discard: "Discard",
+      discardBody: "If you discard them, they’re lost.",
       editFile: "Edit file",
       downloadFile: "Download file",
       downloading: "Downloading…",

@@ -358,8 +358,8 @@ const enSettings = {
       unsaved: "Unsaved changes",
       unsavedWithDetail: "Unsaved changes · {detail}",
       saved: "Saved",
-      unsavedTitle: "Unsaved changes",
-      unsavedMessage: "Your changes to {channel} aren't saved yet.",
+      unsavedTitle: "Save changes to {channel}?",
+      unsavedMessage: "If you discard them, they’re lost.",
       unsavedOnLeave: "{channel} has unsaved changes",
       unsavedOnLeaveMany: "{channels} have unsaved changes",
       discard: "Discard",
@@ -1196,16 +1196,17 @@ const enSettings = {
     logout: {
       action: "Log out",
       actionFor: "Log out {account}",
+      title: "Log out {account}?",
       confirm:
-        "Remove the saved sign-in for {provider} from OpenClaw? You can add this account again later.",
+        "OpenClaw removes the saved sign-in for {provider}. You can add this account again later.",
       loggingOut: "Logging out…",
       done: "Logged out.",
     },
     remove: {
       action: "Remove provider",
-      title: "Remove {provider}",
+      title: "Remove {provider}?",
       accounts:
-        "Remove the saved accounts for {provider} available to this agent? Shared accounts are also removed for other agents that use them. Active runs for this provider on the selected agent may stop.",
+        "This removes the saved accounts for {provider} available to this agent. Shared accounts are also removed for other agents that use them. Active runs for this provider on the selected agent may stop.",
       keys: "Saved API keys for {key} and its configured aliases will also be deleted. Provider settings and external secrets stay in place.",
       kept: "Kept: {source}. Manage external credentials at their source to disconnect fully.",
       secretReferences: "Secret references in {keys}",

@@ -1278,6 +1278,7 @@ src/infra/sqlite-schema-lifetime.ts
 src/infra/sqlite-schema-mutation.ts
 src/infra/sqlite-schema-scope.ts
 src/infra/sqlite-schema-sql.ts
+src/infra/sqlite-snapshot-capacity-error.ts
 src/infra/sqlite-snapshot-diagnostics.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
