@@ -610,7 +610,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   }
 
   return {
-    async mentionable(client, input, publish) {
+    async mentionable(client, input, publish, displayProfileIds) {
       let preparationFailure: Result<never, ErrorShape> | undefined;
       try {
         // A committed profile change can invalidate preparation before this continuation runs.
@@ -628,7 +628,10 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         preparationFailure = mentionInboxUnavailable(log);
       }
       // Current policy selection and response publication must not cross another await.
-      publish(preparationFailure ?? readOperation(() => policy.mentionable(client, input)));
+      publish(
+        preparationFailure ??
+          readOperation(() => policy.mentionable(client, input, undefined, displayProfileIds)),
+      );
     },
     validateRecipients(client, input, profileIds) {
       warnMentionInboxDeprecation("validateRecipients");

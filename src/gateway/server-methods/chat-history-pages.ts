@@ -76,7 +76,7 @@ export async function readChatHistoryMessageById(input: ChatHistoryMessageParams
   });
 }
 
-export async function readChatHistoryPage(
+async function readChatHistoryPageUnprojected(
   input: ChatHistoryPageParams,
   signal?: AbortSignal,
 ): Promise<ChatHistoryPage> {
@@ -144,4 +144,26 @@ async function refreshForwardedLabels(messages: unknown[]): Promise<unknown[]> {
         await prepareForwardedMessageCronJobNameResolver(displayMessages),
       ),
   );
+}
+
+export type ChatHistoryMessageProjector = {
+  project: (messages: unknown[]) => Promise<unknown[]>;
+};
+
+/** Enrich only the admitted display copy, then budget the bytes actually sent. */
+export async function readChatHistoryPage(
+  input: ChatHistoryPageParams,
+  signal?: AbortSignal,
+  displayProjector?: ChatHistoryMessageProjector,
+) {
+  const page = await readChatHistoryPageUnprojected(
+    displayProjector ? { ...input, deferChannelUserDisplay: true } : input,
+    signal,
+  );
+  if (!displayProjector || page.encodedResponse) {
+    return page;
+  }
+  const messages = await displayProjector.project(page.messages);
+  signal?.throwIfAborted();
+  return encodeChatHistoryResponsePage({ ...page, messages }, prepareChatHistoryParams(input));
 }
