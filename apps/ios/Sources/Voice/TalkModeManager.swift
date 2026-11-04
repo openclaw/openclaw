@@ -35,6 +35,12 @@ enum TalkWatchPresentation: Equatable {
     case verbatim(String)
 }
 
+private struct FinishingMutedRecognition {
+    let recognitionGeneration: UInt64
+    let transcriptProcessingGeneration: UInt64
+    var timeoutTask: Task<Void, Never>?
+}
+
 private struct FinishingPushToTalk {
     let captureId: String
     let generation: UInt64
@@ -207,6 +213,8 @@ final class TalkModeManager {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognitionGeneration: UInt64 = 0
+    private var finishingMutedRecognition: FinishingMutedRecognition?
+    private let recognitionFinalizationSleep: @Sendable () async throws -> Void
     private var silenceTask: Task<Void, Never>?
     private var realtimeSession: TalkRealtimeWebRTCSession?
     private var activeRealtimeVoiceSession: TalkRealtimeVoiceSessionOwner?
@@ -415,13 +423,17 @@ final class TalkModeManager {
     init(
         allowSimulatorCapture: Bool = false,
         gatewaySpeechSynthesizer: (any TalkGatewaySpeechSynthesizing)? = nil,
-        audioSessionDeactivationAction: (@MainActor () throws -> Void)? = nil)
+        audioSessionDeactivationAction: (@MainActor () throws -> Void)? = nil,
+        recognitionFinalizationSleep: @escaping @Sendable () async throws -> Void = {
+            try await Task.sleep(for: .seconds(2))
+        })
     {
         // The Gateway owns speech language; discard the retired app preference.
         UserDefaults.standard.removeObject(forKey: "talk.speechLocale")
         self.allowSimulatorCapture = allowSimulatorCapture
         self.gatewaySpeechSynthesizerOverride = gatewaySpeechSynthesizer
         self.audioSessionDeactivationAction = audioSessionDeactivationAction
+        self.recognitionFinalizationSleep = recognitionFinalizationSleep
         self.preferredInputDeviceID = UserDefaults.standard.string(
             forKey: Self.preferredInputDeviceIDKey)
     }
@@ -561,14 +573,20 @@ final class TalkModeManager {
         self.realtimeSession?.setMicrophoneMuted(muted)
         self.realtimeRelaySession?.setMicrophoneMuted(muted)
         guard self.isEnabled else { return }
+        // A quick unmute/re-mute changes the desired input state without replacing the
+        // recognizer that is still finishing pre-mute audio. Normal resume applies it.
+        guard self.finishingMutedRecognition == nil else { return }
 
         if muted {
-            let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             let finishNativeTranscript = self.captureMode == .continuous &&
                 self.isListening && !self.hasRealtimeOwnerOrStart && !self.isSpeechOutputActive &&
                 self.continuousTranscriptProcessingGeneration != self.transcriptProcessingGeneration
             self.isListening = false
             self.isUserSpeechDetected = false
+            if finishNativeTranscript, self.recognitionRequest != nil {
+                self.beginMutedRecognitionFinalization()
+                return
+            }
             self.stopRecognition()
             if self.continuousTranscriptProcessingGeneration != self.transcriptProcessingGeneration {
                 self.silenceTask?.cancel()
@@ -576,10 +594,6 @@ final class TalkModeManager {
             }
             if let captureId = self.activePTTCaptureId {
                 _ = self.endPushToTalk(captureId: captureId)
-            } else if finishNativeTranscript, !transcript.isEmpty {
-                self.lastTranscript = ""
-                self.lastHeard = nil
-                await self.processContinuousTranscript(transcript)
             }
         } else if self.realtimeSession != nil || self.realtimeRelaySession != nil {
             self.isListening = self.phase == .listening
@@ -713,7 +727,7 @@ final class TalkModeManager {
     private func canBeginStart() -> Bool {
         guard self.isEnabled else { return false }
         guard self.captureMode != .pushToTalk else { return false }
-        guard self.finishingPushToTalk == nil else { return false }
+        guard self.finishingPushToTalk == nil, self.finishingMutedRecognition == nil else { return false }
         guard self.foregroundAudioCaptureAllowed else {
             self.setStatus(
                 String(localized: "Paused"),
@@ -885,7 +899,7 @@ final class TalkModeManager {
             }
             return OpenClawTalkPTTStartPayload(captureId: activePushToTalk.captureId)
         }
-        if self.finishingPushToTalk != nil {
+        if self.finishingPushToTalk != nil || self.finishingMutedRecognition != nil {
             throw Self.pushToTalkBusyError()
         }
         guard transcriptionOnly || self.gatewayConnected else { throw self.pushToTalkOfflineError() }
@@ -921,7 +935,10 @@ final class TalkModeManager {
         guard !self.isEnabled || !self.isMicrophoneMuted else {
             throw Self.pushToTalkModeConflictError()
         }
-        guard self.activePushToTalk == nil, self.finishingPushToTalk == nil else {
+        guard self.activePushToTalk == nil,
+              self.finishingPushToTalk == nil,
+              self.finishingMutedRecognition == nil
+        else {
             throw Self.pushToTalkBusyError()
         }
 
@@ -1417,17 +1434,23 @@ final class TalkModeManager {
             throw error
         }
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
-            self.handleRecognitionUpdate(
-                result: result,
-                error: error,
-                pttCaptureId: pttCaptureId,
-                recognitionGeneration: recognitionGeneration)
+            let transcript = result?.bestTranscription.formattedString
+            let isFinal = result?.isFinal == true
+            Task { @MainActor [weak self] in
+                await self?.handleRecognitionUpdate(
+                    transcript: transcript,
+                    isFinal: isFinal,
+                    error: error,
+                    pttCaptureId: pttCaptureId,
+                    recognitionGeneration: recognitionGeneration)
+            }
         }
     }
 
     private func updateMicLevel(_ level: Float, recognitionGeneration: UInt64) {
-        guard self.recognitionGeneration == recognitionGeneration else { return }
+        guard self.recognitionGeneration == recognitionGeneration,
+              self.finishingMutedRecognition == nil
+        else { return }
         // Smooth + clamp for UI, and keep it cheap.
         let raw = max(0, min(Double(level) * 10.0, 1.0))
         self.micLevel = (self.micLevel * 0.80) + (raw * 0.20)
@@ -1456,28 +1479,36 @@ final class TalkModeManager {
     }
 
     private func handleRecognitionUpdate(
-        result: SFSpeechRecognitionResult?,
+        transcript: String?,
+        isFinal: Bool,
         error: Error?,
         pttCaptureId: String?,
-        recognitionGeneration: UInt64)
+        recognitionGeneration: UInt64) async
     {
         guard self.recognitionGeneration == recognitionGeneration else { return }
         if let pttCaptureId, activePTTCaptureId != pttCaptureId {
             return
         }
+        if self.finishingMutedRecognition?.recognitionGeneration == recognitionGeneration {
+            // These results describe audio captured before mute. They must not enter
+            // the normal speech-interruption path or restart microphone capture.
+            if let transcript = transcript?.trimmedNonEmpty {
+                self.lastTranscript = transcript
+            }
+            if isFinal || error != nil {
+                await self.finishMutedRecognition(recognitionGeneration: recognitionGeneration)
+            }
+            return
+        }
         if let error, !self.handleRecognitionError(error) {
             return
         }
-        guard self.recognitionGeneration == recognitionGeneration, let result else { return }
-        let transcript = result.bestTranscription.formattedString
-        Task { @MainActor [weak self] in
-            guard let self, self.recognitionGeneration == recognitionGeneration else { return }
-            await self.handleTranscript(
-                transcript: transcript,
-                isFinal: result.isFinal,
-                pttCaptureId: pttCaptureId,
-                recognitionGeneration: recognitionGeneration)
-        }
+        guard self.recognitionGeneration == recognitionGeneration, let transcript else { return }
+        await self.handleTranscript(
+            transcript: transcript,
+            isFinal: isFinal,
+            pttCaptureId: pttCaptureId,
+            recognitionGeneration: recognitionGeneration)
     }
 
     /// Returns false for cancellation, whose callback must not process a result.
@@ -1544,6 +1575,7 @@ final class TalkModeManager {
 
     private func canRestartNativeRecognition(expectedGeneration: UInt64) -> Bool {
         self.recognitionGeneration == expectedGeneration &&
+            self.finishingMutedRecognition == nil &&
             self.isEnabled &&
             !self.isMicrophoneMuted &&
             self.captureMode == .continuous &&
@@ -1553,14 +1585,71 @@ final class TalkModeManager {
             self.realtimeRelayStartGeneration == nil
     }
 
+    private func beginMutedRecognitionFinalization() {
+        let generation = self.recognitionGeneration
+        self.silenceTask?.cancel()
+        self.silenceTask = nil
+        self.finishingMutedRecognition = FinishingMutedRecognition(
+            recognitionGeneration: generation,
+            transcriptProcessingGeneration: self.transcriptProcessingGeneration)
+        // End capture before endAudio: Speech can finish buffered words, but cannot
+        // receive samples spoken after the mute. Do not cancel its task yet.
+        self.stopRecognitionInput()
+        self.recognitionRequest?.endAudio()
+        let sleep = self.recognitionFinalizationSleep
+        self.finishingMutedRecognition?.timeoutTask = Task { @MainActor [weak self] in
+            do {
+                try await sleep()
+                try Task.checkCancellation()
+            } catch {
+                return
+            }
+            guard let self,
+                  self.finishingMutedRecognition?.recognitionGeneration == generation
+            else { return }
+            // Settlement must not cancel its own task before dispatching the fallback.
+            self.finishingMutedRecognition?.timeoutTask = nil
+            await self.finishMutedRecognition(recognitionGeneration: generation)
+        }
+    }
+
+    private func finishMutedRecognition(recognitionGeneration: UInt64) async {
+        guard let finishing = self.finishingMutedRecognition,
+              finishing.recognitionGeneration == recognitionGeneration,
+              self.recognitionGeneration == recognitionGeneration
+        else { return }
+        let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let canSubmit = self.isEnabled && self.captureMode == .continuous &&
+            self.foregroundAudioCaptureAllowed &&
+            self.transcriptProcessingGeneration == finishing.transcriptProcessingGeneration
+        self.stopRecognition()
+        self.lastTranscript = ""
+        self.lastHeard = nil
+        if canSubmit, !transcript.isEmpty {
+            await self.processContinuousTranscript(transcript)
+        } else {
+            self.scheduleContinuousResume(self.isEnabled)
+        }
+    }
+
     private func stopRecognition() {
-        // Speech may deliver buffered callbacks after cancellation. Advancing the
-        // owner before teardown makes every old callback and audio-level task inert.
+        let inputAlreadyEnded = self.finishingMutedRecognition != nil
+        self.finishingMutedRecognition?.timeoutTask?.cancel()
+        self.finishingMutedRecognition = nil
+        self.stopRecognitionInput()
+        // Speech may deliver buffered callbacks after cancellation. Retire the
+        // generation before canceling so those callbacks cannot affect a new capture.
         self.recognitionGeneration &+= 1
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
-        self.recognitionRequest?.endAudio()
+        if !inputAlreadyEnded {
+            self.recognitionRequest?.endAudio()
+        }
         self.recognitionRequest = nil
+        self.speechRecognizer = nil
+    }
+
+    private func stopRecognitionInput() {
         self.micLevel = 0
         self.lastAudioActivity = nil
         self.noiseFloorSamples.removeAll(keepingCapacity: true)
@@ -1570,7 +1659,6 @@ final class TalkModeManager {
             self.inputTapInstalled = false
         }
         self.audioEngine.stop()
-        self.speechRecognizer = nil
     }
 
     private func stopNativeCaptureAndDiscardTranscript() {
@@ -2988,7 +3076,10 @@ final class TalkModeManager {
     }
 
     private func startSpeechInterruptionRecognitionIfNeeded(context: String = "speak") {
-        guard self.interruptOnSpeech, !self.isEnabled || !self.isMicrophoneMuted else { return }
+        guard self.interruptOnSpeech,
+              self.finishingMutedRecognition == nil,
+              !self.isEnabled || !self.isMicrophoneMuted
+        else { return }
         do {
             try self.startRecognition()
         } catch {
@@ -4424,11 +4515,13 @@ extension TalkModeManager {
         _ transcript: String,
         isFinal: Bool,
         pttCaptureId: String?,
-        recognitionGeneration: UInt64) async
+        recognitionGeneration: UInt64,
+        error: Error? = nil) async
     {
-        await self.handleTranscript(
+        await self.handleRecognitionUpdate(
             transcript: transcript,
             isFinal: isFinal,
+            error: error,
             pttCaptureId: pttCaptureId,
             recognitionGeneration: recognitionGeneration)
     }

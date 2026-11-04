@@ -39,7 +39,10 @@ working, speaking, connection, and error statuses remain visible.
 The choice survives Talk restarts until you unmute or restart the app;
 standalone push-to-talk remains available after ending Talk.
 
-Native Talk finishes already-recognized words before pausing recognition.
+Native Talk stops audio input immediately and lets already-captured speech finish
+transcription before submitting it. If recognition errors or does not finish within
+two seconds, it submits the latest partial transcript. A quick unmute takes effect
+when that pending native turn finishes. Ending Talk discards pending recognition.
 Realtime relay sends silence, and WebRTC disables only the outgoing audio
 track. Realtime capture stays open, so the iOS microphone indicator may remain
 visible while muted.
