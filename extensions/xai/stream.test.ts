@@ -6,6 +6,9 @@ import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import { captureXaiRequest, xaiModel } from "./test-helpers.js";
 
+const PNG_B64 = "data:image/png;base64,QUJDRA==";
+const GIF_B64 = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
 function patchPayload<T extends Record<string, unknown>>(
   payload: T,
   model: Partial<Model<"openai-responses">> = {},
@@ -36,9 +39,9 @@ async function projectAsync(
   return payload.input;
 }
 
-const toolOutput = (output: unknown, callId = "call_1") => ({
+const toolOutput = (output: unknown, call_id = "call_1") => ({
   type: "function_call_output",
-  call_id: callId,
+  call_id,
   output,
 });
 const inputText = (text: string) => ({ type: "input_text", text });
@@ -54,30 +57,31 @@ const toolCall = (call_id: string) => ({
   name: "read",
   arguments: "{}",
 });
-const imagePart = (image_url = "data:image/png;base64,QUJDRA==") => ({
-  type: "input_image",
-  image_url,
-});
+const imagePart = (image_url = PNG_B64) => ({ type: "input_image", image_url });
 
 it.each([
   { modelId: "grok-4-0709", target: "grok-4-fast", supported: true },
   { modelId: "grok-4.3", target: "grok-4.3", supported: false },
 ])("publishes the actual Fast mapping for $modelId", ({ modelId, target, supported }) => {
+  const reqCaps = { endpointClass: "xai-native" as const, allowsAnthropicServiceTier: false };
   expect(
     resolveFastModeSupport({
       modelId,
       provider: "xai",
       api: "openai-responses",
       runtimeId: "openclaw",
-      requestCapabilities: { endpointClass: "xai-native", allowsAnthropicServiceTier: false },
+      requestCapabilities: reqCaps,
     }),
   ).toBe(supported);
-  const capture = (fastMode: boolean | "ultrafast" | (() => "ultrafast")) =>
+  const cap = (fastMode: boolean | "ultrafast" | (() => "ultrafast")) =>
     captureXaiRequest(xaiModel({ id: modelId }), { extraParams: { tool_stream: false, fastMode } })
       .modelId;
-  expect([capture(true), capture("ultrafast"), capture(() => "ultrafast"), capture(false)]).toEqual(
-    [target, target, target, modelId],
-  );
+  expect([cap(true), cap("ultrafast"), cap(() => "ultrafast"), cap(false)]).toEqual([
+    target,
+    target,
+    target,
+    modelId,
+  ]);
 });
 
 async function captureXaiResponsesPayloadWithThinking(
@@ -91,36 +95,37 @@ async function captureXaiResponsesPayloadWithThinking(
     model,
     streamFn: streamSimple,
   });
-  if (!wrapped) {
-    throw new Error("expected the xAI stream wrapper");
-  }
+  if (!wrapped) throw new Error("expected the xAI stream wrapper");
   let captured: Record<string, unknown> | undefined;
+  const opts = {
+    apiKey: "test-api-key",
+    cacheRetention: "none" as const,
+    reasoning,
+    onPayload: (p: unknown) => {
+      captured = structuredClone(p as Record<string, unknown>);
+      throw new Error("stop");
+    },
+  };
   const stream = await wrapped(
     model,
     { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-    {
-      apiKey: "test-api-key",
-      cacheRetention: "none",
-      reasoning,
-      onPayload: (payload) => {
-        captured = structuredClone(payload as Record<string, unknown>);
-        throw new Error("stop after payload capture");
-      },
-    },
+    opts,
   );
   await stream.result();
-  if (!captured) {
-    throw new Error("provider payload callback was not invoked");
-  }
+  if (!captured) throw new Error("provider payload callback was not invoked");
   return captured;
 }
 
 describe("xai stream wrappers", () => {
   it("does not add Grok OAuth headers for a lookalike host", () => {
-    const { headers } = captureXaiRequest(
-      xaiModel({ id: "grok-4.5", baseUrl: "https://cli-chat-proxy.grok.com.example/v1" }),
-      { extraParams: { tool_stream: false }, headers: { "X-Existing": "kept" } },
-    );
+    const model = xaiModel({
+      id: "grok-4.5",
+      baseUrl: "https://cli-chat-proxy.grok.com.example/v1",
+    });
+    const { headers } = captureXaiRequest(model, {
+      extraParams: { tool_stream: false },
+      headers: { "X-Existing": "kept" },
+    });
     expect(headers).toEqual({ "X-Existing": "kept" });
   });
 
@@ -261,10 +266,9 @@ describe("xai stream wrappers", () => {
   );
 
   it("normalizes within-limit GIF images to supported PNG format for xAI Responses payloads across turns", async () => {
-    const gifData = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
     const gifImage = {
       type: "input_image",
-      source: { type: "base64", media_type: "image/gif", data: gifData },
+      source: { type: "base64", media_type: "image/gif", data: GIF_B64 },
     };
     const result = toolOutput([inputText("Read GIF"), gifImage], "call_gif");
     const history = [message("user", "Inspect the gif"), toolCall("call_gif"), result];
