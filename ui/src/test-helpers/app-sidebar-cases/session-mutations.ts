@@ -376,6 +376,7 @@ describe("AppSidebar session mutation feedback", () => {
     harness.publishList({ result: state.result, agentId: state.agentId });
     await sidebar.updateComplete;
 
+    const toast = await mountToastHost();
     const menu = await openSessionMenu(sidebar, row.key);
     menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
     const actions = await waitForConfirmDialogActions();
@@ -397,10 +398,10 @@ describe("AppSidebar session mutation feedback", () => {
       { timeoutMs: null },
     );
     await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledWith("main"));
-    await waitForFast(() => {
-      const error = sidebar.querySelector("[data-sidebar-session-error]")?.textContent ?? null;
-      expect(error).toContain("Stopped session refresh unavailable");
-    });
+    await waitForFast(() =>
+      expect(toast.textContent).toContain("Stopped session refresh unavailable"),
+    );
+    toast.remove();
   });
 
   it("reclaims a pending cloud worker through its session", async () => {
@@ -447,8 +448,9 @@ describe("AppSidebar session mutation feedback", () => {
     await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledWith("main"));
   });
 
-  it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
+  it("toasts a rejected session patch instead of pinning a sidebar error", async () => {
     const { harness, sidebar } = await mountMutationHarness();
+    const toast = await mountToastHost();
     harness.patch.mockRejectedValueOnce(new Error("rename rejected by Gateway"));
     const menu = await openSessionMenu(sidebar, "agent:main:a");
     menu.querySelector<HTMLButtonElement>('[data-shortcut="r"]')?.click();
@@ -458,22 +460,18 @@ describe("AppSidebar session mutation feedback", () => {
     document.body.querySelector<HTMLInputElement>('input[name="value"]')!.value = "Rejected rename";
     document.body.querySelector<HTMLButtonElement>('button[type="submit"]')?.click();
 
-    await waitForFast(() => {
-      expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
+    await waitForFast(() =>
+      expect(toast.querySelector(".app-toast-lane--top-right .app-toast")?.textContent).toContain(
         "rename rejected by Gateway",
-      );
-    });
-    const error = sidebar.querySelector("[data-sidebar-session-error]");
-    expect(error?.parentElement?.classList.contains("sidebar-sessions")).toBe(true);
-    expect(error?.closest(".sidebar-recent-sessions")).toBeNull();
-
-    error?.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
-    await settleLitElement(sidebar);
+      ),
+    );
     expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
+    toast.remove();
   });
 
   it("surfaces partial batch-delete errors", async () => {
     const { harness, sidebar } = await mountMutationHarness();
+    const toast = await mountToastHost();
     harness.deleteMany.mockResolvedValueOnce({
       deleted: ["agent:main:a"],
       errors: [
@@ -493,14 +491,13 @@ describe("AppSidebar session mutation feedback", () => {
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
 
     await waitForFast(() => {
-      expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
-        "agent:main:b: permission denied",
-      );
+      expect(toast.textContent).toContain("agent:main:b: permission denied");
     });
   });
 
   it("surfaces ordered partial batch-archive errors", async () => {
     const { harness, sidebar } = await mountMutationHarness();
+    const toast = await mountToastHost();
     harness.patchMany.mockImplementationOnce(async (targets) => {
       return {
         outcomes: [
@@ -525,9 +522,7 @@ describe("AppSidebar session mutation feedback", () => {
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
 
     await waitForFast(() => {
-      expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
-        "agent:main:b: active run",
-      );
+      expect(toast.textContent).toContain("agent:main:b: active run");
     });
     expect(harness.patchMany).toHaveBeenCalledOnce();
     expect(harness.patch).not.toHaveBeenCalled();
@@ -536,6 +531,7 @@ describe("AppSidebar session mutation feedback", () => {
 
   it("suppresses a late rejection after a same-client reconnect", async () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
+    const toast = await mountToastHost();
     const pending = deferred<ReturnType<typeof successfulSessionPatch>>();
     harness.patch.mockImplementationOnce(() => pending.promise);
     const menu = await openSessionMenu(sidebar, "agent:main:a");
@@ -549,7 +545,8 @@ describe("AppSidebar session mutation feedback", () => {
     await Promise.resolve();
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
+    expect(toast.textContent).not.toContain("late old-connection rejection");
+    toast.remove();
   });
 
   it("suppresses a late batch archive result after a reconnect", async () => {

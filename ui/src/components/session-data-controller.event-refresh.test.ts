@@ -11,6 +11,7 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import type { SessionGateway } from "../lib/sessions/session-capability.ts";
+import * as toast from "../lib/toast.ts";
 import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import { createSessionDataHost } from "./session-data-controller.test-support.ts";
 import { SessionDataOwner } from "./session-data.ts";
@@ -165,7 +166,7 @@ function createFilteredSessionController(
         list.mockRejectedValueOnce(new Error(failure));
       }
       await controller.refreshSidebarSessions();
-      expect(controller.sessionMutationError).toBe(expected);
+      expect(controller.sessionListError).toBe(expected);
     },
     reconnect: () => {
       for (const phase of ["reconnecting", "connected"] as const) {
@@ -430,12 +431,12 @@ describe("filtered sidebar session event refresh", () => {
     list.mockRejectedValueOnce(new Error("Hidden primary list failed"));
     await context.sessions.refresh({ agentId: "main", force: true });
     expect(context.sessions.state.error).toBe("Hidden primary list failed");
-    expect(controller.sessionMutationError).toBeNull();
+    expect(controller.sessionListError).toBeNull();
 
     selectStatusFilter("active");
     context.sessions.patchRowLocal("agent:main:remote-change", { label: "Current title" });
 
-    expect(controller.sessionMutationError).toBeNull();
+    expect(controller.sessionListError).toBeNull();
   });
 
   it("keeps a failed session mutation with its caller instead of the sidebar list", async () => {
@@ -453,11 +454,34 @@ describe("filtered sidebar session event refresh", () => {
     ).rejects.toThrow("Duplicate session name");
 
     expect(context.sessions.state.error).toBe("Duplicate session name");
-    expect(controller.sessionMutationError).toBeNull();
+    expect(controller.sessionListError).toBeNull();
+  });
+
+  it("toasts a current session action failure at the top right and ignores retired scopes", async () => {
+    const showToast = vi.spyOn(toast, "showToast");
+    const { controller } = await readyController("active", 1, true);
+    const scope = controller.beginSessionMutation();
+    if (!scope) {
+      throw new Error("expected a connected session mutation scope");
+    }
+
+    controller.publishSessionMutationError(scope, new Error("Archive rejected"));
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      severity: "error",
+      placement: "top-right",
+      message: "Archive rejected",
+    });
+    expect(controller.sessionListError).toBeNull();
+    expect(controller.sessionMutationError).toBe("Archive rejected");
+
+    controller.disconnect();
+    showToast.mockClear();
+    controller.publishSessionMutationError(scope, new Error("Late archive rejection"));
+    expect(showToast).not.toHaveBeenCalled();
   });
 
   it.each(["active", "archived", "all"] as const)(
-    "clears a recovered %s list failure without erasing a same-text action failure",
+    "clears a recovered %s list failure without erasing an action failure",
     async (statusFilter) => {
       const { controller, selectStatusFilter, refreshError, expectRows } = await readyController(
         statusFilter,
@@ -471,9 +495,10 @@ describe("filtered sidebar session event refresh", () => {
       const mutation = controller.beginSessionMutation();
       expect(mutation).not.toBeNull();
       controller.publishSessionMutationError(mutation!, new Error("Session request failed"));
-      await refreshError("Background session list failed", "Session request failed");
-      await refreshError(undefined, "Session request failed");
+      await refreshError("Background session list failed");
+      await refreshError();
       selectStatusFilter(statusFilter === "archived" ? "all" : "archived");
+      expect(controller.sessionListError).toBeNull();
       expect(controller.sessionMutationError).toBe("Session request failed");
 
       controller.disconnect();
@@ -490,7 +515,7 @@ describe("filtered sidebar session event refresh", () => {
       await refreshError("Retired session list failed");
       selectStatusFilter("active");
 
-      expect(controller.sessionMutationError).toBeNull();
+      expect(controller.sessionListError).toBeNull();
       controller.disconnect();
     },
   );
@@ -499,8 +524,8 @@ describe("filtered sidebar session event refresh", () => {
     const { controller, refreshError } = createFilteredSessionController("archived");
     controller.connect();
     await refreshError("Dismissed session list failed");
-    controller.dismissSessionMutationError();
-    expect(controller.sessionMutationError).toBeNull();
+    controller.dismissSessionListError();
+    expect(controller.sessionListError).toBeNull();
 
     await refreshError();
   });
@@ -516,7 +541,7 @@ describe("filtered sidebar session event refresh", () => {
     delayedList.reject(new Error("Retired archived request failed"));
     await retiredRefresh;
 
-    expect(controller.sessionMutationError).toBeNull();
+    expect(controller.sessionListError).toBeNull();
   });
 
   it("evicts removed-agent caches while retaining current results owned by the roster", () => {

@@ -155,14 +155,16 @@ suite.define(() => {
           });
         }
 
-        const error = page.locator("[data-sidebar-session-error]");
+        const toasts = page.locator(".app-toast-lane--top-right .app-toast");
         await expect
           .poll(() => dialog.getByRole("alert").textContent())
           .toContain("A session with this name already exists.");
         if (concurrent) {
-          await expect.poll(() => error.textContent()).toContain("archive rejected");
+          await expect
+            .poll(() => toasts.filter({ hasText: "archive rejected" }).textContent())
+            .toContain("archive rejected");
         } else {
-          await expect.poll(() => error.count()).toBe(0);
+          await expect.poll(() => toasts.count()).toBe(0);
         }
         await expect.poll(() => field.inputValue()).toBe("Rejected rename");
 
@@ -177,6 +179,7 @@ suite.define(() => {
           error: { code: "UNAVAILABLE", message: "sidebar rename rejected" },
         });
 
+        const error = toasts.filter({ hasText: "sidebar rename rejected" });
         await error.waitFor({ state: "visible" });
         await expect.poll(() => error.textContent()).toContain("sidebar rename rejected");
         expect(
@@ -193,8 +196,7 @@ suite.define(() => {
         );
         await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
         await dialog.waitFor({ state: "detached" });
-        await error.getByRole("button", { name: "Dismiss error" }).click();
-        await expect.poll(() => error.count()).toBe(0);
+        await expect.poll(() => page.locator("[data-sidebar-session-error]").count()).toBe(0);
       }),
   );
 

@@ -63,7 +63,7 @@ export interface SessionListHost {
   readonly sessionData: Pick<
     SessionDataOwner,
     | "childSessionErrorsByParent"
-    | "dismissSessionMutationError"
+    | "dismissSessionListError"
     | "loadMoreSessionCatalog"
     | "loadMoreSidebarSessions"
     | "presenceInstanceId"
@@ -71,7 +71,7 @@ export interface SessionListHost {
     | "refreshSessionCatalogs"
     | "retryChildSessions"
     | "sessionCatalogRefreshStatus"
-    | "sessionMutationError"
+    | "sessionListError"
     | "visibleSessionLimits"
   >;
   readonly sessionsGrouping: SidebarSessionsGrouping;

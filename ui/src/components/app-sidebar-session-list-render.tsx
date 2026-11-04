@@ -11,7 +11,7 @@ import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import {
   renderPersonalSessionEmpty,
-  renderSessionMutationError,
+  renderSessionListError,
 } from "./app-sidebar-session-filter-summary.tsx";
 import type {
   RenderableSessionSection,
@@ -142,7 +142,7 @@ export function renderSessionList(params: {
         host().connected &&
           host().sessionData.sessionsResult !== null &&
           !host().sessionData.sessionsLoading &&
-          !host().sessionData.sessionMutationError &&
+          !host().sessionData.sessionListError &&
           !params.nativeSessionsHaveMore &&
           params.catalogs.catalogs.length === 0 &&
           areSessionCatalogsSettled(host().sessionData),
@@ -231,7 +231,7 @@ export function renderSessionListFrame(
           {t("sessionsView.moveToTopLevel")}
         </div>
       ) : undefined}
-      {renderSessionMutationError(host())}
+      {renderSessionListError(host())}
       {bodyFirst ? body : undefined}
       <PinnedSessionSection host={host()} />
       <PersonalSessionGroups host={host()} />

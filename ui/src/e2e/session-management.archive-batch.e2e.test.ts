@@ -49,7 +49,7 @@ suite.define(() => {
           await check(rowFor(key));
         }
       };
-      const sidebarError = page.locator("[data-sidebar-session-error]");
+      const refreshError = page.locator(".app-toast", { hasText: "list refresh unavailable" });
       const readPinnedSessionState = () =>
         evaluateControlUiContext(
           page,
@@ -148,15 +148,18 @@ suite.define(() => {
         }
         await gateway.resolveDeferred("sessions.list");
       }
-      const toast = page.locator(".app-toast");
+      const toast = page.locator(".app-toast", { hasText: "Archived 3 sessions" });
       await ui.expectText(toast, "Archived 3 sessions");
 
       await eachRow((row) => ui.expectCount(row, 0));
       if (failedRefresh) {
-        await ui.expectText(sidebarError, "Archive list refresh unavailable");
+        await ui.expectText(
+          refreshError.filter({ hasText: "Archive list refresh unavailable" }),
+          "Archive list refresh unavailable",
+        );
         expect(await readPinnedSessionState()).toEqual(pinState(true));
       } else {
-        await ui.expectCount(sidebarError, 0);
+        await ui.expectCount(refreshError, 0);
       }
 
       if (scenario === "refreshed") {
@@ -184,7 +187,10 @@ suite.define(() => {
         });
         if (failedRefresh) {
           await failRefresh("Undo list refresh unavailable");
-          await ui.expectText(sidebarError, "Undo list refresh unavailable");
+          await ui.expectText(
+            refreshError.filter({ hasText: "Undo list refresh unavailable" }),
+            "Undo list refresh unavailable",
+          );
         } else {
           await gateway.resolveDeferred("sessions.list");
         }
