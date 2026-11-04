@@ -30,14 +30,14 @@ const enChatCommandResults = {
       },
       thinking: {
         current: "Current thinking level: {level}.",
-        getFailed: "Couldn’t load the thinking level. Try again. {error}",
+        getFailed: "Couldn’t load effort. Try again. {error}",
         reset: "Thinking level reset to default.",
-        resetFailed: "Couldn’t reset the thinking level. Try again. {error}",
+        resetFailed: "Couldn’t reset effort. Try again. {error}",
         unrecognized: 'Unrecognized thinking level "{level}". Valid levels: {options}.',
         unsupported:
           'Unsupported thinking level "{level}" for this model. Valid levels: {options}.',
         set: "Thinking level set to {level}.",
-        setFailed: "Couldn’t set the thinking level. Try again. {error}",
+        setFailed: "Couldn’t set effort. Try again. {error}",
       },
       verbose: {
         current: "Current verbose level: {level}.",
