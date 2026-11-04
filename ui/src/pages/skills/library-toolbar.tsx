@@ -4,8 +4,11 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { Menu, type MenuEntry } from "../../components/solid/menu.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import { projectGateway } from "../../lib/reactive/application.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
+import { isSkillWorkshopInstalled } from "../skill-workshop/access.ts";
 import type { SkillLibraryModel, LibraryView } from "./library-state.ts";
 
 type SkillLibraryNavigationProps = {
@@ -13,16 +16,26 @@ type SkillLibraryNavigationProps = {
   onWorkshop: () => void;
 };
 
+/** Workshop links exist only while the skill-workshop plugin serves the page. */
+function useSkillWorkshopInstalled() {
+  const context = useOptionalApplication();
+  const gateway = context && projectGateway(context.gateway);
+  return () => isSkillWorkshopInstalled(gateway?.read().snapshot);
+}
+
 export function SkillLibraryNavigation(props: SkillLibraryNavigationProps) {
+  const workshopInstalled = useSkillWorkshopInstalled();
   return (
     <>
       <button type="button" class="btn" onClick={() => props.onSearch()}>
         <Icon name="search" />
         {t("skillDiscovery.search")}
       </button>
-      <button type="button" class="btn" onClick={() => props.onWorkshop()}>
-        {t("pluginsPage.workshopTab")}
-      </button>
+      <Show when={workshopInstalled()}>
+        <button type="button" class="btn" onClick={() => props.onWorkshop()}>
+          {t("pluginsPage.workshopTab")}
+        </button>
+      </Show>
     </>
   );
 }
@@ -43,11 +56,12 @@ export function SkillLibraryPageMenu(
   },
 ) {
   const id = createUniqueId();
+  const workshopInstalled = useSkillWorkshopInstalled();
   const locked = () =>
     props.library.saving() || props.library.state.busy || !props.library.canCreate();
   const items = (): MenuEntry[] => [
     { id: "search", label: t("skillDiscovery.search") },
-    { id: "workshop", label: t("pluginsPage.workshopTab") },
+    ...(workshopInstalled() ? [{ id: "workshop", label: t("pluginsPage.workshopTab") }] : []),
     { id: "create", label: t("skillLibrary.create"), disabled: locked() },
     ...(props.library.uploadsEnabled()
       ? [{ id: "import", label: t("skillLibrary.import"), disabled: locked() }]

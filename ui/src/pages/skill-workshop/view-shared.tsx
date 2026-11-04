@@ -17,6 +17,7 @@ export type WorkshopView = () => {
   context: ApplicationContext;
   agentId: string | null;
   access: ReturnType<typeof resolveWorkshopAccess>;
+  installed: boolean;
   snapshot: WorkshopSnapshot | null;
   error: string | null;
   viewer: WorkshopViewer | null;

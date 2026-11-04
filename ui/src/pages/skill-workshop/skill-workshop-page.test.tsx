@@ -199,6 +199,15 @@ it.each([
   }
 });
 
+it("explains a missing plugin instead of calling its methods", async () => {
+  const request = gateway();
+  const page = await mount(request, { withoutPlugin: true });
+
+  await waitText(page, "Skill Workshop is not available on this Gateway.");
+  expect(request).not.toHaveBeenCalled();
+  expect(page.querySelector('[role="alert"]')).toBeNull();
+});
+
 it("opens an archived skill from a chat link", async () => {
   const versionId = "20260930T010000000Z-archive";
   const request = gateway({

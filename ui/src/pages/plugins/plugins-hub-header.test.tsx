@@ -2,7 +2,9 @@
 import { createSignal, Show } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createContext } from "../skill-workshop/skill-workshop-page.test-support.ts";
 import { PluginsHubHeader } from "./plugins-hub-header.tsx";
 import type { PluginsHubTab } from "./plugins-hub.ts";
 
@@ -52,4 +54,19 @@ it("restores keyboard focus to the destination tab when its route replaces the h
     expect(destination.getAttribute("aria-selected")).toBe("true");
     expect(document.activeElement).toBe(destination);
   });
+});
+
+it("drops the Skill workshop tab when the Gateway lacks the plugin, except on its own page", () => {
+  const [active, setActive] = createSignal<PluginsHubTab>("plugins");
+  const view = mountSolid(() => <PluginsHubHeader active={active()} onSelect={vi.fn()} />, {
+    wrapper: createSolidApplicationContextProvider(createContext(vi.fn(), { withoutPlugin: true }))
+      .wrapper,
+  });
+
+  expect(view.queryByRole("tab", { name: "Skill workshop" })).toBeNull();
+  setActive("skill-workshop");
+  flush();
+  expect(view.getByRole("tab", { name: "Skill workshop" }).getAttribute("aria-selected")).toBe(
+    "true",
+  );
 });

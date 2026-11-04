@@ -24,7 +24,11 @@ import {
 import { generateUUID } from "../../lib/uuid.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
 import { retainRejectedInitialTurn } from "../new-session/rejected-initial-turn.ts";
-import { canRunWorkshopMutation, resolveWorkshopAccess } from "./access.ts";
+import {
+  canRunWorkshopMutation,
+  isSkillWorkshopInstalled,
+  resolveWorkshopAccess,
+} from "./access.ts";
 import { loadWorkshopSnapshot, type WorkshopMutation, type WorkshopSnapshot } from "./api.ts";
 import { SKILL_WORKSHOP_LEARNING_PROMPT } from "./learning-prompt.ts";
 import { resolveWorkshopMode, setWorkshopMode, type SkillWorkshopMode } from "./mode.ts";
@@ -101,7 +105,9 @@ class SkillWorkshopPageState {
   private syncScope() {
     const context = this.context;
     const snapshot = context.gateway.snapshot;
-    const client = snapshot.phase === "connected" ? snapshot.client : null;
+    // Without the plugin there is nothing to load; a catalog that gains it reloads here.
+    const client =
+      snapshot.phase === "connected" && isSkillWorkshopInstalled(snapshot) ? snapshot.client : null;
     const agentId = client ? resolveWorkshopAgentId(context) : null;
     if (client === (this.scope?.client ?? null) && agentId === (this.scope?.agentId ?? null)) {
       return;
@@ -467,6 +473,7 @@ class SkillWorkshopPageState {
       context,
       agentId: this.scope?.agentId ?? null,
       access: resolveWorkshopAccess(context.gateway.snapshot),
+      installed: isSkillWorkshopInstalled(context.gateway.snapshot),
       snapshot: this.snapshot,
       error: context.runtimeConfig.state.configSnapshot
         ? null

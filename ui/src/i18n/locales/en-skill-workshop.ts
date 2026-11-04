@@ -4,6 +4,8 @@ import { en } from "./en.ts";
 const enSkillWorkshop = {
   skillWorkshop: {
     loadError: "Couldn’t load the Workshop. Try again.",
+    notInstalled:
+      "Skill Workshop is not available on this Gateway. Enable the skill-workshop plugin to use it.",
     retry: "Retry",
     mode: {
       label: "Learning",

@@ -87,42 +87,47 @@ export function SkillWorkshopView(props: { view: WorkshopView; reads: WorkshopRe
       <SettingsWorkspace>
         <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-skill-workshop">
           <SettingsPage wide carapace>
-            <Toolbar view={props.view} />
-            <For
-              each={[
-                props.view().learningError,
-                props.view().modeError,
-                props.view().actionError,
-              ].filter(Boolean)}
+            <Show
+              when={props.view().installed}
+              fallback={<SettingsEmpty message={t("skillWorkshop.notInstalled")} carapace />}
             >
-              {(message) => <ErrorBanner message={message ?? ""} />}
-            </For>
-            {props.view().error && (
-              <ErrorBanner
-                message={`${t("skillWorkshop.loadError")} ${props.view().error}`}
-                onRetry={props.view().onRetry}
-              />
-            )}
-            <Loading
-              on={props.reads.listRequest()}
-              fallback={!props.view().snapshot && <SettingsLoadingSkeleton carapace />}
-            >
-              <Errored
-                fallback={(error, reset) => (
-                  <ErrorBanner
-                    message={`${t("skillWorkshop.loadError")} ${formatUiError(error())}`}
-                    onRetry={() => {
-                      props.view().onRetry();
-                      reset();
-                    }}
-                  />
-                )}
+              <Toolbar view={props.view} />
+              <For
+                each={[
+                  props.view().learningError,
+                  props.view().modeError,
+                  props.view().actionError,
+                ].filter(Boolean)}
               >
-                {props.reads.list() && null}
-              </Errored>
-            </Loading>
-            <Show when={props.view().snapshot}>
-              <Library view={props.view} reads={props.reads} />
+                {(message) => <ErrorBanner message={message ?? ""} />}
+              </For>
+              {props.view().error && (
+                <ErrorBanner
+                  message={`${t("skillWorkshop.loadError")} ${props.view().error}`}
+                  onRetry={props.view().onRetry}
+                />
+              )}
+              <Loading
+                on={props.reads.listRequest()}
+                fallback={!props.view().snapshot && <SettingsLoadingSkeleton carapace />}
+              >
+                <Errored
+                  fallback={(error, reset) => (
+                    <ErrorBanner
+                      message={`${t("skillWorkshop.loadError")} ${formatUiError(error())}`}
+                      onRetry={() => {
+                        props.view().onRetry();
+                        reset();
+                      }}
+                    />
+                  )}
+                >
+                  {props.reads.list() && null}
+                </Errored>
+              </Loading>
+              <Show when={props.view().snapshot}>
+                <Library view={props.view} reads={props.reads} />
+              </Show>
             </Show>
           </SettingsPage>
         </div>
