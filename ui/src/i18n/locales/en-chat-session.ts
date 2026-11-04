@@ -176,7 +176,7 @@ const enChatSession = {
       adminRequired: "You need admin access to start suggested tasks.",
       reconnectRequired: "Reconnect to start suggested tasks.",
       unavailable: "Starting suggested tasks isn’t available here.",
-      copyPromptFailed: "Couldn't copy the prompt to the clipboard",
+      copyPromptFailed: "Couldn’t copy the prompt. Try again.",
       startUnconfirmed: "Couldn't confirm the task started. Retry checks the same task.",
     },
     view: {
@@ -232,7 +232,7 @@ const enChatSession = {
     },
     thread: {
       search: "Search messages",
-      searchPlaceholder: "Search messages...",
+      searchPlaceholder: "Search messages…",
       closeSearch: "Close search",
       loading: "Loading chat",
       showEarlier: "Show earlier",

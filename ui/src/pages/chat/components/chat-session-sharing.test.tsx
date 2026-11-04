@@ -424,7 +424,7 @@ describe("chat session sharing menu", () => {
       expect(copy.disabled).toBe(true);
     });
     retry.resolve({ status: "success" });
-    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied"));
     expect(item(root, "public:copy")).toBe(copy);
     expect(copy.disabled).toBe(false);
     expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
