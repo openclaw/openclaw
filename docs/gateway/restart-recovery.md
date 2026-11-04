@@ -411,21 +411,28 @@ guaranteed exactly once.
 
 For a session with a human owner, the input uses that recorded principal's current
 role, scopes, and session access, narrowed by the session's current permission mode
-and tool policy. When no owner is set, the human creator is used. A removed
+and tool policy. When no owner is set, the human creator is used. On a Gateway
+without `gateway.roles`, a profile has no authority of its own: the input uses the
+authenticated connection the person last sent from in that session (its device,
+sign-in method and scopes), revalidated against current pairing, auth and profile
+state, and never more than that connection had. A person who never sent from an
+authenticated connection in that session cannot be resumed there. A removed
 principal or lost access prevents automatic resume. An admission failure records
 a visible interruption notice in the existing session, with a bounded, redacted
 diagnostic. The warning identifies the session, interrupted run, and admission
 stage. Resolve the reported error, then send a new message to continue. Archived
 or deleted sessions remain skipped with a log entry.
-The Gateway never substitutes an administrator or restores a saved operator grant.
+The Gateway never substitutes an administrator. A recorded connection is only a basis for
+revalidation, never a saved grant.
 Sessions with no human principal use ordinary system-event authority; if it lacks
 a needed capability, the agent must ask for an authorized input.
 
 WebChat uses the same session and transcript. An unanswered accepted user prompt
 stays in history as its original entry, separate from the restart input. Channel
 sessions use their current delivery route so normal replies return to the
-conversation. The resume input inherits no old browser connection, device
-capability, approval, or requester authority snapshot.
+conversation. The resume input inherits no old browser connection, approval, or
+requester authority snapshot; on a Gateway without roles it uses only the current,
+revalidated authority of the person's recorded device.
 
 Only accepted user messages whose IDs were captured in the graceful-shutdown
 marker follow the resume input, in FIFO order. Older queued rows left by a crash
