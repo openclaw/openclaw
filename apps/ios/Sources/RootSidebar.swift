@@ -8,6 +8,8 @@ struct RootSidebar: View {
     @Environment(\.displayScale) private var displayScale
     @Bindable var model: RootSidebarModel
     @State private var searchText = ""
+    @State private var collapsedGroups = SessionGroupStore.loadCollapsed()
+    @State private var collapsedParents: Set<String> = []
     @State private var isSearchActive = false
     @State private var showsPagesEditor = false
     @State private var presentedAttention: OpenClawChatAttentionPresentation?
@@ -399,13 +401,34 @@ struct RootSidebar: View {
                         ? String(localized: "Sessions")
                         : (section.title ?? String(localized: "Sessions"))
                     HStack(spacing: 0) {
-                        self.sectionTitle(title)
-                        Spacer(minLength: 0)
+                        if section.id.hasPrefix("group:") {
+                            Button {
+                                if !self.collapsedGroups.insert(section.id).inserted {
+                                    self.collapsedGroups.remove(section.id)
+                                }
+                                SessionGroupStore.saveCollapsed(self.collapsedGroups)
+                            } label: {
+                                HStack(spacing: 0) {
+                                    self.sectionTitle(title)
+                                    Spacer(minLength: 0)
+                                    Image(systemName: self.collapsedGroups.contains(section.id)
+                                        ? "chevron.right" : "chevron.down")
+                                        .font(OpenClawType.captionSemiBold)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            self.sectionTitle(title)
+                            Spacer(minLength: 0)
+                        }
                         self.attentionBadges(
                             for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
                     }
-                    ForEach(self.sessionNodes(for: section)) { node in
-                        self.sessionButton(node, rowPass: rowPass)
+                    if !self.searchText.isEmpty || !self.collapsedGroups.contains(section.id) {
+                        ForEach(self.sessionNodes(for: section)) { row in
+                            self.sessionTreeRow(row, rowPass: rowPass)
+                        }
                     }
                 }
             }
@@ -450,8 +473,8 @@ struct RootSidebar: View {
                 .accessibilityLabel(String(localized: "Edit Pages"))
             }
             self.homeRow
-            ForEach(pinnedSessionNodes) { node in
-                self.sessionButton(node, rowPass: rowPass)
+            ForEach(self.displayRows(pinnedSessionNodes)) { row in
+                self.sessionTreeRow(row, rowPass: rowPass)
             }
             ForEach(self.pinnedPages) { destination in
                 self.destinationButton(destination)
@@ -583,7 +606,7 @@ struct RootSidebar: View {
         var remainingSections = sections
         let pinnedSection = remainingSections.remove(at: pinnedIndex)
         return SessionLayout(
-            pinnedNodes: self.flattened(pinnedSection.nodes),
+            pinnedNodes: pinnedSection.nodes,
             sections: remainingSections)
     }
 
@@ -595,8 +618,8 @@ struct RootSidebar: View {
         nodes.flatMap { [$0] + self.flattened($0.children) }
     }
 
-    private func sessionNodes(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Node] {
-        let nodes = Self.flattened(section.nodes)
+    private func sessionNodes(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Row] {
+        let nodes = self.displayRows(section.nodes)
         guard section.id == "recent", let limit = Self.recentSessionCap(searchText: self.searchText) else {
             return nodes
         }
@@ -612,6 +635,36 @@ struct RootSidebar: View {
         let selectedSessionKey: String
         let mainSessionKey: String
         let categories: [String]
+    }
+
+    private func displayRows(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Row] {
+        ChatSessionSidebarModel.rows(nodes) { node in
+            !self.searchText.isEmpty || !self.collapsedParents.contains(node.id)
+        }
+    }
+
+    private func sessionTreeRow(
+        _ row: ChatSessionSidebarModel.Row,
+        rowPass: SessionRowPass) -> some View
+    {
+        HStack(spacing: 0) {
+            self.sessionButton(row.node, rowPass: rowPass)
+            if !row.node.children.isEmpty {
+                Button {
+                    if !self.collapsedParents.insert(row.id).inserted {
+                        self.collapsedParents.remove(row.id)
+                    }
+                } label: {
+                    Image(systemName: self.collapsedParents.contains(row.id) ? "chevron.right" : "chevron.down")
+                        .font(OpenClawType.captionSemiBold)
+                        .frame(width: 32, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(self.collapsedParents.contains(row.id)
+                    ? String(localized: "Show Sub-sessions") : String(localized: "Hide Sub-sessions"))
+            }
+        }
+        .padding(.leading, CGFloat(row.depth) * 12)
     }
 
     private func sessionButton(

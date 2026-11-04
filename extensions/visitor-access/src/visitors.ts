@@ -20,7 +20,7 @@ import {
   type VisitorOnboardingCompareAndSet,
   type VisitorOnboardingUpdate,
 } from "./grant-record.js";
-import { expiryText, visitorInviteResult } from "./invite-result.js";
+import { accountSeatsText, expiryText, visitorInviteResult } from "./invite-result.js";
 import type {
   VisitorInviteDetails,
   VisitorListDetails,
@@ -385,6 +385,8 @@ export class VisitorAccessService {
         createdAt: previous?.createdAt ?? now,
         expiresAt,
       };
+      // Observe before effects: a completed grant must still settle if authority closes afterward.
+      const accountSeats = await this.policy.readAccountSeats(assertCurrent);
       let gatewayAccess = "";
       await this.policy.update(async (targets) => {
         const entries = await store.entries();
@@ -432,6 +434,7 @@ export class VisitorAccessService {
           : store,
       );
       return visitorInviteResult({
+        accountSeats,
         renewed: previous !== undefined,
         target,
         grant: { ...grant, grantId },
@@ -590,9 +593,12 @@ export class VisitorAccessService {
       ]);
       assertCurrent();
       const missing = entries.filter((entry) => !targetKeys.has(entry.key)).length;
+      const accountSeats = await this.policy.readAccountSeats(assertCurrent);
+      this.assertOpen();
       const summary = `Visitors: ${entries.length} recorded; ${targetKeys.size} in policy. Drift: ${unmanaged.length} unmanaged, ${missing} missing from policy.`;
-      const lines = [summary];
+      const lines = [summary, accountSeatsText(accountSeats)];
       const details: VisitorListDetails = {
+        accountSeats,
         counts: {
           recorded: entries.length,
           inPolicy: targetKeys.size,
@@ -656,7 +662,7 @@ export class VisitorAccessService {
           };
         }),
       );
-      let length = summary.length;
+      let length = lines.join("\n").length;
       let shown = 0;
       for (const row of rows.slice(0, maxVisitors)) {
         if (length + row.line.length + 1 > LIST_MAX_CHARS - 120) {

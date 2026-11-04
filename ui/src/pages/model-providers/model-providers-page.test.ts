@@ -8,6 +8,7 @@ import type { SelectPicker } from "../../components/select-picker.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import "../../lib/toast-host.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
@@ -386,7 +387,7 @@ describe("ModelProvidersPage agent scope", () => {
       await updatePickers(page.renderRoot);
       const fallback = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
         (select) =>
-          select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback Model",
+          select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback model",
       );
       expect(fallback).toBeDefined();
       expect(page.querySelector(".model-providers__defaults")?.textContent).toContain(
@@ -519,11 +520,7 @@ describe("ModelProvidersPage agent scope", () => {
     );
     const row = await expandProvider(page, "openai");
     row.querySelector<HTMLButtonElement>(".provider-row__remove")!.click();
-    const modal = await vi.waitFor(() => {
-      const dialog = document.body.querySelector<HTMLElement>("openclaw-modal-dialog");
-      expect(dialog).not.toBeNull();
-      return dialog!;
-    });
+    const { modal } = await getRenderedModalDialog(document.body);
     expect(modal.textContent).toContain("Remove OpenAI");
     expect(requestCount(request, "models.authLogout")).toBe(0);
     modal.querySelector<HTMLButtonElement>("button.danger")!.click();
@@ -773,11 +770,13 @@ describe("ModelProvidersPage agent scope", () => {
         agentId: "main",
       }),
     );
-    await vi.waitFor(() => expect(toast.toast?.message).toBe("Priority could not be saved"));
+    await vi.waitFor(() =>
+      expect(toast.toasts[0]?.options.message).toBe("Priority could not be saved"),
+    );
     await toast.updateComplete;
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
-      expect(toast.querySelector('[role="status"]')?.textContent).toContain(
+      expect(toast.querySelector('[role="alert"]')?.textContent).toContain(
         "Priority could not be saved",
       ),
     );
@@ -785,7 +784,7 @@ describe("ModelProvidersPage agent scope", () => {
 
     expect(page.querySelector('[role="alert"]')).toBeNull();
     expect(page.view.props.messages.openai).toBeUndefined();
-    expect(toast.querySelector(".app-toast--bottom .app-toast__icon")).not.toBeNull();
+    expect(toast.querySelector(".app-toast-lane--top-center .app-toast__icon")).not.toBeNull();
     expect(
       [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
         (row) => row.dataset.profileId,
@@ -967,5 +966,6 @@ it("applies provider navigation without replacing an edited search during revali
   page.routeData = { ...routeData, provider: "minimax-portal" };
   await waitForSolid(() => expect(search()?.value).toBe("minimax"));
   page.routeData = { ...routeData, provider: "" };
-  await waitForSolid(() => expect(search()?.value).toBe(""));
+  // Setup with nothing connected and nothing typed has no list to filter.
+  await waitForSolid(() => expect(search()?.value ?? "").toBe(""));
 });

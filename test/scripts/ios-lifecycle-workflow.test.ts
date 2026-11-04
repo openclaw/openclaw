@@ -274,11 +274,19 @@ describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => 
 });
 
 describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", () => {
-  it.each(["smoke", "tests"])("executes auth and admitted lifecycle/UI suites in %s", (phase) => {
-    const { result, commands } = runSimulatorStep("voice", [...configuredSteps, iosStep], {
+  it.each([
+    ["smoke", "voice"],
+    ["tests", "voice"],
+    ["smoke", "voice-tests-failed"],
+    ["tests", "voice-tests-failed"],
+  ])("runs suites and retains auth errors (%s, %s)", (phase, mode) => {
+    const { result, commands } = runSimulatorStep(mode, [...configuredSteps, iosStep], {
       IOS_CI_PHASE: phase,
     });
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(mode === "voice" ? 0 : 1);
+    if (mode === "voice-tests-failed") {
+      expect(result.stdout).toContain("[apple-command] Exit 25");
+    }
     const tests = commands.filter(isTestCommand);
     expect(tests).toHaveLength(phase === "smoke" ? 1 : 2);
     expect(tests[0]?.args).toContain("platform=iOS Simulator,id=watch-fixture");
@@ -289,7 +297,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       resultBundle("OpenClawLifecycleTests"),
       "-only-testing:OpenClawTests/ChatComposerTextViewIOSTests",
     ]);
-    const authSelectors = selectors("OpenClawTests", [
+    const lifecycleSelectors = selectors("OpenClawTests", [
       "CloudflareAccessClientTests",
       "CloudflareAccessBrowserPresenterTests",
       "CloudflareAccessTransferTests",
@@ -298,8 +306,10 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       "SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage",
       "GatewayAccessDeviceAuthBindingTests",
       "GatewayConnectionSecurityTests",
+      "QRScannerResultHandoffTests",
     ]);
-    expect(tests[0]?.args).toEqual(expect.arrayContaining(authSelectors));
+    expect(tests[0]?.args).toEqual(expect.arrayContaining(lifecycleSelectors));
+    expect(selectedTests(tests[0]!.args).join("\n")).not.toMatch(/\/(?:ESPSetup|Security2)/u);
     expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
     if (phase === "smoke") {
       expect(commands.at(-1)).toEqual({
@@ -311,7 +321,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       return;
     }
     expectArgs(tests[0]?.args, [
-      ...authSelectors,
+      ...lifecycleSelectors,
       "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
       "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
     ]);
@@ -322,20 +332,6 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     const restart = commands.findIndex((command) => command.tool === "python3");
     expect(restart).toBeGreaterThan(commands.indexOf(tests[0]!));
     expect(restart).toBeLessThan(commands.indexOf(tests[1]!));
-  });
-
-  it.each(["smoke", "tests"])("retains auth errors after restart/UI checks (%s)", (phase) => {
-    const { result, commands } = runSimulatorStep(
-      "voice-tests-failed",
-      [...configuredSteps, iosStep],
-      {
-        IOS_CI_PHASE: phase,
-      },
-    );
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("[apple-command] Exit 25");
-    expect(commands.filter(isTestCommand)).toHaveLength(phase === "smoke" ? 1 : 2);
-    expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
   });
 });
 
@@ -403,6 +399,11 @@ it.skipIf(process.platform === "win32").each([
   { owner: "apps/ios/fastlane/Fastfile", groups: [] },
   { owner: "apps/ios/Tests/TalkModeConfigParsingTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/ChatSendHydrationTests.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/ThirdParty/ESPProvision/ESPProvision/ESPDevice.swift", groups: [] },
+  { owner: "apps/ios/Tests/ESPSetupWireTests.swift", groups: [] },
+  { owner: "apps/ios/Tests/ESPSetupSessionTests.swift", groups: [] },
+  { owner: "apps/ios/Tests/ESPSetupGatewayPreviewTests.swift", groups: [] },
+  { owner: "apps/ios/Tests/QRScannerResultHandoffTests.swift", groups: ["lifecycle"] },
   {
     owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatComposerTextViewIOSTests.swift",
     groups: ["lifecycle"],

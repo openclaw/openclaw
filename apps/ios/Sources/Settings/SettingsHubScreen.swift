@@ -51,6 +51,17 @@ struct SettingsHubScreen: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
+                            self.push(.espSetup)
+                        } label: {
+                            Label { Text("ESP device setup").font(OpenClawType.subheadSemiBold) } icon: {
+                                Image(systemName: "cpu")
+                            }
+                            .labelStyle(.iconOnly)
+                        }
+                        .accessibilityIdentifier("SettingsHub.ESPSetup")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
                             self.push(.gateway)
                         } label: {
                             Text("Gateway")

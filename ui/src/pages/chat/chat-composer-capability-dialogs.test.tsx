@@ -76,6 +76,8 @@ it("loads capability dialogs only when opened and retains their live native cont
   expect(view.container.querySelector("select")).toBe(select);
   expect(view.container.querySelector("details")).toBe(details);
   expect(details.open).toBe(true);
-  view.container.querySelector<HTMLButtonElement>(".exec-approval-header button")!.click();
+  view.container
+    .querySelector<HTMLButtonElement>("openclaw-modal-dialog .oc-dialog__close")!
+    .click();
   expect(library.onClose).toHaveBeenCalledOnce();
 });

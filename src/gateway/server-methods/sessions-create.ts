@@ -33,6 +33,7 @@ import {
   validateAgentToolSessionCreation,
 } from "../session-creation-provenance.js";
 import { prepareSessionDeviceFolder } from "../session-device-folder.js";
+import { prepareSessionRepositoryWorkspace } from "../session-repository-preparation.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   resolveSessionCreateAgentId,
@@ -46,6 +47,7 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
+import { isAttendedSessionCreator } from "./gateway-personal-caller.js";
 import { respondError } from "./response.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged, emitSessionTitleChanged } from "./session-change-event.js";
@@ -59,7 +61,6 @@ import {
 } from "./session-create-initial-turn.js";
 import {
   normalizeSessionProjectGitUrl,
-  prepareSessionRepositoryWorkspace,
   resolveSessionRepositoryCreation,
   validateSessionProjectPreparation,
   validateSessionWorktreeSelection,
@@ -115,8 +116,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const p = structuredClone(params);
     const requiredWorker = prepareRequiredWorkerSessionCreate(p, context.getRuntimeConfig());
     if (requiredWorker.error) {
-      respond(false, undefined, requiredWorker.error);
-      return;
+      return respond(false, undefined, requiredWorker.error);
     }
     const { requiredProfile, automaticEmptyWorkspace } = requiredWorker;
     const requestAuthority = readGatewayRequestMutationAuthority(options);
@@ -128,8 +128,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const emptyWorkspace = p.worktreeSource === "empty";
     const worktreeSelectionError = validateSessionWorktreeSelection(p);
     if (worktreeSelectionError) {
-      respond(false, undefined, worktreeSelectionError);
-      return;
+      return respond(false, undefined, worktreeSelectionError);
     }
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
     const creation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
@@ -338,10 +337,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     requestedCwd = preparedCwd.value;
     const worktreeBaseRef = normalizeOptionalString(p.worktreeBaseRef);
-    const requestedWorktreeName = normalizeOptionalString(p.worktreeName);
     const explicitSessionLabel = normalizeOptionalString(p.label);
     const preparedDisplayName = normalizeOptionalString(p.displayName);
-    const titleAgentId = explicitlyRequestedAgent.agentId;
     if (!authority.ensureActive()) {
       return;
     }
@@ -350,7 +347,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           await loadGatewaySessionEntryReadOnlyInWorker({
             cfg,
             key: explicitlyRequestedKey,
-            agentId: titleAgentId,
+            agentId: explicitlyRequestedAgent.agentId,
           })
         ).entry
       : undefined;
@@ -405,7 +402,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       });
     }
     if (p.worktree === true) {
-      // Raw cwd authorization and project-registry selection have already been checked.
       const agentId = explicitlyRequestedAgent.agentId;
       let targetKey = sessionKey;
       let preservesUnspecifiedKey = false;
@@ -454,10 +450,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           target: lifecycleTarget,
           workspace: emptyWorkspace ? { kind: "empty" } : (projectRoot ?? requestedCwd),
           inheritParentKey: inheritParentWorktree ? spawnRequesterSessionKey : undefined,
+          repositoryMutations: context.workerRepositoryWorkspaceMutationService,
           projectGitUrl: requestedProjectGitUrl,
-          name: requestedWorktreeName,
+          name: normalizeOptionalString(p.worktreeName),
           baseRef: worktreeBaseRef,
           deferWorktree,
+          hasInitialTurn,
           label: explicitSessionLabel ?? preparedDisplayName,
           titleSource: buildDashboardSessionTitleSource({ message: message ?? "", attachments }),
           currentUserMessage: message,
@@ -524,6 +522,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       spawnDepth: p.spawnDepth,
       ...resolveSessionCreateRootParameters(p, preparedRoot?.value),
       permissionMode: p.permissionMode,
+      applyAgentPermissionDefault: isAttendedSessionCreator(client),
       ...(p.toolOverrides !== undefined ? { toolOverrides: p.toolOverrides } : {}),
       ...(p.communication !== undefined ? { communication: p.communication } : {}),
       prepareLifecycle,

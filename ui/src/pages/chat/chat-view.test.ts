@@ -78,6 +78,7 @@ import {
   appendMessageActionFixture,
 } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
+import { ReplyPreview } from "./components/chat-composer-view.tsx";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
@@ -232,7 +233,8 @@ function requireFirstAttachmentsChange(
   return attachments as ChatAttachment[];
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await ReplyPreview.preload();
   onTestFinished(installChatComposerPickerDismissal(document));
   installTranscriptDomMocks();
   vi.spyOn(chatThread, "buildCachedChatItems").mockImplementation(buildChatItemsMock);
@@ -1455,7 +1457,7 @@ describe("chat loading skeleton", () => {
     });
 
     expect(container.querySelector(".chat-group.assistant .chat-turn-recap")).toBeNull();
-    expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("Done in");
+    expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("42 output tokens");
   });
 });
 
@@ -2405,29 +2407,7 @@ describe("chat attachment picker", () => {
     expect(rangeDrop.defaultPrevented).toBe(true);
   });
 
-  it("registers a large paste before an immediate send", () => {
-    let attachments: ChatAttachment[] = [];
-    const onSend = vi.fn(() => {
-      expect(attachments).toHaveLength(1);
-    });
-    const container = renderChatView({
-      draft: "Review the attachment",
-      attachments,
-      getAttachments: () => attachments,
-      onAttachmentsChange: (next) => {
-        attachments = next;
-      },
-      onSend,
-    });
-    const textarea = getComposerTextarea(container);
-    const pastedText = `large paste ${"x".repeat(1100)}`;
-    textarea.dispatchEvent(createPasteEvent(pastedText));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-
-    expect(onSend).toHaveBeenCalledOnce();
-  });
-
-  it("preserves a large paste when a dropped file finishes later", async () => {
+  it("keeps a dropped file independent of native text paste", async () => {
     const readers: FileReader[] = [];
     const readAsDataUrl = vi
       .spyOn(FileReader.prototype, "readAsDataURL")
@@ -2449,11 +2429,13 @@ describe("chat attachment picker", () => {
     });
 
     try {
-      textarea.dispatchEvent(createPasteEvent(pastedText));
+      const paste = createPasteEvent(pastedText);
+      textarea.dispatchEvent(paste);
+      expect(paste.defaultPrevented).toBe(false);
       chat.dispatchEvent(dropEvent);
 
       expect(readers).toHaveLength(1);
-      expect(attachments).toHaveLength(1);
+      expect(attachments).toHaveLength(0);
       Object.defineProperty(readers[0], "result", {
         configurable: true,
         value: `data:application/pdf;base64,${btoa("%PDF-1.4\n")}`,
@@ -2462,27 +2444,26 @@ describe("chat attachment picker", () => {
         new ProgressEvent("load"),
       );
 
-      await waitForFast(() => expect(attachments).toHaveLength(2));
-      expect(attachments.map((attachment) => attachment.fileName)).toEqual([
-        expect.stringMatching(/^pasted-text-\d+\.txt$/u),
-        "brief.pdf",
-      ]);
+      await waitForFast(() => expect(attachments).toHaveLength(1));
+      expect(attachments.map((attachment) => attachment.fileName)).toEqual(["brief.pdf"]);
     } finally {
       readAsDataUrl.mockRestore();
     }
   });
 
   it("keeps the agent-aware placeholder with pasted text, files, images, and comments", () => {
-    let pastedTextAttachments: ChatAttachment[] = [];
-    const pasteTarget = renderChatView({
-      draft: "Review the attachment",
-      getAttachments: () => pastedTextAttachments,
-      onAttachmentsChange: (next) => {
-        pastedTextAttachments = next;
-      },
-    });
-    const textarea = getComposerTextarea(pasteTarget);
-    textarea.dispatchEvent(createPasteEvent(`large paste ${"x".repeat(1100)}`));
+    const pastedTextAttachments = [
+      registerChatAttachmentPayload({
+        attachment: {
+          id: "retained-paste",
+          fileName: "pasted-text-123.txt",
+          mimeType: "text/plain",
+          origin: "paste",
+        },
+        dataUrl: `data:text/plain;base64,${btoa("retained pasted text")}`,
+        file: new File(["retained pasted text"], "pasted-text-123.txt", { type: "text/plain" }),
+      }),
+    ];
 
     const namedLikePaste = registerChatAttachmentPayload({
       attachment: {
@@ -3474,9 +3455,9 @@ describe("chat model controls", () => {
       undefined,
     );
 
+    await import("./components/chat-effort-picker-panel.tsx");
     await waitForSolid(() => expect(getThinkingSlider(container)).toBeInstanceOf(HTMLInputElement));
     const slider = getThinkingSlider(container);
-    expect(slider).toBeInstanceOf(HTMLInputElement);
     if (slider) {
       slider.value = "0";
       slider.dispatchEvent(new Event("input", { bubbles: true }));
@@ -3822,6 +3803,8 @@ describe("chat model controls", () => {
 });
 
 describe("right-click Reply", () => {
+  const escape = () =>
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
   const replyTarget = { messageId: "msg-1", text: "quoted", senderLabel: "User" };
   const renderReply = (overrides: Partial<ChatProps> = {}) =>
     renderChatView({ replyTarget, ...overrides });
@@ -4069,11 +4052,7 @@ describe("right-click Reply", () => {
         const cancel = document.querySelector<HTMLButtonElement>(".chat-confirm-popover__cancel");
         expect(cancel).toBeInstanceOf(HTMLButtonElement);
         expect(document.activeElement).toBe(cancel);
-        const confirmationEscape = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        });
+        const confirmationEscape = escape();
         cancel!.dispatchEvent(confirmationEscape);
         expect(confirmationEscape.defaultPrevented).toBe(true);
         expect(document.querySelector(".chat-confirm-popover")).toBeNull();
@@ -4177,11 +4156,7 @@ describe("right-click Reply", () => {
           textarea.focus();
         }
         expect(pane.host.draft).toBe(visibleDraft);
-        const clear = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        });
+        const clear = escape();
         textarea.dispatchEvent(clear);
         expect(clear.defaultPrevented).toBe(true);
         expect(pane.onClearReply).toHaveBeenCalledOnce();
@@ -4192,11 +4167,7 @@ describe("right-click Reply", () => {
         expect(textarea.value).toBe(visibleDraft);
         expect(document.activeElement).toBe(textarea);
 
-        const abort = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        });
+        const abort = escape();
         textarea.dispatchEvent(abort);
         expect(abort.defaultPrevented).toBe(true);
         expect(pane.onAbort).toHaveBeenCalledOnce();
@@ -4223,22 +4194,14 @@ describe("right-click Reply", () => {
       const textareaB = getComposerTextarea(paneB.container);
       textareaA.focus();
       textareaA.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-      const escapeB = new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      });
+      const escapeB = escape();
       textareaB.dispatchEvent(escapeB);
 
       expect(escapeB.defaultPrevented).toBe(true);
       expect(paneB.onClearReply).toHaveBeenCalledOnce();
       expect(paneB.host.replyTarget).toBeNull();
       expect(paneB.container.querySelector(".chat-reply-preview")).toBeNull();
-      const escapeA = new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      });
+      const escapeA = escape();
       textareaA.dispatchEvent(escapeA);
       expect(escapeA.defaultPrevented).toBe(false);
       expect(paneA.onClearReply).not.toHaveBeenCalled();

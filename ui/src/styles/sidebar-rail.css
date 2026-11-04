@@ -626,14 +626,14 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
 
 @media (hover: none), (pointer: coarse) {
   .shell:not(.shell--mobile-nav) .sidebar-rail {
-    --sidebar-rail-control-size: 44px;
-    --sidebar-rail-action-size: 44px;
+    --sidebar-rail-control-size: 38px;
+    --sidebar-rail-action-size: 38px;
     flex-basis: 52px;
   }
 
   .sidebar-pages__pin {
     opacity: 1;
-    height: 44px;
+    height: 38px;
   }
 }
 
@@ -747,13 +747,6 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 
 .sidebar-session-owner-filter .picker-select__copy {
   flex: 0 1 auto;
-}
-
-.sidebar-session-owner-filter .picker-select__label {
-  color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 550;
-  letter-spacing: -0.005em;
 }
 
 .sidebar-session-owner-filter .picker-select__chevron {

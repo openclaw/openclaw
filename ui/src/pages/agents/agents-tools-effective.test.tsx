@@ -155,6 +155,19 @@ describe("Agents effective-tools read", () => {
     },
   );
 
+  it("keeps a space before the enabled summary and the session key", async () => {
+    const view = await mountEffective(async () => effective("Read"));
+    view.context.settingsAgentSelection.set("main");
+    await view.settleEffective();
+    const descriptions = [...view.container.querySelectorAll(".settings-section__desc")].map(
+      (element) => element.textContent,
+    );
+    expect(descriptions.some((text) => /permissions\. \d+\/\d+ enabled\./.test(text ?? ""))).toBe(
+      true,
+    );
+    expect(descriptions.some((text) => /Session: \S/.test(text ?? ""))).toBe(true);
+  });
+
   it("loads only on demand, joins pending receipts, and retains the accepted result across panel visits", async () => {
     const pending = deferred<ToolsEffectiveResult>();
     const view = await mountEffective(() => pending.promise, "files");
@@ -278,23 +291,17 @@ describe("Agents effective-tools read", () => {
     },
   );
 
-  it("refreshes after saving tool settings and sends the current session after navigation", async () => {
-    const read = vi
-      .fn<() => Promise<ToolsEffectiveResult>>()
-      .mockResolvedValueOnce(effective("Before save"))
-      .mockResolvedValue(effective("After save"));
+  it("sends the current session after navigation", async () => {
+    const read = vi.fn<() => Promise<ToolsEffectiveResult>>().mockResolvedValue(effective("Tools"));
     const view = await mountEffective(read);
-    await waitForSolid(() => expect(preview(view.container)).toContain("Before save"));
-    await view.page.read().onConfigSave();
-    await waitForSolid(() => expect(preview(view.container)).toContain("After save"));
-    expect(view.save).toHaveBeenCalledOnce();
-    expect(view.calls()).toHaveLength(2);
+    await waitForSolid(() => expect(preview(view.container)).toContain("Tools"));
+    expect(view.calls()).toHaveLength(1);
     emitGatewaySnapshot(view.currentGateway, {
       ...snapshot(view.client),
       sessionKey: "agent:main:next",
     });
     view.setPanel("tools");
-    await waitForSolid(() => expect(view.calls()).toHaveLength(3));
+    await waitForSolid(() => expect(view.calls()).toHaveLength(2));
     expect(view.request).toHaveBeenLastCalledWith("tools.effective", {
       agentId: "main",
       sessionKey: "agent:main:next",
