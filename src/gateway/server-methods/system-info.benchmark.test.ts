@@ -40,8 +40,9 @@ it.runIf(process.env.OPENCLAW_SYSTEM_INFO_BENCH === "1")(
       client: { connect: { scopes: ["operator.admin"] } },
       context: { getRuntimeConfig: () => config },
     } as unknown as GatewayRequestHandlerOptions;
-    let clock = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const measuredNow = performance.now.bind(performance);
+    let clockOffset = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => measuredNow() + clockOffset);
     for (let i = 0; i < 10; i++) {
       await handler(request);
     }
@@ -50,13 +51,13 @@ it.runIf(process.env.OPENCLAW_SYSTEM_INFO_BENCH === "1")(
       const cpuSamples: number[] = [];
       for (let round = 0; round < 5; round++) {
         const cpuStart = process.cpuUsage();
-        const start = performance.now();
+        const start = measuredNow();
         for (let i = 0; i < 200; i++) {
-          clock += intervalMs;
+          clockOffset += intervalMs;
           await handler(request);
         }
         const cpu = process.cpuUsage(cpuStart);
-        samples.push(((performance.now() - start) * 1000) / 200);
+        samples.push(((measuredNow() - start) * 1000) / 200);
         cpuSamples.push((cpu.user + cpu.system) / 200);
       }
       report({
@@ -78,15 +79,15 @@ it.runIf(process.env.OPENCLAW_SYSTEM_INFO_BENCH === "1")(
       machineName: () => getMachineDisplayName(),
       mountedDisksWarm: () => readSystemDisks(),
       mountedDisksCold: () => {
-        clock += 60_001;
+        clockOffset += 60_001;
         return readSystemDisks();
       },
     })) {
-      const start = performance.now();
+      const start = measuredNow();
       for (let i = 0; i < 200; i++) {
         await read();
       }
-      report({ kind: "primitive", name, meanUs: ((performance.now() - start) * 1000) / 200 });
+      report({ kind: "primitive", name, meanUs: ((measuredNow() - start) * 1000) / 200 });
     }
     expect(responses).toBe(2010);
   },

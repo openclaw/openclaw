@@ -2,7 +2,7 @@
 
 import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { validateSystemInfoResult } from "../../../packages/gateway-protocol/src/index.js";
 import * as diskSpace from "../../infra/disk-space.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -62,12 +62,23 @@ vi.mock("../../infra/advertised-lan-host.js", async (importOriginal) => ({
 import { systemHandlers } from "./system.js";
 
 const adminClient = { connect: { scopes: ["operator.admin"] } };
+const systemInfoHandler = expectDefined(systemHandlers["system.info"], "system.info handler");
+const requestSystemInfo = (respond: Mock, context = {}, client = adminClient) =>
+  systemInfoHandler({
+    params: {},
+    respond,
+    client,
+    context: { ...createModelsListTestContext({ cfg: {}, catalog: [] }), ...context },
+  } as unknown as GatewayRequestHandlerOptions);
 
 describe("system.info", () => {
   let sampleTime = Date.now();
+  let sampleElapsed = performance.now();
   beforeEach(() => {
     sampleTime += 30_001;
+    sampleElapsed += 30_001;
     vi.spyOn(Date, "now").mockReturnValue(sampleTime);
+    vi.spyOn(performance, "now").mockReturnValue(sampleElapsed);
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     vi.spyOn(os, "platform").mockReturnValue("darwin");
     mocks.runCommandWithTimeout.mockReset().mockImplementation(mountedVolumeOutput);
@@ -79,6 +90,7 @@ describe("system.info", () => {
   });
   afterEach(() => {
     sampleTime = Math.max(sampleTime, Date.now());
+    sampleElapsed = Math.max(sampleElapsed, performance.now());
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -106,29 +118,21 @@ describe("system.info", () => {
     const getEventLoopHealth = vi.fn(() => ({ ...eventLoop }));
     vi.spyOn(process, "availableMemory").mockReturnValue(4096);
 
-    const request = {
-      params: {},
-      respond,
-      client: adminClient,
-      context: {
+    const request = () =>
+      requestSystemInfo(respond, {
         ...createModelsListTestContext({
           cfg: { gateway: { port: 18789 } },
           catalog: [],
           metadataSnapshot: createPluginMetadataSnapshotFixture(),
         }),
         getEventLoopHealth,
-      },
-    } as unknown as GatewayRequestHandlerOptions;
-
-    const handler = expectDefined(
-      systemHandlers["system.info"],
-      'systemHandlers["system.info"] test invariant',
-    );
-    await handler(request);
+      });
+    await request();
     eventLoop.cpuCoreRatio = 0.6;
     readCpus.mockReturnValue([]);
     vi.mocked(Date.now).mockReturnValue(sampleTime + 1_999);
-    await handler(request);
+    vi.spyOn(performance, "now").mockReturnValue(sampleElapsed + 1_999);
+    await request();
 
     expect(respond).toHaveBeenCalledTimes(2);
     expect(mocks.runCommandWithTimeout.mock.calls.map(([argv]) => argv)).toEqual([["mount"]]);
@@ -165,8 +169,10 @@ describe("system.info", () => {
     ]);
 
     sampleTime += 24 * 60 * 60_000;
+    sampleElapsed += 24 * 60 * 60_000;
     vi.mocked(Date.now).mockReturnValue(sampleTime);
-    await handler(request);
+    vi.spyOn(performance, "now").mockReturnValue(sampleElapsed);
+    await request();
     expect(readCpus).not.toHaveBeenCalled();
     expect(respond.mock.calls[2]?.[1]).toMatchObject({
       cpuCount: payload.cpuCount,
@@ -231,9 +237,12 @@ describe("system.info", () => {
     }
   });
 
-  it.each([false, true])(
-    "bounds state-volume reads, keeps live counters and invalidates on expiry or path change (unavailable=%s)",
-    async (unavailable) => {
+  it.each([
+    ...[-3_600_000, 3_600_000].map((wallClockStep) => ({ unavailable: false, wallClockStep })),
+    ...[-3_600_000, 3_600_000].map((wallClockStep) => ({ unavailable: true, wallClockStep })),
+  ])(
+    "bounds state-volume reads across clock steps and path changes ($unavailable, $wallClockStep)",
+    async ({ unavailable, wallClockStep }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", "/system-info-first");
       vi.spyOn(process, "uptime").mockReturnValue(123);
       vi.spyOn(process, "memoryUsage").mockReturnValue(process.memoryUsage());
@@ -248,14 +257,8 @@ describe("system.info", () => {
             : { targetPath, checkedPath: targetPath, totalBytes: 2048, availableBytes: 1024 },
         );
       const respond = vi.fn();
-      const request = {
-        params: {},
-        respond,
-        client: adminClient,
-        context: createModelsListTestContext({ cfg: {}, catalog: [] }),
-      } as unknown as GatewayRequestHandlerOptions;
-      const handler = expectDefined(systemHandlers["system.info"], "system.info handler");
-      await handler(request);
+      const request = () => requestSystemInfo(respond);
+      await request();
       const initial = respond.mock.calls[0]?.[1];
       freemem.mockReturnValue(512);
       availableMemory.mockReturnValue(512);
@@ -266,23 +269,25 @@ describe("system.info", () => {
         totalBytes: 2048,
         availableBytes: 256,
       }));
-      vi.mocked(Date.now).mockReturnValue(sampleTime + 29_999);
-      await handler(request);
+      vi.mocked(Date.now).mockReturnValue(sampleTime + wallClockStep + 29_999);
+      vi.spyOn(performance, "now").mockReturnValue(sampleElapsed + 29_999);
+      await request();
       expect(readDisk).toHaveBeenCalledTimes(1);
       expect(respond.mock.calls[1]?.[1]).toEqual({
         ...initial,
         memoryFreeBytes: 512,
         loadAverage: [4, 5, 6],
       });
-      vi.mocked(Date.now).mockReturnValue(sampleTime + 30_000);
-      await handler(request);
+      vi.mocked(Date.now).mockReturnValue(sampleTime + wallClockStep + 30_000);
+      vi.spyOn(performance, "now").mockReturnValue(sampleElapsed + 30_000);
+      await request();
       expect(readDisk).toHaveBeenCalledTimes(2);
       expect(respond.mock.calls[2]?.[1]).toMatchObject({
         diskAvailableBytes: 256,
         diskPath: "/system-info-first",
       });
       vi.stubEnv("OPENCLAW_STATE_DIR", "/system-info-second");
-      await handler(request);
+      await request();
       expect(readDisk).toHaveBeenCalledTimes(3);
       expect(respond.mock.calls[3]?.[1]).toMatchObject({ diskPath: "/system-info-second" });
     },
@@ -295,15 +300,7 @@ describe("system.info", () => {
     const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(4096);
 
     const respond = vi.fn();
-    await expectDefined(
-      systemHandlers["system.info"],
-      "system.info handler",
-    )({
-      params: {},
-      respond,
-      client: adminClient,
-      context: createModelsListTestContext({ cfg: {}, catalog: [] }),
-    } as unknown as GatewayRequestHandlerOptions);
+    await requestSystemInfo(respond);
 
     const [ok, payload] = respond.mock.calls[0] ?? [];
     expect(ok).toBe(true);
@@ -325,25 +322,11 @@ describe("system.info", () => {
       }));
       if (failure === "throw") {
         mocks.runCommandWithTimeout.mockRejectedValueOnce(new Error("unavailable"));
-      } else if (failure === "statfs-error") {
-        mocks.statfs.mockRejectedValue(new Error("filesystem unavailable"));
       } else {
-        mocks.runCommandWithTimeout.mockResolvedValueOnce({
-          code: failure === "empty" ? 0 : 1,
-          stdout: "",
-          stderr: "",
-        });
+        mocks.runCommandWithTimeout.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
       }
       const respond = vi.fn();
-      await expectDefined(
-        systemHandlers["system.info"],
-        "system.info handler",
-      )({
-        params: {},
-        respond,
-        client: adminClient,
-        context: createModelsListTestContext({ cfg: {}, catalog: [] }),
-      } as unknown as GatewayRequestHandlerOptions);
+      await requestSystemInfo(respond);
       const [ok, payload] = respond.mock.calls[0] ?? [];
       expect(ok).toBe(true);
       if (!validateSystemInfoResult(payload)) {
@@ -365,17 +348,11 @@ describe("system.info", () => {
       totalBytes: 4096,
       availableBytes: 1024,
     }));
-    const handler = expectDefined(systemHandlers["system.info"], "system.info handler");
     const respond = vi.fn();
     // Unavailable native discovery exercises the state-directory fallback entry too.
     mocks.runCommandWithTimeout.mockRejectedValueOnce(new Error("unavailable"));
     for (const scopes of [["operator.read"], ["operator.read", "operator.admin"]]) {
-      await handler({
-        params: {},
-        respond,
-        client: { connect: { scopes } },
-        context: createModelsListTestContext({ cfg: {}, catalog: [] }),
-      } as unknown as GatewayRequestHandlerOptions);
+      await requestSystemInfo(respond, {}, { connect: { scopes } });
     }
 
     const payloads = respond.mock.calls.map(([ok, payload]) => {
