@@ -86,7 +86,7 @@ async function removalHarness(apiKey: unknown = "__OPENCLAW_REDACTED__", withAcc
   async function confirm() {
     row.querySelector<HTMLButtonElement>(".provider-row__remove")!.click();
     await waitForSolid(() =>
-      expect(document.body.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
+      expect(document.body.querySelector("openclaw-modal-actions button.danger")).not.toBeNull(),
     );
     const { modal } = await getRenderedModalDialog(document.body);
     const copy = modal.textContent ?? "";
@@ -138,7 +138,7 @@ it.each(["agent", "reconnect", "access"] as const)(
     await completion;
     await h.page.updateComplete;
     expect(requestCount(h.request, "models.authLogout")).toBe(1);
-    expect(h.toast.toast?.message ?? "").not.toContain("Logged out.");
+    expect(h.toast.toasts[0]?.options.message ?? "").not.toContain("Logged out.");
   },
 );
 
@@ -155,7 +155,7 @@ it.each([true, false])(
     expect(copy).toContain("OpenAI");
     expect(copy).toContain("configured aliases");
     expect(copy).not.toContain("Runs using it stop");
-    await waitForSolid(() => expect(h.toast.toast?.message).toContain("Logged out."));
+    await waitForSolid(() => expect(h.toast.toasts[0]?.options.message).toContain("Logged out."));
     expect(h.logout.mock.calls.map(([target]) => target)).toEqual([
       ...(withAccount ? [{ provider: "openai", agentId: "writer" }] : []),
       { provider: "OpenAI", credentialType: "api_key", agentId: "writer" },
@@ -180,15 +180,15 @@ it.each([false, true])(
     }
     await h.confirm();
     await waitForSolid(() =>
-      expect(h.toast.toast?.message).toContain("Synthetic key removal failure"),
+      expect(h.toast.toasts[0]?.options.message).toContain("Synthetic key removal failure"),
     );
-    expect(h.toast.toast?.message).toContain("removed so far: 1");
+    expect(h.toast.toasts[0]?.options.message).toContain("removed so far: 1");
     if (failRefresh) {
-      expect(h.toast.toast?.message).toContain("Synthetic refresh failure");
+      expect(h.toast.toasts[0]?.options.message).toContain("Synthetic refresh failure");
     } else {
       expect(h.page.querySelector('[data-profile-id="openai:work"]')).toBeNull();
     }
-    expect(h.toast.toast?.message).not.toContain("Logged out.");
+    expect(h.toast.toasts[0]?.options.message).not.toContain("Logged out.");
     expect(requestCount(h.request, "models.authLogout")).toBe(2);
   },
 );
@@ -213,7 +213,7 @@ it("names the retained secret reference when saved accounts can be removed", asy
   });
   const copy = await h.confirm();
   expect(copy).toContain("Secret references in OpenAI");
-  await waitForSolid(() => expect(h.toast.toast?.message).toContain("Logged out."));
+  await waitForSolid(() => expect(h.toast.toasts[0]?.options.message).toContain("Logged out."));
   expect(h.logout.mock.calls.map(([target]) => target)).toEqual([
     { provider: "openai", agentId: "writer" },
   ]);

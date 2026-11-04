@@ -762,6 +762,12 @@ the generic response wait after one second and clears it on cancellation or
 with request-correlated evidence can call `report("slot")`. Any backend probes
 must be bounded by that request's lifetime; do not add an always-on polling loop.
 
+A native transport that runs `onPayload` itself should call
+`applyProviderPayloadHook(options, payload, model)` from
+`openclaw/plugin-sdk/provider-stream-shared`. It returns the hook's replacement, or the
+original payload when the hook returns `undefined`, and stops waiting when the request
+signal aborts, so a cancelled turn settles without dispatching the request.
+
 ## Next steps
 
 - [Channel Plugins](/plugins/sdk-channel-plugins) - if your plugin also provides a channel
@@ -849,3 +855,13 @@ A rejected or lost deletion reply retains cleanup custody. The host can retry
 that exact deletion after restart even when live inspection labels are gone.
 Legacy providers and persisted rows with no receipt keep their existing contract;
 receipt-bearing rows refuse providers that no longer advertise this capability.
+
+### Native web search codecs
+
+`openclaw/plugin-sdk/provider-web-search` exports `nativeWebSearchCodecs` for
+Brave web search, Exa search, Parallel REST search and SearXNG JSON search.
+Each format declares its HTTP method, builds its native query/body, and projects
+results with the native plugin's untrusted-content marking and result metadata.
+The native plugins and ClawRouter use the same codecs. Callers own credentials,
+endpoint admission, SSRF policy, cancellation, response limits and caching; a
+codec does not grant permission to execute an offer or establish its billing.

@@ -696,26 +696,6 @@ describe("new-session composer attachment drops", () => {
     expect(switches).toHaveLength(0);
   });
 
-  it("lets one draft pill replace page-level incognito", () => {
-    const onVisibilityChange = vi.fn();
-    const { composer } = renderComposer({
-      draftAvailable: true,
-      visibility: "draft",
-      onVisibilityChange,
-    });
-    const draftPill = composer.querySelector<HTMLButtonElement>('[role="switch"]');
-    const visibleDraftButtons = Array.from(
-      composer.querySelectorAll<HTMLButtonElement>(".agent-chat__composer-footer button"),
-    ).filter((button) => button.textContent?.trim() === "Draft");
-
-    expect(draftPill?.textContent).toContain("Draft");
-    expect(draftPill?.getAttribute("aria-checked")).toBe("true");
-    expect(visibleDraftButtons).toEqual([draftPill]);
-
-    draftPill?.click();
-    expect(onVisibilityChange).toHaveBeenCalledWith("normal");
-  });
-
   it("adds a dropped file through the shared attachment handling", async () => {
     const { attachmentDraft, composer } = renderComposer();
     const replace = vi.spyOn(attachmentDraft, "replace");

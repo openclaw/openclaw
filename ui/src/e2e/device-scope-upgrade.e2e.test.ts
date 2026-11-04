@@ -175,7 +175,8 @@ suite.define(() => {
     const desktopItem = await openLimitedAccessItem(desktopPanel);
     await desktopItem.getByRole("button", { name: "Request admin" }).waitFor();
     await captureProof(desktop, "desktop-inbox-limited-access.png", desktopPanel);
-    await desktopPanel.getByRole("button", { name: "Dismiss shown" }).click();
+    await desktopPanel.locator(".sidebar-issues-panel__more").click();
+    await desktopPanel.getByRole("menuitem", { name: "Dismiss shown" }).click();
     await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("0 inbox items");
     await expect.poll(() => desktopItem.count()).toBe(0);
     await desktopPanel.getByRole("tab", { name: "All", exact: true }).waitFor();
@@ -389,7 +390,8 @@ suite.define(() => {
 
     const item = await openLimitedAccessItem(await openInbox(page));
     await item.getByRole("button", { name: "Request admin" }).click();
-    const message = "Administrator access request failed: missing scope: operator.read";
+    const message =
+      "Administrator access request failed: Couldn’t complete this request. Ask an admin to grant read access.";
     await item.locator(".sidebar-issues-panel__body").getByText(message, { exact: true }).waitFor();
 
     expect(await item.getByText(message, { exact: true }).count()).toBe(1);

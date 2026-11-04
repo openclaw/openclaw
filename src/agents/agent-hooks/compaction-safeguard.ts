@@ -10,7 +10,11 @@ import {
   SUMMARY_TRUNCATED_MARKER,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
+  clearCompactionPendingAskSection,
   computeFileLists,
+  extractCurrentCompactionUserRequest,
+  extractCompactionMessageText as extractMessageText,
+  formatCompactionUserLabel,
   formatFileOperations,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
@@ -52,7 +56,7 @@ import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardCancellation,
 } from "./compaction-safeguard-runtime.js";
-import { extractMessageText, hasProjectedSummaryText } from "./compaction-safeguard-text.js";
+import { hasProjectedSummaryText } from "./compaction-safeguard-text.js";
 import {
   collectToolFailures,
   formatToolFailuresSection,
@@ -434,7 +438,7 @@ function formatContextMessage(message: AgentMessage): string | null {
   if (message.role === "assistant") {
     roleLabel = "Assistant";
   } else if (message.role === "user") {
-    roleLabel = "User";
+    roleLabel = formatCompactionUserLabel(message);
   } else if (message.role === "toolResult") {
     const toolName = (message as { toolName?: unknown }).toolName;
     const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
@@ -554,18 +558,6 @@ function formatGeneratedSplitTurnSection(summary: string, onTruncated: () => voi
   return `${heading}${cappedSummary}`;
 }
 
-function extractLatestUserAsk(messages: AgentMessage[]): string | null {
-  for (const message of messages.toReversed()) {
-    if (message.role === "user") {
-      const ask = extractMessageText(message);
-      if (ask) {
-        return ask;
-      }
-    }
-  }
-  return null;
-}
-
 /** Registers compaction hooks that summarize, preserve recent turns, and audit output quality. */
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
@@ -583,7 +575,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let baseTurnPrefixMessages = stripRuntimeContextCustomMessages(
       preparation.turnPrefixMessages ?? [],
     );
-    const latestUnresolvedUserRequest = preparation.latestUnresolvedUserRequest;
+    const { requestSelection, latestUnresolvedUserRequest } = preparation;
+    const reconcileRequestSelection = (summary: string) =>
+      requestSelection?.state === "none" ? clearCompactionPendingAskSection(summary) : summary;
     setCompactionSafeguardCancellation(ctx.sessionManager, undefined);
     const cancelCompaction = (reason: string, error?: unknown) => {
       setCompactionSafeguardCancellation(ctx.sessionManager, reason, error);
@@ -815,7 +809,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               messages: baseMessagesToSummarize,
               recentTurnsPreserve,
             });
-            const finalized = await finalizeSummaryText(providerResult, {
+            const finalized = await finalizeSummaryText(reconcileRequestSelection(providerResult), {
               splitTurnSection: preparation.isSplitTurn
                 ? buildSplitTurnContextSection(turnPrefixMessages)
                 : undefined,
@@ -881,9 +875,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       const oracleMessages = [...baseMessagesToSummarize, ...turnPrefixMessages];
       const splitUserAsk = preparation.isSplitTurn
-        ? extractLatestUserAsk(turnPrefixMessages)
+        ? extractCurrentCompactionUserRequest(turnPrefixMessages, extractMessageText)
         : null;
-      const latestUserAsk = splitUserAsk ?? extractLatestUserAsk(baseMessagesToSummarize);
+      const latestUserAsk = requestSelection
+        ? requestSelection.state === "unresolved"
+          ? requestSelection.request
+          : null
+        : extractCurrentCompactionUserRequest(oracleMessages, extractMessageText);
+      const latestAskInRetainedTurn = splitUserAsk !== null && splitUserAsk === latestUserAsk;
       const identifiers = extractOpaqueIdentifiers(
         oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
       );
@@ -895,7 +894,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         recentTurnsPreserve,
       });
       const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
-      const latestPreparedAsk = extractLatestUserAsk(baseMessagesToSummarize);
+      const latestPreparedAsk = extractCurrentCompactionUserRequest(
+        baseMessagesToSummarize,
+        extractMessageText,
+      );
       const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
       const includePreservedContext =
         !latestUnresolvedUserRequest &&
@@ -941,6 +943,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   previousSummary,
                 })
               : buildStructuredFallbackSummary(previousSummary);
+
+          historySummary = reconcileRequestSelection(historySummary);
 
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const splitTurnFocusLabel = "Additional context from /compact";
@@ -994,7 +998,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 auditSummary: unbudgetedSummary,
                 identifiers,
                 latestAsk: latestUserAsk,
-                latestAskInRetainedTurn: splitUserAsk !== null,
+                latestAskInRetainedTurn,
                 latestUnresolvedUserRequest,
                 requiredAskContext,
                 identifierPolicy,
@@ -1012,7 +1016,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           identifiers,
           latestAsk: latestUserAsk,
           latestUnresolvedUserRequest,
-          retainedTurnSummary: splitUserAsk !== null ? splitTurnSummaryLocal : undefined,
+          retainedTurnSummary: latestAskInRetainedTurn ? splitTurnSummaryLocal : undefined,
           identifierPolicy,
         });
         if (quality.ok && !finalized.qualityRetentionInfeasible) {
@@ -1034,7 +1038,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             {
               identifiers,
               latestAsk: latestUserAsk,
-              latestAskInRetainedTurn: splitUserAsk !== null,
+              latestAskInRetainedTurn,
               latestUnresolvedUserRequest,
               requiredAskContext,
               identifierPolicy,

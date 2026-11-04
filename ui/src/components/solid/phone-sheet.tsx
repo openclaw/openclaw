@@ -3,19 +3,13 @@ import { onSettled } from "solid-js";
 import { bindSheetDismissGesture, slideSheetOut } from "../../lib/motion/sheet-dismiss.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { tabbableElements } from "../focus-navigation.ts";
 import { Icon } from "./icon.tsx";
+import { createPhoneSheetLayout } from "./phone-sheet-layout.ts";
 import { Popover, type PopoverHandle } from "./popover.tsx";
 import "./phone-sheet.css";
 
-const PHONE_SHEET_QUERY =
-  "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
-
-/** Phone layouts open form-like filters as a sheet; everywhere else they stay popovers. */
-export function createPhoneSheetLayout() {
-  return createMediaQuery(PHONE_SHEET_QUERY, globalThis.matchMedia?.(PHONE_SHEET_QUERY).matches);
-}
+export { createPhoneSheetLayout };
 
 /**
  * A modal bottom sheet with a popover's trigger, handle, and in-place children, so a surface can
@@ -32,8 +26,6 @@ export function PhoneSheet(props: {
   triggerId?: string;
   triggerClass?: JSX.HTMLAttributes<HTMLButtonElement>["class"];
   triggerTitle?: string;
-  /** A control beside the close button; the title stays centered on the sheet. */
-  headerAction?: JSX.Element;
   children?: JSX.Element;
   onOpenChange?(open: boolean): void;
   ref?(handle: PopoverHandle): void;
@@ -123,6 +115,10 @@ export function PhoneSheet(props: {
         props.ref?.({
           ...value,
           hide: () => {
+            // A form can submit with the sheet closed; a late dismiss would close its next opening.
+            if (!value.overlay.open) {
+              return false;
+            }
             slideOutAndDismiss();
             return true;
           },
@@ -132,11 +128,7 @@ export function PhoneSheet(props: {
         if (open) {
           restore();
           // Focus the close button, not the first field, so a tap doesn't raise the keyboard.
-          // The surface takes it when a header action has hidden the close button.
-          queueMicrotask(() => {
-            handle?.overlay.surface.focus({ preventScroll: true });
-            closeButton.focus({ preventScroll: true });
-          });
+          queueMicrotask(() => closeButton.focus({ preventScroll: true }));
         }
         props.onOpenChange?.(open);
       }}
@@ -153,7 +145,6 @@ export function PhoneSheet(props: {
         <div ref={(element) => (grabber = element)} class="oc-sheet__grabber" aria-hidden="true" />
         <div class="oc-sheet__header">
           <h2 class="oc-sheet__title">{props.label}</h2>
-          <div class="oc-sheet__action">{props.headerAction}</div>
           <button
             ref={(element) => (closeButton = element)}
             type="button"

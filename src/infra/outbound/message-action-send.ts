@@ -492,14 +492,14 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     const preparedTtsPreferences = await prepareTtsPreferences();
     if (
       explicitTts ||
-      shouldAttemptTtsPayload({
+      (await shouldAttemptTtsPayload({
         cfg,
         preparedTtsPreferences,
         ttsAuto,
         agentId,
         channelId: channel,
         accountId: accountId ?? undefined,
-      })
+      }))
     ) {
       const { maybeApplyTtsToPayload } = await loadMessageActionTtsRuntime();
       ttsPayload = await maybeApplyTtsToPayload({

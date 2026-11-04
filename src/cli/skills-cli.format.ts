@@ -1,14 +1,9 @@
-import type {
-  SkillsWorkshopChangesResult,
-  SkillsWorkshopListResult,
-} from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import {
   hasMissingSkillRequirements,
@@ -368,48 +363,4 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   );
 
   return appendClawHubHint(lines.join("\n"));
-}
-
-export function formatSkillsWorkshopList(result: SkillsWorkshopListResult): string {
-  const lines = [
-    `${theme.muted("Agent:")} ${terminalText`${result.agentId}`}  ${theme.muted("Mode:")} ${terminalText`${result.mode}`}`,
-    `${theme.muted("Root:")} ${displayPath(result.root)}`,
-    "",
-  ];
-  if (result.skills.length === 0) {
-    lines.push("No learned skills.");
-  }
-  for (const skill of result.skills) {
-    const uses = skill.useCount === undefined ? "" : `  uses=${skill.useCount}`;
-    lines.push(
-      `${theme.command(terminalText`${skill.name}`)}${terminalText`  updated ${formatTimeAgo(Math.max(0, Date.now() - skill.updatedAtMs))}${uses}  ${skill.description}`}`,
-    );
-  }
-  const archived = result.archived.filter((entry) => !entry.live);
-  if (archived.length > 0) {
-    lines.push("", theme.heading("Archived:"));
-    for (const entry of archived) {
-      lines.push(terminalText`${entry.name}  versions=${entry.versions.length}`);
-    }
-  }
-  const drafts = result.drafts ?? [];
-  if (drafts.length > 0) {
-    lines.push("", theme.heading("Drafts (review with /learn drafts):"));
-    for (const draft of drafts) {
-      lines.push(terminalText`${draft.id}  for ${draft.skillName}  ${draft.summary}`);
-    }
-  }
-  return `${lines.join("\n")}\n`;
-}
-
-export function formatSkillsWorkshopChanges(result: SkillsWorkshopChangesResult): string {
-  if (result.changes.length === 0) {
-    return "No Workshop changes.\n";
-  }
-  return `${result.changes
-    .map((change) => {
-      const version = change.versionId ? `  version=${change.versionId}` : "";
-      return terminalText`${formatTimeAgo(Math.max(0, Date.now() - change.createdAtMs))}  ${change.actor}  ${change.action}  ${change.skillName}  ${change.summary}${version}`;
-    })
-    .join("\n")}\n`;
 }

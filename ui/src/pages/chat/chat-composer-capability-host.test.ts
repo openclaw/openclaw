@@ -16,7 +16,7 @@ import {
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   ChatComposerCapabilityHost,
   ChatComposerCapabilityDialogs,
@@ -220,7 +220,8 @@ function createAddServerHarness(
         .click();
       expect(query("form")).toBe(form);
       container.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "docs";
-      container.querySelector<HTMLSelectElement>('[name="mcp-transport"]')!.value = "stdio";
+      container.querySelector<HTMLInputElement>('input[type="radio"][value="stdio"]')!.click();
+      flush();
       container.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = "docs-mcp";
       query("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       await waitForSolid(() => expect(host.dialogView(context, state, session).busy).toBe(false));

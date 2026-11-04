@@ -299,12 +299,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       </a>
       <Show when={childCount() > 0}>
         <button
-          class={[
-            "sidebar-child-session-toggle",
-            {
-              "sidebar-child-session-toggle--running": session().runningChildCount > 0,
-            },
-          ]}
+          class="sidebar-child-session-toggle"
           type="button"
           ref={(element) => (controls.children = element)}
           disabled={Boolean(session().snapshot)}
@@ -319,20 +314,10 @@ function renderRecentSessionRow(params: RecentSessionParams) {
               session: label(),
             },
           )}
-          aria-description={
-            !childrenExpanded() && session().runningChildCount > 0
-              ? t("sessionsView.activeRun")
-              : undefined
-          }
           onClick={() => host().toggleSessionChildren(actionSession())}
         >
           <span class="sidebar-child-session-toggle__icon" aria-hidden="true">
-            <Show
-              when={!childrenExpanded() && session().runningChildCount > 0}
-              fallback={<Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />}
-            >
-              <span class="session-run-spinner" />
-            </Show>
+            <Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />
           </span>
           <span class="sidebar-child-session-toggle__count">{childCount()}</span>
         </button>

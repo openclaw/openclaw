@@ -660,7 +660,9 @@ serveOwnedWorkerTasks(
               ? request.request.kind === "summary"
                 ? `history.${request.request.params.query.kind}`
                 : `history.${request.request.kind}`
-              : request.kind,
+              : request.kind === "transcript-hydration"
+                ? `transcript-hydration.${request.caller ?? "session-manager"}`
+                : request.kind,
             () => withSessionTranscriptProjectionReceipt(request.projectionReceipt, readRequest),
             request.validation,
             request.kind === "transcript-match" ? request.request.diagnostics : undefined,

@@ -528,7 +528,7 @@ suite.define(() => {
       await confirmationCopy(page).locator("openclaw-update-run-view").waitFor();
 
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      await button(page, "Close").click();
+      await button(page.locator("openclaw-modal-dialog openclaw-modal-actions"), "Close").click();
       await page.locator(".sidebar-issues-button").click();
       const updateIssue = updateCard(page);
       await updateIssue.locator("summary").click();

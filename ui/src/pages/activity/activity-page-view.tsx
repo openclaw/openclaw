@@ -21,6 +21,7 @@ import {
 } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -121,9 +122,9 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
   return haystack.includes(needle);
 }
 
-const STATUS_KINDS = { running: "warn", done: "ok", error: "danger" } as const satisfies Record<
+const STATUS_KINDS = { running: "running", done: "ok", error: "danger" } as const satisfies Record<
   ActivityStatus,
-  "warn" | "ok" | "danger"
+  "running" | "ok" | "danger"
 >;
 
 function toggle(ids: ReadonlySet<string>, id: string, open = !ids.has(id)) {
@@ -422,6 +423,45 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
       { loadingValue: false },
     );
 
+    const actionsMenu = () => (
+      <Menu
+        id="activity-live-actions"
+        pointerFocus="trigger"
+        label={t("browser.moreActions")}
+        placement="bottom-end"
+        trigger={<Icon name="moreHorizontal" />}
+        triggerClass="btn btn--sm activity-live-actions__trigger"
+        triggerAttributes={{ title: t("browser.moreActions") }}
+        items={[
+          {
+            id: "expand",
+            label: t("activity.expandAll"),
+            disabled: filtered().length === 0,
+          },
+          {
+            id: "collapse",
+            label: t("activity.collapseAll"),
+            disabled: expandedIds().size === 0,
+          },
+          {
+            id: "clear",
+            label: t("activity.clear"),
+            variant: "danger",
+            disabled: liveProps.entries.length === 0,
+          },
+        ]}
+        onSelect={(item) => {
+          if (item.id === "expand") {
+            expandAll();
+          } else if (item.id === "collapse") {
+            collapseAll();
+          } else if (item.id === "clear") {
+            clearAll();
+          }
+        }}
+      />
+    );
+
     // The stream fills the remaining viewport height; the settings-page column
     // wrapper is intentionally skipped so the fill-height flex chain
     // (.settings-workspace--fill-height … .activity-page … .activity-group …
@@ -468,42 +508,9 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                 </>
               }
             >
-              <Menu
-                id="activity-live-actions"
-                pointerFocus="trigger"
-                label={t("browser.moreActions")}
-                placement="bottom-end"
-                trigger={<Icon name="moreHorizontal" />}
-                triggerClass="btn btn--sm activity-live-actions__trigger"
-                triggerAttributes={{ title: t("browser.moreActions") }}
-                items={[
-                  {
-                    id: "expand",
-                    label: t("activity.expandAll"),
-                    disabled: filtered().length === 0,
-                  },
-                  {
-                    id: "collapse",
-                    label: t("activity.collapseAll"),
-                    disabled: expandedIds().size === 0,
-                  },
-                  {
-                    id: "clear",
-                    label: t("activity.clear"),
-                    variant: "danger",
-                    disabled: liveProps.entries.length === 0,
-                  },
-                ]}
-                onSelect={(item) => {
-                  if (item.id === "expand") {
-                    expandAll();
-                  } else if (item.id === "collapse") {
-                    collapseAll();
-                  } else if (item.id === "clear") {
-                    clearAll();
-                  }
-                }}
-              />
+              <FloatingHeaderActions fallback={actionsMenu()}>
+                {actionsMenu()}
+              </FloatingHeaderActions>
             </Show>
           </div>
         </div>
