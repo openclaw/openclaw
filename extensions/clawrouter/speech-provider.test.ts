@@ -438,9 +438,10 @@ describe("ClawRouter native speech", () => {
         });
         const provider = speech(cfg);
         const storedCfg = withoutKey(cfg);
-        await expect(provider.synthesize({ ...request(), cfg: storedCfg })).resolves.toMatchObject({
-          audioBuffer: AUDIO,
-        });
+        // This call includes cold auth-owner setup in the end-to-end budget, as TTS does.
+        await expect(
+          provider.synthesize({ ...request(), cfg: storedCfg, timeoutMs: 30_000 }),
+        ).resolves.toMatchObject({ audioBuffer: AUDIO });
         await expect(
           provider.synthesize(
             request({ profileId: "clawrouter:speech", apiKey: "fixture-inline-must-not-win" }),
