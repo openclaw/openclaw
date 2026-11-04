@@ -133,7 +133,7 @@ describe("slackPlugin actions", () => {
     expect(prepared).toBe(workspaceAware ? null : payload);
   });
 
-  it("forces the plugin action path when replyBroadcast is set", () => {
+  it("forces the plugin action path when replyBroadcast is set on an ordinary channel", () => {
     const payload = { text: "hello" };
     const prepared = slackPlugin.actions!.prepareSendPayload!({
       ctx: {
@@ -142,8 +142,10 @@ describe("slackPlugin actions", () => {
         cfg: {},
         params: { replyBroadcast: true, threadId: "111.222" },
         toolContext: {
-          currentChannelId: "team:T123:channel:C999",
-          currentChannelProvider: undefined,
+          // Ordinary unqualified context: without replyBroadcast this target
+          // would keep prepareSendPayload's payload; with it, force plugin path.
+          currentChannelId: "C999",
+          currentChannelProvider: "slack",
         },
       },
       to: "channel:C999",
