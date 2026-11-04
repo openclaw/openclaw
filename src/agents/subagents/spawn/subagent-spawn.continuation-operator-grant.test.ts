@@ -3,12 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hydrateContinuationCustody } from "../../../auto-reply/continuation/custody/custody-store.js";
-import { listContinuationRecords } from "../../../auto-reply/continuation/custody/custody-store.js";
+import { runContinuationCustodyBoot } from "../../../auto-reply/continuation/custody-boot.js";
+import {
+  createContinuationRecord,
+  hydrateContinuationCustody,
+  listContinuationRecords,
+  newContinuationRecordId,
+} from "../../../auto-reply/continuation/custody/custody-store.js";
 import {
   dispatchToolDelegates,
   resetDelegateDispatchHedgesForTests,
 } from "../../../auto-reply/continuation/delegate-dispatch.js";
+import { resetContinueDelegateTurnAdmissionForTests } from "../../../auto-reply/continuation/delegate-turn-admission.js";
 import { captureContinuationQueueContext } from "../../../auto-reply/continuation/queue-context.js";
 import { resetContinuationStateForTests } from "../../../auto-reply/continuation/state.js";
 import {
@@ -48,6 +54,7 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "../registry/subagent-registry-persistence.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import "./subagent-spawn-model.mocks.shared.js";
+import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
 // mock-isolation: In-process spawn tests supply registries without loading installed plugins.
 vi.mock("../../runtime-plugins.js", () => {
@@ -63,6 +70,7 @@ vi.mock("../registry/subagent-registry-state.js", { spy: true });
 vi.mock("../registry/subagent-registry-persistence.js", { spy: true });
 
 const OWNER = "agent:main:main";
+const OTHER = "agent:main:other";
 const INTERRUPTED_NOTICE = "[continuation:delegate-spawn-interrupted]";
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 const persistRegistryRows = vi.fn<MockSubagentRegistryRows>();
@@ -103,6 +111,29 @@ function gatewayInstance(config: OpenClawConfig) {
   return { context, launches };
 }
 
+/** The request scope a turn runs in: a Gateway operator connection, or an internal caller. */
+function turnScope(gateway: ReturnType<typeof gatewayInstance>, client?: GatewayClient) {
+  let connected = true;
+  const scope = {
+    context: gateway.context,
+    resolveGatewayContext: gateway.context.resolveGatewayContext,
+    ...(client
+      ? { client, hasCurrentClientAuthority: () => connected && !client.invalidated }
+      : {}),
+    isWebchatConnect: () => false,
+  };
+  return {
+    /** The electing turn: the tool accepts the delegate, then its post-response dispatch runs. */
+    elect: (delaySeconds: number) =>
+      withPluginRuntimeGatewayRequestScope(scope, () => electDelegate(delaySeconds)),
+    dispatch: (sessionKey: string) =>
+      withPluginRuntimeGatewayRequestScope(scope, () => dispatchQueued(sessionKey)),
+    disconnect: () => {
+      connected = false;
+    },
+  };
+}
+
 /** A CLI operator connection (k6, `openclaw agent`) electing delegates in its own turn. */
 async function operatorConnection(gateway: ReturnType<typeof gatewayInstance>, scopes: string[]) {
   const profile = ensureProfileForEmail("elector@example.test");
@@ -118,24 +149,7 @@ async function operatorConnection(gateway: ReturnType<typeof gatewayInstance>, s
   });
   // The handshake binds access policy: none configured, so no plugin grant (null).
   fixture.client.internal = { ...fixture.client.internal, operatorAccessAuthority: null };
-  let connected = true;
-  const scope = {
-    context: gateway.context,
-    resolveGatewayContext: gateway.context.resolveGatewayContext,
-    client: fixture.client,
-    hasCurrentClientAuthority: () => connected && !fixture.client.invalidated,
-    isWebchatConnect: () => false,
-  };
-  return {
-    profileId: profile.id,
-    device,
-    /** The electing turn: the tool accepts the delegate, then its post-response dispatch runs. */
-    elect: (delaySeconds: number) =>
-      withPluginRuntimeGatewayRequestScope(scope, () => electDelegate(delaySeconds)),
-    disconnect: () => {
-      connected = false;
-    },
-  };
+  return { profileId: profile.id, device, ...turnScope(gateway, fixture.client) };
 }
 
 async function electDelegate(delaySeconds: number): Promise<string> {
@@ -143,13 +157,24 @@ async function electDelegate(delaySeconds: number): Promise<string> {
   const accepted = await tool.execute("call-1", { task: "fold the next crane", delaySeconds });
   expect(accepted.details).toMatchObject({ status: "scheduled" });
   const [record] = await listContinuationRecords({ ownerSessionKey: OWNER, kinds: ["delegate"] });
+  await dispatchQueued(OWNER);
+  return expectDefined(record, "elected delegate record").recordId;
+}
+
+async function dispatchQueued(sessionKey: string) {
   await dispatchToolDelegates({
-    sessionKey: OWNER,
+    sessionKey,
     chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
-    ctx: { sessionKey: OWNER },
+    ctx: { sessionKey },
     maxChainLength: 10,
   });
-  return expectDefined(record, "elected delegate record").recordId;
+}
+
+function expectChildUnderElector(launch: ChildLaunch | undefined, profileId: string) {
+  const authority = launch?.client.internal?.operatorRunAuthority;
+  expect(authority?.profileId).toBe(profileId);
+  expect(authority?.scopes).toEqual(["operator.write"]);
+  expect(launch?.client.connect.scopes).not.toContain("operator.admin");
 }
 
 async function settledDelegate(recordId: string) {
@@ -169,8 +194,21 @@ async function interruptedNotices(): Promise<string[]> {
   );
 }
 
-async function delegateRecords() {
-  return await listContinuationRecords({ ownerSessionKey: OWNER, kinds: ["delegate"] });
+async function delegateRecords(sessionKey: string) {
+  return await listContinuationRecords({ ownerSessionKey: sessionKey, kinds: ["delegate"] });
+}
+
+/** Fail closed: a named terminal refusal, no child, no interrupted-spawn notice. */
+async function expectRefused(
+  gateway: ReturnType<typeof gatewayInstance>,
+  recordId: string,
+  reason: RegExp,
+) {
+  const record = await settledDelegate(recordId);
+  expect(record.status).toBe("failed");
+  expect(record.failureReason).toMatch(reason);
+  expect(gateway.launches).toEqual([]);
+  expect(await interruptedNotices()).toEqual([]);
 }
 
 async function configure(cfg: OpenClawConfig) {
@@ -200,7 +238,10 @@ describe("continuation delegate dispatch under the elector's bounded grant", () 
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
+    subagentSpawnTesting.setDepsForTest();
     resetDelegateDispatchHedgesForTests();
+    resetContinueDelegateTurnAdmissionForTests();
     resetContinuationStateForTests();
     resetSystemEventsForTest();
     resetGatewayWorkAdmission();
@@ -228,15 +269,13 @@ describe("continuation delegate dispatch under the elector's bounded grant", () 
 
     expect(record).toMatchObject({ status: "succeeded", handoff: { target: "subagent_runs" } });
     expect(gateway.launches).toHaveLength(1);
-    const child = gateway.launches[0]!;
-    expect(child.client.internal?.operatorRunAuthority?.profileId).toBe(operator.profileId);
-    expect(child.client.connect.scopes).not.toContain("operator.admin");
+    expectChildUnderElector(gateway.launches[0], operator.profileId);
     const childRunId = record.handoff?.target === "subagent_runs" ? record.handoff.childRunId : "";
     expect(subagentRuns.get(childRunId)).toMatchObject({
       requesterSessionKey: OWNER,
-      childSessionKey: child.sessionKey,
+      childSessionKey: gateway.launches[0]!.sessionKey,
     });
-    expect(await delegateRecords()).toHaveLength(1);
+    expect(await delegateRecords(OWNER)).toHaveLength(1);
     expect(await interruptedNotices()).toEqual([]);
     expect(peekSystemEvents(OWNER).filter((text) => text.includes("DELEGATE spawn"))).toEqual([]);
   });
@@ -249,11 +288,99 @@ describe("continuation delegate dispatch under the elector's bounded grant", () 
     invalidateGatewayDeviceRevocation(gateway.context, operator.device.deviceId, "operator");
     operator.disconnect();
 
+    await expectRefused(gateway, recordId, /operator dispatch grant was revoked/);
+  });
+
+  it("refuses when the operator's scopes narrow below the grant, connection still open", async () => {
+    const gateway = gatewayInstance(runtimeConfig());
+    const operator = await operatorConnection(gateway, ["operator.write"]);
+    const recordId = await operator.elect(0.05);
+    const narrowed = structuredClone(operator.device);
+    narrowed.tokens!.operator!.scopes = ["operator.read"];
+    persistDevices(stateDir, [narrowed], "both");
+
+    await expectRefused(gateway, recordId, /operator dispatch grant was revoked/);
+  });
+
+  it("never lets a grant authorize a spawn under another session", async () => {
+    const gateway = gatewayInstance(runtimeConfig());
+    const operator = await operatorConnection(gateway, ["operator.write"]);
+    const elected = await operator.elect(60);
+    resetDelegateDispatchHedgesForTests();
+    const [source] = await listContinuationRecords({ recordIds: [elected] });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: OTHER },
+      { sessionId: "other-session", updatedAt: Date.now() },
+    );
+    const copied = await createContinuationRecord({
+      recordId: newContinuationRecordId(),
+      kind: "delegate",
+      ownerSessionKey: OTHER,
+      status: "queued",
+      createdAt: Date.now(),
+      dueAt: Date.now(),
+      stateJson: expectDefined(source, "elected record").stateJson.replace(/"delayMs":\d+,/, ""),
+    });
+    expect(copied.outcome).toBe("created");
+    await operator.dispatch(OTHER);
+
+    await expectRefused(gateway, copied.record!.recordId, /belongs to another session/);
+  });
+
+  it("refuses an expired grant even while the electing connection is open", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const gateway = gatewayInstance(runtimeConfig());
+    const operator = await operatorConnection(gateway, ["operator.write"]);
+    const recordId = await operator.elect(0.05);
+    // Past the due time plus the grant's one-hour slack.
+    vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
+
+    await expectRefused(gateway, recordId, /operator dispatch grant expired/);
+  });
+
+  it("keeps the grant across a Gateway restart and never spawns through an ambient route", async () => {
+    const ambient: unknown[] = [];
+    subagentSpawnTesting.setDepsForTest({
+      callGateway: async <T>(request: { method: string; params?: unknown }) => {
+        ambient.push(request.method);
+        return { status: "accepted", runId: "ambient-child" } as T;
+      },
+    });
+    const before = gatewayInstance(runtimeConfig());
+    const operator = await operatorConnection(before, ["operator.write"]);
+    const recordId = await operator.elect(0.3);
+    // The process dies: its timers, its connection and its Gateway instance go with it.
+    resetDelegateDispatchHedgesForTests();
+    operator.disconnect();
+    const after = gatewayInstance(runtimeConfig());
+
+    await runContinuationCustodyBoot({
+      armedAt: Date.now(),
+      resolveGatewayContext: after.context.resolveGatewayContext,
+      whenSubagentRegistryActivated: async () => {},
+    });
     const record = await settledDelegate(recordId);
 
-    expect(record.status).toBe("failed");
-    expect(record.failureReason).toMatch(/operator dispatch grant .*revoked/i);
-    expect(gateway.launches).toEqual([]);
+    expect(ambient).toEqual([]);
+    expect(record.status).toBe("succeeded");
+    expect(before.launches).toEqual([]);
+    expect(after.launches).toHaveLength(1);
+    expectChildUnderElector(after.launches[0], operator.profileId);
+    expect(await interruptedNotices()).toEqual([]);
+  });
+
+  it("leaves internal-caller (channel) and immediate operator delegates as they were", async () => {
+    const gateway = gatewayInstance(runtimeConfig());
+    const channelTurn = turnScope(gateway);
+    const channelRecord = await settledDelegate(await channelTurn.elect(0.05));
+    const operator = await operatorConnection(gateway, ["operator.write"]);
+    const immediateRecord = await settledDelegate(await operator.elect(0));
+
+    expect([channelRecord.status, immediateRecord.status]).toEqual(["succeeded", "succeeded"]);
+    expect(channelRecord.stateJson).not.toContain("dispatchGrant");
+    expect(gateway.launches).toHaveLength(2);
+    expect(gateway.launches[0]!.client.internal?.operatorRunAuthority).toBeUndefined();
+    expectChildUnderElector(gateway.launches[1], operator.profileId);
     expect(await interruptedNotices()).toEqual([]);
   });
 });
