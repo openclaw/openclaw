@@ -41,6 +41,9 @@ it.each([false, true])("writes normalized provenance (release=%s)", (release) =>
     commit: sha,
     builtAt: timestamp,
     buildId: `2026.7.10-${release ? "release-" : ""}aaaaaaaaaaaa-2026-07-10T12-34-56.000Z`,
+    // Deploy tooling reads this list; a build without the fence must never be cut over a fenced
+    // store undrained (docs/design/continue-work-signal-v2.md §5.4.2).
+    capabilities: ["continuation-turn-start-fence"],
   });
 });
 

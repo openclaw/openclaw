@@ -104,19 +104,20 @@ function prepareTerminalNoticeEntry(
   );
 }
 
-/** Hand one pending terminal notice to the durable queue and release the obligation. */
-export async function deliverPendingTerminalNotice(
-  work: PendingContinuationWork,
-  deps: ContinuationWorkTerminalNoticeDeps = defaultDeps,
-): Promise<boolean> {
-  if (!work.flowId) {
-    return false;
-  }
+/**
+ * Move one owed notice into its one durable session-delivery row and release the obligation, in one
+ * custody transaction. The row then owns delivery, including through a restart: the Gateway's
+ * startup delivery recovery replays it with the text written here. Undefined when nothing is owed.
+ */
+export async function settlePendingTerminalNotice(
+  flowId: string,
+  deps: Pick<ContinuationWorkTerminalNoticeDeps, "settleContinuationNotice"> = defaultDeps,
+) {
   // Re-read under a current revision: the caller that terminalized the record
   // holds the pre-CAS revision, and another drain may already have settled it.
-  const pending = await readPendingTerminalNoticeWork(work.flowId);
+  const pending = await readPendingTerminalNoticeWork(flowId);
   if (!pending?.flowId || pending.expectedRevision === undefined) {
-    return false;
+    return undefined;
   }
   const now = Date.now();
   const text = terminalNoticeText(pending);
@@ -128,10 +129,31 @@ export async function deliverPendingTerminalNotice(
     notice: bound,
     now,
   });
-  if (settled.outcome !== "settled") {
-    // Another drain settled it first; its row is the only one.
+  // Any other outcome: another drain settled it first; its row is the only one.
+  return settled.outcome === "settled"
+    ? {
+        pending,
+        text,
+        record: settled.record,
+        entryId: settled.entryId,
+        entryStatus: settled.entryStatus,
+      }
+    : undefined;
+}
+
+/** Hand one pending terminal notice to the durable queue and release the obligation. */
+export async function deliverPendingTerminalNotice(
+  work: PendingContinuationWork,
+  deps: ContinuationWorkTerminalNoticeDeps = defaultDeps,
+): Promise<boolean> {
+  if (!work.flowId) {
     return false;
   }
+  const settled = await settlePendingTerminalNotice(work.flowId, deps);
+  if (!settled) {
+    return false;
+  }
+  const { pending, text } = settled;
   const surfaced = await surfaceDurableContinuationNotice(
     {
       entryId: settled.entryId,

@@ -489,6 +489,29 @@ export function listContinuationRecords(
 }
 
 /**
+ * The same listing over an existing store with no worker and no writer: an artifact-preserving
+ * read-only snapshot, so the store's bytes and its WAL and shared-memory files stay as they were.
+ * For offline inspection of a stopped store (`openclaw continuations fence-status`); a missing state
+ * database lists nothing.
+ */
+export async function listContinuationRecordsReadOnly(
+  query: ContinuationRecordQuery,
+  options?: ContinuationCustodyStoreOptions,
+): Promise<ContinuationRecord[]> {
+  const [{ withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync }, worker] =
+    await Promise.all([
+      import("../../../state/openclaw-state-db-readonly.js"),
+      import("./custody-store.worker.js"),
+    ]);
+  return (
+    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      ({ db }) => worker.listContinuationRecordsInDatabase(db, query),
+      { env: options?.env ?? process.env },
+    )) ?? []
+  );
+}
+
+/**
  * Hydrate the hot-path projection from one committed read (phase A), even when
  * already hydrated. Mutations run it on demand.
  */
