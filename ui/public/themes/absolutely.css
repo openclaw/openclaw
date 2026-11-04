@@ -3,6 +3,7 @@
 :root[data-theme="absolutely"],
 :root[data-theme="absolutely-light"] {
   --accent-foreground: #ffffff;
+  --chat-send-foreground: var(--accent-foreground);
   --sidebar-rail-action-stroke-width: 2.15px;
   --sidebar-rail-surface: color-mix(in srgb, var(--text) 4%, var(--bg-content));
   --bg: color-mix(in srgb, var(--text) 2%, var(--bg-content));
@@ -37,6 +38,7 @@
   --primary-hover: #e68b6b;
   --primary-foreground: #241f1b;
   /* White action glyphs keep their contrast when hover and press step the fill. */
+  --chat-send-hover-bg: color-mix(in srgb, var(--primary) 86%, var(--primary-foreground));
   --sidebar-rail-action-hover-bg: var(--accent-hover);
   --sidebar-rail-action-active-bg: color-mix(
     in srgb,

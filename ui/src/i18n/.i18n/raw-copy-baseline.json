@@ -237,7 +237,7 @@
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/lib/chat/commands.ts",
-      "text": "Clear chat history"
+      "text": "Clear conversation"
     },
     {
       "count": 1,
@@ -280,13 +280,6 @@
       "name": "text",
       "path": "ui/src/pages/agents/memory/view.tsx",
       "text": "plugins.entries.memory-wiki.enabled = true"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-stream-view.tsx",
-      "text": "Assistant"
     },
     {
       "count": 1,
@@ -413,20 +406,6 @@
       "name": "text",
       "path": "ui/src/pages/plugins/consent-dialog.tsx",
       "text": "v"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/plugins/overview.tsx",
-      "text": "Clean"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/plugins/overview.tsx",
-      "text": "Review"
     },
     {
       "count": 1,

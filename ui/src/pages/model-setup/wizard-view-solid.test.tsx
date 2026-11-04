@@ -234,7 +234,7 @@ it("shows device-code expiry only near the end and retires an expired code", asy
   flush();
   expect(container.querySelector("code")).toBeNull();
   expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-    "This code expired. Nothing was connected.",
+    "This code expired. No account was added.",
   );
   expect(container.querySelector(".wizard-sign-in__ring")).toBeNull();
 });

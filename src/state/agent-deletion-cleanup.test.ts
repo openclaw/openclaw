@@ -5,12 +5,12 @@ import type { SQLInputValue } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { readSessionArchiveText } from "../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareAgentDeleteDatabases } from "../agents/agent-delete-databases.js";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { acquireAuthProfileReadDatabase } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
-import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly as readEntry } from "../config/sessions/session-accessor.js";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
@@ -79,7 +79,7 @@ function expectPublishedArchive(databasePath: string, sessionId: string, content
   assert(archive && typeof archive.archive_name === "string");
   expect(archive).toMatchObject({ published_at: expect.any(Number), last_publish_error: null });
   expect(
-    readSessionArchiveContentSync(
+    readSessionArchiveText(
       path.join(resolveSessionArtifactDirectory(databasePath), archive.archive_name),
     ),
   ).toContain(content);
@@ -146,7 +146,7 @@ describe("agent deletion database cleanup authority", () => {
       );
     });
     assert(exported);
-    expect(readSessionArchiveContentSync(exported)).toContain("accepted export proof");
+    expect(readSessionArchiveText(exported)).toContain("accepted export proof");
     expect(f.read()).toBeUndefined();
     expect(
       readRow(

@@ -79,6 +79,7 @@ suite.define(() => {
         );
         expect((high! + 0.05) / (low! + 0.05), accent + " " + state).toBeGreaterThanOrEqual(4.5);
         if (state === "active") {
+          await page.mouse.move(0, 0);
           await page.mouse.up();
         }
       }
@@ -105,6 +106,72 @@ suite.define(() => {
           (a, b) => a - b,
         );
         expect((high! + 0.05) / (low! + 0.05), accent + " inset focus").toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+  it("preserves authored primary and send ink through a custom-accent reset", async () => {
+    const { page } = await openThemedChat("absolutely", "dark");
+    await page.goto(suite.server.baseUrl + "chat");
+    for (const accent of [undefined, "#707070", "theme"]) {
+      await page.evaluate(
+        ({ key, accent: storedAccent }) => {
+          const settings = JSON.parse(localStorage.getItem(key) ?? "{}");
+          if (storedAccent === undefined) {
+            delete settings.accent;
+          } else {
+            settings.accent = storedAccent;
+          }
+          localStorage.setItem(key, JSON.stringify(settings));
+        },
+        { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), accent },
+      );
+      await page.reload();
+      await page.locator(".agent-chat__composer-combobox textarea").fill("Authored ink");
+      await page.addStyleTag({ content: "* { transition: none !important; }" });
+      const authored = accent !== "#707070";
+      const root = await page.evaluate(() => ({
+        primary: getComputedStyle(document.documentElement).getPropertyValue(
+          "--primary-foreground",
+        ),
+        inlinePrimary: document.documentElement.style.getPropertyValue("--primary-foreground"),
+        inlineSend: document.documentElement.style.getPropertyValue("--chat-send-foreground"),
+      }));
+      expect(root.inlinePrimary).toBe(authored ? "" : "#ffffff");
+      expect(root.inlineSend).toBe(authored ? "" : "#ffffff");
+      const expected = await page.evaluate(resolveRenderedColors, {
+        primary: authored ? "#241f1b" : "#ffffff",
+        send: "#ffffff",
+      });
+      expect(
+        (await page.evaluate(resolveRenderedColors, { primary: root.primary })).primary,
+      ).toEqual(expected.primary);
+      const send = page.locator(".chat-send-btn--send").first();
+      for (const state of ["normal", "hover", "active"]) {
+        await page.mouse.move(0, 0);
+        if (state !== "normal") {
+          await send.hover();
+        }
+        if (state === "active") {
+          await page.mouse.down();
+        }
+        const colors = await page.evaluate(
+          resolveRenderedColors,
+          await send.evaluate((element) => ({
+            foreground: getComputedStyle(element).color,
+            background: getComputedStyle(element).backgroundColor,
+          })),
+        );
+        expect(colors.foreground, String(accent) + " " + state).toEqual(expected.send);
+        const values = [luminance(colors.foreground!), luminance(colors.background!)].toSorted(
+          (a, b) => a - b,
+        );
+        expect((values[1]! + 0.05) / (values[0]! + 0.05)).toBeGreaterThanOrEqual(
+          authored && state === "normal" ? 3 : 4.5,
+        );
+        if (state === "active") {
+          await page.mouse.move(0, 0);
+          await page.mouse.up();
+        }
       }
     }
   });

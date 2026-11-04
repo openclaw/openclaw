@@ -65,3 +65,34 @@ it("keeps the ring visible on both the page and an elevated control surface", ()
   expect(contrast(ring, "#ffffff")).toBeGreaterThanOrEqual(3);
   expect(contrast(ring, "#707070")).toBeGreaterThanOrEqual(3);
 });
+
+it("preserves authored primary and send ink before and after a custom accent", () => {
+  const palette = document.head.appendChild(document.createElement("style"));
+  palette.textContent =
+    ":root { --accent: #d97757; --accent-hover: #e68b6b; --accent-foreground: #fffefa; --primary: #d97757; --primary-hover: #e68b6b; --primary-foreground: #241f1b; --chat-send-foreground: #ffffff; --chat-send-hover-bg: #ba6650; --bg: #101014; }";
+  const root = document.documentElement;
+  try {
+    for (const accent of ["theme", "#707070", "theme"]) {
+      applyControlUiAccent(accent);
+      if (accent !== "theme") {
+        expect(root.style.getPropertyValue("--chat-send-foreground")).toBe("#ffffff");
+        continue;
+      }
+      const computed = getComputedStyle(root);
+      for (const [family, ink] of [
+        ["accent", "#fffefa"],
+        ["primary", "#241f1b"],
+        ["chat-send", "#ffffff"],
+      ]) {
+        expect(root.style.getPropertyValue("--" + family + "-foreground")).toBe("");
+        expect(computed.getPropertyValue("--" + family + "-foreground").trim()).toBe(ink);
+        for (const state of ["hover", "active"]) {
+          const property = "--" + family + "-" + state + (family === "chat-send" ? "-bg" : "");
+          expect(contrast(root.style.getPropertyValue(property), ink!)).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+  } finally {
+    palette.remove();
+  }
+});

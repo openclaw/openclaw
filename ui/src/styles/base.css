@@ -43,6 +43,9 @@
   --card-highlight: rgba(255, 255, 255, 0.04);
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
+  --chat-send-foreground: var(--primary-foreground);
+  --chat-send-hover-bg: color-mix(in srgb, var(--primary) 86%, var(--text-strong));
+  --chat-send-active-bg: var(--primary-active);
   --chat-composer-surface: var(--popover);
   /* Composer controls take their ink from the composer's own surface rather
      than the canvas. Built-in dark themes lift that surface well above the

@@ -22,6 +22,9 @@ const ACCENT_CSS_VARIABLES = [
   "--primary-hover",
   "--primary-active",
   "--primary-foreground",
+  "--chat-send-foreground",
+  "--chat-send-hover-bg",
+  "--chat-send-active-bg",
   "--focus",
   "--focus-ring",
   "--focus-glow",
@@ -245,17 +248,27 @@ export function applyControlUiAccent(userAccent?: string): void {
     return;
   }
   const focusSurfaces: string[] = [];
-  for (const family of ["accent", "primary"]) {
-    const background = color ?? resolveThemeColor(computed, "--" + family);
-    const hover = color ? undefined : resolveThemeColor(computed, "--" + family + "-hover");
-    const states = controlUiAccentStates(background, hover);
+  for (const family of ["accent", "primary", "chat-send"]) {
+    const source = family === "chat-send" ? "primary" : family;
+    const background = color ?? resolveThemeColor(computed, "--" + source);
+    const hoverProperty =
+      family === "chat-send" ? "--chat-send-hover-bg" : "--" + family + "-hover";
+    const hover = color ? undefined : resolveThemeColor(computed, hoverProperty) || undefined;
+    const foreground = color
+      ? undefined
+      : resolveThemeColor(computed, "--" + family + "-foreground") || undefined;
+    const states = controlUiAccentStates(background, hover, foreground);
     for (const [state, pair] of Object.entries(states)) {
       focusSurfaces.push(pair.background);
-      const suffix = state === "normal" ? "" : "-" + state;
-      if (color || state !== "normal") {
+      if (family === "chat-send") {
+        if (state !== "normal") {
+          root.style.setProperty("--chat-send-" + state + "-bg", pair.background);
+        }
+      } else if (color || state !== "normal") {
+        const suffix = state === "normal" ? "" : "-" + state;
         root.style.setProperty("--" + family + suffix, pair.background);
       }
-      if (state === "normal") {
+      if (color && state === "normal") {
         root.style.setProperty("--" + family + "-foreground", pair.foreground);
       }
     }

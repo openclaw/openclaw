@@ -26,19 +26,28 @@ function mix(color: string, target: number, amount: number): string {
     .join("")}`;
 }
 
-export function controlUiAccentStates(color: string, hover?: string) {
-  const foreground = controlUiAccentInk(color);
+export function controlUiAccentStates(
+  color: string,
+  hover?: string,
+  foreground: string = controlUiAccentInk(color),
+) {
+  const inkLuminance = luminance(foreground);
+  const contrast = (background: string) => {
+    const fill = luminance(background);
+    return (Math.max(fill, inkLuminance) + 0.05) / (Math.min(fill, inkLuminance) + 0.05);
+  };
   const pair = (preferred: string, amount: number) => {
-    // Change the fill direction before changing ink, so interaction does not flash the glyph.
-    const alternative = mix(color, foreground === "#ffffff" ? 0 : 255, amount);
-    const background = [preferred, alternative].find((candidate) => {
-      const values = [luminance(candidate), luminance(foreground)].toSorted((a, b) => b - a);
-      return (values[0]! + 0.05) / (values[1]! + 0.05) >= 4.5;
-    });
-    return {
-      background: background ?? preferred,
-      foreground: background ? foreground : controlUiAccentInk(preferred),
-    };
+    let background = preferred;
+    // Preserve authored ink too; deepen the fill only as far as readability requires.
+    const target = inkLuminance > 0.179 ? 0 : 255;
+    for (
+      let percent = Math.round(amount * 100);
+      contrast(background) < 4.5 && percent <= 100;
+      percent++
+    ) {
+      background = mix(color, target, percent / 100);
+    }
+    return { background, foreground };
   };
   return {
     normal: { background: color, foreground },

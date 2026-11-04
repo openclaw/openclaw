@@ -638,7 +638,7 @@ extension SettingsProTab {
                     title: "Discord",
                     icon: "bubble.left.and.bubble.right.fill",
                     color: .indigo,
-                    url: URL(string: "https://discord.gg/clawd")!)
+                    url: URL(string: "https://openclaw.ai/discord?from=openclaw-app-ios-settings")!)
             } footer: {
                 Text("© 2026 OpenClaw Foundation — MIT License.")
                     .font(OpenClawType.footnote)
