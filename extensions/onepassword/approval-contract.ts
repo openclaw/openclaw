@@ -9,3 +9,13 @@ export type AutofillApprovalSnapshot = {
   entries?: Array<{ domain: string; reason?: string; granted?: boolean }>;
   code?: string;
 };
+
+/** Private connect-card projection: the public consent link and code, never pickup secrets. */
+export type AutofillConnectSnapshot = {
+  state: string;
+  connectUrl?: string;
+  confirmationCode?: string;
+  expiresAt?: number;
+  openedAt?: number;
+  code?: string;
+};

@@ -208,7 +208,13 @@ export class AutofillService {
     };
   }
 
-  /** Explicit pickup is shared by CLI polling and chat; private keys never leave this service. */
+  /** Live consent for a chat connect card; disconnect clears these, and pickup retires them. */
+  consentSession(sessionId: string, authority: AutofillAuthority): RelaySession | undefined {
+    this.assertCurrent(authority);
+    return this.sessions.get(sessionId);
+  }
+
+  /** Explicit pickup is shared by CLI polling, chat and the connect card's checker. */
   async pickup(sessionId: string, authority: AutofillAuthority) {
     return this.serialize("connect", async () => {
       this.assertCurrent(authority);

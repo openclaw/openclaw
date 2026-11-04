@@ -290,3 +290,13 @@
     transition: none;
   }
 }
+.onepassword-approval__site strong.onepassword-approval__code {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 18px;
+  letter-spacing: 0.08em;
+}
+.onepassword-approval__site p:first-child {
+  margin-top: 0;
+}

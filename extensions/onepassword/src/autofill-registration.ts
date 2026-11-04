@@ -2,7 +2,10 @@ import type { OpenClawPluginApi, PluginServiceSchedulerV1 } from "openclaw/plugi
 import { z } from "zod";
 import { ApprovalNotifier } from "./autofill-approval-notice.js";
 import { BrowserAutofillExtension, autofillBrowserGuidance } from "./autofill-browser.js";
+import { AutofillConnectCards } from "./autofill-connect-cards.js";
+import type { AutofillAuthority } from "./autofill-contract.js";
 import { isAgenticAutofillEnabled } from "./autofill-input.js";
+import { autofillClock } from "./autofill-poll.js";
 import { AutofillError, AutofillRelayClient } from "./autofill-relay.js";
 import {
   AutofillService,
@@ -10,6 +13,34 @@ import {
   type AutofillRequest,
 } from "./autofill-service.js";
 import { createAutofillTool } from "./autofill-tool.js";
+
+type GatewayOptions = Parameters<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>[0];
+
+// Core admits session-scoped methods only at operator.write; the handler itself
+// still requires a real Control UI client holding operator.admin.
+const cardAccess = { mode: "write", requiredTool: "onepassword_autofill" } as const;
+
+/** Private card hydration belongs only to a current, real Control UI admin with session access. */
+function controlUiAuthority(options: GatewayOptions) {
+  return {
+    signal: options.signal,
+    assertCurrent() {
+      options.signal?.throwIfAborted();
+      // Never hydrate for a synthetic agent RPC, even when it inherits administrator scopes.
+      if (
+        !options.client?.internal?.authenticatedControlUi ||
+        options.client.internal.syntheticClient ||
+        options.client.invalidated ||
+        options.hasCurrentClientAuthority?.() !== true ||
+        !options.client.connect.scopes?.includes("operator.admin") ||
+        !options.sessionAccessAuthority
+      ) {
+        throw new AutofillError("gatewayOwnerRequired");
+      }
+      options.sessionAccessAuthority.assertCurrent();
+    },
+  };
+}
 
 /** Compose the Gateway-owned preview, without opening state in CLI child processes. */
 export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => unknown): void {
@@ -47,6 +78,7 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
       }
     },
   });
+  const cards = new AutofillConnectCards(autofillClock);
   const notifier = new ApprovalNotifier(api.runtime.system, (message) => api.logger.warn(message));
   let scheduler: PluginServiceSchedulerV1 | undefined;
   let approvalJob = 0;
@@ -61,7 +93,10 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
         id: "approval-expiry",
         delayMs: 60_000,
         everyMs: 60_000,
-        run: () => service.pruneApprovalLinks(),
+        run: () => {
+          service.pruneApprovalLinks();
+          cards.prune();
+        },
       });
     },
     async stop() {
@@ -71,6 +106,7 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
       }
       pollingReleases.clear();
       service.clearApprovalLinks();
+      cards.clear();
       await extension.close();
     },
   });
@@ -81,28 +117,19 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
     requiredScopes: ["operator.admin"],
     version: 1,
   });
+  api.session.controls.registerControlUiDescriptor({
+    id: "connect",
+    surface: "inline",
+    label: "Connect 1Password",
+    requiredScopes: ["operator.admin"],
+    version: 1,
+  });
+  // Both private card methods share one viewer contract and admission policy.
+  const cardMethod = { scope: "operator.write", sessionAccess: cardAccess } as const;
   api.registerGatewayMethod(
     "onepassword.autofill.approval",
     async (options) => {
-      const authority = {
-        signal: options.signal,
-        assertCurrent() {
-          options.signal?.throwIfAborted();
-          // Admin is the existing Control UI owner contract. Never hydrate for a
-          // synthetic agent RPC, even when it inherits administrator scopes.
-          if (
-            !options.client?.internal?.authenticatedControlUi ||
-            options.client.internal.syntheticClient ||
-            options.client.invalidated ||
-            options.hasCurrentClientAuthority?.() !== true ||
-            !options.client.connect.scopes?.includes("operator.admin") ||
-            !options.sessionAccessAuthority
-          ) {
-            throw new AutofillError("gatewayOwnerRequired");
-          }
-          options.sessionAccessAuthority.assertCurrent();
-        },
-      };
+      const authority = controlUiAuthority(options);
       try {
         authority.assertCurrent();
         const input = z
@@ -182,17 +209,121 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
         };
       }
     },
-    {
-      // Core admits session-scoped methods only at operator.write; the handler
-      // itself still requires a real Control UI client holding operator.admin.
-      scope: "operator.write",
-      sessionAccess: { mode: "write", requiredTool: "onepassword_autofill" },
+    cardMethod,
+  );
+  let connectJob = 0;
+  const connectCheckers = new Set<string>();
+  api.registerGatewayMethod(
+    "onepassword.autofill.connectView",
+    async (options) => {
+      const authority = controlUiAuthority(options);
+      try {
+        authority.assertCurrent();
+        const input = z
+          .object({
+            sessionId: z.string().regex(/^[A-Za-z0-9_-]{22}$/),
+            action: z.enum(["get", "opened"]).default("get"),
+            sessionKey: z.string(),
+            agentId: z.string().optional(),
+          })
+          .strict()
+          .parse(options.params);
+        const target = options.sessionAccessAuthority!.target;
+        const scope = JSON.stringify([target.sessionKey, target.sessionId]);
+        const view = (current: AutofillAuthority) =>
+          cards.snapshot(input.sessionId, scope, service.consentSession(input.sessionId, current));
+        const snapshot = view(authority);
+        if (
+          input.action !== "opened" ||
+          snapshot.state !== "pending" ||
+          connectCheckers.has(input.sessionId) ||
+          !cards.opened(input.sessionId, scope)
+        ) {
+          return snapshot;
+        }
+        const owner = scheduler;
+        if (!owner || owner.signal.aborted) {
+          throw new AutofillError("operationFailed");
+        }
+        // Captured while the click is current so the checker can resume this chat.
+        const resume = await notifier.capture(target);
+        authority.assertCurrent();
+        const retained = options.sessionAccessAuthority!.retain();
+        const release = () => {
+          retained.release();
+          connectCheckers.delete(input.sessionId);
+          pollingReleases.delete(release);
+        };
+        connectCheckers.add(input.sessionId);
+        pollingReleases.add(release);
+        const signal = AbortSignal.any([owner.signal, retained.signal]);
+        try {
+          owner.schedule({
+            id: `connect-${++connectJob}`,
+            delayMs: 0,
+            async run() {
+              try {
+                const checker = { signal, assertCurrent: retained.assertCurrent };
+                // Same cadence as the CLI. Pickup records the card's outcome; stop when
+                // another caller (CLI, agent) settled it, or when the consent expires.
+                while (view(checker).state === "pending") {
+                  let result: Awaited<ReturnType<AutofillService["pickup"]>>;
+                  try {
+                    result = await cards.pickup(input.sessionId, () =>
+                      service.pickup(input.sessionId, checker),
+                    );
+                  } catch (error) {
+                    if (error instanceof AutofillError && error.code === "rateLimited") {
+                      await autofillClock.sleep(60_000, signal);
+                      continue;
+                    }
+                    // Lost authority stays quiet; an authorized stopped check must be visible.
+                    checker.assertCurrent();
+                    cards.stopped(input.sessionId);
+                    const settled = view(checker);
+                    if (settled.state === "failed") {
+                      await notifier.notifyConnect(resume, {
+                        sessionId: input.sessionId,
+                        state: "failed",
+                        code: settled.code,
+                      });
+                    }
+                    return;
+                  }
+                  if (result.state !== "pending") {
+                    await notifier.notifyConnect(resume, {
+                      sessionId: input.sessionId,
+                      state: result.state === "connected" ? "connected" : "failed",
+                    });
+                    return;
+                  }
+                  await autofillClock.sleep(2000, signal);
+                }
+              } catch {
+                // Cancellation or a lost session grant; the card reports the current state.
+              } finally {
+                release();
+              }
+            },
+          });
+        } catch {
+          release();
+          throw new AutofillError("operationFailed");
+        }
+        return view(authority);
+      } catch (error) {
+        return {
+          state: "error",
+          code: error instanceof AutofillError ? error.code : "operationFailed",
+        };
+      }
     },
+    cardMethod,
   );
   api.registerTool(
     {
       contextVersion: 2,
-      create: (context) => createAutofillTool(service, context, api.inlineView),
+      create: (context) => createAutofillTool(service, context, api.inlineView, cards),
     },
     {
       // agenticAutofill.enabled is the opt-in: the tool is registered only when

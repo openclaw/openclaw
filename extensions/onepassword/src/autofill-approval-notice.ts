@@ -5,6 +5,7 @@ type SessionEvents = Pick<
   "captureSessionEventTarget" | "enqueueSessionEvent"
 >;
 type EventTarget = Awaited<ReturnType<SessionEvents["captureSessionEventTarget"]>>;
+type Captured = { agentId: string; sessionKey: string; expectedTarget: EventTarget };
 
 // Public projection of a finished request; never carries links, tokens or references.
 type FinishedApproval = {
@@ -54,26 +55,52 @@ export class ApprovalNotifier {
   }
 
   /** Enqueue one follow-up turn for a finished request; pending results are ignored. */
-  async notify(
-    captured: { agentId: string; sessionKey: string; expectedTarget: EventTarget } | undefined,
-    approval: FinishedApproval,
+  async notify(captured: Captured | undefined, approval: FinishedApproval): Promise<void> {
+    if (approval.state === "pending") {
+      return;
+    }
+    await this.enqueue(
+      captured,
+      approvalNoticeText(approval),
+      `onepassword-approval:${approval.requestId}`,
+    );
+  }
+
+  /** Resume the chat that started a connect card once its consent finishes. */
+  async notifyConnect(
+    captured: Captured | undefined,
+    connect: { sessionId: string; state: "connected" | "failed"; code?: string },
   ): Promise<void> {
-    if (!captured || approval.state === "pending") {
+    await this.enqueue(
+      captured,
+      connect.state === "connected"
+        ? "1Password is now connected. Continue the task that needed it: call onepassword_autofill request_logins for the logins it needs."
+        : `1Password connect did not complete (code=${connect.code ?? "connectDeclined"}). Tell the user; start connect again only if they ask.`,
+      `onepassword-connect:${connect.sessionId}`,
+    );
+  }
+
+  private async enqueue(
+    captured: Captured | undefined,
+    text: string,
+    contextKey: string,
+  ): Promise<void> {
+    if (!captured) {
       return;
     }
     try {
-      const receipt = this.events.enqueueSessionEvent(approvalNoticeText(approval), {
+      const receipt = this.events.enqueueSessionEvent(text, {
         agentId: captured.agentId,
         sessionKey: captured.sessionKey,
-        contextKey: `onepassword-approval:${approval.requestId}`,
+        contextKey,
         expectedTarget: captured.expectedTarget,
       });
       const accepted = await receipt.accepted;
       if (!accepted.ok) {
-        this.warn("1Password approval: the session did not accept the follow-up.");
+        this.warn("1Password Autofill: the session did not accept the follow-up.");
       }
     } catch {
-      this.warn("1Password approval: could not resume the session after approval.");
+      this.warn("1Password Autofill: could not resume the session.");
     }
   }
 }

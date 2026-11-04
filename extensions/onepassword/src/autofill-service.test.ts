@@ -1,6 +1,7 @@
 import { webcrypto } from "node:crypto";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, expect, it, vi } from "vitest";
+import { AutofillConnectCards } from "./autofill-connect-cards.js";
 import type { AgenticAutofillExtension } from "./autofill-contract.js";
 import { decodeConnectionPath } from "./autofill-input.js";
 import { AutofillError } from "./autofill-relay.js";
@@ -165,6 +166,10 @@ function setup() {
 
 it("keeps tokens, keys, links and references outside tool results through connect, approve and fill", async () => {
   const s = setup();
+  // The test relay clock starts at zero; cards read the same clock.
+  const cards = new AutofillConnectCards({ now: () => 0 });
+  const card = (id: string, viewer: string) =>
+    cards.snapshot(id, viewer, s.service.consentSession(id, authority));
   const tool = createAutofillTool(
     s.service,
     {
@@ -174,13 +179,25 @@ it("keeps tokens, keys, links and references outside tool results through connec
       assertInvocationCurrent() {},
     },
     inlineView,
+    cards,
   );
   const execute = async (params: unknown) => JSON.stringify(await tool.execute("call", params));
-  const start = JSON.parse(await execute({ action: "connect" })) as {
-    details: { sessionId: string };
+  const started = await execute({ action: "connect" });
+  // The card shows the link and code privately; the agent only needs the session id.
+  const { sessionId } = JSON.parse(started).details.pluginInlineView.payload as {
+    sessionId: string;
   };
+  expect(started).not.toContain("connect.openclaw.ai");
+  expect(started).not.toContain("ABCD-1234");
+  const scope = JSON.stringify(["chat", "conversation"]);
+  expect(card(sessionId, scope)).toMatchObject({
+    state: "pending",
+    connectUrl: `https://connect.openclaw.ai/1password/start/${sessionId}`,
+    confirmationCode: "ABCD-1234",
+  });
+  expect(card(sessionId, '["other","chat"]').state).toBe("unavailable");
   const outputs = [
-    await execute({ action: "connect", sessionId: start.details.sessionId }),
+    await execute({ action: "connect", sessionId }),
     await execute({ action: "request_logins", requests: input }),
   ];
   expect(JSON.parse(outputs[1]!).details.pluginInlineView.payload).toEqual({
@@ -188,6 +205,7 @@ it("keeps tokens, keys, links and references outside tool results through connec
   });
   expect(outputs[1]).not.toContain("appLink");
   // The agent needs these lookup keys to check status and fill after approval.
+  expect(card(sessionId, scope)).toEqual({ state: "connected" });
   const summary = JSON.parse(outputs[1]!).content[0].text as string;
   expect(summary).toContain("requestId=request");
   expect(summary).toContain("entryId=entry");
@@ -314,6 +332,7 @@ it("rejects nonowners, changed policy, unknown grants and cross-conversation req
       assertInvocationCurrent() {},
     },
     inlineView,
+    new AutofillConnectCards({ now: () => 0 }),
   );
   expect(
     (await tool.execute("call", { action: "request_logins", requests: input })).details,
@@ -723,4 +742,41 @@ it("keeps the real approval window open through its final check and joins that r
   await checker;
   expect(await view).toMatchObject({ state: "resolved", entries: [{ granted: true }] });
   expect(s.extension.getAccessRequestStatus).toHaveBeenCalledTimes(26);
+});
+
+it("keeps an in-flight connect pending across expiry and exposes stopped checks", async () => {
+  const s = setup();
+  const session = await s.service.connect(authority);
+  const consent = s.service.consentSession(session.sessionId, authority)!;
+  let now = Date.parse(consent.expiresAt) - 1;
+  const cards = new AutofillConnectCards({ now: () => now });
+  cards.track(session.sessionId, "chat");
+  cards.opened(session.sessionId, "chat");
+  let finish!: (value: { state: string }) => void;
+  const pending = cards.pickup(
+    session.sessionId,
+    () =>
+      new Promise<{ state: string }>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  now += 2;
+  expect(cards.snapshot(session.sessionId, "chat", consent).state).toBe("pending");
+  finish({ state: "connected" });
+  await pending;
+  expect(cards.snapshot(session.sessionId, "chat", undefined).state).toBe("connected");
+  cards.track("other", "chat");
+  cards.opened("other", "chat");
+  await expect(
+    cards.pickup("other", async () => {
+      throw new AutofillError("networkError");
+    }),
+  ).rejects.toThrow();
+  cards.stopped("other");
+  expect(cards.snapshot("other", "chat", consent)).toEqual({
+    state: "failed",
+    code: "connectCheckStopped",
+  });
+  await cards.pickup("other", async () => ({ state: "connected" }));
+  expect(cards.snapshot("other", "chat", undefined).state).toBe("connected");
 });

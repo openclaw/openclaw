@@ -2,6 +2,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, expect, it, vi } from "vitest";
+import { AutofillConnectCards } from "./autofill-connect-cards.js";
 import { registerAutofill } from "./autofill-registration.js";
 import { AutofillService } from "./autofill-service.js";
 import { MemoryKeyedStore } from "./memory-store.test-support.js";
@@ -63,6 +64,7 @@ function fixture() {
   });
   registerAutofill(api, () => config);
   const handler = methods.get("onepassword.autofill.approval")!;
+  const connectView = methods.get("onepassword.autofill.connectView")!;
   const assertCurrent = vi.fn();
   const release = vi.fn();
   const retained = { signal: new AbortController().signal, assertCurrent, release };
@@ -90,9 +92,38 @@ function fixture() {
       retain: () => retained,
     },
   };
+  // Starts the plugin service with a manual scheduler; jobs[0] is the expiry sweep.
+  const start = async () => {
+    const browser = await import("./autofill-browser.js");
+    vi.spyOn(browser.BrowserAutofillExtension.prototype, "start").mockResolvedValue();
+    vi.spyOn(browser.BrowserAutofillExtension.prototype, "close").mockResolvedValue();
+    const jobs: Array<() => void | Promise<unknown>> = [];
+    const scheduler = {
+      version: 1 as const,
+      signal: new AbortController().signal,
+      now: Date.now,
+      schedule: vi.fn((job: { run: () => void | Promise<unknown> }) => {
+        jobs.push(job.run);
+        return { cancel() {}, stop: async () => {} };
+      }),
+      scope: vi.fn(),
+      beginClose() {},
+      stop: async () => {},
+    };
+    const context = {
+      scheduler,
+      config: {},
+      stateDir: "/tmp/onepassword-autofill-test",
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+    };
+    await services[0]!.start(context);
+    return { jobs, scheduler, stop: () => services[0]!.stop?.(context) };
+  };
   return {
     api,
     handler,
+    connectView,
+    start,
     options: options as Options,
     policies,
     services,
@@ -168,31 +199,7 @@ it("starts a single service-owned checker from the click with retained authority
     ],
     guidance: "Request finished.",
   });
-  const browser = await import("./autofill-browser.js");
-  vi.spyOn(browser.BrowserAutofillExtension.prototype, "start").mockResolvedValue();
-  vi.spyOn(browser.BrowserAutofillExtension.prototype, "close").mockResolvedValue();
-  const jobs: Array<() => void | Promise<unknown>> = [];
-  const abort = new AbortController();
-  const scheduler = {
-    version: 1 as const,
-    signal: abort.signal,
-    now: Date.now,
-    schedule: vi.fn((job: { run: () => void | Promise<unknown> }) => {
-      jobs.push(job.run);
-      return { cancel() {}, stop: async () => {} };
-    }),
-    scope: vi.fn(),
-    beginClose() {},
-    stop: async () => {},
-  };
-  const service = f.services[0]!;
-  const serviceContext = {
-    scheduler,
-    config: {},
-    stateDir: "/tmp/onepassword-approval-test",
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-  };
-  await service.start(serviceContext);
+  const { jobs, scheduler, stop } = await f.start();
   f.options.params.action = "opened";
   expect(await f.handler(f.options)).toMatchObject({ state: "pending" });
   expect(opened).toHaveBeenCalledTimes(1);
@@ -248,7 +255,7 @@ it("starts a single service-owned checker from the click with retained authority
   expect(await f.handler(f.options)).toMatchObject({ openedAt: 1000 });
   expect(scheduler.schedule).toHaveBeenCalledTimes(scheduled);
   expect(opened).toHaveBeenCalledTimes(acknowledged);
-  await service.stop?.(serviceContext);
+  await stop();
 });
 
 it("rechecks the viewer after awaited hydration before returning the private URL", async () => {
@@ -266,4 +273,42 @@ it("rechecks the viewer after awaited hydration before returning the private URL
   const result = await f.handler(f.options);
   expect(result).toEqual({ state: "error", code: "gatewayOwnerRequired" });
   expect(JSON.stringify(result)).not.toContain("onepassword://");
+});
+
+it("runs one connect checker from the card click and resumes the chat when consent finishes", async () => {
+  const f = fixture();
+  const sessionId = "s".repeat(22);
+  const pending = {
+    state: "pending",
+    connectUrl: `https://connect.openclaw.ai/1password/start/${sessionId}`,
+    confirmationCode: "ABCD-1234",
+    expiresAt: 600_000,
+  };
+  vi.spyOn(AutofillService.prototype, "consentSession").mockReturnValue(undefined);
+  const view = vi.spyOn(AutofillConnectCards.prototype, "snapshot").mockReturnValue(pending);
+  vi.spyOn(AutofillConnectCards.prototype, "opened").mockReturnValueOnce(true);
+  const pickup = vi
+    .spyOn(AutofillService.prototype, "pickup")
+    .mockResolvedValueOnce({ state: "pending" })
+    .mockImplementationOnce(async () => {
+      view.mockReturnValue({ state: "connected" });
+      return { state: "connected" };
+    });
+  const poll = await import("./autofill-poll.js");
+  vi.spyOn(poll.autofillClock, "sleep").mockResolvedValue();
+  const { jobs, scheduler, stop } = await f.start();
+  f.options.params = { sessionId, action: "opened", sessionKey: "agent:main:chat" };
+  expect(await f.connectView(f.options)).toMatchObject({ confirmationCode: "ABCD-1234" });
+  // A second click while the checker runs never starts another relay poller.
+  await f.connectView(f.options);
+  expect(scheduler.schedule).toHaveBeenCalledTimes(2);
+  await jobs[1]!();
+  expect(pickup).toHaveBeenCalledTimes(2);
+  expect(f.retained.release).toHaveBeenCalledTimes(1);
+  const [text, options] = vi.mocked(f.system.enqueueSessionEvent).mock.calls[0]!;
+  expect(text).toContain("1Password is now connected");
+  expect(options).toMatchObject({ contextKey: `onepassword-connect:${sessionId}` });
+  f.options.client!.internal!.authenticatedControlUi = undefined;
+  expect(await f.connectView(f.options)).toEqual({ state: "error", code: "gatewayOwnerRequired" });
+  await stop();
 });

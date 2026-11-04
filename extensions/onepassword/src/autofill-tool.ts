@@ -6,6 +6,7 @@ import type {
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { z } from "zod";
 import { autofillBrowserGuidance } from "./autofill-browser.js";
+import type { AutofillConnectCards } from "./autofill-connect-cards.js";
 import { accessRequestInputSchema } from "./autofill-input.js";
 import { AutofillError } from "./autofill-relay.js";
 import type { AutofillAuthority, AutofillService } from "./autofill-service.js";
@@ -50,11 +51,18 @@ function approvalSummary(request: {
   ].join(" ");
 }
 
+// Shown to both the person and the model above the card, so it stays short. The card holds
+// the link and code; the service resumes this chat with a notice when consent finishes.
+function connectSummary(sessionId: string): string {
+  return `1Password connect started (sessionId=${sessionId}). Finish it from the Connect 1Password card; the agent is told when it's done.`;
+}
+
 /** Optional sibling: never broadens the service-account tool's curated-secret policy hook. */
 export function createAutofillTool(
   service: AutofillService,
   context: OpenClawPluginToolContext<2>,
   inlineView: OpenClawPluginApi["inlineView"],
+  cards: AutofillConnectCards,
 ): AnyAgentTool {
   const scope = JSON.stringify([context.sessionKey, context.sessionId]);
   const authority: AutofillAuthority = {
@@ -70,7 +78,7 @@ export function createAutofillTool(
     name: "onepassword_autofill",
     label: "1Password Agentic Autofill",
     description:
-      "Connect your own 1Password, request task-specific logins, check approval, or fill and submit a granted login. Never returns passwords. Owner-only preview; configure the managed browser profile. Approval requires the OpenClaw Control UI on a computer with 1Password.",
+      "Connect your own 1Password, request task-specific logins, check approval, or fill and submit a granted login. Never returns passwords. Owner-only preview; configure the managed browser profile. Connect and approval show cards in the OpenClaw Control UI on a computer with 1Password; elsewhere the owner runs `openclaw onepassword connect` on the Gateway host.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -149,12 +157,22 @@ export function createAutofillTool(
         }
         const input = parsed.data;
         switch (input.action) {
-          case "connect":
-            return jsonResult(
-              input.sessionId
-                ? await service.pickup(input.sessionId, invocation)
-                : await service.connect(invocation),
+          case "connect": {
+            const { sessionId } = input;
+            if (sessionId) {
+              return jsonResult(
+                await cards.pickup(sessionId, () => service.pickup(sessionId, invocation)),
+              );
+            }
+            const session = await service.connect(invocation);
+            authority.assertCurrent();
+            cards.track(session.sessionId, scope);
+            return inlineView(
+              "connect",
+              { sessionId: session.sessionId },
+              { version: 1, summary: connectSummary(session.sessionId) },
             );
+          }
           case "disconnect":
             return jsonResult(await service.disconnect(invocation));
           case "status":

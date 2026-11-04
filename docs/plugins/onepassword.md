@@ -414,10 +414,17 @@ openclaw onepassword disconnect
 
 `connect` prints an HTTPS connect URL and confirmation code, then waits up to ten
 minutes for consent. Open the URL on your own device, verify that the code
-matches, and continue to 1Password. These two public fields can also be returned
-by the `onepassword_autofill` tool's `connect` action; its subsequent `connect`
-call with the returned session ID picks up the result. Pending sessions are
-memory-only: if the Gateway restarts, start consent again.
+matches, and continue to 1Password.
+
+When an agent starts consent with the `onepassword_autofill` tool's `connect`
+action, the chat shows a **Connect 1Password** card in the OpenClaw Control UI
+instead of the link. The card shows the confirmation code and a **Continue to
+1Password** button. After you select it, the Gateway waits for your consent and
+resumes the conversation when it finishes, so you don't need to tell the agent.
+Only the connect session ID is stored in the chat; the card loads the link and
+code for a current Control UI administrator with access to that conversation. In
+other channels, run `openclaw onepassword connect` on the Gateway host instead.
+Pending sessions are memory-only: if the Gateway restarts, start consent again.
 
 This preview is Gateway-owner-only in chat; CLI operations require Gateway admin
 access. It does not derive a human identity from an agent ID or a channel sender
