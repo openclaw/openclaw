@@ -115,8 +115,6 @@ const enApprovals = {
     },
   },
   approvalHistory: {
-    description:
-      "Resolved command, plugin, and system agent approvals recorded here, newest first.",
     loading: "Loading approval history…",
     loadingMore: "Loading…",
     loadMore: "Load more",

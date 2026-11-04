@@ -662,3 +662,21 @@ it.each(["Appearance discovery", "profile selection"] as const)(
     }
   },
 );
+
+it("preserves startup palette validation errors until Settings can localize them", async () => {
+  const { gateway, current } = createGatewayStoreTestStore();
+  const applicationTheme = createApplicationTheme(loadSettings(), gateway);
+  gateway.start();
+  const malformed = createThemeDefinitionFixture({
+    light: createThemePaletteFixture({ background: "" }),
+  });
+  current().request.mockResolvedValue(catalog(malformed));
+  current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  try {
+    await vi.waitFor(() => expect(applicationTheme.catalog?.error).toBeInstanceOf(Error));
+    expect(applicationTheme.catalog?.error).toMatchObject({ message: "background" });
+  } finally {
+    applicationTheme.dispose();
+    gateway.stop();
+  }
+});

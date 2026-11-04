@@ -83,14 +83,14 @@ it("lets the installed plugin request review and gates its effect on Allow once 
       agents: { entries: {} },
     };
     await state.writeConfig(config);
-    const manifestPath = path.join(templateDir, "template.json");
+    const manifestPath = path.join(templateDir, "CLAW.md");
     await fs.writeFile(
       manifestPath,
-      JSON.stringify({
+      `---\n${JSON.stringify({
         schemaVersion: 1,
         agent: { id: "approval-template", name: "Approval Template" },
         packages: [{ kind: "plugin", source: "clawhub", ref: packageName, version }],
-      }),
+      })}\n---\n`,
     );
 
     // Synthetic package uses the official catalog identity but no Lobster runtime dependency.

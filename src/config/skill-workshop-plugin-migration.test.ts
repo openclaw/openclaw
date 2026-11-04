@@ -1,13 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
+import { resolveAgentSkillsRoot } from "../skills/loading/skill-paths.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
 import {
   findSkillWorkshopPolicyWriteRefusal,
   materializeSkillWorkshopPlugin,
 } from "./skill-workshop-plugin-migration.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+
+// The skill-workshop plugin's manifest `agentSkillsDir`.
+const resolveWorkshopSkillsDir = (config: OpenClawConfig, agentId: string) =>
+  resolveAgentSkillsRoot({ config, agentId, dirName: "workshop-skills" });
 
 const builtInEraConfig = (): OpenClawConfig => ({
   plugins: {
