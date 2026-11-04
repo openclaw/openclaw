@@ -140,11 +140,9 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
           )}
         </Show>
       </span>
-      <Show when={shown()?.title}>
-        <For each={props.outcomes}>
-          {(label) => <span class="chat-activity-group__outcome muted">{label}</span>}
-        </For>
-      </Show>
+      <For each={shown()?.title ? props.outcomes : undefined}>
+        {(label) => <span class="chat-activity-group__outcome muted">{label}</span>}
+      </For>
     </>
   );
 }
