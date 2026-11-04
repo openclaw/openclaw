@@ -26,6 +26,7 @@ function linkedMessage(label: string, before = "Connection lost. ".repeat(12)) {
   return { message, link };
 }
 const archived = {
+  severity: undefined,
   message: "Session archived",
   actionLabel: "Undo",
   onAction: () => undefined,
@@ -231,13 +232,14 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
 
   it("keeps a toast usable inside a native modal and returns it to the shell on dismissal", async () => {
     const shell = document.body.appendChild(document.createElement("div"));
-    shell.className = "shell shell--chat";
+    shell.className = "shell shell--chat shell--session";
     const host = shell.appendChild(document.createElement("openclaw-toast-host"));
     await useViewport(1280);
     const { toast: restingToast } = await renderToast({ message: "Saved" }, host);
     const restingBounds = rect(restingToast);
     const controller = new AbortController();
-    const confirmation = showConfirmDialog({ message: "Keep?", signal: controller.signal });
+    const prompt = { title: "Keep?", message: "", confirmLabel: "Keep" };
+    const confirmation = showConfirmDialog({ ...prompt, signal: controller.signal });
     try {
       const { modal, dialog } = await waitForRenderedModalDialog(document.body);
       const onAction = vi.fn();

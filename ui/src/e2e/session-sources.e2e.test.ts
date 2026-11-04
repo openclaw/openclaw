@@ -188,7 +188,7 @@ suite.define(() => {
         },
       });
       await expectCount(section.getByRole("switch"), 0);
-      await expectText(section, "No supported session source plugins are installed");
+      await expectText(section, "No session source plugins yet");
       expect(await section.getByRole("link", { name: "Manage plugins" }).getAttribute("href")).toBe(
         "/settings/plugins",
       );
@@ -208,7 +208,7 @@ suite.define(() => {
         );
         await expectCount(section.getByRole("switch"), 2);
         if (missingSchema) {
-          await expectText(section, "Session source settings are unavailable");
+          await expectText(section, "Couldn’t load session sources");
         }
         for (const toggle of await section.getByRole("switch").all()) {
           expect(await toggle.isDisabled()).toBe(true);

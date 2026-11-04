@@ -111,8 +111,8 @@ is a utility option and is never chosen as the primary model.
 When automatic setup reuses Codex, it shares the Gateway user's `CODEX_HOME`
 (or `~/.codex`), including the login, threads, and `config.toml`. Codex owns
 authentication and token refresh; OpenClaw does not copy the OAuth tokens into
-its auth store. Choose **Use a separate login** on the setup card, or sign in
-with ChatGPT or an OpenAI API key through **Model Setup**, to use an isolated
+its auth store. Choose **Sign in separately** on the setup card, or sign in
+with ChatGPT or an OpenAI API key through **Models**, to use an isolated
 OpenClaw agent home, even after reusing a native login.
 See [Codex login and isolation](/start/onboarding#codex-login-and-isolation)
 to switch between these modes.
@@ -145,7 +145,7 @@ discovered Gateway, a manually entered Gateway URL, or a Gateway reached through
 an SSH tunnel;
 token and password authentication are supported.
 
-Model Setup checks existing provider access and offers sign-in or API-key entry
+Models checks existing provider access and offers sign-in or API-key entry
 when needed. The selected Gateway verifies a real model response before guided
 onboarding begins. An already configured Gateway opens the normal agent UI
 after verification instead. Restart/reopen recovery uses a temporary record

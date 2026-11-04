@@ -26,6 +26,7 @@ import {
   NODE_WORKER_NATIVE_INFERENCE_VERSION,
   NODE_WORKER_PROMPT_CONTEXT_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
 } from "../../../../src/infra/node-runner-inventory.js";
 import {
   coerceNodeInvokeInputPayload,
@@ -218,6 +219,7 @@ export async function connectWireClient(params: {
   gateway: Pick<WireGateway, "wsUrl" | "token" | "runtimeEnv">;
   role: "operator" | "node";
   identity: DeviceIdentity | null;
+  password?: string;
   includeApprovals?: boolean;
   onEvent?: (event: WireGatewayEvent) => void;
   onHelloOk?: () => void;
@@ -229,7 +231,9 @@ export async function connectWireClient(params: {
   const node = params.role === "node";
   const connectionOptions = {
     url: params.gateway.wsUrl,
-    token: params.gateway.token,
+    ...(params.password !== undefined
+      ? { password: params.password }
+      : { token: params.gateway.token }),
     env: params.gateway.runtimeEnv,
     deviceIdentity: params.identity,
   };
@@ -341,6 +345,7 @@ type WireWorkerHostOptions = {
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
   workerGatewayUrl?: string;
+  password?: string;
   workspaceGatewayUrl?: (frame: NodeInvokeRequestPayload) => string;
   workerEnv?: NodeJS.ProcessEnv;
   nodeConfig?: OpenClawConfig;
@@ -348,6 +353,7 @@ type WireWorkerHostOptions = {
     ReturnType<typeof import("../../../../src/node-host/runtime.js").prepareNodeHostRuntime>
   >;
   bundlePrewarm?: boolean;
+  workspaceQuiescence?: boolean;
   bundleRetention?: boolean;
   bundleStatus?: boolean;
   environmentSession?: boolean;
@@ -440,6 +446,9 @@ export async function createPairedNodeWorkerHost(
         ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
         : {}),
       capacity,
+      ...(options.workspaceQuiescence
+        ? { workspaceQuiescence: NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION }
+        : {}),
       ...(options.bundlePrewarm ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION } : {}),
       ...(options.bundleRetention ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION } : {}),
       ...(options.bundleStatus ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION } : {}),
@@ -524,6 +533,7 @@ export async function createPairedNodeWorkerHost(
           runtimeEnv: nodeEnv,
         },
         role: "node",
+        password: options.password,
         identity,
         onEvent,
         onHelloOk: () => {
@@ -705,6 +715,10 @@ export async function startPairedNodeWorkerGateway(params: {
   nativeWorkerDeviceId?: string;
   requiredProfile?: string;
   mockAuthAgentIds?: readonly string[];
+  rpcPassword?: string;
+  runtimeEnvPatch?: Parameters<
+    ReturnType<typeof createQaGatewayChild>["start"]
+  >[0]["runtimeEnvPatch"];
   mutateConfig?: Parameters<ReturnType<typeof createQaGatewayChild>["start"]>[0]["mutateConfig"];
 }): Promise<WireGateway> {
   return await params.owner.start({
@@ -714,6 +728,8 @@ export async function startPairedNodeWorkerGateway(params: {
     providerBaseUrl: `${params.providerBaseUrl}/v1`,
     providerMode: "mock-openai",
     mockAuthAgentIds: params.mockAuthAgentIds,
+    runtimeEnvPatch: params.runtimeEnvPatch,
+    rpcPassword: params.rpcPassword,
     primaryModel: MODEL_REF,
     alternateModel: MODEL_REF,
     transportBaseUrl: "http://127.0.0.1",
