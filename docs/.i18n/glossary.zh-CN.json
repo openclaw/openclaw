@@ -812,6 +812,10 @@
     "target": "Anthropic API 密钥设置"
   },
   {
+    "source": "Anthropic PDF requests",
+    "target": "Anthropic PDF 请求"
+  },
+  {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
   },
