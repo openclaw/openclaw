@@ -1,2 +1,0 @@
-# Regression: skip tabs Chrome permanently refuses to attach to (Cannot attach to this target.) in relay tab enumeration, PR #191578.
-12
