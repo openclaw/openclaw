@@ -108,9 +108,6 @@ it.skipIf(process.platform === "win32")(
         ? { entry, transcript }
         : undefined;
     });
-    const requestCursor = readQaMockRequestCursor(
-      await fetchOkJson(`${mock.baseUrl}/debug/request-cursor`),
-    );
     const sinceIndex = state
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound").length;
@@ -122,6 +119,9 @@ it.skipIf(process.platform === "win32")(
         !isQaPosixProcessGroupAlive(pid!) && gateway.logs().includes(killedLog) ? true : undefined,
       30_000,
       25,
+    );
+    const requestCursor = readQaMockRequestCursor(
+      await fetchOkJson(`${mock.baseUrl}/debug/request-cursor`),
     );
     await gateway.restartAfterStateMutation(async () => {
       const entry = await readEntry();

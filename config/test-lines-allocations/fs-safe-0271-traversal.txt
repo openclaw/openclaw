@@ -1,2 +1,2 @@
-# Keep memory I/O fault injection on the async POSIX and sync Windows owners.
-14
+# Keep filesystem fault injection scoped to platform traversal and extracted metadata.
+23
