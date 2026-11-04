@@ -78,6 +78,7 @@ let targets = explicitTargets
       "src/commands/doctor-database-diagnostics.postgres.test.ts",
       "src/commands/doctor/auth-alias-migration.postgres.test.ts",
       "src/commands/startup-client-credentials.postgres.test.ts",
+      "src/config/sessions/session-cold-storage-selection.postgres.test.ts",
       "src/config/sessions/session-accessor.sqlite-lifecycle-artifacts.postgres.test.ts",
       "src/config/sessions/session-accessor.sqlite-read-hold.postgres.test.ts",
       "src/config/sessions/session-turn-resident.postgres.test.ts",
