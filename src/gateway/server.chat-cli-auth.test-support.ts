@@ -55,7 +55,14 @@ export function createClaudeCliGatewayConfig(
 }
 
 // Synthetic Claude executable for the Gateway account-continuity scenarios.
-export const createClaudeAuthFixture = (workspaceDir: string, projectDir: string) => String.raw`
+export const createClaudeAuthFixture = (
+  workspaceDir: string,
+  projectDir: string,
+  owner: {
+    nativeRoot: string;
+    scenario: "hook-accounts" | "native-history" | "empty-order" | "login-publication";
+  },
+) => String.raw`
 const assert = require("node:assert/strict");
 const { randomUUID } = require("node:crypto");
 const { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } = require("node:fs");
@@ -74,11 +81,14 @@ if (process.argv.includes("auth")) {
   process.exit(0);
 }
 appendFileSync(join(nativeRoot, "execution-launches.log"), "launch\n");
+const invocationId = randomUUID();
 const trace = (event) => {
   const file = join(nativeRoot, "execution-events.jsonl");
   if (existsSync(file) && statSync(file).size >= 65_536) return;
   appendFileSync(file, JSON.stringify({
-    pid: process.pid, event,
+    pid: process.pid, parentPid: process.ppid, invocationId, event,
+    fixturePid: ${process.pid}, scenario: ${JSON.stringify(owner.scenario)},
+    nativeRootMatchesFixture: nativeRoot === ${JSON.stringify(owner.nativeRoot)},
     flags: ["-p", "--print", "--input-format", "--session-id", "--resume", "--tools", "--settings", "--mcp-config"]
       .filter((flag) => process.argv.includes(flag)),
     oauthDescriptorPresent: process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR !== undefined,

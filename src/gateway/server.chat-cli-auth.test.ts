@@ -165,12 +165,23 @@ async function prepareCliAuthFixture(
     const binDir = state.path("bin");
     const scriptPath = path.join(binDir, "claude.cjs");
     const executable = path.join(binDir, process.platform === "win32" ? "claude.cmd" : "claude");
+    const nativeRoot = path.join(state.home, ".claude");
     const fixtureScript = createClaudeAuthFixture(
       (await fs.realpath(workspaceDir)).normalize("NFC"),
       resolveClaudeCliProjectDirForWorkspace({
         workspaceDir,
         homeDir: state.home,
       }),
+      {
+        nativeRoot,
+        scenario: hookAccounts
+          ? "hook-accounts"
+          : nativeContinuity
+            ? "native-history"
+            : credential
+              ? "empty-order"
+              : "login-publication",
+      },
     );
     await fs.mkdir(binDir);
     if (process.platform === "win32") {
@@ -186,7 +197,6 @@ async function prepareCliAuthFixture(
     }
     await fs.writeFile(scriptPath, fixtureScript);
     setTestEnvValue("PATH", binDir);
-    const nativeRoot = path.join(state.home, ".claude");
     setTestEnvValue("CLAUDE_CONFIG_DIR", nativeRoot);
     await fs.mkdir(nativeRoot);
     if (nativeContinuity) {
@@ -362,18 +372,20 @@ async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal)
     const requestsBeforeRevocation = requests.length;
     const refused = await post("native");
     expect(refused).toMatchObject({ status: 502, body: { ok: false } });
-    expect(
-      await launches(),
-      JSON.stringify({
-        status: refused.status,
-        requestsBeforeRevocation,
-        requestsAfterRevocation: requests.length,
-        events: await fs
-          .readFile(path.join(nativeRoot, "execution-events.jsonl"), "utf8")
-          .then((events) => ({ limitReached: events.length >= 65_536, events }))
-          .catch(() => "unavailable"),
-      }),
-    ).toBe(beforeRevocation);
+    const launchesAfterRevocation = await launches();
+    const diagnostic = JSON.stringify({
+      status: refused.status,
+      beforeRevocation,
+      launchesAfterRevocation,
+      requestsBeforeRevocation,
+      requestsAfterRevocation: requests.length,
+      events: await fs
+        .readFile(path.join(nativeRoot, "execution-events.jsonl"), "utf8")
+        .then((events) => ({ limitReached: events.length >= 65_536, events }))
+        .catch(() => "unavailable"),
+    });
+    console.info(`[cli-auth:revocation-observation] ${diagnostic}`);
+    expect(launchesAfterRevocation, diagnostic).toBe(beforeRevocation);
     expect(requests).toHaveLength(requestsBeforeRevocation);
   } finally {
     try {

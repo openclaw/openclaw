@@ -1,0 +1,2 @@
+# Exact own auth diagnostic LF growth against 8bc44540c46d8d1e3d80800c7ea1b11277c2db02.
+48
