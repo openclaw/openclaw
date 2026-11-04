@@ -563,9 +563,9 @@ const startupEnglish = {
     slack: {},
     telegram: {},
     whatsapp: {
-      loggedOut: "Logged out.",
+      loggedOut: "Signed out.",
       logoutNotCleared:
-        "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
+        "No saved WhatsApp session was cleared. It may already be gone or need manual cleanup.",
     },
   },
   agentStartup: {
