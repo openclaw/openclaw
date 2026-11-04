@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   evaluateRuntimeEligibility,
@@ -123,6 +126,48 @@ it("prepared facts observe installation and removal independently of cached hits
   vi.stubEnv("PATH", path.join(root, "other"));
   expect(hasBinary("fixture-tool")).toBe(false);
 });
+
+it.for(["relative", "absolute"])(
+  "keeps %s PATH hits scoped correctly across cwd changes",
+  async (kind, { signal }) => {
+    const root = tempDirs.make("openclaw-binary-cwd-");
+    const first = path.join(root, "first");
+    const second = path.join(root, "second");
+    const binDir = path.join(first, "bin");
+    install(path.join(binDir, "fixture-tool"));
+    fs.mkdirSync(second);
+    const result = await runNodeScript(
+      createNodeEvalArgs(
+        `import assert from "node:assert/strict";
+         import fs from "node:fs";
+         import { hasBinary, prepareBinaryAvailability } from ${JSON.stringify(new URL("./config-eval.ts", import.meta.url).href)};
+         const probe = async () => (await prepareBinaryAvailability(["fixture-tool"])).hasBinary("fixture-tool");
+         assert.equal(hasBinary("fixture-tool"), true);
+         assert.equal(await probe(), true);
+         process.chdir(${JSON.stringify(second)});
+         assert.equal(hasBinary("fixture-tool"), ${kind === "absolute"});
+         assert.equal(await probe(), ${kind === "absolute"});
+         process.chdir(${JSON.stringify(first)});
+         assert.equal(hasBinary("fixture-tool"), true);
+         fs.unlinkSync(${JSON.stringify(path.join(binDir, "fixture-tool"))});
+         assert.equal(hasBinary("fixture-tool"), true);
+         process.chdir(${JSON.stringify(second)});
+         assert.equal(hasBinary("fixture-tool"), ${kind === "absolute"});
+         assert.equal(await probe(), false);`,
+        { imports: [import.meta.resolve("tsx/esm")] },
+      ),
+      {
+        ...process.env,
+        PATH: kind === "relative" ? "./bin" : binDir,
+        TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+      },
+      undefined,
+      { cwd: first, signal, requireProcessTreeExit: process.platform !== "win32" },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+  },
+);
 
 it("preserves nested binary names", async () => {
   const root = setup();
