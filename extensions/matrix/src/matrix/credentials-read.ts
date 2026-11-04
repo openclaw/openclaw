@@ -21,10 +21,11 @@ export { resolveMatrixCredentialsDir, resolveMatrixCredentialsPath } from "../st
 
 function matrixCredentialsStoreOptions(env: NodeJS.ProcessEnv) {
   const runtime = getOptionalMatrixRuntime();
-  const resolvedEnv =
-    env.OPENCLAW_STATE_DIR?.trim() || !runtime
-      ? env
-      : { ...env, OPENCLAW_STATE_DIR: runtime.state.resolveStateDir(env) };
+  // The runtime owns state locality: when it is installed, its resolver wins over
+  // an inherited OPENCLAW_STATE_DIR so credential writes and reads share one store.
+  const resolvedEnv = runtime
+    ? { ...env, OPENCLAW_STATE_DIR: runtime.state.resolveStateDir(env) }
+    : env;
   return {
     namespace: MATRIX_CREDENTIALS_NAMESPACE,
     maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
