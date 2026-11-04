@@ -199,6 +199,37 @@ describe("xai stream wrappers", () => {
     expect(await run([bad, bad])).toEqual({ calls: [[png], omitted], error: bad });
   });
 
+  it("settles the retry stream when first or retry admission rejects", async () => {
+    const png = { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" };
+    const messages = [
+      { role: "user", content: [png] },
+    ] as unknown as Parameters<StreamFn>[1]["messages"]; // SAFETY: fixture.
+    const rejected = createAssistantMessageEventStream();
+    rejected.push({
+      type: "error",
+      reason: "error",
+      error: {
+        stopReason: "error",
+        errorMessage: "400 Image must be a valid JPG, PNG, WebP, or ICO image",
+      } as never,
+    }); // SAFETY: minimal fixture.
+    rejected.end();
+    for (const first of [() => Promise.reject(new Error("admission closed")), () => rejected]) {
+      let calls = 0;
+      const streamFn = (() =>
+        calls++ === 0
+          ? first()
+          : Promise.reject(new Error("admission closed"))) as unknown as StreamFn; // SAFETY: rejecting admission stub.
+      const result = await (
+        await wrapXaiProviderStream({ provider: "xai", modelId: "grok-4", streamFn })!(
+          xaiModel({}),
+          { messages },
+        )
+      ).result();
+      expect(result).toMatchObject({ stopReason: "error", errorMessage: "admission closed" });
+    }
+  });
+
   it("does not add Grok OAuth headers for a lookalike host", () => {
     const { headers } = captureXaiRequest(
       xaiModel({ id: "grok-4.5", baseUrl: "https://cli-chat-proxy.grok.com.example/v1" }),

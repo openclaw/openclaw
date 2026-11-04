@@ -9,6 +9,8 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   composeProviderStreamWrappers,
+  createEmptyTransportUsage,
+  failTransportStream,
   mergeTransportHeaders,
   createPayloadPatchStreamWrapper,
   createPlainTextToolCallCompatWrapper,
@@ -119,31 +121,52 @@ function createXaiImageFormatRetryWrapper(baseStreamFn: StreamFn | undefined): S
       // Hold "start" so a 400 before any content can be retried without the consumer seeing it.
       let start: AssistantMessageEvent | undefined;
       let sent = false;
-      for await (const event of await underlying(model, context, options)) {
-        if (!sent && event.type === "start") {
-          start = event;
-        } else if (
-          !sent &&
-          event.type === "error" &&
-          XAI_IMAGE_FORMAT_400.test(event.error.errorMessage ?? "")
-        ) {
-          // SAFETY: only image blocks change, into text blocks every message role accepts.
-          const retry = { ...context, messages: messages as typeof context.messages };
-          for await (const retried of await underlying(model, retry, options)) {
-            output.push(retried);
+      try {
+        for await (const event of await underlying(model, context, options)) {
+          if (!sent && event.type === "start") {
+            start = event;
+          } else if (
+            !sent &&
+            event.type === "error" &&
+            XAI_IMAGE_FORMAT_400.test(event.error.errorMessage ?? "")
+          ) {
+            // SAFETY: only image blocks change, into text blocks every message role accepts.
+            const retry = { ...context, messages: messages as typeof context.messages };
+            for await (const retried of await underlying(model, retry, options)) {
+              output.push(retried);
+            }
+            sent = true;
+            break;
+          } else {
+            if (!sent && start) {
+              output.push(start);
+            }
+            sent = true;
+            output.push(event);
           }
-          sent = true;
-          break;
-        } else {
-          if (!sent && start) {
-            output.push(start);
-          }
-          sent = true;
-          output.push(event);
         }
-      }
-      if (!sent && start) {
-        output.push(start);
+        if (!sent && start) {
+          output.push(start);
+        }
+      } catch (error) {
+        // Admission (first or retry) can reject before a stream exists; still settle the consumer.
+        const usage = createEmptyTransportUsage();
+        const failed = {
+          role: "assistant" as const,
+          content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage,
+          stopReason: "error" as const,
+          timestamp: Date.now(),
+        };
+        return failTransportStream({
+          stream: output,
+          output: failed,
+          signal: options?.signal,
+          error,
+        });
       }
       output.end();
     })();
