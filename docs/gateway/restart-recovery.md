@@ -18,9 +18,10 @@ A crash or `SIGKILL` cannot write shutdown markers. Startup also recognizes the
 existing persisted nonterminal run identity when it has no live execution owner
 and its run started in the immediately preceding Gateway lifetime. The existing
 boot ledger supplies that lifetime's exact start and the next boot's start; session
-update times and arbitrary freshness timeouts do not authorize recovery. Any recorded
-shutdown completion uses its markers only. Markers in any agent store also prevent
-unmarked adoption if shutdown was interrupted before recording completion. Older orphaned runs are recorded as stopped for restart and are
+update times and arbitrary freshness timeouts do not authorize recovery. A successfully
+completed shutdown uses its markers only. A forced stop or incomplete shutdown also
+recovers unfinished runs from that predecessor, even when other stores have markers.
+Older orphaned runs are recorded as stopped for restart and are
 not resumed. Missing boot history also prevents unmarked recovery. Files, external
 actions, and tool effects may already have changed, so the agent checks them
 before repeating work.
@@ -79,8 +80,7 @@ and cleared by terminal settlement, bounded by the recorded predecessor lifetime
 The same startup metadata read discovers both sources; there are no extra restart checkpoints or execution reconstruction.
 
 Startup recovers marked sessions in ready stores immediately. Before adopting
-unmarked crash work, it joins existing agent preparation to establish that no
-store has shutdown markers. Failed preparation disables unmarked adoption.
+unmarked crash work, it joins existing agent preparation. Failed preparation disables unmarked adoption.
 If a store is still undergoing
 inspection and preparation, its existing startup owner discovers retained work
 before admitting fresh inputs. Recovery runs after database preparation ends,
@@ -100,7 +100,11 @@ startup's temporary database access or wait for model executions to finish.
 ## Graceful shutdown
 
 Once a stop or restart is committed, the Gateway fences new admission, snapshots
-running sessions, writes their markers, and aborts active runs. It joins accepted
+running sessions, writes their markers across independent stores in parallel, and aborts active runs. Marker persistence and subagent settlement each receive at most ten seconds within
+the existing shutdown deadline. Root cancellation does not wait for subagent settlement.
+If marker persistence times out, each eligible root's restart cancellation records
+resume intent in its existing terminal write. Runs that never finish that write remain
+eligible through the predecessor's persisted nonterminal identity. It joins accepted
 persistence before retiring state and gives other resource cleanup a bounded
 grace. A long model stream, tool call, or background process does not get
 a full run-completion drain before shutdown.
