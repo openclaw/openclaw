@@ -49,16 +49,17 @@ export function captureXaiRequest(
 ) {
   let modelId: string | undefined;
   let capturedHeaders: ModelRequestHeaders | undefined;
+  let payloadPromise: unknown;
   const streamFn: StreamFn = (selected, _context, options) => {
     modelId = selected.id;
     capturedHeaders = options?.headers;
-    options?.onPayload?.(payload, selected);
+    payloadPromise = options?.onPayload?.(payload, selected);
     return {} as ReturnType<StreamFn>;
   };
   const wrapped = wrap({ provider: "xai", modelId: model.id, extraParams, streamFn });
   if (!wrapped) {
     throw new Error("expected xAI stream wrapper");
   }
-  void wrapped(model, { messages: [] }, { headers });
-  return { modelId, headers: capturedHeaders, payload };
+  const streamResult = wrapped(model, { messages: [] }, { headers });
+  return { modelId, headers: capturedHeaders, payload, payloadPromise, streamResult };
 }

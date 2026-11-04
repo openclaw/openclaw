@@ -9,8 +9,14 @@ import { captureXaiRequest, xaiModel } from "./test-helpers.js";
 function patchPayload<T extends Record<string, unknown>>(
   payload: T,
   model: Partial<Model<"openai-responses">> = {},
-): T {
-  captureXaiRequest(xaiModel(model), { extraParams: { tool_stream: false }, payload });
+): T | Promise<T> {
+  const captured = captureXaiRequest(xaiModel(model), {
+    extraParams: { tool_stream: false },
+    payload,
+  });
+  if (captured.payloadPromise instanceof Promise) {
+    return captured.payloadPromise.then(() => payload);
+  }
   return payload;
 }
 
@@ -18,7 +24,12 @@ function project(
   input: Array<Record<string, unknown>>,
   model: Partial<Model<"openai-responses">> = {},
 ) {
-  return patchPayload({ input: structuredClone(input) }, model).input;
+  const payload = { input: structuredClone(input) };
+  const res = patchPayload(payload, model);
+  if (res instanceof Promise) {
+    return res.then((p) => p.input);
+  }
+  return res.input;
 }
 
 function toolOutput(output: unknown, callId = "call_1") {
@@ -264,4 +275,57 @@ describe("xai stream wrappers", () => {
       ]);
     },
   );
+
+  it("normalizes within-limit GIF images to supported PNG format for xAI Responses payloads across turns", async () => {
+    const gifData = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    const gifImage = {
+      type: "input_image",
+      source: { type: "base64", media_type: "image/gif", data: gifData },
+    };
+    const result = toolOutput([inputText("Read GIF"), gifImage], "call_gif");
+    const history = [message("user", "Inspect the gif"), toolCall("call_gif"), result];
+
+    const projected = (await project(history)) as Array<Record<string, unknown>>;
+    const carrier = projected.find(
+      (item) => item.type === "message" && item.role === "user" && Array.isArray(item.content),
+    );
+    expect(carrier).toBeDefined();
+    const normalizedImagePart = (carrier?.content as Array<Record<string, unknown>>).find(
+      (part) => part.type === "input_image",
+    );
+    expect(normalizedImagePart).toBeDefined();
+    expect((normalizedImagePart?.source as Record<string, unknown>)?.media_type).toBe("image/png");
+
+    // Subsequent turn: historical message with normalized image retains valid format without poisoning
+    const nextTurn = [
+      ...projected,
+      message("assistant", "I see a 1x1 GIF."),
+      message("user", "What was in it?"),
+    ];
+    const secondProjected = (await project(nextTurn)) as Array<Record<string, unknown>>;
+    expect(secondProjected).toHaveLength(nextTurn.length);
+
+    // Native xAI API route also normalizes GIF in tool output
+    const nativeProjected = (await project([result], {
+      provider: "x-ai",
+      baseUrl: XAI_BASE_URL,
+    })) as Array<Record<string, unknown>>;
+    const nativeToolOutput = nativeProjected[0];
+    expect(nativeToolOutput?.type).toBe("function_call_output");
+    const nativeParts = nativeToolOutput?.output as Array<Record<string, unknown>>;
+    const nativeImage = nativeParts.find((part) => part.type === "input_image");
+    expect((nativeImage?.source as Record<string, unknown>)?.media_type).toBe("image/png");
+
+    // Visible omission when image bytes fail to decode
+    const corruptGif = {
+      type: "input_image",
+      source: { type: "base64", media_type: "image/gif", data: "R0lGOD_corrupt_payload" },
+    };
+    const corruptProjected = (await project([
+      toolOutput([inputText("corrupt"), corruptGif], "call_corrupt"),
+    ])) as Array<Record<string, unknown>>;
+    expect(JSON.stringify(corruptProjected)).toContain(
+      "omitted image payload: invalid inline image data",
+    );
+  });
 });

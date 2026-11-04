@@ -115,72 +115,226 @@ function describeXaiFunctionOutputMediaPlaceholder(
   return undefined;
 }
 
-function normalizeXaiResponsesToolResultPayload(
-  payloadObj: Record<string, unknown>,
-  model: Parameters<StreamFn>[0],
-): void {
-  // The native API accepts call-bound media; retain the existing replay contract on other routes.
-  if (
-    model.api !== "openai-responses" ||
-    isXaiEndpoint(model, XAI_BASE_URL) ||
-    !Array.isArray(payloadObj.input)
-  ) {
-    return;
+function isGifImagePart(part: Record<string, unknown>): boolean {
+  if (part.type !== "input_image") {
+    return false;
+  }
+  if (typeof part.image_url === "string") {
+    const url = part.image_url.toLowerCase();
+    return url.startsWith("data:image/gif;") || url.includes("base64,r0lgod");
+  }
+  const source = asOptionalRecord(part.source);
+  if (source) {
+    const mediaType = typeof source.media_type === "string" ? source.media_type.toLowerCase() : "";
+    const data = typeof source.data === "string" ? source.data : "";
+    return mediaType === "image/gif" || data.startsWith("R0lGOD");
+  }
+  return false;
+}
+
+const convertedGifCache = new Map<string, string>();
+
+async function normalizeXaiImagePart(
+  part: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!isGifImagePart(part)) {
+    return part;
+  }
+  let base64 = "";
+  let isDataUrl = false;
+  if (typeof part.image_url === "string") {
+    const comma = (part.image_url as string).indexOf(",");
+    base64 = comma !== -1 ? (part.image_url as string).slice(comma + 1) : "";
+    isDataUrl = true;
+  } else {
+    const source = asOptionalRecord(part.source);
+    if (source && typeof source.data === "string") {
+      base64 = source.data;
+    }
   }
 
+  if (!base64.trim()) {
+    return { type: "input_text", text: "[omitted image payload: invalid inline image data]" };
+  }
+
+  try {
+    let pngBase64 = convertedGifCache.get(base64);
+    if (!pngBase64) {
+      const { encode } = await import("rastermill");
+      const buffer = Buffer.from(base64, "base64");
+      const encoded = await encode(buffer, { format: "png" });
+      pngBase64 = encoded.data.toString("base64");
+      convertedGifCache.set(base64, pngBase64);
+    }
+
+    if (isDataUrl) {
+      return {
+        ...part,
+        image_url: `data:image/png;base64,${pngBase64}`,
+      };
+    }
+    const source = asOptionalRecord(part.source) ?? {};
+    return {
+      ...part,
+      source: {
+        ...source,
+        type: "base64",
+        media_type: "image/png",
+        data: pngBase64,
+      },
+    };
+  } catch {
+    return { type: "input_text", text: "[omitted image payload: invalid inline image data]" };
+  }
+}
+
+function hasGifImageParts(input: unknown[]): boolean {
+  for (const item of input) {
+    const itemObj = asOptionalRecord(item);
+    if (itemObj?.type === "message" && Array.isArray(itemObj.content)) {
+      for (const part of itemObj.content) {
+        if (asOptionalRecord(part) && isGifImagePart(part as Record<string, unknown>)) {
+          return true;
+        }
+      }
+    } else if (itemObj?.type === "function_call_output" && Array.isArray(itemObj.output)) {
+      for (const part of itemObj.output) {
+        if (asOptionalRecord(part) && isGifImagePart(part as Record<string, unknown>)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+async function transformPayloadInput(
+  payloadObj: Record<string, unknown>,
+  model: Parameters<StreamFn>[0],
+  isNative: boolean,
+  isAsync: boolean,
+): Promise<void> {
   const includeImages = model.input.includes("image");
   let imageContentParts: Array<Record<string, unknown>> = [];
   let toolResultIndex = 0;
-  const normalizedInput = payloadObj.input.flatMap((item: unknown, index, input) => {
+
+  const inputList = payloadObj.input as unknown[];
+  const normalizedInput: unknown[] = [];
+
+  for (let index = 0; index < inputList.length; index += 1) {
+    const item = inputList[index];
     const itemObj = asOptionalRecord(item);
-    if (itemObj?.type !== "function_call_output") {
-      return [item];
+
+    if (itemObj?.type === "message" && Array.isArray(itemObj.content)) {
+      const parts = itemObj.content as Array<Record<string, unknown>>;
+      const normalizedParts: Array<Record<string, unknown>> = [];
+      for (const part of parts) {
+        if (isAsync && isGifImagePart(part)) {
+          normalizedParts.push(await normalizeXaiImagePart(part));
+        } else {
+          normalizedParts.push(part);
+        }
+      }
+      normalizedInput.push({ ...itemObj, content: normalizedParts });
+      continue;
     }
-    // String outputs also occupy a result position, even though they carry no images.
+
+    if (itemObj?.type !== "function_call_output") {
+      normalizedInput.push(item);
+      continue;
+    }
+
     toolResultIndex += 1;
     let normalizedItem = item;
+
     if (Array.isArray(itemObj.output)) {
       const outputParts = itemObj.output as Array<Record<string, unknown>>;
       let textOutput = "";
       const imageStart = imageContentParts.length;
-      for (const part of outputParts) {
+
+      const normalizedOutputParts: Array<Record<string, unknown>> = [];
+      for (const rawPart of outputParts) {
+        const part =
+          isAsync && isGifImagePart(rawPart) ? await normalizeXaiImagePart(rawPart) : rawPart;
+        normalizedOutputParts.push(part);
+
         if (part.type === "input_text" && typeof part.text === "string") {
           textOutput += part.text;
         }
         if (includeImages && isReplayableInputImagePart(part)) {
-          // Emit one ownership label before this result's first replayable image.
-          if (imageContentParts.length === imageStart) {
-            imageContentParts.push({
-              type: "input_text",
-              text: `Image(s) from tool result #${toolResultIndex}:`,
-            });
+          if (!isNative) {
+            if (imageContentParts.length === imageStart) {
+              imageContentParts.push({
+                type: "input_text",
+                text: `Image(s) from tool result #${toolResultIndex}:`,
+              });
+            }
+            imageContentParts.push(part);
           }
-          imageContentParts.push(part);
         }
       }
-      normalizedItem = {
-        ...itemObj,
-        output: textOutput || describeXaiFunctionOutputMediaPlaceholder(outputParts) || "",
-      };
+
+      if (isNative) {
+        normalizedItem = {
+          ...itemObj,
+          output: normalizedOutputParts,
+        };
+      } else {
+        normalizedItem = {
+          ...itemObj,
+          output:
+            textOutput || describeXaiFunctionOutputMediaPlaceholder(normalizedOutputParts) || "",
+        };
+      }
     }
-    // Keep parallel outputs together, then anchor their images before later history.
+
+    if (isNative) {
+      normalizedInput.push(normalizedItem);
+      continue;
+    }
+
     if (
       imageContentParts.length === 0 ||
-      asOptionalRecord(input[index + 1])?.type === "function_call_output"
+      asOptionalRecord(inputList[index + 1])?.type === "function_call_output"
     ) {
-      return [normalizedItem];
+      normalizedInput.push(normalizedItem);
+      continue;
     }
+
     const carrier = { type: "message", role: "user", content: imageContentParts };
     imageContentParts = [];
-    return [normalizedItem, carrier];
-  });
+    normalizedInput.push(normalizedItem, carrier);
+  }
 
   payloadObj.input = normalizedInput;
 }
 
+function normalizeXaiResponsesToolResultPayload(
+  payloadObj: Record<string, unknown>,
+  model: Parameters<StreamFn>[0],
+): void | Promise<void> {
+  // The native API accepts call-bound media; retain the existing replay contract on other routes.
+  if (model.api !== "openai-responses" || !Array.isArray(payloadObj.input)) {
+    return;
+  }
+
+  const isNative = isXaiEndpoint(model, XAI_BASE_URL);
+  const hasGifs = hasGifImageParts(payloadObj.input);
+
+  if (isNative && !hasGifs) {
+    return;
+  }
+
+  if (hasGifs) {
+    return transformPayloadInput(payloadObj, model, isNative, true);
+  }
+
+  void transformPayloadInput(payloadObj, model, isNative, false);
+}
+
 function createXaiToolPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model }) => {
-    normalizeXaiResponsesToolResultPayload(payload, model);
+    return normalizeXaiResponsesToolResultPayload(payload, model);
   });
 }
 
