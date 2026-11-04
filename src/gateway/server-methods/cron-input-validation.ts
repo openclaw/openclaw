@@ -301,7 +301,7 @@ export async function captureCronCreatorSession(
     ? await captureCronCreatedInference({
         job,
         cfg,
-        agentId: agentId ?? resolveDefaultAgentId(cfg),
+        agentId,
         sessionLookupAgentId: agentId,
         caller,
         sessionEntry: callerScope ? creatorSession : undefined,
