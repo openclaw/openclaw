@@ -204,7 +204,7 @@ suite.define(() => {
       await button(addEnv, "Save").click();
       await notice(
         page,
-        "Saved EMPTY_ENV as Agent-readable environment. It is available to Gateway-hosted agent commands from the next run.",
+        "Saved EMPTY_ENV as Agent-readable environment. It is available to Gateway-hosted agent commands from the next reply.",
       );
 
       const envBulk = await openDialog(page, "Bulk add");
@@ -215,7 +215,7 @@ suite.define(() => {
       await button(envBulk, "Save").click();
       await notice(
         page,
-        "Saved 2 entries (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next run.",
+        "Saved 2 entries (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next reply.",
       );
 
       expect((await gateway.getRequests("secrets.store.set")).map(({ params }) => params)).toEqual([

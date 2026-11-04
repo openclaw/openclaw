@@ -1307,7 +1307,7 @@ const startupEnglish = {
       description:
         "Tell this agent about you and how you like to work. This edits only your personal USER.md, not the shared workspace file.",
     },
-    offline: "Connect to the gateway to meet your agent.",
+    offline: "Reconnect to view your profile.",
     access: {},
     usageStatistics: "Usage statistics",
     usageStatisticsDescription: "View activity, costs, and usage trends.",
