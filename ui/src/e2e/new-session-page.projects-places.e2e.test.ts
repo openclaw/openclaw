@@ -167,7 +167,7 @@ suite.define(() => {
       const pathInput = page.locator("input.new-session-page__browser-path");
       await pathInput.fill("");
       if (late === "system info") {
-        await pollAttribute(pathInput, "placeholder").toBe("This computer · local");
+        await pollAttribute(pathInput, "placeholder").toBe("This computer");
         await gateway.resolveDeferred("system.info", systemInfo);
         await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on this computer");
       }
