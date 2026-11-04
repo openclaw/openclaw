@@ -1,0 +1,2 @@
+149
+# Browser geometry/hit-testing regression for nested session controls across depth, themes, narrow/touch layouts, and the mobile drawer. CSS overlap cannot be proven by DOM-only tests.

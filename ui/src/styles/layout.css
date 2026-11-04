@@ -2107,8 +2107,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   display: none;
 }
 
-/* The disclosure stays rightmost; actions sit beside it. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
+/* Every depth shares the disclosure endcap. Keep row-host specificity so touch
+   alignment cannot reset its horizontal space. */
+.sidebar-recent-session.session-row-host:has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
