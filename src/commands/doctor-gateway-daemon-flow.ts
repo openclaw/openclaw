@@ -380,7 +380,7 @@ export async function maybeRepairGatewayDaemon(params: {
     }
     note("Gateway service not installed.", "Gateway");
     if (process.platform === "linux") {
-      let systemGatewayServices: ExtraGatewayService[] = [];
+      let systemGatewayServices: ExtraGatewayService[];
       try {
         systemGatewayServices = await findSystemGatewayServices();
       } catch (error) {
