@@ -73,6 +73,7 @@ it.each([
     });
     expect(Object.keys(result)).toEqual(["content", "failed"]);
     expect(result.content).toMatch(/^Couldn’t .+\. Try again\.\n\n/);
+    expect(result.content).not.toMatch(/thinking level|reasoning/i);
     if (boundary === "describe") {
       expect(describe).toHaveBeenCalledOnce();
     }
