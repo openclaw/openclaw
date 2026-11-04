@@ -6052,7 +6052,6 @@ describe("ci workflow guards", () => {
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
     const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
-    const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const plannerRunner = workflow.jobs["check-plan"]["runs-on"];
     const plannerContext = {
       eventName: "pull_request" as const,
