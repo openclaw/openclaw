@@ -80,6 +80,7 @@ let targets = explicitTargets
       "src/commands/startup-client-credentials.postgres.test.ts",
       "src/config/sessions/session-cold-storage-selection.postgres.test.ts",
       "src/config/sessions/session-accessor.sqlite-lifecycle-artifacts.postgres.test.ts",
+      "src/config/sessions/session-accessor.sqlite-maintenance-age.postgres.test.ts",
       "src/config/sessions/session-accessor.sqlite-read-hold.postgres.test.ts",
       "src/config/sessions/session-turn-resident.postgres.test.ts",
       "src/config/sessions/session-turn-commit.postgres.test.ts",
