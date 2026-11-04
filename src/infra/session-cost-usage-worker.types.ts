@@ -1,5 +1,4 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
-import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import type {
@@ -152,7 +151,6 @@ export type UsageCostWorkerHostEffects = {
     input: Array<{ provider?: string; model?: string }>;
     output: Array<ModelCostConfig | undefined>;
   };
-  restore: { input: SqliteSessionFileMarker; output: void };
   "prune-row": { input: UsageCostPruneRow; output: void };
   prune: { input: Record<string, never>; output: void };
   write: { input: UsageCostPreparedRollup; output: boolean };

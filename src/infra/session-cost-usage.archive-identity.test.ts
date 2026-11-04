@@ -356,7 +356,7 @@ describe("usage archive identity", () => {
     }
   });
 
-  it("keeps cold usage inventory cheap, restores for scanning, and reports a missing archive", async () => {
+  it.each(["file", "sqlite"] as const)("keeps %s usage cold", async (storage) => {
     const scope = {
       agentId: "main",
       sessionId: "cold-usage",
@@ -392,10 +392,22 @@ describe("usage archive identity", () => {
       );
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: archiveTime });
+    if (storage === "sqlite") {
+      await persistSessionTranscriptTurn(scope, {
+        messages: [{ message: assistant(11) }],
+        touchSessionEntry: false,
+      });
+      await loadSessionCostSummary({
+        agentId: "main",
+        config,
+        sessionFile: formatSqliteSessionFileMarker(scope),
+      });
+    }
     await persistSessionTranscriptTurn(scope, {
       messages: [{ message: assistant(17) }],
       touchSessionEntry: false,
     });
+    const coldTokens = storage === "sqlite" ? 28 : 17;
     const hotScope = { ...scope, sessionId: "hot-usage", sessionKey: "agent:main:hot-usage" };
     await upsertSessionEntryCore(hotScope, {
       sessionId: hotScope.sessionId,
@@ -422,7 +434,28 @@ describe("usage archive identity", () => {
       ),
     ).toEqual(before);
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
+    const fileArchive = expectDefined(
+      readSessionColdTranscript(database.db, scope.sessionId),
+      "cold usage archive",
+    );
+    if (storage === "sqlite") {
+      const archivePath = resolveSessionColdArchivePath(database.path, fileArchive.archive_name);
+      const bytes = await fs.readFile(archivePath);
+      runOpenClawAgentWriteTransaction(
+        ({ db }) => {
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<DB>(db)
+              .updateTable("session_transcript_cold_archives")
+              .set({ storage: "sqlite", archive_blob: bytes })
+              .where("session_id", "=", scope.sessionId),
+          );
+        },
+        { agentId: "main", env: state.env },
+      );
+      await fs.unlink(archivePath);
+    }
+    const archiveBefore = readSessionColdTranscript(database.db, scope.sessionId);
     const sessions = [
       before.filePath,
       formatSqliteSessionFileMarker(hotScope),
@@ -437,13 +470,62 @@ describe("usage archive identity", () => {
         requestRefresh: false,
       }),
     ).toMatchObject({
-      summaries: [null, { totalTokens: 19 }, { totalTokens: 19 }, null],
-      cacheStatus: { cachedFiles: 2, pendingFiles: 2 },
+      summaries: [
+        storage === "sqlite" ? { totalTokens: 11 } : null,
+        { totalTokens: 19 },
+        { totalTokens: 19 },
+        null,
+      ],
+      cacheStatus: { cachedFiles: storage === "sqlite" ? 3 : 2, pendingFiles: 2 },
     });
     expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
-    expect(await totalUsage("main")).toMatchObject({ totals: { totalTokens: 36 } });
-    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeUndefined();
+    // A missing rollup (file) and a stale rollup (embedded backup) must both stay cold.
+    await expect(refreshCostUsageCacheForAgent({ agentId: "main", config })).resolves.toBe(
+      "refreshed",
+    );
+    expect(readSessionColdTranscript(database.db, scope.sessionId)).toEqual(archiveBefore);
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        getNodeSqliteKysely<DB>(database.db)
+          .selectFrom("transcript_events")
+          .select("seq")
+          .where("session_id", "=", scope.sessionId),
+      ).rows,
+    ).toEqual([]);
+    expect(await totalUsage("main")).toMatchObject({ totals: { totalTokens: coldTokens + 19 } });
+    const discovered = expectDefined(
+      (await discoverAllSessions({ agentId: "main" })).find(
+        (session) => session.sessionId === scope.sessionId,
+      ),
+      "cold usage discovery",
+    );
+    expect(
+      await loadSessionCostSummariesFromCache({
+        agentId: "main",
+        config,
+        sessions: [discovered],
+        requestRefresh: false,
+      }),
+    ).toMatchObject({
+      summaries: [{ totalTokens: coldTokens, totalCost: coldTokens / 1000 }],
+      cacheStatus: { status: "fresh" },
+    });
     const rollups = readSessionCostUsageRollupRows("main");
+    const coldRollup = expectDefined(
+      rollups.find((row) => row.key === before.filePath),
+      "cold rollup",
+    );
+    const fingerprint = await resolveUsageCostPricingFingerprint(config, state.agentDir());
+    expect(
+      decodeUsageCostRollupEnvelope(coldRollup.valueJson, fingerprint)?.checkpoint,
+    ).toMatchObject({
+      kind: "sqlite",
+      generation: fileArchive.generation,
+    });
+    await refreshCostUsageCacheForAgent({ agentId: "main", config });
+    expect(readSessionCostUsageRollupRows("main")).toEqual(rollups);
+    expect(readSessionColdTranscript(database.db, scope.sessionId)).toEqual(archiveBefore);
     const missingScope = {
       ...scope,
       sessionKey: "agent:main:missing-usage",
@@ -457,6 +539,12 @@ describe("usage archive identity", () => {
       messages: [{ message: assistant(19) }],
       touchSessionEntry: false,
     });
+    await refreshCostUsageCacheForAgent({ agentId: "main", config });
+    const priorRollups = readSessionCostUsageRollupRows("main");
+    await persistSessionTranscriptTurn(missingScope, {
+      messages: [{ message: assistant(23) }],
+      touchSessionEntry: false,
+    });
     await ageTranscript(missingScope);
     const missingFile = expectDefined(
       (await listUsageCountedTranscriptStats("main")).find(
@@ -466,18 +554,26 @@ describe("usage archive identity", () => {
     );
     expect(await runSessionColdStorageMaintenance({ config: coldConfig })).toMatchObject({
       archivedTranscripts: 1,
-      externalizedTranscripts: 0,
+      externalizedTranscripts: storage === "sqlite" ? 1 : 0,
     });
     const archive = expectDefined(
       readSessionColdTranscript(database.db, missingScope.sessionId),
       "cold archive",
     );
-    await fs.unlink(resolveSessionColdArchivePath(database.path, archive.archive_name));
+    const brokenPath = resolveSessionColdArchivePath(database.path, archive.archive_name);
+    if (storage === "file") {
+      await fs.unlink(brokenPath);
+    } else {
+      await fs.writeFile(brokenPath, "corrupt cold archive");
+    }
+    await expect(refreshCostUsageCacheForAgent({ agentId: "main", config })).rejects.toThrow(
+      /missing|unreadable|failed verification/,
+    );
     await expect(
       loadSessionLogs({ agentId: "main", sessionFile: missingFile.filePath }),
-    ).rejects.toThrow(/missing|unreadable/);
-    expect(readSessionCostUsageRollupRows("main")).toEqual(rollups);
-    expect(readSessionColdTranscript(database.db, missingScope.sessionId)).toBeDefined();
+    ).rejects.toThrow(/missing|unreadable|failed verification/);
+    expect(readSessionCostUsageRollupRows("main")).toEqual(priorRollups);
+    expect(readSessionColdTranscript(database.db, missingScope.sessionId)).toEqual(archive);
   });
 
   it("discovers and reads compressed deleted archives for a non-main agent", async ({ signal }) => {

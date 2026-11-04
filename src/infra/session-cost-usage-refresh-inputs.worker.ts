@@ -8,10 +8,13 @@ import { listTranscriptArchivesFromDatabase } from "../config/sessions/session-a
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { listSqliteSessionEntriesFromDatabase } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
 import { listTranscriptInstancesFromDatabase } from "../config/sessions/session-accessor.sqlite-history.js";
+import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
 import { readWithCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
+import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { LruCache } from "./lru-cache.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import {
@@ -25,6 +28,7 @@ import type {
   UsageCostWorkerDatabase,
 } from "./session-cost-usage-worker.types.js";
 import { readSqliteDatabaseScopedWriteTokenForPath } from "./sqlite-database-admission.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 
 type TranscriptStats = SessionTranscriptStats & { generation?: string | null; cold?: boolean };
 type RollupInput = {
@@ -195,5 +199,31 @@ export function createUsageCostCollectionAccess(params: {
     access,
     inventory,
     readFacts: (marker: SqliteSessionFileMarker) => transcriptFacts.get(transcriptKey(marker)),
+    // The caller retains its native read section while consuming this snapshot's archive.
+    readColdArchive: (marker: SqliteSessionFileMarker) => {
+      const database = target(marker.agentId, marker.storePath);
+      const result = withOpenClawAgentDatabaseReadOnly(
+        (opened) =>
+          runSqliteReadSnapshotSync(opened.db, () => {
+            const archive = readSessionColdTranscript(opened.db, marker.sessionId);
+            if (!archive) {
+              return undefined;
+            }
+            const archive_blob =
+              archive.storage === "sqlite"
+                ? (executeSqliteQuerySync(
+                    opened.db,
+                    getSessionKysely(opened.db)
+                      .selectFrom("session_transcript_cold_archives")
+                      .select("archive_blob")
+                      .where("session_id", "=", marker.sessionId),
+                  ).rows[0]?.archive_blob ?? null)
+                : null;
+            return { ...archive, archive_blob };
+          }),
+        { ...database, env },
+      );
+      return result.found ? result.value : undefined;
+    },
   };
 }

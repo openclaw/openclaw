@@ -7,6 +7,10 @@ import { WorkerTaskError } from "@openclaw/worker-runtime";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  decodeSessionColdRecords,
+  readVerifiedSessionColdArchive,
+} from "../config/sessions/session-cold-storage-codec.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
@@ -115,13 +119,13 @@ export async function executeUsageCostWorker(
     }
     return owned;
   };
-  const readStore = <T>(agentId: string, storePath: string, read: () => T) => {
+  const readStore = <T>(agentId: string, storePath: string, read: () => T | Promise<T>) => {
     const database = target(agentId, storePath);
     return control.runNativeSection(() => readDatabase(database, read));
   };
   const refreshInputs =
     operation.kind === "refresh" ? usageRefreshInputs(location.databasePath) : undefined;
-  const { access, readFacts, inventory } = createUsageCostCollectionAccess({
+  const { access, readFacts, readColdArchive, inventory } = createUsageCostCollectionAccess({
     input,
     control,
     target,
@@ -243,25 +247,39 @@ export async function executeUsageCostWorker(
     return body;
   };
   const resolveCosts = createUsageCostWorkerPriceResolver((pairs) => host("pricing", pairs));
-  const readGeneration = async (marker: SqliteSessionFileMarker) => {
-    const facts = readFacts(marker);
-    if (facts?.cold) {
-      await host("restore", marker);
-      // Restore may replace the projection; rebuild this derived cache from the captured bounds.
-      return undefined;
-    }
-    return facts?.generation;
-  };
+  const readGeneration = async (marker: SqliteSessionFileMarker) => readFacts(marker)?.generation;
   const readRows = async (
     marker: SqliteSessionFileMarker,
     afterSeq: number,
     throughSeq: number,
-  ): Promise<Array<{ seq: number; event: unknown }>> => {
+    consume: (seq: number, event: unknown) => void,
+  ): Promise<number> => {
     if (throughSeq <= afterSeq) {
-      return [];
+      return afterSeq;
     }
     const database = target(marker.agentId, marker.storePath);
-    const stored = await readStore(marker.agentId, marker.storePath, () => {
+    return readStore(marker.agentId, marker.storePath, async () => {
+      if (readFacts(marker)?.cold) {
+        const archive = readColdArchive(marker);
+        if (archive) {
+          // Snapshot embedded bytes with their metadata; immutable files remain readable after restore.
+          const bytes = await readVerifiedSessionColdArchive({ storePath: database.path, archive });
+          control.throwIfCancelled();
+          let lastSeq = afterSeq;
+          for (const record of decodeSessionColdRecords(bytes, archive)) {
+            control.throwIfCancelled();
+            if (
+              record.kind === "event" &&
+              record.row.seq > afterSeq &&
+              record.row.seq <= throughSeq
+            ) {
+              consume(record.row.seq, JSON.parse(record.row.event_json));
+              lastSeq = record.row.seq;
+            }
+          }
+          return lastSeq;
+        }
+      }
       const result = withOpenClawAgentDatabaseReadOnly(
         (opened) => {
           const query = getSessionKysely(opened.db)
@@ -272,24 +290,24 @@ export async function executeUsageCostWorker(
             .where("seq", "<=", throughSeq)
             .orderBy("seq", "asc")
             .limit(1_024);
-          const page: Array<{ seq: number; event_json: string }> = [];
+          let lastSeq = afterSeq;
           let bytes = 0;
-          // Stop before parsing: retain at most 8 MiB plus one lookahead event.
+          // Bound each hot page; the consumer retains only usage and navigation fields.
           for (const row of iterateSqliteQuerySync(opened.db, query)) {
             const size = Buffer.byteLength(row.event_json);
-            if (page.length > 0 && bytes + size > 8 * 1024 * 1024) {
+            if (lastSeq > afterSeq && bytes + size > 8 * 1024 * 1024) {
               break;
             }
-            page.push(row);
+            consume(row.seq, JSON.parse(row.event_json));
+            lastSeq = row.seq;
             bytes += size;
           }
-          return page;
+          return lastSeq;
         },
         { ...database, env },
       );
-      return result.found ? result.value : [];
+      return result.found ? result.value : afterSeq;
     });
-    return stored.map((row) => ({ seq: row.seq, event: JSON.parse(row.event_json) as unknown }));
   };
   if (operation.kind === "summary" || operation.kind === "sessions") {
     // Exact sub-quarter/day-crossing requests share one bounded replay allowance.
