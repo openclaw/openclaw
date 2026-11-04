@@ -153,6 +153,18 @@ it("mounts a newly inserted diagram without replacing an existing sibling", asyn
   await diagram.updateComplete;
 });
 
+it("expands the diagram without a hover tooltip", async () => {
+  const { element } = await mount("Preview diagram");
+  await waitForImage(element);
+  const preview = element.querySelector<HTMLButtonElement>("button.preview")!;
+
+  expect(preview.hasAttribute("title")).toBe(false);
+  expect(preview.getAttribute("aria-label")).toBe("Expand diagram");
+  expect(preview.getAttribute("aria-haspopup")).toBe("dialog");
+  preview.click();
+  await expanded(element, "Mermaid diagram");
+});
+
 it("preserves source and reports copy failure", async () => {
   copySource.mockResolvedValueOnce(false);
   const { original, container, element } = await mount("x < y & z <script>alert(1)</script>");
