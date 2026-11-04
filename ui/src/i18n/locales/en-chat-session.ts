@@ -199,7 +199,7 @@ const enChatSession = {
       inComposer: "Answer above the message box.",
       archived: "No longer pending",
       archivedReason: "The conversation moved on. You can still answer this question.",
-      sendFailed: "Could not send your answer. Your draft is preserved.",
+      sendFailed: "Couldn’t send your answer. Your draft is still here. Try again.",
       queued: "Answer queued",
       sending: "Sending answer…",
       sent: "Answer sent",
@@ -265,7 +265,7 @@ const enChatSession = {
         cancelled: "This agent update was cancelled before delivery.",
       },
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
-      waitingForWorkerSetup: "Received · waiting for worker setup",
+      waitingForWorkerSetup: "Received · setting up device",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       earlier: "Show earlier unsent messages",

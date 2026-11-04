@@ -355,7 +355,7 @@ async function readSlotColdOpenOutcome(
           true,
         );
       } else {
-        await subagents.getByText("No subagents in this conversation.", { exact: true }).waitFor();
+        await subagents.getByText("No subagents yet.", { exact: true }).waitFor();
       }
     }
     if (label === "Side chat" && !expectedOutcome) {
@@ -843,7 +843,7 @@ suite.define(() => {
         expect(outcome).toEqual({
           outcome: "generic-empty",
           heading: "Subagents",
-          description: "No subagents in this conversation.",
+          description: "No subagents yet.",
           emptyStateOffersAction: false,
         });
       } else if (label === "Processes") {

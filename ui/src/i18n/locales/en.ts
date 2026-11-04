@@ -1527,10 +1527,10 @@ const startupEnglish = {
     sessionDetails: {
       automations: "Automations",
       progressOptions: "Task progress options",
-      automationError: "Couldn't load automations.",
-      automationUnavailable: "Automations unavailable for this session.",
+      automationError: "Couldn’t load automations. Try again.",
+      automationUnavailable: "Automations unavailable.",
       automationLoading: "Loading automations…",
-      automationEmpty: "No automations for this session",
+      automationEmpty: "No automations yet.",
       automationMore: "Load more automations",
       automationAttention: "Needs attention",
       automationPaused: "Paused",

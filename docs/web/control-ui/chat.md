@@ -12,6 +12,23 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: session controls, the composer, and how the transcript renders.
 
+## Goals, questions, and recovery
+
+A goal belongs to a session. Saving an edited goal does not start a reply. Replacing
+its objective during a reply interrupts that reply, updates the objective, and
+resumes the goal. If you switch sessions while entering a goal, cancel the entry
+and select **Goal** again in the session you want to use.
+
+If an answer cannot be sent, its draft stays saved so you can retry. If browser
+storage fails, keep the tab open or copy the draft before reloading. A goal update
+that cannot save its recovery request is not sent; free browser storage and try
+again. For an unconfirmed goal update, use **Check outcome** before changing it.
+
+**Session paused as a precaution** means the provider has findings to review
+before the session can continue. Queued messages stay held; review and retry each
+message separately after continuation is accepted. A session stopped without
+reviewable findings cannot continue.
+
 An existing session with an empty transcript shows **No messages yet** and keeps
 the composer available. The agent welcome and recent chats appear only on the
 **New session** page. If no model is configured, the existing session's composer
@@ -175,7 +192,8 @@ it, when it gave one, rather than its instructions, followed by **running**
 while it works and by its duration once it has finished. A subagent that failed
 or timed out reads **failed** instead, and one that was stopped reads
 **stopped**. Selecting the name opens that subagent in the **Subagents** panel;
-the rest of the row still expands the launch's details. Collapsed activity counts subagents on
+the rest of the row still expands the launch's details. The panel labels elapsed
+work as **Duration** and shows **No subagents yet.** before any are listed. Collapsed activity counts subagents on
 their own, such as **1 other operation · 3 subagents**. A launch that was
 refused started no subagent and is counted with the other operations. While the
 step in progress has no title of its own, the collapsed row keeps showing that

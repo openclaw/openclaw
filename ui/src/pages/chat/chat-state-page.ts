@@ -46,7 +46,7 @@ import {
 } from "./chat-send-actions.ts";
 import { requestChatSend, resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { chatOfflineQueueStorageError } from "./chat-send-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
@@ -377,7 +377,7 @@ export function createPageState(
       setChatError(state, null);
       void resumeStoredChatOutboxes(state);
     } else if (outcome === "rejected") {
-      setChatError(state, OFFLINE_QUEUE_STORAGE_ERROR);
+      setChatError(state, chatOfflineQueueStorageError());
     }
   };
   state.retryQueuedChatMessage = (id) => retryQueuedChatMessage(state, id);

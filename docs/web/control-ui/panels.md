@@ -22,7 +22,9 @@ Details keeps session metadata visible. Pull requests and automations appear
 expanded when they contain items; empty sections are omitted entirely. You can
 collapse populated sections without ordinary updates reopening them. Loading or
 failed automation reads show their status and retry action without an empty
-disclosure. Task progress remains independently collapsible.
+disclosure. Task progress remains independently collapsible. If the connection
+drops, progress shows **Disconnected · Activity may be outdated** while keeping
+the saved steps visible. A failed refresh keeps the last update and offers a retry.
 
 ## OpenClaw system care
 
