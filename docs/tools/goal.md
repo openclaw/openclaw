@@ -187,6 +187,9 @@ target.
 verified against the full objective with no required work remaining. It should
 mark a goal `blocked` only after the same blocking condition recurs for at least
 three consecutive goal turns, not for ordinary difficulty or missing polish.
+A missing scope or other authorization limit that this session cannot change
+is a blocker on the first turn. Do not wait for three turns, and do not keep
+searching for a tool the grant does not include.
 Resuming a blocked goal starts a fresh count of three consecutive turns. Earlier
 blocked turns do not count toward it.
 A nearly exhausted budget does not justify marking unfinished work complete.

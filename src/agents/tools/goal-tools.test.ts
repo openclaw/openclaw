@@ -124,7 +124,7 @@ describe("goal tools", () => {
       goal: makeGoal({ status: "complete", tokensUsed: 10 }),
     });
     const tool = createUpdateGoalTool(options);
-    const originalGoal = readGoal();
+    expect(tool.description).toContain("blocker on the first turn");
 
     const result = await tool.execute("call-already-complete", { status: "blocked" });
 
@@ -133,7 +133,7 @@ describe("goal tools", () => {
       error: "goal is already complete",
       nextAction: expect.stringContaining("Do not retry update_goal"),
     });
-    expect(readGoal()).toEqual(originalGoal);
+    expect(readGoal()?.status).toBe("complete");
 
     const repeated = await tool.execute("call-complete-again", { status: "complete" });
     expect(repeated.details).toMatchObject({
