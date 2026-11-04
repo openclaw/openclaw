@@ -23,11 +23,14 @@ enum SessionGroupStore {
     static let collapsedKey = "openclaw:sessions:collapsed-groups"
 
     static func loadCollapsed(defaults: UserDefaults = .standard) -> Set<String> {
-        Set(defaults.stringArray(forKey: self.collapsedKey) ?? [])
+        Set((defaults.stringArray(forKey: self.collapsedKey) ?? [])
+            .filter { $0.hasPrefix("group:") }
+            .map { String($0.dropFirst("group:".count)) })
     }
 
     static func saveCollapsed(_ names: Set<String>, defaults: UserDefaults = .standard) {
-        defaults.set(names.sorted(), forKey: self.collapsedKey)
+        // Keep the section-ID contract used by the landed sidebar writer.
+        defaults.set(names.map { "group:\($0)" }.sorted(), forKey: self.collapsedKey)
     }
 
     static func remember(_ name: String, defaults: UserDefaults = .standard) {

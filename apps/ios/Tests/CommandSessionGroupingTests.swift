@@ -346,6 +346,38 @@ struct SessionGroupMigrationTests {
         }
     }
 
+    @Test func `main sidebar folds survive model load catalog prune and reload`() async {
+        await GatewayPersistenceTestGate.shared.acquire()
+        defer { GatewayPersistenceTestGate.shared.release() }
+        await withUserDefaults([
+            SessionGroupStore.defaultsKey: nil,
+            SessionGroupStore.collapsedKey: nil,
+        ]) {
+            /// Freeze the main-side writer from 064a39c2c3e7: sections persist IDs, not catalog names.
+            /// A name containing the prefix must lose exactly one section prefix on load.
+            func saveMainSidebarFolds(_ sectionIDs: Set<String>) {
+                UserDefaults.standard.set(sectionIDs.sorted(), forKey: "openclaw:sessions:collapsed-groups")
+            }
+            saveMainSidebarFolds(["group:Kept", "group:group:Nested", "group:Gone"])
+            let model = SessionGroupModel()
+            #expect(model.collapsed == ["Kept", "group:Nested", "Gone"])
+            let appModel = NodeAppModel()
+            let connection = OpenClawSessionMenuConnection(
+                methods: ["sessions.groups.list"],
+                scopes: ["operator.read"],
+                isCurrent: { true },
+                request: { _ in
+                    Data(#"{"groups":[{"name":"Kept","position":0},{"name":"group:Nested","position":1}]}"#.utf8)
+                })
+            await model.refresh(appModel: appModel, connectionProvider: { _ in connection })
+            model.pruneCollapsed(for: [])
+            #expect(model.collapsed == ["Kept", "group:Nested"])
+            #expect(UserDefaults.standard.stringArray(forKey: SessionGroupStore.collapsedKey) ==
+                ["group:Kept", "group:group:Nested"])
+            #expect(SessionGroupModel().collapsed == ["Kept", "group:Nested"])
+        }
+    }
+
     @Test func `a loaded catalog prunes folded names that no longer name a group`() async {
         await GatewayPersistenceTestGate.shared.acquire()
         defer { GatewayPersistenceTestGate.shared.release() }
