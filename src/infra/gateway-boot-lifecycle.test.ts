@@ -159,7 +159,7 @@ describe("gateway crash-loop breaker", () => {
     },
   );
 
-  it("offers no crash-resume window without a predecessor or after a settled predecessor", async () => {
+  it("offers recovery after a forced stop, but not a successfully settled predecessor", async () => {
     const lifecycle = createLifecycleDb();
     let now = 1_000;
     let boot = await lifecycle.begin(now);
@@ -174,7 +174,9 @@ describe("gateway crash-loop breaker", () => {
     ] as const) {
       await lifecycle.complete(boot.id, outcome, now + 1);
       const next = await lifecycle.begin(now + 2);
-      expect(next.restartResumeWindow).toBeUndefined();
+      expect(next.restartResumeWindow).toEqual(
+        outcome === "forced_stop" ? { startedAt: now, endedAt: now + 2 } : undefined,
+      );
       now += 2;
       boot = next;
     }

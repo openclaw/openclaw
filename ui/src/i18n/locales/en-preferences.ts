@@ -136,6 +136,9 @@ const enPreferences = {
       runtime: "Node {version} · PID {pid}",
     },
     personal: {
+      deviceOnly: "This preference is saved only on this device.",
+      shortcutsLocalOnly:
+        "Shortcuts are saved only on this device because their previous sync state is missing. Edit a shortcut to sync again.",
       browserOnly: en.quickSettings.personal.browserOnly,
     },
   },
