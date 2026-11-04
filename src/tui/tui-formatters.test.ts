@@ -118,7 +118,7 @@ describe("formatTuiFooter", () => {
 
   it.each([
     ["active", 12_000, 30_000, "Pursuing goal (12k/30k)"],
-    ["blocked", 0, undefined, "Goal blocked (/goal resume)"],
+    ["blocked", 0, undefined, "Goal blocked (/goal resume <what changed>)"],
   ] as const)("renders %s goals", (status, tokensUsed, tokenBudget, expected) => {
     const goal = {
       schemaVersion: 1 as const,

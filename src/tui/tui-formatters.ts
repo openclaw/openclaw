@@ -463,7 +463,7 @@ function formatGoalFooter(goal?: SessionGoal): string | null {
     case "paused":
       return "Goal paused (/goal resume)";
     case "blocked":
-      return "Goal blocked (/goal resume)";
+      return "Goal blocked (/goal resume <what changed>)";
     case "usage_limited":
       return "Goal hit usage limits (/goal resume)";
     case "budget_limited":
