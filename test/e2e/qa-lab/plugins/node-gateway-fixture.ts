@@ -88,9 +88,8 @@ export async function withNodeGateway(
       ...options.env,
     },
   });
-  const claim = options.receiver === "child" ? undefined : await acquireGatewayE2ePortBlock();
-  let unstartedClaim: typeof claim | undefined = claim;
-  const previousRegistry = captureActivePluginRegistrySnapshot();
+  let unstartedClaim: Awaited<ReturnType<typeof acquireGatewayE2ePortBlock>> | undefined;
+  let previousRegistry: ReturnType<typeof captureActivePluginRegistrySnapshot> | undefined;
   let gateway: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let stopReceiver: (() => Promise<void>) | undefined;
   let operator: GatewayClient | undefined;
@@ -99,6 +98,9 @@ export async function withNodeGateway(
   const responses: Promise<void>[] = [];
   const handlerErrors: unknown[] = [];
   try {
+    const claim = options.receiver === "child" ? undefined : await acquireGatewayE2ePortBlock();
+    unstartedClaim = claim;
+    previousRegistry = captureActivePluginRegistrySnapshot();
     const identity = (name: string) =>
       loadOrCreateDeviceIdentity({
         path: path.join(state.home, "proof-clients", name, "client", "credentials.sqlite"),
@@ -354,7 +356,7 @@ export async function withNodeGateway(
       () => gateway?.close({ reason: `${options.label} proof complete` }),
       () => stopReceiver?.(),
       () => unstartedClaim?.release(),
-      () => restoreActivePluginRegistrySnapshot(previousRegistry),
+      () => previousRegistry && restoreActivePluginRegistrySnapshot(previousRegistry),
       () => state.cleanup(),
     );
   }
