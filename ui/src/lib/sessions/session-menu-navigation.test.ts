@@ -52,7 +52,7 @@ const copy = () => run("copy-markdown");
 async function rejectCopy(errorMessage = t("sessionsView.copyTranscriptChanged")) {
   await copy();
   expect(copyToClipboard).not.toHaveBeenCalled();
-  expect(showToast).toHaveBeenCalledWith({ message: errorMessage });
+  expect(showToast).toHaveBeenCalledWith({ severity: "error", message: errorMessage });
 }
 
 function page(messages: unknown[], extra: Partial<ChatHistoryResult> = {}): ChatHistoryResult {
@@ -219,7 +219,10 @@ it.each(["view", "connection", "pending"])(
       expect(request).not.toHaveBeenCalled();
     }
     expect(copyToClipboard).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.copyTranscriptChanged") });
+    expect(showToast).toHaveBeenCalledWith({
+      severity: "error",
+      message: t("sessionsView.copyTranscriptChanged"),
+    });
   },
 );
 

@@ -250,6 +250,7 @@ function renderSidebarMenus(
                 .then(({ createApplicationAgent }) => createApplicationAgent(context, identity))
                 .catch((error: unknown) =>
                   showToast({
+                    severity: "error",
                     message: t("agentChip.creationFailed", { error: formatUiError(error) }),
                     durationMs: 12_000,
                   }),
@@ -525,6 +526,7 @@ function renderSidebarMenus(
                     }).catch((error: unknown) => {
                       if (!actionSignal.aborted) {
                         showToast({
+                          severity: "error",
                           message: error instanceof Error ? error.message : String(error),
                         });
                       }

@@ -8,6 +8,15 @@
   min-width: 0;
 }
 
+/* Refresh stays beside the subtitle, which wraps first on narrow columns. */
+.content-header--settings:has(> .page-header-actions .profile-refresh) {
+  flex-wrap: nowrap;
+}
+
+.page-header-actions:has(.profile-refresh) {
+  flex-shrink: 0;
+}
+
 /* An account's identity under its title: an address, an id or a handle. */
 .identity-account {
   min-width: 0;
@@ -78,17 +87,13 @@
 
 .profile-hero__badge {
   flex: 0 0 auto;
-}
-
-.profile-hero__badge,
-.model-accounts__provider {
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--accent);
   background: var(--accent-subtle);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 2px 8px;
 }
@@ -115,19 +120,7 @@
   overflow-wrap: anywhere;
 }
 
-.model-accounts__id {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  color: var(--text-strong);
-}
-
-.model-accounts__provider {
-  margin-left: var(--space-2);
-  vertical-align: middle;
-}
-
-.model-accounts-flow,
-.model-accounts-choice {
+.model-accounts-flow {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -146,6 +139,29 @@
 .model-accounts-form .settings-input {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.model-accounts-form .btn {
+  flex: none;
+}
+
+/* A typed credential id reads from its start. */
+.settings-row__control .model-accounts-form input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+/* A provider and its account stay on one line on phones; the picker truncates long labels. */
+@media (max-width: 640px) {
+  :is(.shell--settings, .shell--embed-settings)
+    .settings-row:has(> .settings-row__control .profile-auth-account-picker) {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      width: auto;
+      flex: 0 1 64%;
+      flex-wrap: nowrap;
+    }
+  }
 }
 
 .model-accounts-error .settings-row__desc {

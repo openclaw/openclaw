@@ -492,7 +492,27 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    registry.learnContributions.push({ pluginId: record.id, contribution });
+    // The dispatcher calls these callbacks after registration and runs plugin code (skill
+    // writes, state reads), so each one enters the registering instance's call scope. Bind each
+    // callable: values read back out of a wrapped array (e.g. by `find`) are the raw originals.
+    const instance = getPluginInstance(record);
+    const bind = <T>(callback: T): T => (instance ? instance.wrap(callback) : callback);
+    registry.learnContributions.push({
+      pluginId: record.id,
+      contribution: {
+        ...contribution,
+        buildGuidance: bind(contribution.buildGuidance),
+        ...(contribution.subcommands
+          ? {
+              subcommands: contribution.subcommands.map((subcommand) => ({
+                ...subcommand,
+                handle: bind(subcommand.handle),
+                ...(subcommand.matchArgs ? { matchArgs: bind(subcommand.matchArgs) } : {}),
+              })),
+            }
+          : {}),
+      },
+    });
   };
 
   return {

@@ -276,7 +276,7 @@ describe("chat pane worker stop", () => {
       );
       expect(pane.context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
         session.key,
-        "Worker stop requested. Review the initial message before retrying.",
+        "Device stop requested. Review the initial message before retrying.",
         expect.objectContaining({
           readSessionPlacementRecovery: expect.any(Function),
           pauseSessionPlacementRecovery: expect.any(Function),

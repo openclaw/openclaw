@@ -54,7 +54,7 @@ it.each(["profile", "device"] as const)(
         runner: target === "device" ? { kind: "device", status: "available" } : undefined,
       },
     });
-    expect(text(container, "chip")).toBe("Worker · syncing files");
+    expect(text(container, "chip")).toBe("Device · syncing files");
     await openPlacement(container);
     expect(text(container, "note")).toContain("Saving workspace changes");
     expect(container.querySelector("openclaw-elapsed-time")).toBeNull();

@@ -15,6 +15,8 @@ const enPersonalInstructions = {
       dirty: "Unsaved changes",
       saved: "Saved",
       discard: "Discard your unsaved instructions and load the saved file?",
+      discardBody: "Your edits since the last save are lost.",
+      discardAction: "Discard",
       failureHint:
         "Your draft is unchanged. If the file changed elsewhere, copy your draft, then reload before saving again.",
       contextChanged:

@@ -7,6 +7,7 @@ const enModelControls = {
       subscription: "Subscription",
       api: "API",
       default: "Default",
+      defaultModel: "Default model",
       routes: {
         claudeCli: {
           label: "Claude CLI · native",
@@ -78,7 +79,7 @@ const enModelControls = {
       selectionScopeSessionLabel: "This session",
       selectionScopeAgentLabel: "Agent default",
       selectionScopeGlobalLabel: "Global default",
-      selectionScopeSession: "Applies to this chat only.",
+      selectionScopeSession: "Applies to this session only.",
       selectionScopeAgent: "Changes the default for this agent.",
       selectionScopeGlobal: "Changes the default for all agents.",
       defaultWithModel: "Default ({model})",
@@ -113,27 +114,27 @@ const enModelControls = {
     },
     nativeRuntimeRecovery: {
       title: "Use {runtime}’s native permissions?",
-      confirm: "Continue for this chat",
+      confirm: "Continue for this session",
       confirmMessage:
-        "{runtime} will run on the Gateway host under its own permissions. OpenClaw’s optional native tool and sandbox restrictions, including workspace-only restrictions, will not be enforced for this harness. Only this chat is changed; other chats and global configuration stay unchanged. OpenClaw-hosted tools keep their own policy checks.",
+        "{runtime} will run on the Gateway host under its own permissions. OpenClaw’s optional native tool and sandbox restrictions, including workspace-only restrictions, will not be enforced for this harness. Only this session is changed; other sessions and global configuration stay unchanged. OpenClaw-hosted tools keep their own policy checks.",
       retryMessage: "Continue will retry the message you just sent.",
-      chooseAnother: "Choose another model to keep this chat’s current execution restrictions.",
-      failed: "Could not change this chat’s execution permissions: {error}",
+      chooseAnother: "Choose another model to keep this session’s current execution restrictions.",
+      failed: "Could not change this session’s execution permissions: {error}",
       refreshFailed:
-        "The model and permissions were saved, but refreshing this chat failed: {error}",
+        "The model and permissions were saved, but refreshing this session failed: {error}",
       reasons: {
-        "sandbox-required": "{runtime} cannot run because this chat requires a sandbox.",
+        "sandbox-required": "{runtime} cannot run because this session requires a sandbox.",
         sandbox: "{runtime} uses native tools that cannot run inside the OpenClaw sandbox.",
         "workspace-only":
-          "{runtime} cannot enforce this chat’s OpenClaw workspace-only restriction.",
-        "permission-mode": "{runtime} cannot enforce this chat’s current execution permissions.",
-        "tool-policy": "{runtime} cannot enforce this chat’s OpenClaw native tool restrictions.",
-        "remote-execution": "{runtime} cannot use this chat’s remote execution target.",
+          "{runtime} cannot enforce this session’s OpenClaw workspace-only restriction.",
+        "permission-mode": "{runtime} cannot enforce this session’s current execution permissions.",
+        "tool-policy": "{runtime} cannot enforce this session’s OpenClaw native tool restrictions.",
+        "remote-execution": "{runtime} cannot use this session’s remote execution target.",
       },
     },
     permissionControls: {
       label: "Permissions",
-      help: "Choose what the agent can read, edit, and run in this chat.",
+      help: "Choose what the agent can read, edit, and run in this session.",
       default: "Default",
       agentDefault: "Agent default",
       agentDefaultWithMode: "Agent default ({mode})",
@@ -141,12 +142,14 @@ const enModelControls = {
       defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Only admins can turn on Full access.",
       requiresAdmin: "Requires admin access.",
-      updateFailed: "Couldn't change permissions: {error}",
-      refreshFailed: "Permissions saved, but this chat didn't refresh. Reload to see the change.",
+      updateFailed: "Couldn’t change permissions. Try again.",
+      refreshFailed:
+        "Permissions saved, but this session didn't refresh. Reload to see the change.",
       modes: {
         "read-only": {
           label: "Read only",
-          description: "Can read files in this chat's workspace. Can't edit files or run commands.",
+          description:
+            "Can read files in this session's workspace. Can't edit files or run commands.",
         },
         guarded: {
           label: "Ask me",

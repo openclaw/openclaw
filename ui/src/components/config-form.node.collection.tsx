@@ -40,9 +40,8 @@ import {
   matchesNodeSelf,
   resolveConfigFieldMeta as resolveFieldMeta,
 } from "./config-form.search.ts";
-import { configFieldId, type JsonSchema } from "./config-form.shared.ts";
+import { configFieldId, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { Icon } from "./solid/icon.tsx";
-import { SettingsEmpty } from "./solid/settings-ui.tsx";
 
 const UNSET_ARRAY_SOURCE_IDENTITY = Symbol("unset-array-source");
 
@@ -397,6 +396,7 @@ function ConfigArrayRow(
       onPatch: props.content.patchArrayItem,
     } satisfies ConfigNodeRenderParams;
   });
+  const isObjectItem = () => schemaType(node().schema) === "object";
   const remove = () =>
     canRemove() &&
     props.content.patch(nextValue(), props.content.rowIdentities.toSpliced(props.index, 1));
@@ -414,10 +414,10 @@ function ConfigArrayRow(
   );
   return (
     <Show
-      when={props.params.compact}
+      when={props.params.compact || !isObjectItem()}
       fallback={
         <>
-          <div class="settings-row">
+          <div class="settings-row cfg-collection-row">
             <div class="settings-row__text">
               <span class="settings-row__title">#{props.index + 1}</span>
             </div>
@@ -427,7 +427,7 @@ function ConfigArrayRow(
         </>
       }
     >
-      <div class="cfg-array__item">
+      <div class={["cfg-array__item", { "cfg-array__item--row": !props.params.compact }]}>
         <div class="cfg-array__value">{props.renderNode(node)}</div>
         {removeControl()}
       </div>
@@ -473,7 +473,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
     >
       {(current) => (
         <div class="cfg-block cfg-array">
-          <div class="settings-row">
+          <div class="settings-row cfg-collection-row">
             <div class="settings-row__text">
               <Show when={current().showLabel}>
                 <span class="settings-row__title">
@@ -515,16 +515,6 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
               </Show>
             </div>
             <div class="settings-row__control">
-              <Show when={!props.params.compact}>
-                <span class="settings-row__value">
-                  {t(
-                    current().arrayValue.length === 1
-                      ? "configForm.itemCountOne"
-                      : "configForm.itemCount",
-                    { count: String(current().arrayValue.length) },
-                  )}
-                </span>
-              </Show>
               <button
                 ref={focus.addRef}
                 type="button"
@@ -549,14 +539,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
             ref={(handle) => (draft = handle)}
             onCommit={(value) => current().commitDraft(value)}
           />
-          <Show
-            when={entries().length > 0}
-            fallback={
-              <Show when={!props.params.compact}>
-                <SettingsEmpty message={t("configForm.noItems")} />
-              </Show>
-            }
-          >
+          <Show when={entries().length > 0}>
             <div class="settings-subrows">
               <For each={entries()} keyed={(entry) => entry.identity}>
                 {(entry, index) => (

@@ -62,6 +62,28 @@ function publishHistory(
     check();
   }
 }
+
+it.each([false, true])("collapses a replacement diagnostic (mobile=%s)", async (mobile) => {
+  const { container, publish } = publishedComposer(
+    { runError: { summary: "First diagnostic" } },
+    mobile,
+  );
+  const details = await waitForElement(container, "details", "first diagnostic");
+  details.setAttribute("open", "");
+  publish({ messages: [], runError: { summary: "Second diagnostic" } });
+  await waitForSolid(() => {
+    expect(container.querySelector("details")).not.toBe(details);
+    expect(container.querySelector("details")?.open).toBe(false);
+  });
+});
+it("preserves caller-owned recovery instructions in request notices", async () => {
+  const error = "Session is busy; wait for the current run to finish.";
+  const { container } = publishedNotices<TopbarProps>(renderChatTopbarNotices, { error });
+  await waitForSolid(() => {
+    expect(container.querySelector(".chat-error strong")?.textContent).toBe(error);
+    expect(container.querySelector("details")).toBeNull();
+  });
+});
 const failedPlacement = (error: string) => ({
   sessionKey: "agent:main:failed-start",
   phase: "failed" as const,
@@ -279,16 +301,15 @@ it.each(["refresh", "details", "message"] as const)(
     const details = notice.querySelector("details");
     if (variant === "message") {
       expect(details).toBeNull();
-      expect(notice.querySelector("button")).toBeNull();
-      return;
+    } else {
+      expect(details?.open).toBe(false);
+      expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
+      details!.open = true;
+      expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+      expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
+        t("chat.copyError"),
+      );
     }
-    expect(details?.open).toBe(false);
-    expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
-    details!.open = true;
-    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
-    expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
-      t("chat.copyError"),
-    );
     const refresh = notice.querySelector<HTMLButtonElement>(".chat-error__refresh");
     if (variant === "refresh") {
       refresh!.click();
@@ -342,7 +363,7 @@ describe("chat view notice integration", () => {
         expect(alert.textContent).toContain("🧭");
         expect(alert.querySelector("img")).toBeNull();
         const summary = requireElement(details, "summary", "error header");
-        expect(summary.textContent).toContain("Details");
+        expect(summary.textContent).toContain("Show details");
         expect(summary.textContent).not.toContain("Error details");
         expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
         const copy = summary.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
@@ -392,7 +413,9 @@ describe("chat view notice integration", () => {
       );
       expect(alert.textContent).not.toContain("⚠");
       const details = requireElement(alert, "details", "startup disclosure");
-      expect(requireElement(details, "summary", "startup header").textContent).toContain("Details");
+      expect(requireElement(details, "summary", "startup header").textContent).toContain(
+        "Show details",
+      );
       expect(requireElement(details, "pre", "startup diagnostic").getAttribute("aria-label")).toBe(
         "Error details",
       );

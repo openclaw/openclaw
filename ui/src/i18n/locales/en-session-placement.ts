@@ -24,13 +24,15 @@ const enSessionPlacement = {
     waitingForDevice: "Waiting for the device to reconnect. Retry when it’s connected.",
     continueOnGatewayMenu: "Continue on Gateway…",
     continueOnGatewayAction: "Continue on Gateway",
+    continueOnGatewayTitle: "Continue “{session}” on the Gateway?",
     continueOnGatewayConfirm:
-      "Continue “{session}” on the Gateway? Unsynced device files and work in progress may be lost. OpenClaw will continue from the last Gateway-synced state and won’t replay the interrupted reply.",
+      "Unsynced device files and work in progress may be lost. OpenClaw will continue from the last Gateway-synced state and won’t replay the interrupted reply.",
+    discardWorkspaceTitle: "Discard unsynced changes?",
     discardWorkspaceDeleteConfirm:
-      'The device for "{session}" is offline and has changes that have not synced. Reconnect it to keep those changes. To delete this session now, discard unsynced device files and in-flight work, then retry deletion once. The last Gateway-synced workspace is used; interrupted work is not replayed.',
+      "The device for “{session}” is offline with unsynced changes. Reconnect it to keep them, or discard them to delete now. Interrupted work won’t be replayed.",
     discardWorkspaceDeleteAction: "Discard changes and delete",
     discardWorkspaceArchiveConfirm:
-      'The device for "{session}" is offline and has changes that have not synced. Reconnect it to keep those changes. To archive this session now, discard unsynced device files and in-flight work, then retry archiving once. The last Gateway-synced workspace is used; interrupted work is not replayed.',
+      "The device for “{session}” is offline with unsynced changes. Reconnect it to keep them, or discard them to archive now. Interrupted work won’t be replayed.",
     discardWorkspaceArchiveAction: "Discard changes and archive",
     workspaceRecoveryBatchHint:
       "Recover each offline session separately before retrying this selection.",
@@ -41,7 +43,7 @@ const enSessionPlacement = {
     stopDeviceWorkerConfirmAction: "Stop",
     restartSession: "Restart session…",
     restartingSession: "Restarting session…",
-    restartSessionTitle: "Restart session",
+    restartSessionTitle: "Restart this session?",
     restartSessionDescription: "Choose where “{session}” should restart.",
     restartSessionWarning:
       "The session restarts from its last saved workspace on the selected destination. Changes that the previous device didn’t upload may be lost.",
@@ -60,7 +62,7 @@ const enSessionPlacement = {
     moveSessionWorkspaceRequired:
       "Moving requires a session-owned worktree or repository workspace.",
     dispatchLocalSessionNotice:
-      "Continue the same session on a configured cloud worker or device. The active turn must finish before moving.",
+      "Continue the same session on a configured cloud device or paired device. The active reply must finish before moving.",
     dispatchSessionTitle: "Choose a device",
     dispatchSessionDescription: "Choose where “{session}” should continue.",
     dispatchSessionNotice:
@@ -68,7 +70,7 @@ const enSessionPlacement = {
     dispatchSessionAction: "Continue on device",
     stoppingSession: "Stopping session…",
     finishingSessionMove: "Finishing session move…",
-    syncingCloudFiles: "Worker · syncing files",
+    syncingCloudFiles: "Device · syncing files",
     syncingCloudFilesComposer: "Send now; your message starts automatically after workspace sync.",
     syncingCloudFilesDetail: "Saving workspace changes",
     failedSessionTitle: "Couldn’t continue this session",

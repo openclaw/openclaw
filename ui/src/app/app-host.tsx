@@ -3,7 +3,7 @@ import { onSettled, Show, untrack } from "solid-js";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
-  titleForRoute,
+  pageTitleForRoute,
 } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import "../components/app-topbar-solid.tsx";
@@ -459,7 +459,10 @@ export class ShellOwner
       return;
     }
     const outboxScopeHost = this.storedOutboxScopeHost(context);
-    let primaryContext = routeId === "custodian" ? askBrandLabel() : titleForRoute(routeId);
+    let primaryContext =
+      routeId === "custodian"
+        ? askBrandLabel()
+        : pageTitleForRoute(routeId, context.nativeDeviceSettings?.snapshot);
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }
@@ -488,7 +491,11 @@ export class ShellOwner
           gatewayStatus: state.gatewayStatus,
           connectionRecovery: this.connectionRecovery,
           connectionFlagVisible: this.connectionFlagVisible,
-          connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
+          // The floating refresh notice speaks for the collapsed sidebar.
+          connectionFlagAllowed:
+            state.navCollapsed &&
+            !state.mobileNavLayout &&
+            !state.floatingUpdateCard.refreshRequired,
         });
       }
       this.syncNavigationPresentation(state);

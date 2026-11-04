@@ -210,7 +210,7 @@ describe("DraftSubmissionFlow", () => {
         expect(flow).toMatchObject({
           error:
             storage === "unavailable before create"
-              ? "Couldn't prepare session recovery. Your draft has been kept."
+              ? "Couldn’t prepare session recovery. Your draft has been kept."
               : "Couldn’t start this session. Retry setup. placement recovery storage is unavailable",
           message: "Keep my model and runtime",
         });
@@ -260,6 +260,7 @@ describe("DraftSubmissionFlow", () => {
       expect(takePreparedTitle).not.toHaveBeenCalled();
       if (oversized) {
         expect(showToast).toHaveBeenCalledExactlyOnceWith({
+          severity: "error",
           message: "Too large to send: second.txt",
         });
       } else {

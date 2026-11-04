@@ -888,9 +888,7 @@ describe("sessions page new group", () => {
     pending.resolve("completed");
     await created;
     expect(sessions.patch).not.toHaveBeenCalled();
-    expect(messages).toEqual([
-      "Gateway connection replaced before the group was saved. Try again.",
-    ]);
+    expect(messages).toEqual(["The connection changed before the group was saved. Try again."]);
     page.result = sessionsResult([row], 1);
     await page.requestNewCategory(key);
     expect(messages[1]).toBeNull();
@@ -1061,7 +1059,9 @@ describe("sessions page plugin actions", () => {
     menu.querySelector<HTMLElement>(actionSelector)!.click();
     await settleSessionMenu(menu);
     expect(run.mock.calls.length).toBe(1);
-    await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
+    await waitForFast(() =>
+      expect(page.textContent).toContain(i18n.t("pluginUi.actionUnavailableSession")),
+    );
 
     publish([{ ...current, archived: true }]);
     await page.updateComplete;
@@ -1080,7 +1080,9 @@ describe("sessions page plugin actions", () => {
       menu.querySelector<HTMLElement>(actionSelector)!.click();
       await settleSessionMenu(menu);
       expect(run.mock.calls.length).toBe(0);
-      await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
+      await waitForFast(() =>
+        expect(page.textContent).toContain(i18n.t("pluginUi.actionSessionUnavailable")),
+      );
     }
 
     expect(page.querySelector(actionSelector)).toBeNull();

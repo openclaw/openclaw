@@ -423,7 +423,7 @@ it.each([false, true])(
     expect(manager.t("sessionsView.communication.send")).toBe("Send messages");
     expect(manager.t("sessionsView.personalGroupEdit")).toBe("Edit section");
     expect(manager.t("sessionsView.groupDefaultsTitle", { group: "Build" })).toBe(
-      'New session defaults for "Build"',
+      "New session defaults for “Build”",
     );
     expect(manager.getLocale()).toBe("de");
     expect(en.sessionsView).toBe(namespace);
@@ -528,7 +528,7 @@ it("loads optional chat copy with its view while keeping admission errors synchr
   registerEnglishCatalog(registerChatSessionEnglish);
   await manager.setLocale("de");
   expect(manager.t("chat.composer.menu.offlineBlocked")).toBe(
-    "Reconnect to change tools for this chat.",
+    "Reconnect to change tools for this session.",
   );
   expect(manager.t("chat.workspaceFiles.showFiles")).toBe("Show session files");
   expect(manager.t("chat.workspaceFiles.search")).toBe("chat.workspaceFiles.search");

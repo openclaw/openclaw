@@ -163,7 +163,7 @@ suite.define(() => {
       await gateway.deferNext("sessions.move");
       await openPlacement(page);
       await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
-      await page.getByText("The active turn will be interrupted.", { exact: false }).waitFor();
+      await page.getByText("The active reply will be interrupted.", { exact: false }).waitFor();
       await page.locator('[data-value="gateway"]').waitFor();
       await page.locator('[data-value="device:writer-runner"]').waitFor();
       expect(await page.locator('[data-value="cloud:aws"]').count()).toBe(0);
