@@ -121,25 +121,13 @@ export class SessionOrganizer {
     return Boolean(client && this.creatingNestedSessions.get(client)?.has(sessionKey));
   }
 
+  // State stays here; mutation orchestration loads with the other session operations.
   createNestedSession(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation(async (operations, scope) => {
-      let pending = this.creatingNestedSessions.get(scope.client);
-      if (!pending) {
-        pending = new Set();
-        this.creatingNestedSessions.set(scope.client, pending);
-      }
-      if (pending.has(session.key)) {
-        return;
-      }
-      pending.add(session.key);
-      this.notify();
-      try {
-        await operations.createChildSession(this.deps, session, scope, { fork: false });
-      } finally {
-        pending.delete(session.key);
-        this.notify();
-      }
-    });
+    return this.runOperation((operations, scope) =>
+      operations.createNestedSession(this.deps, session, scope, this.creatingNestedSessions, () =>
+        this.notify(),
+      ),
+    );
   }
 
   promoteSession(session: SidebarRecentSession): Promise<void> {

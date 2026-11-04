@@ -15,7 +15,6 @@ import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
-import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { categoryClearReturnsToGroups } from "../lib/sessions/grouping.ts";
 import {
   canArchiveSessionRow,
@@ -447,15 +446,8 @@ function renderSidebarMenus(
                 context()?.gateway.snapshot.client,
                 session().key,
               ),
-              disabledReason: (() => {
-                const access = readSessionMethodAccess(context()?.gateway.snapshot, {
-                  method: "sessions.create",
-                  params: { parentSessionKey: session().key },
-                  sessionScope: true,
-                  session: session(),
-                });
-                return access.allowed ? undefined : access.reason;
-              })(),
+              // Forks and empty children share parent-scoped sessions.create admission.
+              disabledReason: actionDisabledReasons().fork,
               onCreate: () => {
                 void view.sessionOrganizer.createNestedSession(session()).finally(() => {
                   if (projected.sessionMenu === menu) {
