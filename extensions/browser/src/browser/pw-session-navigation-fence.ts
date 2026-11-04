@@ -66,6 +66,25 @@ export type NavigationAuthorityFenceDisposeOptions = {
   stopLoading?: boolean;
 };
 
+/**
+ * Resolve or fail one paused request. Chromium retires a paused request's id
+ * when the page cancels it first (frame removed or re-navigated). That request
+ * can no longer load, so there is nothing left to admit or deny.
+ */
+async function settleInterception(
+  target: NavigationTargetSession,
+  method: "Fetch.continueRequest" | "Fetch.failRequest",
+  params: { requestId: string; errorReason?: "Failed" | "Aborted" },
+): Promise<void> {
+  try {
+    await target.send(method, params);
+  } catch (error) {
+    if (!(error instanceof Error && error.message.includes("Invalid InterceptionId"))) {
+      throw error;
+    }
+  }
+}
+
 /** Fence every Chromium redirect hop, including separately hosted iframe targets. */
 export async function installNavigationAuthorityFence(
   page: Page,
@@ -160,14 +179,16 @@ export async function installNavigationAuthorityFence(
             };
             const resume = async () => {
               assertTargetCurrent();
-              await target.send("Fetch.continueRequest", { requestId: event.requestId });
+              await settleInterception(target, "Fetch.continueRequest", {
+                requestId: event.requestId,
+              });
             };
             await handleDocument(
               {
                 continue: resume,
                 fallback: resume,
                 abort: async () => {
-                  await target.send("Fetch.failRequest", {
+                  await settleInterception(target, "Fetch.failRequest", {
                     requestId: event.requestId,
                     errorReason: "Failed",
                   });
@@ -177,7 +198,7 @@ export async function installNavigationAuthorityFence(
                   // Raw CDP cancellation leaves the current document intact.
                   // A synthetic 204 keeps the URL but replaces Chromium's title
                   // with a provisional "Loading ..." state.
-                  await target.send("Fetch.failRequest", {
+                  await settleInterception(target, "Fetch.failRequest", {
                     requestId: event.requestId,
                     errorReason: "Aborted",
                   });
@@ -199,7 +220,9 @@ export async function installNavigationAuthorityFence(
           }
           if (!closing && !failed) {
             assertCurrent();
-            await target.send("Fetch.continueRequest", { requestId: event.requestId });
+            await settleInterception(target, "Fetch.continueRequest", {
+              requestId: event.requestId,
+            });
             return;
           }
         }
@@ -212,16 +235,14 @@ export async function installNavigationAuthorityFence(
       if (!states.has(target)) {
         return;
       }
-      await target
-        .send("Fetch.failRequest", {
-          requestId: event.requestId,
-          errorReason: "Aborted",
-        })
-        .catch((error: unknown) => {
-          if (states.has(target)) {
-            fail(error);
-          }
-        });
+      await settleInterception(target, "Fetch.failRequest", {
+        requestId: event.requestId,
+        errorReason: "Aborted",
+      }).catch((error: unknown) => {
+        if (states.has(target)) {
+          fail(error);
+        }
+      });
     };
     const listener = (event: PausedRequest) => {
       if (event.networkId) {
