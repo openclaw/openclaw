@@ -195,6 +195,28 @@ it.each(["dispose", "selection", "capability", "deadline"] as const)(
   },
 );
 
+it("retries the message subscription when the wall clock jumps forward", async () => {
+  useFakeClock();
+  const selected = { key: "agent:main:selected", agentId: null } satisfies Subscription;
+  let calls = 0;
+  const subscribeMessages = vi.fn<Subscribe>(async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw sessionChanged();
+    }
+    return selected;
+  });
+  const { state } = createSubscriptionState({ subscribeMessages });
+  const pending = syncSubscription(state);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(subscribeMessages).toHaveBeenCalledTimes(1);
+  vi.setSystemTime(Date.now() + 120_000);
+  await vi.advanceTimersByTimeAsync(500);
+  await expect(pending).resolves.toBe(true);
+  expect(subscribeMessages.mock.calls.length).toBeGreaterThan(1);
+  expect(state.chatSessionMessageSubscription).toEqual(selected);
+});
+
 it.each([
   sessionChanged({ code: "FORBIDDEN" }),
   sessionChanged({
