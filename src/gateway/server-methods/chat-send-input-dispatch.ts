@@ -581,6 +581,7 @@ export async function handleChatSendWithStorage(
     }
     phase?.finish();
     diagnostics.acknowledge();
+    using dispatchHandoff = diagnostics.scope("detail.dispatch.accepted_handoff");
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     // Dispatch owns execution from this point, including deferred and collected turns.
@@ -642,6 +643,7 @@ export async function handleChatSendWithStorage(
         runOutsideOperatorToolGatewayAuthority(() => startChatDispatch(dispatch)),
       ),
     );
+    dispatchHandoff?.finish();
     admittedCleanup.dispatched = true;
     if (codexGoalCommitted) {
       await acknowledgeCodexGoal({

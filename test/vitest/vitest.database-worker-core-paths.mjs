@@ -1008,6 +1008,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-lease-heartbeat.test.ts",
   "src/state/openclaw-state-lease-worker-owner.test.ts",
   "src/state/openclaw-state-lease.test.ts",
+  "src/state/openclaw-state-lease-native-renewal.test.ts",
   "src/agents/tools/transcripts-tool-read.test.ts",
   "src/agents/tools/transcripts-tool.auto-start.test.ts",
   "src/agents/tools/transcripts-tool.lifecycle.test.ts",
