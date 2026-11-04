@@ -8,7 +8,7 @@ import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js"
 import type { ExtensionDeclaration } from "./extension-launch-state.js";
 
 /** Select a full browser that honors unpacked extension launch flags. */
-export function resolveExtensionLaunchExecutable(
+function resolveExtensionLaunchExecutable(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
 ): BrowserExecutable {

@@ -1,6 +1,8 @@
 import { webcrypto } from "node:crypto";
 import { expect, it, vi } from "vitest";
-import { AutofillRelayClient, openRelayEnvelope, type SealedEnvelope } from "./autofill-relay.js";
+import { AutofillRelayClient } from "./autofill-relay.js";
+
+type EnvelopePurpose = "integration_key" | "tokens";
 
 const subtle = webcrypto.subtle;
 const encode = new TextEncoder();
@@ -10,8 +12,8 @@ async function seal(
   publicKey: webcrypto.CryptoKey,
   plaintext: string,
   sessionId: string,
-  purpose: SealedEnvelope["purpose"],
-): Promise<SealedEnvelope> {
+  purpose: EnvelopePurpose,
+): Promise<Record<string, unknown>> {
   const ephemeral = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, [
     "deriveBits",
   ]);
@@ -53,28 +55,74 @@ async function seal(
   };
 }
 
-it("opens independent WebCrypto envelopes and rejects session, purpose, version, and ciphertext tampering", async () => {
-  const gateway = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, [
-    "deriveBits",
-  ]);
-  const envelope = await seal(
-    gateway.publicKey,
-    "synthetic-integration-key",
-    "session",
-    "integration_key",
+it("opens independent WebCrypto envelopes at pickup and rejects session, purpose, version, and ciphertext tampering", async () => {
+  const sessionId = "s".repeat(22);
+  const tokens = JSON.stringify({
+    access_token: "synthetic-access",
+    refresh_token: "synthetic-refresh",
+    expires_in: 900,
+    scope: "brokered-credentials:read",
+  });
+  let gateway: webcrypto.CryptoKey | undefined;
+  let sealKey: (key: webcrypto.CryptoKey) => Promise<Record<string, unknown>>;
+  const client = new AutofillRelayClient(
+    vi.fn<typeof fetch>(async (input, init) => {
+      if (typeof input === "string" && input.endsWith("/sessions")) {
+        if (typeof init?.body !== "string") {
+          throw new Error("Relay fixture expects a JSON string body");
+        }
+        const { gatewayPublicKey } = JSON.parse(init.body) as {
+          gatewayPublicKey: webcrypto.JsonWebKey;
+        };
+        gateway = await subtle.importKey(
+          "jwk",
+          gatewayPublicKey,
+          { name: "ECDH", namedCurve: "P-256" },
+          false,
+          [],
+        );
+        return Response.json(
+          {
+            sessionId,
+            pickupToken: "p".repeat(43),
+            connectUrl: `https://connect.openclaw.ai/1password/start/${sessionId}`,
+            confirmationCode: "ABCD-1234",
+            expiresAt: "2026-11-02T23:59:00Z",
+          },
+          { status: 201 },
+        );
+      }
+      if (!gateway) {
+        throw new Error("Relay fixture expects a session first");
+      }
+      return Response.json({
+        state: "connected",
+        sealedIntegrationKey: await sealKey(gateway),
+        sealedTokens: await seal(gateway, tokens, sessionId, "tokens"),
+      });
+    }),
   );
-  await expect(
-    openRelayEnvelope(envelope, gateway.privateKey, "session", "integration_key"),
-  ).resolves.toBe("synthetic-integration-key");
-  for (const [input, session, purpose] of [
-    [envelope, "different", "integration_key"],
-    [envelope, "session", "tokens"],
-    [{ ...envelope, v: 2 }, "session", "integration_key"],
-    [{ ...envelope, ct: "AA" }, "session", "integration_key"],
-  ] as const) {
-    await expect(
-      openRelayEnvelope(input, gateway.privateKey, session, purpose),
-    ).rejects.toMatchObject({ code: "invalidEnvelope" });
+  const session = await client.create();
+  sealKey = (key) => seal(key, "synthetic-integration-key", sessionId, "integration_key");
+  await expect(client.pickup(session)).resolves.toMatchObject({
+    state: "connected",
+    integrationKey: "synthetic-integration-key",
+  });
+  for (const tamper of [
+    (key: webcrypto.CryptoKey) =>
+      seal(key, "synthetic-integration-key", "t".repeat(22), "integration_key"),
+    (key: webcrypto.CryptoKey) => seal(key, "synthetic-integration-key", sessionId, "tokens"),
+    async (key: webcrypto.CryptoKey) => ({
+      ...(await seal(key, "synthetic-integration-key", sessionId, "integration_key")),
+      v: 2,
+    }),
+    async (key: webcrypto.CryptoKey) => ({
+      ...(await seal(key, "synthetic-integration-key", sessionId, "integration_key")),
+      ct: "AA",
+    }),
+  ]) {
+    sealKey = tamper;
+    await expect(client.pickup(session)).rejects.toMatchObject({ code: "invalidRelayResponse" });
   }
 });
 

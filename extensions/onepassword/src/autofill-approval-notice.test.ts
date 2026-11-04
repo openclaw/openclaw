@@ -10,7 +10,9 @@ const finished = (granted: boolean, state = "resolved") => ({
 function setup(capture: () => Promise<unknown> = async () => ({})) {
   const events = {
     captureSessionEventTarget: vi.fn(capture),
-    enqueueSessionEvent: vi.fn(() => ({ accepted: Promise.resolve({ ok: true }) })),
+    enqueueSessionEvent: vi.fn((_text: string, _options: unknown) => ({
+      accepted: Promise.resolve({ ok: true }),
+    })),
   };
   const warn = vi.fn();
   return { events, warn, notifier: new ApprovalNotifier(events as never, warn) };
@@ -22,7 +24,7 @@ it("tells the agent how to continue only when a login was granted", async () => 
   const s = setup();
   await s.notifier.notify(captured, finished(true));
   await s.notifier.notify(captured, finished(false, "denied"));
-  const texts = s.events.enqueueSessionEvent.mock.calls.map((call) => String(call[0]));
+  const texts = s.events.enqueueSessionEvent.mock.calls.map((call) => call[0]);
   expect(texts[0]).toContain("fill with this requestId");
   expect(texts[1]).toContain("No logins were granted");
 });

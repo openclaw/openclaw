@@ -1,10 +1,7 @@
 import { expect, it } from "vitest";
-import { nextAutofillPollDelay, pollAutofillDecision } from "./autofill-poll.js";
+import { pollAutofillDecision } from "./autofill-poll.js";
 
 it("uses the partner schedule with no early checks and no checks after two minutes", async () => {
-  expect(
-    [0, 4999, 5000, 29999, 30000, 59999, 60000, 119999, 120000].map(nextAutofillPollDelay),
-  ).toEqual([5000, 1, 2000, 2000, 5000, 5000, 10000, 1, null]);
   let now = 0;
   const checked: number[] = [];
   const result = await pollAutofillDecision({

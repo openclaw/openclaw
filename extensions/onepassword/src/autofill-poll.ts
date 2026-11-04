@@ -14,7 +14,7 @@ export const autofillClock: AutofillClock = {
 };
 
 /** Schedule from explicit link-open acknowledgement, not creation or delivery. Stop at 2 min. */
-export function nextAutofillPollDelay(elapsedMs: number): number | null {
+function nextAutofillPollDelay(elapsedMs: number): number | null {
   if (elapsedMs < 5_000) {
     return 5_000 - elapsedMs;
   }

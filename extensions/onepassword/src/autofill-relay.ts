@@ -21,8 +21,8 @@ const envelopeSchema = z
     ct: z.string().regex(/^[A-Za-z0-9_-]+$/),
   })
   .strict();
-export type SealedEnvelope = z.infer<typeof envelopeSchema>;
-export const tokenSchema = z.object({
+type SealedEnvelope = z.infer<typeof envelopeSchema>;
+const tokenSchema = z.object({
   access_token: z.string().min(1),
   refresh_token: z.string().min(1),
   expires_in: z.number().int().positive().max(86_400),
@@ -52,7 +52,7 @@ export class AutofillError extends Error {
 }
 
 /** Open the exact v1 relay envelope; purpose and session are authenticated, not inferred. */
-export async function openRelayEnvelope(
+async function openRelayEnvelope(
   input: unknown,
   privateKey: webcrypto.CryptoKey,
   sessionId: string,

@@ -3,14 +3,14 @@ export type ExtResult<T> =
   | { success: true; result: T }
   | { success: false; error: { code: string } };
 
-export type LoginEntryInput = {
+type LoginEntryInput = {
   type: "login";
   parameters: { website: string };
   reason?: string;
   keywords?: string[];
 };
 export type AccessRequestInput = { version: 2; goal: string; entries: LoginEntryInput[] };
-export type AccessRequest = Omit<AccessRequestInput, "entries"> & {
+type AccessRequest = Omit<AccessRequestInput, "entries"> & {
   id: string;
   path: string;
   identity: string;
