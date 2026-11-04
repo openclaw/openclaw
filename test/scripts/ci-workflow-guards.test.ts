@@ -1343,6 +1343,7 @@ AFTER_CD
   it("verifies the pinned OpenGrep release binary before installing it", () => {
     for (const workflowPath of [OPENGREP_PR_DIFF_WORKFLOW, OPENGREP_FULL_WORKFLOW]) {
       const workflow = readWorkflow(workflowPath);
+      expect(workflow.jobs.scan["runs-on"], workflowPath).toBe("ubuntu-24.04");
       const installStep = requiredWorkflowStep(workflow.jobs.scan.steps, "Install opengrep");
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
