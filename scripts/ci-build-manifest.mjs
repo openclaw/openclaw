@@ -1975,6 +1975,10 @@ if (hybridHostedEligible) {
     "check-docs": count(manifest.run_check_docs),
     "postgres-conformance": count(manifest.run_postgres_conformance, 3),
     "skills-python": count(manifest.run_skills_python_job),
+    "checks-windows": count(
+      manifest.run_checks_windows,
+      manifest.checks_windows_matrix.include.length,
+    ),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     // Eligible profiles emit one app test row plus packages and mlx; settings
     // and release rows require a different dispatch admission.

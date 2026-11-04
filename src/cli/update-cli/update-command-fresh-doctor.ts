@@ -466,7 +466,8 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
         ) {
           warning = {
             reason: "doctor-advisory",
-            message: `Post-update plugin Doctor did not complete${exitCode == null ? "" : ` (exit ${exitCode})`}: ${message}`,
+            // The ledger truncates this message; keep the next step ahead of the output.
+            message: `Post-update plugin Doctor did not complete${exitCode == null ? "" : ` (exit ${exitCode})`}. Run \`openclaw update repair\` to retry post-update plugin repair.\n${message}`,
             guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
           };
           if (doctorStep) {

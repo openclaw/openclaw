@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
@@ -156,7 +156,11 @@ export async function closeWireServer(server: Server): Promise<void> {
   });
 }
 
-export async function createPublishedWireWorkspace(root: string): Promise<PublishedWireWorkspace> {
+export async function createPublishedWireWorkspace(
+  root: string,
+  files: ReadonlyArray<{ path: string; content: string; executable?: boolean }> = [],
+  options: { smartHttp?: boolean } = {},
+): Promise<PublishedWireWorkspace> {
   const source = path.join(root, "source");
   const bare = path.join(root, "repo.git");
   await fs.mkdir(source, { recursive: true });
@@ -167,14 +171,82 @@ export async function createPublishedWireWorkspace(root: string): Promise<Publis
   await fs.mkdir(path.join(source, "nested"));
   await fs.writeFile(path.join(source, "launch-wire.txt"), "local-install launch wire\n");
   await fs.writeFile(path.join(source, "nested", "tracked.txt"), "nested tracked input\n");
+  // These are committed fixture inputs, never executed during repository construction.
+  for (const file of files) {
+    const target = path.join(source, file.path);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, file.content, { mode: file.executable ? 0o755 : 0o644 });
+  }
+  if (files.length > 0) {
+    await git(source, "add", "--force", "--", ...files.map((file) => file.path));
+  }
   await git(source, "add", ".");
   await git(source, "commit", "-m", "initialize node worker launch wire workspace");
   await git(source, "remote", "add", "publish", bare);
   await git(source, "push", "publish", "main");
   await git(source, "remote", "remove", "publish");
+  if (options.smartHttp) {
+    await git(bare, "symbolic-ref", "HEAD", "refs/heads/main");
+  }
   await git(bare, "update-server-info");
 
   const server = createServer((request, response) => {
+    if (options.smartHttp) {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      const child = spawn("git", ["http-backend"], {
+        env: {
+          PATH: process.env.PATH,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_PROJECT_ROOT: root,
+          GIT_HTTP_EXPORT_ALL: "1",
+          PATH_INFO: url.pathname,
+          QUERY_STRING: url.search.slice(1),
+          REQUEST_METHOD: request.method ?? "GET",
+          CONTENT_TYPE: request.headers["content-type"] ?? "",
+          CONTENT_LENGTH: request.headers["content-length"] ?? "",
+          REMOTE_ADDR: "127.0.0.1",
+          HTTP_GIT_PROTOCOL: String(request.headers["git-protocol"] ?? ""),
+        },
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+      let headers: Buffer | undefined = Buffer.alloc(0);
+      child.stdout.on("data", (data: Buffer) => {
+        if (headers === undefined) {
+          response.write(data);
+          return;
+        }
+        headers = Buffer.concat([headers, data]);
+        const boundary = headers.indexOf("\r\n\r\n");
+        if (boundary < 0) {
+          return;
+        }
+        for (const line of headers.subarray(0, boundary).toString().split("\r\n")) {
+          const colon = line.indexOf(":");
+          const key = line.slice(0, colon);
+          const value = line.slice(colon + 1).trim();
+          if (key.toLowerCase() === "status") {
+            response.statusCode = Number(value.split(" ")[0]);
+          } else {
+            response.setHeader(key, value);
+          }
+        }
+        response.write(headers.subarray(boundary + 4));
+        headers = undefined;
+      });
+      child.on("error", () => {
+        response.writeHead(500).end();
+      });
+      child.on("close", () => {
+        response.end();
+      });
+      child.stdin.on("error", () => {});
+      response.on("close", () => {
+        child.kill();
+      });
+      request.pipe(child.stdin);
+      return;
+    }
     void (async () => {
       const pathname = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname);
       if (!pathname.startsWith("/repo.git/")) {
@@ -715,6 +787,7 @@ export async function startPairedNodeWorkerGateway(params: {
   nativeWorkerDeviceId?: string;
   requiredProfile?: string;
   mockAuthAgentIds?: readonly string[];
+  enabledPluginIds?: string[];
   rpcPassword?: string;
   runtimeEnvPatch?: Parameters<
     ReturnType<typeof createQaGatewayChild>["start"]
@@ -728,6 +801,7 @@ export async function startPairedNodeWorkerGateway(params: {
     providerBaseUrl: `${params.providerBaseUrl}/v1`,
     providerMode: "mock-openai",
     mockAuthAgentIds: params.mockAuthAgentIds,
+    enabledPluginIds: params.enabledPluginIds,
     runtimeEnvPatch: params.runtimeEnvPatch,
     rpcPassword: params.rpcPassword,
     primaryModel: MODEL_REF,

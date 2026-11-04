@@ -55,6 +55,7 @@ import {
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import {
   proveConcurrentWorkspacePreparation,
+  proveColdPreparationCapacityIsolation,
   provePreparationObservationBoundary,
   provePreparationWaiterAuthority,
   proveWorkspaceIncarnationRecovery,
@@ -180,8 +181,9 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
-it("keeps unchanged sandbox turns running and reconciles later guest and host edits", () =>
-  proveWarmWorkspaceReuse(owner));
+it("reuses warm workspaces and reconciles edits", () => proveWarmWorkspaceReuse(owner));
+
+it("isolates cold capacity", ({ signal }) => proveColdPreparationCapacityIsolation(owner, signal));
 
 it("coalesces concurrent cold and warm sandbox preparations without retaining completed scans", () =>
   proveConcurrentWorkspacePreparation(owner));
