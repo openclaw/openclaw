@@ -134,7 +134,9 @@ it("preserves authority-error precedence when rejection cleanup also fails", asy
 it("leaves calls without a read scope unchanged", async () => {
   expect(captureAuthority()).toBeUndefined();
   expect(captureChannelReadScope()).toBeUndefined();
-  await expect(withAuthority(undefined, async () => "direct result")).resolves.toBe("direct result");
+  await expect(withAuthority(undefined, async () => "direct result")).resolves.toBe(
+    "direct result",
+  );
   const error = new Error("direct error");
   await expect(withAuthority(undefined, () => Promise.reject(error))).rejects.toBe(error);
 });

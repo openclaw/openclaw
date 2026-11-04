@@ -62,7 +62,7 @@ export async function withGuardedFetchRequestAuthority<T>(
   run: (assertCurrent: (() => void) | undefined) => Promise<T>,
   beforeRequest?: () => void,
 ): Promise<T> {
-  const inherited = requestAuthority.getStore();
+  let inherited = requestAuthority.getStore();
   if (!assertCurrent && !beforeRequest && !inherited) {
     return await run(undefined);
   }
@@ -87,9 +87,13 @@ export async function withGuardedFetchRequestAuthority<T>(
               }
             : undefined,
       },
-      () => run(assertAuthority),
+      // Keep the producer out of the guard's retained lexical context.
+      run.bind(undefined, assertAuthority),
     );
   } finally {
     active = false;
+    inherited = undefined;
+    assertCurrent = undefined;
+    beforeRequest = undefined;
   }
 }

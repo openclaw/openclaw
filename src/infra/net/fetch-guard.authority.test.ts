@@ -74,7 +74,7 @@ it.each([false, true])("checks inherited dispatch and redirects (%s)", async (de
 
 it("releases closed callbacks without authorizing late requests", async () => {
   const release = createDeferred();
-  const beforeRequest = vi.fn();
+  const beforeRequest = () => expect.unreachable("closed scope must refuse before dispatch");
   let retained: Promise<unknown> | undefined;
   let captured: (() => void) | undefined;
   await withAuthority(
@@ -93,7 +93,6 @@ it("releases closed callbacks without authorizing late requests", async () => {
       })();
       release.resolve();
       await expect(retained).rejects.toThrow("no longer active");
-      expect(captured).toBeTypeOf("function");
       expect(() => captured!()).toThrow("no longer active");
       const control = new WeakRef({});
       await nextTurn();
@@ -104,7 +103,6 @@ it("releases closed callbacks without authorizing late requests", async () => {
     beforeRequest,
   );
   expect(fetchImpl).not.toHaveBeenCalled();
-  expect(beforeRequest).not.toHaveBeenCalled();
   const result = await request();
   expect(fetchImpl).toHaveBeenCalledOnce();
   await result.release();
