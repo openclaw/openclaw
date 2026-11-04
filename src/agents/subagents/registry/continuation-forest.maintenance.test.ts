@@ -202,6 +202,26 @@ describe("the burning annex: store maintenance past the cap", () => {
     expect(rooms(forest)).not.toContain(relay.sessionKey);
   });
 
+  it("keeps a crane a report across is bound to while that report is on its way; it reaches the crane, then the room goes", async () => {
+    const forest = await lightTheAnnex();
+    const across = forest.electionOf(forest.node("t0.1"));
+    const target = forest.acrossTarget(0);
+    const report = forest.hold(`report:${across.id}`);
+    await forest.until(report, 2_000);
+    await forest.advanceTo(FOLD_MS + ANNEX_STEP_MS);
+    // The crane folded, reported home and went home; only the report across is owed to it.
+    expect(subagentRuns.get(target.runId!)?.delivery?.status).toBe("delivered");
+
+    await maintain(forest, { maxEntries: 2 });
+    expect.soft(rooms(forest)).toContain(target.sessionKey);
+
+    await report.release();
+    await forest.advanceTo(NIGHTFALL_MS);
+    await forest.expectForestHolds();
+    await maintain(forest, { maxEntries: 2 });
+    expect(rooms(forest)).not.toContain(target.sessionKey);
+  });
+
   it("when every room past the cap holds custody, the Gateway's pass leaves the store over it and says so once", async () => {
     const forest = await lightTheAnnex();
     const relay = forest.node("t0.0");
