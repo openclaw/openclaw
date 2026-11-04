@@ -5,19 +5,20 @@ import { postJson } from "./post-json.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 import { createPendingResponse } from "./response-snippet.test-harness.js";
 
-vi.mock("./remote-http.js", () => ({
+vi.mock("./remote-http.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./remote-http.js")>()),
   withRemoteHttpResponse: vi.fn(),
 }));
 
 const remoteHttpMock = vi.mocked(withRemoteHttpResponse);
 
-function jsonResponse(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), { status });
-}
-
-function textResponse(body: string, status: number): Response {
-  return new Response(body, { status });
-}
+const postOptions = {
+  url: "https://memory.example/v1/post",
+  headers: {},
+  body: {},
+  errorPrefix: "post failed",
+  parse: () => ({}),
+};
 
 function streamingTextResponse(params: {
   body: string;
@@ -46,15 +47,14 @@ describe("postJson", () => {
     const controller = new AbortController();
     remoteHttpMock.mockImplementationOnce(async (params) => {
       expect(params.signal).toBe(controller.signal);
-      return await params.onResponse(jsonResponse({ data: [{ embedding: [1, 2] }] }));
+      return await params.onResponse(Response.json({ data: [{ embedding: [1, 2] }] }));
     });
 
     const result = await postJson({
-      url: "https://memory.example/v1/post",
+      ...postOptions,
       headers: { Authorization: "Bearer test" },
       body: { input: ["x"] },
       signal: controller.signal,
-      errorPrefix: "post failed",
       parse: (payload) => payload,
     });
 
@@ -70,12 +70,8 @@ describe("postJson", () => {
     });
 
     const read = postJson({
-      url: "https://memory.example/v1/post",
-      headers: {},
-      body: {},
+      ...postOptions,
       signal: controller.signal,
-      errorPrefix: "post failed",
-      parse: () => ({}),
     });
     const settled = read.then(
       () => undefined,
@@ -109,15 +105,7 @@ describe("postJson", () => {
       );
     });
 
-    await expect(
-      postJson({
-        url: "https://memory.example/v1/post",
-        headers: {},
-        body: {},
-        errorPrefix: "post failed",
-        parse: () => ({}),
-      }),
-    ).rejects.toMatchObject({
+    await expect(postJson(postOptions)).rejects.toMatchObject({
       status: 429,
       statusCode: 429,
       errorCode: "insufficient_quota",
@@ -139,32 +127,19 @@ describe("postJson", () => {
       );
     });
 
-    await expect(
-      postJson({
-        url: "https://memory.example/v1/post",
-        headers: {},
-        body: {},
-        errorPrefix: "post failed",
-        parse: () => ({}),
-      }),
-    ).rejects.toMatchObject({ status: 502, errorBody: `${"x".repeat(499)}…` });
+    await expect(postJson(postOptions)).rejects.toMatchObject({
+      status: 502,
+      errorBody: `${"x".repeat(499)}…`,
+    });
     expect(canceled).toBe(true);
   });
 
   it("wraps malformed success JSON with the request error prefix", async () => {
     remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(textResponse("{ nope", 200));
+      return await params.onResponse(new Response("{ nope", { status: 200 }));
     });
 
-    await expect(
-      postJson({
-        url: "https://memory.example/v1/post",
-        headers: {},
-        body: {},
-        errorPrefix: "post failed",
-        parse: () => ({}),
-      }),
-    ).rejects.toThrow("post failed: malformed JSON response");
+    await expect(postJson(postOptions)).rejects.toThrow("post failed: malformed JSON response");
   });
 
   it("rejects successful JSON responses with oversized content-length", async () => {
@@ -184,12 +159,8 @@ describe("postJson", () => {
 
     await expect(
       postJson({
-        url: "https://memory.example/v1/post",
-        headers: {},
-        body: {},
-        errorPrefix: "post failed",
+        ...postOptions,
         maxResponseBytes: 8,
-        parse: () => ({}),
       }),
     ).rejects.toThrow("post failed: response body too large: 32 bytes (limit: 8 bytes)");
     expect(canceled).toBe(true);
@@ -206,10 +177,7 @@ describe("postJson", () => {
     });
 
     const result = await postJson({
-      url: "https://memory.example/v1/post",
-      headers: {},
-      body: {},
-      errorPrefix: "post failed",
+      ...postOptions,
       maxResponseBytes: 8,
       parse: (payload) => payload,
     });
@@ -233,12 +201,8 @@ describe("postJson", () => {
 
     await expect(
       postJson({
-        url: "https://memory.example/v1/post",
-        headers: {},
-        body: {},
-        errorPrefix: "post failed",
+        ...postOptions,
         maxResponseBytes: 16,
-        parse: () => ({}),
       }),
     ).rejects.toThrow("post failed: response body too large");
     expect(canceled).toBe(true);
