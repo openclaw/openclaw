@@ -6,10 +6,7 @@ import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
-import { QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER } from "./providers/mock-openai/mock-openai-contracts.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
-import { fetchOkJson } from "./providers/mock-openai/server.test-harness.js";
-import { readQaMockRequestCursor } from "./providers/shared/debug-request-cursor.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
 import {
@@ -31,7 +28,7 @@ afterEach(async () => {
 });
 
 it.skipIf(process.platform === "win32")(
-  "leaves a killed run idle until a new user message arrives",
+  "resumes a killed Code Mode run once without a new user message",
   async () => {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
@@ -84,11 +81,14 @@ it.skipIf(process.platform === "win32")(
       readSessionTranscriptSummary({ gateway }, key, options);
     const poll = <T>(check: () => Promise<T | undefined>, timeoutMs = 120_000) =>
       transport.waitForCondition(check, timeoutMs, 25);
-    const inbound = { accountId: transport.accountId, conversation, senderId: conversation.id };
-    const send = (text: string) => transport.sendInbound({ ...inbound, text });
     const killedLog = "gateway child exited unexpectedly (exitCode=null, signal=SIGKILL)";
     await transport.waitReady({ gateway });
-    await send("Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.");
+    await transport.sendInbound({
+      accountId: transport.accountId,
+      conversation,
+      senderId: conversation.id,
+      text: "Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.",
+    });
     const pending = await poll(async () => {
       const listed = await gateway.call("sessions.list", { agentId: "qa", activeOnly: true });
       if (!isRecord(listed) || !Array.isArray(listed.sessions)) {
@@ -108,12 +108,6 @@ it.skipIf(process.platform === "win32")(
         ? { entry, transcript }
         : undefined;
     });
-    const requestCursor = readQaMockRequestCursor(
-      await fetchOkJson(`${mock.baseUrl}/debug/request-cursor`),
-    );
-    const sinceIndex = state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound").length;
     const pid = gateway.pid;
     expect(pid).not.toBeNull();
     expect(signalQaPosixProcessGroup(pid!, "SIGKILL")).toBeUndefined();
@@ -131,23 +125,17 @@ it.skipIf(process.platform === "win32")(
     });
     expect(gateway.pid).not.toBe(pid);
     await transport.waitReady({ gateway });
-    // SIGKILL cannot record graceful markers; the transcript remains available,
-    // and only a fresh input may launch another turn.
-    await transport.waitForNoOutbound({ sinceIndex });
-    expect(await fetchOkJson(`${mock.baseUrl}/debug/requests?after=${requestCursor}`)).toEqual([]);
-    const second = await send("repeated request queued reply gateway qa check");
-    const reply = await transport.waitForOutbound({
-      conversation,
-      sinceIndex,
-      textIncludes: QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
-      timeoutMs: 180_000,
+    // SIGKILL cannot write shutdown markers; startup adopts the predecessor's
+    // unfinished run and appends one standard resume input to the same session.
+    const resumed = await poll(async () => {
+      const summary = await readTranscript({
+        afterEventCursor: pending.transcript.eventCursor,
+        allowEmpty: true,
+        probeText: "The Gateway restarted while you were working. Resume your work:",
+      });
+      return (summary.probeTextEndLine ?? 0) > pending.transcript.eventCursor ? summary : undefined;
     });
-    expect(reply).toMatchObject({ replyToId: second.id, accountId: transport.accountId });
-    const settled = await poll(async () => {
-      const entry = await readEntry();
-      return entry?.status === "done" ? entry : undefined;
-    }, 30_000);
-    expect(settled.sessionId).toBe(pending.entry.sessionId);
+    expect(resumed.userMessageCount).toBe(1);
   },
   240_000,
 );
