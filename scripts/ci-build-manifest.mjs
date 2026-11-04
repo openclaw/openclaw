@@ -6,6 +6,7 @@ import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
 } from "./lib/ci-ios-smoke-plan.mjs";
+import { resolveBoatNodeTestCapacity } from "./lib/ci-node-test-capacity.mts";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -1334,6 +1335,10 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
+    const capacity =
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+        ? resolveBoatNodeTestCapacity(shard.runner, shard.checkName)
+        : undefined;
     const row = {
       check_name: shard.checkName,
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
@@ -1357,12 +1362,13 @@ const nodeTestShards = targetNodeTestShards
       pretest_build_mode: shard.pretestBuildMode,
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
-      runner: shard.runner,
+      runner: capacity?.runner ?? shard.runner,
       timeout_minutes:
         !shard.requiresDist && testRuntimeMode === "dual-all"
           ? 2 * (shard.timeoutMinutes ?? 60)
           : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
+      cpu_budget: capacity?.cpuBudget ?? shard.cpuBudget,
       predicted_seconds: shard.predictedTestSeconds ?? shard.predictedSeconds,
       targets: shard.targets,
       requires_go: shardRequiresTests(shard, ["test/scripts/docs-i18n.test.ts"], (plan) => {
@@ -1872,6 +1878,20 @@ const manifest = {
   ),
 };
 
+// Project matrix runners before counting physical hosted rows. Logical groups stay unchanged.
+if (process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat") {
+  for (const value of Object.values(manifest)) {
+    if (value && typeof value === "object" && Array.isArray(value.include)) {
+      for (const row of value.include) {
+        const capacity = resolveBoatNodeTestCapacity(row.runner, row.check_name);
+        if (capacity) {
+          row.runner = capacity.runner;
+        }
+      }
+    }
+  }
+}
+
 // Routing belongs to this workflow, not the frozen target's test planners.
 // Only automatic hybrid first attempts can add optional hosted rows.
 const HYBRID_HOSTED_ROW_LIMIT = 45;
@@ -1896,7 +1916,7 @@ if (hybridHostedEligible) {
         "runtime-topology-architecture",
         "plugin-sdk-api-diff",
         "dependencies",
-      ].includes(row.group) || !row.runner.startsWith("blacksmith-"),
+      ].includes(row.group) || row.runner === "ubuntu-24.04",
   ).length;
   const hostedPlanner =
     process.env.OPENCLAW_CI_RUNNER_BACKEND === "runson" || nodeRunnerBackend === "runson";

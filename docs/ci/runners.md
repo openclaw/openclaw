@@ -439,33 +439,27 @@ this exact-head SDK report alongside push coverage and use the admitted runner
 backend. They use the full validation tier; the main validation tier is reserved
 for ordinary same-revision manual or scheduled validation.
 
-### Boat build qualification
+<a id="boat-build-qualification"></a>
 
-A maintainer can dispatch `ci.yml` with `runner_backend=boat`,
-`release_gate=true`, `pull_request_number`, and `target_ref` set to the full
-current same-repository PR head. The workflow branch and revision must match
-that head. Existing maintainer and exact-head admission applies.
+### Boat backend
 
-The default-shape first attempt runs only `build-artifacts` on `boat-xlarge`,
-using store-only dependency setup. Other runner routes use `hybrid`.
-Retries use the existing hosted route. Boat is not a repository backend value;
-this pilot does not change defaults, fork admission, or worker limits. The Boat
-GitHub integration, repository access, and account capacity must be configured
-before dispatch. Resource, cache, and artifact behavior still require live
-qualification before expanding the cutover.
+`OPENCLAW_CI_RUNNER_BACKEND=boat` uses the existing hybrid logical plan. Only
+same-repository first attempts authored and started by `vincentkoc` may allocate
+Boat runners. Other authors, starters, forks, and retries use GitHub-hosted
+runners. A maintainer qualification dispatch retains the existing exact-head
+admission and checks the target PR author as well as the starting actor.
 
-For artifact consumer qualification, set `ci_shape=main`. The Boat build keeps
-the 35-minute dispatch budget, and the plan selects the existing macOS runtime
-and published-driver artifact consumers even for a CI-only change. Those
-consumers remain selected on hosted retries. The macOS scope retains its native
-Node, Swift, and shared-package checks; no platform proof moves to Boat.
+Final Linux jobs map the Blacksmith 4/8-class to `boat`, 16-class to `boat-large`,
+and 32-class to `boat-xlarge`. Node jobs retain their logical 2/4/8-CPU budgets;
+actual RAM still gates overlap and memory-qualified workers. Packing, groups,
+timing identities, explicit workers, heaps, native providers, and release runner
+groups are unchanged. The build retains its 35-minute Boat budget.
 
-With `ci_shape=main` and `test_runtime_policy=node`, the first attempt also routes
-`checks-node-compact-large-4` to `boat-xlarge` when the existing plan selects its
-8-class, serial, source-only row. It retains the planned groups, worker limits,
-8-GiB Node heap, and 60-minute job budget. This row uses store-only dependency
-setup; failed-job-only retries stay hosted even when preflight outputs are reused.
-Retire the build and row overrides when the general Boat backend replaces this pilot.
+Boat uses store-only dependency setup. Scheduled cache warmers stay on hosted
+Ubuntu and retain the existing hosted namespace; a cache miss is valid. The
+former build and named Node-row pilots are replaced by this general route.
+Failed-job-only retries retain their emitted plan but execute on hosted runners
+without the Boat CPU cap. Rerunning all jobs creates a new GitHub-hosted plan.
 
 ### RunsOn qualification
 
