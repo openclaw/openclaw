@@ -72,16 +72,37 @@ export async function recordPublication(packageName, tarball, sourceCommit, outp
   appendFileSync(outputPath, `${outputNames.get(packageName)}=${JSON.stringify(publication)}\n`);
 }
 
-async function dispatchPublication(publication, token) {
+async function dispatchPublication(publication, token, deadline) {
   const spec = `${publication.package_name}@${publication.package_version}`;
   let registry;
-  try {
-    registry = await fetch(
-      `https://registry.npmjs.org/${encodeURIComponent(publication.package_name)}/${encodeURIComponent(publication.package_version)}`,
-      { redirect: "error", signal: AbortSignal.timeout(30_000) },
-    );
-  } catch {
-    throw new Error(`Exact registry readback failed for ${spec}; no notification sent.`);
+  let retryDelay = 2_000;
+  for (;;) {
+    if (Date.now() >= deadline) {
+      if (registry?.status === 404) {
+        break;
+      }
+      throw new Error(
+        `Exact registry readback deadline elapsed for ${spec}; no notification sent.`,
+      );
+    }
+    try {
+      registry = await fetch(
+        `https://registry.npmjs.org/${encodeURIComponent(publication.package_name)}/${encodeURIComponent(publication.package_version)}`,
+        {
+          redirect: "error",
+          signal: AbortSignal.timeout(Math.max(1, Math.min(30_000, deadline - Date.now()))),
+        },
+      );
+    } catch {
+      throw new Error(`Exact registry readback failed for ${spec}; no notification sent.`);
+    }
+    if (registry.status !== 404 || Date.now() >= deadline) {
+      break;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(retryDelay, deadline - Date.now()));
+    });
+    retryDelay = Math.min(retryDelay * 2, 30_000);
   }
   if (!registry.ok) {
     throw new Error(`Exact registry readback returned HTTP ${registry.status} for ${spec}.`);
@@ -146,12 +167,14 @@ export async function notifyPublications(publications, token, summaryPath) {
   if (typeof token !== "string" || !token.trim()) {
     throw new Error("Missing gateway publication GitHub App token; no notification sent.");
   }
+  // The workflow has five minutes for setup and both packages, so share one shorter readback budget.
+  const deadline = Date.now() + 180_000;
   const failures = [];
   for (const publication of publications) {
     const spec = `${publication.package_name}@${publication.package_version}`;
     let outcome;
     try {
-      await dispatchPublication(publication, token);
+      await dispatchPublication(publication, token, deadline);
       outcome = "accepted by GitHub; downstream validation is not awaited";
     } catch (error) {
       outcome = error.message;
