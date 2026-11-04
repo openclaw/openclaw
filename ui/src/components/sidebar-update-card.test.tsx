@@ -13,7 +13,7 @@ import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update-card.tsx";
 
 let originalWebkit: PropertyDescriptor | undefined;
-const checkFailure = "Could not check the latest update";
+const checkFailure = "Couldn’t check for updates. Try again.";
 const reconnectFailure = "Couldn’t refresh. Check your connection and try again.";
 async function settle() {
   await Promise.resolve();
@@ -658,7 +658,9 @@ describe("SidebarUpdateCard", () => {
     expect(action?.getAttribute("aria-disabled")).toBe("true");
     expect(action?.getAttribute("aria-describedby")).not.toBeNull();
     expect(tooltip?.hasAttribute("open-on-click")).toBe(true);
-    expect(tooltip?.content).toContain("Administrator access is required");
+    expect(tooltip?.content).toContain(
+      "You need admin access to change update settings or start an update.",
+    );
     action?.click();
     expect(onUpdate).not.toHaveBeenCalled();
   });
