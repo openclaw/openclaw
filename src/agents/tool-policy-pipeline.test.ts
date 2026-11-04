@@ -10,7 +10,7 @@ import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
 } from "./tool-policy-pipeline.js";
-import { resolveToolProfilePolicy } from "./tool-policy.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
 const { toolPolicyAuditDebug, toolPolicyAuditInfo } = vi.hoisted(() => ({
   toolPolicyAuditDebug: vi.fn(),
@@ -170,6 +170,70 @@ describe("tool-policy-pipeline", () => {
     expect(warnings).toEqual([
       "tools: tools.profile (coding) allowlist contains unknown entries (browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
     ]);
+  });
+
+  describe("client-capability gated tools from shipped families", () => {
+    const canvasPluginMeta = (tool: DummyTool) =>
+      tool.name === "canvas" ? { pluginId: "canvas" } : undefined;
+    // Messaging surfaces construct no show_widget: it requires the inline-widgets client capability.
+    const runMessagingProfile = (alsoAllow: string[], tools: DummyTool[], label: string) => {
+      const warnings: string[] = [];
+      const profilePolicy = resolveToolProfilePolicy("messaging");
+      const filtered = runPipeline({
+        tools,
+        toolMeta: canvasPluginMeta,
+        warn: (msg) => warnings.push(msg),
+        steps: buildDefaultToolPolicyPipelineSteps({
+          profile: "messaging",
+          profilePolicy: mergeAlsoAllowPolicy(profilePolicy, alsoAllow),
+          profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
+          agentPolicy: { allow: alsoAllow },
+          agentId: label,
+        }),
+      });
+      return { warnings, names: filtered.map((tool) => tool.name).toSorted() };
+    };
+
+    test("does not warn for show_widget implied by canvas on a surface without widgets", () => {
+      expect(
+        runMessagingProfile(
+          ["group:openclaw", "canvas"],
+          [{ name: "message" }, { name: "canvas" }],
+          "canvas-family",
+        ),
+      ).toEqual({ warnings: [], names: ["canvas", "message"] });
+    });
+
+    test("does not warn for group:openclaw alone on a surface without widgets", () => {
+      expect(runMessagingProfile(["group:openclaw"], [{ name: "message" }], "group-only")).toEqual({
+        warnings: [],
+        names: ["message"],
+      });
+    });
+
+    test("still warns for a literally configured show_widget", () => {
+      // The shared profile label is deduped across tests; the agent label is unique to this one.
+      expect(
+        runMessagingProfile(
+          ["canvas", "show_widget"],
+          [{ name: "message" }, { name: "canvas" }],
+          "literal-widget",
+        ).warnings,
+      ).toContain(
+        "tools: agents.literal-widget.tools.allow allowlist contains unknown entries (show_widget). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+      );
+    });
+
+    test("still warns for canvas without its plugin and for other unavailable core tools", () => {
+      expect(
+        runAllowlistWarningStep({
+          allow: ["canvas", "browser"],
+          label: "canvas-family tools.allow",
+        }),
+      ).toEqual([
+        "tools: canvas-family tools.allow allowlist contains unknown entries (canvas, browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+      ]);
+    });
   });
 
   test("does not warn for run-granted core tools absent from this run", () => {

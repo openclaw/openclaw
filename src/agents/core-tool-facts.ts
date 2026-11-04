@@ -21,6 +21,9 @@ type CoreToolFacts = {
   replay?: "both" | "blind" | "recorded";
   // Present only on runs whose owner granted it; absence is not a policy mistake.
   runGranted?: true;
+  // Listed only for clients advertising the factory's requiredClientCaps. Diagnostics need this
+  // before construction, since gated tools are filtered out of the runtime list they inspect.
+  clientCapsGated?: true;
 };
 
 export type CoreToolDefinition = CoreToolFacts & {
@@ -116,13 +119,13 @@ export const CORE_TOOL_DEFINITIONS = [
   ]),
   ...coreTools("ui", { profiles: ["coding"], includeInOpenClawGroup: true }, [
     ["browser", { executionLocation: "placement", profiles: [], factoryFamily: undefined }],
-    ["screen"],
+    ["screen", { clientCapsGated: true }],
     ["theme", { profiles: ["coding", "messaging"] }],
     ["dashboard"],
     ["terminal"],
     ["portal", { executionLocation: "gateway" }],
     ["canvas", { profiles: [], includeInOpenClawGroup: false, factoryFamily: undefined }],
-    ["show_widget", { profiles: [] }],
+    ["show_widget", { profiles: [], clientCapsGated: true }],
   ]),
   ...coreTools("messaging", { profiles: ["messaging"], includeInOpenClawGroup: true }, [
     ["message"],
@@ -299,4 +302,9 @@ export function isKnownCoreToolId(toolId: string): boolean {
 /** Core tools that only exist on runs whose owner granted them, such as `skill_library`. */
 export function isRunGrantedCoreToolId(toolId: string): boolean {
   return CORE_TOOL_BY_ID.get(toolId)?.runGranted === true;
+}
+
+/** Core tools whose listing depends on the requesting client's capabilities, such as `show_widget`. */
+export function isClientCapsGatedCoreToolId(toolId: string): boolean {
+  return CORE_TOOL_BY_ID.get(toolId)?.clientCapsGated === true;
 }

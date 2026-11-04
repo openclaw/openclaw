@@ -4,6 +4,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
+import { isClientCapsGatedCoreToolId } from "./core-tool-facts.js";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import {
   attachToolAllowlistIntersection,
@@ -276,9 +277,20 @@ export function analyzeAllowlistByToolType(
     }
   }
   const mcpToolPrefixes = buildDeclaredMcpToolPrefixes(declaredTools?.mcpServerNames);
+  // A family grant like `canvas` covers its members wherever they exist; a client-gated member
+  // is expected to be absent on other surfaces. Entries the operator wrote still warn.
+  const configuredEntries = new Set(policy.allow.map(normalizeToolPolicyName));
+  const expectedAbsentFamilyTools = new Set(
+    [...configuredEntries].flatMap(
+      (entry) =>
+        SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS.get(entry)?.filter(
+          (tool) => isClientCapsGatedCoreToolId(tool) && !configuredEntries.has(tool),
+        ) ?? [],
+    ),
+  );
   const unknownAllowlist: string[] = [];
   for (const entry of normalized) {
-    if (entry === "*") {
+    if (entry === "*" || expectedAbsentFamilyTools.has(entry)) {
       continue;
     }
     const isPluginEntry =
