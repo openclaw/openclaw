@@ -24,11 +24,12 @@ describe("scoped SQLite write receipts", () => {
       readSqliteDatabaseScopedWriteToken(database, "entry");
     }
     const then = vi.fn();
+    // oxlint-disable-next-line unicorn/no-thenable -- Exercise rejection of structural thenables.
     for (const value of [Promise.resolve(), { then }, Object.assign(() => {}, { then })]) {
       expect(() =>
         runSqliteImmediateTransactionSync(database, () => {
           // Discarding the result must not hide it from the write-scope owner.
-          withSqliteDatabaseWriteScope(database, ["entry"], () => {
+          void withSqliteDatabaseWriteScope(database, ["entry"], () => {
             database.exec("INSERT INTO original VALUES (1)");
             return value;
           });

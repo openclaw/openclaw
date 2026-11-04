@@ -115,6 +115,7 @@ it("rejects a discarded actor thenable, rolls back, and releases the actor scope
       f.write(() => {
         withSessionActorTransactionState(f.database, forkSessionActorStoredState(state), () => {
           expect(f.append("rejected", { role: "user", content: "rejected" })?.appended).toBe(true);
+          // oxlint-disable-next-line unicorn/no-thenable -- Exercise rejection of a discarded thenable.
           return { then };
         });
       }),
