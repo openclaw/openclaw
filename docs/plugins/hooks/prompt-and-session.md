@@ -268,8 +268,12 @@ distinguish those inputs; do not parse prompt prefixes. Provenance describes
 origin and does not grant authority to use tools or access another session.
 
 For admitted session turns where the host resolves a memory audience, agent hook
-contexts may also include `ctx.memoryAudience` (`owner-private` or
-`conversation`) and `ctx.assertMemoryAudienceCurrent()`. Revalidate with
+contexts may also include `ctx.memoryAudience` and
+`ctx.assertMemoryAudienceCurrent()`. `ctx.memoryAudience` is the host-resolved
+[`MemoryAudience`](/plugins/sdk-overview/memory-and-context#memory-audience)
+object, either `{ kind: "owner-private", agentId }` or
+`{ kind: "conversation", agentId, sessionKey, sessionId }`; branch on
+`ctx.memoryAudience.kind`, not on the field itself. Revalidate with
 `ctx.assertMemoryAudienceCurrent?.()` after awaited work and before releasing
 memory data or performing an effect; do not infer memory authority from
 `senderIsOwner` or session-key patterns.
