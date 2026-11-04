@@ -242,14 +242,16 @@ describe("session progress hovercard ownership", () => {
     await waitForSolid(() => expect(dismiss()).not.toBeNull());
     dismiss()!.click();
     await waitForSolid(() =>
-      expect(toast.toast?.message).toBe(
+      expect(toast.toasts[0]?.options.message).toBe(
         "Couldn't mark as read. Try again. Session store unavailable",
       ),
     );
-    expect(toast.toast?.severity).toBe("error");
+    expect(toast.toasts[0]?.options.severity).toBe("error");
     expect(dismiss()?.disabled).toBe(false);
     dismiss()!.click();
-    await waitForSolid(() => expect(toast.toast?.message).toBe("Marked as read"));
+    await waitForSolid(() =>
+      expect(toast.toasts.map((entry) => entry.options.message)).toEqual(["Marked as read"]),
+    );
     expect(patch).toHaveBeenCalledTimes(2);
   });
 

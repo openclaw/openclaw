@@ -505,11 +505,11 @@ it.each([false, true])(
 
     mark()[0]!.click();
     await waitForSolid(() =>
-      expect(toast.toast?.message).toBe(
+      expect(toast.toasts[0]?.options.message).toBe(
         "Couldn't mark as read. Try again. Session store unavailable",
       ),
     );
-    expect(toast.toast?.severity).toBe("error");
+    expect(toast.toasts[0]?.options.severity).toBe("error");
     expect(mark()).toHaveLength(2);
     expect(mark()[0]!.disabled).toBe(false);
 
@@ -517,7 +517,7 @@ it.each([false, true])(
     await waitForSolid(() => expect(mark()).toHaveLength(1));
     expect(f.keys()).toEqual(["agent:worker:subagent:a"]);
     // The successful retry replaces the stale failure.
-    expect(toast.toast?.message).toBe("Marked as read");
-    expect(toast.toast?.severity).toBeUndefined();
+    expect(toast.toasts.map((entry) => entry.options.message)).toEqual(["Marked as read"]);
+    expect(toast.toasts[0]?.options.severity).toBeUndefined();
   },
 );

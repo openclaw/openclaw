@@ -87,7 +87,7 @@ suite.define(() => {
         });
         await mark.waitFor();
         await rejectNextAcknowledgement(gateway, mark);
-        const error = page.locator(".app-toast--error .app-toast__message");
+        const error = page.locator(".app-toast--error .app-toast__body");
         await expect.poll(() => error.textContent()).toBe(rejectionMessage);
         expect(await mark.isEnabled()).toBe(true);
         // Park the pointer so a row tooltip does not cover the toast.
@@ -146,7 +146,7 @@ suite.define(() => {
           .getByRole("button", { name: "Dismiss", exact: true });
         await dismiss.waitFor({ state: "visible" });
         await rejectNextAcknowledgement(gateway, dismiss);
-        const error = page.locator(".app-toast--error .app-toast__message");
+        const error = page.locator(".app-toast--error .app-toast__body");
         await expect.poll(() => error.textContent()).toBe(rejectionMessage);
         await expect.poll(alerting).toContain("sidebar-recent-session--attention-danger");
         await capture(page, page.locator(".shell"), "hovercard-dismiss-rejected");

@@ -4,13 +4,13 @@ import { t } from "../../i18n/index.ts";
 import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import { formatUiError } from "../format-error.ts";
 import { readSessionMethodAccess } from "../session-method-access.ts";
-import { showToast } from "../toast.ts";
+import { dismissToast, showToast, type ToastOptions } from "../toast.ts";
 import { resolveUiSessionRowAgentId } from "./session-key.ts";
 
 registerSessionOrganizationSharedEnglish();
 
 // A rejection toast outlives its hovercard; a later successful acknowledgement replaces it.
-let rejectionToast: object | undefined;
+let rejectionToast: ToastOptions | undefined;
 
 /** The failed session to acknowledge; callers decide that its failure is still an alert. */
 type SessionFailureTarget = Pick<GatewaySessionRow, "key"> &
@@ -67,9 +67,10 @@ export async function dismissSessionFailures(
     (result): result is PromiseRejectedResult => result.status === "rejected",
   );
   if (rejected) {
-    const toast = {};
-    rejectionToast = toast;
-    showToast({
+    if (rejectionToast) {
+      dismissToast(rejectionToast, "replaced");
+    }
+    const toast: ToastOptions = {
       message: t("sessionsView.markFailureReadFailed", { error: formatUiError(rejected.reason) }),
       severity: "error",
       onDismiss: () => {
@@ -77,8 +78,11 @@ export async function dismissSessionFailures(
           rejectionToast = undefined;
         }
       },
-    });
+    };
+    rejectionToast = toast;
+    showToast(toast);
   } else if (rejectionToast && results.length > 0) {
+    dismissToast(rejectionToast, "replaced");
     rejectionToast = undefined;
     showToast({ severity: undefined, message: t("sessionsView.markFailureReadDone") });
   }
