@@ -477,6 +477,7 @@ export async function startQaGatewayRpcProxy({
               "sessions.create",
               "media.get",
               "plugin.surface.refresh",
+              "talk.client.close",
             ].includes(input.method) ||
             holdMethod ||
             approvalReservation ||
