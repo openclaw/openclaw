@@ -496,8 +496,8 @@ it("routes the default model fallback through the catalog", () => {
         sessionsResult: createSessionsListResult({ defaultsModel: "", defaultsProvider: "" }),
       }),
     );
-    expect(translate).toHaveBeenCalledWith("common.default", undefined);
-    expect(state.defaultLabel).toBe(i18n.t("common.default"));
+    expect(translate).toHaveBeenCalledWith("chat.modelControls.defaultModel", undefined);
+    expect(state.defaultLabel).toBe(i18n.t("chat.modelControls.defaultModel"));
   } finally {
     translate.mockRestore();
   }
