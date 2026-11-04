@@ -450,7 +450,9 @@ it.for(cases)(
           await queuedDelivered.promise;
         }
         signal.throwIfAborted();
-        expect(placements.get(sessionId)).toMatchObject({ state: "local", turnClaim: null });
+        await expect
+          .poll(() => placements.get(sessionId))
+          .toMatchObject({ state: "local", turnClaim: null });
         expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(placements.validateTurnClaim(claim)).toBe(false);
         expect(await placements.getPlacementMoveAsync(sessionId)).toBeUndefined();
