@@ -240,7 +240,7 @@ describeLive("embedded Responses output-limit recovery live", () => {
         // The latter deliberately omits previous_response_id, so prove the receipt survived instead.
         expect(JSON.stringify(requests[2]?.input)).toContain(receipt);
         expect(JSON.stringify(requests[2]?.input)).toContain(
-          "Split the remaining work into smaller tool calls",
+          "Split the remaining work into smaller tool calls with shorter arguments only if the original request allows continuing that work. Use recorded tool results to determine what completed",
         );
         expect(JSON.stringify(requests[2]?.input)).toContain("max_output_tokens");
         expect(result.payloads?.map((payload) => payload.text ?? "").join("\n")).toContain(receipt);
