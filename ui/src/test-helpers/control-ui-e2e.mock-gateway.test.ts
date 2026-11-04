@@ -22,6 +22,80 @@ import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test
 const getGateway = (window: MockGatewayWindow) =>
   expectDefined(window.openclawControlUiE2eGateway, "Mock Gateway was not installed");
 
+it("retains only bounded row counts from successful delivered session lists", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  const gateway = getGateway(gatewayPage.window);
+  const { request, send } = gatewayPage.connect();
+  await flushMockTimers();
+  let response: unknown;
+  gateway.setRequestHandler("sessions.list", ({ respond }) => respond(response));
+  response = { sessions: [] };
+  for (const spawnedBy of [undefined, "", "  "]) {
+    await request(`root-${String(spawnedBy)}`, "sessions.list", { spawnedBy });
+  }
+  expect(gateway.sessionListResponseFacts.replies).toEqual(
+    Array.from({ length: 3 }, () => ({ child: false, rows: 0 })),
+  );
+  for (let rows = 0; rows < 10; rows++) {
+    response = { sessions: Array.from({ length: rows }, () => ({ key: "private-row-canary" })) };
+    await request(`list-${rows}`, "sessions.list", rows % 2 ? { spawnedBy: "private-parent" } : {});
+  }
+  const bounded = {
+    replies: Array.from({ length: 8 }, (_, index) => ({
+      child: (index + 2) % 2 === 1,
+      rows: index + 2,
+    })),
+    truncated: true,
+    unavailableReplies: 0,
+  };
+  expect(gateway.sessionListResponseFacts).toEqual(bounded);
+  expect(JSON.stringify(gateway.sessionListResponseFacts)).not.toContain("private-");
+  response = { unavailable: true };
+  await request("missing-rows", "sessions.list", {});
+  bounded.unavailableReplies = 1;
+  expect(gateway.sessionListResponseFacts).toEqual(bounded);
+  response = { __mockError: { code: "FORBIDDEN", message: "private-error" } };
+  await request("denied", "sessions.list", {});
+  expect(gateway.sessionListResponseFacts).toEqual(bounded);
+
+  gateway.deferNext("sessions.list");
+  send("held", "sessions.list", {});
+  await flushMockTimers();
+  expect(gateway.sessionListResponseFacts).toEqual(bounded);
+  gateway.resolveDeferred("sessions.list", { sessions: [] });
+  bounded.replies.shift();
+  bounded.replies.push({ child: false, rows: 0 });
+  expect(gateway.sessionListResponseFacts).toEqual(bounded);
+  gateway.deferNext("sessions.list");
+  send("closed", "sessions.list", {});
+  await flushMockTimers();
+  gateway.closeLatest();
+  gateway.resolveDeferred("sessions.list", { sessions: [] });
+  expect(gateway.sessionListResponseFacts).toEqual(bounded);
+});
+
+it("counts a delivered session list even when its receiver closes synchronously", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  const gateway = getGateway(gatewayPage.window);
+  const socket = new gatewayPage.window.WebSocket("ws://mock-gateway");
+  await flushMockTimers();
+  socket.addEventListener("message", () => socket.close());
+  socket.send(
+    JSON.stringify({ type: "req", id: "delivered", method: "sessions.list", params: {} }),
+  );
+  await flushMockTimers();
+  expect(socket.readyState).toBe(gatewayPage.window.WebSocket.CLOSED);
+  expect(gateway.sessionListResponseFacts).toEqual({
+    replies: [{ child: false, rows: 1 }],
+    truncated: false,
+    unavailableReplies: 0,
+  });
+});
+
 it.for([undefined, null, "profile-current"])(
   "keeps prepared role presentation separate from changed socket scopes (%s)",
   async (profileActivityViewerId, { gatewayPage }) => {

@@ -1,3 +1,4 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
@@ -9,7 +10,7 @@ import {
   buildGatewayConnectAuth,
   selectGatewayConnectAuth,
 } from "../../packages/gateway-client/src/connect-auth.js";
-import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
+import type { HelloOk, ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import {
   GATEWAY_OWNER_PROFILE_ID,
   type UsersSelfResult,
@@ -22,6 +23,7 @@ import {
 } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import {
@@ -32,8 +34,11 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { gitHubPublicApi } from "./github-public-api.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { OperatorScope } from "./operator-scopes.js";
+import { retainGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
 import type { GatewayServer } from "./server-public.js";
 import {
   connectReq,
@@ -46,6 +51,7 @@ import {
   NODE_CLIENT,
   openTailscaleWs,
   openWs,
+  onceMessage,
   rpcReq,
   testState,
   testTailscaleWhois,
@@ -54,6 +60,7 @@ import {
 } from "./server.auth.test-helpers.js";
 import { onGatewayPolicyClientInvalidated } from "./server/ws-policy-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -240,42 +247,52 @@ test.each(["config", "profile", "profile-revocation"] as const)(
     const person = ensureProfileForEmail("member@example.test");
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const completed = createDeferredCore<boolean>();
+    const completed = createDeferredCore<{ ok: true } | { ok: false; error: unknown }>();
+    const effectPath = holdAcceptedWork
+      ? path.join(tempDirs.make("openclaw-timeline-effect-"), "committed")
+      : undefined;
     let accepted = false;
     let revoked = false;
     if (holdAcceptedWork) {
-      const { config, registry } = createPluginRegistryFixture();
-      registerVirtualTestPlugin({
-        registry,
-        config,
-        id: "timeline-proof",
-        name: "Timeline proof",
-        register(api) {
-          api.registerGatewayMethod(
-            "timeline-proof.accepted",
-            async ({ client }) => {
-              if (!client) {
-                throw new Error("expected the authenticated WebSocket caller");
-              }
-              // This real WS dispatch retains its actual source, independently of socket close.
-              const unbind = onGatewayPolicyClientInvalidated(client as GatewayWsClient, () => {
-                revoked = true;
-              });
-              accepted = true;
-              entered.resolve();
-              try {
-                await release.promise;
-                completed.resolve(!revoked);
-                return { completed: !revoked };
-              } finally {
-                unbind();
-              }
-            },
-            { scope: "operator.sessions.write" },
-          );
-        },
-      });
-      setTestPluginRegistry(registry.registry);
+      const registry = createEmptyPluginRegistry();
+      const handler: GatewayRequestHandler = async (options) => {
+        let authority: ReturnType<typeof retainGatewayRequestMutationAuthority> | undefined;
+        let unbind = () => {};
+        try {
+          if (!options.client || !effectPath) {
+            throw new Error("expected the authenticated WebSocket caller and owned effect");
+          }
+          // Preserve the dispatcher's bound options; plugin adapters clone their input.
+          authority = retainGatewayRequestMutationAuthority(options);
+          unbind = onGatewayPolicyClientInvalidated(options.client as GatewayWsClient, () => {
+            revoked = true;
+          });
+          accepted = true;
+          entered.resolve();
+          await release.promise;
+          authority.assertCurrent();
+          writeFileSync(effectPath, "committed", { flag: "wx", mode: 0o600 });
+          options.respond(true, { completed: true });
+          completed.resolve({ ok: true });
+        } catch (error) {
+          entered.reject(error);
+          completed.resolve({ ok: false, error });
+          throw error;
+        } finally {
+          unbind();
+          authority?.release();
+        }
+      };
+      registry.gatewayHandlers["timeline-proof.accepted"] = handler;
+      registry.gatewayMethodDescriptors.push(
+        createPluginGatewayMethodDescriptor({
+          pluginId: "timeline-proof",
+          name: "timeline-proof.accepted",
+          handler,
+          scope: "operator.sessions.write",
+        }),
+      );
+      setTestPluginRegistry(registry);
     }
     // Minimal fixtures own injected methods and real profile publications; full mode
     // owns committed config reloads. Neither fixture can impersonate the other owner.
@@ -314,6 +331,14 @@ test.each(["config", "profile", "profile-revocation"] as const)(
           }
           await expectProfile(ws, person.id);
           if (holdAcceptedWork) {
+            const prematureReply = onceMessage<Pick<ResponseFrame, "type" | "id" | "error">>(
+              ws,
+              (frame) => frame.type === "res" && frame.id === "accepted-timeline-work",
+            ).then((frame) => {
+              throw new Error(
+                `Timeline work returned before handler admission: ${frame.error?.code ?? "success"}`,
+              );
+            });
             ws.send(
               JSON.stringify({
                 type: "req",
@@ -322,7 +347,7 @@ test.each(["config", "profile", "profile-revocation"] as const)(
                 params: {},
               }),
             );
-            await entered.promise;
+            await Promise.race([entered.promise, prematureReply]);
           }
           if (publication === "config") {
             await patchRoles({
@@ -346,7 +371,17 @@ test.each(["config", "profile", "profile-revocation"] as const)(
           }
           if (holdAcceptedWork) {
             release.resolve();
-            expect(await completed.promise).toBe(publication !== "profile-revocation");
+            const outcome = await completed.promise;
+            if (publication === "profile-revocation") {
+              expect(outcome).toMatchObject({
+                ok: false,
+                error: expect.any(SessionMutationAuthorizationChangedError),
+              });
+              expect(existsSync(effectPath!)).toBe(false);
+            } else {
+              expect(outcome).toEqual({ ok: true });
+              expect(readFileSync(effectPath!, "utf8")).toBe("committed");
+            }
           }
         } finally {
           release.resolve();

@@ -1,2 +1,2 @@
-# Saved-owner browser recovery, current-role hello publication, and transport/source authority lifecycle regressions.
-493
+# Saved-owner recovery, current-role/source authority, fixture lifecycle, and bounded failure diagnostics.
+907

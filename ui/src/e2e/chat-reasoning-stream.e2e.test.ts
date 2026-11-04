@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import type { ChatState } from "../pages/chat/chat-state-contract.ts";
+import { rethrowWithControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -183,7 +185,39 @@ suite.define(() => {
       await worked.waitFor();
       await worked.click();
       await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
-      await rawDetails.waitFor();
+      try {
+        await rawDetails.waitFor();
+      } catch (error) {
+        await rethrowWithControlUiE2eFailureFacts(page, error, "reasoningFactsRead", () =>
+          rawDetails.evaluateAll((summaries) => {
+            const pane = document.querySelector<HTMLElement & { state?: ChatState }>(
+              'openclaw-chat-pane[aria-hidden="false"]',
+            );
+            const state = pane?.state;
+            const items = state?.chatReasoning?.items ?? [];
+            const receipts = items.slice(0, 8).filter((item) => item.receipt);
+            const worked = pane?.querySelector(".chat-work-group > .chat-activity-group__summary");
+            return {
+              stateAvailable: Boolean(state),
+              messages: state?.chatMessages.length ?? 0,
+              toolMessages: state?.chatToolMessages.length ?? 0,
+              toolStreams: state?.toolStreamById.size ?? 0,
+              reasoningItems: items.length,
+              reasoningScanTruncated: items.length > 8,
+              receipts: receipts.length,
+              persistedReceipts: receipts.filter((item) => item.receipt?.persisted).length,
+              hasRun: Boolean(state?.chatRunId),
+              toolGroups: pane?.querySelectorAll(".chat-group.tool").length ?? 0,
+              toolCards: pane?.querySelectorAll(".chat-tool-msg-summary").length ?? 0,
+              workedCount: pane?.querySelectorAll(".chat-work-group").length ?? 0,
+              workedExpanded: worked?.getAttribute("aria-expanded") === "true",
+              rawMatches: summaries.length,
+              rawVisible: summaries[0]?.checkVisibility() ?? false,
+              rawExpanded: summaries[0]?.getAttribute("aria-expanded") === "true",
+            };
+          }),
+        );
+      }
       if ((await rawDetails.getAttribute("aria-expanded")) === "false") {
         await rawDetails.click();
       }
