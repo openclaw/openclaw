@@ -246,7 +246,7 @@ function isolatedWorkerRole(launch, role) {
   );
 }
 
-function childLaunchSnapshot(argv, options) {
+function childLaunchSnapshot(argv, options, synchronous = false) {
   try {
     const values = argv === undefined ? [] : plainArguments(argv);
     const safeArguments =
@@ -271,10 +271,14 @@ function childLaunchSnapshot(argv, options) {
       "windowsVerbatimArguments",
       "timeout",
       "killSignal",
-      "maxBuffer",
       "encoding",
       "serialization",
     ];
+    // Async spawn ignores maxBuffer; Execa retains a per-stream array here.
+    // Only spawnSync consumes it, so do not inspect async nested values.
+    if (synchronous) {
+      scalarKeys.push("maxBuffer");
+    }
     const safeOptions =
       safeArguments &&
       data &&
@@ -937,7 +941,7 @@ function install(spec) {
       : undefined;
   };
   childProcess.spawnSync = function (...args) {
-    const launch = childLaunchSnapshot(args[1], args[2]);
+    const launch = childLaunchSnapshot(args[1], args[2], true);
     const startedAt = String(process.hrtime.bigint());
     let result;
     try {

@@ -496,7 +496,14 @@ it.skipIf(process.platform !== "linux")(
 );
 
 it("preserves synchronous throws and unsafe metadata without claiming native completion", () => {
-  for (const mode of ["encoding", "getter-throw", "argv-accessor", "argv-proxy", "no-preload"]) {
+  for (const mode of [
+    "encoding",
+    "getter-throw",
+    "max-buffer-array",
+    "argv-accessor",
+    "argv-proxy",
+    "no-preload",
+  ]) {
     const f = fixture();
     const script = path.join(f.root, "sync-metadata.cjs");
     const marker = path.join(f.root, "ran");
@@ -510,6 +517,7 @@ it("preserves synchronous throws and unsafe metadata without claiming native com
       const code = "require('node:fs').writeFileSync("+JSON.stringify(marker)+",'ran'); process.stdout.write('ok')";
       let args=['-e',code], options={encoding:mode==='encoding'?'not-an-encoding':'utf8'};
       if(mode==='getter-throw') options={get encoding(){throw sentinel;}};
+      if(mode==='max-buffer-array') options.maxBuffer=[1024,1024];
       if(mode==='no-preload') options.env={};
       if(mode==='argv-accessor') Object.defineProperty(args,1,{get(){reads++;return code;}});
       if(mode==='argv-proxy') args=new Proxy(args,{get(target,key,receiver){reads++;return Reflect.get(target,key,receiver);}});
@@ -535,7 +543,7 @@ it("preserves synchronous throws and unsafe metadata without claiming native com
     expect(plain.status, plain.stderr).toBe(0);
     expect(observed.status, observed.stderr).toBe(0);
     expect(observed.stdout, mode).toBe(plain.stdout);
-    const threw = mode === "encoding" || mode === "getter-throw";
+    const threw = ["encoding", "getter-throw", "max-buffer-array"].includes(mode);
     if (threw) {
       expect(
         f.records().some((row) => row.event === "spawn-sync-return"),
@@ -548,6 +556,9 @@ it("preserves synchronous throws and unsafe metadata without claiming native com
         error: "Synchronous spawn threw; native completion is unknown",
       });
       expect(JSON.parse(observed.stdout).ran).toBe(mode === "encoding");
+      if (mode === "max-buffer-array") {
+        expect(JSON.parse(observed.stdout).outcome).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+      }
     }
     expect(() => readInstalledTerminalEvents(f.spec.directory), mode).toThrow(
       threw
@@ -1785,11 +1796,13 @@ it.each([false, true])(
     const {spawn} = require('node:child_process');
     const {once} = require('node:events');
     (async () => {
-      let getters = 0, traps = 0;
+      const execa = ${historical ? "undefined" : `(await import(${JSON.stringify(import.meta.resolve("execa"))})).execa`};
+      let getters = 0, traps = 0, execaLaunches = 0;
       const outcomes = [];
       const unsafe = process.argv[2] === 'unsafe';
       const snapshot = process.argv[2]?.startsWith('snapshot');
-      const inputs = snapshot ? [${JSON.stringify(snapshotLaunch)}] : unsafe ? Array(11).fill(${JSON.stringify(launches[0])}) : ${JSON.stringify(launches)};
+      const ignoredBuffer = process.argv[2] === 'ignored-buffer';
+      const inputs = snapshot ? [${JSON.stringify(snapshotLaunch)}] : unsafe ? Array(11).fill(${JSON.stringify(launches[0])}) : ignoredBuffer ? Array(3).fill(${JSON.stringify(launches[0])}) : ${JSON.stringify(launches)};
       for (const [index, input] of inputs.entries()) {
         let argv = input;
         const env = process.argv[2] === 'snapshot-observed' ? process.env : argv[1] === '--openclaw-sqlite-readonly-child' ? {} : {OPENCLAW_CLI:'1'};
@@ -1805,11 +1818,20 @@ it.each([false, true])(
         if (unsafe && index === 8) Object.defineProperty(options, 'env', {enumerable:true,configurable:true,get(){getters++;Object.defineProperty(options,'env',{value:env,enumerable:true,configurable:true});return {...env,NODE_OPTIONS:${JSON.stringify(`--require=${preload}`)}};}});
         if (unsafe && index === 9) {argv=[...input];Object.defineProperty(argv,0,{configurable:true,get(){getters++;Object.defineProperty(argv,0,{value:input[0],configurable:true});return ${JSON.stringify(preload)};}});}
         if (unsafe && index === 10) {options.cwd=require('node:url').pathToFileURL(${JSON.stringify(f.root)});Object.defineProperty(options.cwd,'protocol',{get(){getters++;env.NODE_OPTIONS=${JSON.stringify(`--require=${preload}`)};return 'file:';}});}
+        if (ignoredBuffer && index === 0) options.maxBuffer = new Proxy([1024,1024], {get(){traps++;throw new Error('nested buffer read');},ownKeys(){traps++;throw new Error('nested buffer keys');}});
+        if (ignoredBuffer && index === 1) options.maxBuffer = {get valueOf(){getters++;throw new Error('nested buffer coercion');}};
+        if (ignoredBuffer && index === 2) Object.defineProperty(options,'maxBuffer',{enumerable:true,get(){getters++;return [1024,1024];}});
+        if (execa && !unsafe && !snapshot && !ignoredBuffer && index > 0) {
+          const result = await execa(process.execPath, argv, {...options,extendEnv:false,encoding:'buffer',maxBuffer:1024*1024});
+          execaLaunches++;
+          outcomes.push([result.exitCode,result.signal ?? null]);
+          continue;
+        }
         const child = spawn(process.execPath, argv, options);
         if (unsafe && index === 6) delete Object.prototype.NODE_OPTIONS;
         outcomes.push(await once(child, 'close'));
       }
-      console.log(JSON.stringify({outcomes,getters,traps}));
+      console.log(JSON.stringify({outcomes,getters,traps,execaLaunches}));
     })().catch(error => {console.error(error); process.exitCode = 1;});
   `,
     );
@@ -1841,6 +1863,7 @@ it.each([false, true])(
     expect(observed.status, observed.stderr).toBe(0);
     expect(plain.status, plain.stderr).toBe(0);
     expect(observed.stdout).toBe(plain.stdout);
+    expect(JSON.parse(observed.stdout).execaLaunches).toBe(historical ? 0 : 2);
     const rows = packageRecords(f);
     expect(rows.filter((row) => row.event === "startup")).toHaveLength(1);
     const launchesObserved = rows.filter((row) => row.event === "spawn");
@@ -2002,6 +2025,34 @@ it.each([false, true])(
       expect.objectContaining({ event: "startup", pid: hiddenEnvironmentChild.child }),
     );
     expect(() => readInstalledTerminalEvents(f.spec.directory, spec)).toThrow("Missing Node child");
+    for (const file of fs.readdirSync(f.spec.directory)) {
+      fs.unlinkSync(path.join(f.spec.directory, file));
+    }
+    const ignoredPlain = runProcess(node, [script, "ignored-buffer"], process.env, 10_000);
+    const ignoredObserved = runProcess(node, [script, "ignored-buffer"], f.env, 10_000);
+    expect(ignoredPlain.status, ignoredPlain.stderr).toBe(0);
+    expect(ignoredObserved.status, ignoredObserved.stderr).toBe(0);
+    expect(ignoredObserved.stdout).toBe(ignoredPlain.stdout);
+    expect(JSON.parse(ignoredObserved.stdout)).toEqual({
+      outcomes: [
+        [0, null],
+        [0, null],
+        [0, null],
+      ],
+      getters: 1,
+      traps: 0,
+      execaLaunches: 0,
+    });
+    expect(
+      f
+        .records()
+        .filter((row) => row.event === "spawn")
+        .map((row) => row.packageEntry),
+    ).toEqual([
+      expect.objectContaining({ environmentQualified: true }),
+      expect.objectContaining({ environmentQualified: true }),
+      expect.objectContaining({ environmentQualified: false }),
+    ]);
     for (const mode of ["snapshot-observed", "snapshot-unobserved"]) {
       for (const file of fs.readdirSync(f.spec.directory)) {
         fs.unlinkSync(path.join(f.spec.directory, file));
