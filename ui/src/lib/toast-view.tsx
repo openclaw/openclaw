@@ -1,4 +1,4 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, createSignal, For, onSettled } from "solid-js";
 import { Icon, type IconName } from "../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
 import { formatUiExternalText } from "./format-error.ts";
@@ -108,6 +108,28 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
   const lane = (): ToastLane => props.entry.lane;
   const dismiss = (reason: "action" | "dismiss") => props.owner.dismiss(props.entry.id, reason);
   const content = createMemo(() => toast().message);
+  const [singleRow, setSingleRow] = createSignal(false);
+  let contentElement!: HTMLDivElement;
+  let bodyElement!: HTMLDivElement;
+  let messageElement!: HTMLSpanElement;
+  onSettled(() => {
+    const measure = () => {
+      const action = contentElement.querySelector<HTMLElement>(".app-toast__action");
+      const titleHeight = messageElement.offsetHeight;
+      // Measure the contents, not the card: padding must not feed back into the
+      // decision, and collapsed stack cards borrow the newest card's height.
+      setSingleRow(
+        titleHeight > 0 &&
+          titleHeight <= Number.parseFloat(getComputedStyle(messageElement).lineHeight) + 1 &&
+          (!action || action.offsetTop < bodyElement.offsetTop + bodyElement.offsetHeight),
+      );
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(contentElement);
+    observer.observe(messageElement);
+    measure();
+    return () => observer.disconnect();
+  });
   // Two-sentence copy reads as a title and a muted description, without rewording.
   const copy = createMemo(() => {
     const value = content();
@@ -138,6 +160,7 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
           "app-toast--progress": toast().severity === "progress",
           "app-toast--avatar": Boolean(toast().avatar),
           "app-toast--action": Boolean(toast().actionLabel && toast().onAction),
+          "app-toast--single-row": !copy().description && singleRow(),
         },
       ]}
       data-active={props.entry.active ? "true" : "false"}
@@ -205,9 +228,11 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
           <Icon name={SEVERITY_ICONS[toast().severity!]} />
         </span>
       ) : undefined}
-      <div class="app-toast__content">
-        <div class="app-toast__body">
-          <span class="app-toast__message">{message()}</span>
+      <div class="app-toast__content" ref={(element) => (contentElement = element)}>
+        <div class="app-toast__body" ref={(element) => (bodyElement = element)}>
+          <span class="app-toast__message" ref={(element) => (messageElement = element)}>
+            {message()}
+          </span>
           {copy().description ? " " : undefined}
           {copy().description ? (
             <span class="app-toast__description">{formatUiExternalText(copy().description)}</span>

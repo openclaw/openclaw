@@ -122,6 +122,8 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     await useViewport(1280);
     const { host, toast, action } = await renderToast();
     const height = rect(toast).height;
+    expect(height).toBe(44);
+    expect(rect(action).height).toBe(28);
     expect(Number.parseFloat(getComputedStyle(toast).borderTopLeftRadius)).toBeGreaterThanOrEqual(
       height / 2,
     );
@@ -140,8 +142,45 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     expect(rect(block.toast).width).toBeCloseTo(360, 0);
     expect(rect(block.action).top).toBeGreaterThan(rect(block.body).bottom);
     expect(rect(block.action).right).toBeCloseTo(rect(block.toast).right - 10, 0);
+    expect(getComputedStyle(block.toast).paddingBlockStart).toBe("12px");
+    expect(getComputedStyle(block.toast).paddingBlockEnd).toBe("12px");
     expect(getComputedStyle(block.toast).borderTopLeftRadius).toBe("28px");
     expect(block.action.classList.contains("app-toast__action--primary")).toBe(true);
+  });
+
+  it("restores roomy padding when the title or action wraps after resizing", async () => {
+    await useViewport(1280);
+    const { host, toast, body, action } = await renderToast({
+      message: "Sitzung wurde archiviert",
+      actionLabel: "Wiederherstellen",
+    });
+    const expectPadding = async (padding: string) =>
+      waitForSolid(() => expect(getComputedStyle(toast).paddingBlockStart).toBe(padding));
+    await expectPadding("8px");
+
+    await useViewport(320);
+    await expectPadding("12px");
+    expect(action.offsetTop).toBeGreaterThanOrEqual(body.offsetTop + body.offsetHeight);
+
+    await useViewport(1280);
+    await expectPadding("8px");
+    root.style.setProperty("--control-ui-text-scale", "1.6");
+    await useViewport(390);
+    await expectPadding("12px");
+    expect(rect(action).right).toBeLessThanOrEqual(rect(toast).right);
+
+    const wrapped = await renderToast(
+      {
+        message: "The session could not be archived because it is currently in use",
+        actionLabel: undefined,
+        onAction: undefined,
+      },
+      host,
+    );
+    expect(wrapped.message.offsetHeight).toBeGreaterThan(
+      Number.parseFloat(getComputedStyle(wrapped.message).lineHeight),
+    );
+    expect(getComputedStyle(wrapped.toast).paddingBlockStart).toBe("12px");
   });
 
   it("places actions in the center and arrivals on the right as fixed-width blocks", async () => {
