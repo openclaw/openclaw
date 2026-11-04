@@ -91,6 +91,34 @@ describe("createDiscordAvatarResolver", () => {
     expect(fetchGuild).toHaveBeenCalledTimes(1);
   });
 
+  it("does not refresh a cached guild icon after a wall-clock forward step", async () => {
+    const guildLookup = createDeferred<{ icon: string }>();
+    const guildDownload = createDeferred<{ path: string }>();
+    const fetchGuild = vi.fn(() => guildLookup.promise);
+    const client = { fetchGuild } as unknown as Client;
+    mocks.saveRemoteMedia.mockReturnValueOnce(guildDownload.promise);
+    const resolve = avatarScenario(client, "guild-1");
+
+    expect(resolve()).toBeUndefined();
+    guildLookup.resolve({ icon: "guild-hash" });
+    await vi.waitFor(() => expect(mocks.saveRemoteMedia).toHaveBeenCalledTimes(1));
+    guildDownload.resolve({ path: "/media/inbound/guild-icon.png" });
+    await vi.waitFor(() => expect(resolve()).toBe("/media/inbound/guild-icon.png"));
+    expect(fetchGuild).toHaveBeenCalledTimes(1);
+
+    // A wall-clock forward step (NTP correction, manual clock change) must not
+    // make the 5-minute TTL cache window look expired. The window is anchored to
+    // the monotonic clock, so the cached icon stays reusable without a refetch.
+    const realNow = Date.now;
+    vi.spyOn(Date, "now").mockReturnValue(realNow() + 10 * 60_000);
+    try {
+      expect(resolve()).toBe("/media/inbound/guild-icon.png");
+      expect(fetchGuild).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("does not fall back to the public CDN when an API override is configured", async () => {
     const guildLookup = createDeferred<{ icon: string }>();
     const client = { fetchGuild: vi.fn(() => guildLookup.promise) } as unknown as Client;
