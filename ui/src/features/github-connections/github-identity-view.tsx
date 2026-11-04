@@ -169,7 +169,7 @@ function GitHubAuthorization(props: IdentityProps) {
           ? t("agentTools.githubDenied")
           : state.phase === "incorrect_device_code"
             ? t("agentTools.githubIncorrectCode")
-            : t("agentTools.githubAuthorizationFailed"),
+            : "",
     );
   };
   const failureDetail = () => {
@@ -251,7 +251,7 @@ function GitHubAuthorization(props: IdentityProps) {
           description={
             failed() ? (
               <>
-                <div>{failureDescription()}</div>
+                <Show when={failureDescription()}>{(description) => <div>{description()}</div>}</Show>
                 <Show when={failureDetail()}>{(detail) => <div>{detail()}</div>}</Show>
               </>
             ) : (

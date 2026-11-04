@@ -66,7 +66,7 @@ const enProfile = {
       attribution: identity.attribution,
       githubAccount: "GitHub sign-in",
       githubAccountDescription:
-        "Verified sign-in identity, not permission to publish. Manage publishing access under GitHub connections below.",
+        "Verified sign-in identity, not permission to publish. Manage publishing access under GitHub accounts below.",
       githubVerified: "Verified",
       githubUnavailable: "Unavailable",
       githubUnavailableDescription:
