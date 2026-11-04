@@ -14,17 +14,21 @@ const removedAsyncTransactionNames = new Set([
   "runOpenClawAgentWriteTransactionAsync",
   "runSqliteImmediateTransactionAsync",
 ]);
-const synchronousTransactionCallbackIndexes = new Map([
-  ["runOpenClawAgentWriteTransaction", 0],
-  ["runOpenClawAgentWriteWithYieldingAdmission", 0],
-  ["runOpenClawStateWriteTransaction", 0],
-  ["runPostgresTransactionSync", 1],
-  ["runSqliteReservedTransactionSync", 1],
-  ["runSqliteDeferredTransactionSync", 1],
-  ["runSqliteReadSnapshotSync", 1],
-  ["runSqliteImmediateTransactionSync", 1],
-  ["runSqliteSingleStatementSync", 1],
-  ["runSqliteWorkerTransactionSync", 1],
+const transactionBoundaries = new Map<string, { callback?: number; options?: number }>([
+  ["runOpenClawAgentWriteTransaction", { callback: 0 }],
+  ["runOpenClawAgentWriteWithYieldingAdmission", { callback: 0 }],
+  ["runOpenClawStateWriteTransaction", { callback: 0 }],
+  ["runPostgresTransactionSync", { callback: 1, options: 2 }],
+  ["runSqliteReservedTransactionSync", { callback: 1, options: 2 }],
+  ["runSqliteDeferredTransactionSync", { callback: 1, options: 2 }],
+  ["runSqliteReadSnapshotSync", { callback: 1, options: 2 }],
+  ["runSqliteImmediateTransactionSync", { callback: 1, options: 2 }],
+  ["runSqliteSingleStatementSync", { callback: 1 }],
+  ["runSqliteWorkerTransactionSync", { callback: 1, options: 2 }],
+  // Preparation may await, but the physical commit hook must remain synchronous.
+  ["runSqliteImmediateTransaction", { options: 2 }],
+  ["withSessionActorTransactionState", { callback: 2 }],
+  ["withSqliteDatabaseWriteScope", { callback: 2 }],
 ]);
 
 function expressionName(expression: ts.Expression) {
@@ -78,7 +82,7 @@ function collectSynchronousTransactionAliases(sourceFile: ts.SourceFile) {
     }
     for (const specifier of bindings.elements) {
       const importedName = specifier.propertyName?.text ?? specifier.name.text;
-      if (synchronousTransactionCallbackIndexes.has(importedName)) {
+      if (transactionBoundaries.has(importedName)) {
         aliases.set(specifier.name.text, importedName);
       }
     }
@@ -143,15 +147,41 @@ export function findSqliteTransactionBoundaryViolations(
       const canonicalName = calledName
         ? (transactionAliases.get(calledName) ?? calledName)
         : undefined;
-      const callbackIndex = canonicalName
-        ? synchronousTransactionCallbackIndexes.get(canonicalName)
-        : undefined;
+      const boundary = canonicalName ? transactionBoundaries.get(canonicalName) : undefined;
+      const callbackIndex = boundary?.callback;
       const callback = callbackIndex === undefined ? undefined : node.arguments[callbackIndex];
       if (canonicalName && callback && isAsyncCallback(callback, localAsyncFunctionNames)) {
         violations.push({
           line: toLine(sourceFile, callback),
           reason: `passes an async callback to synchronous SQLite transaction helper "${canonicalName}"`,
         });
+      }
+      const options =
+        boundary?.options === undefined ? undefined : node.arguments[boundary.options];
+      const literal = options && unwrapExpression(options);
+      if (literal && ts.isObjectLiteralExpression(literal)) {
+        for (const property of literal.properties) {
+          const name = "name" in property ? property.name : undefined;
+          if (
+            !name ||
+            !(ts.isIdentifier(name) || ts.isStringLiteral(name)) ||
+            name.text !== "withCommit"
+          ) {
+            continue;
+          }
+          const async = ts.isMethodDeclaration(property)
+            ? hasAsyncModifier(property)
+            : ts.isPropertyAssignment(property)
+              ? isAsyncCallback(property.initializer, localAsyncFunctionNames)
+              : ts.isShorthandPropertyAssignment(property) &&
+                localAsyncFunctionNames.has(name.text);
+          if (async) {
+            violations.push({
+              line: toLine(sourceFile, property),
+              reason: "passes an async commit hook to synchronous SQLite transaction helper",
+            });
+          }
+        }
       }
     }
 

@@ -295,86 +295,72 @@ function ChatPaneHeaderChrome(
         </Show>
         <div class="chat-pane__actions">
           <Show when={!props.mergedChrome}>
-            <div class="chat-pane__connection-slot">
-              <Show
-                when={
-                  props.gatewayStatus?.kind && props.gatewayStatus.kind !== "connected"
-                    ? props.gatewayStatus.kind
-                    : null
-                }
-              >
-                {(kind) => (
-                  <openclaw-tooltip
-                    prop:content={
-                      props.gatewayStatus?.lastError
-                        ? redactLoginFailureError(props.gatewayStatus.lastError)
-                        : ""
-                    }
-                  >
-                    <div class="chat-pane__connection">
-                      {/* Visual only: the app shell's live region owns connection announcements. */}
-                      <span class="chat-pane__connection-state">
-                        <span
-                          class={[
-                            "chat-pane__connection-icon",
-                            {
-                              "chat-pane__connection-icon--busy":
-                                kind() !== "offline" &&
-                                kind() !== "reload-required" &&
-                                kind() !== "suspended" &&
-                                kind() !== "suspending",
-                            },
-                          ]}
-                          aria-hidden="true"
+            <Show
+              when={
+                props.gatewayStatus?.kind && props.gatewayStatus.kind !== "connected"
+                  ? props.gatewayStatus.kind
+                  : null
+              }
+            >
+              {(kind) => (
+                <openclaw-tooltip
+                  prop:content={
+                    props.gatewayStatus?.lastError
+                      ? redactLoginFailureError(props.gatewayStatus.lastError)
+                      : ""
+                  }
+                >
+                  <div class="chat-pane__connection">
+                    {/* Visual only: the app shell's live region owns connection announcements. */}
+                    <span class="chat-pane__connection-state">
+                      <span
+                        class={[
+                          "chat-pane__connection-icon",
+                          {
+                            btn__spinner:
+                              kind() !== "offline" &&
+                              kind() !== "reload-required" &&
+                              kind() !== "suspended" &&
+                              kind() !== "suspending",
+                          },
+                        ]}
+                        aria-hidden="true"
+                      >
+                        <Show
+                          when={
+                            kind() === "offline" ||
+                            kind() === "reload-required" ||
+                            kind() === "suspended" ||
+                            kind() === "suspending"
+                          }
                         >
-                          <Show
-                            when={
-                              kind() === "offline" ||
-                              kind() === "reload-required" ||
-                              kind() === "suspended" ||
-                              kind() === "suspending"
+                          <Icon
+                            name={
+                              kind() === "offline" || kind() === "reload-required"
+                                ? "alertTriangle"
+                                : "pause"
                             }
-                            fallback={
-                              <svg
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.8"
-                                stroke-linecap="round"
-                              >
-                                <circle cx="12" cy="12" r="9" opacity="0.25" />
-                                <path d="M12 3a9 9 0 0 1 9 9" />
-                              </svg>
-                            }
-                          >
-                            <Icon
-                              name={
-                                kind() === "offline" || kind() === "reload-required"
-                                  ? "alertTriangle"
-                                  : "pause"
-                              }
-                            />
-                          </Show>
-                        </span>
-                        {props.savedConversation
-                          ? t("chat.savedConversation", { status: t(`connection.${kind()}`) })
-                          : t(`connection.${kind()}`)}
+                          />
+                        </Show>
                       </span>
-                      <Show when={canRetryGatewayStatus(kind()) && props.gatewayStatus?.onRetry}>
-                        <span class="chat-pane__connection-divider" aria-hidden="true" />
-                        <button
-                          type="button"
-                          class="chat-pane__connection-retry"
-                          onClick={() => props.gatewayStatus?.onRetry?.()}
-                        >
-                          {t("common.retry")}
-                        </button>
-                      </Show>
-                    </div>
-                  </openclaw-tooltip>
-                )}
-              </Show>
-            </div>
+                      {props.savedConversation
+                        ? t("chat.savedConversation", { status: t(`connection.${kind()}`) })
+                        : t(`connection.${kind()}`)}
+                    </span>
+                    <Show when={canRetryGatewayStatus(kind()) && props.gatewayStatus?.onRetry}>
+                      <span class="chat-pane__connection-divider" aria-hidden="true" />
+                      <button
+                        type="button"
+                        class="chat-pane__connection-retry"
+                        onClick={() => props.gatewayStatus?.onRetry?.()}
+                      >
+                        {t("common.retry")}
+                      </button>
+                    </Show>
+                  </div>
+                </openclaw-tooltip>
+              )}
+            </Show>
           </Show>
           <Show when={!props.narrow && (props.mergedChrome || !props.detailsControl)}>
             <RunningSubagents count={props.runningSubagentCount} />

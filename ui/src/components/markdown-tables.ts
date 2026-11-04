@@ -60,12 +60,16 @@ function measureTableOverflow(shell: HTMLElement): (() => void) | undefined {
     return undefined;
   }
   const { scrollWidth, clientWidth, scrollLeft } = viewport;
+  const position =
+    getComputedStyle(viewport).direction === "rtl"
+      ? scrollWidth - clientWidth + scrollLeft
+      : scrollLeft;
   const overflows = scrollWidth - clientWidth > 1;
   return () => {
-    shell.classList.toggle("markdown-table--can-scroll-left", overflows && scrollLeft > 1);
+    shell.classList.toggle("markdown-table--can-scroll-left", overflows && position > 1);
     shell.classList.toggle(
       "markdown-table--can-scroll-right",
-      overflows && scrollLeft + clientWidth < scrollWidth - 1,
+      overflows && position + clientWidth < scrollWidth - 1,
     );
   };
 }

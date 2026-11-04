@@ -245,11 +245,11 @@ describe("chat pane header", () => {
       gatewayStatus: { kind: "reconnecting" },
     });
     const savedStatus = () => text(container, ".chat-pane__connection-state");
-    expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
+    expect(savedStatus()).toBe("Reconnecting… · Saved conversation");
     update({ gatewayStatus: undefined });
     absent(container, ".chat-pane__connection");
     update({ gatewayStatus: { kind: "offline" } });
-    expect(savedStatus()).toBe("Saved conversation · Disconnected");
+    expect(savedStatus()).toBe("Disconnected · Saved conversation");
     update({ savedConversation: false, gatewayStatus: { kind: null } });
     absent(container, ".chat-pane__connection");
   });

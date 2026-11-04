@@ -383,8 +383,9 @@ const enPluginManagement = {
     configurationDescription: "Settings declared by this plugin.",
     accessCapabilities: "Access & capabilities",
     accessCapabilitiesDescription: "What this plugin can access with the current policy.",
-    promptContextAccess: "Add context to prompts",
-    promptContextAccessDescription: "Allows hooks to add plugin context before a model runs.",
+    promptContextAccess: "Modify prompts",
+    promptContextAccessDescription:
+      "Allows this plugin to add or change the context and instructions sent to the model, which can influence its responses. Only allow this for plugins you trust.",
     conversationAccess: "Read conversation context",
     conversationAccessDescription: "Allows hooks to inspect conversation content.",
     modelOverrideAccess: "Override model selection",
