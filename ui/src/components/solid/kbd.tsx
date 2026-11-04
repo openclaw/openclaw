@@ -90,8 +90,8 @@ export function KeyboardShortcut(
     applePlatform?: boolean;
   },
 ) {
-  const apple = () => props.applePlatform ?? isApplePlatform();
-  const parts = () => formatKeyboardShortcutParts(props.combo, apple());
+  const parts = () =>
+    formatKeyboardShortcutParts(props.combo, props.applePlatform ?? isApplePlatform());
   return (
     <>
       {props.separateKeys ? (
