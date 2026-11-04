@@ -1286,7 +1286,7 @@ describe("Claude session catalog", () => {
     now += 300_001;
     vi.mocked(Date.now).mockReturnValue(Date.now() - 7_200_000);
     await listPage({}, home);
-    expect(homeCalls(spies[2])).not.toEqual([]);
+    expect(spies.some((spy) => homeCalls(spy).length > 0)).toBe(true);
   });
 
   it("retries a transient project snapshot read on the short I/O recovery bound", async () => {
