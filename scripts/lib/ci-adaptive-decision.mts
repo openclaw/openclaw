@@ -121,7 +121,7 @@ export function captureAdaptiveGraphDecision(options: {
           baseline.version !== 1 ||
           !Array.isArray(baseline.invocations) ||
           baseline.invocations.length !== current.invocations.length ||
-          !["repository", "configDigest", "lockDigest", "environmentDigest"].every(
+          !(["repository", "configDigest", "lockDigest", "environmentDigest"] as const).every(
             (key) => context[key] === current.context[key],
           ) ||
           !baseline.invocations.every((invocation, index) =>

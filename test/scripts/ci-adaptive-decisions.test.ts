@@ -134,7 +134,9 @@ it("pins an available prior and computes its full diff before subsequent outcome
     const frozen = JSON.stringify(decision);
     writeFileSync(target, "{}");
     expect(JSON.stringify(decision)).toBe(frozen);
-    expect(current.invocations[0]!.files.every((file) => file.outcome === "unknown")).toBe(true);
+    for (const file of current.invocations[0]!.files) {
+      expect(file.outcome).toBe("unknown");
+    }
 
     for (const reason of [
       "future",
