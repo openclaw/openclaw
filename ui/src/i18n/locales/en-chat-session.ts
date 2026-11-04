@@ -6,7 +6,7 @@ import { en } from "./en.ts";
 // This copy follows its lazy rendering consumers; shared labels stay in en.ts.
 const enChatSession = {
   chat: {
-    savedConversation: "Saved conversation · {status}",
+    savedConversation: "{status} · Saved conversation",
     sessionAutomation: {
       everyDuration: "Every {duration}",
       onceAt: "{day} at {time}",
@@ -24,7 +24,7 @@ const enChatSession = {
       close: "Close details",
       automations: en.chat.sessionDetails.automations,
       progressOptions: en.chat.sessionDetails.progressOptions,
-      hideProgress: "Don't show task progress again",
+      hideProgress: "Don’t show task progress again",
       collapseDefault: "Collapse task progress by default",
       settings: "Task progress settings",
       progressHidden: "Task progress hidden in this browser.",
@@ -106,7 +106,7 @@ const enChatSession = {
     sessionHeader: {
       people: "People",
       peopleParticipants: "Participants",
-      mentionRejected: "Mention was not inserted. Return to the composer and try again.",
+      mentionRejected: "Couldn’t insert the mention. Return to the message box and try again.",
       mentionsTruncated: "Some people are not included. Type @ in the composer to search.",
       mention: "Mention",
       mentionPerson: "Mention {name}",
@@ -121,10 +121,11 @@ const enChatSession = {
       panels: "Panels",
       continueInTerminal: {
         action: "Continue in terminal…",
-        disconnected: "Connect to the Gateway to continue this session in a terminal.",
+        disconnected: "Reconnect to continue in a terminal.",
         queryRouted:
-          "Query-routed Gateway URLs cannot create credential-free continuation commands because authentication and stored device scope are not query-aware. Use a manually authenticated CLI target or a queryless configured Gateway URL.",
-        unavailable: "This session or Gateway address cannot be continued in a terminal.",
+          "This Gateway address can’t open a terminal. Use the CLI or a Gateway address without a query string.",
+        unavailable:
+          "This session can’t continue in a terminal. Check the session and Gateway address.",
       },
       workspaceAria: "Workspace actions for {workspace}",
       revealFinder: "Reveal in Finder",
@@ -134,10 +135,9 @@ const enChatSession = {
       copyBranch: "Copy branch name",
       copied: "Copied",
       branches: "Versions",
-      versionsHelpLabel: "About versions",
       versionsHelp:
         "Saved copies of this conversation from rewinds or repairs. You can return to an earlier version here.",
-      versionsEmptyTitle: "No earlier versions",
+      versionsEmptyTitle: "No earlier versions yet.",
       versionsEmptyDescription: "Saved versions appear after a rewind or repair.",
       branchSwitchUnavailable: "Versions cannot be switched while the agent is working.",
       untitledBranch: "Untitled version",
@@ -158,7 +158,7 @@ const enChatSession = {
       enterFullscreen: "Enter fullscreen",
       exitFullscreen: "Exit fullscreen",
       fullscreenUnavailable: "Fullscreen is unavailable in this browser",
-      fullscreenFailed: "Could not change fullscreen mode: {error}",
+      fullscreenFailed: "Couldn’t change fullscreen mode: {error}",
       workboardCard: "Workboard card: {title}, {status}",
       defaultTab: "Main",
       mockPlaceholder: "Board view · {tabs} tabs · {widgets} widgets",
@@ -226,11 +226,9 @@ const enChatSession = {
       closeSearch: "Close search",
       loading: "Loading chat",
       showEarlier: "Show earlier",
-      loadingEarlier: "Loading earlier…",
       retryEarlier: "Retry earlier messages",
       earlierUnavailable: "Couldn’t load earlier messages",
       earlierInterrupted: "History refreshed before this page loaded. Try again.",
-      earlierConnecting: "Waiting for connection…",
       earlierHint: "Scroll up for earlier messages",
       noMatches: "No matching messages",
       noMessages: "No messages yet",
@@ -287,7 +285,7 @@ const enChatSession = {
       typingSeveral: "Several people are typing…",
       typingOthers: "{count} others",
       otherCollaborators: "Other collaborators",
-      typingDraftState: "is typing...",
+      typingDraftState: "is typing…",
       pausedDraftState: "Draft",
       state: {
         pending: "Pending",

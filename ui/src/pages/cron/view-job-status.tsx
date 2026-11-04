@@ -25,6 +25,27 @@ export function describeJobSchedule(job: CronJob): string {
     : `${t("cron.events.label")}: ${source}`;
 }
 
+/** The zone stays separate so the phone card can drop it; the detail view keeps it. */
+export function JobSchedule(props: { job: CronJob }) {
+  const schedule = () => props.job.schedule;
+  const zone = () => {
+    const current = schedule();
+    return current.kind === "cron" ? current.tz : undefined;
+  };
+  const expression = () => {
+    const current = schedule();
+    return current.kind === "cron"
+      ? formatCronSchedule({ schedule: { ...current, tz: undefined } })
+      : describeJobSchedule(props.job);
+  };
+  return (
+    <>
+      {expression()}
+      {zone() ? <span class="cron-table__schedule-zone"> ({zone()})</span> : undefined}
+    </>
+  );
+}
+
 /** Runtime facts, not the authored occurrence, decide what happens next. */
 export function describeJobNextRun(job: CronJob, absolute = false): string {
   if (isCronJobRunning(job)) {

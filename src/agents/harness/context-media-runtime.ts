@@ -86,6 +86,7 @@ export async function prepareHarnessContextMedia(params: {
     agentId: params.agentId,
   });
   const inlineFactIndexes = readPersistedImageBlockFactIndexes(message);
+  let localRoots: readonly string[] | undefined;
   const rawImages = await detectAndLoadPromptImages({
     prompt: "",
     workspaceDir: params.workspaceDir,
@@ -98,7 +99,12 @@ export async function prepareHarnessContextMedia(params: {
     workspaceOnly,
     localRoots: workspaceOnly
       ? undefined
-      : getAgentScopedMediaLocalRoots(params.config ?? {}, params.agentId, params.workspaceDir),
+      : () =>
+          (localRoots ??= getAgentScopedMediaLocalRoots(
+            params.config ?? {},
+            params.agentId,
+            params.workspaceDir,
+          )),
     sandbox: params.sandbox,
     ...limits,
   });

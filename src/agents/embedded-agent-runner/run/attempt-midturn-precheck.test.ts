@@ -14,6 +14,7 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { createFixedRequestTokenEstimator } from "../../sessions/context-token-pressure.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
@@ -411,6 +412,7 @@ describe("provider request admission", () => {
           toolResultMaxChars: cap,
           toolResultAggregateMaxChars: cap * 4,
           toolResultPromptProjectionState: projectionState,
+          prepareRequestTokenPressure: createFixedRequestTokenEstimator(),
           onModelRequest: streamGuards.onModelRequest,
           normalizeToolCallIds: streamGuards.normalizeToolCallIds,
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),

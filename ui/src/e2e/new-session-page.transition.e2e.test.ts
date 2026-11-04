@@ -439,7 +439,10 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("agent.wait", { endedAt: Date.now(), runId, status: "ok" });
       const toast = page.locator(".app-toast");
-      await toast.getByText("Done").waitFor({ timeout: 10_000 });
+      // A finished run shows only the session name and Open session.
+      await toast
+        .getByRole("link", { name: "Open session", exact: true })
+        .waitFor({ timeout: 10_000 });
       await captureProof(page, `background-${label}-complete.png`);
       if (captureProofEnabled) {
         await page.waitForTimeout(800);

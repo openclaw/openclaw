@@ -337,7 +337,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     { compatibilityRestored: true },
   ],
   ["gateway.restart.request", "restart", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
-  ["system-presence", "system", "operator.read", "<=2026.7"],
+  ["system-presence", "system", "operator.sessions.read", "<=2026.7"],
   ["system-event", "system", "operator.admin", "<=2026.7"],
   ["message.action", "send", "operator.write", "<=2026.7"],
   ["conversations.send", "conversations", "operator.admin", "<=2026.7"],
@@ -656,7 +656,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["portal.session.close", "portals", "operator.write", "2026.9", PORTAL_SESSION_WRITE],
   ["cron.history", "cron", "operator.read", "2026.9"],
   // The first UI interaction may precede post-hello identity hydration.
-  ["presence.activity", "system", "operator.read", "2026.9", PROFILE_DEPENDENT],
+  ["presence.activity", "system", "operator.sessions.read", "2026.9", PROFILE_DEPENDENT],
   ["presence.query", "presence", "operator.read", "2026.9", PROFILE_DEPENDENT],
   ["users.merge", "users", "operator.admin", "2026.9", PROFILE_DEPENDENT],
   ["gateway.stop.request", "restart", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
@@ -755,4 +755,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.files.preview", "sessions-files", "operator.read", "2026.10"],
   ["sessions.files.preview.release", "sessions-files", "operator.read", "2026.10"],
   ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
+  ["sessions.groups.create", "sessions-groups", "operator.write", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

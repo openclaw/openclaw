@@ -55,6 +55,7 @@
 }
 
 :root[data-theme="dash-light"] {
+  --status-running: #1d4ed8;
   /*
    * Accent — toasted sienna on lightly tinted paper
    */

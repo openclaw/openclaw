@@ -84,7 +84,7 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
     const updated = { ...group, sessionKeys: [...group.sessionKeys, key] };
     const error = write(groups().map((candidate) => (candidate.id === id ? updated : candidate)));
     if (error) {
-      showToast({ message: error });
+      showToast({ severity: "error", message: error });
     }
     props.host.sessionOrganizer.finishSessionDrag();
   };

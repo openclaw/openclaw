@@ -492,6 +492,68 @@ it.each(["unadmitted", "retired"] as const)(
   },
 );
 
+it.each(["event", "service"] as const)(
+  "uses the captured live relay owner for %s delivery",
+  async (delivery) => {
+    const context = new AsyncLocalStorage<object>();
+    const owner = {};
+    let live = true;
+    let checks = 0;
+    const root = tempDirs.make("sqlite-relay-context-");
+    const admission = context.run(owner, () =>
+      createSqliteDatabaseAdmissionRelay(() => {
+        expect(context.getStore()).toBe(owner);
+        checks++;
+        if (!live) {
+          throw new Error("Relay owner retired");
+        }
+      }),
+    );
+    async function request(location: string) {
+      const { port1, port2 } = channelFixture();
+      const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+      try {
+        expect(context.getStore()).toBeUndefined();
+        admission.port.postMessage(
+          {
+            kind: "sqlite-database-admissions",
+            admissions: [],
+            location,
+            create: "admitted",
+            port: port2,
+            decision: decision.buffer,
+          },
+          [port2],
+        );
+        if (delivery === "service") {
+          admission.service();
+          expect(Atomics.load(decision, 0)).not.toBe(0);
+        }
+        await expect.poll(() => Atomics.load(decision, 0)).not.toBe(0);
+        return Atomics.load(decision, 0);
+      } finally {
+        port1.close();
+        port2.close();
+      }
+    }
+    try {
+      const accepted = path.join(root, "accepted.sqlite");
+      expect(await request(accepted)).toBe(1);
+      expect(existsSync(accepted)).toBe(true);
+      expect(admission.failure).toBeUndefined();
+      live = false;
+      const refused = path.join(root, "refused.sqlite");
+      expect(await request(refused)).toBe(2);
+      expect(existsSync(refused)).toBe(false);
+      expect(admission.failure).toMatchObject({ message: "Relay owner retired" });
+      expect(checks).toBe(2);
+    } finally {
+      admission.finish();
+      context.disable();
+    }
+  },
+);
+
 it("reads a queued worker commit before settlement and message callbacks run", async () => {
   const admission = admissionFixture();
   const posted = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
