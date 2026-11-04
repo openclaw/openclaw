@@ -197,13 +197,22 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `06acff141582`: qualify the settlement observer in
+Pinned main `06acff141582`: preserve the complete mutation argument tuple in
 `extensions/codex/src/app-server/native-subagent-inventory.settlement.test.ts`.
-The wrapper forwards three mutation arguments while its caller supplies a fourth
-live-authority capability. All three existing cases, timing, observers and
-assertions remain unchanged for the baseline. Runtime boundary proof and a
-minimal complete-tuple forwarding repair are pending; no production defect or
-passing qualification is claimed by this prerequisite draft.
+The observer still reads the mutation kind and resolves the same promises, but
+now forwards the caller's live-authority capability to the real binding owner.
+All three existing cases, timing, inputs and assertions remain; production is
+unchanged. One added test line has an equal separate allocation.
+
+The untouched three-case suite passes. An identical temporary probe reuses the
+first case's actual assignment and a real prepared authority whose liveness is
+revoked. The original wrapper drops that authority and persists the forbidden
+assignment; the repaired wrapper rejects at the mutation boundary with the exact
+revocation error and leaves storage unchanged. The probe removes only its own
+control write through the saved real method. Original control is two passes/one
+intended failure; candidate control and clean restored suite pass all three,
+with identical inventories and byte-restored source. This proves the fixture's
+in-process mutation boundary, not a live native Codex process or Gateway.
 
 ## Completed source review
 
