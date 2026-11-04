@@ -1,4 +1,5 @@
 import type { CronJob } from "../../api/types.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { isCronJobRunning } from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { createMsFormatter } from "../../lib/format.ts";
@@ -23,32 +24,45 @@ export function FailureDetails(props: { job: CronJob; onSelectJob: CronProps["on
       : t("cron.attention.noNextRun");
   };
   return (
-    <section
-      class="cron-failure-details"
-      data-test-id="cron-failure-details"
-      aria-label={t("cron.attention.title")}
-    >
-      <h2>
-        {t(
-          props.job.state.autoDisabled
-            ? "cron.attention.autoDisabledTitle"
-            : "cron.attention.title",
-        )}
-      </h2>
-      <p class="cron-failure-details__cause">{cause()}</p>
-      {diagnostic() && diagnostic() !== cause() ? (
-        <p class="cron-failure-details__cause">{diagnostic()}</p>
-      ) : undefined}
-      <p>{consequence()}</p>
-      <p>{t("cron.attention.effectsUnknown")}</p>
-      <button
-        type="button"
-        class="btn btn--secondary btn--sm"
-        data-test-id="cron-review-failed-run"
-        onClick={() => props.onSelectJob(props.job)}
-      >
-        {t("cron.attention.reviewRun")}
-      </button>
-    </section>
+    <details class="cron-failure-details" data-test-id="cron-failure-details">
+      <summary>
+        <span class="cron-failure-details__icon" aria-hidden="true">
+          <Icon name="alertTriangle" />
+        </span>
+        <span class="cron-failure-details__copy">
+          <strong>
+            {t(
+              props.job.state.autoDisabled
+                ? "cron.attention.autoDisabledTitle"
+                : "cron.attention.title",
+            )}
+          </strong>
+          <span class="cron-failure-details__preview">{cause()}</span>
+        </span>
+        <button
+          type="button"
+          class="btn btn--ghost btn--sm"
+          data-test-id="cron-review-failed-run"
+          onClick={(event) => {
+            // Reviewing the run is independent of opening the diagnostic disclosure.
+            event.preventDefault();
+            props.onSelectJob(props.job);
+          }}
+        >
+          {t("cron.attention.reviewRun")}
+        </button>
+        <span class="cron-failure-details__chevron" aria-hidden="true">
+          <Icon name="chevronDown" />
+        </span>
+      </summary>
+      <div class="cron-failure-details__body">
+        <p class="cron-failure-details__cause">{cause()}</p>
+        {diagnostic() && diagnostic() !== cause() ? (
+          <p class="cron-failure-details__cause">{diagnostic()}</p>
+        ) : undefined}
+        <p>{consequence()}</p>
+        <p class="muted">{t("cron.attention.effectsUnknown")}</p>
+      </div>
+    </details>
   );
 }

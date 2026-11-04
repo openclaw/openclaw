@@ -59,11 +59,13 @@ export function DetailView(
             <Icon name="arrowLeft" /> {t("cron.detail.back")}
           </button>
         </div>
-        <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
+        <div class="cron-detail-intro">
+          <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
+          <Show when={failedJob()}>
+            {(job) => <FailureDetails job={job()} onSelectJob={props.onSelectJob} />}
+          </Show>
+        </div>
         <AdminRequired {...props} />
-        <Show when={failedJob()}>
-          {(job) => <FailureDetails job={job()} onSelectJob={props.onSelectJob} />}
-        </Show>
         {hasDetailTabs() ? <DetailTabs {...props} /> : undefined}
         <ErrorBanner error={props.error} reads={showHistory() ? undefined : props.reads} />
         <NoticeBanner notice={props.notice} />

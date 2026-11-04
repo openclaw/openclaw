@@ -100,8 +100,8 @@ const enCron = {
     },
 
     attention: {
-      title: "Latest run failed",
-      autoDisabledTitle: "Automation stopped after an error",
+      title: "Run failed",
+      autoDisabledTitle: "Automatically stopped",
       causeUnknown:
         "No failure details were recorded. Review the run history for available evidence.",
       autoDisabledConsequence:
@@ -109,8 +109,7 @@ const enCron = {
       nextRun: "Next run is scheduled for {time}.",
       noNextRun: "No further run is scheduled.",
       running: "A new run is in progress. Review its outcome before starting another run.",
-      effectsUnknown:
-        "Some actions may already have taken effect. Review the run and verify the outcome before running it again.",
+      effectsUnknown: "Check for completed actions before running again.",
       reviewRun: "Review run",
     },
 

@@ -80,6 +80,19 @@ suite.define(() => {
           await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
           const attention = page.locator("[data-test-id=cron-failure-details]");
           await attention.waitFor();
+          expect(await attention.getAttribute("open")).toBeNull();
+          const collapsed = await attention.boundingBox();
+          expect(collapsed?.height).toBeLessThan(viewport.width < 640 ? 112 : 64);
+          const disclosure = attention.locator("summary");
+          await disclosure.focus();
+          await page.keyboard.press("Enter");
+          expect(await attention.locator(".cron-failure-details__body").isVisible()).toBe(true);
+          expect(await attention.locator(".cron-failure-details__cause").textContent()).toBe(
+            failure,
+          );
+          await page.screenshot({ path: path.join(artifactDir, "expanded.png") });
+          await page.keyboard.press("Enter");
+          expect(await attention.getAttribute("open")).toBeNull();
           expect(await attention.textContent()).toContain(failure);
           expect(await page.locator(".cron-run-entry").textContent()).toContain(failure);
           await page.locator("[data-test-id=cron-detail-tab-settings]").click();
@@ -90,6 +103,7 @@ suite.define(() => {
           const draft = "Keep this unsaved release instruction while reviewing the failure.";
           await prompt.fill(draft);
           await page.locator("[data-test-id=cron-review-failed-run]").click();
+          expect(await attention.getAttribute("open")).toBeNull();
           await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
           await page.locator("[data-test-id=cron-detail-tab-settings]").click();
           expect(await prompt.inputValue()).toBe(draft);
