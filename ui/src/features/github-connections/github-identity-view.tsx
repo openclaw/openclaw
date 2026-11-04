@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, isPending, latest, Loading, Match, Show, Switch } from "solid-js";
 import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { ErrorDetails } from "../../components/config-error.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -251,8 +252,10 @@ function GitHubAuthorization(props: IdentityProps) {
           description={
             failed() ? (
               <>
-                <Show when={failureDescription()}>{(description) => <div>{description()}</div>}</Show>
-                <Show when={failureDetail()}>{(detail) => <div>{detail()}</div>}</Show>
+                <Show when={failureDescription()}>
+                  {(description) => <div>{description()}</div>}
+                </Show>
+                <ErrorDetails error={failureDetail()} />
               </>
             ) : (
               t("agentTools.githubConnectHint")

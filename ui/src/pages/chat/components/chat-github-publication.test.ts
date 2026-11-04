@@ -115,7 +115,7 @@ afterEach(() => {
 });
 
 const unknownAvailability =
-  "Couldn’t verify the publishing account. Reload and try again, or check gh auth status on this computer. Accounts in Settings are optional; My GitHub is separate.";
+  "Couldn’t verify the publishing account. Reload and try again, or check gh auth status on the computer running OpenClaw. Accounts in Settings are optional; My GitHub is separate.";
 function availability(
   reason: GitHubPublicationOptions["sharedUnavailableReason"],
   message: string | undefined,
@@ -127,7 +127,7 @@ function availability(
 it.each([
   availability(
     "unavailable",
-    "No GitHub account is available on this computer. Sign in with gh auth login on this computer, or add an account in Settings → Profile → GitHub accounts. My GitHub is separate and optional.",
+    "No GitHub account is available on the computer running OpenClaw. Sign in with gh auth login on the computer running OpenClaw, or add an account in Settings → Profile → GitHub accounts. My GitHub is separate and optional.",
   ),
   availability(
     "rate_limited",
@@ -135,7 +135,7 @@ it.each([
   ),
   availability(
     "unverified",
-    "Couldn’t verify the GitHub account. Try publishing again or check gh auth status on this computer.",
+    "Couldn’t verify the GitHub account. Try publishing again or check gh auth status on the computer running OpenClaw.",
   ),
   availability(
     "unsupported_workspace",
@@ -295,21 +295,23 @@ it("warns about the workspace only for a selected or sole personal account", () 
     paint({ options, onSelect, personalReady: false, ...overrides });
   paintPublication({});
   expect(publish()?.disabled).toBe(false);
-  expect(container.textContent).not.toContain("reclaim the workspace");
+  expect(container.textContent).not.toContain("bring it back to the computer running OpenClaw");
   paintPublication({
     selection: { source: "personal", generation: personal.generation, account: personal.account },
   });
   expect(publish()?.disabled).toBe(true);
-  expect(container.textContent).toContain("reclaim the workspace");
-  expect(query('[role="menu"]')?.textContent).not.toContain("reclaim the workspace");
+  expect(container.textContent).toContain("bring it back to the computer running OpenClaw");
+  expect(query('[role="menu"]')?.textContent).not.toContain(
+    "bring it back to the computer running OpenClaw",
+  );
   expect(query(".chat-pr__publication-outcome")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-    "Wait for work to finish and bring it back to this computer to publish with My GitHub.",
+    "Wait for work to finish and bring it back to the computer running OpenClaw to publish with My GitHub.",
   );
   paintPublication({ options: { ...options, shared: null }, selection: null });
   expect(publish()?.disabled).toBe(true);
   expect(publish()?.textContent?.trim()).toBe("Publish as @alice-tools");
   expect(query('[aria-label="Publication account"]')).toBeNull();
-  expect(container.textContent).toContain("reclaim the workspace");
+  expect(container.textContent).toContain("bring it back to the computer running OpenClaw");
   expect(onSelect).not.toHaveBeenCalled();
 });
 

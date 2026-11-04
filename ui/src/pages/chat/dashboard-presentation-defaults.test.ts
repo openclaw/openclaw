@@ -625,7 +625,8 @@ describe("dashboard shared default in the native Dashboard menu", () => {
     await operation;
     expect(h.state.chatError).toContain("Dashboard default denied");
     expect(showToast).toHaveBeenCalledWith({
-      message: t("chat.sidePanel.defaultSaveError", { error: "Dashboard default denied" }),
+      message: t("chat.sidePanel.defaultSaveError"),
+      detail: new Error("Dashboard default denied"),
       anchor: h.pane.element,
     });
     const retry = (await h.header()).querySelector<HTMLButtonElement>(defaultAction);

@@ -75,7 +75,9 @@ describe("GitHub identity view", () => {
     const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
     const summary = view.getByText("Couldn’t sign in to GitHub. Try again.");
     expect(summary.textContent).not.toContain("Synthetic provider detail");
-    expect(view.getByText("Synthetic provider detail")).toBeTruthy();
+    const details = view.container.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(details?.textContent).toContain("Synthetic provider detail");
   });
 
   it("shows device request and cancellation progress before the server settles", async () => {
@@ -390,14 +392,14 @@ describe("GitHub identity view", () => {
     const button = view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
     button.click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(statusText()).toEqual(["Copied!"]);
+    expect(statusText()).toEqual(["Copied"]);
 
     await vi.advanceTimersByTimeAsync(1500);
     writeText.mockRejectedValueOnce(new Error("Synthetic clipboard rejection"));
     fallback.mockReturnValueOnce(false);
     button.click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(statusText()).toEqual(["Copy failed"]);
+    expect(statusText()).toEqual(["Couldn’t copy. Try again."]);
   });
 
   it("keeps the focused PAT field across draft and mutation updates", async () => {

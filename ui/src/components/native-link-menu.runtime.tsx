@@ -145,7 +145,10 @@ export function mountNativeLinkMenu(options: {
   menu.onAction = (action) => {
     if (action === "copy") {
       void copyToClipboard(options.url.href).then((copied) => {
-        showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+        showToast({
+          severity: copied ? undefined : "error",
+          message: t(copied ? "common.copied" : "common.copyFailed"),
+        });
       });
     } else if (action === "inline") {
       options.openInline();
