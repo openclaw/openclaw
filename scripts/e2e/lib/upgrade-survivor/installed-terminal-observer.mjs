@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL, URLSearchParams } from "node:url";
 import { types } from "node:util";
 import workerThreads from "node:worker_threads";
 import { gzipSync } from "node:zlib";
@@ -56,9 +56,78 @@ const publishedProgressSha256 = "3f74e8b47c704a23722b1d6d444bfc189b15b36c88314a7
 const reviewedRevision = "23ce62a0035a78be5050c5d9305ddb47168e6675";
 const publishedRevision = "8b18b5578f66eab1501cba4cef2310d88bfb9a41";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const workerUrlDescriptors = Object.getOwnPropertyDescriptors(URL.prototype);
+const workerSearchParamsDescriptors = Object.getOwnPropertyDescriptors(URLSearchParams.prototype);
+const nativeArraySpecies = Object.getOwnPropertyDescriptor(Array, Symbol.species)?.get;
 
-// Native spawn already consumed these inputs. Metadata must not evaluate a
-// second getter or Proxy trap; unsupported shapes remain ordinary unqualified launches.
+function nativePrototypeMatches(prototype, expected) {
+  const actual = Object.getOwnPropertyDescriptors(prototype);
+  return (
+    Object.getPrototypeOf(prototype) === Object.prototype &&
+    Reflect.ownKeys(actual).length === Reflect.ownKeys(expected).length &&
+    Reflect.ownKeys(expected).every((key) =>
+      ["get", "set", "value", "writable", "enumerable", "configurable"].every(
+        (field) => actual[key]?.[field] === expected[key][field],
+      ),
+    )
+  );
+}
+
+function inertNativeSlots(value) {
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  return Reflect.ownKeys(descriptors).every(
+    (key) =>
+      typeof key === "symbol" &&
+      ![Symbol.toPrimitive, Symbol.toStringTag, Symbol.for("nodejs.util.inspect.custom")].includes(
+        key,
+      ) &&
+      "value" in descriptors[key] &&
+      typeof descriptors[key].value === "number",
+  );
+}
+
+function workerEntrySnapshot(entry) {
+  // Native URL detection reads inherited properties before consuming execArgv.
+  // Only inert built-in URL inputs can bind a pre-construction launch snapshot.
+  const hooks = ["href", "protocol", "auth", "path", Symbol.toPrimitive];
+  if (
+    hooks.some(
+      (key) => Object.hasOwn(Object.prototype, key) || Object.hasOwn(String.prototype, key),
+    )
+  ) {
+    return undefined;
+  }
+  if (typeof entry === "string") {
+    return entry;
+  }
+  if (
+    !entry ||
+    types.isProxy(entry) ||
+    Object.getPrototypeOf(entry) !== URL.prototype ||
+    !nativePrototypeMatches(URL.prototype, workerUrlDescriptors) ||
+    !inertNativeSlots(entry)
+  ) {
+    return undefined;
+  }
+  try {
+    // URL serialization can consult the exposed searchParams object when dirty.
+    // Inspect its descriptors before allowing native serialization to touch it.
+    const params = Reflect.apply(workerUrlDescriptors.searchParams.get, entry, []);
+    if (
+      Object.getPrototypeOf(params) !== URLSearchParams.prototype ||
+      !inertNativeSlots(params) ||
+      !nativePrototypeMatches(URLSearchParams.prototype, workerSearchParamsDescriptors)
+    ) {
+      return undefined;
+    }
+    return Reflect.apply(workerUrlDescriptors.toString.value, entry, []);
+  } catch {
+    return undefined;
+  }
+}
+
+// Snapshot metadata without invoking getters or Proxy traps. Unsupported shapes
+// remain ordinary unqualified launches with their original native arguments.
 // Child-process normalization spreads options, ignoring non-enumerable fields;
 // Worker options retain their separate own-data contract.
 function plainData(value, enumerableOnly = false) {
@@ -104,12 +173,143 @@ function plainArguments(value) {
     : null;
 }
 
-function closedLaunchEnvironment(options, role) {
-  const data = plainData(options, true);
+function workerOptionsData(options) {
+  const data = plainData(options);
+  if (!data) {
+    return undefined;
+  }
+  // Worker reads these properties directly, including non-enumerable inherited
+  // values. Refuse hooks that could change argv before native initialization.
+  const prototype = Object.getPrototypeOf(options);
+  const nativeKeys = [
+    "execArgv",
+    "argv",
+    "eval",
+    "env",
+    "name",
+    "resourceLimits",
+    "trackUnmanagedFds",
+    "stdin",
+    "stdout",
+    "stderr",
+    "transferList",
+    "workerData",
+  ];
+  if (prototype && nativeKeys.some((key) => Object.hasOwn(prototype, key))) {
+    return undefined;
+  }
+  return data;
+}
+
+function isolatedWorkerLaunch(data) {
+  if (!data) {
+    return undefined;
+  }
+  const env = plainData(data.env);
+  const execArgv = plainArguments(data.execArgv);
+  const keys = Object.keys(data).toSorted();
+  if (
+    !env ||
+    Object.keys(env).length !== 0 ||
+    !execArgv ||
+    execArgv.length !== 0 ||
+    (data.eval !== undefined && typeof data.eval !== "boolean") ||
+    [data.stdout, data.stderr].some((value) => value !== undefined && typeof value !== "boolean") ||
+    keys.some(
+      (key) =>
+        !["eval", "env", "execArgv", "workerData", "transferList", "stdout", "stderr"].includes(
+          key,
+        ),
+    )
+  ) {
+    return undefined;
+  }
+  return { environment: "empty", execArgv, eval: data.eval === true, keys };
+}
+
+function publishedWorkerOptions(data) {
+  if (!data) {
+    return undefined;
+  }
+  const env = plainData(data.env);
+  const execArgv = plainArguments(data.execArgv);
+  const workerData = data.workerData === undefined ? undefined : plainData(data.workerData);
+  return env && execArgv && (data.workerData === undefined || workerData)
+    ? { ...data, env, execArgv, workerData }
+    : undefined;
+}
+
+function isolatedWorkerRole(launch, role) {
+  const allowed =
+    role === "heartbeat"
+      ? ["eval", "env", "execArgv", "workerData", "transferList", "stdout", "stderr"]
+      : ["eval", "env", "execArgv", "workerData"];
+  return (
+    launch?.environment === "empty" &&
+    Array.isArray(launch.execArgv) &&
+    launch.execArgv.length === 0 &&
+    launch.eval === (role === "published-inline") &&
+    Array.isArray(launch.keys) &&
+    launch.keys.includes("env") &&
+    launch.keys.includes("execArgv") &&
+    launch.keys.every((key) => allowed.includes(key))
+  );
+}
+
+function childLaunchSnapshot(argv, options) {
+  try {
+    const values = argv === undefined ? [] : plainArguments(argv);
+    const safeArguments =
+      values &&
+      (argv === undefined ||
+        (Object.getPrototypeOf(argv) === Array.prototype &&
+          !Object.hasOwn(argv, "constructor") &&
+          Object.getOwnPropertyDescriptor(Array.prototype, "constructor")?.value === Array &&
+          Object.getOwnPropertyDescriptor(Array, Symbol.species)?.get === nativeArraySpecies));
+    const data = plainData(options, true);
+    const env = data && plainData(data.env);
+    // Node slices argv, spreads options, then coerces cwd before reading env.
+    // Copy inert launch facts now; getters must never become safe after consumption.
+    const scalarKeys = [
+      "cwd",
+      "argv0",
+      "detached",
+      "uid",
+      "gid",
+      "shell",
+      "windowsHide",
+      "windowsVerbatimArguments",
+      "timeout",
+      "killSignal",
+      "maxBuffer",
+      "encoding",
+      "serialization",
+    ];
+    const safeOptions =
+      safeArguments &&
+      data &&
+      env &&
+      Object.values(env).every((value) => value === undefined || typeof value === "string") &&
+      scalarKeys.every(
+        (key) => data[key] == null || ["string", "number", "boolean"].includes(typeof data[key]),
+      ) &&
+      (data.stdio == null || typeof data.stdio === "string" || plainArguments(data.stdio)) &&
+      data.signal == null &&
+      (data.input == null || typeof data.input === "string");
+    return {
+      argv: safeArguments ? values : null,
+      options: safeOptions ? { ...data, env } : undefined,
+    };
+  } catch {
+    return { argv: null, options: undefined };
+  }
+}
+
+function closedLaunchEnvironment(data, role) {
   if (!data || (data.shell !== undefined && data.shell !== false)) {
     return false;
   }
-  const env = data && plainData(data.env);
+  const env = data.env;
   if (
     !env ||
     Object.values(env).some((value) => typeof value !== "string" && value !== undefined)
@@ -694,21 +894,38 @@ function install(spec) {
   };
   workerThreads.Worker = new Proxy(original.Worker, {
     construct(target, args, newTarget) {
+      // Native construction can invoke workerData clone getters after consuming
+      // loader flags. Capture inert descriptors first; forward original inputs.
+      const entry = workerEntrySnapshot(args[0]);
+      const options = workerOptionsData(args[1]);
+      const launch = entry === undefined ? undefined : isolatedWorkerLaunch(options);
+      const publishedOptions = entry === undefined ? undefined : publishedWorkerOptions(options);
       const child = Reflect.construct(target, args, newTarget);
       observe("thread", () => {
         const childThread = child.threadId;
-        const entry = String(args[0]);
         let packageHasher;
-        if (spec.hashWorker && locationOf(args[0]) === spec.hashWorker.path) {
+        if (
+          isolatedWorkerRole(launch, "installed-file") &&
+          spec.hashWorker &&
+          locationOf(entry) === spec.hashWorker.path
+        ) {
           const workerBytes = fs.readFileSync(spec.hashWorker.path);
           assert(workerBytes.length <= 64 * 1024);
-          packageHasher = { kind: "installed-file", sha256: digest(workerBytes) };
-        } else if (spec.historical && digest(entry) === historicalHasherSha256) {
-          packageHasher = { kind: "published-inline", sha256: historicalHasherSha256 };
+          packageHasher = { kind: "installed-file", sha256: digest(workerBytes), launch };
+        } else if (
+          isolatedWorkerRole(launch, "published-inline") &&
+          spec.historical &&
+          digest(entry) === historicalHasherSha256
+        ) {
+          packageHasher = { kind: "published-inline", sha256: historicalHasherSha256, launch };
         }
         let packageHeartbeat;
-        if (spec.heartbeatWorkers && locationOf(args[0]).endsWith(`/${heartbeatRelativePath}`)) {
-          const file = locationOf(args[0]);
+        if (
+          isolatedWorkerRole(launch, "heartbeat") &&
+          spec.heartbeatWorkers &&
+          locationOf(entry).endsWith(`/${heartbeatRelativePath}`)
+        ) {
+          const file = locationOf(entry);
           const stat = fs.lstatSync(file);
           assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 4 * 1024 * 1024);
           assert.equal(fs.realpathSync(file), file);
@@ -721,14 +938,14 @@ function install(spec) {
           const facts = heartbeatFacts(root);
           const receipt = readHeartbeatReceipt(root, facts);
           assert.equal(sha256, receipt.sha256);
-          packageHeartbeat = { root, ...receipt };
+          packageHeartbeat = { root, ...receipt, launch };
         }
         report("thread", {
           childThread,
-          entry,
+          entry: entry ?? "unknown",
           packageHasher,
           packageHeartbeat,
-          packageEntry: publishedWorker(entry, args[1]),
+          packageEntry: entry === undefined ? undefined : publishedWorker(entry, publishedOptions),
         });
         child.once("exit", (code) => report("thread-exit", { childThread, code }));
       });
@@ -736,9 +953,8 @@ function install(spec) {
     },
   });
   let spawnId = 0;
-  const nativeOperation = (command, argv, options) => {
-    const data = plainData(options, true);
-    const env = data && plainData(data.env);
+  const nativeOperation = (command, argv, data) => {
+    const env = data?.env;
     // Node's sole --version operation returns in native initialization, before
     // JS or preloads. An explicit empty environment excludes native loaders too.
     return !process.versions.bun &&
@@ -753,6 +969,7 @@ function install(spec) {
       : undefined;
   };
   childProcess.spawnSync = function (...args) {
+    const launch = childLaunchSnapshot(args[1], args[2]);
     const startedAt = String(process.hrtime.bigint());
     let result;
     try {
@@ -769,7 +986,7 @@ function install(spec) {
       const child = result.pid || null;
       const command = args[0];
       assert.equal(typeof command, "string");
-      const argv = args[1] === undefined ? [] : plainArguments(args[1]);
+      const { argv } = launch;
       // The PID becomes available only on return. This timestamp records the
       // invocation bound, not an invented native start/async exit event.
       report("spawn", {
@@ -780,7 +997,7 @@ function install(spec) {
         command,
         argv,
         nodeChild: command === process.execPath || path.basename(command) === "node",
-        nativeOperation: nativeOperation(command, argv, args[2]),
+        nativeOperation: nativeOperation(command, argv, launch.options),
       });
       report("spawn-sync-return", {
         spawnId: id,
@@ -830,7 +1047,7 @@ function install(spec) {
       values[1] === "--eval" &&
       digest(values[2]) === publishedProgressSha256
     ) {
-      const data = plainData(options, true);
+      const data = options;
       const environment =
         data &&
         (data.shell === undefined || data.shell === false) &&
@@ -908,6 +1125,7 @@ function install(spec) {
     };
   };
   childProcess.spawn = function (...args) {
+    const launch = childLaunchSnapshot(args[1], args[2]);
     const child = Reflect.apply(original.spawn, this, args);
     observe("spawn", () => {
       const id = spawnId++;
@@ -918,9 +1136,10 @@ function install(spec) {
       child.once("spawn", () => {
         spawned = true;
       });
-      const argv = plainArguments(args[1]);
+      const { argv } = launch;
       const nodeChild = args[0] === process.execPath || path.basename(args[0]) === "node";
-      const packageEntry = args[0] === process.execPath ? closedEntry(argv, args[2]) : undefined;
+      const packageEntry =
+        args[0] === process.execPath ? closedEntry(argv, launch.options) : undefined;
       report("spawn", {
         spawnId: id,
         child: pid,
@@ -928,7 +1147,7 @@ function install(spec) {
         command: args[0],
         argv,
         packageEntry,
-        nativeOperation: nativeOperation(args[0], argv, args[2]),
+        nativeOperation: nativeOperation(args[0], argv, launch.options),
       });
       // Native exit owns process lifetime. Parent-side IPC disconnect can omit
       // aggregate close; selected finalizer output still requires close and EOF.
@@ -1618,17 +1837,20 @@ function readObservation(directory, spec = {}) {
       continue;
     }
     const admittedFile =
+      isolatedWorkerRole(row.packageHasher?.launch, "installed-file") &&
       row.packageHasher?.kind === "installed-file" &&
       spec.hashWorker &&
       locationFromEntry(row.entry) === spec.hashWorker.path &&
       row.packageHasher.sha256 === spec.hashWorker.sha256;
     const admittedInline =
+      isolatedWorkerRole(row.packageHasher?.launch, "published-inline") &&
       spec.historical === true &&
       row.packageHasher?.kind === "published-inline" &&
       row.packageHasher.sha256 === historicalHasherSha256 &&
       digest(row.entry) === historicalHasherSha256;
     const heartbeat = spec.heartbeatWorkers?.find(
       (contract) =>
+        isolatedWorkerRole(row.packageHeartbeat?.launch, "heartbeat") &&
         contract.relativePath === heartbeatRelativePath &&
         row.packageHeartbeat &&
         /^[a-f0-9]{64}$/u.test(row.packageHeartbeat.dependencySha256) &&

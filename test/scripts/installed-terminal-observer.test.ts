@@ -228,12 +228,17 @@ it.skipIf(process.platform !== "linux").each(["spawnSync", "spawn"])(
       "options-proxy",
       "env-accessor",
       "env-proxy",
+      "env-rewrite",
+      "argv-rewrite",
+      "cwd-mutation",
+      "argv-constructor",
     ];
     fs.writeFileSync(
       script,
       `
       import childProcess from 'node:child_process';
       import path from 'node:path';
+      import {pathToFileURL} from 'node:url';
       const results=[];
       for (const mode of ${JSON.stringify(modes)}) {
         let reads=0, command=process.execPath, argv=['--version'], options={env:{},encoding:'utf8'};
@@ -251,6 +256,10 @@ it.skipIf(process.platform !== "linux").each(["spawnSync", "spawn"])(
         if(mode==='options-proxy') options=track(options);
         if(mode==='env-accessor') Object.defineProperty(options.env,'UNUSED',{enumerable:true,get(){reads++;return '';}});
         if(mode==='env-proxy') options.env=track(options.env);
+        if(mode==='env-rewrite') Object.defineProperty(options,'env',{enumerable:true,configurable:true,get(){reads++;Object.defineProperty(options,'env',{value:{},enumerable:true,configurable:true});return {LD_LIBRARY_PATH:${JSON.stringify(f.root)}};}});
+        if(mode==='argv-rewrite') Object.defineProperty(argv,0,{configurable:true,get(){reads++;Object.defineProperty(argv,0,{value:'--version',configurable:true});return '--help';}});
+        if(mode==='cwd-mutation') {options.cwd=pathToFileURL(${JSON.stringify(f.root)});Object.defineProperty(options.cwd,'protocol',{get(){reads++;options.env.LD_LIBRARY_PATH=${JSON.stringify(f.root)};return 'file:';}});}
+        if(mode==='argv-constructor') Object.defineProperty(argv,'constructor',{get(){reads++;options.env.LD_LIBRARY_PATH=${JSON.stringify(f.root)};return Array;}});
         let code,stdout;
         if(${JSON.stringify(api)}==='spawnSync') {
           const result=childProcess.spawnSync(command,argv,options);code=result.status;stdout=result.stdout;
@@ -1235,6 +1244,12 @@ function publishedHelperFixture() {
   const base = path.join(f.root, "compile-cache");
   const target = path.join(base, "openclaw/2026.10.9/build-fixture");
   fs.mkdirSync(target, { recursive: true });
+  const preloadMarker = path.join(f.root, "published-preload-ran");
+  const preload = path.join(f.root, "published-preload.cjs");
+  fs.writeFileSync(
+    preload,
+    `require('node:fs').appendFileSync(${JSON.stringify(preloadMarker)}, 'ran');`,
+  );
   const parent = path.join(root, "dist/parent.mjs");
   fs.writeFileSync(
     parent,
@@ -1261,13 +1276,29 @@ function publishedHelperFixture() {
       if (mode === 'data-proxy' && options.workerData) input.workerData = new Proxy(workerData, {});
       if (mode === 'worker-loader') input.env = {NODE_OPTIONS:'--no-warnings'};
       if (mode === 'worker-argument') input.execArgv = ['--no-warnings'];
+      // Node24 consumes the third env/execArgv read; rewrite only after selecting that value.
+      if (mode === 'argv-rewrite' || mode === 'env-rewrite') {
+        let launchReads = 0;
+        const key = mode === 'argv-rewrite' ? 'execArgv' : 'env';
+        const safe = key === 'execArgv' ? [] : env;
+        Object.defineProperty(input, key, {configurable:true, get(){
+          reads++; launchReads++;
+          if (launchReads < 3) return safe;
+          Object.defineProperty(input,key,{value:safe,configurable:true,enumerable:true});
+          return key === 'execArgv' ? ['--require',${JSON.stringify(preload)}] : {...env,NODE_OPTIONS:${JSON.stringify(`--require=${preload}`)}};
+        }});
+      }
       const worker = new Worker(entry, input);
       assert.equal((await once(worker, 'exit'))[0], 0);
     }
     const childEnv = mode === 'node-loader' ? {NODE_OPTIONS:'--no-warnings'} : mode === 'native-loader' ? {LD_LIBRARY_PATH:${JSON.stringify(f.root)}} : mode === 'wrong-spec-loader' ? {NODE_OPTIONS:${JSON.stringify(`--import=${observer}`)},OPENCLAW_INSTALLED_TERMINAL_OBSERVER:${JSON.stringify(path.join(f.root, "wrong-spec.json"))}} : {};
     const childOptions = {env:childEnv,stdio:['pipe','ignore','inherit']};
+    const childArgv = ['--input-type=commonjs','--eval',${JSON.stringify(helpers.copyProgress)}];
     if(mode==='progress-non-enumerable-env') Object.defineProperty(childOptions,'env',{value:childEnv,enumerable:false});
-    const child = spawn(process.execPath, ['--input-type=commonjs','--eval',${JSON.stringify(helpers.copyProgress)}], childOptions);
+    if(mode==='progress-env-rewrite') Object.defineProperty(childOptions,'env',{enumerable:true,configurable:true,get(){reads++;Object.defineProperty(childOptions,'env',{value:childEnv,enumerable:true,configurable:true});return {NODE_OPTIONS:${JSON.stringify(`--require=${preload}`)}};}});
+    if(mode==='progress-argv-rewrite') Object.defineProperty(childArgv,2,{configurable:true,get(){reads++;Object.defineProperty(childArgv,2,{value:${JSON.stringify(helpers.copyProgress)},configurable:true});return 'require('+${JSON.stringify(JSON.stringify(preload))}+');'+${JSON.stringify(helpers.copyProgress)};}});
+    if(mode==='progress-cwd-mutation') {childOptions.cwd=new URL(${JSON.stringify(pathToFileURL(f.root).href)});Object.defineProperty(childOptions.cwd,'protocol',{get(){reads++;childEnv.NODE_OPTIONS=${JSON.stringify(`--require=${preload}`)};return 'file:';}});}
+    const child = spawn(process.execPath, childArgv, childOptions);
     if (mode === 'killed') { await once(child,'spawn'); child.kill('SIGKILL'); }
     else child.stdin.end(JSON.stringify({directory:${JSON.stringify(target)}}));
     const [code,signal] = await once(child,'close');
@@ -1304,7 +1335,7 @@ function publishedHelperFixture() {
       fs.unlinkSync(path.join(spec.directory, file));
     }
   };
-  return { ...f, spec, parent, base, target, clear };
+  return { ...f, spec, parent, base, target, clear, preloadMarker };
 }
 
 it.skipIf(process.platform !== "linux").each(["normal", "killed"])(
@@ -1453,16 +1484,33 @@ it.skipIf(process.platform !== "linux")(
       "data-proxy",
       "worker-loader",
       "worker-argument",
+      "argv-rewrite",
+      "env-rewrite",
       "node-loader",
       "native-loader",
       "wrong-spec-loader",
       "progress-non-enumerable-env",
+      "progress-env-rewrite",
+      "progress-argv-rewrite",
+      "progress-cwd-mutation",
     ]) {
       f.clear();
+      fs.rmSync(f.preloadMarker, { force: true });
       const plain = runProcess(node, [f.parent, mode], process.env, 10_000);
+      if (mode.endsWith("rewrite") || mode === "progress-cwd-mutation") {
+        expect(fs.readFileSync(f.preloadMarker, "utf8"), mode).toBe(
+          mode.startsWith("progress-") ? "ran" : "ranran",
+        );
+      }
+      fs.rmSync(f.preloadMarker, { force: true });
       const observed = runProcess(node, [f.parent, mode], f.env, 10_000);
       expect(observed.status).toBe(plain.status);
       expect(observed.stdout).toBe(plain.stdout);
+      if (mode.endsWith("rewrite") || mode === "progress-cwd-mutation") {
+        expect(fs.readFileSync(f.preloadMarker, "utf8"), mode).toBe(
+          mode.startsWith("progress-") ? "ran" : "ranran",
+        );
+      }
       if (mode === "data-proxy") {
         // Node itself refuses cloning a Proxy. Observation must preserve that throw.
         expect(observed.status).not.toBe(0);
@@ -1471,8 +1519,7 @@ it.skipIf(process.platform !== "linux")(
       expect(observed.status, observed.stderr).toBe(0);
       const launches = f.records().filter((row) => row.event === "thread" || row.event === "spawn");
       const target =
-        (mode.endsWith("loader") && mode !== "worker-loader") ||
-        mode === "progress-non-enumerable-env"
+        (mode.endsWith("loader") && mode !== "worker-loader") || mode.startsWith("progress-")
           ? launches.at(-1)
           : mode === "data-accessor"
             ? launches[1]
@@ -1706,6 +1753,12 @@ it.each([false, true])(
     fs.mkdirSync(path.dirname(snapshotEntry), { recursive: true });
     fs.copyFileSync(path.join(packageRoot, sqliteRelative), snapshotEntry);
     const snapshotLaunch = [snapshotEntry, "--openclaw-sqlite-readonly-child", "session"];
+    const preloadMarker = path.join(f.root, "closed-entry-preload-ran");
+    const preload = path.join(f.root, "closed-entry-preload.cjs");
+    fs.writeFileSync(
+      preload,
+      `require('node:fs').appendFileSync(${JSON.stringify(preloadMarker)}, 'ran');`,
+    );
     const script = path.join(packageRoot, "dist/closed-parent.cjs");
     fs.writeFileSync(
       script,
@@ -1717,7 +1770,7 @@ it.each([false, true])(
       const outcomes = [];
       const unsafe = process.argv[2] === 'unsafe';
       const snapshot = process.argv[2]?.startsWith('snapshot');
-      const inputs = snapshot ? [${JSON.stringify(snapshotLaunch)}] : unsafe ? Array(8).fill(${JSON.stringify(launches[0])}) : ${JSON.stringify(launches)};
+      const inputs = snapshot ? [${JSON.stringify(snapshotLaunch)}] : unsafe ? Array(11).fill(${JSON.stringify(launches[0])}) : ${JSON.stringify(launches)};
       for (const [index, input] of inputs.entries()) {
         let argv = input;
         const env = process.argv[2] === 'snapshot-observed' ? process.env : argv[1] === '--openclaw-sqlite-readonly-child' ? {} : {OPENCLAW_CLI:'1'};
@@ -1730,6 +1783,9 @@ it.each([false, true])(
         if (unsafe && index === 5) options.shell = true;
         if (unsafe && index === 6) Object.defineProperty(Object.prototype, 'NODE_OPTIONS', {value:'--no-warnings', enumerable:true, configurable:true});
         if (unsafe && index === 7) Object.defineProperty(options, 'env', {value:env, enumerable:false});
+        if (unsafe && index === 8) Object.defineProperty(options, 'env', {enumerable:true,configurable:true,get(){getters++;Object.defineProperty(options,'env',{value:env,enumerable:true,configurable:true});return {...env,NODE_OPTIONS:${JSON.stringify(`--require=${preload}`)}};}});
+        if (unsafe && index === 9) {argv=[...input];Object.defineProperty(argv,0,{configurable:true,get(){getters++;Object.defineProperty(argv,0,{value:input[0],configurable:true});return ${JSON.stringify(preload)};}});}
+        if (unsafe && index === 10) {options.cwd=require('node:url').pathToFileURL(${JSON.stringify(f.root)});Object.defineProperty(options.cwd,'protocol',{get(){getters++;env.NODE_OPTIONS=${JSON.stringify(`--require=${preload}`)};return 'file:';}});}
         const child = spawn(process.execPath, argv, options);
         if (unsafe && index === 6) delete Object.prototype.NODE_OPTIONS;
         outcomes.push(await once(child, 'close'));
@@ -1872,9 +1928,12 @@ it.each([false, true])(
       fs.unlinkSync(path.join(f.spec.directory, file));
     }
     const unsafePlain = runProcess(node, [script, "unsafe"], process.env, 10_000);
+    expect(fs.readFileSync(preloadMarker, "utf8")).toBe("ranranran");
+    fs.rmSync(preloadMarker);
     const unsafeObserved = runProcess(node, [script, "unsafe"], f.env, 10_000);
     expect(unsafeObserved.status, unsafeObserved.stderr).toBe(0);
     expect(unsafeObserved.stdout).toBe(unsafePlain.stdout);
+    expect(fs.readFileSync(preloadMarker, "utf8")).toBe("ranranran");
     expect(
       f
         .records()
@@ -1888,6 +1947,9 @@ it.each([false, true])(
       undefined,
       expect.objectContaining({ environmentQualified: false }),
       expect.objectContaining({ environmentQualified: false }),
+      expect.objectContaining({ environmentQualified: false }),
+      expect.objectContaining({ environmentQualified: false }),
+      undefined,
       expect.objectContaining({ environmentQualified: false }),
     ]);
     expect(
@@ -1965,7 +2027,9 @@ it("admits package-bound heartbeat lifetimes only outside predecessor observatio
     script,
     `
     const {Worker} = require('node:worker_threads');
-    const worker = new Worker(require('node:path').join(__dirname, '..', ${JSON.stringify(relativePath)}), {env: {}, execArgv: []});
+    const worker = new Worker(require('node:path').join(__dirname, '..', ${JSON.stringify(relativePath)}), {
+      env: {}, execArgv: process.argv[2] ? [process.argv[2], process.argv[3]] : []
+    });
     worker.once('exit', code => { process.exitCode = code; });
   `,
   );
@@ -2028,13 +2092,41 @@ it("admits package-bound heartbeat lifetimes only outside predecessor observatio
     dependencyReferenceSha256: contract.dependencyReferenceSha256,
     metadata: readInstalledTerminalMetadata(packageRoot, identity),
   };
-  const packageHeartbeat = { root: packageRoot, ...qualification };
+  const packageHeartbeat = {
+    root: packageRoot,
+    ...qualification,
+    launch: { environment: "empty", execArgv: [], eval: false, keys: ["env", "execArgv"] },
+  };
   expect(created.packageHeartbeat).toEqual(packageHeartbeat);
   expect(observed.find((row) => row.event === "heartbeat-package")).toMatchObject(qualification);
   expect(observed.filter((row) => row.event === "startup")).toHaveLength(1);
   expect(() => readInstalledTerminalEvents(f.spec.directory, spec)).toThrow(
     "Missing worker-thread",
   );
+  const extraPreload = path.join(f.root, "heartbeat-preload.cjs");
+  const marker = path.join(f.root, "heartbeat-preload-ran");
+  fs.writeFileSync(
+    extraPreload,
+    `require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'ran');`,
+  );
+  for (const flag of ["--require", "--import"]) {
+    for (const file of fs.readdirSync(f.spec.directory)) {
+      fs.unlinkSync(path.join(f.spec.directory, file));
+    }
+    fs.rmSync(marker, { force: true });
+    const withLoader = runProcess(node, [f.spec.bin, flag, extraPreload], f.env, 10_000);
+    expect(withLoader.status, `${flag}: ${withLoader.stderr}`).toBe(0);
+    expect(fs.readFileSync(marker, "utf8"), flag).toBe("ran");
+    const unqualified = f.records().find((row) => row.event === "thread");
+    expect(unqualified?.packageHeartbeat, flag).toBeUndefined();
+    expect(
+      f.records().some((row) => row.event === "thread-exit"),
+      flag,
+    ).toBe(true);
+    expect(() => readInstalledTerminalEvents(f.spec.directory, spec), flag).toThrow(
+      "Missing worker-thread",
+    );
+  }
   for (const file of fs.readdirSync(f.spec.directory)) {
     fs.unlinkSync(path.join(f.spec.directory, file));
   }
@@ -2175,6 +2267,22 @@ it("admits package-bound heartbeat lifetimes only outside predecessor observatio
     },
   ]);
   for (const changed of [
+    parent.map((row) =>
+      row === thread
+        ? { ...thread, packageHeartbeat: { ...packageHeartbeat, launch: undefined } }
+        : row,
+    ),
+    parent.map((row) =>
+      row === thread
+        ? {
+            ...thread,
+            packageHeartbeat: {
+              ...packageHeartbeat,
+              launch: { ...packageHeartbeat.launch, execArgv: ["--require=extra.cjs"] },
+            },
+          }
+        : row,
+    ),
     parent.map((row) => (row === exit ? { ...exit, time: "11" } : row)),
     parent.map((row) =>
       row === thread ? { ...thread, time: "11" } : row === exit ? { ...exit, time: "12" } : row,
@@ -2563,6 +2671,184 @@ it("keeps a small failed receipt when the complete isolate census exceeds its bo
     errorTruncated: false,
   });
 });
+
+it.each(["installed", "published"] as const)(
+  "binds %s hasher launch options before native construction",
+  (kind) => {
+    const f = fixture();
+    const worker = path.join(f.root, "hasher.mjs");
+    const source =
+      kind === "installed"
+        ? `${stripTypeScriptTypes(fs.readFileSync("src/infra/package-update-integrity-hasher.worker.ts", "utf8"))}\nexport {};\n`
+        : (JSON.parse(
+            fs.readFileSync("test/fixtures/installed-terminal-historical-helpers.json", "utf8"),
+          ).packageHasher as string);
+    fs.writeFileSync(worker, source);
+    const spec = {
+      ...f.spec,
+      historical: kind === "published",
+      hashWorker: { path: worker, sha256: createHash("sha256").update(source).digest("hex") },
+    };
+    writeJson(path.join(f.root, "spec.json"), spec);
+    const script = path.join(f.root, "parent.cjs");
+    const preload = path.join(f.root, "extra.cjs");
+    const marker = path.join(f.root, "preload-ran");
+    fs.writeFileSync(
+      preload,
+      `require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'ran');`,
+    );
+    for (const variant of [
+      "plain",
+      "hidden",
+      "require",
+      "import",
+      "clone-mutation",
+      "getter",
+      "proxy",
+      "inherit-env",
+      "inherit-argv",
+      "inherited-argv",
+      "environment",
+      "unknown",
+      ...(kind === "installed"
+        ? ["plain-url", "url-mutation", "url-subclass", "url-clone-change", "search-params-hook"]
+        : []),
+    ]) {
+      fs.writeFileSync(
+        script,
+        `
+      const assert = require('node:assert/strict');
+      const {Worker} = require('node:worker_threads');
+      const {once} = require('node:events');
+      (async () => {
+        const variant = ${JSON.stringify(variant)};
+        const preload = ${JSON.stringify(preload)};
+        const cancel = new Int32Array(new SharedArrayBuffer(4));
+        let reads = 0, cloneReads = 0;
+        let input = {env:{}, execArgv:[], eval:${kind === "published"}, workerData:{cancel}};
+        if (variant === 'hidden') {
+          Object.defineProperty(input, 'env', {value:{}, enumerable:false});
+          Object.defineProperty(input, 'execArgv', {value:[], enumerable:false});
+        }
+        if (variant === 'require' || variant === 'import') input.execArgv = ['--'+variant, preload];
+        if (variant === 'environment') input.env = {NODE_OPTIONS:'--require='+preload};
+        if (variant === 'clone-mutation') {
+          input.execArgv = ['--require', preload];
+          input.workerData = {get cancel(){cloneReads++; input.execArgv=[]; return cancel;}};
+        }
+        if (variant === 'getter') Object.defineProperty(input, 'execArgv', {get(){reads++; return [];}});
+        if (variant === 'proxy') input = new Proxy(input, {get(target,key,receiver){reads++; return Reflect.get(target,key,receiver);}});
+        if (variant === 'inherit-env') delete input.env;
+        if (variant === 'inherit-argv') delete input.execArgv;
+        if (variant === 'unknown') input.name = 'unqualified';
+        if (variant === 'inherited-argv') Object.defineProperty(Object.prototype, 'argv', {
+          configurable:true, value:[{toString(){reads++; input.execArgv=['--require',preload]; return 'extra';}}]
+        });
+        let entry = ${kind === "installed" ? JSON.stringify(worker) : JSON.stringify(source)};
+        const sentinel = new Error('native search params hook');
+        if (['plain-url','url-mutation','url-subclass','url-clone-change','search-params-hook'].includes(variant)) {
+          const url = require('node:url').pathToFileURL(entry);
+          const protocol = () => {reads++; input.execArgv=['--require',preload]; return 'file:';};
+          entry = variant === 'url-subclass' ? new (class extends URL {get protocol(){return protocol();}})(url.href) : url;
+          if (variant === 'url-mutation') Object.defineProperty(entry, 'protocol', {get:protocol});
+          if (variant === 'search-params-hook') {
+            const params = entry.searchParams;
+            params.set('dirty', '1');
+            Object.defineProperty(params, 'size', {get(){reads++; throw sentinel;}});
+          }
+          if (variant === 'url-clone-change') input.workerData = {get cancel(){cloneReads++; entry.pathname='/unused-after-native-capture'; return cancel;}};
+          else if (variant !== 'plain-url') input.workerData = {get cancel(){cloneReads++; input.execArgv=[]; return cancel;}};
+        }
+        let child;
+        try { child = new Worker(entry, input); }
+        catch (error) {
+          if (variant !== 'search-params-hook') throw error;
+          assert.equal(error, sentinel);
+          console.log(JSON.stringify({reads,cloneReads,caught:true}));
+          return;
+        }
+        finally { if (variant === 'inherited-argv') delete Object.prototype.argv; }
+        child.once('online', () => child.postMessage('close'));
+        const [code] = await once(child, 'exit');
+        assert.equal(code, 0);
+        console.log(JSON.stringify({reads,cloneReads}));
+      })().catch(error => {console.error(error); process.exitCode=1;});
+    `,
+      );
+      fs.rmSync(marker, { force: true });
+      const plain = runProcess(
+        node,
+        [script],
+        { ...process.env, NODE_OPTIONS: "", OPENCLAW_INSTALLED_TERMINAL_OBSERVER: "" },
+        10_000,
+      );
+      expect(plain.status, `${kind}/${variant}: ${plain.stderr}`).toBe(0);
+      const plainMarker = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "";
+      fs.rmSync(marker, { force: true });
+      for (const file of fs.readdirSync(f.spec.directory)) {
+        fs.unlinkSync(path.join(f.spec.directory, file));
+      }
+      const observed = runProcess(node, [script], f.env, 10_000);
+      expect(observed.status, `${kind}/${variant}: ${observed.stderr}`).toBe(plain.status);
+      expect(observed.stdout, `${kind}/${variant}: getter parity`).toBe(plain.stdout);
+      expect(
+        fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "",
+        `${kind}/${variant}: preload parity`,
+      ).toBe(plainMarker);
+      if (
+        [
+          "require",
+          "clone-mutation",
+          "inherited-argv",
+          "environment",
+          "url-mutation",
+          "url-subclass",
+        ].includes(variant) ||
+        (kind === "installed" && variant === "import")
+      ) {
+        expect(plainMarker, `${kind}/${variant}: real preload ran`).toBe("ran");
+      }
+      if (variant === "clone-mutation") {
+        expect(JSON.parse(observed.stdout)).toMatchObject({ cloneReads: 1 });
+      }
+      const rows = f.records();
+      if (variant === "search-params-hook") {
+        expect(JSON.parse(observed.stdout)).toEqual({ reads: 1, cloneReads: 0, caught: true });
+        expect(rows.filter((row) => row.event === "thread")).toHaveLength(0);
+        continue;
+      }
+      const created = rows.find((row) => row.event === "thread");
+      assert(created);
+      const admitted = ["plain", "hidden", "plain-url", "url-clone-change"].includes(variant);
+      if (admitted) {
+        expect(created.packageHasher, `${kind}/${variant}`).toMatchObject({
+          kind: kind === "installed" ? "installed-file" : "published-inline",
+          launch: { environment: "empty", execArgv: [], eval: kind === "published" },
+        });
+      } else {
+        expect(created.packageHasher, `${kind}/${variant}`).toBeUndefined();
+      }
+      expect(
+        rows.filter((row) => row.event === "thread-exit"),
+        `${kind}/${variant}`,
+      ).toHaveLength(1);
+      if (
+        admitted ||
+        rows.some((row) => row.event === "startup" && row.thread === created.childThread)
+      ) {
+        expect(
+          () => readInstalledTerminalEvents(f.spec.directory, spec),
+          `${kind}/${variant}`,
+        ).not.toThrow();
+      } else {
+        expect(
+          () => readInstalledTerminalEvents(f.spec.directory, spec),
+          `${kind}/${variant}`,
+        ).toThrow("Missing worker-thread");
+      }
+    }
+  },
+);
 
 it("admits only the bound builtin hasher with a joined native thread", () => {
   const f = fixture();
