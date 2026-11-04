@@ -29,7 +29,9 @@ import controlUiViteConfig, {
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
+import { createI18nManagerForTesting } from "../i18n/lib/translate.test-support.ts";
 import type { TranslationMap } from "../i18n/lib/types.ts";
+import { registerActivityEnglish } from "../i18n/locales/en-activity.ts";
 import { en } from "../i18n/locales/en.ts";
 
 const childProcessMocks = vi.hoisted(() => {
@@ -697,7 +699,7 @@ it("defers page and config-hint translations until their namespace loads", async
   }
 });
 
-it("bootstraps only an absent locale memory from the English catalog", async () => {
+it("bootstraps source-only copy without duplicating English page namespaces", async () => {
   const { load } = await localeHooks();
   const baseId = baseLocaleId;
   const addWatchFile = vi.fn();
@@ -707,7 +709,14 @@ it("bootstraps only an absent locale memory from the English catalog", async () 
     expect(flattenTranslations(catalog).has("activity.title")).toBe(false);
     expect(catalog.configHints).toBeUndefined();
     await loadAll();
-    expect(flattenTranslations(catalog)).toEqual(flattenTranslations(loadControlUiSourceCatalog()));
+    expect(flattenTranslations(catalog)).toEqual(
+      flattenTranslations({ ...en, configHints: loadControlUiSourceCatalog().configHints }),
+    );
+    registerActivityEnglish();
+    const manager = createI18nManagerForTesting(async () => catalog);
+    await manager.setLocale("fr");
+    expect(manager.getLocale()).toBe("fr");
+    expect(manager.t("activity.title")).toBe("Activity");
     expect(watchedPaths(addWatchFile)).toContain(path.join(repoRoot, "src/config/schema.hints.ts"));
   });
 });

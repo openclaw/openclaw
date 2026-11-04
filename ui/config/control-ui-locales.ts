@@ -80,7 +80,9 @@ async function loadControlUiLocaleCatalogPartition(
   // Source PRs omit generated memory until the post-merge refresh runs.
   // Existing empty or malformed memory stays fatal below so drift cannot hide.
   if (!existsSync(memoryPath)) {
-    return partitionControlUiLocaleCatalog(sourceCatalog, startupKeys);
+    const partition = partitionControlUiLocaleCatalog(sourceCatalog, startupKeys);
+    partition.namespaces = {};
+    return partition;
   }
   const memory = loadControlUiTranslationMemory(memoryPath);
   if (memory.size === 0) {
