@@ -117,6 +117,7 @@ export function closeRelaySession(
     completion: completion.promise,
   };
   session.closing = closing;
+  session.closeOpeningGreeting?.();
   const close = async (admissionFailure?: { error: unknown }) => {
     try {
       if (admissionFailure) {
@@ -261,6 +262,7 @@ export function sendTalkRealtimeRelayAudio(params: {
   if (typeof params.timestamp === "number" && Number.isFinite(params.timestamp)) {
     session.bridge.setMediaTimestamp(params.timestamp);
   }
+  session.noteClientAudioAdmitted?.();
 }
 
 export function acknowledgeTalkRealtimeRelayMark(params: {

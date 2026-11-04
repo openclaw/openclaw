@@ -1126,12 +1126,12 @@ function listToolingFullSuiteTestTargets(cwd: string) {
       fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
     ),
   )
-    // Match Vitest's fixture/live exclusions before forming explicit leaf chunks.
+    // Match Vitest's tooling suffixes and fixture/live exclusions before forming leaf chunks.
     .filter(
       (file) =>
-        file.endsWith(".test.ts") &&
+        (file.endsWith(".test.ts") || (file.startsWith("test/") && file.endsWith(".test.mjs"))) &&
         !file.startsWith("test/fixtures/") &&
-        !file.endsWith(".live.test.ts") &&
+        !/\.live\.test\.(?:ts|mjs)$/u.test(file) &&
         classifyTarget(file, cwd) === "tooling",
     )
     .toSorted((left, right) => left.localeCompare(right));

@@ -20,6 +20,12 @@ export type GatewayRpcExtraOptions = {
   progress?: boolean;
   scopes?: Parameters<typeof callGateway>[0]["scopes"];
   sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
+  /** Reuse approved device auth; explicit credentials still take precedence. */
+  useStoredDeviceAuth?: boolean;
+  /** Require existing grants without requesting a scope upgrade. */
+  requiredStoredDeviceAuthScopes?: Parameters<
+    typeof callGateway
+  >[0]["requiredStoredDeviceAuthScopes"];
 };
 
 type GatewayCliTransportRpcOpts = Omit<GatewayRpcOpts, "timeout"> & {
@@ -62,10 +68,6 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
     defaultTimeoutMs?: number;
     timeoutMs?: number | null;
     label?: string;
-    useStoredDeviceAuth?: boolean;
-    requiredStoredDeviceAuthScopes?: Parameters<
-      typeof callGateway
-    >[0]["requiredStoredDeviceAuthScopes"];
     requireLocalBackendSharedAuth?: boolean;
   },
 ) {

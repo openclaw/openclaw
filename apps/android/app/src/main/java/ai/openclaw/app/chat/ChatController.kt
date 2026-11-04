@@ -6082,7 +6082,7 @@ class ChatController internal constructor(
               err.gatewayError.details?.reason == "gateway-restarting" && err.gatewayError.details.retryable
           ) -> {
           // The restart admission fence rejected before execution; preserve the same ID for reconnect.
-          persist(ChatOutboxStatus.Queued, if (direct != null) err.message else err.message ?: "send failed")
+          persist(ChatOutboxStatus.Queued, err.message)
           direct?.let { settleDirectSendRun(it, item.id) }
           if (direct == null || direct.gatewayScope == currentCacheScope()) _healthOk.value = false
           if (direct != null) publishOutbox()

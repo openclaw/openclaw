@@ -320,6 +320,8 @@ export type RelaySession = {
     runTranscript?: (run: () => boolean) => boolean;
   };
   failSession: (message: string) => void;
+  noteClientAudioAdmitted?: () => void;
+  closeOpeningGreeting?: () => void;
 };
 
 export type CreateTalkRealtimeRelaySessionParams = {
@@ -336,6 +338,13 @@ export type CreateTalkRealtimeRelaySessionParams = {
   voiceChangeId?: string;
   voiceSelectionVoices?: readonly string[];
   initialItems?: Array<{ role: "user" | "assistant"; text: string }>;
+  greeting?: string;
+  /** Client elapsed time plus the Gateway monotonic receipt time. */
+  recovery?: { interruptedForMs: number; receivedAt: number };
+  /** Retained request/session checks before initial or resumed speech. */
+  assertGreetingAllowed?: () => void;
+  /** Transfers a canonical session-authorization hold to the opening lifetime. */
+  releaseGreetingAuthority?: () => void;
   instructions: string;
   tools: RealtimeVoiceTool[];
   model?: string;

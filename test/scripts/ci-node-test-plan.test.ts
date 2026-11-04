@@ -266,7 +266,10 @@ function mockPlanShards(shards: () => typeof fullSuiteVitestShards) {
   }));
 }
 function mockTrackedFiles(list: (root: string) => string[]) {
-  mockOriginal("files", { listTrackedTestFiles: list });
+  mockOriginal("files", {
+    listTrackedTestFiles: (root: string, suffix = ".test.ts") =>
+      list(root).filter((file) => file.endsWith(suffix)),
+  });
 }
 function mockPlanTimings(read: () => Readonly<Record<string, number>>) {
   mockFixture("timings", () => ({
