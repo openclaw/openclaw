@@ -1,7 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { writeMantisArtifacts } from "./run.test-support.js";
 
 export const SLACK_ARTIFACT_TEST_CHANNEL = "C123456789";
+
+export async function copySlackSmokeArtifacts(
+  args: readonly string[],
+  artifacts: Record<string, string>,
+  qaArtifacts: Record<string, string> = {},
+) {
+  const outputDir = expectDefined(args.at(-1), "artifact copy destination");
+  await writeMantisArtifacts(outputDir, outputDir.endsWith("slack-qa/") ? qaArtifacts : artifacts);
+  return outputDir;
+}
 
 export async function writeApprovalCheckpointArtifacts(
   outputDir: string,
@@ -18,7 +30,7 @@ export async function writeApprovalCheckpointArtifacts(
           `${JSON.stringify({
             version: 1,
             scenarioId,
-            approvalKind: scenarioId === "slack-approval-exec-native" ? "exec" : "plugin",
+            approvalKind: scenarioId.endsWith("-approval-exec-native") ? "exec" : "plugin",
             state,
             approvalId: `${scenarioId}:approval`,
             channelId: SLACK_ARTIFACT_TEST_CHANNEL,

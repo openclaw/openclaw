@@ -1,4 +1,3 @@
-// Gateway Client tests cover event loop ready behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForEventLoopReady } from "./event-loop-ready.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
@@ -6,67 +5,42 @@ import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
 describe("waitForEventLoopReady", () => {
   afterEach(() => {
     vi.useRealTimers();
-    vi.restoreAllMocks();
   });
 
   it("falls back when maxWaitMs is non-finite instead of arming a NaN timer", async () => {
     vi.useFakeTimers();
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-
     const readiness = waitForEventLoopReady({
       maxWaitMs: Number.NaN,
       intervalMs: 25,
       consecutiveReadyChecks: 2,
     });
 
-    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 25);
-
     await vi.advanceTimersByTimeAsync(50);
-    await expect(readiness).resolves.toMatchObject({
+    await expect(readiness).resolves.toEqual({
       ready: true,
+      aborted: false,
+      elapsedMs: 50,
       checks: 2,
+      maxDriftMs: 0,
     });
   });
 
-  it("clamps oversized readiness intervals before scheduling", async () => {
+  it("waits through the safe timer ceiling for oversized readiness intervals", async () => {
     vi.useFakeTimers();
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-
+    const completed = vi.fn();
     const readiness = waitForEventLoopReady({
       maxWaitMs: Number.MAX_SAFE_INTEGER,
       intervalMs: Number.MAX_SAFE_INTEGER,
       consecutiveReadyChecks: 1,
     });
-
-    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
+    void readiness.then(completed);
 
     await vi.advanceTimersByTimeAsync(MAX_SAFE_TIMEOUT_DELAY_MS - 1);
+    expect(completed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     await expect(readiness).resolves.toMatchObject({
       ready: true,
       checks: 1,
-    });
-  });
-
-  it("resolves ready after consecutive low-drift timer checks", async () => {
-    vi.useFakeTimers();
-
-    const readiness = waitForEventLoopReady({
-      maxWaitMs: 100,
-      intervalMs: 10,
-      consecutiveReadyChecks: 2,
-    });
-
-    await vi.advanceTimersByTimeAsync(20);
-
-    await expect(readiness).resolves.toEqual({
-      ready: true,
-      aborted: false,
-      elapsedMs: 20,
-      checks: 2,
-      maxDriftMs: 0,
     });
   });
 

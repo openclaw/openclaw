@@ -1,4 +1,4 @@
-import { afterAll } from "vitest";
+import { afterAll, expect } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as execApprovalsStore from "../infra/exec-approvals-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -21,8 +21,14 @@ export async function withAgentPermissionState<T>(fn: () => Promise<T>): Promise
   // Permission rows share empty provenance; only their persisted approval policy varies.
   agentPermissionStateDir ??= agentPermissionDirs.make("openclaw-agent-permission-");
   return withEnvAsync({ OPENCLAW_STATE_DIR: agentPermissionStateDir }, async () => {
-    pristineAgentApprovals ??= execApprovalsStore.readExecApprovalsSnapshot();
-    execApprovalsStore.restoreExecApprovalsSnapshot(pristineAgentApprovals);
+    const current = execApprovalsStore.readExecApprovalsSnapshot();
+    pristineAgentApprovals ??= current;
+    expect(
+      await execApprovalsStore.restoreExecApprovalsSnapshotLocked(
+        pristineAgentApprovals,
+        current.hash,
+      ),
+    ).toBe(true);
     return fn();
   });
 }

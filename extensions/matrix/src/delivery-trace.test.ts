@@ -2,7 +2,7 @@
 //
 // Drives the real monitor handler (createMatrixRoomMessageHandler) end to end
 // through the shared handler test harness: IN steps map onto the captured
-// real reply dispatcher (enqueue, typing callbacks, onPartialReply,
+// reply-dispatcher wiring (deliver, typing callbacks, onPartialReply,
 // onBlockReplyQueued, onAssistantMessageStart), OUT events are the raw Matrix
 // client calls (sendMessage/getEvent/redactEvent/setTyping/sendReadReceipt)
 // observed at a recording client. The room is plain (E2EE out of scope), so
@@ -11,7 +11,6 @@
 // are mentions-inert until a final either edits in place or gets redacted and
 // re-sent as a fresh mention-bearing event.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
-import { MatrixEvent, type IEvent } from "matrix-js-sdk/lib/matrix.js";
 import {
   deliveryTraceScenarios,
   expectDeliveryTraceMatchesGolden,
@@ -20,161 +19,24 @@ import {
   type DeliveryTraceScenario,
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
-import {
-  implicitMentionKindWhen,
-  resolveInboundMentionDecision,
-} from "openclaw/plugin-sdk/channel-mention-gating";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  chunkMarkdownTextWithMode,
-  resolveChunkMode,
-  resolveTextChunkLimit,
-} from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { beforeEach, describe, it, vi } from "vitest";
+import { beforeAll, describe, it, vi } from "vitest";
+import {
+  createRecordingMatrixClient,
+  installMatrixDeliveryTraceRuntime,
+} from "./delivery-trace.test-support.js";
 import {
   createMatrixHandlerTestHarness,
-  installMatrixHandlerTestFixture,
-  matrixCaseConfig,
-  registerMatrixTestRelease,
-  waitForMatrixTestSignal,
-  type MatrixReplyScript,
   createMatrixTextMessageEvent,
 } from "./matrix/monitor/handler.test-helpers.js";
-import type { MatrixClient } from "./matrix/sdk.js";
-import { installMatrixTestRuntime } from "./test-runtime.js";
-
-const matrixFixture = installMatrixHandlerTestFixture();
 
 const ROOM_ID = "!room:example.org";
-const BOT_USER_ID = "@openclaw:example.org";
 const INBOUND_EVENT_ID = "$inbound-1";
 
-beforeEach(() => {
-  // send.ts/replies.ts read text helpers and the monitor's mention gating from
-  // the module runtime slot; bind the real chunking/table implementations so
-  // rendered wire content is part of the recorded lifecycle (mirrors the
-  // feishu adoption's runtime stub). Media helpers stay absent: these
-  // scenarios are text-only and a media lookup should fail loudly.
-  installMatrixTestRuntime({
-    cfg: matrixCaseConfig(),
-    stateDir: matrixFixture.state.stateDir,
-    logging: { shouldLogVerbose: () => false },
-    channel: {
-      inbound: createPluginRuntimeMock().channel.inbound,
-      text: {
-        resolveMarkdownTableMode,
-        convertMarkdownTables,
-        resolveTextChunkLimit,
-        resolveChunkMode,
-        chunkMarkdownTextWithMode,
-      },
-      mentions: {
-        buildMentionRegexes: () => [],
-        matchesMentionPatterns: (text: string, patterns: RegExp[]) =>
-          patterns.some((pattern) => pattern.test(text)),
-        matchesMentionWithExplicit: () => false,
-        implicitMentionKindWhen,
-        resolveInboundMentionDecision,
-      },
-    } as unknown as PluginRuntime["channel"],
-  });
-});
+beforeAll(installMatrixDeliveryTraceRuntime);
 
-function createRecordingMatrixClient(recorder: WireRecorder): Partial<MatrixClient> {
-  // Deterministic sequential event ids replace homeserver-minted opaque ids
-  // (the normalizer seam from the trace spec, applied at the mock boundary):
-  // every event on the wire consumes one id, so goldens show edits minting new
-  // ids while their m.relates_to target stays the original event.
-  const eventsById = new Map<string, IEvent>();
-  let eventCount = 0;
-  const mintEventId = () => {
-    eventCount += 1;
-    return `$e${eventCount}`;
-  };
-  const client: Partial<MatrixClient> = {
-    getUserId: async () => BOT_USER_ID,
-    prepareRoomForMessageSend: async () => "m.room.message",
-    sendMessage: async (roomId: string, content: Record<string, unknown>) => {
-      const eventId = mintEventId();
-      // Snapshot before recording: edit flows reuse content structures, and the
-      // recorder serializes at compare time.
-      const payload = structuredClone(content);
-      eventsById.set(eventId, {
-        event_id: eventId,
-        sender: BOT_USER_ID,
-        type: "m.room.message",
-        origin_server_ts: Date.now(),
-        content: payload,
-        unsigned: {},
-      });
-      recorder.recordWireCall({
-        method: "sendMessage",
-        target: roomId,
-        payload,
-        result: { event_id: eventId },
-      });
-      return eventId;
-    },
-    // Mention diffing and requested thread validation read the prior event;
-    // quiet previews without a thread skip this otherwise unused round trip.
-    getEvent: async (_roomId: string, eventId: string) => {
-      recorder.recordWireCall({
-        method: "getEvent",
-        target: eventId,
-        result: { found: eventsById.has(eventId) },
-      });
-      const event = eventsById.get(eventId);
-      if (!event) {
-        throw new Error(`Unknown recorded Matrix event: ${eventId}`);
-      }
-      return { ...structuredClone(event) };
-    },
-    getRelations: async (_roomId, eventId, relationType, eventType, opts) => {
-      const originalEvent = eventsById.get(eventId);
-      const events = [...eventsById.values()].filter((event) => {
-        const relation = new MatrixEvent(event).getRelation();
-        return (
-          relation?.event_id === eventId &&
-          relation.rel_type === relationType &&
-          (!eventType || event.type === eventType) &&
-          (relationType !== "m.replace" || event.sender === originalEvent?.sender)
-        );
-      });
-      recorder.recordWireCall({
-        method: "getRelations",
-        target: eventId,
-        payload: { relationType, eventType: eventType ?? null, limit: opts?.limit },
-        result: { count: events.length },
-      });
-      return { originalEvent: originalEvent ?? null, events, nextBatch: null, prevBatch: null };
-    },
-    redactEvent: async (_roomId: string, eventId: string) => {
-      // Redactions are events too: abandoning a draft consumes an event id.
-      const redactionEventId = mintEventId();
-      recorder.recordWireCall({
-        method: "redactEvent",
-        target: eventId,
-        result: { event_id: redactionEventId },
-      });
-      return redactionEventId;
-    },
-    setTyping: async (roomId: string, typing: boolean, timeoutMs: number) => {
-      recorder.recordWireCall({
-        method: "setTyping",
-        target: roomId,
-        payload: { typing, timeoutMs },
-      });
-    },
-    sendReadReceipt: async (_roomId: string, eventId: string) => {
-      recorder.recordWireCall({ method: "sendReadReceipt", target: eventId });
-    },
-  };
-  return client;
-}
+type MatrixTraceDeliver = (payload: ReplyPayload, info: { kind: string }) => Promise<void>;
 
 type MatrixTraceReplyOptions = {
   onPartialReply?: (payload: { text: string }) => void;
@@ -186,40 +48,47 @@ type MatrixTraceReplyOptions = {
 };
 
 async function setupMatrixTrace(recorder: WireRecorder) {
-  const client = createRecordingMatrixClient(recorder);
-
-  let capturedDispatcher: Parameters<MatrixReplyScript>[0]["dispatcher"] | undefined;
+  let capturedDeliver: MatrixTraceDeliver | undefined;
   let capturedOnReplyStart: (() => Promise<void> | void) | undefined;
+  let capturedOnIdle: (() => void) | undefined;
   let capturedReplyOptions: MatrixTraceReplyOptions | undefined;
-  let resolveCaptured: (() => void) | undefined;
-  const captured = new Promise<void>((resolve) => {
-    resolveCaptured = resolve;
-  });
+  const { promise: captured, resolve: resolveCaptured } = Promise.withResolvers<void>();
+  const notifyCaptured = () => {
+    if (capturedDeliver && capturedReplyOptions) {
+      resolveCaptured?.();
+    }
+  };
 
-  // The scripted steps stand in for the model run: dispatchReplyFromConfig
+  // The scripted steps stand in for the model run: dispatchInboundMessage
   // stays pending until the script's final/cancel step settles it, so the
   // handler's post-dispatch flow (including the finally-block draft abandon
   // path) runs exactly where the real run would settle.
-  let queuedFinal = false;
-  let releaseRun: (() => void) | undefined;
-  const runGate = new Promise<void>((resolve) => {
-    releaseRun = resolve;
-  });
+  type DispatchResult = { queuedFinal: boolean; counts: { final: number; block: number } };
+  const { promise: runGate, resolve: releaseRun } = Promise.withResolvers<DispatchResult>();
 
-  registerMatrixTestRelease(() => releaseRun?.());
   const { handler } = createMatrixHandlerTestHarness({
     streaming: "partial",
     blockStreamingEnabled: true,
-    client,
+    client: createRecordingMatrixClient(recorder),
     resolveMarkdownTableMode: () => resolveMarkdownTableMode({ cfg: {}, channel: "matrix" }),
-    dispatchReplyFromConfig: async ({ dispatcher, replyOptions }) => {
-      capturedDispatcher = dispatcher;
-      capturedOnReplyStart = replyOptions?.onReplyStart;
-      capturedReplyOptions = replyOptions;
-      resolveCaptured?.();
-      await runGate;
-      return { queuedFinal, counts: dispatcher.getQueuedCounts() };
+    createReplyDispatcherWithTyping: (options: Record<string, unknown> | undefined) => {
+      capturedDeliver = options?.deliver as MatrixTraceDeliver | undefined;
+      capturedOnReplyStart = options?.onReplyStart as typeof capturedOnReplyStart;
+      capturedOnIdle = options?.onIdle as typeof capturedOnIdle;
+      notifyCaptured();
+      return {
+        dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
+        replyOptions: {},
+        markDispatchIdle: () => {},
+        markRunComplete: () => {},
+      };
     },
+    dispatchInboundMessage: (async (args: { replyOptions?: MatrixTraceReplyOptions }) => {
+      capturedReplyOptions = args?.replyOptions;
+      notifyCaptured();
+      const result = await runGate;
+      return { queuedFinal: result.queuedFinal, counts: { ...result.counts, tool: 0 } };
+    }) as never,
   });
 
   const handlerDone = handler(
@@ -230,17 +99,12 @@ async function setupMatrixTrace(recorder: WireRecorder) {
       originServerTs: Date.now(),
     }),
   );
-  await waitForMatrixTestSignal(captured, handlerDone);
-  const dispatcher = capturedDispatcher!;
-  const deliver = async (payload: ReplyPayload, kind: "block" | "final") => {
-    if (kind === "final") {
-      const accepted = dispatcher.sendFinalReply(payload);
-      queuedFinal ||= accepted;
-    } else {
-      dispatcher.sendBlockReply(payload);
-    }
-    await dispatcher.waitForIdle();
-  };
+  await Promise.race([
+    captured,
+    handlerDone.then(() => {
+      throw new Error("matrix handler settled before capturing dispatcher wiring");
+    }),
+  ]);
   // Drain the fire-and-forget inbound read receipt so it lands at a fixed
   // position (before the first scripted step) in every recording.
   await vi.advanceTimersByTimeAsync(0);
@@ -270,7 +134,7 @@ async function setupMatrixTrace(recorder: WireRecorder) {
           { text: step.text },
           { assistantMessageIndex },
         );
-        await deliver({ text: step.text }, "block");
+        await capturedDeliver?.({ text: step.text }, { kind: "block" });
         break;
       case "tool-progress":
         // Preview tool progress is not adopted here; a completed tool round
@@ -280,25 +144,25 @@ async function setupMatrixTrace(recorder: WireRecorder) {
         }
         break;
       case "final":
-        await deliver(
+        await capturedDeliver?.(
           {
             ...(step.text !== undefined ? { text: step.text } : {}),
             ...(step.mediaUrls ? { mediaUrls: step.mediaUrls } : {}),
             ...(step.isError ? { isError: true } : {}),
           },
-          "final",
+          { kind: "final" },
         );
-        releaseRun?.();
+        releaseRun?.({ queuedFinal: true, counts: { final: 1, block: 0 } });
         await handlerDone;
         break;
       case "cancel":
-        // This script completes successfully without a final payload. A real
-        // abort/error retains an accepted preview; separate handler cases cover it.
-        releaseRun?.();
+        // An aborted run settles the dispatch without a final payload; the
+        // handler's finally block flushes and redacts the unconsumed draft.
+        releaseRun?.({ queuedFinal: false, counts: { final: 0, block: 0 } });
         await handlerDone;
         break;
       case "idle":
-        await handlerDone;
+        capturedOnIdle?.();
         break;
       case "wire-fault":
         throw new Error("matrix trace scenarios do not script wire faults");
@@ -380,18 +244,15 @@ const MATRIX_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
 
 describe("matrix delivery trace goldens", () => {
   for (const scenario of MATRIX_TRACE_SCENARIOS) {
-    it(
-      `records ${scenario.name}`,
-      matrixFixture.wrapCase(async () => {
-        const events = await runDeliveryTraceScenario({
-          scenario,
-          setup: setupMatrixTrace,
-        });
-        expectDeliveryTraceMatchesGolden({
-          goldenUrl: new URL(`./__traces__/${scenario.name}.trace.jsonl`, import.meta.url),
-          events,
-        });
-      }),
-    );
+    it(`records ${scenario.name}`, async () => {
+      const events = await runDeliveryTraceScenario({
+        scenario,
+        setup: setupMatrixTrace,
+      });
+      expectDeliveryTraceMatchesGolden({
+        goldenUrl: new URL(`./__traces__/${scenario.name}.trace.jsonl`, import.meta.url),
+        events,
+      });
+    });
   }
 });

@@ -1,0 +1,2 @@
+# Each plugin guards terminal Homebrew errors and redaction before tail slicing.
+42

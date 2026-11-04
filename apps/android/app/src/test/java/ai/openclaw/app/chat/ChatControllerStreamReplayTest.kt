@@ -1,5 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayErrorDetails
+import ai.openclaw.app.gateway.GatewayRequestRejected
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatTimelineItem
 import ai.openclaw.app.ui.chat.buildTimeline
 import ai.openclaw.app.ui.chat.prepareChatHistory
@@ -74,7 +77,7 @@ class ChatControllerStreamReplayTest {
     val gateway: ScriptedGateway,
     val owner: ChatComposerOwner,
   ) {
-    suspend fun send(id: String): Boolean = controller.sendMessageForOwnerAwaitAcceptance(id, "off", emptyList(), owner, idempotencyKey = id)
+    suspend fun send(id: String): Boolean = controller.sendMessageAwaitAcceptance(id, "off", emptyList(), owner, idempotencyKey = id)
 
     fun text(id: String) {
       controller.handleGatewayEvent("chat", chatDeltaPayload(owner.sessionKey, id, 1, null, "Original output"))
@@ -172,6 +175,28 @@ class ChatControllerStreamReplayTest {
       historyGate.cancel()
     }
   }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun emptyChatAndAssistantSnapshotsClearPendingOutput() =
+    runTest {
+      withPendingRunReplay {
+        assertTrue(send("run"))
+        for (event in listOf("chat", "agent")) {
+          text("run")
+          assertEquals("Original output", controller.streamingAssistantText.value)
+          val payload =
+            if (event == "chat") {
+              chatDeltaPayload(owner.sessionKey, "run", 2, "", "")
+            } else {
+              """{"sessionKey":"${owner.sessionKey}","runId":"run","stream":"assistant","data":{"text":""}}"""
+            }
+          controller.handleGatewayEvent(event, payload)
+          assertEquals(event, "", controller.streamingAssistantText.value)
+          assertEquals(1, controller.pendingRunCount.value)
+        }
+      }
+    }
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
@@ -1067,7 +1092,7 @@ class ChatControllerStreamReplayTest {
       assertEquals(listOf("assistant" to "main transcript"), transcript(controller))
 
       gateway.respond("sessions.patch") { error("rename unavailable") }
-      assertFalse(controller.patchSession(key = "main", label = "Renamed"))
+      assertFalse(controller.patchSession(ChatSessionPatch(key = "main", label = "Renamed")))
       assertEquals("rename unavailable", controller.errorText.value)
 
       controller.loadCurrent("main")
@@ -1098,7 +1123,7 @@ class ChatControllerStreamReplayTest {
         controller.load("main")
         runCurrent()
         assertTrue(controller.historyLoading.value)
-        assertFalse(controller.patchSession(key = "main", label = "Renamed"))
+        assertFalse(controller.patchSession(ChatSessionPatch(key = "main", label = "Renamed")))
         assertEquals("rename unavailable", controller.errorText.value)
 
         controller.load("main")
@@ -1144,7 +1169,7 @@ class ChatControllerStreamReplayTest {
         controller.onGatewayConnected(MainSessionBinding(key, "OpenClaw App"))
         runCurrent()
         assertTrue(adoptionStarted.isCompleted)
-        assertFalse(controller.patchSession(key = key, label = "Renamed"))
+        assertFalse(controller.patchSession(ChatSessionPatch(key = key, label = "Renamed")))
         assertEquals("rename unavailable", controller.errorText.value)
 
         releaseAdoption.complete(Unit)
@@ -1267,6 +1292,72 @@ class ChatControllerStreamReplayTest {
         )
         assertNull(controller.errorText.value)
       }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun transcriptInvalidationSurvivesRepeatedWorkerOverloadWithoutAnotherEvent() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway)
+      var reads = 0
+      val updated = listOf(ReplayHistoryMessage("assistant", "committed elsewhere", 1_000))
+      gateway.respond("chat.history") {
+        reads += 1
+        if (reads <= 2) {
+          throw GatewayRequestRejected(
+            GatewaySession.ErrorShape(
+              "UNAVAILABLE",
+              "session history is busy; retry shortly",
+              GatewayErrorDetails(null, false, null, retryable = true),
+            ),
+          )
+        }
+        historyResponse("session-1", updated)
+      }
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+      assertEquals(1, reads)
+      advanceTimeBy(750)
+      runCurrent()
+      assertEquals(2, reads)
+      advanceTimeBy(750)
+      runCurrent()
+      assertEquals(updated.map { it.role to it.text }, transcript(controller))
+      assertEquals(3, reads)
+      advanceTimeBy(5_000)
+      runCurrent()
+      assertEquals("Successful history retires the refresh obligation", 3, reads)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun transcriptOverloadRefreshDoesNotFollowTheUserToAnotherSession() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway)
+      var refusedReads = 0
+      gateway.respond("chat.history") {
+        refusedReads += 1
+        throw GatewayRequestRejected(
+          GatewaySession.ErrorShape("UNAVAILABLE", "busy", GatewayErrorDetails(null, false, null, retryable = true)),
+        )
+      }
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+      assertEquals(1, refusedReads)
+      var newSessionReads = 0
+      gateway.respond("chat.history") {
+        newSessionReads += 1
+        historyResponse("other-session", emptyList())
+      }
+      controller.load("agent:main:other")
+      runCurrent()
+      val readsAfterSwitch = newSessionReads
+      advanceTimeBy(5_000)
+      runCurrent()
+      assertEquals(readsAfterSwitch, newSessionReads)
+      assertEquals(emptyList<Pair<String, String?>>(), transcript(controller))
     }
 
   @Test

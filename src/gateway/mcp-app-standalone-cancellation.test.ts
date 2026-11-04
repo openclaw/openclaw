@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { createServer, request as requestHttp } from "node:http";
-import type { AddressInfo } from "node:net";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   getSessionMcpRequestSignal,
@@ -17,7 +17,6 @@ import {
   resetStandaloneMcpAppTestState,
   resolveMcpAppActiveView,
   runtime,
-  secret,
   view,
 } from "./mcp-app-standalone.http.test-support.js";
 
@@ -35,28 +34,21 @@ describe("MCP App standalone request cancellation", () => {
       await finish.promise;
       return { content: [{ type: "text", text: "completed once" }] };
     });
-    const ticket = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret }).ticket;
+    const ticket = issueTicket({ sessionKey: "agent:main:main", view, nowMs }).ticket;
     const server = createServer((req, res) => {
       void handleMcpAppStandaloneHttpRequest(req, res, {
         gatewayPort: 18_789,
         sandboxPort: 18_790,
-        nowMs,
-        ticketSecret: secret,
       }).finally(() => handled.resolve());
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    const origin = await httpFixtures.listenLoopback(server);
     const controller = new AbortController();
-    const response = fetch(
-      `http://127.0.0.1:${(server.address() as AddressInfo).port}/__openclaw__/mcp-app/view`,
-      {
-        method: "POST",
-        signal: controller.signal,
-        headers: { Authorization: `MCP-App ${ticket}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ method: "tools/call", params: { name: "app-only" } }),
-      },
-    ).then(
+    const response = fetch(`${origin}/__openclaw__/mcp-app/view`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { Authorization: `MCP-App ${ticket}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ method: "tools/call", params: { name: "app-only" } }),
+    }).then(
       async (value) => ({ body: await value.json() }),
       (error: unknown) => ({ error }),
     );
@@ -101,15 +93,13 @@ describe("MCP App standalone request cancellation", () => {
       const clientDone = createDeferred<number | string>();
       let leakedCloseListeners = 0;
       let handlerError: unknown;
-      const ticket = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret }).ticket;
+      const ticket = issueTicket({ sessionKey: "agent:main:main", view, nowMs }).ticket;
       const server = createServer((req, res) => {
         const originalListeners = new Set(req.socket.listeners("close"));
         entered.resolve();
         void handleMcpAppStandaloneHttpRequest(req, res, {
           gatewayPort: 18_789,
           sandboxPort: 18_790,
-          nowMs,
-          ticketSecret: secret,
         })
           .catch((error: unknown) => {
             handlerError = error;
@@ -122,11 +112,9 @@ describe("MCP App standalone request cancellation", () => {
             handled.resolve();
           });
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
+      const origin = await httpFixtures.listenLoopback(server);
       const client = requestHttp(
-        `http://127.0.0.1:${(server.address() as AddressInfo).port}/__openclaw__/mcp-app/view`,
+        `${origin}/__openclaw__/mcp-app/view`,
         {
           method: "POST",
           headers: { Authorization: `MCP-App ${ticket}`, "Content-Type": "application/json" },
@@ -255,7 +243,6 @@ describe("MCP App standalone request cancellation", () => {
       sessionKey: "agent:main:main",
       view: requestView,
       nowMs,
-      secret,
     }).ticket;
     const pending = request({
       url: "/__openclaw__/mcp-app/view",

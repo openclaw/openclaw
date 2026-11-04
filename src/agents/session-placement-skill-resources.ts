@@ -37,3 +37,13 @@ export function resolveSessionSkillResourceMounts(): ResourceContext["mounts"] |
   context?.assertCurrent();
   return context?.mounts;
 }
+
+/** Only the placement carrying this turn's exact delivery may consume its catalog. */
+export function resolveSessionSkillResourceCatalog(mounts?: ResourceContext["mounts"]) {
+  const context = resources.getStore();
+  if (!context || mounts !== context.mounts) {
+    return undefined;
+  }
+  context.assertCurrent();
+  return context;
+}

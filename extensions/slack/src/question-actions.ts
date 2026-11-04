@@ -19,8 +19,7 @@ export function encodeSlackQuestionAction(action: SlackQuestionAction): string |
   ) {
     return undefined;
   }
-  const value = `${SLACK_QUESTION_VALUE_PREFIX}${action.questionId}:${action.optionIndex}`;
-  return value.length <= SLACK_BUTTON_VALUE_MAX ? value : undefined;
+  return `${SLACK_QUESTION_VALUE_PREFIX}${action.questionId}:${action.optionIndex}`;
 }
 
 export function decodeSlackQuestionAction(value: unknown): SlackQuestionAction | null {
@@ -32,9 +31,6 @@ export function decodeSlackQuestionAction(value: unknown): SlackQuestionAction |
 }
 
 type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
-type QuestionResolver = (
-  params: ResolveQuestionParams,
-) => ReturnType<typeof questionGatewayRuntime.resolveOption>;
 
 export async function resolveSlackQuestionAction(params: {
   action: SlackQuestionAction;
@@ -42,11 +38,10 @@ export async function resolveSlackQuestionAction(params: {
   accountId: string;
   userId: string;
   respond: (text: string) => Promise<void>;
-  resolveQuestion?: QuestionResolver;
 }): Promise<void> {
-  let result: Awaited<ReturnType<QuestionResolver>>;
+  let result: Awaited<ReturnType<typeof questionGatewayRuntime.resolveOption>>;
   try {
-    result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
+    result = await questionGatewayRuntime.resolveOption({
       cfg: params.cfg,
       questionId: params.action.questionId,
       optionIndex: params.action.optionIndex,

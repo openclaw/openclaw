@@ -1,10 +1,10 @@
 import path from "node:path";
 import { z } from "zod";
+import { parseStrictJsonObject } from "../../chrome-extension/modules/strict-json.js";
 import {
   BROWSER_NATIVE_HOST_NAME,
   BROWSER_NATIVE_HOST_DESCRIPTION,
 } from "./extension-native-host.constants.js";
-import { parseStrictJsonObject } from "./extension-relay/auth-v2.js";
 import { isValidProfileName } from "./profiles.js";
 
 export const WINDOWS_MANAGEMENT_LIMIT = 32768;
@@ -64,7 +64,7 @@ export const sidSchema = z
       !["S-1-5-18", "S-1-5-19", "S-1-5-20"].includes(value)
     );
   });
-export const originsSchema = z
+const originsSchema = z
   .array(z.string().regex(/^chrome-extension:\/\/[a-p]{32}\/$/))
   .min(1)
   .max(32)

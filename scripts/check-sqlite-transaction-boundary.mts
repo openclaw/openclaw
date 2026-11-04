@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import ts from "typescript";
+import * as ts from "typescript/ast";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
@@ -16,8 +16,15 @@ const removedAsyncTransactionNames = new Set([
 ]);
 const synchronousTransactionCallbackIndexes = new Map([
   ["runOpenClawAgentWriteTransaction", 0],
+  ["runOpenClawAgentWriteWithYieldingAdmission", 0],
   ["runOpenClawStateWriteTransaction", 0],
+  ["runPostgresTransactionSync", 1],
+  ["runSqliteReservedTransactionSync", 1],
+  ["runSqliteDeferredTransactionSync", 1],
+  ["runSqliteReadSnapshotSync", 1],
   ["runSqliteImmediateTransactionSync", 1],
+  ["runSqliteSingleStatementSync", 1],
+  ["runSqliteWorkerTransactionSync", 1],
 ]);
 
 function expressionName(expression: ts.Expression) {
@@ -53,7 +60,7 @@ function collectLocalAsyncFunctionNames(sourceFile: ts.SourceFile) {
         names.add(node.name.text);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return names;
@@ -87,8 +94,11 @@ function isAsyncCallback(expression: ts.Expression, localAsyncFunctionNames: Set
   return ts.isIdentifier(unwrapped) && localAsyncFunctionNames.has(unwrapped.text);
 }
 
-export function findSqliteTransactionBoundaryViolations(content: string, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+export function findSqliteTransactionBoundaryViolations(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+) {
   const localAsyncFunctionNames = collectLocalAsyncFunctionNames(sourceFile);
   const transactionAliases = collectSynchronousTransactionAliases(sourceFile);
   const violations: Array<{ line: number; reason: string }> = [];
@@ -145,7 +155,7 @@ export function findSqliteTransactionBoundaryViolations(content: string, fileNam
       }
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return violations;
@@ -170,7 +180,7 @@ async function main() {
   console.error(
     "Complete asynchronous preparation before the transaction, then validate and apply inside a synchronous transaction callback.",
   );
-  process.exit(1);
+  process.exitCode = 1;
 }
 
 runAsScript(import.meta.url, main);

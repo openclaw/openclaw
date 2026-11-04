@@ -1,17 +1,6 @@
-// Cold plugin fixture helpers create plugin packages for cold import and loader tests.
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-
-type ColdPluginFixture = {
-  authChoiceId: string;
-  channelId: string;
-  pluginId: string;
-  providerId: string;
-  rootDir: string;
-  runtimeMarker: string;
-  runtimeSource: string;
-};
 
 type ColdPluginFixtureOptions = {
   rootDir: string;
@@ -27,95 +16,64 @@ type ColdPluginFixtureOptions = {
   manifest?: Record<string, unknown>;
 };
 
-export function createColdPluginFixture(options: ColdPluginFixtureOptions): ColdPluginFixture {
+export function createColdPluginFixture(options: ColdPluginFixtureOptions) {
+  const { rootDir } = options;
   const pluginId = options.pluginId ?? "cold-control-plane";
   const providerId = options.providerId ?? "cold-model-provider";
   const channelId = options.channelId ?? "cold-channel";
   const authChoiceId = options.authChoiceId ?? "cold-provider-api-key";
-  const runtimeSource = path.join(options.rootDir, "index.cjs");
-  const runtimeMarker = path.join(options.rootDir, "runtime-loaded.txt");
-  fs.writeFileSync(
-    path.join(options.rootDir, "package.json"),
-    JSON.stringify(
+  const runtimeSource = path.join(rootDir, "index.cjs");
+  const runtimeMarker = path.join(rootDir, "runtime-loaded.txt");
+  const writeJson = (name: string, value: object) =>
+    fs.writeFileSync(path.join(rootDir, name), JSON.stringify(value, null, 2), "utf8");
+  writeJson("package.json", {
+    name: options.packageName ?? "@example/openclaw-cold-control-plane",
+    version: options.packageVersion ?? "1.0.0",
+    ...options.packageJson,
+    openclaw: {
+      extensions: ["./index.cjs"],
+      ...(options.setupEntrySource !== undefined ? { setupEntry: "./setup-entry.cjs" } : {}),
+    },
+  });
+  writeJson("openclaw.plugin.json", {
+    id: pluginId,
+    name: "Cold Control Plane",
+    configSchema: { type: "object" },
+    providers: [providerId],
+    channels: [channelId],
+    channelConfigs: { [channelId]: { schema: { type: "object" } } },
+    providerAuthChoices: [
       {
-        name: options.packageName ?? "@example/openclaw-cold-control-plane",
-        version: options.packageVersion ?? "1.0.0",
-        ...options.packageJson,
-        openclaw: {
-          extensions: ["./index.cjs"],
-          ...(options.setupEntrySource !== undefined ? { setupEntry: "./setup-entry.cjs" } : {}),
-        },
+        provider: providerId,
+        method: "api-key",
+        choiceId: authChoiceId,
+        choiceLabel: "Cold Provider API key",
+        groupId: providerId,
+        groupLabel: "Cold Provider",
+        optionKey: "coldProviderApiKey",
+        cliFlag: "--cold-provider-api-key",
+        cliOption: "--cold-provider-api-key <key>",
+        onboardingScopes: ["text-inference"],
       },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(options.rootDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: pluginId,
-        name: "Cold Control Plane",
-        configSchema: { type: "object" },
-        providers: [providerId],
-        channels: [channelId],
-        channelConfigs: {
-          [channelId]: {
-            schema: { type: "object" },
-          },
-        },
-        providerAuthChoices: [
-          {
-            provider: providerId,
-            method: "api-key",
-            choiceId: authChoiceId,
-            choiceLabel: "Cold Provider API key",
-            groupId: providerId,
-            groupLabel: "Cold Provider",
-            optionKey: "coldProviderApiKey",
-            cliFlag: "--cold-provider-api-key",
-            cliOption: "--cold-provider-api-key <key>",
-            onboardingScopes: ["text-inference"],
-          },
-        ],
-        ...options.manifest,
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
+    ],
+    ...options.manifest,
+  });
   fs.writeFileSync(
     runtimeSource,
     `require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded", "utf8");\nthrow new Error(${JSON.stringify(options.runtimeMessage ?? "runtime entry should not load for cold plugin metadata discovery")});\n`,
     "utf8",
   );
   if (options.setupEntrySource !== undefined) {
-    fs.writeFileSync(
-      path.join(options.rootDir, "setup-entry.cjs"),
-      options.setupEntrySource,
-      "utf8",
-    );
+    fs.writeFileSync(path.join(rootDir, "setup-entry.cjs"), options.setupEntrySource, "utf8");
   }
-  return {
-    authChoiceId,
-    channelId,
-    pluginId,
-    providerId,
-    rootDir: options.rootDir,
-    runtimeMarker,
-    runtimeSource,
-  };
+  return { authChoiceId, channelId, pluginId, providerId, rootDir, runtimeMarker, runtimeSource };
 }
 
 export function createColdPluginConfig(pluginDir: string, pluginId: string): OpenClawConfig {
   return {
     plugins: {
       load: { paths: [pluginDir] },
-      entries: {
-        [pluginId]: { enabled: true },
-      },
+      entries: { [pluginId]: { enabled: true } },
     },
   };
 }
@@ -133,6 +91,6 @@ export function createColdPluginHermeticEnv(
   };
 }
 
-export function isColdPluginRuntimeLoaded(fixture: Pick<ColdPluginFixture, "runtimeMarker">) {
+export function isColdPluginRuntimeLoaded(fixture: { runtimeMarker: string }) {
   return fs.existsSync(fixture.runtimeMarker);
 }

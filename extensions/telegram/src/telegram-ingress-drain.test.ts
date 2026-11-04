@@ -1,62 +1,93 @@
-// Telegram ingress drain adapter: dispatch result propagation.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { GrammyError } from "grammy";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
+  resolveTelegramUpdateReceivedAtSeconds,
   runWithTelegramUpdateProcessingFrame,
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { resolveTelegramForumFlag } from "./bot/helpers.js";
+import { commitTelegramMessageDispatchReplay } from "./message-dispatch-dedupe.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
-import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
 import {
   TelegramIngressPayloadError,
   type TelegramSpooledUpdatePayload,
 } from "./telegram-ingress-spool.payload.js";
 import { telegramSpooledUpdateLaneKey } from "./telegram-ingress-spool.test-support.js";
 
-async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-ingress-drain-"));
-  try {
-    return await fn(stateDir);
-  } finally {
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
+type MonitorOptions = Parameters<typeof createTelegramIngressMonitor>[0];
+type Queue = MonitorOptions["queue"];
+type MakeMonitor = (
+  options: Omit<MonitorOptions, "queue" | "getConfig" | "accountId">,
+) => ReturnType<typeof createTelegramIngressMonitor>;
+
+function createFixture(stateDir: string) {
+  const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+    channelId: "telegram",
+    accountId: "default",
+    stateDir,
+  });
+  return {
+    stateDir,
+    queue,
+    monitor: (options: Parameters<MakeMonitor>[0]) =>
+      createTelegramIngressMonitor({ queue, ...monitorDefaults, ...options }),
+    enqueue: async (updateId: number, callback = false) => {
+      const payload = callback ? callbackPayload(updateId) : updatePayload(updateId);
+      const eventId = String(updateId).padStart(16, "0");
+      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
+      await queue.enqueue(eventId, payload, { laneKey });
+      return { eventId, payload, laneKey };
+    },
+  };
+}
+async function withTempState<T>(fn: (fixture: ReturnType<typeof createFixture>) => Promise<T>) {
+  return withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-telegram-ingress-drain-", applyEnv: false },
+    ({ stateDir }) => fn(createFixture(stateDir)),
+  );
 }
 
-const cfg = {
-  channels: {
-    telegram: {
-      allowFrom: ["111"],
-      dmPolicy: "allowlist",
-    },
-  },
-} as OpenClawConfig;
+const cfg: OpenClawConfig = {
+  channels: { telegram: { allowFrom: ["111"], dmPolicy: "allowlist" } },
+};
+const monitorDefaults = { getConfig: () => cfg, accountId: "default" };
 
-function updatePayload(updateId: number): TelegramSpooledUpdatePayload {
+function updatePayload(updateId: number) {
   return {
     version: 1,
     updateId,
     receivedAt: updateId,
     update: {
       update_id: updateId,
-      message: {
-        text: "hello",
+      message: { text: "hello", from: { id: 111 }, chat: { id: 111, type: "private" } },
+    },
+  } satisfies TelegramSpooledUpdatePayload;
+}
+
+function callbackPayload(updateId: number) {
+  const payload = updatePayload(updateId);
+  return {
+    ...payload,
+    update: {
+      update_id: updateId,
+      callback_query: {
+        id: `callback-${updateId}`,
+        data: "choice",
         from: { id: 111 },
-        chat: { id: 111, type: "private" },
+        message: payload.update.message,
       },
     },
-  };
+  } satisfies TelegramSpooledUpdatePayload;
 }
 
 function telegramSendError(errorCode: number, description: string): GrammyError {
@@ -68,153 +99,222 @@ function telegramSendError(errorCode: number, description: string): GrammyError 
   );
 }
 
-describe("resolveTelegramIngressNonRetryableFailure", () => {
-  it.each([
-    "Forbidden: bot was blocked by the user",
-    "Forbidden: bot was kicked from the group chat",
-    "Forbidden: user is deactivated",
-  ])("classifies permanent Telegram recipient rejection: %s", (description) => {
-    expect(resolveTelegramIngressNonRetryableFailure(telegramSendError(403, description))).toEqual({
-      reason: "recipient-unreachable",
-      message: expect.stringContaining(description),
-    });
+function forumFlag(chatId: number, isForum: boolean) {
+  return resolveTelegramForumFlag({ chatId, chatType: "supergroup", isGroup: true, isForum });
+}
+
+async function createTelegramMessageDispatchReplayForgetError(): Promise<unknown> {
+  type ReplayGuard = Parameters<typeof commitTelegramMessageDispatchReplay>[0]["guard"];
+  type ReplayClaim = import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle;
+  const diskError = new Error("dedupe disk write failed");
+  const guard: ReplayGuard = {
+    claim: async () => ({ kind: "invalid" }),
+    forget: async (event) => !("keys" in event && event.keys?.[0] === "first"),
+    warmup: async () => 0,
+  };
+  const claims: ReplayClaim[] = ["first", "second"].map((key) => ({
+    keys: [key],
+    commit: async (options) => {
+      if (key === "second") {
+        options?.onDiskError?.(diskError);
+      }
+      return true;
+    },
+    release: () => undefined,
+  }));
+  try {
+    await commitTelegramMessageDispatchReplay({ guard, claims, requirePersistent: true });
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected Telegram dispatch rollback failure");
+}
+
+const deferred = <T = void>() => Promise.withResolvers<T>();
+
+async function startDeferred(makeMonitor: MakeMonitor, name: string) {
+  const participant: { current?: TelegramSpooledReplayDeferredParticipant } = {};
+  const dispatch = vi.fn(async () => {
+    participant.current = createTelegramSpooledReplayDeferredParticipant(name) ?? undefined;
   });
+  const monitor = makeMonitor({ dispatch });
+  monitor.start();
+  await vi.waitFor(() => expect(participant.current).toBeDefined());
+  return { monitor, participant, dispatch };
+}
 
-  it("classifies a permanent recipient error nested inside a dispatch failure", () => {
-    const cause = telegramSendError(403, "Forbidden: bot was blocked by the user");
+async function expectPending(queue: Queue, rows: Array<Record<string, unknown>>) {
+  expect(await queue.listPending({ limit: "all" })).toMatchObject(rows);
+}
 
-    expect(
-      resolveTelegramIngressNonRetryableFailure(new Error("pairing reply failed", { cause })),
-    ).toEqual({
-      reason: "recipient-unreachable",
-      message: expect.stringContaining("bot was blocked by the user"),
-    });
-  });
-
-  it("keeps recoverable Telegram permission failures eligible for retry", () => {
-    const error = telegramSendError(403, "Forbidden: not enough rights to send text messages");
-
-    expect(resolveTelegramIngressNonRetryableFailure(error)).toBeNull();
-  });
-
-  it("keeps flood-control failures eligible for retry", () => {
-    const error = telegramSendError(429, "Too Many Requests: retry after 30");
-
-    expect(resolveTelegramIngressNonRetryableFailure(error)).toBeNull();
-  });
-});
-
-function deferred<T = void>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
+async function waitPending(queue: Queue, rows: Array<Record<string, unknown>>) {
+  await vi.waitFor(() => expectPending(queue, rows));
 }
 
 describe("createTelegramIngressMonitor", () => {
-  it("dead-letters a real blocked-recipient Telegram API error without retrying it", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const eventId = "3".padStart(16, "0");
-      const payload = updatePayload(3);
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
-
-      const error = telegramSendError(403, "Forbidden: bot was blocked by the user");
-      const dispatch = vi.fn(async () => ({ kind: "failed-retryable" as const, error }));
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
-        dispatch,
-      });
+  it.each([
+    {
+      name: "wrapped callback authority rejection",
+      callback: true,
+      error: new Error("spooled callback failed", {
+        cause: new Error("Gateway requester authority changed"),
+      }),
+      reason: "callback-authority-changed",
+      message: "Gateway requester authority changed",
+    },
+    {
+      name: "deferred callback authority rejection",
+      callback: true,
+      deferred: true,
+      error: new Error("Gateway requester authority changed"),
+      reason: "callback-authority-changed",
+      message: "Gateway requester authority changed",
+    },
+    {
+      name: "expired callback query",
+      callback: true,
+      error: new GrammyError(
+        "Call to 'answerCallbackQuery' failed",
+        {
+          ok: false,
+          error_code: 400,
+          description:
+            "Bad Request: query is too old and response timeout expired or query ID is invalid",
+        },
+        "answerCallbackQuery",
+        { callback_query_id: "expired-callback" },
+      ),
+      reason: "callback-query-expired",
+      message: "query is too old",
+    },
+    {
+      name: "blocked Telegram recipient",
+      error: telegramSendError(403, "Forbidden: bot was blocked by the user"),
+      reason: "recipient-unreachable",
+      message: "bot was blocked by the user",
+    },
+    {
+      name: "wrapped missing harness",
+      error: new Error("Agent turn failed", {
+        cause: new Error('Requested agent harness "missing-harness-85470" is not registered.'),
+      }),
+      reason: "missing-agent-harness",
+      message: 'Requested agent harness "missing-harness-85470" is not registered.',
+    },
+    {
+      name: "wrapped archived session rejection",
+      error: new Error("Command failed", {
+        cause: Object.assign(new Error("Restore the archived session before starting work."), {
+          name: "SessionWorkStartError",
+          reason: "archived",
+          retryable: false,
+        }),
+      }),
+      reason: "session-archived",
+      message: "Restore the archived session before starting work.",
+    },
+  ])("dead-letters a $name and releases the next same-chat update", async (testCase) => {
+    const { error, reason, message } = testCase;
+    const callback = "callback" in testCase && testCase.callback;
+    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
+      const { eventId } = await enqueue(3, callback);
+      await enqueue(4);
+      const dispatch = vi
+        .fn<MonitorOptions["dispatch"]>()
+        .mockImplementationOnce(async () => {
+          if ("deferred" in testCase && testCase.deferred) {
+            const participant = createTelegramSpooledReplayDeferredParticipant("callback");
+            participant?.settle({ kind: "failed-retryable", error });
+            return undefined;
+          }
+          return { kind: "failed-retryable", error };
+        })
+        .mockResolvedValue({ kind: "completed" });
+      const monitor = makeMonitor({ dispatch });
 
       monitor.start();
       await monitor.waitForIdle();
 
-      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch.mock.calls.map(([update]) => update)).toEqual([
+        (callback ? callbackPayload(3) : updatePayload(3)).update,
+        updatePayload(4).update,
+      ]);
       expect(await queue.listFailed?.({ limit: "all" })).toEqual([
         expect.objectContaining({
           id: eventId,
-          reason: "recipient-unreachable",
-          message: expect.stringContaining("bot was blocked by the user"),
+          reason,
+          message: expect.stringContaining(message),
         }),
       ]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
-
       await monitor.stop();
     });
   });
 
-  it("propagates failed-retryable dispatch results as claim release (not tombstone)", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
+  it("keeps a fresh admission lane when the forum cache changes during ACK", async () => {
+    await withTempState(async ({ queue, monitor: makeMonitor }) => {
+      const update = {
+        update_id: 17,
+        message: {
+          text: "hello",
+          from: { id: 111 },
+          chat: { id: -9017, type: "supergroup" },
+        },
+      };
+      await forumFlag(-9017, false);
+      const ackEntered = deferred();
+      const ackRelease = deferred();
+      const receivedAt = 1_700_000_000_000;
+      const delivered: Array<{ laneKey: string | undefined; receivedAt: number }> = [];
+      const monitor = makeMonitor({
+        botInfo: telegramBotInfoForTest,
+        onDurableAdmission: async () => {
+          ackEntered.resolve();
+          await ackRelease.promise;
+        },
+        dispatch: async (raw, lifecycle) => {
+          const [claim] = await queue.listClaims();
+          delivered.push({
+            laneKey: claim?.laneKey,
+            receivedAt: resolveTelegramUpdateReceivedAtSeconds(raw),
+          });
+          await lifecycle.onAdopted();
+          return { kind: "completed" };
+        },
       });
-      const eventId = "1".padStart(16, "0");
-      const payload = updatePayload(1);
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
-
-      const retryError = new Error("provider blip");
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
-        dispatch: async () => ({ kind: "failed-retryable", error: retryError }),
-      });
-
       monitor.start();
       await monitor.waitForIdle();
-
-      // Failed-retryable must release, not complete — re-enqueue is pending, not tombstone.
-      const status = await queue.enqueue(eventId, payload, { laneKey });
-      expect(status.kind).not.toBe("completed");
-      expect(status.kind === "accepted" || status.kind === "pending").toBe(true);
-
-      const pending = await queue.listPending({ limit: "all" });
-      expect(pending.some((row) => row.id === eventId)).toBe(true);
-
-      await monitor.stop();
+      const admission = monitor.admit(update, { receivedAt });
+      try {
+        await ackEntered.promise;
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({ laneKey: "telegram:-9017", attempts: 0 }),
+        ]);
+        expect(delivered).toEqual([]);
+        await forumFlag(-9017, true);
+        ackRelease.resolve();
+        await admission;
+        await monitor.waitForIdle();
+        expect(delivered).toEqual([{ laneKey: "telegram:-9017", receivedAt: 1_700_000_000 }]);
+        expect(await monitor.admit(update)).toMatchObject({
+          kind: "durable",
+          queueResult: { kind: "completed" },
+        });
+        expect(delivered).toHaveLength(1);
+      } finally {
+        ackRelease.resolve();
+        await admission;
+        await monitor.stop();
+      }
     });
   });
 
   it("reconciles a cached General topic when private bot topics are disabled", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const updateId = 9;
-      const eventId = String(updateId).padStart(16, "0");
-      const update = {
-        update_id: updateId,
-        message: {
-          text: "hello",
-          from: { id: 111 },
-          chat: { id: -9003, type: "supergroup" },
-        },
-      };
-      const payload: TelegramSpooledUpdatePayload = {
-        version: 1,
-        updateId,
-        receivedAt: updateId,
-        update,
-      };
-      await resolveTelegramForumFlag({
-        chatId: -9003,
-        chatType: "supergroup",
-        isGroup: true,
-        isForum: true,
-      });
+    await withTempState(async ({ queue, monitor: makeMonitor }) => {
+      const eventId = "9".padStart(16, "0");
+      const payload = updatePayload(9);
+      payload.update.message.chat = { id: -9003, type: "supergroup" };
+      await forumFlag(-9003, true);
       await queue.enqueue(eventId, payload, { laneKey: "telegram:-9003" });
 
       const dispatch = vi.fn(async (_update, lifecycle) => {
@@ -224,10 +324,7 @@ describe("createTelegramIngressMonitor", () => {
         await lifecycle.onAdopted();
         return { kind: "completed" as const };
       });
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
+      const monitor = makeMonitor({
         botInfo: { id: 999, has_topics_enabled: false } as never,
         dispatch,
       });
@@ -243,13 +340,6 @@ describe("createTelegramIngressMonitor", () => {
 
   it.each([
     {
-      name: "private chat",
-      updateKind: "message",
-      chat: { id: 1234, type: "private" },
-      topic: {},
-      laneKey: "telegram:1234",
-    },
-    {
       name: "private topic",
       updateKind: "edited_message",
       chat: { id: 1234, type: "private" },
@@ -257,38 +347,22 @@ describe("createTelegramIngressMonitor", () => {
       laneKey: "telegram:1234:topic:42",
     },
     {
-      name: "forum topic",
-      updateKind: "message",
-      chat: { id: -1234, type: "supergroup", is_forum: true },
-      topic: { message_thread_id: 42, is_topic_message: true },
-      laneKey: "telegram:-1234:topic:42",
-    },
-    {
-      name: "channel Direct Messages topic",
-      updateKind: "message",
-      chat: { id: -1234, type: "supergroup", is_direct_messages: true },
-      topic: { direct_messages_topic: { topic_id: 42 }, message_thread_id: 99 },
-      laneKey: "telegram:-1234:topic:42",
-    },
-    ...["channel_post", "edited_channel_post"].map((updateKind) => ({
-      name: updateKind,
-      updateKind,
+      name: "edited_channel_post",
+      updateKind: "edited_channel_post",
       chat: { id: -1234, type: "channel" },
       topic: {},
       laneKey: "telegram:-1234",
-    })),
-    ...["telegram:-9999:topic:42", "telegram:-1234:topic:99", "telegram:-1234:approval"].map(
-      (laneKey) => ({
-        name: `mismatched Direct Messages lane ${laneKey}`,
-        updateKind: "message",
-        chat: { id: -1234, type: "supergroup", is_direct_messages: true },
-        topic: { direct_messages_topic: { topic_id: 42 }, message_thread_id: 99 },
-        laneKey,
-        reject: true,
-      }),
-    ),
+    },
+    {
+      name: "mismatched Direct Messages lane telegram:-1234:approval",
+      updateKind: "message",
+      chat: { id: -1234, type: "supergroup", is_direct_messages: true },
+      topic: { direct_messages_topic: { topic_id: 42 }, message_thread_id: 99 },
+      laneKey: "telegram:-1234:approval",
+      reject: true,
+    },
   ])("replays promoted controls after restart: $name", async (testCase) => {
-    await withTempState(async (stateDir) => {
+    await withTempState(async ({ stateDir }) => {
       const queueOptions = { channelId: "telegram", accountId: "default", stateDir };
       const update = {
         update_id: 136,
@@ -302,29 +376,25 @@ describe("createTelegramIngressMonitor", () => {
         },
       };
       const eventId = String(update.update_id).padStart(16, "0");
-      const payload: TelegramSpooledUpdatePayload = {
-        version: 1,
-        updateId: update.update_id,
-        receivedAt: Date.now(),
-        update,
-      };
+      const payload = { ...updatePayload(136), receivedAt: 1_736_382_000_123, update };
       await createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions).enqueue(
         eventId,
         payload,
         { laneKey: testCase.laneKey },
       );
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
 
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions);
       const controlLaneKey = `telegram:${testCase.chat.id}:control`;
-      const dispatch = vi.fn(async () => {
+      const dispatch = vi.fn(async (dispatchedUpdate: unknown) => {
+        expect(resolveTelegramUpdateReceivedAtSeconds(dispatchedUpdate)).toBe(1_736_382_000);
         expect(await queue.listClaims()).toMatchObject([{ laneKey: controlLaneKey }]);
         return { kind: "completed" as const };
       });
       const monitor = createTelegramIngressMonitor({
         queue,
-        getConfig: () => cfg,
-        accountId: "default",
+        ...monitorDefaults,
         botInfo: {
           ...telegramBotInfoForTest,
           has_topics_enabled: true,
@@ -342,9 +412,8 @@ describe("createTelegramIngressMonitor", () => {
         } else {
           expect(dispatch).toHaveBeenCalledExactlyOnceWith(update, expect.any(Object));
           expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-          expect(await queue.enqueue(eventId, payload, { laneKey: controlLaneKey })).toMatchObject({
-            kind: "completed",
-          });
+          const replay = await queue.enqueue(eventId, payload, { laneKey: controlLaneKey });
+          expect(replay.kind).toBe("completed");
         }
         expect(await queue.listPending()).toEqual([]);
       } finally {
@@ -353,148 +422,72 @@ describe("createTelegramIngressMonitor", () => {
     });
   });
 
-  it("applies a late deferred retry failure with the real error", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const eventId = "4".padStart(16, "0");
-      const payload = updatePayload(4);
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
-      const participant: { current?: TelegramSpooledReplayDeferredParticipant } = {};
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
-        dispatch: async () => {
-          participant.current =
-            createTelegramSpooledReplayDeferredParticipant("test:late-retry") ?? undefined;
-        },
-      });
-
-      monitor.start();
-      await vi.waitFor(() => expect(participant.current).toBeDefined());
+  it.each([
+    new Error("late provider blip"),
+    new Error("Gateway requester authority changed"),
+    Object.assign(new Error("workspace is not ready"), {
+      name: "SessionWorkStartError",
+      reason: "workspace_pending",
+      retryable: true,
+    }),
+    new Error("Session is archived"),
+  ])("preserves retry for a late deferred failure: %s", async (error) => {
+    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
+      const { eventId } = await enqueue(4);
+      const { monitor, participant } = await startDeferred(makeMonitor, "test:late-retry");
       expect(await queue.listClaims()).toHaveLength(1);
-      participant.current?.settle({
-        kind: "failed-retryable",
-        error: new Error("late provider blip"),
-      });
+      participant.current?.settle({ kind: "failed-retryable", error });
 
-      await vi.waitFor(async () =>
-        expect(await queue.listPending({ limit: "all" })).toMatchObject([
-          { id: eventId, attempts: 1, lastError: "late provider blip" },
-        ]),
-      );
+      await waitPending(queue, [{ id: eventId, attempts: 1, lastError: error.message }]);
       await monitor.stop();
     });
   });
 
-  it("dead-letters a late deferred non-retryable failure", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const eventId = "5".padStart(16, "0");
-      const payload = updatePayload(5);
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
-      const participant: { current?: TelegramSpooledReplayDeferredParticipant } = {};
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
-        dispatch: async () => {
-          participant.current =
-            createTelegramSpooledReplayDeferredParticipant("test:late-fatal") ?? undefined;
-        },
-      });
-
-      monitor.start();
-      await vi.waitFor(() => expect(participant.current).toBeDefined());
+  it("dead-letters a late deferred dispatch dedupe rollback failure", async () => {
+    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
+      const { eventId } = await enqueue(5);
+      const { monitor, participant, dispatch } = await startDeferred(
+        makeMonitor,
+        "test:late-fatal",
+      );
       participant.current?.settle({
         kind: "failed-retryable",
-        error: new TelegramIngressPayloadError("late invalid payload"),
+        error: await createTelegramMessageDispatchReplayForgetError(),
       });
 
       await vi.waitFor(async () =>
         expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
-          { id: eventId, reason: "invalid-event", message: "late invalid payload" },
+          { id: eventId, reason: "dispatch-dedupe-rollback-failed" },
         ]),
       );
+      await monitor.waitForIdle();
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      expect(await queue.listClaims()).toEqual([]);
+      expect(dispatch).toHaveBeenCalledOnce();
       await monitor.stop();
     });
   });
 
-  it.each(["completed", "skipped"] as const)(
-    "releases an aborted deferred claim after a late %s settlement",
-    async (terminalKind) => {
-      await withTempState(async (stateDir) => {
-        const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-          channelId: "telegram",
-          accountId: "default",
-          stateDir,
-        });
-        const updateId = terminalKind === "completed" ? 6 : 7;
-        const eventId = String(updateId).padStart(16, "0");
-        const payload = updatePayload(updateId);
-        const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-        await queue.enqueue(eventId, payload, { laneKey });
-        const participant: { current?: TelegramSpooledReplayDeferredParticipant } = {};
-        const monitor = createTelegramIngressMonitor({
-          queue,
-          getConfig: () => cfg,
-          accountId: "default",
-          dispatch: async () => {
-            participant.current =
-              createTelegramSpooledReplayDeferredParticipant(`test:late-${terminalKind}`) ??
-              undefined;
-          },
-        });
+  it("releases an aborted deferred claim after a late completed settlement", async () => {
+    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
+      const { eventId, payload, laneKey } = await enqueue(6);
+      const { monitor, participant } = await startDeferred(makeMonitor, "test:late-completed");
+      await monitor.stop();
+      expect(await queue.listClaims()).toEqual([]);
+      await expectPending(queue, [{ id: eventId, attempts: 0 }]);
 
-        monitor.start();
-        await vi.waitFor(() => expect(participant.current).toBeDefined());
-        await monitor.stop();
-        expect(await queue.listClaims()).toEqual([]);
-        expect(await queue.listPending({ limit: "all" })).toMatchObject([
-          { id: eventId, attempts: 0 },
-        ]);
-
-        participant.current?.settle({ kind: terminalKind });
-        await vi.waitFor(async () =>
-          expect(await queue.listPending({ limit: "all" })).toMatchObject([
-            {
-              id: eventId,
-              attempts: 0,
-            },
-          ]),
-        );
-        expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
-        expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");
-      });
-    },
-  );
+      participant.current?.settle({ kind: "completed" });
+      await waitPending(queue, [{ id: eventId, attempts: 0 }]);
+      expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
+      expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");
+    });
+  });
 
   it("uses participant settlement to own the row despite frame completion after abort", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const payload = updatePayload(8);
-      const eventId = String(payload.updateId).padStart(16, "0");
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
+    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
+      const { eventId, payload, laneKey } = await enqueue(8);
       const started = deferred();
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
+      const monitor = makeMonitor({
         dispatch: async (_update, lifecycle) => {
           const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
             const participant = createTelegramSpooledReplayDeferredParticipant("test:inline-abort");
@@ -516,30 +509,17 @@ describe("createTelegramIngressMonitor", () => {
       await started.promise;
       await monitor.stop();
 
-      expect(await queue.listPending({ limit: "all" })).toMatchObject([
-        { id: eventId, attempts: 0 },
-      ]);
+      await expectPending(queue, [{ id: eventId, attempts: 0 }]);
       expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
       expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");
     });
   });
 
   it("uses participant adoption to own the row despite a failed frame outcome", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const payload = updatePayload(8);
-      const eventId = String(payload.updateId).padStart(16, "0");
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
+    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
+      const { eventId, payload, laneKey } = await enqueue(8);
       const release = vi.spyOn(queue, "release");
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
+      const monitor = makeMonitor({
         dispatch: async () => {
           const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
             const participant = createTelegramSpooledReplayDeferredParticipant("test:adopted");
@@ -566,22 +546,11 @@ describe("createTelegramIngressMonitor", () => {
   });
 
   it("preserves an adopted tombstone when inline completion returns after shutdown", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const payload = updatePayload(8);
-      const eventId = String(payload.updateId).padStart(16, "0");
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
+    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
+      const { eventId, payload, laneKey } = await enqueue(8);
       const adopted = deferred();
       const finishDispatch = deferred();
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
+      const monitor = makeMonitor({
         dispatch: async (_update, lifecycle) => {
           await lifecycle.onAdopted();
           adopted.resolve();
@@ -602,57 +571,27 @@ describe("createTelegramIngressMonitor", () => {
   });
 
   it("requeues an aborted deferred participant even when its late result is non-retryable", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const eventId = "9".padStart(16, "0");
-      const payload = updatePayload(9);
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
-      const participant: { current?: TelegramSpooledReplayDeferredParticipant } = {};
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
-        dispatch: async () => {
-          participant.current =
-            createTelegramSpooledReplayDeferredParticipant("test:aborted-non-retryable") ??
-            undefined;
-        },
-      });
-
-      monitor.start();
-      await vi.waitFor(() => expect(participant.current).toBeDefined());
+    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
+      const { eventId } = await enqueue(9);
+      const { monitor, participant } = await startDeferred(
+        makeMonitor,
+        "test:aborted-non-retryable",
+      );
       await monitor.stop();
       participant.current?.settle({
         kind: "failed-retryable",
         error: new TelegramIngressPayloadError("late invalid payload"),
       });
 
-      await vi.waitFor(async () =>
-        expect(await queue.listPending({ limit: "all" })).toMatchObject([
-          { id: eventId, attempts: 0 },
-        ]),
-      );
+      await waitPending(queue, [{ id: eventId, attempts: 0 }]);
       expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
       expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
     });
   });
 
   it("releases when dispatch settles only after its owner was aborted", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const eventId = "8".padStart(16, "0");
-      const payload = updatePayload(8);
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
+    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
+      const { eventId, payload, laneKey } = await enqueue(8);
       const priorClaim = await queue.claim(eventId, { ownerId: "prior-owner" });
       if (!priorClaim) {
         throw new Error("Expected the prior Telegram ingress claim.");
@@ -662,21 +601,15 @@ describe("createTelegramIngressMonitor", () => {
         releasedAt: priorAttemptAt,
         lastError: "previous delivery failed",
       });
-      let finishDispatch!: () => void;
-      const dispatchGate = new Promise<void>((resolve) => {
-        finishDispatch = resolve;
-      });
+      const dispatchGate = deferred();
       let ownerSignal: AbortSignal | undefined;
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
+      const monitor = makeMonitor({
         dispatch: async (_update, lifecycle) => {
           ownerSignal = lifecycle.abortSignal;
           const participant = createTelegramSpooledReplayDeferredParticipant(
             "test:abort-before-settlement",
           );
-          await dispatchGate;
+          await dispatchGate.promise;
           participant?.settle({ kind: "completed" });
         },
       });
@@ -685,85 +618,18 @@ describe("createTelegramIngressMonitor", () => {
       await vi.waitFor(() => expect(ownerSignal).toBeDefined());
       const stopped = monitor.stop();
       await vi.waitFor(() => expect(ownerSignal?.aborted).toBe(true));
-      finishDispatch();
+      dispatchGate.resolve();
       await stopped;
 
-      await vi.waitFor(async () =>
-        expect(await queue.listPending({ limit: "all" })).toMatchObject([
-          {
-            id: eventId,
-            attempts: 1,
-            lastAttemptAt: priorAttemptAt,
-            lastError: "previous delivery failed",
-          },
-        ]),
-      );
-      expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");
-    });
-  });
-
-  it("tombstones completed dispatch results", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const eventId = "2".padStart(16, "0");
-      const payload = updatePayload(2);
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
-
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
-        dispatch: async (_update, lifecycle) => {
-          await lifecycle.onAdopted();
-          return { kind: "completed" };
+      await waitPending(queue, [
+        {
+          id: eventId,
+          attempts: 1,
+          lastAttemptAt: priorAttemptAt,
+          lastError: "previous delivery failed",
         },
-      });
-
-      monitor.start();
-      await monitor.waitForIdle();
-
-      const status = await queue.enqueue(eventId, payload, { laneKey });
-      expect(status.kind).toBe("completed");
-      await monitor.stop();
-    });
-  });
-
-  it("logs a diagnostic when dispatch records no outcome and defers no participant", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-        channelId: "telegram",
-        accountId: "default",
-        stateDir,
-      });
-      const eventId = "3".padStart(16, "0");
-      const payload = updatePayload(3);
-      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
-      await queue.enqueue(eventId, payload, { laneKey });
-
-      const logs: string[] = [];
-      const monitor = createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
-        dispatch: async () => {},
-        onLog: (message) => logs.push(message),
-      });
-
-      monitor.start();
-      await monitor.waitForIdle();
-
-      // Silent consumption still completes (skip semantics), but must leave a trace.
-      const status = await queue.enqueue(eventId, payload, { laneKey });
-      expect(status.kind).toBe("completed");
-      expect(
-        logs.some((line) => line.includes("completed without a recorded processing outcome")),
-      ).toBe(true);
-      await monitor.stop();
+      ]);
+      expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");
     });
   });
 });

@@ -1,4 +1,8 @@
 import { expect, it, vi } from "vitest";
+import memoryWikiPlugin from "./memory-wiki/index.js";
+import policyPlugin from "./policy/index.js";
+import qaLabPlugin from "./qa-lab/index.js";
+import voiceCallPlugin from "./voice-call/index.js";
 
 vi.mock("./memory-wiki/src/cli.js", () => {
   throw new Error("memory-wiki CLI eagerly imported");
@@ -14,10 +18,10 @@ vi.mock("./voice-call/src/cli.js", () => {
 });
 
 it.each([
-  { id: "memory-wiki", load: () => import("./memory-wiki/index.js") },
-  { id: "policy", load: () => import("./policy/index.js") },
-  { id: "qa-lab", load: () => import("./qa-lab/index.js") },
-  { id: "voice-call", load: () => import("./voice-call/index.js") },
-])("imports $id without evaluating its CLI", async ({ id, load }) => {
-  expect((await load()).default.id).toBe(id);
+  { id: "memory-wiki", plugin: memoryWikiPlugin },
+  { id: "policy", plugin: policyPlugin },
+  { id: "qa-lab", plugin: qaLabPlugin },
+  { id: "voice-call", plugin: voiceCallPlugin },
+])("imports $id without evaluating its CLI", ({ id, plugin }) => {
+  expect(plugin.id).toBe(id);
 });

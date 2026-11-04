@@ -48,16 +48,10 @@ export const GENERIC_PROVIDER_AUTH_CHOICES: ReadonlyArray<AuthChoice> = [
 ];
 
 /** Format static auth-choice values for Commander help/validation text. */
-export function formatStaticAuthChoiceChoicesForCli(params?: { includeSkip?: boolean }): string {
-  const includeSkip = params?.includeSkip ?? true;
-  const values = [
+export function formatStaticAuthChoiceChoicesForCli(): string {
+  return [
     ...CORE_AUTH_CHOICE_OPTIONS.map((opt) => opt.value),
     ...GENERIC_PROVIDER_AUTH_CHOICES,
-  ];
-
-  if (includeSkip) {
-    values.push("skip");
-  }
-
-  return values.join("|");
+    "skip",
+  ].join("|");
 }

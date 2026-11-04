@@ -1,24 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { materializeProviderContext } from "./images.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-video-transcript-replay-");
 const MP4 = Buffer.from("0000001c6674797069736f6d0000000069736f6d0000000000000000", "hex");
 
 describe("native video transcript replay", () => {
   it("replays native video after reopening the canonical transcript", async () => {
-    const stateDir = tempDirs.make("openclaw-video-transcript-replay-");
+    const stateDir = tempDirs.make();
     const inboundDir = path.join(stateDir, "media", "inbound");
     await fs.mkdir(inboundDir, { recursive: true });
     await fs.writeFile(path.join(inboundDir, "history.mp4"), MP4);

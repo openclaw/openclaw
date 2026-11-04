@@ -1,12 +1,11 @@
 // Command-analysis display helpers turn parsed command policy data into small
 // warning summaries for approval surfaces without loading the rich parser path.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { CommandExplanation, CommandRisk } from "../command-explainer/types.js";
+import type { CommandRisk } from "../command-explainer/types.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
-import { analyzeCommandForPolicy } from "./policy.js";
+import { analyzeArgvCommand } from "../exec-argv-analysis.js";
 import { detectCommandCarrierArgv, detectInlineEvalInSegments } from "./risks.js";
 
-/** Compact command explanation summary shown in approval UI. */
 export type CommandExplanationSummary = {
   commandCount: number;
   nestedCommandCount: number;
@@ -32,21 +31,6 @@ function riskLabel(risk: CommandRisk): string {
     default:
       return risk.kind;
   }
-}
-
-/** Summarizes parsed shell-command explanation data for display. */
-function summarizeCommandExplanation(explanation: CommandExplanation): CommandExplanationSummary {
-  const riskKinds = uniqueStrings(explanation.risks.map((risk) => risk.kind));
-  const warningLines = explanation.risks.map((risk) => {
-    const label = riskLabel(risk);
-    return label === risk.kind ? `Contains ${risk.kind}` : `Contains ${risk.kind}: ${label}`;
-  });
-  return {
-    commandCount: explanation.topLevelCommands.length,
-    nestedCommandCount: explanation.nestedCommands.length,
-    riskKinds,
-    warningLines: uniqueStrings(warningLines),
-  };
 }
 
 function summarizeCommandSegmentsForDisplay(
@@ -87,22 +71,39 @@ export async function resolveCommandAnalysisSummaryForDisplay(params: {
   cwd?: string | null;
   sanitizeText?: (value: string) => string;
 }): Promise<CommandExplanationSummary | null> {
-  const summary =
-    params.host === "node"
-      ? (() => {
-          if (!Array.isArray(params.commandArgv) || params.commandArgv.length === 0) {
-            return null;
-          }
-          const analysis = analyzeCommandForPolicy({
-            source: "argv",
-            argv: params.commandArgv,
-            cwd: params.cwd ?? undefined,
-          });
-          return analysis.ok ? summarizeCommandSegmentsForDisplay(analysis.segments) : null;
-        })()
-      : (await explainCommandForDisplay(params.commandText))?.summary;
-  if (!summary) {
-    return null;
+  let summary: CommandExplanationSummary;
+  if (params.host === "node") {
+    if (!Array.isArray(params.commandArgv) || params.commandArgv.length === 0) {
+      return null;
+    }
+    const analysis = analyzeArgvCommand({
+      argv: params.commandArgv,
+      cwd: params.cwd ?? undefined,
+    });
+    if (!analysis.ok) {
+      return null;
+    }
+    summary = summarizeCommandSegmentsForDisplay(analysis.segments);
+  } else {
+    try {
+      const { explainShellCommand } = await import("../command-explainer/extract.js");
+      const explanation = await explainShellCommand(params.commandText);
+      summary = {
+        commandCount: explanation.topLevelCommands.length,
+        nestedCommandCount: explanation.nestedCommands.length,
+        riskKinds: uniqueStrings(explanation.risks.map((risk) => risk.kind)),
+        warningLines: uniqueStrings(
+          explanation.risks.map((risk) => {
+            const label = riskLabel(risk);
+            return label === risk.kind
+              ? `Contains ${risk.kind}`
+              : `Contains ${risk.kind}: ${label}`;
+          }),
+        ),
+      };
+    } catch {
+      return null;
+    }
   }
   const sanitizeText = params.sanitizeText;
   if (!sanitizeText) {
@@ -114,16 +115,4 @@ export async function resolveCommandAnalysisSummaryForDisplay(params: {
     riskKinds: summary.riskKinds.map((kind) => sanitizeText(kind)),
     warningLines: summary.warningLines.map((line) => sanitizeText(line)),
   };
-}
-
-async function explainCommandForDisplay(
-  command: string,
-): Promise<{ explanation: CommandExplanation; summary: CommandExplanationSummary } | null> {
-  try {
-    const { explainShellCommand } = await import("../command-explainer/extract.js");
-    const explanation = await explainShellCommand(command);
-    return { explanation, summary: summarizeCommandExplanation(explanation) };
-  } catch {
-    return null;
-  }
 }

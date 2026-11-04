@@ -214,7 +214,8 @@ struct CloudWorkerHostTests {
         let cliDirectory = root.appendingPathComponent("runtime/node_modules/openclaw", isDirectory: true)
         try FileManager.default.createDirectory(at: cliDirectory, withIntermediateDirectories: true)
         try """
-        printf '%s\\n' "$OPENCLAW_STATE_DIR" "$OPENCLAW_CUA_DRIVER_ENDPOINT" "$@" > "$OPENCLAW_STATE_DIR/observed"
+        printf '%s\\n' "$OPENCLAW_STATE_DIR" "$OPENCLAW_CUA_DRIVER_ENDPOINT" "$@" > "$OPENCLAW_STATE_DIR/observed.pending" &&
+        /bin/mv "$OPENCLAW_STATE_DIR/observed.pending" "$OPENCLAW_STATE_DIR/observed"
         exec /bin/sleep 30
         """.write(to: cliDirectory.appendingPathComponent("openclaw.mjs"), atomically: true, encoding: .utf8)
         try "synthetic-enrollment".write(

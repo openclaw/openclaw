@@ -2,27 +2,36 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import {
+  describeGatewayNodeVersionRepair,
+  isNodeVersionChangeIssue,
+} from "../daemon/node-version-prefix.js";
 import { SERVICE_AUDIT_CODES } from "../daemon/service-audit.js";
 import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import { sanitizeServiceInspectionError } from "../daemon/service-inspection-error.js";
+import { resolveServiceEntrypoint } from "../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../daemon/service-operation-lock.js";
 import type { GatewayServiceDefinitionTransactionHooks } from "../daemon/service-stage.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceEnv,
-  GatewayServiceInstallArgs,
+import {
+  hasGatewayServiceLauncherOverride,
+  type GatewayServiceCommandConfig,
+  type GatewayServiceEnv,
+  type GatewayServiceInstallArgs,
 } from "../daemon/service-types.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
 import { isSystemdUnitActive, type SystemdUnitScope } from "../daemon/systemd.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { reportGatewayServiceFailure } from "./doctor-service-audit.js";
 
 export type DoctorGatewayInstallationMaintenance = {
   managerUid?: number;
   assertCurrent: () => void;
   assertReadCurrent: () => void;
+  beforeMutation?: () => Promise<void>;
 };
 
 type GatewayServiceInstallationRepair = {
@@ -53,9 +62,12 @@ export async function canRepairRunningGatewayDefinition(params: {
 /** One native writer retains Doctor custody through publication and recovery. */
 export async function installDoctorGatewayService(
   params: Omit<GatewayServiceInstallationRepair, "activeRoot"> & {
-    repair: { kind: "config" } | { kind: "definition" | "installation"; root: string };
+    repair:
+      | { kind: "config"; root?: string }
+      | { kind: "definition" | "installation"; root: string };
     args: GatewayServiceInstallArgs;
     runtime: RuntimeEnv;
+    onFinding?: (finding: HealthFinding) => void;
   },
 ): Promise<void> {
   try {
@@ -74,9 +86,14 @@ export async function installDoctorGatewayService(
             );
           }
         }
-        await params.service.install({ ...params.args, assertCurrent, definitionTransaction });
+        await params.service.install({
+          ...params.args,
+          assertCurrent,
+          definitionTransaction,
+          beforeMutation: params.maintenance?.beforeMutation ?? params.args.beforeMutation,
+        });
       };
-      if (params.repair.kind === "definition") {
+      if (params.repair.kind !== "installation" && params.repair.root) {
         const { reconcileGatewayServiceDefinition } =
           await import("../daemon/service-reconciliation.js");
         await reconcileGatewayServiceDefinition({
@@ -92,13 +109,29 @@ export async function installDoctorGatewayService(
       }
     };
     if (params.repair.kind === "installation") {
-      await repairGatewayServiceInstallation({
+      const repair = {
         service: params.service,
         command: params.command,
         activeRoot: params.repair.root,
         maintenance: params.maintenance,
         env: params.args.env,
-        install,
+      };
+      await withGatewayServiceOperationLock(repair.env, async (assertNative) => {
+        const assertCurrent = () => {
+          assertNative();
+          repair.maintenance?.assertCurrent();
+        };
+        await assertGatewayServiceInstallationRepairAllowed(repair);
+        assertCurrent();
+        await install(assertCurrent);
+        // Standalone Windows reinstall can leave the old process alive after /Run.
+        if (process.platform === "win32" && !repair.maintenance) {
+          await repair.service.restart({
+            env: repair.env,
+            stdout: process.stdout,
+            assertCurrent,
+          });
+        }
       });
       note(
         "Gateway service installation reconciled with the active CLI.",
@@ -111,7 +144,11 @@ export async function installDoctorGatewayService(
     if (err instanceof GatewayServiceAuthorityError || hasCommandProcessCleanupError(err)) {
       throw err;
     }
-    params.runtime.error(`Gateway service update failed: ${String(err)}`);
+    reportGatewayServiceFailure(
+      `Gateway service update failed: ${String(err)}`,
+      params.runtime,
+      params.onFinding,
+    );
   }
 }
 
@@ -164,31 +201,11 @@ export async function assertGatewayServiceInstallationRepairAllowed(
   }
 }
 
-async function repairGatewayServiceInstallation(
-  params: GatewayServiceInstallationRepair & {
-    env: NodeJS.ProcessEnv;
-    install: (assertCurrent: () => void) => Promise<void>;
-  },
-): Promise<void> {
-  await withGatewayServiceOperationLock(params.env, async (assertNative) => {
-    const assertCurrent = () => {
-      assertNative();
-      params.maintenance?.assertCurrent();
-    };
-    await assertGatewayServiceInstallationRepairAllowed(params);
-    assertCurrent();
-    await params.install(assertCurrent);
-    // Maintenance already stopped the old task. A standalone reinstall can leave
-    // an existing Scheduled Task process alive after /Run accepts its new script.
-    if (process.platform === "win32" && !params.maintenance) {
-      await params.service.restart({ env: params.env, stdout: process.stdout, assertCurrent });
-    }
-  });
-}
-
 const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayCommandMissing,
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
+  SERVICE_AUDIT_CODES.gatewayNodePrefixSkew,
+  SERVICE_AUDIT_CODES.gatewayNodeVersionMissing,
 ]);
 export function isExecStartRepairIssue(issue: { code: string }): boolean {
   return EXECSTART_REPAIR_CODES.has(issue.code);
@@ -212,7 +229,8 @@ export function resolveSystemdUnitNameFromServicePath(sourcePath: string | undef
 
 export async function resolveSystemdServiceRewriteBlock(
   command: GatewayServiceCommandConfig,
-  issues: { code: string }[],
+  issues: { code: string; message?: string }[],
+  repairPlan?: { entrypointPath?: string; plannedNodePath?: string; pinnedRuntimePath?: string },
 ): Promise<string | undefined> {
   if (process.platform !== "linux" || !issues.some(isExecStartRepairIssue)) {
     return undefined;
@@ -226,6 +244,29 @@ export async function resolveSystemdServiceRewriteBlock(
   if (!active.value) {
     return undefined;
   }
-  issues.splice(0, issues.length, ...issues.filter((issue) => !isExecStartRepairIssue(issue)));
+  const nodeVersionChange = issues.find(isNodeVersionChangeIssue);
+  issues.splice(
+    0,
+    issues.length,
+    ...issues.filter((issue) => !isExecStartRepairIssue(issue) || isNodeVersionChangeIssue(issue)),
+  );
+  if (nodeVersionChange) {
+    const inspectCommand = `systemctl${scope === "user" ? " --user" : ""} cat ${unitName}`;
+    const intro = `Gateway service ${unitName} is running, and its Node version does not own the installed package. ${nodeVersionChange.message ?? "The service Node and install are split across versions."}`;
+    const repair = describeGatewayNodeVersionRepair({
+      code: nodeVersionChange.code,
+      entrypointPath: repairPlan?.entrypointPath ?? resolveServiceEntrypoint(command),
+      plannedNodePath: repairPlan?.plannedNodePath,
+      recordedNodePath: command.programArguments[0],
+      pinnedRuntimePath: repairPlan?.pinnedRuntimePath,
+    });
+    if (hasGatewayServiceLauncherOverride(command)) {
+      const kept = repair.remains ? ` ${repair.remains}` : "";
+      const select = repair.resolvesSplit ? "" : ` ${repair.action}`;
+      return `${intro} The effective ExecStart comes from an operator-owned systemd drop-in, so rewriting the managed unit does not change it. Inspect with \`${inspectCommand}\` and point that drop-in at the Node that owns this install.${kept}${select}`;
+    }
+    const kept = repair.remains ? `${repair.remains} ` : "";
+    return `${intro} OpenClaw left the running launcher unchanged. ${kept}${repair.action}`;
+  }
   return `Gateway service ${unitName} is running; skipped command/entrypoint rewrites and leaving supervisor metadata unchanged. Stop the service first or use \`${formatCliCommand("openclaw gateway install --force")}\` when you want to replace the active launcher.`;
 }

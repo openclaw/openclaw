@@ -14,6 +14,7 @@ struct SettingsHubScreen: View {
     var body: some View {
         NavigationStack(path: self.$navigationPath) {
             self.root
+                .background(SidebarNavigationMarginAnchor())
                 .navigationDestination(for: SettingsRoute.self) { route in
                     self.nativeScreen(route: route)
                 }
@@ -22,7 +23,7 @@ struct SettingsHubScreen: View {
 
     @ViewBuilder private var root: some View {
         let config = self.appModel.activeGatewayConnectConfig
-        if Self.usesDashboard(
+        if config?.ingressAuthorization == nil, Self.usesDashboard(
             isOperatorConnected: self.appModel.isOperatorGatewayConnected,
             hasOperatorAdminScope: self.appModel.hasOperatorAdminScope,
             isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
@@ -46,6 +47,17 @@ struct SettingsHubScreen: View {
                 .toolbar {
                     if let headerSidebarAction {
                         OpenClawSidebarToolbarItem(action: headerSidebarAction, placement: .topBarLeading)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            self.push(.espSetup)
+                        } label: {
+                            Label { Text("ESP device setup").font(OpenClawType.subheadSemiBold) } icon: {
+                                Image(systemName: "cpu")
+                            }
+                            .labelStyle(.iconOnly)
+                        }
+                        .accessibilityIdentifier("SettingsHub.ESPSetup")
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
@@ -122,13 +134,14 @@ struct SettingsHubScreen: View {
         case .diagnostics: .diagnostics
         case .licenses: .licenses
         case .about: .about
-        case .quickChatShortcut, .microphoneTest, .browserImport, .debug: nil
+        case .aiSetup, .quickChatShortcut, .microphoneTest, .browserImport, .debug: nil
         }
     }
 }
 
 struct EmbeddedDashboardContent: View {
     @State private var bridge: IOSDeviceSettingsBridge
+    private let appModel: NodeAppModel
     let embedCompatibility: DashboardEmbedCompatibility?
     let url: URL
     let config: GatewayConnectConfig?
@@ -145,6 +158,7 @@ struct EmbeddedDashboardContent: View {
         openGateway: (() -> Void)? = nil)
     {
         self.url = url
+        self.appModel = appModel
         self.config = config
         self.openGateway = openGateway
         self.embedCompatibility = embedCompatibility
@@ -170,7 +184,14 @@ struct EmbeddedDashboardContent: View {
                     storedOperatorToken: storedOperatorToken,
                     usesNativeNavigationChrome: true),
                 tls: self.config?.tls,
+                basicProxyCredentialProvider: {
+                    AuthenticatedControlUI.basicProxyCredential(config: self.config)
+                },
                 deviceSettingsBridge: self.bridge,
+                nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
+                    config: self.config,
+                    storedOperatorToken: storedOperatorToken,
+                    appModel: self.appModel),
                 usesNativeEmbed: true,
                 embedCompatibility: self.embedCompatibility)
                 .id(AuthenticatedControlUI.webContentIdentity(

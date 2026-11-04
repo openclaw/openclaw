@@ -1,6 +1,6 @@
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 // Covers file identity comparison across platform stat shapes.
 import { describe, expect, it } from "vitest";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 type FileIdentityStat = Parameters<typeof sameFileIdentity>[0];
 
