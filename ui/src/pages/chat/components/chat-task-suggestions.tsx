@@ -43,6 +43,7 @@ export type ChatTaskSuggestionTrayProps = {
   ) => void;
   onCopyTaskSuggestionPrompt?: (suggestion: TaskSuggestion) => void;
   canAcceptTaskSuggestions?: boolean;
+  taskSuggestionBlockedReason?: string;
   canDismissTaskSuggestions?: boolean;
   onAcceptTaskSuggestion?: (
     suggestion: TaskSuggestion,
@@ -144,7 +145,7 @@ function TaskSuggestionCard(props: {
         label={t("chat.taskSuggestions.startOptions")}
         disabled={busy() || !canAccept()}
         triggerClass="btn task-suggestion__start task-suggestion__start--options"
-        triggerAttributes={{ title: canAccept() ? "" : t("chat.taskSuggestions.adminRequired") }}
+        triggerAttributes={{ title: canAccept() ? "" : props.view.taskSuggestionBlockedReason }}
         trigger={<Icon name="chevronDown" />}
         items={[
           {
@@ -333,7 +334,7 @@ function TaskSuggestionCard(props: {
                 class="btn task-suggestion__start task-suggestion__start--primary"
                 type="button"
                 disabled={busy() || !canAccept()}
-                title={canAccept() ? "" : t("chat.taskSuggestions.adminRequired")}
+                title={canAccept() ? "" : props.view.taskSuggestionBlockedReason}
                 onClick={() => accept("local")}
               >
                 <Icon name="play" />

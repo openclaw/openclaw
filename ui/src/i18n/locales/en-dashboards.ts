@@ -20,7 +20,7 @@ const enDashboards = {
     sortUpdated: "Recently updated",
     sortTitle: "Title A–Z",
     resultCount: "Dashboards: {count}",
-    noResultsTitle: "No matching dashboards",
+    noResultsTitle: "No dashboards match your search.",
     noResultsDescription: "Try another search or author.",
   },
 } satisfies TranslationMap;

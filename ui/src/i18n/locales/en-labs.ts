@@ -15,7 +15,8 @@ const enLabs = {
       childOutcome: "Subagents finished. Check the conversation for the final reply.",
       childOutcomeProcessing: "Subagents finished. The parent agent is processing their results.",
       details: "Subagent details",
-      detailsUnavailable: "Subagent details are unavailable. Counts include all accepted subagents.",
+      detailsUnavailable:
+        "Subagent details are unavailable. Counts include all accepted subagents.",
       otherGroups: "{count} more active groups",
     },
     configure: "Configure",
@@ -39,7 +40,7 @@ const enLabs = {
       executorQuickjs: "QuickJS (isolated)",
     },
     toolSearch: {
-      title: "Tool Search for all models",
+      title: "Tool search for all models",
       description:
         "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
     },

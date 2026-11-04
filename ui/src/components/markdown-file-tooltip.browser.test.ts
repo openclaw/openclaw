@@ -62,7 +62,7 @@ it("keeps the popup reachable and copies the exact path without opening the file
   await copyButton().click();
   expect(write).toHaveBeenCalledWith(filePath);
   copied.resolve();
-  await expect.poll(() => card()?.querySelector('[role="status"]')?.textContent).toBe("Copied!");
+  await expect.poll(() => card()?.querySelector('[role="status"]')?.textContent).toBe("Copied");
   expect(open).not.toHaveBeenCalled();
   expect(card()?.textContent).toContain(filePath);
   expect(document.querySelectorAll("openclaw-tooltip[open]")).toHaveLength(1);
@@ -98,7 +98,7 @@ it.each([undefined, true, false])(
     }
     expect(document.activeElement).toBe(anchor());
     if (copied === false) {
-      await expect.element(page.getByRole("status")).toHaveTextContent("Copy failed");
+      await expect.element(page.getByRole("status")).toHaveTextContent("Couldn’t copy. Try again.");
     }
     expect(card()).toBeNull();
     expect(anchor().hasAttribute("title")).toBe(false);
@@ -164,7 +164,7 @@ it.each(["path changes", "link is removed", "file switches"])(
     if (change === "file switches") {
       await expect.element(copyButton()).toBeVisible();
       expect(card()?.textContent).toContain("src/next.ts");
-      expect(card()?.textContent).not.toContain("Copied!");
+      expect(card()?.textContent).not.toContain("Copied");
     } else {
       await expect.poll(card).toBeNull();
       expect(document.querySelector(".markdown-file-tooltip")).toBeNull();
