@@ -217,6 +217,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 | NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                               | `novita/deepseek/deepseek-v3-0324`                         |
 | [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                               | `ollama-cloud/kimi-k2.6`                                   |
 | OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`       | `openrouter/auto`                                          |
+| [Opper](/providers/opper)               | `opper`                          | `OPPER_API_KEY`                                | `opper/claude-sonnet-5-5`                                  |
 | Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                              | `qianfan/deepseek-v3.2`                                    |
 | [Requesty](/providers/requesty)         | `requesty`                       | `REQUESTY_API_KEY`                             | `requesty/claude-sonnet-5-5`                               |
 | Tencent TokenHub                        | `tencent-tokenhub`               | `TOKENHUB_API_KEY`                             | `tencent-tokenhub/hy3-preview`                             |

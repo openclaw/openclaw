@@ -67,6 +67,15 @@ contributed by the LongCat team at Meituan with permission to use it here:
   `currentColor` so the mark renders on both light and dark themes; the
   geometry otherwise matches the cited source.
 
+## Opper icon
+
+`ProviderIcon-opper.svg` is the official Opper brand mark, contributed by the
+Opper team with permission to use it here:
+
+- Source: official Opper logo vector (https://opper.ai)
+- The mark is recolored to `currentColor` so it renders on both light and dark
+  themes; the geometry otherwise matches the supplied source.
+
 ## Requesty icon
 
 `ProviderIcon-requesty.svg` is the official Requesty brand mark, contributed by

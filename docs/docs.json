@@ -2340,6 +2340,7 @@
                       "providers/litellm",
                       "providers/neon",
                       "providers/openrouter",
+                      "providers/opper",
                       "providers/requesty",
                       "providers/vercel-ai-gateway"
                     ]

@@ -60,6 +60,7 @@ The following defaults reuse the corresponding files in [`ui/public/provider-ico
 | `opencode`              | `ProviderIcon-opencode.svg`     |
 | `opencode-go`           | `ProviderIcon-opencodego.svg`   |
 | `openrouter`            | `ProviderIcon-openrouter.svg`   |
+| `opper`                 | `ProviderIcon-opper.svg`        |
 | `perplexity`            | `ProviderIcon-perplexity.svg`   |
 | `pixverse`              | `ProviderIcon-pixverse.svg`     |
 | `qianfan`               | `ProviderIcon-qianfan.svg`      |
