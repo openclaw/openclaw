@@ -19,6 +19,7 @@ export function startFixtureAttempt(
   fixture: { root: string; pluginConfig: CodexPluginConfig },
   attemptClientFactory = getLeasedSharedCodexAppServerClient,
   signal = new AbortController().signal,
+  attemptParams: Partial<EmbeddedRunAttemptParams> = {},
 ) {
   const agentDir = path.join(fixture.root, "agent");
   const workspaceDir = path.join(fixture.root, "workspace");
@@ -65,6 +66,7 @@ export function startFixtureAttempt(
         authStorage: {} as never,
         authProfileStore: { version: 1, profiles: {} },
         modelRegistry: {} as never,
+        ...attemptParams,
       }) as EmbeddedRunAttemptParams,
     sessionAgentId: "agent-1",
     effectiveWorkspace: workspaceDir,

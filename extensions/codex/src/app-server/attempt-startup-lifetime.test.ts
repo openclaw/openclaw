@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answerInitialize,
   createAttemptPaths,
+  createAttemptParams,
   createAttemptClientHarness,
   createAttemptThreadStarter,
   readHarnessRequestMethods,
@@ -116,6 +117,7 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
       harness: retained,
       paths,
       skipStartSpy: true,
+      buildAttemptParams: () => ({ ...createAttemptParams(paths), disableTools: false }),
     });
     const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
     const threadStart = await threadWritten.promise;
@@ -129,6 +131,7 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
       harness: replacement,
       paths,
       skipStartSpy: true,
+      buildAttemptParams: () => ({ ...createAttemptParams(paths), disableTools: false }),
     }).run;
     await answerInitialize(replacement);
     const mutate = vi.spyOn(testCodexAppServerBindingStore, "mutate");

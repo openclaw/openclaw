@@ -383,7 +383,8 @@ describe("Codex app-server startup retry", () => {
 
   it("preserves the shared client and binding on an overloaded resume with a sibling lease", async () => {
     const fixture = await createStartupFailureFixture("overload");
-    const sibling = await startFixtureAttempt(fixture);
+    const persistentParams = { disableTools: false };
+    const sibling = await startFixtureAttempt(fixture, undefined, undefined, persistentParams);
     sibling.turnRoute.release();
     const identity = {
       kind: "session" as const,
@@ -397,7 +398,9 @@ describe("Codex app-server startup retry", () => {
       const requestsBeforeResume = await fs.readFile(fixture.requestLogPath, "utf8");
 
       // An unrelated lease must not hide a native refusal or lose its healthy client.
-      await expect(startFixtureAttempt(fixture)).rejects.toMatchObject({
+      await expect(
+        startFixtureAttempt(fixture, undefined, undefined, persistentParams),
+      ).rejects.toMatchObject({
         name: "CodexAppServerRpcError",
         code: -32_001,
         method: "thread/resume",
