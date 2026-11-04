@@ -549,7 +549,8 @@ export const mcpStdioRuntime = Object.freeze({
   },
 });
 
-export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
+export type { McpToolCatalog } from "../agents/agent-bundle-mcp-catalog.types.js";
+export type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
 
 /**

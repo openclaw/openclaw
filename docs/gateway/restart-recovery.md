@@ -436,8 +436,10 @@ an ordinary failed send that the sender can resend. A channel identity without a
 profile does not authorize queued execution after restart.
 
 New messages arriving during a resumed run use ordinary steering and queue rules.
-There is no recovery-predecessor wait or special recovery admission lane. Explicit
-Stop, cancellation, archive, and reset keep their normal meanings.
+Resumed turns execute on the bounded `restart-recovery` lane at
+`agents.defaults.maxConcurrent`, independently of interactive and cron capacity.
+A recovery backlog cannot queue ahead of new cron runs. Per-session input order
+is unchanged; Stop, cancellation, archive, and reset keep their normal meanings.
 
 ### Subagents
 

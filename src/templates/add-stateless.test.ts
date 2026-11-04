@@ -106,14 +106,14 @@ describe("stateless Template Add", () => {
     const sourceRoot = path.join(stateDir, "source");
     mkdirSync(sourceRoot);
     writeFileSync(path.join(sourceRoot, "SOUL.md"), "Workspace agent instructions.\n");
-    const manifestPath = path.join(sourceRoot, "template.json");
+    const manifestPath = path.join(sourceRoot, "CLAW.md");
     writeFileSync(
       manifestPath,
-      JSON.stringify({
+      `---\n${JSON.stringify({
         schemaVersion: 1,
         agent: { id: "workspace-agent", name: "Workspace Agent" },
         workspace: { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } },
-      }),
+      })}\n---\n`,
     );
     const result = await readTemplateManifestFile(manifestPath);
     if (!result.ok) {
@@ -384,18 +384,18 @@ async function portableSource(fixture: OpenClawTestState) {
   const packageRoot = fixture.statePath("package");
   await mkdir(packageRoot, { recursive: true });
   await writeFile(
-    path.join(packageRoot, "template.json"),
-    JSON.stringify({
+    path.join(packageRoot, "CLAW.md"),
+    `---\n${JSON.stringify({
       schemaVersion: 1,
       agent: { id: "portable", name: "Portable" },
       workspace: { bootstrapFiles: { "HEARTBEAT.md": { source: "HEARTBEAT.md" } } },
-    }),
+    })}\n---\n`,
   );
   await writeFile(
     path.join(packageRoot, "HEARTBEAT.md"),
     `${checklist}tasks:\n- name: Summary\n  interval: 15m\n  prompt: Prepare a summary.\n`,
   );
-  const source = await readTemplateManifestFile(path.join(packageRoot, "template.json"));
+  const source = await readTemplateManifestFile(path.join(packageRoot, "CLAW.md"));
   assert(source.ok, JSON.stringify(source.diagnostics));
   return source;
 }
