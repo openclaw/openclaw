@@ -418,20 +418,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/plugins/overview.tsx",
-      "text": "Clean"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/plugins/overview.tsx",
-      "text": "Review"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/skills/library-detail.tsx",
       "text": "SKILL.md"
     },
