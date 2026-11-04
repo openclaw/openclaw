@@ -16,6 +16,9 @@ export type DiagnosticSessionActivitySnapshot = {
   activeBackendLivenessDeadlineAtMs?: number;
   /** Absolute provider retry deadline validated against the live logical run. */
   activeRetryWaitDeadlineAtMs?: number;
+  /** Compaction owns progress while it runs; its own safety timeout bounds the allowance. */
+  activeCompactionStartedAtMs?: number;
+  activeCompactionDeadlineAtMs?: number;
 };
 
 // Quiet-but-alive tools are normal agent behavior; the CLI byte watchdog kills

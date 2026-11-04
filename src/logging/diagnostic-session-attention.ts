@@ -56,6 +56,12 @@ export function classifySessionAttention(params: {
   if (params.activity.activeWorkKind) {
     const lastProgressAgeMs = params.activity.lastProgressAgeMs ?? 0;
     if (
+      params.activity.activeCompactionDeadlineAtMs !== undefined &&
+      Date.now() < params.activity.activeCompactionDeadlineAtMs
+    ) {
+      return longRunning("active_compaction");
+    }
+    if (
       params.activity.hasActiveEmbeddedRun === true &&
       typeof params.stuckSessionAbortMs === "number" &&
       (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= params.stuckSessionAbortMs

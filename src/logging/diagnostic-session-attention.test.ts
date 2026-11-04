@@ -31,6 +31,35 @@ describe("classifySessionAttention", () => {
       );
     },
   );
+  it.each([false, true])(
+    "classifies an in-deadline compaction as long running (expired=%s)",
+    (expired) => {
+      const classification = classifySessionAttention({
+        state: "processing",
+        queueDepth: 1,
+        activity: {
+          activeWorkKind: "embedded_run",
+          hasActiveEmbeddedRun: true,
+          lastProgressAgeMs: 660_000,
+          activeCompactionStartedAtMs: Date.now() - (expired ? 700_000 : 60_000),
+          activeCompactionDeadlineAtMs: Date.now() + (expired ? -1000 : 600_000),
+        },
+        staleMs: 120_000,
+        stuckSessionAbortMs: 360_000,
+      });
+      expect(classification).toMatchObject(
+        expired
+          ? {
+              eventType: "session.stalled",
+              reason: "active_work_without_progress",
+            }
+          : {
+              eventType: "session.long_running",
+              reason: "active_compaction",
+            },
+      );
+    },
+  );
   it.each([
     {
       name: "queued stale state without active work",
