@@ -343,11 +343,12 @@ function registerSkillWorkshopHealthChecks(
   _params: BundledHealthCheckParams,
   registerCheck: typeof registerHealthCheck,
 ): void {
-  // Registered even while the plugin is disabled: the check reports that plugin switch.
-  loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+  // Registered even while the plugin is disabled: the check reports that plugin switch. A
+  // package without the plugin has no Workshop tool to diagnose, so a missing artifact is skipped.
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync<BundledHealthApi>({
     dirName: "skill-workshop",
-    artifactBasename: "doctor-health-api.js",
-  }).registerSkillWorkshopDoctorChecks?.({
+    artifactCandidates: ["doctor-health-api.js"],
+  })?.registerSkillWorkshopDoctorChecks?.({
     getHealthCheck,
     registerHealthCheck: registerCheck,
     async explainToolAvailability(params) {

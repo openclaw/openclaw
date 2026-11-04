@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -9,6 +8,7 @@ import {
   isInternalSessionEffectsKey,
   resolveFailoverReasonFromError,
 } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import type { ReviewedSkillUse } from "./experience-review-prompt.js";
 import { workshopLog } from "./runtime.js";

@@ -8,7 +8,6 @@ import {
   validateSkillsWorkshopUndoParams,
   type ValidationError,
 } from "@openclaw/gateway-protocol";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -18,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyWorkshopDraft, discardWorkshopDraft, viewWorkshopDraft } from "./drafts.js";
 import {
   archiveWorkshopSkill,

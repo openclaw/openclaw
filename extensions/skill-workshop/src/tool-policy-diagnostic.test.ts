@@ -37,7 +37,7 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
     [
       agent({ sandbox: { mode: "all" }, tools: additiveGrant }),
       "entries.main",
-      "sandboxed run without library-authoring authority",
+      "unavailable in sandboxed runs",
     ],
     [
       agent({ tools: additiveGrant }, { sandbox: { mode: "non-main" } }),
@@ -49,7 +49,7 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
     expect(diagnostic).toMatchObject({ source: `agents.${owner}.sandbox.mode` });
     expect(diagnostic?.detail).toContain(detail);
     expect(diagnostic?.fix).toContain("non-sandboxed session");
-    expect(diagnostic?.fix).toContain("host-granted library-authoring authority");
+    expect(diagnostic?.fix).toContain("openclaw skills workshop CLI");
     expect(diagnostic?.fix).not.toContain("alsoAllow");
   });
 

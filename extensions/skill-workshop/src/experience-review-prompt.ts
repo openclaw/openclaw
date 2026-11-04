@@ -1,4 +1,4 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   SKILL_AUTHORING_STANDARDS_PROMPT,
   SKILL_DO_NOT_CAPTURE_PROMPT,

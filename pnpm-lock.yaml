@@ -2335,9 +2335,6 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
     devDependencies:
-      '@openclaw/normalization-core':
-        specifier: workspace:*
-        version: link:../../packages/normalization-core
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk

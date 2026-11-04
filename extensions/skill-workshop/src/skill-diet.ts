@@ -3,13 +3,7 @@
 // rest is tightened, and a separate reviewer must confirm that no rule was lost or weakened
 // before one versioned write publishes the result.
 import path from "node:path";
-import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
-import {
-  asNonArrayRecord,
-  asOptionalRecord,
-  isStringArray,
-} from "@openclaw/normalization-core/record-coerce";
-import { readNonBlankString, readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -21,6 +15,13 @@ import {
   loadUtilityCompletion,
   type WorkshopChange,
 } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
+import {
+  asNonArrayRecord,
+  asOptionalRecord,
+  readNonBlankString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
   listWorkshopSkills,

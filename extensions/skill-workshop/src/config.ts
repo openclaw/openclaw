@@ -1,5 +1,5 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** How background reviews may change Workshop skills. */
 type SkillsWorkshopAutonomousMode = "off" | "propose" | "auto";

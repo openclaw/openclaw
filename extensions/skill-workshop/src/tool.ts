@@ -1,5 +1,4 @@
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ToolInputError } from "openclaw/plugin-sdk/code-mode-executor-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -10,6 +9,7 @@ import {
   canonicalizePath,
   type WorkshopChange,
 } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
