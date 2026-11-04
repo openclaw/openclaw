@@ -274,14 +274,16 @@ describe("without the skill-workshop plugin", () => {
       }
       return realSetTimeout(run, delay);
     }) as typeof setTimeout);
-    onTestFinished(() => vi.restoreAllMocks());
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const request = pluginGateway({ enabled: false }, () => Promise.resolve({ ok: true }));
     const page = await mount(request, { withoutPlugin: true, methods: pluginMethods });
 
     await click(page, "Turn on Skill Workshop");
     await waitForSolid(() => expect(timers).toHaveLength(1));
     expect(text(page, ".sw-plugin-off button")).toBe("Turning on…");
-    timers[0].run();
+    timers.shift()?.run();
     await waitText(page, "Skill Workshop is on. Reload to open it.");
     expect(button(page, "Reload")).not.toBeNull();
     expect(button(page, "Turn on Skill Workshop")).toBeNull();

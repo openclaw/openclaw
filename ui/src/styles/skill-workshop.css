@@ -565,8 +565,7 @@
 }
 
 .sw-empty__title {
-  color: var(--oc-text-primary, var(--text));
-  font-size: var(--oc-font-size-base, 1rem);
+  color: var(--oc-text-primary);
 }
 
 .sw-empty .oc-banner {
