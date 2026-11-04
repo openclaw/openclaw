@@ -148,17 +148,27 @@ it("pins an available prior and computes its full diff before subsequent outcome
       "hash-type",
     ] as const) {
       const invalid = structuredClone(bundle);
-      if (reason === "future") invalid.restoredAt = "2026-11-04T00:01:00Z";
-      if (reason === "consumer") invalid.consumer.runId = "201";
-      if (reason === "context")
+      if (reason === "future") {
+        invalid.restoredAt = "2026-11-04T00:01:00Z";
+      }
+      if (reason === "consumer") {
+        invalid.consumer.runId = "201";
+      }
+      if (reason === "context") {
         invalid.candidates[0]!.observations.observations.context.lockDigest = "f".repeat(64);
-      if (reason === "missing-source")
+      }
+      if (reason === "missing-source") {
         invalid.candidates[0]!.observations.observations.context.revision = "f".repeat(40);
-      if (reason === "runtime")
+      }
+      if (reason === "runtime") {
         invalid.candidates[0]!.observations.observations.invocations[0]!.runtime = "bun";
-      if (reason === "date-type") Object.assign(invalid, { restoredAt: [invalid.restoredAt] });
-      if (reason === "hash-type")
+      }
+      if (reason === "date-type") {
+        Object.assign(invalid, { restoredAt: [invalid.restoredAt] });
+      }
+      if (reason === "hash-type") {
         Object.assign(invalid.candidates[0]!, { memberSha256: ["b".repeat(64)] });
+      }
       writeFileSync(target, JSON.stringify(invalid));
       const fallback = captureAdaptiveGraphDecision(options);
       expect(fallback.graph, reason).toBeNull();

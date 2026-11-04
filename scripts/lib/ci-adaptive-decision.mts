@@ -94,7 +94,7 @@ export function captureAdaptiveGraphDecision(options: {
       return decision;
     }
     const candidates: Prior[] = bundle.candidates;
-    for (const prior of [...candidates].sort(
+    for (const prior of candidates.toSorted(
       (a, b) =>
         Date.parse(b.createdAt) - Date.parse(a.createdAt) ||
         b.artifactId - a.artifactId ||
