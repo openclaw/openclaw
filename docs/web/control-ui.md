@@ -116,7 +116,7 @@ checkout paths. This label does not grant access to private repository content.
 
 ## Create a nested session
 
-Right-click a session in the sidebar and choose **New Nested Session** to open an
+Right-click a session in the sidebar and choose **New child session** to open an
 empty, persistent child beneath it. The parent expands to show the new session,
 and the Control UI opens the child conversation.
 
