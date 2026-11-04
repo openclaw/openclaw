@@ -53,6 +53,7 @@ it("lists configured API-key models without loading profile auth runtimes", asyn
   vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
     throw new Error("Configured API-key catalogs must not load broad auth helpers");
   });
+  // mock-isolation: Prepared credentials must not initialize profile auth runtimes.
   vi.doMock("openclaw/plugin-sdk/provider-auth-runtime", () => {
     throw new Error("Configured API-key catalogs must not load profile auth runtime");
   });
