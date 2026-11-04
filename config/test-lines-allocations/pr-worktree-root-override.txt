@@ -1,2 +1,2 @@
-# scripts/pr must provision and review under OPENCLAW_PR_WORKTREE_ROOT, and a partial nitSweep must name its fix.
-48
+# scripts/pr must provision and review under OPENCLAW_PR_WORKTREE_ROOT.
+35
