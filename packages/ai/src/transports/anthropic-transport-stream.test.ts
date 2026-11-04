@@ -622,10 +622,10 @@ describe("anthropic transport stream", () => {
 
   it.each([
     {
-      label: "defaults missing catalog limits",
+      label: "rejects missing catalog limits before dispatch",
       maxTokens: undefined,
       contextWindow: 200_000,
-      expected: 4_096,
+      expected: undefined,
     },
     {
       label: "rejects an invalid catalog limit",

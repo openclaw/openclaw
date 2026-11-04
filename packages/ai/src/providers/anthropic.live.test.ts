@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { Context } from "../types.js";
 import { isContextOverflow } from "../utils/overflow.js";
@@ -125,7 +126,7 @@ describeLive("Anthropic provider live", () => {
       const context: Context = {
         messages: [{ role: "user", content: "Reply briefly with ok.", timestamp: 0 }],
       };
-      const requestedMaxTokens = model.maxTokens * 100;
+      const requestedMaxTokens = expectDefined(model.maxTokens, "fixture output cap") * 100;
 
       const result = await streamSimpleAnthropic(model, context, {
         apiKey,

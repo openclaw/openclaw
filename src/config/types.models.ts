@@ -46,9 +46,9 @@ export type ModelDefinitionConfig = Omit<
   /** Supported input modalities for routing and media-tool selection. */
   input: NonNullable<ModelDefinitionSchemaInput["input"]>;
   /** Token pricing in USD per million tokens. */
-  cost: RawModelCostConfig;
-  /** Maximum completion/output token budget. */
-  maxTokens: number;
+  cost?: RawModelCostConfig;
+  /** Optional execution output budget; intersected with a qualified model ceiling. */
+  maxTokens?: number;
   /** Optional agent execution runtime override for this provider/model pair. */
   agentRuntime?: AgentRuntimePolicyConfig;
   /** Provider compatibility flags for payload shaping and feature gating. */

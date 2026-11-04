@@ -336,21 +336,21 @@ export interface Usage {
     | { state: "unavailable" };
   totalTokens: number;
   cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    total: number;
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
     /** Provenance for the recorded total cost; provider-billed totals are authoritative. */
     totalOrigin?: "provider-billed";
   };
 }
 
 /** Per-million-token rates for separately billed token buckets. */
-export type ModelCostRates = ModelDataCostRates;
+export type ModelCostRates = Partial<ModelDataCostRates>;
 
 /** One whole-request tier on the cache-inclusive prompt-token axis. */
-export type PricingTier = ModelCostRates & {
+export type PricingTier = ModelDataCostRates & {
   /** Half-open prompt-token interval `[start, end)`. */
   range: [number, number];
 };
@@ -836,7 +836,8 @@ export interface Model<TApi extends Api = Api> {
    */
   thinkingLevelMap?: ThinkingLevelMap;
   input: ("text" | "image")[];
-  cost: RawModelCostConfig;
+  /** Missing rates remain unknown; an explicit zero is a qualified free bucket. */
+  cost?: RawModelCostConfig;
   contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
@@ -848,7 +849,8 @@ export interface Model<TApi extends Api = Api> {
   parameterCount?: number;
   /** Provider/catalog-declared canonical developer lineage, such as `anthropic`. */
   family?: string;
-  maxTokens: number;
+  /** Output ceiling or explicit execution bound; absence never implies a provider default. */
+  maxTokens?: number;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;
   headers?: ModelRequestHeaders;

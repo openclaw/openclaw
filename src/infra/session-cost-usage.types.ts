@@ -43,13 +43,17 @@ export type CostUsageTotals = {
   cacheRead: number;
   cacheWrite: number;
   totalTokens: number;
+  /** Sum of known call totals; incomplete when missingCostEntries is nonzero. */
   totalCost: number;
+  // Known component subtotals; incomplete when missingCostBreakdownEntries is nonzero.
   // Cost breakdown by token type (from actual API data when available)
   inputCost: number;
   outputCost: number;
   cacheReadCost: number;
   cacheWriteCost: number;
   missingCostEntries: number;
+  /** Calls missing at least one cost bucket, independently of their billed total. */
+  missingCostBreakdownEntries?: number;
   /** Missing-cost entry counts keyed by the raw `provider/model` attribution. */
   missingCostByModel?: Record<string, number>;
 };

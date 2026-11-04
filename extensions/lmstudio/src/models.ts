@@ -456,3 +456,35 @@ export const getUnlistedLmstudioConfiguredModelIds: NonNullable<
     })
     .map((model) => model.modelId);
 };
+
+export function applyRequestedContextWindowToAllModels(params: {
+  models: ModelDefinitionConfig[];
+  discoveryModels: LmstudioModelWire[];
+  requestedContextWindow?: number;
+}): ModelDefinitionConfig[] {
+  const requestedContextWindow = params.requestedContextWindow;
+  if (!requestedContextWindow) {
+    return params.models;
+  }
+  const contextLimitByModelId = new Map(
+    params.discoveryModels.flatMap((entry) => {
+      const modelId = entry.key?.trim();
+      const raw = entry.max_context_length;
+      const limit =
+        raw !== undefined && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
+      return modelId ? [[modelId, limit] as const] : [];
+    }),
+  );
+  return params.models.map((model) => {
+    const contextTokens = Math.min(
+      requestedContextWindow,
+      contextLimitByModelId.get(model.id) ?? requestedContextWindow,
+    );
+    return {
+      ...model,
+      contextTokens,
+      maxTokens:
+        model.maxTokens === undefined ? undefined : Math.min(model.maxTokens, contextTokens),
+    };
+  });
+}

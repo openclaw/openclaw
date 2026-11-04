@@ -1842,7 +1842,7 @@ describe("buildLiveGatewayConfig", () => {
       cost: normalizeResolvedPricing(rawCost),
     };
     const originalCost = structuredClone(model.cost);
-    expect(model.cost.tieredPricing?.[1]?.range).toEqual([1001, Infinity]);
+    expect(model.cost?.tieredPricing?.[1]?.range).toEqual([1001, Infinity]);
     const cfg = buildLiveGatewayConfig({
       cfg: {},
       candidates: [model],
@@ -1862,9 +1862,9 @@ describe("buildLiveGatewayConfig", () => {
 
     expect(serializedCost).toEqual(rawCost);
     expect(projected).not.toBe(model.cost);
-    expect(projected.tieredPricing).not.toBe(model.cost.tieredPricing);
-    expect(projected.tieredPricing?.[0]?.range).not.toBe(model.cost.tieredPricing?.[0]?.range);
-    expect(projected.tieredPricing?.[1]?.range).not.toBe(model.cost.tieredPricing?.[1]?.range);
+    expect(projected.tieredPricing).not.toBe(model.cost?.tieredPricing);
+    expect(projected.tieredPricing?.[0]?.range).not.toBe(model.cost?.tieredPricing?.[0]?.range);
+    expect(projected.tieredPricing?.[1]?.range).not.toBe(model.cost?.tieredPricing?.[1]?.range);
     expect(model.cost).toEqual(originalCost);
     const restoredCost = normalizeResolvedPricing(serializedCost);
     for (const input of [900, 901, 1900]) {

@@ -5,6 +5,7 @@ import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.t
 import { formatDurationCompact, formatDurationHuman } from "./format-duration.ts";
 import {
   clampText,
+  formatCost,
   createMsFormatter,
   formatDateTimeMs,
   formatDateMs,
@@ -353,4 +354,14 @@ describe("text truncation", () => {
     expect(clampText("abc", 2)).toBe("a…");
     expect(truncateText("abc", 2)).toEqual({ text: "ab", truncated: true, total: 3 });
   });
+});
+
+it.each([
+  [undefined, "—"],
+  [null, "—"],
+  [Number.NaN, "—"],
+  [0, "$0.00"],
+  [1, "$1.00"],
+] as const)("distinguishes unavailable cost %s from a complete zero", (value, expected) => {
+  expect(formatCost(value)).toBe(expected);
 });

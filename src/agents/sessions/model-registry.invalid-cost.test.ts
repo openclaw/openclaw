@@ -85,3 +85,40 @@ describe.each(["authored", "generated"])("%s catalog semantic validation", (sour
     );
   });
 });
+
+it.each(["authored", "generated"])(
+  "retains %s rows with unknown limits through registry forks",
+  (source) => {
+    const registry = registryFor(
+      source,
+      "fixture",
+      [
+        { id: "unknown" },
+        { id: "local-budget", contextTokens: 4096 },
+        { id: "known", contextWindow: 8192, maxTokens: 2048 },
+      ],
+      { api: "anthropic-messages" },
+    );
+    for (const current of [registry, registry.fork(AuthStorage.inMemory())]) {
+      expect(current.getAll().map((model) => model.id)).toEqual([
+        "unknown",
+        "local-budget",
+        "known",
+      ]);
+      expect(current.find("fixture", "unknown")).toMatchObject({
+        contextWindow: undefined,
+        maxTokens: undefined,
+      });
+      expect(current.find("fixture", "local-budget")).toMatchObject({
+        contextWindow: undefined,
+        contextTokens: 4096,
+        maxTokens: undefined,
+      });
+      expect(current.find("fixture", "known")).toMatchObject({
+        contextWindow: 8192,
+        maxTokens: 2048,
+      });
+      expect(current.getError()).toBeUndefined();
+    }
+  },
+);

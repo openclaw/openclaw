@@ -13,14 +13,15 @@ import {
 export const RADIUS_BASE_URL = "https://radius.pi.dev/v1";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-type ModelCost = ModelDefinitionConfig["cost"];
+type ModelCost = NonNullable<ModelDefinitionConfig["cost"]>;
+type CompleteRates = Required<Pick<ModelCost, "input" | "output" | "cacheRead" | "cacheWrite">>;
 type RadiusModel = Omit<ModelDefinitionConfig, "input" | "contextWindow"> & {
   input: Array<"text" | "image">;
   contextWindow: number;
 };
 type RadiusCatalog = Omit<ModelProviderConfig, "models"> & { models: RadiusModel[] };
 
-function readRates(value: unknown): ModelCost | undefined {
+function readRates(value: unknown): CompleteRates | undefined {
   const row = asOptionalRecord(value);
   const input = asFiniteNumberInRange(row?.input, { min: 0 });
   const output = asFiniteNumberInRange(row?.output, { min: 0 });
@@ -46,7 +47,7 @@ function readCost(value: unknown): ModelCost | undefined {
   if (!Array.isArray(tiers)) {
     return undefined;
   }
-  const thresholds: Array<{ start: number; rates: ModelCost }> = [{ start: 0, rates }];
+  const thresholds: Array<{ start: number; rates: CompleteRates }> = [{ start: 0, rates }];
   for (const tier of tiers) {
     const tierRates = readRates(tier);
     const threshold = asFiniteNumberInRange(asOptionalRecord(tier)?.inputTokensAbove, { min: 0 });

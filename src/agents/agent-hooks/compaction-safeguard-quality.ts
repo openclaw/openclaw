@@ -40,7 +40,7 @@ export function resolveSummaryReserveTokens(
   // tokens; generic callers own their output budget.
   const requested = Math.max(1, Math.min(Math.floor(requestedReserveTokens), 20_000));
   const modelMaxTokens = model.maxTokens;
-  if (!Number.isFinite(modelMaxTokens) || modelMaxTokens <= 0) {
+  if (modelMaxTokens === undefined || !Number.isFinite(modelMaxTokens) || modelMaxTokens <= 0) {
     return requested;
   }
   return Math.max(1, Math.min(requested, Math.floor(modelMaxTokens)));

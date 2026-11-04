@@ -71,6 +71,43 @@ you only need an issued ClawRouter key.
   </Step>
 </Steps>
 
+## Offered model discovery
+
+When the configured router advertises an eligible model-list operation, the
+catalog refresh uses that exact operation with the same ClawRouter key. It does
+not contact upstream discovery services or borrow upstream credentials.
+
+The supported contracts cover twelve provider families:
+
+| Families                               | Declared response contract                                       |
+| -------------------------------------- | ---------------------------------------------------------------- |
+| Arcee, Baseten, Chutes, Novita, Venice | Each provider's native model-list envelope                       |
+| Bifrost, DeepInfra, LiteLLM            | Strict `openai.models` list                                      |
+| Cerebras, NVIDIA                       | Manifest-only `{providerId, catalog}` public metadata projection |
+| Featherless                            | Manifest-only `{providerId, catalog}` complete scan              |
+| Requesty                               | `requesty.models_managed` Chat policy list                       |
+
+Featherless's paged native codec and DeepInfra's separate internal pricing feed
+are not substitute envelopes. The client never follows discovery pagination or
+redirects. Opaque aliases retain their spelling; Baseten decision models and
+Requesty's regional/non-Chat policies do not enter Chat selection.
+
+A complete empty result removes that provider's static seed rows. A failed,
+malformed or interrupted response is a failed refresh, not an empty inventory
+or a reason to retry anonymously. Cache identity includes the original key,
+profile, origin and declared operation. All requests share the acquisition's
+existing deadline. Cancelling a caller stops delivery; admitted shared metadata
+reads retain their existing bounded completion and cleanup lifetime.
+
+Missing prices and limits stay unknown. Exact current catalog route/billing
+facts may remain attached to the same upstream identity; template defaults are
+not used. Upstream price observations, including explicit zero, remain separate
+from the router's qualified tariff. NVIDIA's suggested output budget is not an
+output ceiling. Discovery observations are removed before inference requests.
+
+These client contracts require matching runtime declarations and grants on the
+configured deployment. They do not establish live account entitlement.
+
 ## Vercel native Messages
 
 The frozen `vercel-ai-gateway/anthropic/claude-sonnet-4.6` row uses OpenClaw's

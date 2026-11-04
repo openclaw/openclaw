@@ -1,4 +1,4 @@
-import { calculateUsageCost, type ModelCostConfig } from "@openclaw/llm-core";
+import { calculateUsageCost, normalizeUsageCost, type ModelCostConfig } from "@openclaw/llm-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -7,26 +7,8 @@ import { hasRecordedUsageCost, normalizeUsage } from "../agents/usage.js";
 import { isToolCallContentType } from "../chat/tool-content.js";
 import type { CostBreakdown, ParsedTranscriptEntry } from "./session-cost-usage.types.js";
 
-const extractCostBreakdown = (usageRaw?: UsageLike): CostBreakdown | undefined => {
-  const cost = usageRaw?.cost;
-  if (!cost) {
-    return undefined;
-  }
-
-  const total = asFiniteNumber(cost.total);
-  if (total === undefined || total < 0) {
-    return undefined;
-  }
-
-  return {
-    total,
-    input: asFiniteNumber(cost.input),
-    output: asFiniteNumber(cost.output),
-    cacheRead: asFiniteNumber(cost.cacheRead),
-    cacheWrite: asFiniteNumber(cost.cacheWrite),
-    totalOrigin: cost.totalOrigin === "provider-billed" ? cost.totalOrigin : undefined,
-  };
-};
+const extractCostBreakdown = (usageRaw?: UsageLike): CostBreakdown | undefined =>
+  normalizeUsageCost(usageRaw?.cost);
 
 const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
   const message = entry.message as Record<string, unknown> | undefined;
@@ -64,9 +46,13 @@ export const parseUsageCostTranscriptRecord = (
 
   const usageRaw =
     (message.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
-  // Usage reports count only measured turns. A turn whose provider usage is unknown (a failed or
-  // interrupted request) adds no tokens or cost; it still counts as a message.
-  const reported = usageRaw?.usageReport?.state === "unavailable" ? undefined : usageRaw;
+  // Unavailable token accounting cannot erase a separately authoritative billed amount.
+  const reported =
+    usageRaw?.usageReport?.state === "unavailable"
+      ? usageRaw.cost?.totalOrigin === "provider-billed"
+        ? { cost: usageRaw.cost }
+        : undefined
+      : usageRaw;
   const usage = reported ? (normalizeUsage(reported) ?? undefined) : undefined;
 
   const provider =
@@ -155,7 +141,8 @@ export function needsUsageCostEstimate(
   // Recorded estimates include request-time service tiers the current catalog cannot recover.
   return (
     Boolean(entry?.usage) &&
-    !((entry?.costTotal ?? 0) > 0 || hasRecordedUsageCost(entry?.costBreakdown))
+    entry?.costTotal === undefined &&
+    !hasRecordedUsageCost(entry?.costBreakdown)
   );
 }
 
@@ -182,18 +169,17 @@ export function applyUsageCostEstimate(
   entry: UsageCostEstimateEntry,
   resolveCost: UsageCostResolver,
 ): ParsedTranscriptEntry {
-  const cost = resolveCost({ provider: entry.provider, model: entry.model });
-  const { totalTokens } = computeUsageTokenTotals(entry.usage);
-  if (!cost && totalTokens > 0) {
-    entry.costTotal = undefined;
-    entry.costBreakdown = undefined;
-  } else if (entry.costTotal === undefined || totalTokens > 0) {
-    const estimated =
-      cost && !hasAmbiguousRequestTier(entry.usage, cost)
-        ? calculateUsageCost(entry.usage, cost)
-        : undefined;
-    entry.costBreakdown = estimated && Number.isFinite(estimated.total) ? estimated : undefined;
-    entry.costTotal = entry.costBreakdown?.total;
+  if (hasRecordedUsageCost(entry.costBreakdown) || entry.costTotal !== undefined) {
+    return entry;
   }
+  const cost = resolveCost({ provider: entry.provider, model: entry.model });
+  const estimated =
+    cost && hasAmbiguousRequestTier(entry.usage, cost)
+      ? undefined
+      : calculateUsageCost(entry.usage, cost);
+  // Recorded buckets retain their request-time pricing even when only part was observed.
+  const { total: _estimatedTotal, ...estimatedBuckets } = estimated ?? {};
+  entry.costBreakdown = normalizeUsageCost({ ...estimatedBuckets, ...entry.costBreakdown });
+  entry.costTotal = entry.costBreakdown?.total;
   return entry;
 }

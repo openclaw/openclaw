@@ -36,13 +36,13 @@ function preserveAssistantUsage(message: AssistantMessage, pending: NormalizedUs
     return;
   }
   const final = normalizeUsage(message.usage);
+  const finalCost = final?.cost;
   if (hasNonzeroUsage(final)) {
     if (
       pending.cost?.totalOrigin === "provider-billed" &&
       final.cost?.totalOrigin !== "provider-billed"
     ) {
       message.usage.cost = {
-        ...makeZeroUsageSnapshot().cost,
         ...message.usage.cost,
         ...pending.cost,
       };
@@ -68,7 +68,8 @@ function preserveAssistantUsage(message: AssistantMessage, pending: NormalizedUs
     totalTokens: pending.total ?? input + output + cacheRead + cacheWrite,
     ...(pending.reasoningTokens !== undefined ? { reasoningTokens: pending.reasoningTokens } : {}),
   };
-  Object.assign(message.usage.cost, pending.cost);
+  message.usage.cost =
+    finalCost?.totalOrigin === "provider-billed" ? { ...finalCost } : { ...pending.cost };
 }
 
 /** Owns model facts at event ingress, independently of queued reply delivery. */

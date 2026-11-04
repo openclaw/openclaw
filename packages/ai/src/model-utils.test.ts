@@ -1,7 +1,20 @@
+import {
+  calculateUsageCost,
+  normalizeResolvedPricing,
+  normalizeUsageCost,
+  type RawModelCostConfig,
+  type Usage,
+} from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import { clampThinkingLevel, getSupportedThinkingLevels } from "./model-utils.js";
+import {
+  applyProviderReportedUsageCost,
+  calculateCost,
+  clampThinkingLevel,
+  getSupportedThinkingLevels,
+} from "./model-utils.js";
 import { makeProviderModel } from "./providers/provider-model.test-support.js";
 import type { Model } from "./types.js";
+import { createZeroUsage } from "./utils/usage.js";
 
 function makeModel(
   thinkingLevelMap: Model["thinkingLevelMap"],
@@ -74,5 +87,73 @@ describe("clampThinkingLevel", () => {
 
     expect(getSupportedThinkingLevels(model)).toContain("max");
     expect(clampThinkingLevel(model, "max")).toBe("max");
+  });
+});
+
+describe("unknown pricing", () => {
+  const counts = { input: 1_000_000, output: 500_000, cacheRead: 0, cacheWrite: 0 };
+  it.each([
+    [undefined, { cacheRead: 0, cacheWrite: 0 }],
+    [{ input: 2 }, { input: 2, cacheRead: 0, cacheWrite: 0 }],
+    [
+      { input: 2, output: 0 },
+      { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, total: 2 },
+    ],
+    [
+      { input: 2, output: 4, cacheRead: 1, cacheWrite: 3 },
+      { input: 2, output: 2, cacheRead: 0, cacheWrite: 0, total: 4 },
+    ],
+  ] satisfies Array<[RawModelCostConfig | undefined, Usage["cost"]]>)(
+    "retains absence and measured zero for %j",
+    (pricing, expected) => {
+      expect(calculateUsageCost(counts, pricing)).toEqual(expected);
+      const normalized = normalizeResolvedPricing(pricing);
+      expect(normalized).toEqual(pricing);
+      if (normalized) {
+        const storedPricing = JSON.stringify(normalized);
+        expect(calculateUsageCost(counts, JSON.parse(storedPricing))).toEqual(expected);
+      }
+    },
+  );
+
+  it("does not treat missing quantities as measured zero", () => {
+    expect(calculateUsageCost({}, { input: 2 })).toEqual({});
+    expect(calculateUsageCost({}, { input: 0 })).toEqual({ input: 0 });
+    expect(calculateUsageCost({ input: 0 }, undefined)).toEqual({ input: 0 });
+    expect(calculateUsageCost({ cacheWrite: 10, cacheWrite1h: 5 }, { cacheWrite: 0 })).toEqual({});
+  });
+
+  it("keeps unknown tier selection unknown and retains complete schedules", () => {
+    const rates = { input: 2, output: 4, cacheRead: 1, cacheWrite: 3 };
+    const pricing = { ...rates, tieredPricing: [{ ...rates, range: [0, 10] as [number, number] }] };
+    expect(calculateUsageCost({ output: 1 }, pricing)).toEqual({});
+    expect(
+      calculateUsageCost({ input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, pricing).total,
+    ).toBeCloseTo(0.000006);
+  });
+
+  it.each([0, 0.25])("preserves billed total %s independently of missing buckets", (billed) => {
+    const usage = { ...createZeroUsage(), ...counts };
+    const model = makeModel(undefined, { cost: { input: 2 } });
+    calculateCost(model, usage);
+    expect(usage.cost.total).toBeUndefined();
+    applyProviderReportedUsageCost(usage, billed);
+    calculateCost(model, usage);
+    const storedCost = JSON.stringify(usage.cost);
+    expect(normalizeUsageCost(JSON.parse(storedCost))).toEqual({
+      input: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: billed,
+      totalOrigin: "provider-billed",
+    });
+    expect(usage.cost.output).toBeUndefined();
+  });
+
+  it("removes stale estimates when later usage has unknown prices", () => {
+    const usage = { ...createZeroUsage(), ...counts, cost: { input: 8, output: 9, total: 17 } };
+    calculateCost(makeModel(undefined, { cost: undefined }), usage);
+    expect(usage.cost).toEqual({ cacheRead: 0, cacheWrite: 0 });
+    expect(normalizeUsageCost({ input: 0, output: Infinity, cacheRead: -1 })).toEqual({ input: 0 });
   });
 });

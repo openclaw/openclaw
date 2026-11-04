@@ -2,7 +2,7 @@ import { normalizeModelPricingCatalog } from "openclaw/plugin-sdk/model-catalog-
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function readVeniceRates(value: unknown): ModelDefinitionConfig["cost"] | undefined {
+function readVeniceRates(value: unknown) {
   const row = asOptionalRecord(value);
   const [input, output, cacheRead, cacheWrite] = [
     "input",
@@ -28,7 +28,7 @@ function readVeniceRates(value: unknown): ModelDefinitionConfig["cost"] | undefi
 }
 
 /** Venice's public /models prices are USD per million tokens, for the whole request. */
-export function parseVeniceModelPricing(value: unknown): ModelDefinitionConfig["cost"] | undefined {
+export function parseVeniceModelPricing(value: unknown) {
   const row = asOptionalRecord(value);
   const base = readVeniceRates(row);
   if (!base || row?.extended === undefined) {
@@ -61,7 +61,7 @@ export function parseVeniceModelPricing(value: unknown): ModelDefinitionConfig["
       { ...base, range: [0, start] },
       { ...rates, range: [start] },
     ],
-  };
+  } satisfies NonNullable<ModelDefinitionConfig["cost"]>;
 }
 
 /** Public lightweight publisher entrypoint; vendor payload interpretation stays in this plugin. */

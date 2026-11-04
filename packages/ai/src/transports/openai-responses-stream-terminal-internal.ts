@@ -406,7 +406,7 @@ export function createResponsesTerminalController(params: {
         ...usage,
         ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
         usageReport: { state: "available" },
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        cost: {},
       };
     } else {
       output.usage.usageReport = { state: "unavailable" };

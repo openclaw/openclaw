@@ -8,7 +8,10 @@ import {
   supportsAnthropicServerSideFallback,
 } from "../transports/anthropic-payload-policy.js";
 import { runAnthropicStreamLifecycle } from "../transports/anthropic-stream-lifecycle.js";
-import { applyAnthropicThinkingOptions } from "../transports/anthropic-transport-options.js";
+import {
+  applyAnthropicThinkingOptions,
+  resolveAnthropicMessagesMaxTokens,
+} from "../transports/anthropic-transport-options.js";
 import { withModelRequestBodyBytes } from "../transports/model-request-body.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import { streamFragmentError } from "../transports/transport-utils.js";
@@ -30,7 +33,7 @@ import {
 import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders } from "./github-copilot-headers.js";
-import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
+import { buildBaseOptions } from "./simple-options.js";
 
 type AnthropicCompactionOptions = AnthropicOptions & {
   authProfileId?: string;
@@ -105,7 +108,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
   if (options?.thinkingEnabled === true && !supportsClaudeAdaptiveThinking(model)) {
     const budgetTokens = options.thinkingBudgetTokens ?? ANTHROPIC_MIN_THINKING_BUDGET_TOKENS;
     const maxTokens = options.maxTokens ?? model.maxTokens;
-    if (!(budgetTokens >= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS && budgetTokens < maxTokens)) {
+    if (
+      !(
+        budgetTokens >= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS &&
+        maxTokens !== undefined &&
+        budgetTokens < maxTokens
+      )
+    ) {
       // Manual thinking is one request-wide mode: replay, sampling, tool choice,
       // headers, and payload construction must all observe the disabled state.
       requestOptions = { ...options, thinkingEnabled: false, thinkingBudgetTokens: undefined };
@@ -269,6 +278,17 @@ export const streamSimpleAnthropic: StreamFunction<
       thinkingDisplay?: AnthropicOptions["thinkingDisplay"];
     }
 > = (model, context, options) => {
+  const maxTokens = resolveAnthropicMessagesMaxTokens({
+    modelContextWindow: model.contextWindow,
+    modelMaxTokens: model.maxTokens,
+    requestedMaxTokens: options?.maxTokens,
+    useModelDefault: true,
+  });
+  if (maxTokens === undefined) {
+    throw new RangeError(
+      `Anthropic requires a positive maxTokens value for ${model.provider}/${model.id}`,
+    );
+  }
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = {
@@ -278,7 +298,7 @@ export const streamSimpleAnthropic: StreamFunction<
     cacheTtlPruning: options?.cacheTtlPruning,
     onCompactionRejected: options?.onCompactionRejected,
     authProfileId: options?.authProfileId,
-    maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
+    maxTokens,
     toolChoice: options?.toolChoice,
     thinkingDisplay: options?.thinkingDisplay,
   };

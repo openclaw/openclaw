@@ -302,13 +302,24 @@ describe("anthropic stream wrappers", () => {
     expect(cost).toEqual(original);
   });
 
+  it.each([undefined, { input: 2, output: 0 }])("preserves unknown fast-mode rates: %j", (cost) => {
+    const captured = captureStream({
+      wrap: (base) => createAnthropicFastModeWrapper(base, true),
+      model: { id: "claude-opus-5", cost },
+      options: { apiKey: "sk-ant-api03-test-key" },
+    });
+    expect(captured.payload).toMatchObject({ speed: "fast" });
+    expect(captured.model?.cost).toEqual(cost ? { input: 4, output: 0 } : undefined);
+    expect(cost).toEqual(cost ? { input: 2, output: 0 } : undefined);
+  });
+
   it.each([
     { label: "OAuth", params: { apiKey: "sk-ant-oat01-test-token" } },
     { label: "Vertex", params: { baseUrl: "https://us-east5-aiplatform.googleapis.com" } },
   ])("does not send native fast mode over $label routes", ({ params }) => {
     const captured = runNativeFastModeWrapper(params);
 
-    expect([captured.headers, captured.payload, captured.model?.cost.input]).toEqual([
+    expect([captured.headers, captured.payload, captured.model?.cost?.input]).toEqual([
       undefined,
       {},
       5,

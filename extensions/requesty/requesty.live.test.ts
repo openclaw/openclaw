@@ -62,7 +62,7 @@ describeLive("requesty plugin live", () => {
     for (const modelId of defaultModelIds) {
       const model = provider.models.find((candidate) => candidate.id === modelId);
       expect(model, `managed default ${modelId}`).toBeDefined();
-      expect(model?.cost.input).toBeGreaterThan(0);
+      expect(model?.cost?.input).toBeGreaterThan(0);
       expect(model?.contextWindow).toBeGreaterThan(0);
     }
   }, 30_000);

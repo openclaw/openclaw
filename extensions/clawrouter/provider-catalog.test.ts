@@ -127,7 +127,7 @@ describe("ClawRouter provider catalog", () => {
       input: ["text", "image"],
       cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
       contextWindow: 1_000_000,
-      maxTokens: 64_000,
+      maxTokens: undefined,
     });
     expect(openai?.thinkingLevelMap).toEqual({
       off: "none",
@@ -289,7 +289,7 @@ describe("ClawRouter provider catalog", () => {
       input: ["text", "image"],
       contextWindow: 1_050_000,
       contextTokens: 272_000,
-      maxTokens: 64_000,
+      maxTokens: 128_000,
     });
     expect(
       provider.models.find((model) => model.id === "deepseek/deepseek-v4-flash"),
@@ -329,7 +329,11 @@ describe("ClawRouter provider catalog", () => {
     });
     const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
     for (const model of provider.models) {
-      expect(model).toMatchObject({ input: ["text"], contextWindow: 200_000, maxTokens: 32_768 });
+      expect(model).toMatchObject({
+        input: ["text"],
+        contextWindow: undefined,
+        maxTokens: undefined,
+      });
     }
   });
 
@@ -413,16 +417,19 @@ describe("ClawRouter provider catalog", () => {
     expect(provider.models.map((model) => model.id)).toEqual(["defaults", "duplicate"]);
     expect(provider.models[1]).toMatchObject({
       name: "First",
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 2 },
-      contextWindow: 200_000,
-      maxTokens: 32_768,
+      cost: { cacheRead: 0 },
+      contextWindow: undefined,
+      maxTokens: undefined,
       params: { clawrouterRoute: { serviceTiers: ["priority", "priority", "default"] } },
     });
     expect(provider.models[0]).toMatchObject({
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200_000,
-      maxTokens: 32_768,
+      cost: undefined,
+      contextWindow: undefined,
+      maxTokens: undefined,
     });
+    expect(provider.models[1]?.cost?.input).toBeUndefined();
+    expect(provider.models[1]?.cost?.output).toBeUndefined();
+    expect(provider.models[1]?.cost?.cacheWrite).toBeUndefined();
     expect(provider.models[0]?.params?.clawrouterRoute).not.toHaveProperty("serviceTiers");
   });
 

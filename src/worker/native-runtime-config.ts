@@ -26,12 +26,14 @@ export const NativeRuntimeModelSchema = z.strictObject({
   maxTokens: z.number().int().positive(),
   reasoning: z.boolean().optional(),
   thinkingLevelMap: z.partialRecord(ThinkingSchema, z.string().nullable()).optional(),
-  cost: z.strictObject({
-    input: z.number().finite().nonnegative(),
-    output: z.number().finite().nonnegative(),
-    cacheRead: z.number().finite().nonnegative(),
-    cacheWrite: z.number().finite().nonnegative(),
-  }),
+  cost: z
+    .strictObject({
+      input: z.number().finite().nonnegative().optional(),
+      output: z.number().finite().nonnegative().optional(),
+      cacheRead: z.number().finite().nonnegative().optional(),
+      cacheWrite: z.number().finite().nonnegative().optional(),
+    })
+    .optional(),
   input: z
     .array(z.enum(["text", "image"]))
     .min(1)

@@ -87,15 +87,30 @@ export function createMantleAnthropicStreamFn(): StreamFn {
       },
       fetch: buildGuardedModelFetch(model),
     });
+    const declaredMaxTokens = model.maxTokens;
+    const requestedMaxTokens = options?.maxTokens;
+    if (
+      requestedMaxTokens !== undefined &&
+      (!Number.isSafeInteger(requestedMaxTokens) || requestedMaxTokens <= 0)
+    ) {
+      throw new RangeError("Bedrock Mantle maxTokens must be a positive safe integer");
+    }
+    const maxTokens =
+      requestedMaxTokens !== undefined
+        ? Math.min(requestedMaxTokens, declaredMaxTokens ?? requestedMaxTokens)
+        : declaredMaxTokens === undefined
+          ? undefined
+          : resolveClaudeOpus5ModelIdentity(model) ||
+              resolveClaudeSonnet5ModelIdentity(model) ||
+              resolveClaudeMythos5ModelIdentity(model)
+            ? declaredMaxTokens
+            : Math.min(declaredMaxTokens, 32_000);
+    if (maxTokens === undefined || !Number.isSafeInteger(maxTokens) || maxTokens <= 0) {
+      throw new RangeError("Bedrock Mantle requires an explicit or qualified maxTokens bound");
+    }
     const base = copyProviderAcceptanceObserver(options, {
       ...(requiresClaudeDefaultSampling(model) ? {} : { temperature: options?.temperature }),
-      maxTokens:
-        options?.maxTokens ||
-        (resolveClaudeOpus5ModelIdentity(model) ||
-        resolveClaudeSonnet5ModelIdentity(model) ||
-        resolveClaudeMythos5ModelIdentity(model)
-          ? model.maxTokens
-          : Math.min(model.maxTokens, 32_000)),
+      maxTokens,
       signal: options?.signal,
       apiKey,
       cacheRetention: options?.cacheRetention,

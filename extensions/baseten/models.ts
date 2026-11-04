@@ -136,10 +136,10 @@ function projectLiveModel(
         : ["text"]
       : (fallback?.input ?? ["text"]),
     cost: {
-      input: inputPrice ?? fallback?.cost.input ?? 0,
-      output: outputPrice ?? fallback?.cost.output ?? 0,
-      cacheRead: cacheReadPrice ?? fallback?.cost.cacheRead ?? 0,
-      cacheWrite: fallback?.cost.cacheWrite ?? 0,
+      input: inputPrice ?? fallback?.cost?.input ?? 0,
+      output: outputPrice ?? fallback?.cost?.output ?? 0,
+      cacheRead: cacheReadPrice ?? fallback?.cost?.cacheRead ?? 0,
+      cacheWrite: fallback?.cost?.cacheWrite ?? 0,
     },
     contextWindow:
       asPositiveSafeInteger(Number(row.context_length)) ??

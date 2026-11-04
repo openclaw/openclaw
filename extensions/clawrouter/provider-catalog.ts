@@ -3,6 +3,8 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   getCachedLiveProviderModelRows,
   loadBundledModelIdentityFactsResolver,
+  resolveProviderCatalogDiscoveryTimeoutMs,
+  withProviderCatalogDiscoveryBudget,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   MISTRAL_MODEL_TRANSPORT_PATCH,
@@ -22,6 +24,8 @@ import {
   readClawRouterCapabilityOffers,
   type ClawRouterCapabilityOffer,
 } from "./capability-offers.js";
+import { catalogDiscoveryProvider } from "./catalog-discovery-contracts.js";
+import { discoverClawRouterModels } from "./catalog-discovery.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { CLAWROUTER_ROUTE_METADATA_KEY as ROUTE_METADATA_KEY } from "./provider-policy-api.js";
 
@@ -32,17 +36,10 @@ export const decisionCapabilities = ModelInferenceCapabilitiesSchema.parse(
 );
 
 const PROVIDER_ID = "clawrouter";
+const DISCOVERY_METADATA_KEY = "clawrouterDiscovery";
 // Inventory changes infrequently; inference still enforces current grants and budgets.
 // Explicit catalog refresh bypasses this response cache at the acquisition owner.
 const CATALOG_CACHE_TTL_MS = 60 * 60_000;
-const DEFAULT_CONTEXT_WINDOW = 200_000;
-const DEFAULT_MAX_TOKENS = 32_768;
-const DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
 
 export const CLAWROUTER_REASONING_EFFORT_LEVELS = [
   ["none", "off"],
@@ -59,6 +56,7 @@ type CatalogRoute = {
   endpoint?: string;
   path: string;
   requestFormat: string;
+  responseFormat?: string;
   methods: string[];
 };
 
@@ -121,6 +119,7 @@ function parseCatalogRoute(value: unknown): CatalogRoute | undefined {
     endpoint: normalizeOptionalString(row?.endpoint),
     path,
     requestFormat,
+    responseFormat: normalizeOptionalString(row?.responseFormat),
     methods: normalizeTrimmedStringList(row?.methods).map((method) => method.toUpperCase()),
   };
 }
@@ -232,8 +231,8 @@ const NATIVE_MODEL_FACT_PROVIDERS = new Set(["openai", "anthropic", "cohere"]);
 // Catalog providers whose id differs from the bundled provider serving the same native API.
 const BUNDLED_CATALOG_PROVIDER_IDS = new Map([["google-gemini", "google"]]);
 
-function microsPerMillionToCost(value: number | undefined): number {
-  return value === undefined ? 0 : value / 1_000_000;
+function microsPerMillionToCost(value: number | undefined): number | undefined {
+  return value === undefined ? undefined : value / 1_000_000;
 }
 
 function buildRoutedModel(
@@ -371,7 +370,6 @@ function buildRoutedModel(
       ? asOptionalRecord(asOptionalRecord(native.endpoints)?.[endpoint])
       : undefined;
   const endpointMaxTokens = asPositiveSafeInteger(endpointFacts?.maxOutputTokens);
-  const pricingMaxTokens = asPositiveSafeInteger(pricing?.defaultMaxOutputTokens);
 
   const providerPrefix = `${provider.id}/`;
   const modelLabel = id.startsWith(providerPrefix) ? id.slice(providerPrefix.length) : id;
@@ -450,23 +448,18 @@ function buildRoutedModel(
             asFiniteNumberInRange(pricing.cachedInputMicrosPerMillion, { min: 0 }),
           ),
           cacheWrite: microsPerMillionToCost(
-            asFiniteNumberInRange(pricing.cacheWrite5mInputMicrosPerMillion, { min: 0 }) ??
-              asFiniteNumberInRange(pricing.cacheWrite1hInputMicrosPerMillion, { min: 0 }),
+            asFiniteNumberInRange(pricing.cacheWrite5mInputMicrosPerMillion, { min: 0 }),
           ),
         }
-      : DEFAULT_COST,
+      : undefined,
     contextWindow:
       asPositiveSafeInteger(endpointFacts?.contextWindow) ??
-      asPositiveSafeInteger(pricing?.maxInputTokens) ??
-      DEFAULT_CONTEXT_WINDOW,
+      asPositiveSafeInteger(pricing?.maxInputTokens),
     ...(asPositiveSafeInteger(endpointFacts?.contextTokens)
       ? { contextTokens: asPositiveSafeInteger(endpointFacts?.contextTokens) }
       : {}),
-    // A native output ceiling never raises the router's reservation default.
-    maxTokens:
-      endpointMaxTokens && pricingMaxTokens
-        ? Math.min(endpointMaxTokens, pricingMaxTokens)
-        : (endpointMaxTokens ?? pricingMaxTokens ?? DEFAULT_MAX_TOKENS),
+    // Reservation defaults are admission policy, not a provider output-limit fact.
+    maxTokens: endpointMaxTokens,
     params: {
       [ROUTE_METADATA_KEY]: {
         api,
@@ -492,13 +485,36 @@ export async function buildClawRouterProviderConfig(params: {
   apiKey: string;
   discoveryApiKey?: string;
   baseUrl?: string;
+  profileId?: string;
+  signal?: AbortSignal;
 }): Promise<ModelProviderConfig & { api: "openai-responses"; baseUrl: string }> {
+  return withProviderCatalogDiscoveryBudget(
+    resolveProviderCatalogDiscoveryTimeoutMs(PROVIDER_ID),
+    () => buildClawRouterCatalogWithinBudget(params),
+  );
+}
+
+async function buildClawRouterCatalogWithinBudget(
+  params: Parameters<typeof buildClawRouterProviderConfig>[0],
+): Promise<ModelProviderConfig & { api: "openai-responses"; baseUrl: string }> {
+  params.signal?.throwIfAborted();
+  if (!(params.discoveryApiKey ?? params.apiKey).trim()) {
+    throw new Error("ClawRouter catalog requires its original proxy key");
+  }
   const rootUrl = normalizeClawRouterRootUrl(params.baseUrl);
   const rows = await getCachedLiveProviderModelRows({
     providerId: PROVIDER_ID,
     endpoint: `${rootUrl}/v1/catalog`,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
+    signal: params.signal,
+    cacheKeyParts: [
+      PROVIDER_ID,
+      "model-rows",
+      rootUrl,
+      params.profileId,
+      params.discoveryApiKey ?? params.apiKey,
+    ],
     readRows: (body) => readCatalogRows(body, `${rootUrl}/v1`),
     ttlMs: CATALOG_CACHE_TTL_MS,
     auditContext: "clawrouter-model-discovery",
@@ -510,6 +526,70 @@ export async function buildClawRouterProviderConfig(params: {
   const resolveNativeModelFacts = await loadBundledModelIdentityFactsResolver();
   const models = new Map<string, ModelDefinitionConfig>();
   for (const provider of providers) {
+    const discoveryProvider = catalogDiscoveryProvider(provider.id);
+    const discovered = discoveryProvider
+      ? await discoverClawRouterModels({
+          provider: discoveryProvider,
+          offers: provider.httpOffers,
+          apiKey: params.discoveryApiKey ?? params.apiKey,
+          profileId: params.profileId,
+          signal: params.signal,
+        })
+      : undefined;
+    if (discovered !== undefined) {
+      if (
+        discovered.length &&
+        (!provider.openaiCompatible ||
+          !provider.routes.some(
+            (route) =>
+              route.methods.includes("POST") &&
+              route.requestFormat === "openai.chat_completions" &&
+              route.responseFormat === "openai.chat_completions",
+          ))
+      ) {
+        throw new Error("ClawRouter discovery has no declared Chat Completions transport");
+      }
+      for (const fact of discovered) {
+        // Only an exact upstream identity may retain this catalog's qualified
+        // route/billing facts. No template, seed name or prefix supplies facts.
+        const declared = provider.models
+          .map(asOptionalRecord)
+          .find((row) => row?.upstream === fact.id);
+        const routed = buildRoutedModel(
+          rootUrl,
+          provider,
+          {
+            ...declared,
+            id: declared?.id ?? `${provider.id}/${fact.id}`,
+            upstream: fact.id,
+            capabilities: ["llm.chat"],
+          },
+          resolveNativeModelFacts,
+        );
+        if (!routed) {
+          throw new Error("ClawRouter discovered model has no supported generation transport");
+        }
+        models.set(routed.id, {
+          ...routed,
+          name: fact.name ?? routed.name,
+          contextWindow: fact.contextWindow ?? routed.contextWindow,
+          maxTokens: fact.maxTokens ?? routed.maxTokens,
+          reasoning: fact.reasoning ?? routed.reasoning,
+          input: fact.input?.length ? fact.input : routed.input,
+          params: {
+            ...routed.params,
+            [DISCOVERY_METADATA_KEY]: {
+              provider: provider.id,
+              upstream: fact.id,
+              observations: fact.observations,
+            },
+          },
+        });
+      }
+      // Even [] replaces this provider's static inventory. Failure throws and
+      // never becomes a successful empty result or a seed/anonymous retry.
+      continue;
+    }
     for (const model of provider.models) {
       const routed = buildRoutedModel(rootUrl, provider, model, resolveNativeModelFacts);
       if (!routed || models.has(routed.id)) {
@@ -518,6 +598,7 @@ export async function buildClawRouterProviderConfig(params: {
       models.set(routed.id, routed);
     }
   }
+  params.signal?.throwIfAborted();
   return {
     baseUrl: `${rootUrl}/v1`,
     api: "openai-responses",
@@ -553,7 +634,11 @@ function stripRouteMetadata(
   if (!params || !(ROUTE_METADATA_KEY in params)) {
     return params;
   }
-  const { [ROUTE_METADATA_KEY]: _routeMetadata, ...remaining } = params;
+  const {
+    [ROUTE_METADATA_KEY]: _routeMetadata,
+    [DISCOVERY_METADATA_KEY]: _discovery,
+    ...remaining
+  } = params;
   return Object.keys(remaining).length > 0 ? remaining : undefined;
 }
 

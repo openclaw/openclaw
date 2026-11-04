@@ -138,11 +138,11 @@ export const WorkerTranscriptUsageSchema = closedObject({
   ),
   totalTokens: Type.Number({ minimum: 0 }),
   cost: closedObject({
-    input: Type.Number({ minimum: 0 }),
-    output: Type.Number({ minimum: 0 }),
-    cacheRead: Type.Number({ minimum: 0 }),
-    cacheWrite: Type.Number({ minimum: 0 }),
-    total: Type.Number({ minimum: 0 }),
+    input: Type.Optional(Type.Number({ minimum: 0 })),
+    output: Type.Optional(Type.Number({ minimum: 0 })),
+    cacheRead: Type.Optional(Type.Number({ minimum: 0 })),
+    cacheWrite: Type.Optional(Type.Number({ minimum: 0 })),
+    total: Type.Optional(Type.Number({ minimum: 0 })),
     totalOrigin: Type.Optional(Type.Literal("provider-billed")),
   }),
 });

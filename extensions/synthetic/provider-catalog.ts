@@ -71,10 +71,10 @@ function projectSyntheticModels(
         contextWindow,
       ),
       cost: {
-        input: readTokenPrice(pricing?.prompt) ?? seed?.cost.input ?? 0,
-        output: readTokenPrice(pricing?.completion) ?? seed?.cost.output ?? 0,
-        cacheRead: readTokenPrice(pricing?.input_cache_reads) ?? seed?.cost.cacheRead ?? 0,
-        cacheWrite: readTokenPrice(pricing?.input_cache_writes) ?? seed?.cost.cacheWrite ?? 0,
+        input: readTokenPrice(pricing?.prompt) ?? seed?.cost?.input ?? 0,
+        output: readTokenPrice(pricing?.completion) ?? seed?.cost?.output ?? 0,
+        cacheRead: readTokenPrice(pricing?.input_cache_reads) ?? seed?.cost?.cacheRead ?? 0,
+        cacheWrite: readTokenPrice(pricing?.input_cache_writes) ?? seed?.cost?.cacheWrite ?? 0,
       },
       ...(Array.isArray(record.supported_features)
         ? { compat: { ...seed?.compat, supportsTools: features.includes("tools") } }

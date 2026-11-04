@@ -199,7 +199,10 @@ describe("ModelRegistry", () => {
     const firstModel = first.find("custom", "example-model");
     const secondModel = second.find("custom", "example-model");
     firstModel!.input.push("image");
-    firstModel!.cost.input = 42;
+    if (!firstModel?.cost) {
+      throw new Error("Expected the configured pricing fixture");
+    }
+    firstModel.cost.input = 42;
     for (const model of [secondModel, template.find("custom", "example-model")]) {
       expect(model).toMatchObject({ input: ["text"], cost: { input: 0 } });
     }

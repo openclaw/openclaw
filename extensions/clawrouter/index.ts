@@ -41,6 +41,7 @@ import {
 import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { clawrouterMediaUnderstandingProvider } from "./audio-transcription.js";
 import { normalizeClawRouterApiBaseUrl, normalizeClawRouterRootUrl } from "./base-url.js";
+import { buildClawRouterAuthenticatedCatalog } from "./catalog-auth.js";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
 import { clawrouterEmbeddingProvider } from "./embedding-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
@@ -587,38 +588,7 @@ export default defineSingleProviderPluginEntry({
       },
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const auth = ctx.resolveProviderAuth(PROVIDER_ID);
-          let discoveryApiKey = auth.discoveryApiKey;
-          if (!discoveryApiKey) {
-            try {
-              const { resolveApiKeyForProvider } =
-                await import("openclaw/plugin-sdk/provider-auth-runtime");
-              discoveryApiKey = (
-                await resolveApiKeyForProvider({
-                  provider: PROVIDER_ID,
-                  cfg: ctx.config,
-                  ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-                  ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-                  ...(auth.profileId ? { profileId: auth.profileId, lockedProfile: true } : {}),
-                })
-              )?.apiKey;
-            } catch {
-              return null;
-            }
-          }
-          const apiKey = auth.apiKey ?? discoveryApiKey;
-          if (!apiKey || !discoveryApiKey) {
-            return null;
-          }
-          return {
-            provider: await buildClawRouterProviderConfig({
-              apiKey,
-              discoveryApiKey,
-              baseUrl: configuredBaseUrl(ctx.config),
-            }),
-          };
-        },
+        run: (ctx) => buildClawRouterAuthenticatedCatalog(ctx, configuredBaseUrl(ctx.config)),
       },
       // This is protocol support, not a key grant. The decision executor checks the
       // selected credential's catalog before using its native route.
@@ -654,6 +624,7 @@ export default defineSingleProviderPluginEntry({
           apiKey,
           discoveryApiKey: apiKey,
           baseUrl: ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config),
+          profileId: ctx.authProfileId,
         });
         const model = providerConfig.models.find((entry) => entry.id === ctx.modelId);
         if (!model) {

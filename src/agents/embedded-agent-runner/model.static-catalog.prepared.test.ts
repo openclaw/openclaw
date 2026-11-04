@@ -251,7 +251,7 @@ describe("prepared bundled provider static catalogs", () => {
         api: "fixture-api",
         baseUrl: "",
         input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        cost: undefined,
         contextWindow: 0,
         contextTokens: 0,
         maxTokens: 4096,

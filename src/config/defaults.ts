@@ -9,7 +9,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { resolveCatalogOwnedModelCompat } from "../agents/model-compat-catalog.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -51,12 +50,6 @@ export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   "gemini-flash-lite": "google/gemini-3.5-flash-lite",
 };
 
-const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
 const DEFAULT_MODEL_INPUT: ModelDefinitionConfig["input"] = ["text"];
 const DEFAULT_MODEL_MAX_TOKENS = 8192;
 const MISTRAL_SAFE_MAX_TOKENS_BY_MODEL = {
@@ -71,26 +64,16 @@ const MISTRAL_SAFE_MAX_TOKENS_BY_MODEL = {
 type ModelDefinitionLike = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
 
-function resolveModelCost(
-  raw?: Partial<ModelDefinitionConfig["cost"]>,
-): ModelDefinitionConfig["cost"] {
-  return {
-    input: typeof raw?.input === "number" ? raw.input : DEFAULT_MODEL_COST.input,
-    output: typeof raw?.output === "number" ? raw.output : DEFAULT_MODEL_COST.output,
-    cacheRead: typeof raw?.cacheRead === "number" ? raw.cacheRead : DEFAULT_MODEL_COST.cacheRead,
-    cacheWrite:
-      typeof raw?.cacheWrite === "number" ? raw.cacheWrite : DEFAULT_MODEL_COST.cacheWrite,
-    ...(raw?.tieredPricing ? { tieredPricing: raw.tieredPricing } : {}),
-  };
-}
-
 export function resolveNormalizedProviderModelMaxTokens(params: {
   providerId: string;
   modelId: string;
-  contextWindow: number;
+  contextWindow: number | undefined;
   rawMaxTokens: number;
 }): number {
-  const clamped = Math.min(params.rawMaxTokens, params.contextWindow);
+  const clamped =
+    params.contextWindow === undefined
+      ? params.rawMaxTokens
+      : Math.min(params.rawMaxTokens, params.contextWindow);
   if (normalizeProviderId(params.providerId) !== "mistral") {
     return clamped;
   }
@@ -103,7 +86,7 @@ export function resolveNormalizedProviderModelMaxTokens(params: {
   if (safeMaxTokens !== undefined) {
     return Math.min(clamped, safeMaxTokens);
   }
-  return clamped < params.contextWindow
+  return params.contextWindow === undefined || clamped < params.contextWindow
     ? clamped
     : Math.min(DEFAULT_MODEL_MAX_TOKENS, params.contextWindow);
 }
@@ -267,36 +250,39 @@ export function applyModelDefaults(
 
         const input = raw.input ?? catalogModel?.input ?? [...DEFAULT_MODEL_INPUT];
 
-        const cost = resolveModelCost(mergeModelCost(catalogModel?.cost, raw.cost));
+        const cost = mergeModelCost(catalogModel?.cost, raw.cost);
         const costMutated =
-          !raw.cost ||
-          raw.cost.input !== cost.input ||
-          raw.cost.output !== cost.output ||
-          raw.cost.cacheRead !== cost.cacheRead ||
-          raw.cost.cacheWrite !== cost.cacheWrite ||
-          raw.cost.tieredPricing !== cost.tieredPricing;
+          raw.cost?.input !== cost?.input ||
+          raw.cost?.output !== cost?.output ||
+          raw.cost?.cacheRead !== cost?.cacheRead ||
+          raw.cost?.cacheWrite !== cost?.cacheWrite ||
+          raw.cost?.tieredPricing !== cost?.tieredPricing;
         const contextWindow =
           asPositiveFiniteNumber(raw.contextWindow) ??
           asPositiveFiniteNumber(catalogModel?.contextWindow);
-        const contextTokens =
+        const requestedContextTokens =
           asPositiveFiniteNumber(raw.contextTokens) ??
           asPositiveFiniteNumber(catalogModel?.contextTokens);
+        const contextTokens =
+          requestedContextTokens !== undefined && contextWindow !== undefined
+            ? Math.min(requestedContextTokens, contextWindow)
+            : requestedContextTokens;
 
-        const maxTokenContextWindow = contextWindow ?? DEFAULT_CONTEXT_TOKENS;
-        const defaultMaxTokens = Math.min(
-          providerMaxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
-          maxTokenContextWindow,
-        );
+        const catalogMaxTokens = asPositiveFiniteNumber(catalogModel?.maxTokens);
+        const requestedMaxTokens = asPositiveFiniteNumber(raw.maxTokens) ?? providerMaxTokens;
         const rawMaxTokens =
-          asPositiveFiniteNumber(raw.maxTokens) ??
-          asPositiveFiniteNumber(catalogModel?.maxTokens) ??
-          defaultMaxTokens;
-        const maxTokens = resolveNormalizedProviderModelMaxTokens({
-          providerId,
-          modelId: id,
-          contextWindow: maxTokenContextWindow,
-          rawMaxTokens,
-        });
+          requestedMaxTokens !== undefined && catalogMaxTokens !== undefined
+            ? Math.min(requestedMaxTokens, catalogMaxTokens)
+            : (requestedMaxTokens ?? catalogMaxTokens);
+        const maxTokens =
+          rawMaxTokens === undefined
+            ? undefined
+            : resolveNormalizedProviderModelMaxTokens({
+                providerId,
+                modelId: id,
+                contextWindow,
+                rawMaxTokens,
+              });
         const api = raw.api ?? providerApi;
 
         const thinkingLevelMap =

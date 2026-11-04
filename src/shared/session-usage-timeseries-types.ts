@@ -12,12 +12,12 @@ export type SessionUsageTimePoint = {
   cacheWrite: number;
   /** Total billable and cached tokens counted in this sample window. */
   totalTokens: number;
-  /** Estimated cost for this sample window. */
-  cost: number;
+  /** Complete cost for this sample window; absent when any call is unpriced. */
+  cost?: number;
   /** Running token total through this sample. */
   cumulativeTokens: number;
-  /** Running cost total through this sample. */
-  cumulativeCost: number;
+  /** Complete running cost through this sample; absent after an unpriced call. */
+  cumulativeCost?: number;
 };
 
 /** Downsampled usage series returned for a single session when requested. */

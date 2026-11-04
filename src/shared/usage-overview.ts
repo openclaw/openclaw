@@ -389,6 +389,7 @@ export function compactUsageOverviewSession(
     cacheReadCost: row.cacheReadCost,
     cacheWriteCost: row.cacheWriteCost,
     missingCostEntries: row.missingCostEntries,
+    missingCostBreakdownEntries: row.missingCostBreakdownEntries,
     missingCostByModel: row.missingCostByModel ?? source.missingCostByModel,
     computedAt: source.computedAt,
     staleSince: source.staleSince,

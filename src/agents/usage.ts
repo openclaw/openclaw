@@ -1,3 +1,4 @@
+import { normalizeUsageCost } from "@openclaw/llm-core";
 import {
   asFiniteNumber,
   asNonNegativeFiniteNumber,
@@ -117,23 +118,17 @@ export function hasBillableUsage(usage?: NormalizedUsage | null): usage is Norma
   );
 }
 
-/** Adapter-default zeros are not price evidence; billed totals and cost components are. */
+/** Recorded zero is a price fact, just like a positive total. */
 export function hasRecordedUsageCost(value: unknown): boolean {
-  const cost = asOptionalRecord(value);
-  const total = asFiniteNumber(cost?.total);
-  return (
-    total !== undefined &&
-    total >= 0 &&
-    (total > 0 ||
-      cost?.totalOrigin === "provider-billed" ||
-      USAGE_COST_COMPONENTS.some((key) => (asFiniteNumber(cost?.[key]) ?? 0) !== 0))
-  );
+  return normalizeUsageCost(value)?.total !== undefined;
 }
 
-/** Empty transport snapshots synthesize $0; recorded cost evidence can establish an observation. */
+/** Empty transport snapshots have no price evidence; partial costs are observations. */
 export function hasObservedModelUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
   return (
-    usage?.usageReport !== undefined || hasRecordedUsageCost(usage?.cost) || hasNonzeroUsage(usage)
+    usage?.usageReport !== undefined ||
+    normalizeUsageCost(usage?.cost) !== undefined ||
+    hasNonzeroUsage(usage)
   );
 }
 
@@ -163,7 +158,12 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   // Provisional stream counters are not completed-response accounting. Keep the
   // observation so an interrupted call invalidates earlier session snapshots.
   if (raw.usageReport?.state === "unavailable") {
-    return { usageReport: { state: "unavailable" }, contextUsage: { state: "unavailable" } };
+    const billed = normalizeUsageCost(raw.cost);
+    return {
+      usageReport: { state: "unavailable" },
+      contextUsage: { state: "unavailable" },
+      ...(billed?.totalOrigin === "provider-billed" ? { cost: billed } : {}),
+    };
   }
   const cacheRead = normalizeTokenCount(
     raw.cacheRead ??
@@ -244,25 +244,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.output_tokens_details?.thinking_tokens,
   );
   const total = normalizeTokenCount(raw.total ?? raw.totalTokens ?? raw.total_tokens);
-  const costTotal = asFiniteNumber(raw.cost?.total);
-  const cost: NormalizedUsage["cost"] =
-    costTotal !== undefined && costTotal >= 0
-      ? {
-          total: costTotal,
-          ...(raw.cost?.totalOrigin === "provider-billed"
-            ? { totalOrigin: "provider-billed" }
-            : {}),
-        }
-      : undefined;
-  if (cost?.total === 0) {
-    // Retain the component evidence that distinguishes a recorded zero from an adapter default.
-    for (const key of USAGE_COST_COMPONENTS) {
-      const component = asFiniteNumber(raw.cost?.[key]);
-      if (component !== undefined && component !== 0) {
-        cost[key] = component;
-      }
-    }
-  }
+  const cost = normalizeUsageCost(raw.cost);
 
   if (
     [

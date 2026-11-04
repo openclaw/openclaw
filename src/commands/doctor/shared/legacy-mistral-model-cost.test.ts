@@ -23,6 +23,6 @@ it.each(["constructor", "__proto__"])("preserves the configured cost of custom m
 
   normalizeLegacyMistralModelDefaults(config, changes);
 
-  expect(model.cost.cacheRead).toBe(0);
+  expect(model.cost?.cacheRead).toBe(0);
   expect(changes).toEqual([]);
 });

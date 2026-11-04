@@ -1,19 +1,29 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
+import { createUsageCalendar } from "../shared/usage-calendar.js";
 import * as fixtures from "./session-cost-usage-fixtures.test-support.js";
 import {
   decodeUsageCostPartition as decodePartition,
   partitionUsageCostRollup as partitionRollup,
 } from "./session-cost-usage-partitions.js";
+import { parseUsageCostTranscriptRecord } from "./session-cost-usage-pricing.js";
+import { addUsageQuartersToDailyTotals } from "./session-cost-usage-quarters-columns.js";
+import {
+  encodeUsageCostQuarters,
+  decodeUsageCostQuarters,
+  createUsageQuarterRange,
+} from "./session-cost-usage-quarters.js";
 import {
   decodeUsageCostRollup as decodeRollup,
   decodeUsageCostRollupEnvelope as decodeEnvelope,
   encodeUsageCostRollup as encodeRollup,
 } from "./session-cost-usage-rollup-codec.js";
+import { createUsageRollupScan } from "./session-cost-usage-rollup-scan.js";
 import {
   appendSessionUsageRollupContribution,
   createSessionUsageRollupData,
 } from "./session-cost-usage-rollup.js";
+import { createEmptyCostUsageTotals } from "./session-cost-usage-totals.js";
 
 function entry(records: number) {
   const rollup = createSessionUsageRollupData();
@@ -117,4 +127,65 @@ it.each([
       buckets: { "0": { totals: { totalTokens: records } } },
     });
   }
+});
+
+it("preserves partial costs and independent billed zero through rollup and quarter persistence", async () => {
+  const scan = createUsageRollupScan({
+    appendOnly: false,
+    pricingFingerprint: "partial",
+    resolveCosts: async (pairs) => pairs.map(() => undefined),
+  });
+  const time = Date.UTC(2026, 0, 1);
+  const entries = [
+    { input: 1, cost: { input: 0.2 } },
+    { input: 1, cost: { total: 0, totalOrigin: "provider-billed" } },
+    { input: 1, cost: { input: 0.1, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 } },
+  ].map((usage) =>
+    expectDefined(
+      parseUsageCostTranscriptRecord({
+        message: {
+          role: "assistant",
+          timestamp: time,
+          provider: "fixture",
+          model: "partial",
+          usage,
+        },
+      }),
+      "usage record",
+    ),
+  );
+  await scan.addEntries(entries);
+  const value = scan.finish({
+    kind: "sqlite",
+    maxSeq: 3,
+    eventCount: 3,
+    size: 1,
+    mtimeMs: time,
+    anchorHash: "fixture",
+  });
+  const encoded = encodeRollup(value);
+  const restored = expectDefined(
+    decodeRollup(encoded.valueJson, "partial", encoded.blob),
+    "restored rollup",
+  );
+  const quarter = encodeUsageCostQuarters("2026-01", restored.rollup);
+  const block = expectDefined(
+    decodeUsageCostQuarters("2026-01", quarter.valueJson, quarter.blob),
+    "restored quarters",
+  );
+  const totals = createEmptyCostUsageTotals();
+  addUsageQuartersToDailyTotals({
+    block,
+    range: createUsageQuarterRange({
+      calendar: createUsageCalendar({ mode: "utc-offset", utcOffsetMinutes: 0 }),
+    }),
+    daily: new Map(),
+    totals,
+  });
+  expect(totals).toMatchObject({
+    totalCost: 0.1,
+    missingCostEntries: 1,
+    missingCostBreakdownEntries: 2,
+  });
+  expect(totals.inputCost).toBeCloseTo(0.3);
 });

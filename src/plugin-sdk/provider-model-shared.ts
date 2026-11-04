@@ -246,9 +246,11 @@ export function modelCostsEqual(
   expected: ProviderRuntimeModel["cost"],
 ): boolean {
   return (
-    current !== undefined &&
-    JSON.stringify(normalizeModelCostConfig(current)) ===
-      JSON.stringify(normalizeModelCostConfig(expected))
+    current === expected ||
+    (current !== undefined &&
+      expected !== undefined &&
+      JSON.stringify(normalizeModelCostConfig(current)) ===
+        JSON.stringify(normalizeModelCostConfig(expected)))
   );
 }
 

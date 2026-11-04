@@ -22,7 +22,6 @@ import {
   resolveProviderModelRoutes,
 } from "../../plugins/provider-model-routes.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import {
   modelTransportRoutesMatch,
   resolveCatalogOwnedModelCompat,
@@ -509,9 +508,7 @@ export function applyConfiguredProviderOverrides(params: {
   const contextWindow =
     metadataOverrideModel?.contextWindow ??
     discoveredModel?.contextWindow ??
-    (!discoveredModel
-      ? (configuredStaticCatalogModel?.contextWindow ?? DEFAULT_CONTEXT_TOKENS)
-      : undefined);
+    (!discoveredModel ? configuredStaticCatalogModel?.contextWindow : undefined);
   // An authored native window replaces its provenance; a prompt cap does not.
   const { contextWindowSource: _syntheticContextWindowSource, ...discoveredWithoutSizeSource } =
     discoveredModel ?? {};
@@ -524,8 +521,16 @@ export function applyConfiguredProviderOverrides(params: {
     configuredMaxTokens ??
     discoveredModel?.maxTokens ??
     (!discoveredModel ? configuredStaticCatalogModel?.maxTokens : undefined);
+  const qualifiedOutputLimit = [discoveredModel, configuredStaticCatalogModel].find(
+    (model) =>
+      model?.maxTokens !== undefined &&
+      model.maxTokensSource !== "configured" &&
+      modelTransportRoutesMatch(model, resolvedTransport),
+  )?.maxTokens;
   const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
-    resolvedMaxTokens,
+    resolvedMaxTokens !== undefined && qualifiedOutputLimit !== undefined
+      ? Math.min(resolvedMaxTokens, qualifiedOutputLimit)
+      : resolvedMaxTokens,
     contextWindow,
   );
   // Output-limit provenance does not confer ownership of route capabilities.
@@ -638,13 +643,18 @@ export function applyConfiguredProviderOverrides(params: {
                 }
               }
             }
-            return normalizeResolvedPricing(mergeModelCost(catalogCost, authoredCost) ?? {});
+            return normalizeResolvedPricing(mergeModelCost(catalogCost, authoredCost));
           })(),
           contextWindow,
-          contextTokens:
+          contextTokens: clampModelMaxTokensToContextWindow(
             metadataOverrideModel?.contextTokens ??
-            discoveredModel?.contextTokens ??
-            (!discoveredModel ? configuredStaticCatalogModel?.contextTokens : undefined),
+              discoveredModel?.contextTokens ??
+              (!discoveredModel ? configuredStaticCatalogModel?.contextTokens : undefined),
+            metadataOverrideModel?.contextWindow === undefined &&
+              discoveredModel?.contextWindowSource === "synthetic"
+              ? undefined
+              : contextWindow,
+          ),
           parameterCount:
             metadataOverrideModel?.parameterCount ??
             (discoveredModel && modelTransportRoutesMatch(discoveredModel, resolvedTransport)

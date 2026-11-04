@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { buildMistralModelDefinition, MISTRAL_DEFAULT_MODEL_ID } from "./model-definitions.js";
 import { buildMistralProvider } from "./provider-catalog.js";
@@ -18,8 +19,9 @@ describe("mistral model definitions", () => {
 
   it("prices cached Mistral input tokens at ten percent of standard input tokens", () => {
     for (const model of buildMistralProvider().models) {
-      expect(model.cost.cacheRead).toBeCloseTo(model.cost.input * 0.1, 10);
-      expect(model.cost.cacheWrite).toBe(0);
+      const cost = expectDefined(model.cost, "published Mistral pricing");
+      expect(cost.cacheRead).toBeCloseTo(expectDefined(cost.input, "input rate") * 0.1, 10);
+      expect(cost.cacheWrite).toBe(0);
     }
   });
 });

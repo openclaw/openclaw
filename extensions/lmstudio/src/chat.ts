@@ -139,11 +139,14 @@ export function createLmstudioChatStream(): StreamFn {
       },
       (payload) => {
         // Binary thinking has no separate token budget; keep the caller's output cap.
-        payload.max_tokens = Math.min(
-          streamOptions.maxTokens ?? model.maxTokens,
-          model.maxTokens,
-          typeof payload.max_tokens === "number" ? payload.max_tokens : Number.POSITIVE_INFINITY,
-        );
+        const requestedMaxTokens = streamOptions.maxTokens ?? model.maxTokens;
+        if (requestedMaxTokens !== undefined) {
+          payload.max_tokens = Math.min(
+            requestedMaxTokens,
+            model.maxTokens ?? requestedMaxTokens,
+            typeof payload.max_tokens === "number" ? payload.max_tokens : requestedMaxTokens,
+          );
+        }
         if (Array.isArray(payload.tools)) {
           for (const tool of payload.tools) {
             const definition = asRecord(tool);

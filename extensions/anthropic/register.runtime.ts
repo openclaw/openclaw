@@ -413,7 +413,7 @@ function normalizeAnthropicResolvedModel(
   if (
     model.maxTokensSource !== "configured" &&
     isAnthropic128kOutputModel(contractModelId) &&
-    !(model.maxTokens >= ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS)
+    (model.maxTokens === undefined || model.maxTokens < ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS)
   ) {
     patch.maxTokens = ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS;
   }

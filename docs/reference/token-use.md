@@ -377,3 +377,18 @@ See [Skills](/tools/skills) for the exact skill list overhead formula.
 - [API usage and costs](/reference/api-usage-costs)
 - [Prompt caching](/reference/prompt-caching)
 - [Usage tracking](/concepts/usage-tracking)
+
+## Unknown model limits
+
+Missing catalog `contextWindow` and `maxTokens` values remain unknown through
+model selection and runtime resolution. The model stays listed. A router
+reservation default or monetary policy does not establish either provider limit.
+
+An explicit caller or configured `maxTokens` value is an execution budget. A
+known model output ceiling constrains it; an unknown ceiling does not supply a
+default. `contextTokens` is a local context budget and does not fill a missing
+provider context window. Known context windows constrain local budgets.
+
+Anthropic Messages requires a positive output bound before sending a request.
+Supply an explicit `maxTokens` value or qualified model output metadata. Missing
+or invalid bounds fail before the paid POST, without removing the catalog row.

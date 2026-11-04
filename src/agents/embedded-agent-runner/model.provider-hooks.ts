@@ -1,5 +1,5 @@
+import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -109,24 +109,6 @@ export function normalizeResolvedModel(params: {
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model {
-  const normalizeModelCost = (cost: unknown): Model["cost"] => {
-    if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
-      return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    }
-    const record = cost as Partial<Model["cost"]>;
-    const normalized = {
-      input: asFiniteNumber(record.input) ?? 0,
-      output: asFiniteNumber(record.output) ?? 0,
-      cacheRead: asFiniteNumber(record.cacheRead) ?? 0,
-      cacheWrite: asFiniteNumber(record.cacheWrite) ?? 0,
-    };
-    return (["input", "output", "cacheRead", "cacheWrite"] as const).every(
-      (key) => normalized[key] === record[key],
-    )
-      ? (record as Model["cost"])
-      : { ...cost, ...normalized };
-  };
-
   const normalizedInputModel = {
     ...params.model,
     input: resolveProviderModelInput({
@@ -135,7 +117,7 @@ export function normalizeResolvedModel(params: {
       modelName: params.model.name,
       input: params.model.input,
     }),
-    cost: normalizeModelCost(params.model.cost),
+    cost: normalizeResolvedPricing(params.model.cost),
   } as Model & ProviderRuntimeModel;
   const runtimeHooks = params.runtimeHooks ?? resolveRuntimeHooks();
   const hookParams = {

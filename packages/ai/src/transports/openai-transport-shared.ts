@@ -405,7 +405,7 @@ export function parseOpenAICompletionsUsage(
         }
       : { state: "unavailable" },
     totalTokens: input + output + cacheRead + cacheWrite,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    cost: {},
   };
   calculateCost(model, usage);
   applyProviderReportedUsageCost(usage, rawUsage.cost);

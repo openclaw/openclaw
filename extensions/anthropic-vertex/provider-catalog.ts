@@ -172,6 +172,7 @@ export function normalizeAnthropicVertexResolvedModel(
     input === model.input &&
     model.contextWindow === ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW &&
     model.contextTokens === ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW &&
+    model.maxTokens !== undefined &&
     model.maxTokens >= ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS &&
     nativeThinkingLevelsMatch &&
     costMatches
@@ -184,7 +185,10 @@ export function normalizeAnthropicVertexResolvedModel(
     input,
     contextWindow: ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW,
     contextTokens: ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: Math.max(model.maxTokens, ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS),
+    maxTokens:
+      model.maxTokens === undefined
+        ? ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS
+        : Math.max(model.maxTokens, ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS),
     thinkingLevelMap,
     ...(cost ? { cost } : {}),
   };

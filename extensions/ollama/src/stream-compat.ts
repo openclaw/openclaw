@@ -201,11 +201,9 @@ export function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): numb
   return Math.floor(raw);
 }
 
-function resolveOllamaNumCtx(model: ProviderRuntimeModel): number {
-  return (
-    resolveOllamaConfiguredNumCtx(model) ??
-    Math.max(1, Math.floor(model.contextTokens ?? model.contextWindow ?? model.maxTokens))
-  );
+function resolveOllamaNumCtx(model: ProviderRuntimeModel): number | undefined {
+  const budget = resolveOllamaConfiguredNumCtx(model) ?? model.contextTokens ?? model.contextWindow;
+  return budget === undefined ? undefined : Math.max(1, Math.floor(budget));
 }
 
 export function createConfiguredOllamaCompatStreamWrapper(
@@ -224,7 +222,10 @@ export function createConfiguredOllamaCompatStreamWrapper(
         providerId,
       })
     ) {
-      streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaNumCtx(model));
+      const numCtx = resolveOllamaNumCtx(model);
+      if (numCtx !== undefined) {
+        streamFn = wrapOllamaCompatNumCtx(streamFn, numCtx);
+      }
     }
   }
 

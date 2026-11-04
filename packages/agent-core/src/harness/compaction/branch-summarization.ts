@@ -174,7 +174,7 @@ export async function generateBranchSummary(
   const maxSummaryOutputTokens = Math.min(
     2048,
     Math.max(1, Math.floor(contextWindow / 4)),
-    model.maxTokens > 0 ? model.maxTokens : 2048,
+    model.maxTokens !== undefined && model.maxTokens > 0 ? model.maxTokens : 2048,
   );
   // Preserve usable caller reservations; only an impossible reservation may
   // fall back before its nonpositive budget disables history bounds entirely.

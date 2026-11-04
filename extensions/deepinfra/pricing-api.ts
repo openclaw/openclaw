@@ -1,12 +1,11 @@
 import { normalizeModelPricingCatalog } from "openclaw/plugin-sdk/model-catalog-pricing";
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asFiniteNumberInRange,
   asOptionalRecord,
   asPositiveSafeInteger,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function normalizeDeepInfraTokenPricing(value: unknown): ModelDefinitionConfig["cost"] | undefined {
+function normalizeDeepInfraTokenPricing(value: unknown) {
   const row = asOptionalRecord(value);
   if (!row || (row.type !== undefined && row.type !== "tokens")) {
     return undefined;

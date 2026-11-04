@@ -29,12 +29,18 @@ export function modelCatalogRowToEntry(
     servingContextLimit?: ModelServingContextLimit;
   },
 ): ModelCatalogEntry {
-  const contextWindow = row.contextWindow ?? row.contextTokens;
+  const contextWindow = row.contextWindow;
+  const contextBudget =
+    row.contextTokens !== undefined &&
+    contextWindow !== undefined &&
+    row.contextWindowSource !== "synthetic"
+      ? Math.min(row.contextTokens, contextWindow)
+      : row.contextTokens;
   const servingWindow = readModelServingContextWindow(row);
   const contextTokens =
     servingWindow === undefined
-      ? row.contextTokens
-      : Math.min(servingWindow, row.contextTokens ?? contextWindow ?? Infinity);
+      ? contextBudget
+      : Math.min(servingWindow, contextBudget ?? contextWindow ?? Infinity);
   return {
     id: row.id,
     name: row.name,

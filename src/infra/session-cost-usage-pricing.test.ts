@@ -86,6 +86,45 @@ it.each([
   ["multi-call lowest tier", 900, tieredPricing, 0.00094],
   ["single-call tier", 600, tieredPricing, 0.00064],
 ])("%s", (_name, input, cost, expected) => {
-  const total = estimate({ input, output: 20, contextUsage: latestCall }, cost);
+  const total = estimate(
+    { input, output: 20, cacheRead: 0, cacheWrite: 0, contextUsage: latestCall },
+    cost,
+  );
   expect(total).toEqual(expected === undefined ? undefined : expect.closeTo(expected, 8));
+});
+
+it.each([0, 0.5])("never reprices a recorded total %s with unknown components", (total) => {
+  const entry = parseUsageCostTranscriptRecord({
+    message: {
+      role: "assistant",
+      usage: {
+        input: 10,
+        cost: { total, totalOrigin: "provider-billed" },
+      },
+    },
+  });
+  expect(needsUsageCostEstimate(entry)).toBe(false);
+  expect(entry?.costBreakdown).toEqual({ total, totalOrigin: "provider-billed" });
+});
+it("keeps recorded partial buckets when estimating the remaining request", () => {
+  const entry = parseUsageCostTranscriptRecord({
+    message: {
+      role: "assistant",
+      usage: {
+        input: 1_000_000,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: { input: 0 },
+      },
+    },
+  });
+  if (!needsUsageCostEstimate(entry)) {
+    throw new Error("Expected an incomplete request estimate");
+  }
+  const priced = applyUsageCostEstimate(entry, () => ({ input: 2 }));
+  expect(priced.costBreakdown).toEqual({ input: 0, cacheRead: 0, cacheWrite: 0 });
+  expect(priced.costTotal).toBeUndefined();
+  const completed = applyUsageCostEstimate(entry, () => ({ input: 2, output: 1 }));
+  expect(completed.costTotal).toBe(0.000001);
 });

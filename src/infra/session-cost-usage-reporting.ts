@@ -191,7 +191,7 @@ export async function loadSessionUsageTimeSeries(
       points.push({
         timestamp,
         ...computeUsageTokenTotals(entry.usage),
-        cost: entry.costTotal ?? 0,
+        cost: entry.costTotal,
       });
     }
 
@@ -221,19 +221,25 @@ export async function loadSessionUsageTimeSeries(
         bucket.cacheRead += point.cacheRead;
         bucket.cacheWrite += point.cacheWrite;
         bucket.totalTokens += point.totalTokens;
-        bucket.cost += point.cost;
+        bucket.cost =
+          bucket.cost !== undefined && point.cost !== undefined
+            ? bucket.cost + point.cost
+            : undefined;
       }
       points = downsampled;
     }
 
     // Accumulate after sampling to preserve the bucket-based floating-point sums.
     let cumulativeTokens = 0;
-    let cumulativeCost = 0;
+    let cumulativeCost: number | undefined = 0;
     return {
       sessionId: scoped.sessionId,
       points: points.map((point) => {
         cumulativeTokens += point.totalTokens;
-        cumulativeCost += point.cost;
+        cumulativeCost =
+          cumulativeCost !== undefined && point.cost !== undefined
+            ? cumulativeCost + point.cost
+            : undefined;
         return Object.assign(point, { cumulativeTokens, cumulativeCost });
       }),
     };

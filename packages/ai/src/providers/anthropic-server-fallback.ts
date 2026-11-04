@@ -53,7 +53,7 @@ function resolveFallbackModelIdentity(modelId: string | null): string | null {
   return normalized || null;
 }
 
-function resolveClaudeOpusFallbackCost(modelId: string | null): Model["cost"] | undefined {
+function resolveClaudeOpusFallbackCost(modelId: string | null) {
   if (modelId === "claude-opus-5-5") {
     return CLAUDE_OPUS_55_FALLBACK_MODEL_COST;
   }
@@ -81,14 +81,18 @@ export function resolveAnthropicFallbackServingModelCost(params: {
   if (!requestedCost) {
     return servingCost;
   }
-  // Preserve fast/custom multipliers when Opus 5.5 changes the base rates.
-  return {
-    input: (params.requestedCost.input / requestedCost.input) * servingCost.input,
-    output: (params.requestedCost.output / requestedCost.output) * servingCost.output,
-    cacheRead: (params.requestedCost.cacheRead / requestedCost.cacheRead) * servingCost.cacheRead,
-    cacheWrite:
-      (params.requestedCost.cacheWrite / requestedCost.cacheWrite) * servingCost.cacheWrite,
-  };
+  // A custom multiplier exists only for an observed requested rate.
+  if (!params.requestedCost) {
+    return undefined;
+  }
+  const cost: NonNullable<Model["cost"]> = {};
+  for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+    const rate = params.requestedCost[key];
+    if (rate !== undefined) {
+      cost[key] = (rate / requestedCost[key]) * servingCost[key];
+    }
+  }
+  return cost;
 }
 
 function readBoundaryModel(value: unknown): string | null {

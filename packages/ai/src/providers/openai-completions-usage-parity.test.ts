@@ -5,18 +5,17 @@ import type { Context, Model } from "../types.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 import { makeOpenAIProviderModel, preserveTransportHost } from "./openai-provider.test-support.js";
 
-const model = makeOpenAIProviderModel("openai-completions", {
-  cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0.5 },
-});
+const rates = { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0.5 };
+const model = makeOpenAIProviderModel("openai-completions", { cost: rates });
 
 const context = {
   messages: [{ role: "user", content: "Explain the billing", timestamp: 1 }],
 } satisfies Context;
 
 const tieredCost = {
-  ...model.cost,
+  ...rates,
   tieredPricing: [
-    { ...model.cost, range: [0, 101] as [number, number] },
+    { ...rates, range: [0, 101] as [number, number] },
     { input: 3, output: 6, cacheRead: 1, cacheWrite: 2, range: [101] as [number] },
   ],
 };

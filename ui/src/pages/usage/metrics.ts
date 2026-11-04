@@ -27,7 +27,10 @@ function formatUsageTokens(n: number): string {
 
 // Usage charts choose fixed precision from the surrounding scale; the shared
 // adaptive cost formatter would change labels as values cross its thresholds.
-function formatUsageCost(n: number, decimals: 2 | 4 | 6 = 2): string {
+function formatUsageCost(n: number | undefined, decimals: 2 | 4 | 6 = 2): string {
+  if (n === undefined || !Number.isFinite(n)) {
+    return "—";
+  }
   const formatter = (costFormatters[decimals] ??= new Intl.NumberFormat("en-US", {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,

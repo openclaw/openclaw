@@ -16,9 +16,9 @@ export function toLiveModelConfig(
     ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
     cost: {
       ...model.cost,
-      ...(model.cost.tieredPricing
+      ...(model.cost?.tieredPricing
         ? {
-            tieredPricing: model.cost.tieredPricing.map((tier) => ({
+            tieredPricing: model.cost?.tieredPricing.map((tier) => ({
               ...tier,
               range:
                 tier.range.length === 2 && tier.range[1] === Number.POSITIVE_INFINITY

@@ -12,20 +12,16 @@ import {
 import { adjustMaxTokensForThinking } from "../providers/simple-options.js";
 import { copyProviderAcceptanceObserver } from "./transport-stream-shared.js";
 
-const ANTHROPIC_MESSAGES_DEFAULT_MAX_TOKENS = 4_096;
-const ANTHROPIC_MESSAGES_FALLBACK_CONTEXT_DIVISOR = 4;
-
 export type AnthropicTransportOptions = AnthropicOptions &
   Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets" | "stop"> & {
     authProfileId?: string;
   };
 
 function resolvePositiveAnthropicTokenLimit(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     return undefined;
   }
-  const floored = Math.floor(value);
-  return floored > 0 ? floored : undefined;
+  return value;
 }
 
 export function resolveAnthropicMessagesMaxTokens(params: {
@@ -35,28 +31,15 @@ export function resolveAnthropicMessagesMaxTokens(params: {
   useModelDefault?: boolean;
 }): number | undefined {
   const requested = resolvePositiveAnthropicTokenLimit(params.requestedMaxTokens);
-  if (requested !== undefined) {
-    return requested;
-  }
   const modelMax = resolvePositiveAnthropicTokenLimit(params.modelMaxTokens);
-  if (modelMax !== undefined) {
-    return params.useModelDefault ? modelMax : Math.min(modelMax, 32_000);
+  if (params.requestedMaxTokens !== undefined) {
+    return requested === undefined ? undefined : Math.min(requested, modelMax ?? requested);
   }
-  if (params.modelMaxTokens !== undefined) {
-    return undefined;
-  }
-  // Anthropic requires max_tokens even when an optional custom-model row has no output cap.
-  // Use a conservative compatibility baseline; higher model limits require explicit metadata.
-  const contextWindow = resolvePositiveAnthropicTokenLimit(params.modelContextWindow);
-  return contextWindow === undefined
-    ? ANTHROPIC_MESSAGES_DEFAULT_MAX_TOKENS
-    : Math.max(
-        1,
-        Math.min(
-          ANTHROPIC_MESSAGES_DEFAULT_MAX_TOKENS,
-          Math.floor(contextWindow / ANTHROPIC_MESSAGES_FALLBACK_CONTEXT_DIVISOR),
-        ),
-      );
+  return modelMax === undefined
+    ? undefined
+    : params.useModelDefault
+      ? modelMax
+      : Math.min(modelMax, 32_000);
 }
 
 export function resolveAnthropicTransportOptions(
@@ -76,7 +59,7 @@ export function resolveAnthropicTransportOptions(
       resolveClaudeOpus5ModelIdentity(model) !== undefined,
   });
   if (baseMaxTokens === undefined) {
-    throw new Error(
+    throw new RangeError(
       `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
     );
   }

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
@@ -54,7 +55,12 @@ function fixture(native = true, steps: Step[] = ["ready"]) {
   });
   const startup: NativeInferenceStartup = {
     credentials: { [`${ref.provider}/${ref.model}`]: "synthetic-authority-key" },
-    config: { models: [{ ...model, contextWindow: 8192 }], workspace: root },
+    config: {
+      models: [
+        { ...model, contextWindow: 8192, maxTokens: expectDefined(model.maxTokens, "fixture cap") },
+      ],
+      workspace: root,
+    },
   };
   const connection = connections.createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,

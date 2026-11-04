@@ -99,21 +99,28 @@ function mergeAnthropicBetaHeader(
 }
 
 function applyAnthropicFastModePricing(model: Parameters<StreamFn>[0]): Parameters<StreamFn>[0] {
-  const scaleRates = (rates: Parameters<StreamFn>[0]["cost"]) => ({
-    input: rates.input * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
-    output: rates.output * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
-    cacheRead: rates.cacheRead * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
-    cacheWrite: rates.cacheWrite * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
-  });
+  if (!model.cost) {
+    return model;
+  }
+  const cost = { ...model.cost };
+  for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+    const rate = cost[key];
+    if (rate !== undefined) {
+      cost[key] = rate * ANTHROPIC_FAST_MODE_COST_MULTIPLIER;
+    }
+  }
   return {
     ...model,
     cost: {
-      ...scaleRates(model.cost),
+      ...cost,
       ...(model.cost.tieredPricing
         ? {
             tieredPricing: model.cost.tieredPricing.map((tier) => ({
               ...tier,
-              ...scaleRates(tier),
+              input: tier.input * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
+              output: tier.output * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
+              cacheRead: tier.cacheRead * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
+              cacheWrite: tier.cacheWrite * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
             })),
           }
         : {}),

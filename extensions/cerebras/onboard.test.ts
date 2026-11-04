@@ -91,7 +91,7 @@ it("discovers credential-free text and vision metadata, with incomplete pricing 
     ["vision", "Vision", false, ["text", "image"], 262144, 65536],
   ]);
   expect(
-    catalog.models.map(({ cost: c }) => [c.input, c.output, c.cacheRead, c.cacheWrite]),
+    catalog.models.map(({ cost: c }) => [c?.input, c?.output, c?.cacheRead, c?.cacheWrite]),
   ).toEqual([
     [expect.closeTo(0.35, 10), expect.closeTo(0.75, 10), expect.closeTo(0.35, 10), 0],
     [0, 0, 0, 0],

@@ -93,7 +93,7 @@ describe("venice-models", () => {
         },
       },
     ]);
-    expect(model?.cost.tieredPricing).toEqual([
+    expect(model?.cost?.tieredPricing).toEqual([
       { input: 3, output: 5, cacheRead: 0.3, cacheWrite: 3.75, range: [0, 18] },
       { input: 6, output: 10, cacheRead: 0.6, cacheWrite: 7.5, range: [18] },
     ]);

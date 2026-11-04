@@ -445,7 +445,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
             ? "done"
             : "Project archive summary. "
                 .repeat(700)
-                .slice(0, (options?.maxTokens ?? model.maxTokens) * 4);
+                .slice(0, expectDefined(options?.maxTokens ?? model.maxTokens, "output cap") * 4);
           const response = createAssistant(model, [{ type: "text", text }], "stop", tokens);
           response.usage.output = Math.ceil(text.length / 4);
           response.usage.totalTokens = tokens + response.usage.output;

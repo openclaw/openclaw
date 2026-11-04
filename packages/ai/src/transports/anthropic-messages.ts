@@ -173,15 +173,14 @@ export async function buildAnthropicRequest(
   claudeCodeVersion?: string,
 ) {
   const managed = profile === "transport";
-  const maxTokens = managed
-    ? resolveAnthropicMessagesMaxTokens({
-        modelContextWindow: model.contextWindow,
-        modelMaxTokens: model.maxTokens,
-        requestedMaxTokens: options?.maxTokens,
-      })
-    : (options?.maxTokens ?? model.maxTokens);
-  if (managed && maxTokens === undefined) {
-    throw new Error(
+  const maxTokens = resolveAnthropicMessagesMaxTokens({
+    modelContextWindow: model.contextWindow,
+    modelMaxTokens: model.maxTokens,
+    requestedMaxTokens: options?.maxTokens,
+    useModelDefault: !managed,
+  });
+  if (maxTokens === undefined) {
+    throw new RangeError(
       `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
     );
   }
@@ -510,7 +509,7 @@ export async function buildAnthropicRequest(
       managed && isDirectAnthropicModel(model) ? model.id.replace(/^anthropic\//i, "") : model.id,
     // SAFETY: the API accepts in-history system messages and compaction blocks absent from the SDK union.
     messages: messages as MessageParam[],
-    max_tokens: maxTokens ?? model.maxTokens,
+    max_tokens: maxTokens,
     stream: true,
   };
   if (system) {

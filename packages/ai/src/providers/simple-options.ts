@@ -78,12 +78,30 @@ export function clampReasoning(
 }
 
 export function adjustMaxTokensForThinking(
-  // Undefined means no explicit caller cap. Use the model cap and fit thinking inside it.
+  baseMaxTokens: number,
+  modelMaxTokens: number | undefined,
+  reasoningLevel: ThinkingLevel,
+  customBudgets?: ThinkingBudgets,
+): { maxTokens: number; thinkingBudget: number };
+export function adjustMaxTokensForThinking(
   baseMaxTokens: number | undefined,
   modelMaxTokens: number,
   reasoningLevel: ThinkingLevel,
   customBudgets?: ThinkingBudgets,
-): { maxTokens: number; thinkingBudget: number } {
+): { maxTokens: number; thinkingBudget: number };
+export function adjustMaxTokensForThinking(
+  baseMaxTokens: number | undefined,
+  modelMaxTokens: number | undefined,
+  reasoningLevel: ThinkingLevel,
+  customBudgets?: ThinkingBudgets,
+): { maxTokens: number | undefined; thinkingBudget: number };
+export function adjustMaxTokensForThinking(
+  // Missing caller and model bounds remain absent; a thinking budget is not an output ceiling.
+  baseMaxTokens: number | undefined,
+  modelMaxTokens: number | undefined,
+  reasoningLevel: ThinkingLevel,
+  customBudgets?: ThinkingBudgets,
+): { maxTokens: number | undefined; thinkingBudget: number } {
   const defaultBudgets: Required<ThinkingBudgets> = {
     minimal: 1024,
     low: 2048,
@@ -99,9 +117,9 @@ export function adjustMaxTokensForThinking(
   const maxTokens =
     baseMaxTokens === undefined
       ? modelMaxTokens
-      : Math.min(baseMaxTokens + thinkingBudget, modelMaxTokens);
+      : Math.min(baseMaxTokens + thinkingBudget, modelMaxTokens ?? Number.POSITIVE_INFINITY);
 
-  if (maxTokens <= thinkingBudget) {
+  if (maxTokens !== undefined && maxTokens <= thinkingBudget) {
     thinkingBudget = Math.max(0, maxTokens - minOutputTokens);
   }
 
