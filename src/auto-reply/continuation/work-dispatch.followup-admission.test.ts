@@ -83,6 +83,7 @@ await prewarmConfigDrivenReplyRuntime();
 const FOLLOWUP_DEBOUNCE_MS = 500;
 const CLOCK_STEP_MS = 100;
 const REFUSED = "Retryable continuation skip: followup-refused";
+const REQUEUED = "Requeued same-session continuation wake";
 // Worker replies arrive as real macrotasks that the injected clock never advances.
 const realSetImmediate = globalThis.setImmediate;
 const realNow = performance.now.bind(performance);
@@ -196,6 +197,12 @@ async function queueFollowupsBehindEndedTurn() {
   expect(pendingFollowups()).toEqual(["user-2", "user-3"]);
 }
 
+/** The wake reached the session's input queue, waiting, steering or claimed. */
+const wakeEnteredSession = () =>
+  (getExistingFollowupQueue(key)?.entries ?? []).some((input) =>
+    input.source?.prompt.includes("[continuation:wake]"),
+  );
+
 function pendingFollowups() {
   return (getExistingFollowupQueue(key)?.items ?? []).map((item) =>
     item.prompt.includes("[continuation:wake]")
@@ -303,14 +310,19 @@ describe("a due continue_work wake whose session becomes active before reply adm
           await held.running;
         }
       };
-      await dispatchPendingContinuationWork({ sessionKey: key });
-      await settleWorkDispatchCustody();
-      expect(world.effects).toEqual(["user-0", "user-1"]);
-      expect(pendingFollowups()).toEqual([]);
-      expect(await readWork(recordId)).toMatchObject({ status: "queued", failureReason: REFUSED });
-
+      const dispatching = dispatchPendingContinuationWork({ sessionKey: key });
+      // Admission decides while user-1 still holds the session: the wake is requeued, or it entered
+      // the session's input queue to be steered or queued.
+      await until(
+        async () => wakeEnteredSession() || (await readWork(recordId)).phase === REQUEUED,
+      );
+      const entered = wakeEnteredSession();
+      const decided = await readWork(recordId);
       held.release();
-      await userTurnOne;
+      await Promise.all([userTurnOne, dispatching]);
+      expect(entered).toBe(false);
+      expect(decided).toMatchObject({ status: "queued", failureReason: REFUSED });
+
       await until(delivered(recordId), CLOCK_STEP_MS);
       expect(world.effects).toEqual(["user-0", "user-1", "wake"]);
     });
