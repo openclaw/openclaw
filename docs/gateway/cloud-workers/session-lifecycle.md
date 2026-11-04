@@ -54,6 +54,14 @@ Shared-state schema 39 adds nullable lifecycle custody after disk-authority sche
 Older environments remain unretained. Package-only downgrade is refused; restore the
 matching pre-upgrade backup and binary only after settling retained operations and cleanup.
 
+On Gateway restart, local workspace recovery journals settle before readiness.
+Remote provider reconciliation and Git publication recovery run in the background,
+so an unavailable cloud provider does not block the Gateway from becoming ready.
+Restart recovery may interrupt only placement turn claims captured before startup;
+newly admitted or replaced claims keep their live execution ownership. Gateway
+shutdown drains accepted recovery work before stopping the environment service.
+Gateway readiness does not imply that every retained worker is ready to execute.
+
 ## Dispatch a session
 
 `sessions.dispatch` rejects a busy session without interrupting its active work. Wait for the current turn to finish, then retry. For an idle session, dispatch closes local turn admission, validates the workspace source, provisions the lease for the selected execution mode, and runs setup. With project warm images enabled, it prepares the committed checkout and node runtime and captures any needed image before enrollment. It then enrolls the node, installs the required pinned Gateway bundle, applies the session workspace, and returns once the placement reaches `active` ownership. Gateway-source inventory validation happens before provider allocation. Repository-only inventory is captured on the enrolled node after fetching the pinned source; either path reports actionable size or entry limits. Budget several minutes for the first cloud dispatch, including capture when needed; later dispatches can reuse the image, project seed, and runtime installs. After that, talk to the session as usual. OpenClaw turns route to the worker process; Codex native operations run on the authorized cloud node, paired device, or supported SSH-backed provider.

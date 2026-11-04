@@ -87,6 +87,7 @@ describe("plugin scaffold event scope", () => {
     [[".github/workflows/plugin-init-scaffold-validation.yml"], true],
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/plugin-init-scaffold-validation.yml");
+    expect(workflow.jobs["validate-provider-scaffold"]["runs-on"]).toBe("ubuntu-24.04");
     expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
     for (const event of ["push", "pull_request"]) {
       expect(acceptsWorkflowPaths(workflow.on[event].paths, files)).toBe(expected);
