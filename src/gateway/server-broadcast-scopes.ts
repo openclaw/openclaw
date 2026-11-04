@@ -35,6 +35,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "chat.side_result": [SESSION_READ_SCOPE],
   cron: [READ_SCOPE],
   "cron.inventory.changed": [READ_SCOPE],
+  "worktrees.branches.changed": [WRITE_SCOPE],
+  "projects.checkoutOptions.changed": [SESSION_READ_SCOPE],
   health: [],
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
@@ -46,7 +48,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "openclaw.approval.requested": [APPROVALS_SCOPE],
   "openclaw.approval.resolved": [APPROVALS_SCOPE],
   // The frame cadence itself exposes person activity; match system-presence access.
-  presence: [READ_SCOPE],
+  presence: [SESSION_READ_SCOPE],
   shutdown: [],
   "gateway.suspension": [],
   tick: [],
@@ -139,6 +141,18 @@ export function isSessionReadInvalidation(
       )
     );
   }
+  if (event === "projects.checkoutOptions.changed") {
+    return (
+      targeted &&
+      Object.hasOwn(payload, "projectId") &&
+      fields.every(
+        ([key, field]) =>
+          "value" in field &&
+          ((key === "projectId" && typeof field.value === "string") ||
+            (key === "agentId" && (field.value === undefined || typeof field.value === "string"))),
+      )
+    );
+  }
   // Hidden/deleted rows send subscribed readers only a signal to repeat an authorized read.
   return (
     event === "sessions.changed" &&
@@ -208,6 +222,8 @@ export function hasEventScope(
         (scope) =>
           operatorScopeSatisfied(scope, scopes) &&
           (scope !== SESSION_READ_SCOPE ||
+            // Presence carries no session content; its recipient projection filters rows.
+            event === "presence" ||
             operatorScopeSatisfied(READ_SCOPE, scopes) ||
             hasSessionReadContext?.() === true),
       ) ||

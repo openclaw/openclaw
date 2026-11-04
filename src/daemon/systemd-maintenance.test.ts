@@ -34,10 +34,9 @@ async function policyFixture(stopSeconds = 330, includePath = true) {
     OPENCLAW_SERVICE_VERSION: "2026.7.1-2",
     ...(includePath ? { PATH: "/usr/bin:/bin" } : {}),
   };
-  const original = buildSystemdUnit(f.command).replace(
-    "TimeoutStopSec=330",
-    `TimeoutStopSec=${stopSeconds}`,
-  );
+  const original = buildSystemdUnit(f.command)
+    .replace("TimeoutStopSec=330", `TimeoutStopSec=${stopSeconds}`)
+    .replace(/^Delegate(?:Subgroup)?=.*\n/gm, "");
   await fs.writeFile(f.sourcePath, original);
   const warnings: string[] = [];
   return {
@@ -228,6 +227,7 @@ it.each([
       expect(await readSystemdGatewayStopTimeout(installedState(f))).toBeUndefined();
     }
     const refreshed = await f.read();
+    expect(refreshed).not.toMatch(/^Delegate(?:Subgroup)?=/m);
     expect(refreshed).toContain(`TimeoutStartSec=${custom ? 45 : 30}`);
     if (custom) {
       expect(refreshed).toContain("KillMode=mixed");

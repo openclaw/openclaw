@@ -13,6 +13,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -20,7 +21,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { apiThrottler } from "./bot.runtime.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -116,6 +117,54 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     }
   });
   afterEach(resetTelegramAccountThrottlersForTest);
+
+  it.each([false, true])(
+    "renders copied recap as native code without mentions or previews (rich=%s)",
+    async (richMessages) => {
+      const capability = vi.spyOn(getSessionBindingService(), "getCapabilities").mockReturnValue({
+        adapterAvailable: true,
+        bindSupported: true,
+        unbindSupported: true,
+        placements: ["current"],
+      });
+      try {
+        const prepareFork = telegramPlugin.conversationBindings?.prepareFork;
+        assert(prepareFork, "Telegram must expose /fork through its channel binding contract");
+        const prepared = await prepareFork({
+          cfg,
+          accountId: "default",
+          source: { conversationId: "-100123:topic:7" },
+          isGroup: true,
+          assertCurrent() {},
+        });
+        if (!prepared.ok) {
+          throw new Error(prepared.reason);
+        }
+        const text =
+          "User: @someone https://example.invalid/ ![image](https://example.invalid/x.png)\n" +
+          "```\nMEDIA:https://example.invalid/a\n[[reply_to:literal]]";
+        await sendPayload(prepared.formatRecap!(text), {
+          cfg: {
+            channels: { telegram: { ...cfg.channels.telegram, richMessages, linkPreview: true } },
+          },
+        });
+        expect(requests).toHaveLength(1);
+        const fields = requestFields();
+        if (richMessages) {
+          expect(fields.rich_message).toMatchObject({ skip_entity_detection: true });
+          expect(JSON.stringify(fields.rich_message)).toContain("MEDIA:https://example.invalid/a");
+          expect(JSON.stringify(fields.rich_message)).not.toContain('"type":"mention"');
+        } else {
+          expect(fields.link_preview_options).toEqual({ is_disabled: true });
+          expect(fields.text).toContain("<pre>");
+          expect(fields.text).toContain("[[reply_to:literal]]");
+          expect(fields.text).not.toContain("<a href");
+        }
+      } finally {
+        capability.mockRestore();
+      }
+    },
+  );
 
   it("rejects ambiguous account ownership before dispatch and sends with an explicit owner", async () => {
     const ownerCfg: OpenClawConfig = {

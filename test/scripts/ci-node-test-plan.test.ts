@@ -341,8 +341,7 @@ describe("Control UI release-only inventories", () => {
     const desktop = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
     const serial = [
       "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
-      "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
-      "ui/src/e2e/quiet-automations.real-gateway.e2e.test.ts",
+      "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
       "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
     ];
     const parallel = [
@@ -355,8 +354,7 @@ describe("Control UI release-only inventories", () => {
       [desktop]: 80,
       [serial[0]!]: 60,
       [serial[1]!]: 50,
-      [serial[2]!]: 40,
-      [serial[3]!]: 10,
+      [serial[2]!]: 10,
     };
     for (const file of parallel) {
       fileSeconds[file] = 100;
@@ -448,59 +446,43 @@ describe("Control UI release-only inventories", () => {
     expect(shards.every((shard) => !shard.run_desktop)).toBe(true);
   });
 
-  it("retains PR-exempt entries while omitting release-only UI matrices", () => {
-    const groups = createUiTestShardGroups({ includeReleaseOnlyTests: false });
+  it.each([
+    { name: "automatic selection", full: false, edited: [] },
+    { name: "full automatic selection", full: true, edited: [] },
+    {
+      name: "directly edited release matrices",
+      full: false,
+      edited: [entry, staleBuild, teamScale, ...releaseOnlyRealGateway],
+    },
+    {
+      name: "full selection with one edited release suite",
+      full: true,
+      edited: [automationManagement],
+    },
+  ])("retains PR exemptions and direct edits in $name", ({ full, edited }) => {
+    const groups = createUiTestShardGroups({
+      includeReleaseOnlyTests: false,
+      includeReleaseOnlyE2eTests: full,
+      uiE2eFiles: full ? [embed, entry, staleBuild, teamScale] : undefined,
+      changedPaths: [...edited, "ui/src/e2e", "ui/src/pages/usage/usage-page.tsx"],
+    });
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
-    expect(groups.e2e[0]?.includePatterns).toContain(embed);
-    expect(groups.e2e[0]?.includePatterns).toContain(entry);
-    expect(groups.e2e[0]?.includePatterns).not.toContain(staleBuild);
-    expect(groups.e2e[0]?.includePatterns).not.toContain(teamScale);
-    expect(
-      uiE2eRealGatewayTestFiles.filter((file) => groups.e2e[0]?.includePatterns?.includes(file)),
-    ).toEqual(uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)));
     expect(groups.ui[0]?.includePatterns).toContain(
       "ui/src/components/app-sidebar-row-identity.browser.test.ts",
     );
     expect(groups.ui[0]?.includePatterns?.some((file) => file.endsWith(".e2e.test.ts"))).toBe(
       false,
     );
+    for (const file of [embed, entry]) {
+      expect(groups.e2e[0]?.includePatterns).toContain(file);
+    }
+    for (const file of [staleBuild, teamScale]) {
+      expect(groups.e2e[0]?.includePatterns?.includes(file)).toBe(edited.includes(file));
+    }
     expectRealGatewayCoverage(
       groups.e2e,
-      uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)),
-    );
-  });
-
-  it("retains directly edited release matrices alongside PR-exempt entries", () => {
-    const options = {
-      includeReleaseOnlyTests: false,
-      changedPaths: [
-        entry,
-        staleBuild,
-        teamScale,
-        ...releaseOnlyRealGateway,
-        "ui/src/components/app-sidebar.ts",
-        "ui/src/e2e",
-      ],
-    };
-    const groups = createUiTestShardGroups(options);
-    expect(groups.e2e[0]?.includePatterns).toContain(entry);
-    expect(groups.e2e[0]?.includePatterns).toContain(staleBuild);
-    expect(groups.e2e[0]?.includePatterns).toContain(teamScale);
-    expect(
-      groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
-    ).toEqual(
-      uiE2eRealGatewayTestFiles.filter((file) => releaseOnlyRealGateway.has(file)).toSorted(),
-    );
-    expect(groups.e2e[0]?.includePatterns).toContain(embed);
-    expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
-    expectRealGatewayCoverage(groups.e2e, uiE2eRealGatewayTestFiles);
-    expectRealGatewayCoverage(
-      createUiTestShardGroups({
-        includeReleaseOnlyTests: false,
-        changedPaths: [automationManagement, "ui/src/e2e", "ui/src/pages/usage/usage-page.tsx"],
-      }).e2e,
       uiE2eRealGatewayTestFiles.filter(
-        (file) => !releaseOnlyRealGateway.has(file) || file === automationManagement,
+        (file) => !releaseOnlyRealGateway.has(file) || edited.includes(file),
       ),
     );
   });
@@ -512,6 +494,13 @@ describe("Control UI release-only inventories", () => {
       e2e: [{ configs: [configPath("ui-e2e")], shard_name: configPath("ui-e2e") }],
     });
     expectRealGatewayCoverage(groups.e2e, uiE2eRealGatewayTestFiles);
+    expectRealGatewayCoverage(
+      createUiTestShardGroups({
+        includeReleaseOnlyE2eTests: true,
+        uiE2eFiles: [entry],
+      }).e2e,
+      uiE2eRealGatewayTestFiles,
+    );
   });
 });
 

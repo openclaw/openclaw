@@ -54,12 +54,3 @@ export function registerMessageChannel(plugin: ChannelPlugin, origin?: "bundled"
     ]),
   );
 }
-
-export function messageSource(channel: string, target: string, messageId?: string) {
-  return {
-    currentChannelProvider: channel,
-    currentChannelId: target,
-    currentMessagingTarget: target,
-    ...(messageId === undefined ? {} : { currentMessageId: messageId }),
-  };
-}

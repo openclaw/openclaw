@@ -83,7 +83,7 @@ it.each([
       personId ? "[data-activity-identity]" : ".activity-pulse",
     )!;
     expect(getComputedStyle(container.querySelector(".activity-feed__feedback")!).minHeight).toBe(
-      "32px",
+      width <= 640 ? "38px" : "32px",
     );
     const top = content.getBoundingClientRect().top;
     expect(content.getBoundingClientRect().height).toBeGreaterThan(0);

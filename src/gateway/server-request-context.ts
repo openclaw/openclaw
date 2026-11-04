@@ -280,13 +280,7 @@ export function createGatewayRequestContext(
     getRuntimeConfig,
     ...(agentDatabaseStartup
       ? {
-          agentDatabaseStartup: {
-            get hasPendingAgents() {
-              return agentDatabaseStartup.hasPendingAgents;
-            },
-            waitForAgentPreparation:
-              agentDatabaseStartup.waitForAgentPreparation.bind(agentDatabaseStartup),
-          },
+          agentDatabaseStartup: agentDatabaseStartup.observation,
         }
       : {}),
     resolveSessionRequestTargets: (request) =>

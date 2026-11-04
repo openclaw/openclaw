@@ -13,7 +13,7 @@ import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
-import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
 import type { Message } from "../../src/llm/types.js";
 
 const { values } = parseArgs({

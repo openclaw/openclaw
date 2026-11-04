@@ -46,7 +46,7 @@
   margin: 0;
   padding: 0;
   border: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-elevated) 95%, var(--text) 5%);
 }
 .chat-machine .chat-pane__placement-fact {
@@ -134,7 +134,7 @@
 }
 .chat-machine__recovery {
   padding: 16px;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-elevated) 95%, var(--text) 5%);
 }
 .chat-machine__recovery h3 {

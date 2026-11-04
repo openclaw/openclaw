@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
@@ -35,7 +36,7 @@ import type {
   MemoryPromoteExplainOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
-import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
+import { resolveMemoryPromotionFileMaxChars } from "./memory-budget-config.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { searchMemoryForCli } from "./memory-search-operation.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
@@ -373,6 +374,7 @@ async function runMemoryPromotion(
             agentId,
             workspaceAgentIds,
             workspaceDir,
+            workspaceFileMode: resolveAgentConfig(cfg, agentId)?.workspaceFileMode,
             candidates,
             limit: opts.limit,
             minScore: opts.minScore ?? dreaming.minScore,

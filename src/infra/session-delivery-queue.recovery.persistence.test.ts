@@ -5,12 +5,12 @@ import {
   drainPendingSessionDelivery,
   recoverPendingSessionDeliveries,
 } from "./session-delivery-queue-recovery.js";
-import {
-  enqueueSessionDelivery,
-  loadPendingSessionDeliveries,
-} from "./session-delivery-queue-storage.js";
+import { loadPendingSessionDeliveries } from "./session-delivery-queue-storage.js";
 import { SessionDeliveryDeadLetteredError } from "./session-delivery-queue.records.js";
-import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
+import {
+  enqueueUnclaimedSessionDeliveryFixture as enqueueSessionDelivery,
+  withSessionDeliveryQueue,
+} from "./session-delivery-queue.test-helpers.js";
 
 it.each([
   { mode: "startup", phase: "retry" },

@@ -89,13 +89,13 @@ it("rejects generated video downloads that exceed the configured media cap", asy
   ).rejects.toThrow(`${downloadLabel} exceeds 1 bytes`);
 });
 
-it("shares one wall-clock deadline across download headers and body", async () => {
+it("shares one monotonic deadline across download headers and body", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(1_000);
   fetchWithTimeoutMock
     .mockResolvedValueOnce(taskResponse({ model: undefined }))
     .mockImplementationOnce(async () => {
-      vi.setSystemTime(1_090);
+      vi.advanceTimersByTime(90);
       return videoResponse(
         new ReadableStream<Uint8Array>({
           async pull(controller) {
@@ -152,7 +152,19 @@ it.each([
 });
 
 it("submits, polls, and downloads while dropping malformed duration metadata", async () => {
-  const result = await completeVideo({}, undefined, { duration: 1.5, model: undefined });
+  vi.useFakeTimers();
+  fetchWithTimeoutMock
+    .mockResolvedValueOnce(taskResponse({ status: "queued" }))
+    .mockResolvedValueOnce(taskResponse({ status: "running" }))
+    .mockResolvedValueOnce(taskResponse({ duration: 1.5, model: undefined }))
+    .mockResolvedValueOnce(videoResponse("webm-bytes", "video/webm"));
+
+  const pending = generateVideo();
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(5_000);
+  const result = await pending;
   expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
   expect(postRequest().url).toBe(
     "https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks",
@@ -165,6 +177,12 @@ it("submits, polls, and downloads while dropping malformed duration metadata", a
 it.each([
   ["BytePlus video status response missing task status", { status: undefined }],
   ["BytePlus video generation completed with malformed content", { content: [videoUrl] }],
+  [
+    "BytePlus video status response returned unknown task status: unexpected",
+    { status: "unexpected" },
+  ],
+  ["synthetic job failed", { status: "failed", error: { message: "  synthetic job failed  " } }],
+  ["BytePlus video generation failed", { status: "cancelled", error: { message: " " } }],
 ] as const)("rejects invalid task responses: %s", async (message, task) => {
   fetchWithTimeoutMock.mockResolvedValueOnce(taskResponse({ ...task, model: undefined }));
   await expect(generateVideo()).rejects.toThrow(message);
@@ -186,6 +204,7 @@ it.each([
     `${label}: JSON response exceeds ${16 * 1024 * 1024} bytes`,
   );
   expect(stream.wasCanceled()).toBe(true);
+  expect(stream.getReadCount()).toBeGreaterThan(16);
   expect(stream.getReadCount()).toBeLessThan(32);
   if (stage === "submit") {
     expect(release).toHaveBeenCalledOnce();

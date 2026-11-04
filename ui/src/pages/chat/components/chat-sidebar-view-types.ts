@@ -36,6 +36,7 @@ type SessionWorkspaceOptionalKey =
   | "onNavigationScroll"
   | "connectionEpoch"
   | "onDownloadFile"
+  | "onFindWorkspaceFile"
   | "onOpenDiff";
 export type SessionWorkspaceProps = Omit<SessionWorkspaceView, SessionWorkspaceOptionalKey> &
   Partial<Pick<SessionWorkspaceView, SessionWorkspaceOptionalKey>>;
@@ -78,6 +79,7 @@ export type ChatDetailPanelProps = {
   allowExternalEmbedUrls: boolean;
   embedded: boolean;
   onOpenWorkspaceFile: ((target: WorkspaceFileLinkTarget) => void) | null;
+  onBrowseFiles?: (() => void) | null;
   onOpenSessionLink: ((target: SessionLinkTarget) => void) | null;
   onRevealInWorkspace: ((path: string) => void) | null;
   onOpenImage: ((item: ImageLightboxItem) => void) | null;
