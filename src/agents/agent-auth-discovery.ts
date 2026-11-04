@@ -21,6 +21,7 @@ import {
   resolveProviderEnvAuthLookupMaps,
 } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
+import { runProviderIsolated, runProviderIsolatedSync } from "./provider-failure-isolation.js";
 
 type AgentDiscoveryAuthLookupOptions = {
   config?: OpenClawConfig;
@@ -156,13 +157,14 @@ export function resolveAmbientAgentCredentialsForDiscovery(
 ): AgentCredentialMap {
   const { credentials, providers } = resolveAmbientCredentialInputs(options);
   for (const provider of providers) {
-    addSyntheticCredential(
-      credentials,
-      provider,
-      options.resolveSyntheticAuth
-        ? options.resolveSyntheticAuth(provider)
-        : resolveProviderSyntheticAuthWithPlugin(syntheticAuthParams(options, provider)),
+    const resolved = runProviderIsolatedSync(
+      { providerIds: [provider], stage: "synthetic auth" },
+      () =>
+        options.resolveSyntheticAuth
+          ? options.resolveSyntheticAuth(provider)
+          : resolveProviderSyntheticAuthWithPlugin(syntheticAuthParams(options, provider)),
     );
+    addSyntheticCredential(credentials, provider, resolved);
   }
   return credentials;
 }
@@ -178,13 +180,17 @@ export async function prepareAmbientAgentCredentialsForDiscovery(
   const { credentials, providers } = resolveAmbientCredentialInputs(options);
   for (const provider of providers) {
     options.signal?.throwIfAborted();
-    const resolved = options.resolveSyntheticAuth
-      ? await options.resolveSyntheticAuth(provider)
-      : await prepareProviderSyntheticAuthWithPlugin({
-          ...syntheticAuthParams(options, provider),
-          signal: options.signal,
-          preparationOwner: options.preparationOwner,
-        });
+    const resolved = await runProviderIsolated(
+      { providerIds: [provider], stage: "synthetic auth", signal: options.signal },
+      async () =>
+        options.resolveSyntheticAuth
+          ? await options.resolveSyntheticAuth(provider)
+          : await prepareProviderSyntheticAuthWithPlugin({
+              ...syntheticAuthParams(options, provider),
+              signal: options.signal,
+              preparationOwner: options.preparationOwner,
+            }),
+    );
     options.signal?.throwIfAborted();
     addSyntheticCredential(credentials, provider, resolved);
   }

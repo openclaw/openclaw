@@ -45,6 +45,14 @@ backup.
 
 ## Update implementation contract
 
+The candidate macOS app's narrow credential Doctor also completes pending local
+service-runtime intent migration before native startup selects a Gateway. This
+prevents an absent migration receipt from preserving the old seed after credential
+cutover advances shared state. The daemon migration owner keeps explicit pins and
+conflict refusals; preparation does not seed a runtime or start a service. Retry
+also reconciles intent when credential cutover already completed. The candidate
+must contain this fix; older installed updaters are unchanged.
+
 Linux managed updates run in a separate user service and slice, so an agent exec's
 descendant cleanup, Gateway restarts, and the Gateway unit's memory limit do not
 own the handoff. If its recorded helper and updater die, update status or startup
@@ -1143,6 +1151,11 @@ Post-activation schema inspection preserves captured SQLite database, WAL, and s
 artifacts so the final Doctor can verify the same migration source.
 
 Database rehearsal also avoids a second full backup of each private snapshot.
+Candidate inventory reads database registrations and the installed plugin index
+in one read-only transaction instead of copying the whole shared database just
+for metadata. Sources requiring private recovery keep the snapshot path. The
+candidate worker must contain this improvement; snapshot publication, integrity
+checks, and rollback verification are unchanged.
 Update schema inspection and rehearsal use SQLite online backup with a pinned
 read transaction, so a busy Gateway can keep writing while the copy includes
 committed WAL data. Each acquisition makes one copy instead of retrying until

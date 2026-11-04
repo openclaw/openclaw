@@ -77,7 +77,8 @@ async function readSnapshotRecord(
     return null;
   }
   if (asOptionalRecord(value)?.projectionVersion !== CHAT_SNAPSHOT_PROJECTION_VERSION) {
-    await deleteStoredChatSnapshot(sessionKey);
+    // Retiring a cache must not abort the live history request replacing it.
+    await deleteStoredChatSnapshot(sessionKey, "cache-eviction");
     return null;
   }
   const record = await parseSnapshotRecord(value, sessionKey);

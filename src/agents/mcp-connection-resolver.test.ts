@@ -15,6 +15,7 @@ import {
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import { isGatewayRestartExternallyAllowed, setGatewayRestartPolicy } from "../infra/restart.js";
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -301,6 +302,9 @@ describe("mcp connection resolver helpers", () => {
         logCron: reloadLog,
         logReload: reloadLog,
         cronReconciliation: createGatewayCronReconciliation({
+          getConfig: () => ({}),
+          getPluginRegistry: () => createEmptyPluginRegistry(),
+          logger: { warn() {} },
           port: 0,
           workspaceDir: process.cwd(),
           isClosing: () => false,

@@ -303,12 +303,16 @@ export function retainSessionHistoryWorkerDatabase(
                       ...input,
                       database,
                       validation: validation?.validation,
-                      projectionReceipt: projectionReceipt && {
-                        ...projectionReceipt,
-                        ...(input.kind === "history-page" && !projectionReceipt.entrySessionKey
-                          ? { contextOnly: true }
-                          : {}),
-                      },
+                      projectionReceipt:
+                        projectionReceipt &&
+                        (input.kind === "history-page"
+                          ? {
+                              ...projectionReceipt,
+                              entrySessionKey: undefined,
+                              facts: undefined,
+                              contextOnly: true,
+                            }
+                          : projectionReceipt),
                     } satisfies SessionTranscriptWorkerRequest;
                   },
                   {

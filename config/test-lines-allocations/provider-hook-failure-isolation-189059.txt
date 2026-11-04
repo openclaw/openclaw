@@ -1,0 +1,2 @@
+# Cover thrown synthetic/static/augment hooks while retaining siblings and selected-provider outcomes.
+194

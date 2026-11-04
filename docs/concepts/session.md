@@ -18,11 +18,23 @@ configured model metadata while other sessions remain available. Native metadata
 is refreshed when that row is next invalidated; an unchanged list read does not
 retry it.
 
+Reading a compressed transcript file allows at most its stored size plus 1 MiB of
+decompressed output. Archives exceeding that budget fail with a visible error and
+remain unchanged. This includes valid archives with larger expansion; export
+those as uncompressed JSONL to read them.
+Archive publication verifies compressed output against the original plaintext byte
+count, preserving compression and disk-budget retention.
+
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
 
 For turn ownership, queueing, stopping, and lifecycle mutation rules, see
 [Session controller](/concepts/session-controller).
+
+Retries with the same input key acknowledge an already committed input even after
+another turn has started. They do not append another user message or generate a
+second reply. Interrupted current turns can still resume; reusing a key for
+conflicting content or sender identity is refused.
 
 For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see

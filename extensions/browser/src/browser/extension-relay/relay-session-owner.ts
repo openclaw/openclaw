@@ -336,28 +336,33 @@ export class RelaySessionOwner {
     await Promise.all(
       sessions.map(async (session) => {
         const physical = session.physical;
-        if (physical.active.signal.aborted) {
-          return;
-        }
-        if (
-          !this.hasRootSessions(physical.rootSessionId) &&
-          !this.hasPendingClaims(physical.tabId)
-        ) {
-          await this.retireAttachment(physical.rootSessionId);
-          return;
-        }
         const parent = physical.parent;
-        if (
-          parent &&
-          !physical.subscribers.size &&
-          !this.childWanted(physical) &&
-          parent !== reconciling
-        ) {
-          await parent.target.enqueue(() => this.reconcileChildren(parent));
+        let root = physical;
+        while (root.parent) {
+          root = root.parent;
+        }
+        if (physical.active.signal.aborted) {
+          await (root.retiring ?? physical.retiring);
           return;
         }
-        const targetCleanup = physical.target.remove(session);
         try {
+          if (
+            !this.hasRootSessions(physical.rootSessionId) &&
+            !this.hasPendingClaims(physical.tabId)
+          ) {
+            await this.retireAttachment(physical.rootSessionId);
+            return;
+          }
+          if (
+            parent &&
+            !physical.subscribers.size &&
+            !this.childWanted(physical) &&
+            parent !== reconciling
+          ) {
+            await parent.target.enqueue(() => this.reconcileChildren(parent));
+            return;
+          }
+          const targetCleanup = physical.target.remove(session);
           await Promise.all([
             targetCleanup,
             raceWithTimeout(
@@ -369,12 +374,23 @@ export class RelaySessionOwner {
               { ref: false },
             ),
           ]);
+          if (parent && parent !== reconciling && !physical.subscribers.size) {
+            await parent.target.enqueue(() => this.reconcileChildren(parent));
+          }
         } catch (error) {
+          // Retirement supersedes cleanup on this scope or its parent's Target queue.
+          // Keep the captured root: disposal removes it before native detach ACK.
+          const retiring = root.retiring ?? physical.retiring;
+          if (
+            retiring &&
+            ((physical.active.signal.aborted && error === physical.active.signal.reason) ||
+              (parent?.active.signal.aborted && error === parent.active.signal.reason))
+          ) {
+            await retiring;
+            return;
+          }
           await this.retireAttachment(physical.rootSessionId);
           throw error;
-        }
-        if (parent && parent !== reconciling && !physical.subscribers.size) {
-          await parent.target.enqueue(() => this.reconcileChildren(parent));
         }
       }),
     );

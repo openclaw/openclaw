@@ -3,11 +3,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { createSnapshot } from "../config/mutate.test-support.js";
+import * as pluginAutoEnable from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   listAmbientOnlyConfiguredChannelIds,
   listGatewayActivatedChannelIds as activatedChannelIds,
 } from "../plugins/channel-presence-policy.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveGatewayReloadPluginActivationCandidate } from "./plugin-activation-runtime-config.js";
@@ -26,6 +28,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   clearPluginMetadataLifecycleCaches();
 });
@@ -45,12 +48,23 @@ it.each<[string, AmbientEnvTriggerPolicy, OpenClawConfig["channels"], boolean]>(
       hash: "ambient-channels",
     });
     const log = { info: vi.fn(), warn: vi.fn() };
+    const applyAutoEnable = pluginAutoEnable.applyPluginAutoEnable;
+    const observedSnapshots: unknown[] = [];
+    const autoEnable = vi
+      .spyOn(pluginAutoEnable, "applyPluginAutoEnable")
+      .mockImplementation((params) => {
+        // The fixture has a synthetic config fingerprint; observe the inherited owner scope.
+        observedSnapshots.push(getCurrentPluginMetadataSnapshot());
+        return applyAutoEnable(params);
+      });
     const startup = await loadGatewayStartupConfigSnapshot({
       minimalTestGateway: false,
       ambientEnvTriggers,
       log,
       initialSnapshotRead: { snapshot, pluginMetadataSnapshot: metadata },
     });
+    expect(observedSnapshots).toEqual([metadata]);
+    autoEnable.mockRestore();
     const reload = resolveGatewayReloadPluginActivationCandidate({
       sourceConfig: { ...sourceConfig, logging: { level: "debug" } },
       env: process.env,

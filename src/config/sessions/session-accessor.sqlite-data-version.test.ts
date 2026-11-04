@@ -42,6 +42,7 @@ import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcrip
 import { appendTranscriptEventsInTransaction as appendEvents } from "./session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
+import { readSessionEntryList } from "./session-entry-list.worker.js";
 import { promptReport } from "./system-prompt-report.test-support.js";
 import type { SessionEntry } from "./types.js";
 
@@ -537,6 +538,13 @@ it("validates a folded sibling before selecting or preparing the exact opaque ta
     expect(() => listSessionEntriesReadOnly({ ...listing, projection })).toThrow(
       "non-canonical persisted row",
     );
+    await expect(
+      readSessionEntryList({
+        kind: "session-entry-list",
+        database: { agentId: database.agentId, path: database.path },
+        scope: { ...listing, projection },
+      }),
+    ).rejects.toThrow("non-canonical persisted row");
   }
   const shouldAppend = vi.fn(() => true);
   await expect(

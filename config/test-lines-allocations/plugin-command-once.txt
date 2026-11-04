@@ -1,0 +1,2 @@
+54
+# Reuse native channel fixture for single-dispatch continuation, absent caller options, and login precedence regressions.

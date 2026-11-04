@@ -55,6 +55,8 @@ import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { dispatchInboundMessage } from "../dispatch.js";
 import type { ReplyPayload } from "../types.js";
 import { createReplyAgentDefaults } from "./get-reply-config.test-support.js";
+import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
+import { getReplyFromConfig } from "./get-reply.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
@@ -83,6 +85,8 @@ type Sender = {
   verified?: boolean;
   commandAuthorized?: boolean;
   foreignOperatorAuthority?: true;
+  native?: boolean;
+  direct?: boolean;
 };
 
 type AuthorityChange = "demotion" | "role removal" | "identity unlink";
@@ -159,6 +163,7 @@ async function withChannelCommandPlugin(
       );
       const commands = [
         { name: "review-panel", requireAuth: true, runtimeCapabilities: ["subagents"] },
+        { name: "login", requireAuth: false },
         {
           name: "review-schedule",
           requireAuth: true,
@@ -245,6 +250,17 @@ async function withChannelCommandPlugin(
             {
               messageId: randomUUID(),
               message: { rawBody: body },
+              ...(sender.native
+                ? {
+                    commandTurn: {
+                      kind: "native" as const,
+                      source: "native" as const,
+                      authorized: sender.commandAuthorized ?? true,
+                      commandName: body.slice(1).split(/\s+/, 1)[0] ?? "",
+                      body,
+                    },
+                  }
+                : {}),
               access: { commands: { authorized: sender.commandAuthorized ?? true } },
             },
           );
@@ -255,6 +271,10 @@ async function withChannelCommandPlugin(
             : undefined;
           if (sender.foreignOperatorAuthority) {
             expect(operatorAuthority).toBeDefined();
+          }
+          if (sender.direct) {
+            const reply = await getReplyFromConfig(ctx, undefined, markCompleteReplyConfig(cfg));
+            return (Array.isArray(reply) ? reply : [reply]).map((payload) => payload?.text);
           }
           const replies: ReplyPayload[] = [];
           const dispatcher = createReplyDispatcher({
@@ -429,37 +449,71 @@ describe("plugin command native capabilities through channel ingress", () => {
     },
   );
 
-  it("continues the agent on the same committed user input", async () => {
-    await withChannelCommandPlugin(async ({ handler, probe, send, userInputs, userInputKeys }) => {
-      handler.mockImplementationOnce(async (ctx) => {
-        expect(await probe(ctx)).toMatchObject({
-          subagents: true,
-          userInputs: ["/review-panel"],
-        });
-        return { continueAgent: true };
+  it.each([false, true])(
+    "runs a continuing plugin once on the same committed input (native=%s)",
+    async (native) => {
+      await withChannelCommandPlugin(
+        async ({ handler, probe, send, userInputs, userInputKeys }) => {
+          handler.mockImplementation(async (ctx) => {
+            expect(await probe(ctx)).toMatchObject({
+              subagents: true,
+              userInputs: ["/review-panel"],
+            });
+            return { continueAgent: true };
+          });
+          let continuation:
+            | { runId?: string; receiptSessionId?: string; inputsAtRun: unknown[] }
+            | undefined;
+          vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
+            continuation = {
+              runId: params.runId,
+              receiptSessionId: params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.sessionId,
+              inputsAtRun: await userInputs(),
+            };
+            return { payloads: [{ text: "Continued." }], meta: { durationMs: 1 } };
+          });
+          expect(await send("/review-panel", { native })).toEqual(["Continued."]);
+          expect(handler).toHaveBeenCalledTimes(1);
+          expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+          expect(continuation).toEqual({
+            runId: expect.any(String),
+            receiptSessionId: "channel-parent",
+            inputsAtRun: ["/review-panel"],
+          });
+          expect(await userInputs()).toEqual(["/review-panel"]);
+          expect(await userInputKeys()).toEqual(["channel-user:v1:"]);
+        },
+      );
+    },
+  );
+
+  it("continues a native plugin without caller options", async () => {
+    await withChannelCommandPlugin(async ({ handler, send }) => {
+      handler.mockReturnValue({ continueAgent: true });
+      vi.mocked(runEmbeddedAgent).mockResolvedValue({
+        payloads: [{ text: "Continued without options." }],
+        meta: { durationMs: 1 },
       });
-      let continuation:
-        | { runId?: string; receiptSessionId?: string; inputsAtRun: unknown[] }
-        | undefined;
-      vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
-        continuation = {
-          runId: params.runId,
-          receiptSessionId: params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.sessionId,
-          inputsAtRun: await userInputs(),
-        };
-        return { payloads: [{ text: "Continued." }], meta: { durationMs: 1 } };
-      });
-      expect(await send("/review-panel")).toEqual(["Continued."]);
+      expect(await send("/login", { native: true, direct: true })).toEqual([
+        "Continued without options.",
+      ]);
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0]?.[0].runtimeContext?.subagents).toBeUndefined();
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-      expect(continuation).toEqual({
-        runId: expect.any(String),
-        receiptSessionId: "channel-parent",
-        inputsAtRun: ["/review-panel"],
-      });
-      expect(await userInputs()).toEqual(["/review-panel"]);
-      expect(await userInputKeys()).toEqual(["channel-user:v1:"]);
     });
   });
+
+  it.each([false, true])(
+    "keeps terminal plugin login ahead of built-in login (native=%s)",
+    async (native) => {
+      await withChannelCommandPlugin(async ({ handler, send }) => {
+        handler.mockReturnValue({ text: "Plugin login." });
+        expect(await send("/login", { native })).toEqual(["Plugin login."]);
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("rechecks the channel operator on every native call and fences the revoked turn", async () => {
     await withChannelCommandPlugin(async ({ handler, send, demoteAdmin }) => {

@@ -179,7 +179,8 @@ export function migrateWorkerPlacementExecutionModeSchema(
           AND sql IS NOT NULL
           AND name NOT IN (
             'idx_worker_session_placements_session_key',
-            'idx_worker_session_placements_reconcile'
+            'idx_worker_session_placements_reconcile',
+            'idx_worker_session_placements_environment'
           )`,
     )
     .all();

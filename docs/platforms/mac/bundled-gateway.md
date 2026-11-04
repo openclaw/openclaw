@@ -28,6 +28,12 @@ duplicated. Existing independently managed installations keep their current
 lifecycle. Eligible app-managed Node services move to bundled Bun while keeping
 their always-on service.
 
+For local connections, the app prefers the configured `gateway.auth.token` or
+`gateway.auth.password` over `OPENCLAW_GATEWAY_TOKEN` or
+`OPENCLAW_GATEWAY_PASSWORD` inherited by the app, matching Gateway startup.
+Environment credentials remain fallbacks when no configured credential resolves.
+Remote connections retain their environment overrides.
+
 Before launching an app-hosted Gateway, the app saves a local authentication
 token when neither configuration nor the child environment supplies credentials
 and token authentication is selected or implicit. Existing credentials, secret
@@ -76,8 +82,12 @@ PostgreSQL or the Gateway is unavailable; shared approval policy still requires
 its existing state owner.
 
 The packaged app runs the matching bundled CLI's narrow, noninteractive
-credential preparation before native admission. Gateway and node startup use
-the same migration owner. Ordinary pending migrations and validated remounts
+credential preparation before native admission. That native handoff also settles
+pending local runtime-pin migration before the app chooses its Gateway runtime.
+It preserves explicit pin data rather than forcing a new seed; a migration
+conflict prevents startup and retains recovery guidance. Gateway and node
+startup use the same credential migration owner. Ordinary pending migrations
+and validated remounts
 complete automatically without a manual Doctor command or a recovery prompt.
 A recognized credential-only native version-zero database can be
 extracted under exclusive custody before PostgreSQL bootstrap. Unknown data or

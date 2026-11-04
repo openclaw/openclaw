@@ -2,7 +2,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareSyntheticLocalProviderAuth } from "../agents/model-auth-runtime.js";
 import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
+import {
+  PreparedModelRuntimePluginGenerationRetiredError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "../agents/prepared-model-runtime-admission-errors.js";
+import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
 
 const nativeProvider = vi.hoisted(() => ({
@@ -428,5 +434,61 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
     );
     expect(resolveSyntheticAuth).toHaveBeenCalledOnce();
     expect(nativeProvider.prepareSyntheticAuth).not.toHaveBeenCalled();
+  });
+  it("captures failed synthetic hooks as closed empty facts without losing a healthy provider", async () => {
+    const params = nativeParams();
+    const healthy = {
+      ...nativeProvider,
+      id: "z-healthy",
+      aliases: [],
+      prepareSyntheticAuth: vi.fn(async () => nativeAuth),
+    };
+    nativeProvider.prepareSyntheticAuth.mockRejectedValue(new Error("capture hook failed"));
+    let facts: Awaited<ReturnType<typeof captureProviderSyntheticAuthFacts>> = [];
+    await resolveProviderOwnerIds.withImplementation(
+      () => ["fixture"],
+      async () => {
+        await resolvePluginDiscoveryProvidersRuntime.withImplementation(
+          () => [nativeProvider, healthy],
+          async () => {
+            facts = await captureProviderSyntheticAuthFacts({
+              ...params,
+              providerRefs: ["native-auth", "z-healthy"],
+            });
+          },
+        );
+      },
+    );
+    expect(facts).toEqual([
+      { providerRef: "native-auth", result: null },
+      { providerRef: "z-healthy", result: nativeAuth },
+    ]);
+    const worker = nativeParams();
+    restorePreparedSyntheticAuthFacts(worker.config, facts, worker);
+    expect(await prepareProviderSyntheticAuthWithPlugin(worker)).toBeUndefined();
+    expect(resolveProviderSyntheticAuthWithPlugin(worker)).toBeUndefined();
+    expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledOnce();
+    expect(healthy.prepareSyntheticAuth).toHaveBeenCalledOnce();
+    await expect(prepareProviderSyntheticAuthWithPlugin(params)).rejects.toThrow(
+      "capture hook failed",
+    );
+  });
+
+  it("rethrows lifecycle and unresolved-secret failures from catalog auth capture", async () => {
+    const failures = [
+      new PluginInstanceUnavailableError("native-auth"),
+      new PreparedModelRuntimePluginGenerationRetiredError("retired"),
+      new PreparedModelRuntimePublicationSupersededError("superseded"),
+      new UnresolvedSecretInputError({
+        path: "models.providers.native-auth.apiKey",
+        ref: { source: "env", provider: "default", id: "MISSING_FIXTURE" },
+      }),
+    ];
+    for (const failure of failures) {
+      nativeProvider.prepareSyntheticAuth.mockRejectedValue(failure);
+      await expect(
+        captureProviderSyntheticAuthFacts({ ...nativeParams(), providerRefs: ["native-auth"] }),
+      ).rejects.toBe(failure);
+    }
   });
 });

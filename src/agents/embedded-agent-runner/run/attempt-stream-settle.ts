@@ -301,21 +301,23 @@ export async function settleEmbeddedAttemptStream(input: {
         const { timedOutDuringCompaction } = input.readLifecycleState();
         const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
         const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
-        await appendAttemptCacheTtlIfNeeded({
-          sessionManager,
-          timedOutDuringCompaction,
-          compactionOccurredThisAttempt,
-          config: attempt.config,
-          provider: attempt.provider,
-          modelId: attempt.modelId,
-          modelApi: attempt.model.api,
-          modelRoute: {
-            baseUrl: attempt.model.baseUrl,
-            supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
-          },
-          isCacheTtlEligibleProvider,
-          toolResultPromptProjectionState: input.toolResultPromptProjectionState,
-        });
+        if (!attempt.inputAlreadyDelivered) {
+          await appendAttemptCacheTtlIfNeeded({
+            sessionManager,
+            timedOutDuringCompaction,
+            compactionOccurredThisAttempt,
+            config: attempt.config,
+            provider: attempt.provider,
+            modelId: attempt.modelId,
+            modelApi: attempt.model.api,
+            modelRoute: {
+              baseUrl: attempt.model.baseUrl,
+              supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
+            },
+            isCacheTtlEligibleProvider,
+            toolResultPromptProjectionState: input.toolResultPromptProjectionState,
+          });
+        }
 
         if (timedOutDuringCompaction) {
           const removedEntries = await normalizeCompactionRecoveryTranscriptTail({

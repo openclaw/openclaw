@@ -170,6 +170,41 @@ struct TailscaleIntegrationSectionTests {
         #expect(saveCount == 0)
     }
 
+    @Test(arguments: ["token", "password", "trusted-proxy"])
+    func `turning tailscale off keeps gateway authentication`(mode: String) async {
+        let credentials: [String: Any] = switch mode {
+        case "token": ["mode": mode, "token": "existing-token"] // pragma: allowlist secret
+        case "password": ["mode": mode, "password": "existing-password"] // pragma: allowlist secret
+        default: ["mode": mode, "trustedProxy": ["userHeader": "x-forwarded-user"]]
+        }
+        let saved = SavedConfigRoot()
+        let outcome = await TestIsolation.withIsolatedState(defaults: [connectionModeKey: "local"]) {
+            let state = AppStateStore.shared
+            let previousMode = state.connectionMode
+            state.connectionMode = .local
+            // A loaded document with no local-only save goes through the connected config.set path.
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                loadLocal: {
+                    var auth: [String: Any] = credentials
+                    auth["allowTailscale"] = true
+                    return ["gateway": ["mode": "local", "tailscale": ["mode": "serve"], "auth": auth]]
+                },
+                saveGateway: { saved.root = $0 }))
+            let outcome = await TailscaleIntegrationSection.saveTailscaleSettings(
+                settings: GatewayTailscaleSettingsSnapshot(mode: .off, requireCredentialsForServe: false, password: ""),
+                connectionMode: .local)
+            await ConfigStore._testClearOverrides()
+            state.connectionMode = previousMode
+            return outcome
+        }
+        let gateway = saved.root?["gateway"] as? [String: Any]
+
+        #expect(outcome == .saved)
+        #expect((gateway?["tailscale"] as? [String: Any])?["mode"] as? String == "off")
+        #expect(NSDictionary(dictionary: gateway?["auth"] as? [String: Any] ?? [:]).isEqual(to: credentials))
+    }
+
     @Test func `tailscale apply validates changed passwords before saving`() async {
         let settings = GatewayTailscaleSettingsSnapshot(
             mode: .funnel, requireCredentialsForServe: true, password: "  ")
@@ -240,4 +275,9 @@ private actor TailscaleStatusCompletion {
     func markFinished() {
         self.finishedCount += 1
     }
+}
+
+@MainActor
+private final class SavedConfigRoot {
+    var root: [String: Any]?
 }

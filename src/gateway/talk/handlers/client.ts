@@ -288,10 +288,13 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           assertStoreCurrent?.();
           request.sessionMutationAuthorization?.assertCurrent();
           parseRealtimeVoiceAgentConsultArgs(params.args ?? {});
-          const origin = assertClientVoiceSessionOpen(
+          const origin = await assertClientVoiceSessionOpen(
             { agentId, sessionKey: params.sessionKey, voiceSessionId },
             physicalSource,
           );
+          assertStoreCurrent?.();
+          requester.assertCurrent();
+          request.sessionMutationAuthorization?.assertCurrent();
           if (origin === "relay" && (!relaySessionId || !connId)) {
             throw new Error(
               "relay-owned voice sessions require relaySessionId and connection ownership",

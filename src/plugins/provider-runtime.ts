@@ -11,6 +11,7 @@ import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
 } from "../agents/plugin-text-transforms.js";
+import { runProviderIsolated } from "../agents/provider-failure-isolation.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -19,10 +20,7 @@ import { providerUsageLabel } from "../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
-import type {
-  PluginMetadataRegistryView,
-  PluginMetadataSnapshot,
-} from "./plugin-metadata-snapshot.types.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import {
   resolvePluginOwnedProviderAuthWith,
   resolveProviderAuthScope,
@@ -55,13 +53,11 @@ import {
   type PreparedSyntheticAuthFacts,
 } from "./provider-synthetic-auth.js";
 import {
-  resolveCatalogHookProviderPluginIds,
   resolveOwningPluginIdsForProviderRef,
   resolveUsageHookProviderPluginContracts,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import type {
-  ProviderAugmentModelCatalogContext,
   ProviderDeferSyntheticProfileAuthContext,
   ProviderResolveSyntheticAuthContext,
   ProviderCreateStreamFnContext,
@@ -157,41 +153,6 @@ export {
   resolveProviderRuntimePlugin,
   wrapProviderSimpleCompletionStreamFn,
 };
-
-function resolveProviderPluginsForCatalogHooks(params: {
-  providerIds?: readonly string[];
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
-}): ProviderPlugin[] {
-  const workspaceDir =
-    params.workspaceDir ??
-    params.metadataSnapshot?.workspaceDir ??
-    getActivePluginRegistryWorkspaceDirFromState();
-  const env = params.env ?? process.env;
-  const onlyPluginIds = resolveCatalogHookProviderPluginIds({
-    config: params.config,
-    workspaceDir,
-    env,
-    metadataSnapshot: params.metadataSnapshot,
-  });
-  if (onlyPluginIds.length === 0 || params.providerIds?.length === 0) {
-    return [];
-  }
-  const providers = resolveProviderPluginsForHooks({
-    ...params,
-    workspaceDir,
-    env,
-    onlyPluginIds,
-    providerRefs: params.providerIds,
-    pluginMetadataSnapshot: params.metadataSnapshot,
-  });
-  const providerIds = params.providerIds;
-  return providerIds
-    ? providers.filter((provider) => matchesAnyProviderPluginRef(provider, providerIds))
-    : providers;
-}
 
 export const runProviderDynamicModel = normalizedRuntimeHook("resolveDynamicModel");
 
@@ -762,6 +723,8 @@ export async function captureProviderSyntheticAuthFacts(params: {
       config: params.config,
       env: params.env,
       workspaceDir: params.workspaceDir,
+      signal: params.signal,
+      preparationOwner,
       context: {
         config: params.config,
         provider,
@@ -772,11 +735,10 @@ export async function captureProviderSyntheticAuthFacts(params: {
     if (providers.length === 0) {
       continue;
     }
-    const result = await prepareSyntheticAuthProviders(providers, {
-      ...lookup,
-      signal: params.signal,
-      preparationOwner,
-    });
+    const result = await runProviderIsolated(
+      { providerIds: [provider], stage: "synthetic auth", signal: params.signal },
+      () => prepareSyntheticAuthProviders(providers, lookup),
+    );
     facts.push(
       Object.freeze({
         providerRef: provider,
@@ -813,18 +775,4 @@ export function shouldDeferProviderSyntheticProfileAuthWithPlugin(
   return undefined;
 }
 
-export async function augmentModelCatalogWithProviderPlugins(params: {
-  providerIds?: readonly string[];
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
-  context: ProviderAugmentModelCatalogContext;
-}) {
-  const supplemental: ProviderAugmentModelCatalogContext["entries"] = [];
-  for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
-    supplemental.push(...((await plugin.augmentModelCatalog?.(params.context)) ?? []));
-  }
-  return supplemental;
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+export { augmentModelCatalogWithProviderPlugins } from "./provider-catalog-augment.js";

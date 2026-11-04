@@ -4,6 +4,7 @@ import { newChatPage } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
 import { expectTranscriptLayoutCommitted } from "./claude-sessions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureFrame } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Chat history loading",
@@ -25,6 +26,49 @@ function historyPage(messages: unknown[], hasMore: boolean, nextOffset?: number)
 }
 
 suite.define(() => {
+  it("does not offer earlier history for unanchored tool-only activity", async () => {
+    const page = await newChatPage(suite);
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.startup": historyPage(
+          [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "read-1",
+                  name: "read",
+                  arguments: { path: "synthetic.txt" },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolName: "read",
+              toolCallId: "read-1",
+              content: "Synthetic tool result",
+            },
+          ],
+          true,
+        ),
+      },
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+    const activity = pane.locator(".chat-tool-row, .chat-activity-group__summary").first();
+    await activity.waitFor();
+    await expectTranscriptLayoutCommitted(pane.locator(".chat-thread"));
+    await captureFrame(suite.artifactDir, "boundary.png", pane, [activity]);
+    expect(await pane.locator(".chat-history-boundary").count()).toBe(0);
+    expect(
+      await page
+        .getByText(/Couldn't load earlier messages|History has no usable older boundary/)
+        .count(),
+    ).toBe(0);
+    expect(await gateway.getRequests("chat.history")).toEqual([]);
+  });
+
   it("shows an inline retry after earlier history fails on mobile and recovers in place", async () => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },

@@ -12,7 +12,7 @@ import {
   type EngineConnection,
 } from "./sql-connection.js";
 import {
-  installSqliteDatabaseAdmissions,
+  exchangeSqliteDatabaseAdmission as exchange,
   sqliteDatabaseAdmissionState as state,
 } from "./sqlite-database-admission-context.js";
 import { createSqliteDatabaseAdmissionReader } from "./sqlite-database-admission-read.js";
@@ -171,29 +171,21 @@ export const {
 } = scopedWrites;
 export { sqliteSessionIdWriteScope } from "./sqlite-database-write-receipts.js";
 
-function exchange(target: string | Admission, create?: boolean): void {
-  const current = state.exchange.getStore();
-  if (!current || state.exchanging) {
-    return;
+/** Explicit readiness/readmission shares committed facts before handing off the connection. */
+export function settleSqliteDatabaseAdmissionPublication(database: DatabaseSync): boolean {
+  if (
+    database.isTransaction ||
+    getSqliteNativeAdmissionFacts(database) ||
+    hasSqlitePostCommitScope(database) ||
+    state.exchanging
+  ) {
+    return false;
   }
-  state.exchanging = true;
-  try {
-    const scope = typeof target === "string" ? { location: target } : { admissions: [target] };
-    const admissions = state.registry.captureExchange(scope, target);
-    installSqliteDatabaseAdmissions(
-      current(
-        admissions,
-        // Publications already name their generation; only opens request pathname discovery.
-        typeof target === "string" ? target : undefined,
-        create,
-      ),
-    );
-  } catch (error) {
-    state.registry.resetExchangeCursor();
-    throw error;
-  } finally {
-    state.exchanging = false;
+  const record = admission(database);
+  if (record) {
+    exchange(record, undefined, true);
   }
+  return true;
 }
 
 /** Identity descriptors stay open for the process: closing one can release SQLite's POSIX locks. */
@@ -481,7 +473,11 @@ function publishFact<T>(
     return;
   }
   state.registry.publish(record);
-  exchange(record);
+  // Reconstructible physical facts ride the next custody exchange; a blocked
+  // parent must not stall the connection that just captured its own catalog.
+  if (key.writer !== "connection") {
+    exchange(record);
+  }
 }
 
 /** Publish one row-cache revision when a local native write settles. */

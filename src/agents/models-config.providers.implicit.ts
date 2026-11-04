@@ -9,9 +9,6 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { raceWithTimeout } from "@openclaw/retry";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isUnresolvedSecretInputError } from "../config/types.secrets.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   withProviderCatalogExpiry,
@@ -58,8 +55,11 @@ import {
   createProviderAuthResolver,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secrets.js";
-
-const log = createSubsystemLogger("agents/model-providers");
+import {
+  isRequestWideFailure,
+  runProviderIsolated,
+  skipFailedProvider,
+} from "./provider-failure-isolation.js";
 
 type ImplicitProviderParams = {
   agentDir: string;
@@ -90,6 +90,7 @@ type ImplicitProviderContext = ImplicitProviderParams & {
   resolveProviderApiKey: ProviderApiKeyResolver;
   resolveProviderAuth: ProviderAuthResolver;
   normalizeProviderForScope: (provider: string) => string;
+  failedSyntheticProviders: ReadonlySet<import("../plugins/types.js").ProviderPlugin>;
 };
 
 function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
@@ -135,7 +136,7 @@ async function resolvePluginImplicitProviders(
   providers: import("../plugins/types.js").ProviderPlugin[],
   preparedStaticConfigs?: ReadonlyMap<
     string,
-    PreparedProviderStaticCatalog["entries"][number]["providerConfigs"]
+    Pick<PreparedProviderStaticCatalog["entries"][number], "providerConfigs" | "failed">
   >,
 ): Promise<Record<string, ProviderConfig>> {
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
@@ -197,6 +198,17 @@ async function resolvePluginImplicitProviders(
           (providerIds === undefined && !catalogProviderRefs.some(canDiscoverProvider))
         ) {
           return undefined;
+        }
+        if (ctx.failedSyntheticProviders.has(provider)) {
+          return {
+            provider,
+            normalizedResult: undefined,
+            includeProvider,
+            outcomes: (providerIds ?? [provider.id]).map((id) => ({
+              provider: id,
+              status: "unavailable" as const,
+            })),
+          };
         }
         const catalogConfig = buildPluginCatalogConfig(ctx, provider);
         const resolveCatalogProviderApiKey = (providerId?: string) => {
@@ -260,10 +272,26 @@ async function resolvePluginImplicitProviders(
               });
             }
             if (useStaticCatalog || (!result && provider.staticCatalog)) {
-              if (preparedStatic) {
-                return preparedStatic;
+              if (preparedStatic && !preparedStatic.failed) {
+                return preparedStatic.providerConfigs;
               }
-              result = await runProviderStaticCatalog({ provider });
+              // A failed static run reports every selected identity so publication retains
+              // their previous models as a refresh failure.
+              const unavailable = providerIds ?? [provider.id];
+              if (preparedStatic) {
+                outcomes.push(
+                  ...unavailable.map((id) => ({ provider: id, status: "unavailable" as const })),
+                );
+                return undefined;
+              }
+              result = await runProviderIsolated(
+                {
+                  providerIds: unavailable,
+                  stage: "static catalog",
+                  reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+                },
+                async () => await runProviderStaticCatalog({ provider }),
+              );
             }
             return result ? normalizePluginDiscoveryResult({ provider, result }) : undefined;
           },
@@ -388,17 +416,15 @@ export async function runProviderCatalogWithTimeout(
       { ref: false },
     );
   } catch (error) {
-    if (isUnresolvedSecretInputError(error)) {
-      throw error;
-    }
-    if (await reportProviderCatalogSecretFailure(error, params)) {
+    if (!isRequestWideFailure(error) && (await reportProviderCatalogSecretFailure(error, params))) {
       return undefined;
     }
     // A failing hook owns only its selected providers, not the healthy siblings in this batch.
-    for (const provider of params.providerIds ?? [params.provider.id]) {
-      params.reportCatalogOutcome?.({ provider, status: "unavailable" });
-    }
-    log.warn(`${formatErrorMessage(error)}; skipping provider discovery`);
+    skipFailedProvider(error, {
+      providerIds: params.providerIds ?? [params.provider.id],
+      stage: "provider discovery",
+      reportCatalogOutcome: params.reportCatalogOutcome,
+    });
     return undefined;
   } finally {
     // A timed-out hook can still finish; its late reports no longer own this publication.
@@ -583,26 +609,48 @@ export async function resolveImplicitProviders(
       : [],
   );
   const scopedRefs = discoveryScope ? new Set([...discoveryScope.values()].flat()) : undefined;
+  const failedSyntheticProviders = new Set<(typeof discoveryProviders)[number]>();
   // Prepare declared native refs and their configured API aliases without reopening
   // unrelated discovery. Already-resolved descriptors retain hook-alias matching.
   for (const provider of new Set([...syntheticRefs, ...configuredSyntheticRefs])) {
     if (scopedRefs && !scopedRefs.has(provider)) {
       continue;
     }
-    await prepareProviderExternalAuthWithPlugin({
-      config: discoveryAuthConfig,
-      env: discoveryAuthEnv,
-      workspaceDir: params.workspaceDir,
-      provider,
-      context: {
+    const api = findNormalizedProviderValue(discoveryAuthConfig?.models?.providers, provider)?.api;
+    const owners = syntheticProviders.filter(
+      (candidate) =>
+        matchesProviderPluginRef(candidate, provider) ||
+        (api !== undefined && matchesProviderPluginRef(candidate, api)),
+    );
+    if (owners.some((owner) => failedSyntheticProviders.has(owner))) {
+      continue;
+    }
+    try {
+      await prepareProviderExternalAuthWithPlugin({
         config: discoveryAuthConfig,
+        env: discoveryAuthEnv,
+        workspaceDir: params.workspaceDir,
         provider,
-        providerConfig: findNormalizedProviderValue(
-          discoveryAuthConfig?.models?.providers,
+        context: {
+          config: discoveryAuthConfig,
           provider,
-        ),
-      },
-    });
+          providerConfig: findNormalizedProviderValue(
+            discoveryAuthConfig?.models?.providers,
+            provider,
+          ),
+        },
+      });
+    } catch (error) {
+      skipFailedProvider(error, { providerIds: [provider], stage: "synthetic auth preparation" });
+      // Failure is not a successful empty credential. Do not retry this descriptor's
+      // aliases or run its catalog/fallback with partially prepared auth.
+      for (const owner of owners) {
+        failedSyntheticProviders.add(owner);
+      }
+      if (owners.length === 0) {
+        params.onProviderCatalogOutcome?.({ provider, status: "unavailable" });
+      }
+    }
   }
   const authStore =
     params.authStore ??
@@ -623,6 +671,7 @@ export async function resolveImplicitProviders(
   const metadata = params.pluginMetadataSnapshot;
   const context: ImplicitProviderContext = {
     ...params,
+    failedSyntheticProviders,
     normalizeProviderForScope:
       discoveryScope && metadata
         ? createPreparedModelCatalogProviderNormalizer(
@@ -644,9 +693,9 @@ export async function resolveImplicitProviders(
     Object.assign(context, await prepareProviderDiscoveryAuth(context, discoveryAuthConfig));
   }
   const preparedStaticConfigs = new Map(
-    preparedStaticEntries?.map(({ provider, providerConfigs }) => [
+    preparedStaticEntries?.map(({ provider, providerConfigs, failed }) => [
       `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
-      providerConfigs,
+      { providerConfigs, failed },
     ]) ?? [],
   );
   return resolvePluginImplicitProviders(context, discoveryProviders, preparedStaticConfigs);

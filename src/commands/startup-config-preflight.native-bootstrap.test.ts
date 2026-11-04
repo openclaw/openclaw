@@ -40,7 +40,7 @@ it.each([false, true])(
       if (routed) {
         seedMacNodeWorkerProofState(state.statePath("state", "openclaw.sqlite"));
         ambientDatabase = fs.readFileSync(state.statePath("state", "openclaw.sqlite"));
-        fs.mkdirSync(selectedRoot);
+        fs.mkdirSync(selectedRoot, { mode: 0o700 });
         fs.writeFileSync(selectedConfig, JSON.stringify(config));
         await state.writeConfig({ env: { vars: { OPENCLAW_STATE_DIR: selectedRoot } } });
         delete process.env.OPENCLAW_STATE_DIR;

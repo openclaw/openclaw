@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -203,6 +207,50 @@ describe("realtime voice agent consult runtime", () => {
       expect(cleanup).toHaveBeenCalledOnce();
     },
   );
+
+  it("cleans up without dispatch after cancellation during the final model-lock read", async ({
+    signal,
+  }) => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    const waiting = createDeferred();
+    const resume = createDeferred();
+    const controller = new AbortController();
+    const cleanup = vi.fn();
+    const cleanupBeforeRun = vi.fn();
+    let registered = false;
+    const read = runtime.session.getSessionEntryAsync;
+    vi.spyOn(runtime.session, "getSessionEntryAsync").mockImplementation(async (...args) => {
+      const entry = await read(...args);
+      if (registered) {
+        waiting.resolve();
+        await resume.promise;
+      }
+      return entry;
+    });
+    const consult = runConsult(runtime, {
+      abortSignal: controller.signal,
+      onRunStarted: () => {
+        registered = true;
+        return { cleanup, cleanupBeforeRun };
+      },
+    });
+    const rejected = expect(consult).rejects.toThrow("cancelled during model-lock read");
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(waiting.promise, consult, "Final model-lock read did not wait"),
+        signal,
+      );
+      controller.abort(new Error("cancelled during model-lock read"));
+      resume.resolve();
+      await rejected;
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(cleanupBeforeRun).toHaveBeenCalledOnce();
+      expect(cleanup).toHaveBeenCalledOnce();
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([consult]);
+    }
+  });
 
   it("retains the voice binding until delegated run completion", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();

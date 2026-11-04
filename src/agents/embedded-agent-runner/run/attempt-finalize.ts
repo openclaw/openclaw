@@ -198,6 +198,9 @@ export async function completeEmbeddedAttemptAfterTurn(
   const { effectiveWorkspace, sessionAgentId } = input.setup;
   const { sessionRuntime, bootstrap, bundleTools, toolBase } = input.prepared;
   const { sessionManager, cacheTrace, anthropicPayloadLogger } = sessionRuntime;
+  if (attempt.inputAlreadyDelivered) {
+    return;
+  }
   const { diagnosticTrace } = input.diagnostics;
   const { shouldRecordCompletedBootstrapTurn } = bootstrap;
   const skillWorkshopAvailable = bundleTools.uncompactedEffectiveTools.some(

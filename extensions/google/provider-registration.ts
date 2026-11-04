@@ -1,5 +1,6 @@
 import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
@@ -11,6 +12,7 @@ import {
   isGoogleNativeVideoModelId,
   isModernGoogleModel,
   resolveGoogleGeminiForwardCompatModel,
+  resolveGoogleModelApi,
 } from "./provider-models.js";
 import {
   isOfficialGoogleAiStudioBaseUrl,
@@ -26,6 +28,10 @@ const loadGenerativeAiStream = createLazyRuntimeSurface(
 const loadVertexStream = createLazyRuntimeSurface(
   () => import("./transport-stream.js"),
   (runtime) => runtime.createGoogleVertexTransportStreamFn(),
+);
+const loadInteractionsStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleInteractionsTransportStreamFn(),
 );
 
 export function buildGoogleProvider(): ProviderPlugin {
@@ -89,11 +95,18 @@ export function buildGoogleProvider(): ProviderPlugin {
       const input = (ctx.model.input as string[]).filter((type) => type !== "video");
       const supportsVideo =
         ctx.provider === "google" &&
-        ctx.model.api === "google-generative-ai" &&
+        (ctx.model.api === "google-generative-ai" || ctx.model.api === "google-interactions") &&
         isOfficialGoogleAiStudioBaseUrl(ctx.model.baseUrl) &&
         isGoogleNativeVideoModelId(ctx.modelId);
       return {
         ...ctx.model,
+        api: resolveGoogleModelApi({
+          provider: ctx.provider,
+          modelId: ctx.modelId,
+          api: ctx.model.api,
+          baseUrl: ctx.model.baseUrl,
+          providerConfig: resolveMergedModelProviderConfig(ctx.config, ctx.provider),
+        }),
         input: supportsVideo ? [...input, "video"] : input,
       } as typeof ctx.model;
     },
@@ -112,6 +125,9 @@ export function buildGoogleProvider(): ProviderPlugin {
       }
       if (model.api === "google-generative-ai") {
         return async (...args) => (await loadGenerativeAiStream())(...args);
+      }
+      if (model.api === "google-interactions") {
+        return async (...args) => (await loadInteractionsStream())(...args);
       }
       return undefined;
     },

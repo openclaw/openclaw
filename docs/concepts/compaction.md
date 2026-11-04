@@ -24,6 +24,8 @@ The full conversation history stays on disk. Compaction only changes what the mo
 
 Compaction loads the complete current context: the latest reset or compaction boundary, its retained messages and previous summary, and the following history. Obsolete history before that window stays on disk without being loaded again, even when daily resets or `/new` keep the same session ID. The history hydration byte limit for ordinary turns does not clip compaction input; the summarizer's existing input budget still applies.
 
+Recovery keeps a bounded copy of the active human request in the summary, including across repeated compactions after its original message leaves the current context. Internal updates retain their source labels without replacing that request; newer human steering can update it. An independent internal run does not revive completed human work. An admitted input that has not been processed must remain intact.
+
 OpenAI Responses native compaction and checkpoint replay follow
 [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership),
 including legacy defaults, explicit opt-in, and handling of preexisting checkpoints
@@ -77,6 +79,10 @@ commit without a generated summary; see [Auto-compaction](#auto-compaction).
 ## Auto-compaction
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
+
+Preflight uses published prompt totals, falling back to a bounded recent usage
+tail or the same bounded context view used by the runtime. Missing usage does not
+trigger a second accounting pass over the entire conversation history.
 
 In the built-in runtime, native ChatGPT sign-in uses V2 compaction at normal
 request boundaries, including between completed tool rounds. It starts when the

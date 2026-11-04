@@ -1,12 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
+import { resolveEmbeddedSessionContextLimits } from "../../agents/embedded-agent-runner/run/session-context-limits.js";
 import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import {
-  SQLITE_USAGE_TAIL_MAX_EVENTS,
-  type SessionTranscriptAccountingSnapshot,
-  type SessionTranscriptUsageSnapshot,
+import type {
+  SessionTranscriptAccountingSnapshot,
+  SessionTranscriptUsageSnapshot,
 } from "../../config/sessions/session-transcript-accounting.types.js";
 import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
 import {
@@ -28,14 +28,19 @@ type TranscriptScope = {
 };
 
 export async function readPreflightTranscriptContextMessages(
-  scope: TranscriptScope,
+  scope: TranscriptScope & { contextWindowTokens: number },
   signal?: AbortSignal,
 ): Promise<AgentMessage[]> {
+  const limits = resolveEmbeddedSessionContextLimits({
+    contextTokenBudget: scope.contextWindowTokens,
+  });
   const readLegacyProjection = async () => {
     signal?.throwIfAborted();
     const messages = (await readSessionMessagesAsync(scope, {
-      mode: "full",
-      reason: "preflight-compaction-estimate-legacy",
+      mode: "recent",
+      maxMessages: limits.maxEvents,
+      maxLines: limits.maxEvents,
+      maxBytes: limits.maxBytes,
     })) as AgentMessage[]; // SAFETY: Gateway readers project stored rows as AgentMessage values.
     signal?.throwIfAborted();
     return messages.filter(
@@ -48,7 +53,7 @@ export async function readPreflightTranscriptContextMessages(
   }
   const target = { ...scope, sessionKey: scope.sessionKey, storePath: scope.storePath };
   try {
-    const context = await SessionManager.openModelContextAsync(target, { signal });
+    const context = await SessionManager.openModelContextAsync(target, { signal, limits });
     const messages = context.buildSessionContext().messages;
     if (messages.length > 0 || context.getEntries().length > 0) {
       return messages;
@@ -75,7 +80,6 @@ export async function readSessionLogSnapshot(params: {
   includeByteSize: boolean;
   includeTurnTaint?: boolean;
   includeUsage: boolean;
-  usageEventLimit?: number;
   abortSignal?: AbortSignal;
 }): Promise<SessionTranscriptAccountingSnapshot> {
   params.abortSignal?.throwIfAborted();
@@ -96,7 +100,6 @@ export async function readSessionLogSnapshot(params: {
         includeByteSize: params.includeByteSize,
         includeTurnTaint: params.includeTurnTaint,
         includeUsage: params.includeUsage,
-        usageEventLimit: params.usageEventLimit,
       },
       params.abortSignal,
     );
@@ -117,7 +120,6 @@ export type TranscriptTokenEstimate = {
     | "prompt_projection";
   outputTokens?: number;
   promptIncludesOutput?: boolean;
-  transcriptByteSize?: number;
 };
 
 function hasUsableProviderPromptUsage(
@@ -171,29 +173,11 @@ export async function estimatePromptTokensFromSessionTranscript(
         sessionId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
-        includeByteSize: true,
+        includeByteSize: false,
         includeUsage: true,
         abortSignal,
       }));
-    let usage = snapshot.usage;
-    if (
-      !hasUsableProviderPromptUsage(usage) &&
-      snapshot.eventCount !== undefined &&
-      snapshot.eventCount > SQLITE_USAGE_TAIL_MAX_EVENTS
-    ) {
-      usage = (
-        await readSessionLogSnapshot({
-          agentId: params.agentId,
-          sessionId,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          includeByteSize: false,
-          includeUsage: true,
-          usageEventLimit: snapshot.eventCount,
-          abortSignal,
-        })
-      ).usage;
-    }
+    const usage = snapshot.usage;
     const normalizedOutputTokens =
       usage?.outputTokens === undefined ? undefined : Math.ceil(usage.outputTokens);
     const providerUsage = hasUsableProviderPromptUsage(usage) ? usage : undefined;
@@ -216,7 +200,6 @@ export async function estimatePromptTokensFromSessionTranscript(
       // output only for projection against a separate persisted prompt fact.
       ...(!providerUsage ? { promptIncludesOutput: true } : {}),
       outputTokens: normalizedOutputTokens,
-      transcriptByteSize: snapshot.byteSize,
     };
   } catch (error) {
     abortSignal?.throwIfAborted();

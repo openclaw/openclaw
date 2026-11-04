@@ -117,7 +117,11 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       const revision = readSqliteDatabaseGeneration(record, "publicationRevision");
       const misses = state.misses.get(record) ?? new Map<string, number>();
       state.misses.set(record, misses);
-      if (!database.isTransaction && (options.refresh || misses.get(key.name) !== revision)) {
+      if (
+        key.writer !== "connection" &&
+        !database.isTransaction &&
+        (options.refresh || misses.get(key.name) !== revision)
+      ) {
         exchange(record);
         fact = record.facts.get(key.name);
         misses.set(key.name, readSqliteDatabaseGeneration(record, "publicationRevision"));

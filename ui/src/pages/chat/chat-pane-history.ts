@@ -10,6 +10,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import {
   nativeHistoryMessageSourceIdentity,
+  oldestNativeHistoryMessage,
   prependUniqueNativeMessages,
 } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -180,7 +181,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     if (parseCatalogSessionKey(state.sessionKey)) {
       return Boolean(this.history.catalogCursor && !this.history.catalogLoading);
     }
-    return state.chatHistoryPagination.hasMore && !state.chatLoading;
+    return chatHistoryOlderSelector(state) !== null && !state.chatLoading;
   }
 
   protected resetOlderMessagesViewport(): void {
@@ -454,9 +455,12 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
         }
         const expectedSessionId = state.currentSessionId?.trim() ?? "";
         const selector = chatHistoryOlderSelector(state);
+        if (!selector) {
+          return false;
+        }
         const boundary =
           "messageId" in selector
-            ? nativeHistoryMessageSourceIdentity(state.chatMessages[0])
+            ? nativeHistoryMessageSourceIdentity(oldestNativeHistoryMessage(state.chatMessages))
             : undefined;
         const requestedCursor = pagination.olderCursor;
         if (!result) {

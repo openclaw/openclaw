@@ -156,7 +156,8 @@ export type SqliteDatabaseAdmissionKey<T> = {
   schemaDependent?: boolean;
   /** Physical validation and owner-published decisions survive ordinary native close. */
   lifetime?: "process";
-  writer?: "host";
+  /** Physical cache facts can be recaptured locally; their transport never gates a live connection. */
+  writer?: "host" | "connection";
 };
 export type SqliteDatabaseAdmissionExchange = (
   admissions: SqliteDatabaseAdmissions,
@@ -215,7 +216,10 @@ export function advanceSqliteDatabaseGeneration(
 }
 export function publishSqliteDatabaseFact(
   record: Admission,
-  key: { name: string; schemaDependent?: boolean; lifetime?: "process"; writer?: "host" },
+  key: Pick<
+    SqliteDatabaseAdmissionKey<unknown>,
+    "name" | "schemaDependent" | "lifetime" | "writer"
+  >,
   value: AdmissionFactValue,
   revision: number,
   publication: string,

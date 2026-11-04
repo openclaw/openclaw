@@ -26,6 +26,8 @@ import {
 import { getClickClackDiscussionInstallationId } from "./installation.js";
 import { captureDiscussionRegistration } from "./register.test-support.js";
 import {
+  isClickClackDiscussionChannelRevoked,
+  isClickClackDiscussionChannelRevokedAsync,
   markClickClackDiscussionChannelIdentityRevoked,
   markClickClackDiscussionChannelRevoked,
 } from "./revoked-channel-store.js";
@@ -148,6 +150,14 @@ function boundedStoreOptions(namespace = "discussion-bindings") {
   return { namespace, maxEntries: 10_000, overflowPolicy: "reject-new" } as const;
 }
 const bindingOptions = boundedStoreOptions();
+function nativeRevocations(env: NodeJS.ProcessEnv) {
+  return createPluginStateSyncKeyedStoreForTests("clickclack", {
+    namespace: "discussion-revoked-channels",
+    maxEntries: 100_000,
+    overflowPolicy: "reject-new",
+    env,
+  });
+}
 function nativeBindings(env: NodeJS.ProcessEnv) {
   return createPluginStateSyncKeyedStoreForTests<ClickClackDiscussionBinding>("clickclack", {
     ...bindingOptions,
@@ -286,6 +296,28 @@ it("denies bound messages and session tools after the plugin-state owner publish
   expect(native.lookup(sessionKey)).toBeUndefined();
 });
 
+it("denies synchronous access until legacy SQLite revocations are adopted", async () => {
+  const f = generationFixture();
+  const channel = { serverBaseUrl: "https://clickclack.example", channelId: "chn_legacy" };
+  const legacyKey = `${channel.serverBaseUrl}\0${channel.channelId}`;
+  nativeRevocations(f.env).register(legacyKey, {
+    accountId: "default",
+    ...channel,
+    revokedAt: 1,
+  });
+  const unrevoked = { ...channel, channelId: "chn_unrevoked" };
+  captureDiscussionRegistration(f.runtime);
+  expect(isClickClackDiscussionChannelRevoked({ runtime: f.runtime, ...channel })).toBe(true);
+  expect(isClickClackDiscussionChannelRevoked({ runtime: f.runtime, ...unrevoked })).toBe(true);
+
+  await expect(
+    isClickClackDiscussionChannelRevokedAsync({ runtime: f.runtime, ...channel }),
+  ).resolves.toBe(true);
+  expect(nativeRevocations(f.env).lookup(legacyKey)).toBeUndefined();
+  expect(isClickClackDiscussionChannelRevoked({ runtime: f.runtime, ...channel })).toBe(true);
+  expect(isClickClackDiscussionChannelRevoked({ runtime: f.runtime, ...unrevoked })).toBe(false);
+});
+
 it.each(["unchanged", "revoked", "replaced"] as const)(
   "uses published %s authority when a channel rename resumes without synchronous state reads",
   async (change) => {
@@ -305,18 +337,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
     const renaming = track(f.service.reconcile(sessionKey));
     await entered.promise;
     if (change === "revoked") {
-      const revocations = createPluginStateSyncKeyedStoreForTests("clickclack", {
-        namespace: "discussion-revoked-channels",
-        maxEntries: 100_000,
-        overflowPolicy: "reject-new",
-        env: f.env,
-      });
-      revocations.register(`${binding.serverBaseUrl}\0${binding.channelId}`, {
-        accountId: binding.accountId,
-        serverBaseUrl: binding.serverBaseUrl,
-        channelId: binding.channelId,
-        revokedAt: Date.now(),
-      });
+      await markClickClackDiscussionChannelIdentityRevoked({ runtime: f.runtime, ...binding });
     } else if (change === "replaced") {
       nativeBindings(f.env).register(sessionKey, { ...binding, channelId: "chn_replacement" });
     }
@@ -593,3 +614,128 @@ describe("ClickClack pending generation persistence", () => {
     expect(await generations.lookup(sessionKey)).toBeUndefined();
   });
 });
+
+it.each(["entries", "compareAndApply", "delete"] as const)(
+  "retains legacy evidence and retries failed adoption at %s",
+  async (method) => {
+    const f = generationFixture();
+    const channel = { serverBaseUrl: "https://clickclack.example", channelId: "chn_legacy" };
+    const legacyKey = `${channel.serverBaseUrl}\0${channel.channelId}`;
+    const native = nativeRevocations(f.env);
+    native.register(legacyKey, { accountId: "default", ...channel, revokedAt: 1 });
+    const secondLegacyKey = `${channel.serverBaseUrl}\0second`;
+    native.register(secondLegacyKey, {
+      accountId: "default",
+      ...channel,
+      channelId: "second",
+      revokedAt: 1,
+    });
+    const open = f.runtime.state.openKeyedStoreV2;
+    let calls = 0;
+    f.runtime.state.openKeyedStoreV2 = <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: PluginStateActionAuthority,
+    ) => {
+      const store = open<T>(options, authority);
+      if (options.namespace !== "discussion-revoked-channels") {
+        return store;
+      }
+      return {
+        ...store,
+        [method]: async (...args: unknown[]) => {
+          if (++calls === (method === "entries" ? 1 : 2)) {
+            throw new Error("synthetic adoption failure");
+          }
+          return Reflect.apply(store[method], store, args);
+        },
+      };
+    };
+    const params = { runtime: f.runtime, ...channel };
+    await expect(isClickClackDiscussionChannelRevokedAsync(params)).rejects.toThrow(
+      "synthetic adoption failure",
+    );
+    expect(native.lookup(secondLegacyKey)).toBeDefined();
+    expect(isClickClackDiscussionChannelRevoked({ ...params, channelId: "ordinary" })).toBe(true);
+    await expect(isClickClackDiscussionChannelRevokedAsync(params)).resolves.toBe(true);
+    expect(native.lookup(legacyKey)).toBeUndefined();
+    expect(native.entries()).toHaveLength(2);
+    expect(native.entries().every(({ key }) => !key.includes("\0"))).toBe(true);
+    await expect(
+      isClickClackDiscussionChannelRevokedAsync({ ...params, channelId: "second" }),
+    ).resolves.toBe(true);
+    expect(isClickClackDiscussionChannelRevoked({ ...params, channelId: "ordinary" })).toBe(false);
+  },
+);
+
+it("retains legacy evidence and fails closed at the namespace capacity", async () => {
+  const f = generationFixture();
+  const native = createPluginStateSyncKeyedStoreForTests("clickclack", {
+    namespace: "discussion-revoked-channels",
+    maxEntries: 2,
+    overflowPolicy: "reject-new",
+    env: f.env,
+  });
+  for (const channelId of ["first", "second"]) {
+    native.register(`https://clickclack.example\0${channelId}`, {
+      accountId: "default",
+      serverBaseUrl: "https://clickclack.example",
+      channelId,
+      revokedAt: 1,
+    });
+  }
+  const open = f.runtime.state.openKeyedStoreV2;
+  // Exercise the identical bounded-store kernel with a two-row fixture instead of 100,000 writes.
+  f.runtime.state.openKeyedStoreV2 = <T>(
+    options: OpenAsyncKeyedStoreOptions,
+    authority?: PluginStateActionAuthority,
+  ) =>
+    open<T>(
+      options.namespace === "discussion-revoked-channels" && options.retention !== "retained"
+        ? { ...options, maxEntries: 2 }
+        : options,
+      authority,
+    );
+  const params = {
+    runtime: f.runtime,
+    serverBaseUrl: "https://clickclack.example",
+    channelId: "first",
+  };
+  await expect(isClickClackDiscussionChannelRevokedAsync(params)).rejects.toMatchObject({
+    code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+  });
+  expect(native.entries()).toHaveLength(2);
+  expect(native.entries().every(({ key }) => key.includes("\0"))).toBe(true);
+  expect(isClickClackDiscussionChannelRevoked({ ...params, channelId: "ordinary" })).toBe(true);
+});
+
+it.each(["channel", "binding"] as const)(
+  "preserves legacy %s evidence over a portable binding marker",
+  async (scope) => {
+    const f = generationFixture();
+    await f.service.open(sessionKey);
+    const binding = await persistedBinding(f.runtime);
+    await markClickClackDiscussionChannelRevoked(f.runtime, sessionKey, binding);
+    const native = nativeRevocations(f.env);
+    native.register(`${binding.serverBaseUrl}\0${binding.channelId}`, {
+      accountId: binding.accountId,
+      serverBaseUrl: binding.serverBaseUrl,
+      channelId: binding.channelId,
+      revokedAt: 1,
+      ...(scope === "binding" ? { binding: { ...binding, label: "legacy" } } : {}),
+    });
+    const reopened = generationFixture({ env: f.env });
+    const params = {
+      runtime: reopened.runtime,
+      ...binding,
+      binding: { ...binding, label: "successor" },
+    };
+    const reading = isClickClackDiscussionChannelRevokedAsync(params);
+    if (scope === "channel") {
+      await expect(reading).resolves.toBe(true);
+    } else {
+      await expect(reading).rejects.toThrow("Conflicting ClickClack revocation evidence");
+      expect(native.entries().some(({ key }) => key.includes("\0"))).toBe(true);
+      expect(isClickClackDiscussionChannelRevoked({ ...params, channelId: "ordinary" })).toBe(true);
+    }
+  },
+);

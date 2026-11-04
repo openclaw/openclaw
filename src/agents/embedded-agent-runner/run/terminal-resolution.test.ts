@@ -41,7 +41,7 @@ vi.mock("./auth-profile-success.js", () => ({
 }));
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+  "Your turn ended without a final reply. Continue from the current conversation and answer the user's request now. Do not repeat completed actions or restart the task. Do not restate your reasoning.";
 
 function reasoningAssistant(id: string, thinking: string) {
   const thinkingSignature = JSON.stringify({ id, type: "reasoning" });
@@ -65,6 +65,18 @@ describe("terminal resolution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetGeneratedMediaTaskActivityForTests();
+  });
+
+  it("acknowledges an already-delivered input without empty-response recovery", async () => {
+    const resolved = await resolveTerminal({
+      assistant: undefined,
+      attemptOverrides: { inputAlreadyDelivered: true },
+      runParams: { terminalReplyExpectation: "result-required" },
+    });
+    expectComplete(resolved);
+    expect(resolved.result.payloads).toBeUndefined();
+    expect(resolved.result.meta.error).toBeUndefined();
+    expect(resolved.result.meta.terminalReply).toEqual({ disposition: "silent" });
   });
 
   it("completes an empty post-tool turn after committed media delivery", async () => {

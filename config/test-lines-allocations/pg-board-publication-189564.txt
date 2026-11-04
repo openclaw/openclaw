@@ -1,0 +1,4 @@
+# 97 net test lines for #189564: real PostgreSQL Board handler publication regression.
+# Covers HTML update, native report persistence, and unchanged host-SQL prohibition.
+# Reuses measured sub-second owner proof instead of duplicating Gateway transport E2E.
+97

@@ -1,0 +1,2 @@
+# Keep active plain and subscribed initial history when retiring obsolete display snapshots.
+35

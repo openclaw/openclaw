@@ -138,6 +138,12 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     expect(capped.truncated).toBe(true);
     expect(capped.hits.every((hit) => hit.sessionKey.startsWith("agent:main:"))).toBe(true);
 
+    await append("underscore", "underscore-hit", "quay signal", "user", "dev_ops");
+    await append("lookalike", "lookalike-hit", "quay signal", "user", "devxops");
+    expect(
+      (await search("quay signal", { agentId: "dev_ops" })).hits.map((hit) => hit.messageId),
+    ).toEqual(["underscore-hit"]);
+
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const config = {
       agents: { entries: { main: {} } },

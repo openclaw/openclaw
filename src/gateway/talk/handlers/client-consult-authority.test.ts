@@ -48,6 +48,10 @@ import { closeRelaySession, registerTalkRealtimeRelayAgentRun } from "../relay/o
 import { createTalkRealtimeRelaySession } from "../relay/session-create.js";
 import { relaySessions } from "../relay/state.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
+import {
+  forgetLegacyVoiceBinding,
+  readLegacyVoiceBinding,
+} from "./client-legacy-voice-bindings.js";
 import { talkClientHandlers } from "./client.js";
 
 const chat = vi.hoisted(() => ({
@@ -229,6 +233,54 @@ describe("voice consult registration authority", () => {
         }, attachment),
     );
   });
+
+  it.for(["requester", "session"] as const)(
+    "refuses legacy binding after authority changes during voice validation (%s)",
+    async (revoked, { signal }) => {
+      const context = consultContext();
+      const params = consultParams("validation-revocation");
+      const client = { connId: "validation-revocation", invalidated: false };
+      const authorized = await authorizeConsult(params, context, client as never);
+      const waiting = createDeferred();
+      const resume = createDeferred();
+      const read = voiceSessionReaders.assertClientVoiceSessionOpen;
+      vi.spyOn(voiceSessionReaders, "assertClientVoiceSessionOpen").mockImplementationOnce(
+        async (...args) => {
+          const origin = await read(...args);
+          waiting.resolve();
+          await resume.promise;
+          return origin;
+        },
+      );
+      const { respond, pending } = toolCall(
+        params,
+        context,
+        authorized.authorization,
+        client as never,
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(waiting.promise, pending, "Voice validation did not wait"),
+          signal,
+        );
+        expect(readLegacyVoiceBinding(client.connId, scope.sessionKey)).toBeUndefined();
+        if (revoked === "requester") {
+          client.invalidated = true;
+        } else {
+          replaceSessionEntrySync(scope, { sessionId: "replacement-session", updatedAt: 2 });
+        }
+        resume.resolve();
+        await pending;
+        expect(readLegacyVoiceBinding(client.connId, scope.sessionKey)).toBeUndefined();
+        expect(respond.mock.lastCall?.[0]).toBe(false);
+        expect(chat.dispatched).not.toHaveBeenCalled();
+      } finally {
+        resume.resolve();
+        await pending;
+        forgetLegacyVoiceBinding(client.connId, scope.sessionKey, voiceSessionId);
+      }
+    },
+  );
 
   it.for([
     { origin: "client", wait: "preparation" },

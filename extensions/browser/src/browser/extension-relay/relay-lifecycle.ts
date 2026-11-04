@@ -145,8 +145,7 @@ async function ensureDesiredRelay(params: {
           existing.allowLegacyAuth === state.resolved.extensionRelay.allowLegacyAuth;
         if (matches && existing.ownership === "borrowed" && existing.client.connected) {
           try {
-            // A live socket can still have an unread retirement notice. Reuse requires
-            // a response from this owner; loss without cleanup acknowledgement stays blocked.
+            // Reuse requires a response; an unread retirement notice can invalidate a live socket.
             await existing.client.status();
           } catch (error) {
             if (existing.client.connected) {

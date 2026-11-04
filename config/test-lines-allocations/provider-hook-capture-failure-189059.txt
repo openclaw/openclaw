@@ -1,0 +1,2 @@
+# Keep failed synthetic capture closed and provider-local without weakening direct auth or lifecycle failures.
+62

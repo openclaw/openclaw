@@ -46,3 +46,49 @@ describe("configured model proxy routing", () => {
     expect(resolveRoute("https://proxy.example.com")?.baseUrl).toBe("https://proxy.example.com");
   });
 });
+
+it.each(["provider", "model"] as const)(
+  "honors an explicit %s GenerateContent override over Flash's catalog route",
+  (scope) => {
+    const model: ProviderRuntimeModel = {
+      ...catalogModel,
+      provider: "google",
+      id: "gemini-3.8-flash",
+      name: "Gemini Flash",
+      api: "google-interactions",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    };
+    const resolved = applyConfiguredProviderOverrides({
+      provider: "google",
+      modelId: model.id,
+      discoveredModel: model,
+      providerConfig: {
+        baseUrl: model.baseUrl,
+        ...(scope === "provider" ? { api: "google-generative-ai" as const } : {}),
+        models:
+          scope === "model"
+            ? [
+                {
+                  id: model.id,
+                  name: model.name,
+                  api: "google-generative-ai" as const,
+                  reasoning: false,
+                  input: ["text" as const],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1,
+                  maxTokens: 1,
+                },
+              ]
+            : [],
+      },
+      manifestAlias: { provider: "google" },
+      providerMetadataOwners,
+      runtimeHooks: createProviderRuntimeTestMock({ handledDynamicProviders: [] }),
+    });
+    expect(resolved).toMatchObject({
+      id: model.id,
+      api: "google-generative-ai",
+      baseUrl: model.baseUrl,
+    });
+  },
+);

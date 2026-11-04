@@ -569,6 +569,54 @@ describe("ModelProvidersPage agent scope", () => {
     ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
   });
 
+  it.each([
+    ["another provider fails", "anthropic", "ready", undefined],
+    ["an alias is ready", "claude-cli", "ready", undefined],
+    [
+      "the added provider fails",
+      "anthropic",
+      "unavailable",
+      "More models could not be discovered.",
+    ],
+    [
+      "no own outcome is available",
+      "unrelated",
+      "ready",
+      "Models from ollama could not be discovered.",
+    ],
+  ] as const)("provider-add feedback when %s", async (_case, ownProvider, ownStatus, warning) => {
+    const { context, runtimeConfig, request } = createHarness("main");
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) =>
+      method === "models.list"
+        ? {
+            models: [],
+            refreshFailed: true,
+            providerOutcomes: [
+              { provider: ownProvider, status: ownStatus },
+              { provider: "ollama", status: "unavailable" },
+            ],
+          }
+        : originalRequest(method),
+    );
+    const page = appendPage(context);
+    await waitForProviders(page);
+    await openApiKeyProvider(page, "anthropic");
+    page.view.props.onAddProviderKeyChange("new-provider-key");
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>("[data-models-key-dialog] button.primary")!.click();
+    await runtimeConfig.runExternalMutation.mock.results[0]!.value;
+    await drainPageUpdates(page);
+
+    expect(page.view.props.messages.add).toEqual({
+      kind: "success",
+      text: "Provider anthropic added.",
+      ...(warning ? { warning } : {}),
+    });
+    expect(page.view.props.addProviderOpen).toBe(Boolean(warning));
+    expect(page.querySelector("[data-models-key-dialog]") !== null).toBe(Boolean(warning));
+  });
+
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
     const { settingsAgentSelection, context, notifySelection, runtimeConfig } =
       createHarness("main");

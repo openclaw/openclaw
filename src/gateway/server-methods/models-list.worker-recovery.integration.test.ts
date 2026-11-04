@@ -103,6 +103,15 @@ it("model reads recover a failed shared-worker publication and retain the failed
   try {
     await using listening = await serveModelsEndpoint(endpoint);
     const { baseUrl } = listening;
+    // Route only this owned loopback fixture directly; preserve all other proxy routing.
+    // The proxy matcher recognizes bypass-all only when the entire value is "*".
+    const inheritedNoProxy = process.env.no_proxy ?? process.env.NO_PROXY;
+    const noProxy =
+      inheritedNoProxy === "*"
+        ? inheritedNoProxy
+        : [inheritedNoProxy, new URL(baseUrl).host].filter(Boolean).join(",");
+    Object.assign(state.envVars, { NO_PROXY: noProxy, no_proxy: noProxy });
+    state.applyEnv();
     const pluginPath = await writeCatalogPlugin(
       state,
       providers,
@@ -113,8 +122,8 @@ it("model reads recover a failed shared-worker publication and retain the failed
             staticCatalog: provider === ${JSON.stringify(provider)} ? {
               order: "simple", async run() {
                 const response = await fetch(${JSON.stringify(`${baseUrl}/prepare`)});
-                if (!response.ok) throw new Error("Fixture runtime preparation failed");
-                return null;
+                if (response.ok) return null;
+                return { get provider() { throw new Error("Fixture runtime preparation failed"); } };
               },
             } : undefined,
             catalog: { order: "profile", async run(ctx) {
@@ -207,7 +216,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
       const worker = workers.get(heldThread);
       expect(worker).toBeDefined();
       expect(heldThread).toBeGreaterThan(0);
-      // Fail real preparation after worker exit, without synthesizing publication events.
+      // Fail real result normalization after worker exit, without synthesizing publication events.
       failedPreparations = 1;
       await worker!.terminate();
       expect((await withinTest(recoveryFailed.promise, signal)).message).toContain(

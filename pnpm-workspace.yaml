@@ -104,7 +104,8 @@ overrides:
   "@aws-sdk/xml-builder": 3.972.41
   "@hono/node-server": 2.1.5
   axios: 1.20.0
-  fast-uri: 4.2.2
+  fast-uri: 4.2.3
+  "mailauth>nodemailer": 10.1.7
   follow-redirects: 1.16.1
   defu: 6.1.7
   fast-xml-parser: 5.11.2

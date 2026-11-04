@@ -1,0 +1,2 @@
+# Real-worker refusal settlement: native peer publication, multi-device replacement, live revocation, restart, uncertain reply, and exact cleanup retry.
+346
