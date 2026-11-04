@@ -32,10 +32,6 @@ export type { SessionOrganizerDependencies } from "./session-organizer-types.ts"
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
 
 export class SessionOrganizer {
-  private readonly creatingNestedSessions = new WeakMap<
-    SidebarSessionMutationScope["client"],
-    Set<string>
-  >();
   readonly sectionHeaders = new Map<string, HTMLElement>();
   collapsedSessionSections = loadStoredCollapsedSessionSections();
   draggingSessionKey: string | null = null;
@@ -111,22 +107,6 @@ export class SessionOrganizer {
           scope,
         ),
       true,
-    );
-  }
-
-  isCreatingNestedSession(
-    client: SidebarSessionMutationScope["client"] | null | undefined,
-    sessionKey: string,
-  ): boolean {
-    return Boolean(client && this.creatingNestedSessions.get(client)?.has(sessionKey));
-  }
-
-  // State stays here; mutation orchestration loads with the other session operations.
-  createNestedSession(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.createNestedSession(this.deps, session, scope, this.creatingNestedSessions, () =>
-        this.notify(),
-      ),
     );
   }
 

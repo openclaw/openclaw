@@ -25,6 +25,50 @@ type SidebarSessionAction = Exclude<
   }
 >;
 
+// Pending work is scoped to the organizer and Gateway client, and loaded only with menus.
+const pendingNestedSessions = new WeakMap<
+  SessionOrganizer,
+  WeakMap<SidebarSessionMutationScope["client"], Set<string>>
+>();
+
+export function isCreatingNestedSession(
+  organizer: SessionOrganizer,
+  client: SidebarSessionMutationScope["client"] | null | undefined,
+  key: string,
+): boolean {
+  return Boolean(client && pendingNestedSessions.get(organizer)?.get(client)?.has(key));
+}
+
+export function createNestedSession(
+  organizer: SessionOrganizer,
+  session: SidebarRecentSession,
+): Promise<void> {
+  let pendingByClient = pendingNestedSessions.get(organizer);
+  if (!pendingByClient) {
+    pendingByClient = new WeakMap();
+    pendingNestedSessions.set(organizer, pendingByClient);
+  }
+  const clients = pendingByClient;
+  return organizer.runOperation(async (operations, scope) => {
+    let pending = clients.get(scope.client);
+    if (!pending) {
+      pending = new Set();
+      clients.set(scope.client, pending);
+    }
+    if (pending.has(session.key)) {
+      return;
+    }
+    pending.add(session.key);
+    organizer.notify();
+    try {
+      await operations.createChildSession(organizer.deps, session, scope, { fork: false });
+    } finally {
+      pending.delete(session.key);
+      organizer.notify();
+    }
+  });
+}
+
 export async function runSessionAction(
   organizer: SessionOrganizer,
   session: SidebarRecentSession,

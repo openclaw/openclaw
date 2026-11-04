@@ -231,8 +231,6 @@ it("keeps personal pinning and navigation usable in an offline session menu", as
     sessionOrganizer: {
       isPersonalSessionPin: () => false,
       setPersonalSessionPin: pin,
-      isCreatingNestedSession: () => false,
-      createNestedSession: async () => undefined,
     },
   } as unknown as SidebarMenusOwner;
   const view = render(() => (

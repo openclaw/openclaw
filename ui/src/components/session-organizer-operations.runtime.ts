@@ -462,31 +462,6 @@ export async function assignSessionCategory(
   );
 }
 
-export async function createNestedSession(
-  deps: SessionActionHost,
-  session: SessionActionRow,
-  scope: SidebarSessionMutationScope,
-  pendingByClient: WeakMap<SidebarSessionMutationScope["client"], Set<string>>,
-  notify: () => void,
-): Promise<void> {
-  let pending = pendingByClient.get(scope.client);
-  if (!pending) {
-    pending = new Set();
-    pendingByClient.set(scope.client, pending);
-  }
-  if (pending.has(session.key)) {
-    return;
-  }
-  pending.add(session.key);
-  notify();
-  try {
-    await createChildSession(deps, session, scope, { fork: false });
-  } finally {
-    pending.delete(session.key);
-    notify();
-  }
-}
-
 export async function createChildSession(
   deps: SessionActionHost,
   session: SessionActionRow,

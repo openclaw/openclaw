@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHarness, sessionRow } from "./session-organizer-batch-mutations.test-support.ts";
+import { createNestedSession, isCreatingNestedSession } from "./session-organizer-menu.runtime.ts";
 import { createChildSession } from "./session-organizer-operations.runtime.ts";
 import { SessionOrganizer } from "./session-organizer.ts";
 
@@ -22,18 +23,18 @@ describe("persistent child-session creation", () => {
       vi.fn(),
     );
     const parent = sessionRow(1);
-    const pending = organizer.createNestedSession(parent);
+    const pending = createNestedSession(organizer, parent);
     await expect.poll(() => first.create.mock.calls.length).toBe(1);
-    expect(organizer.isCreatingNestedSession(activeScope.client, parent.key)).toBe(true);
-    await organizer.createNestedSession(parent);
+    expect(isCreatingNestedSession(organizer, activeScope.client, parent.key)).toBe(true);
+    await createNestedSession(organizer, parent);
     expect(first.create).toHaveBeenCalledTimes(1);
     activeScope = second.scope;
-    expect(organizer.isCreatingNestedSession(activeScope.client, parent.key)).toBe(false);
-    await organizer.createNestedSession(parent);
+    expect(isCreatingNestedSession(organizer, activeScope.client, parent.key)).toBe(false);
+    await createNestedSession(organizer, parent);
     expect(second.create).toHaveBeenCalledTimes(1);
     result.resolve("agent:main:first-child");
     await pending;
-    expect(organizer.isCreatingNestedSession(activeScope.client, parent.key)).toBe(false);
+    expect(isCreatingNestedSession(organizer, activeScope.client, parent.key)).toBe(false);
     expect(first.selectSession).not.toHaveBeenCalledWith("agent:main:first-child");
   });
 
