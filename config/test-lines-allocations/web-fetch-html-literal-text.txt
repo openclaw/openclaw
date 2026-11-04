@@ -1,2 +1,0 @@
-# Preserve literal HTML text through basic extraction, Readability, and HTTP error diagnostics.
-28

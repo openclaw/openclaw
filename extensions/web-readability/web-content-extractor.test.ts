@@ -8,8 +8,9 @@ const SAMPLE_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8" 
 const MINIFIED_BLOCKS_HTML =
   "<!doctype html><html><head><title>Results</title></head><body><article><h1>Heading</h1>" +
   "<p>Para 0. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p>" +
-  "<p>Para 1. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p><ul><li>alpha</li><li>beta</li></ul>" +
+  "<p>Para 1. Use <code>[report](draft)</code> and <code>![alt](image.png)</code> literally. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p><ul><li>alpha</li><li>beta</li></ul>" +
   "<p>Para 2. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p></article></body></html>";
+const literalParagraph = "\nPara 1. Use [report](draft) and ![alt](image.png) literally.";
 
 async function extractArticle(html: string, extractMode: "text" | "markdown" = "text") {
   const result = await createReadabilityWebContentExtractor().extract({
@@ -22,16 +23,6 @@ async function extractArticle(html: string, extractMode: "text" | "markdown" = "
 }
 
 describe("web readability extractor", () => {
-  it("preserves literal HTML text selected by Readability", async () => {
-    const extracted = await extractArticle(
-      SAMPLE_HTML.replace(
-        "<article>",
-        "<article><p>Use <code>[report](draft)</code> and <code>![alt](image.png)</code> literally.</p>",
-      ),
-    );
-    expect(extracted.text).toContain("Use [report](draft) and ![alt](image.png) literally.");
-  });
-
   it.each([
     ["", "/next", "/article#top"],
     ['<base target="_blank" />', "/next", "/article#top"],
@@ -49,7 +40,7 @@ describe("web readability extractor", () => {
   });
 
   it.each([
-    ["text", ["Heading\nPara 0.", "\nPara 1.", "\nalpha\nbeta\n"]],
+    ["text", ["Heading\nPara 0.", literalParagraph, "\nalpha\nbeta\n"]],
     ["markdown", ["# Heading", "Para 0.", "- alpha\n- beta"]],
   ] as const)("keeps minified block structure in %s mode", async (mode, fragments) => {
     const extracted = await extractArticle(MINIFIED_BLOCKS_HTML, mode);
