@@ -298,7 +298,10 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
         }
       };
       await assertSeed();
-      const worktreeRoot = params.worktreeRoot;
+      // The default parent keeps its physical-root spelling; only an explicit
+      // relocation (already physical from the shell owner) is used verbatim.
+      const relocated = params.worktreeRoot !== path.join(params.root, ".worktrees");
+      const worktreeRoot = relocated ? params.worktreeRoot : path.join(root, ".worktrees");
       const resolvedWorktreeRoot = await fs.realpath(worktreeRoot).catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
           throw error;
@@ -310,9 +313,7 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
       // paths on Git rather than registering managed templates outside the
       // canonical namespace.
       const native =
-        worktreeRoot !== path.join(params.root, ".worktrees") ||
-        resolvedWorktreeRoot !== worktreeRoot ||
-        (await needsNativeGit(rawGit, env));
+        relocated || resolvedWorktreeRoot !== worktreeRoot || (await needsNativeGit(rawGit, env));
       const gitBytes = await estimateWorktreeGitBytes(root, params.seed, {
         signal: guard.signal,
         assertCurrent,
