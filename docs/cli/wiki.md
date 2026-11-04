@@ -221,6 +221,13 @@ Apply narrow mutations without freeform page surgery:
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
 
+For `apply metadata`, each supplied `--source-id`, `--contradiction`, or
+`--question` list replaces the entire stored list. Read the page with `wiki get`
+first and repeat each flag for every value you want to retain; omitted lists
+stay unchanged. Successful output reports before/after counts for supplied lists
+(`metadataListChanges` in JSON). To clear a list explicitly, use `wiki_apply`
+with an empty array; the CLI has no list-clear flag.
+
 Refreshing a synthesis without `--status` preserves its existing status. New synthesis pages default to `active`; an explicit `--status` sets or replaces the value.
 
 For `apply synthesis`, pass the summary with `--body <text>` or `--body-file <path>`.
