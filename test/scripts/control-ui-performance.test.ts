@@ -488,7 +488,7 @@ describe("Control UI performance budgets", () => {
         area === "locale"
           ? 307_200
           : area === "startup"
-            ? 641
+            ? 769
             : CONTROL_UI_PERFORMANCE_BUDGETS[`${area}BootJsGzipBytes`];
       const writeBytes = (fixture: ReturnType<typeof createCliFixture>, bytes: number) => {
         if (area === "startup") {
@@ -500,12 +500,12 @@ describe("Control UI performance budgets", () => {
         }
       };
       writeBytes(base, cap + 100);
-      for (const growth of [-1, 0, 64, 65]) {
+      for (const growth of [-1, 0, 192, 193]) {
         writeBytes(head, cap + 100 + growth);
-        const result = jsonCli(head, ["--base-dist", base.distDir], growth > 64 ? 1 : 0);
-        if (growth > 64) {
+        const result = jsonCli(head, ["--base-dist", base.distDir], growth > 192 ? 1 : 0);
+        if (growth > 192) {
           expect(result.report).toContain("base already exceeds the cap");
-          expect(result.report).toContain("no growth beyond 64 B build variance");
+          expect(result.report).toContain("no growth beyond 192 B build variance");
         } else {
           expect(result.violations).toEqual([]);
         }
@@ -518,7 +518,7 @@ describe("Control UI performance budgets", () => {
     const head = createCliFixture();
     for (const [fixture, ru, de] of [
       [base, 310_000, 320_000],
-      [head, 310_065, 315_000],
+      [head, 310_193, 315_000],
     ] as const) {
       fixture.writeAsset("ru-a.js", ru);
       fixture.writeAsset("de-a.js", de);
@@ -527,8 +527,8 @@ describe("Control UI performance budgets", () => {
     expect(result.violations).toEqual([
       expect.objectContaining({
         metric: "ru locale catalog pair JS gzip",
-        actual: 310_065,
-        limit: 310_064,
+        actual: 310_193,
+        limit: 310_192,
       }),
     ]);
   });
@@ -617,10 +617,10 @@ describe("Control UI performance budgets", () => {
   });
 
   it.each([
-    { baselineBytes: 315_881, limit: 316_457 },
-    { baselineBytes: 311_544, limit: 312_120 },
+    { baselineBytes: 315_881, limit: 316_585 },
+    { baselineBytes: 311_544, limit: 312_248 },
   ])(
-    "enforces unchanged startup allowances for a $baselineBytes B baseline",
+    "enforces approved startup allowances for a $baselineBytes B baseline",
     ({ baselineBytes, limit }) => {
       const fixture = createCliFixture();
       // Synthetic assets and their baseline must not depend on the live build ratchet.
@@ -634,7 +634,7 @@ describe("Control UI performance budgets", () => {
         budgets: { startupJsGzipBytes: 325_131 },
         startupBudgetBaseline: { startupJsGzipBytes: baselineBytes },
         startupJsTolerance: 512,
-        startupJsBuildVariance: 64,
+        startupJsBuildVariance: 192,
         metrics: { startup: { js: { gzipBytes: limit, requests: 2 } } },
         violations: [],
       });

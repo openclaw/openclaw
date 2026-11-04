@@ -356,6 +356,14 @@ type EnglishCatalog = TranslationMap & {
 };
 
 const startupEnglish = {
+  runtimeErrors: {
+    socketInsecure:
+      "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
+    socketRefused:
+      "Browser refused the Gateway WebSocket for security reasons. Check the Gateway WebSocket URL and browser security policy.",
+    socketCreateFailed: "Could not create the Gateway WebSocket: {message}",
+    socketTimeout: "gateway websocket opening timed out after {milliseconds}ms",
+  },
   pluginUi: {
     retryView: "Retry plugin view",
     inlineLoading: "Loading plugin view…",
@@ -375,6 +383,7 @@ const startupEnglish = {
     dashboard: "Dashboard",
   },
   common: {
+    showDetails: "Show details",
     uploadsDisabled: "File and image uploads are disabled.",
     health: "Health",
     ok: "OK",
@@ -566,8 +575,8 @@ const startupEnglish = {
     short: "Starting up…",
   },
   lazyView: {
-    errorTitle: "Panel failed to load",
-    genericSubtitle: "Something went wrong while loading this panel.",
+    errorTitle: "Couldn’t load this panel.",
+    genericSubtitle: "Try again.",
     staleTitle: "This view could not load",
     staleSubtitle:
       "Some interface files could not be downloaded. Check your connection, then reload.",
@@ -1067,7 +1076,7 @@ const startupEnglish = {
     labs: "Labs",
     updates: "Updates",
     about: "About",
-    aiAgents: "Agent Defaults",
+    aiAgents: "Agent defaults",
     modelSetup: "Model Setup",
     memoryImport: "Import Memory",
     security: "Privacy & Security",
@@ -1185,14 +1194,10 @@ const startupEnglish = {
     install: "Install",
   },
   labsPage: {
-    intro:
-      "Labs contains experimental capabilities that may change, break, or disappear between releases.",
-    sectionTitle: "Experimental features",
     sectionDescription:
       "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future agent runs.",
-    documentation: "Documentation",
     restartRequired: "Gateway restart required.",
-    saveErrorTitle: "Could not update feature",
+    saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
     codeMode: {},
@@ -1543,6 +1548,7 @@ const startupEnglish = {
     mentions: {},
     cloudWorkerFailed: "Runner failed: {error}",
     errorDetails: "Error details",
+    errorSummary: "Couldn’t complete this action. Try again.",
     errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
     errorReplyTitle: "Couldn’t finish this reply",
     historyUnavailableTitle: "Couldn’t load this conversation",
@@ -1560,7 +1566,7 @@ const startupEnglish = {
     },
     errorBusySummary: "OpenClaw is busy. Check status before trying again.",
     errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",
-    errorStartSummary: "Couldn't start this conversation. Open Settings → Logs for details.",
+    errorStartSummary: "Couldn’t start this session. Try again.",
     checkStatus: "Check status",
     details: "Details",
     usageLimit: {},
@@ -1872,7 +1878,7 @@ const startupEnglish = {
       defaultSaved: "Dashboard default saved for future opens.",
       defaultSaveFailed:
         "Could not save the dashboard default. Check the connection and try again.",
-      defaultSaveError: "Could not save the dashboard default: {error}",
+      defaultSaveError: "Couldn’t save the dashboard default. Try again.",
       swap: "Swap {main} and {side}",
       layout: "Layout",
       panelPosition: "Panel position",

@@ -1,19 +1,18 @@
 import path from "node:path";
 import { toUSVString } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
-import { normalizeProfileEmail } from "./user-profile-email.kernel.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
-import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
-import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
+import { normalizeProfileEmail } from "./user-profile-email.kernel.js";
+import {
+  selectProfileAccessEntries,
+  selectUserProfileGitHubIdentities,
+} from "./user-profile-github-identity.js";
 import {
   matchUserProfileReference,
   resolveCatalogProfile,
@@ -25,6 +24,7 @@ import {
   userProfilesDb,
   userProfileDisplaySelection,
 } from "./user-profiles-internal.js";
+import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
 import type {
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -235,9 +235,7 @@ export function selectCanonicalTailscaleProfileIdInDatabase(
     );
     profileId = linked?.profile_id;
   }
-  return profileId
-    ? selectResolvedUserProfileMetadataById(db, profileId)?.id
-    : undefined;
+  return profileId ? selectResolvedUserProfileMetadataById(db, profileId)?.id : undefined;
 }
 
 /** Read display rows and their one-hop aliases without creating profile storage. */
@@ -280,7 +278,17 @@ export function selectUserProfileDisplaysInDatabase(
     }
     return displays;
   }
-  const byId = new Map(rows.map((row) => [row.id, row]));
+  const namelessIds = rows.filter((row) => !row.display_name?.trim()).map((row) => row.id);
+  const githubNames = selectUserProfileGitHubIdentities(db, namelessIds);
+  const byId = new Map(
+    rows.map((row) => [
+      row.id,
+      {
+        ...row,
+        ...(githubNames.has(row.id) ? { githubIdentity: githubNames.get(row.id) } : {}),
+      },
+    ]),
+  );
   return new Map(
     ids.map((id) => {
       // Match native text binding before indexing the returned SQLite rows.
