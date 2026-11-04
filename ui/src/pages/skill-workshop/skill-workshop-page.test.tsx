@@ -1,6 +1,6 @@
 import type { SkillsWorkshopListResult, SkillWorkshopChange } from "@openclaw/gateway-protocol";
 import { getByRole, queryByRole } from "@solidjs/testing-library";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -199,13 +199,93 @@ it.each([
   }
 });
 
-it("explains a missing plugin instead of calling its methods", async () => {
-  const request = gateway();
-  const page = await mount(request, { withoutPlugin: true });
+describe("without the skill-workshop plugin", () => {
+  const pluginMethods = ["plugins.list", "plugins.setEnabled"];
+  function pluginGateway(
+    entry: { enabled: boolean } | null,
+    setEnabled: () => Promise<unknown> = () => createDeferredCore<unknown>().promise,
+  ) {
+    return vi.fn((method: string, params?: unknown) => {
+      if (method === "plugins.list") {
+        return Promise.resolve({
+          plugins: entry ? [{ id: "skill-workshop", name: "Skill Workshop", ...entry }] : [],
+          diagnostics: [],
+          mutationAllowed: true,
+        });
+      }
+      if (method === "plugins.setEnabled") {
+        expect(params).toEqual({ pluginId: "skill-workshop", enabled: true });
+        return setEnabled();
+      }
+      return Promise.reject(new Error(`unexpected ${method}`));
+    });
+  }
+  const workshopCalls = (request: ReturnType<typeof vi.fn>) =>
+    request.mock.calls.filter(([method]) => String(method).startsWith("skills.workshop."));
 
-  await waitText(page, "Skill Workshop is not available on this Gateway.");
-  expect(request).not.toHaveBeenCalled();
-  expect(page.querySelector('[role="alert"]')).toBeNull();
+  it("offers to turn the plugin on, then sends one enable request", async () => {
+    const request = pluginGateway({ enabled: false });
+    const page = await mount(request, { withoutPlugin: true, methods: pluginMethods });
+
+    await waitText(page, "Skill Workshop is off");
+    const enable = await click(page, "Turn on Skill Workshop");
+    await waitForSolid(() => expect(enable.disabled).toBe(true));
+    expect(enable.textContent).toBe("Turning on…");
+    enable.click();
+    flush();
+    expect(request.mock.calls.filter(([method]) => method === "plugins.setEnabled")).toHaveLength(
+      1,
+    );
+    expect(workshopCalls(request)).toEqual([]);
+  });
+
+  it("keeps the button and shows why when enabling fails", async () => {
+    const request = pluginGateway({ enabled: false }, () =>
+      Promise.reject(new Error("plugins are disabled globally")),
+    );
+    const page = await mount(request, { withoutPlugin: true, methods: pluginMethods });
+
+    const enable = await click(page, "Turn on Skill Workshop");
+    await waitText(page, "plugins are disabled globally");
+    expect(enable.disabled).toBe(false);
+  });
+
+  it("tells operators without admin access who can turn it on", async () => {
+    const request = pluginGateway({ enabled: false });
+    const page = await mount(request, {
+      withoutPlugin: true,
+      methods: pluginMethods,
+      scopes: ["operator.read"],
+    });
+
+    await waitText(page, "An admin can turn it on from Plugins.");
+    expect(button(page, "Turn on Skill Workshop")).toBeNull();
+  });
+
+  it.each([
+    [null, "Skill Workshop is not part of this OpenClaw install."],
+    [{ enabled: true }, "Skill Workshop is turned on but did not load."],
+  ])("explains a plugin that cannot be turned on (%j)", async (entry, expected) => {
+    const request = pluginGateway(entry);
+    const page = await mount(request, { withoutPlugin: true, methods: pluginMethods });
+
+    await waitText(page, expected);
+    expect(button(page, "Turn on Skill Workshop")).toBeNull();
+    expect(workshopCalls(request)).toEqual([]);
+  });
+
+  it("retries a failed plugin check", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("catalog offline"))
+      .mockResolvedValue({ plugins: [], diagnostics: [], mutationAllowed: true });
+    const page = await mount(request, { withoutPlugin: true, methods: pluginMethods });
+
+    await waitText(page, "catalog offline");
+    await click(page, "Retry");
+    await waitText(page, "Skill Workshop is not part of this OpenClaw install.");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
 });
 
 it("opens an archived skill from a chat link", async () => {

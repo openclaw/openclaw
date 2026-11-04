@@ -19,6 +19,7 @@ export function resolveWorkshopAccess(snapshot: ApplicationGatewaySnapshot | nul
     // Apply and Discard ship together and share their scope.
     canReviewDrafts: canCallGatewayMethod(snapshot, "skills.workshop.applyDraft", "operator.admin"),
     canSetMode: canCallGatewayMethod(snapshot, "config.patch", "operator.admin"),
+    canEnablePlugin: canCallGatewayMethod(snapshot, "plugins.setEnabled", "operator.admin"),
   };
 }
 

@@ -4,8 +4,16 @@ import { en } from "./en.ts";
 const enSkillWorkshop = {
   skillWorkshop: {
     loadError: "Couldn’t load the Workshop. Try again.",
-    notInstalled:
-      "Skill Workshop is not available on this Gateway. Enable the skill-workshop plugin to use it.",
+    plugin: {
+      offTitle: "Skill Workshop is off",
+      offBody:
+        "Turn it on to let your agent save what it learns as skills and improve them over time.",
+      enable: "Turn on Skill Workshop",
+      enabling: "Turning on…",
+      needsAdmin: "An admin can turn it on from Plugins.",
+      missing: "Skill Workshop is not part of this OpenClaw install.",
+      failed: "Skill Workshop is turned on but did not load. Check Plugins for details.",
+    },
     retry: "Retry",
     mode: {
       label: "Learning",

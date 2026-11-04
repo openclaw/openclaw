@@ -87,10 +87,7 @@ export function SkillWorkshopView(props: { view: WorkshopView; reads: WorkshopRe
       <SettingsWorkspace>
         <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-skill-workshop">
           <SettingsPage wide carapace>
-            <Show
-              when={props.view().installed}
-              fallback={<SettingsEmpty message={t("skillWorkshop.notInstalled")} carapace />}
-            >
+            <Show when={!props.view().plugin} fallback={<PluginUnavailable view={props.view} />}>
               <Toolbar view={props.view} />
               <For
                 each={[
@@ -133,6 +130,70 @@ export function SkillWorkshopView(props: { view: WorkshopView; reads: WorkshopRe
         </div>
       </SettingsWorkspace>
     </>
+  );
+}
+
+/** The Gateway serves no Workshop methods: explain why, and turn the plugin on when allowed. */
+function PluginUnavailable(props: { view: WorkshopView }) {
+  const state = () => props.view().plugin;
+  const off = () => {
+    const current = state();
+    return current?.status === "off" ? current : undefined;
+  };
+  const failure = () => {
+    const current = state();
+    return current?.status === "error" ? current : undefined;
+  };
+  const message = () =>
+    state()?.status === "missing"
+      ? t("skillWorkshop.plugin.missing")
+      : state()?.status === "failed"
+        ? t("skillWorkshop.plugin.failed")
+        : t("skillWorkshop.plugin.offBody");
+  return (
+    <Show when={state()?.status !== "checking"} fallback={<SettingsLoadingSkeleton carapace />}>
+      <Show
+        when={failure()}
+        fallback={
+          <div class="sw-empty sw-plugin-off oc-settings-group settings-group">
+            <span class="sw-empty__icon" aria-hidden="true">
+              <Icon name="wandSparkles" />
+            </span>
+            <Show when={off()}>
+              <strong>{t("skillWorkshop.plugin.offTitle")}</strong>
+            </Show>
+            <p>{message()}</p>
+            <Show when={off()}>
+              {(current) => (
+                <Show
+                  when={props.view().access.canEnablePlugin}
+                  fallback={<p>{t("skillWorkshop.plugin.needsAdmin")}</p>}
+                >
+                  <button
+                    type="button"
+                    class="btn primary"
+                    disabled={current().enabling}
+                    onClick={() => props.view().onEnablePlugin()}
+                  >
+                    {current().enabling
+                      ? t("skillWorkshop.plugin.enabling")
+                      : t("skillWorkshop.plugin.enable")}
+                  </button>
+                </Show>
+              )}
+            </Show>
+            <Show when={off()?.error}>{(error) => <ErrorBanner message={error()} />}</Show>
+          </div>
+        }
+      >
+        {(current) => (
+          <ErrorBanner
+            message={`${t("skillWorkshop.loadError")} ${current().error}`}
+            onRetry={props.view().onRetryPlugin}
+          />
+        )}
+      </Show>
+    </Show>
   );
 }
 

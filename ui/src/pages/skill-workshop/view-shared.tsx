@@ -12,12 +12,16 @@ import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import { canRunWorkshopMutation, type resolveWorkshopAccess } from "./access.ts";
 import type { WorkshopMutation, WorkshopSnapshot } from "./api.ts";
 import type { SkillWorkshopMode } from "./mode.ts";
+import type { WorkshopPluginAvailability } from "./plugin-availability.ts";
 
 export type WorkshopView = () => {
   context: ApplicationContext;
   agentId: string | null;
   access: ReturnType<typeof resolveWorkshopAccess>;
-  installed: boolean;
+  /** Set while the Gateway serves no Workshop methods. */
+  plugin: WorkshopPluginAvailability | null;
+  onEnablePlugin: () => void;
+  onRetryPlugin: () => void;
   snapshot: WorkshopSnapshot | null;
   error: string | null;
   viewer: WorkshopViewer | null;

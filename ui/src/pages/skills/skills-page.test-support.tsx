@@ -41,7 +41,7 @@ export function mountSkills(
     createApplicationGatewaySnapshot({
       client,
       phase: "connected",
-      hello: gatewayHelloForMethods(["skills.install", "skills.update", "skills.workshop.list"]),
+      hello: gatewayHelloForMethods(["skills.install", "skills.update"]),
       assistantAgentId: "main",
       sessionKey: "main",
     }),

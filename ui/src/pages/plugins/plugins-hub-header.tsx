@@ -1,10 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
-import { projectGateway } from "../../lib/reactive/application.ts";
-import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { isSkillWorkshopInstalled } from "../skill-workshop/access.ts";
 import { PLUGINS_HUB_DOCS_URLS, PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
@@ -18,11 +15,6 @@ export function PluginsHubHeader(props: {
     onClick: () => void;
   };
 }) {
-  const context = useOptionalApplication();
-  const gateway = context && projectGateway(context.gateway);
-  // The Workshop page keeps its own tab so a direct link still shows where it is.
-  const showWorkshop = () =>
-    props.active === "skill-workshop" || isSkillWorkshopInstalled(gateway?.read().snapshot);
   return (
     <HubPageHeader<PluginsHubTab>
       active={props.active}
@@ -31,9 +23,7 @@ export function PluginsHubHeader(props: {
         items: [
           { value: "plugins", label: t("tabs.plugins") },
           { value: "skills", label: t("tabs.skills") },
-          ...(showWorkshop()
-            ? [{ value: "skill-workshop" as const, label: t("tabs.skillWorkshop") }]
-            : []),
+          { value: "skill-workshop", label: t("tabs.skillWorkshop") },
         ],
         ariaLabel: t("pluginsPage.hubTablistLabel"),
         panelId: PLUGINS_HUB_PANEL_ID,
