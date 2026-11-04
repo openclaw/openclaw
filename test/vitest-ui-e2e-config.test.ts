@@ -419,6 +419,15 @@ describe("Control UI E2E resource ownership", () => {
     expect(skipped.admissions).toEqual([]);
   });
 
+  it("isolates native paste from parallel browser clipboard writers", () => {
+    const file = "ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts";
+    const result = probeOwnership({ filters: [file] });
+    expectInventory(result, [file]);
+    expect(result.files).toEqual([
+      expect.objectContaining({ file, project: "ui-e2e-serial", phase: 1, workers: 1 }),
+    ]);
+  });
+
   it("routes production deployment fixtures exactly once with or without artifact reuse", async () => {
     const { uiE2eProductionArtifactTestFiles } = await import("./vitest/vitest.ui-e2e.config.ts");
     const files = uiE2eProductionArtifactTestFiles.toSorted();

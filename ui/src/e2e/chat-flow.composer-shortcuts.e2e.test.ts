@@ -287,9 +287,7 @@ suite.define(() => {
     "explains and submits the opposite of %s with modified Enter",
     async (followUpMode) => {
       const inheritsQueueMode = followUpMode === "collect";
-      const runtimeConfig = {
-        messages: { queue: { mode: inheritsQueueMode ? followUpMode : "steer" } },
-      };
+      const runtimeConfig = { messages: { queue: { mode: followUpMode } } };
       const { page, gateway, composer } = await openChat(
         inheritsQueueMode
           ? {
@@ -318,8 +316,10 @@ suite.define(() => {
       await composer.fill(followUpText);
       const primary = page.locator(".agent-chat__composer-actions .chat-send-btn--send");
       await primary.hover();
-      const tooltip =
-        followUpMode === "steer" ? "Steer ⏎ · Queue ⌘/Ctrl+Enter" : "Queue ⏎ · Steer ⌘/Ctrl+Enter";
+      const modifiedEnter = await page.evaluate(() =>
+        /Mac|iPhone|iPad|iPod/u.test(navigator.platform) ? "⌘/Ctrl+Enter" : "CtrlEnter",
+      );
+      const tooltip = `${followUpMode === "steer" ? "Steer ⏎ · Queue" : "Queue ⏎ · Steer"} ${modifiedEnter}`;
       const tooltipHost = primary.locator("..");
       const tooltipContent = tooltipHost.locator('[slot="content"]');
       await expect

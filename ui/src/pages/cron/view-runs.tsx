@@ -329,7 +329,7 @@ export function RunsSection(props: CronRunsSectionProps) {
             aria-live="polite"
             data-test-id="cron-runs-loading"
           >
-            {t("cron.list.loading")}
+            {t("cron.runs.loading")}
           </div>
         ) : props.runsState !== "ready" ? undefined : hasRunFilters() ? (
           <div class="muted cron-runs__empty">{t("cron.runs.noMatching")}</div>
@@ -370,7 +370,7 @@ export function RunsSection(props: CronRunsSectionProps) {
           disabled={props.runsLoadingMore}
           onClick={() => props.onLoadMoreRuns()}
         >
-          {props.runsLoadingMore ? t("cron.list.loading") : t("cron.runs.loadMore")}
+          {props.runsLoadingMore ? t("cron.runs.loading") : t("cron.runs.loadMore")}
         </button>
       ) : undefined}
     </div>

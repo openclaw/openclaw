@@ -3,7 +3,7 @@ import { en } from "./en.ts";
 
 const enMcpApp = {
   mcpApp: {
-    title: "MCP App",
+    title: "MCP app",
     catalogTitle: "Plugin apps",
     catalogDescription: "Open an app directly, without sending a message to your agent.",
     open: "Open app",
@@ -40,7 +40,7 @@ const enMcpApp = {
     retry: "Try again",
     relaunch: "Relaunch",
     sessionEnded: "This app’s session ended. Relaunch to use it.",
-    reconstructed: "Send a message to interact again",
+    reconstructed: "Send a message to interact again.",
     newConversation: "Start a new session",
     confirmMessage: "Send this message to the agent?",
     sendMessage: "Send",
@@ -50,14 +50,14 @@ const enMcpApp = {
     unavailable: "This app couldn’t load. Try again. {error}",
     errors: {
       sessionUnavailable: "Couldn’t open this app’s session. Try again.",
-      gatewayUnavailable: "This app couldn’t connect. Reconnect and try again.",
-      mountUnavailable: "This app couldn’t open. Try again.",
-      sandboxTimedOut: "This app took too long to open. Try again.",
-      sandboxUnavailable: "This app couldn’t open. Try again.",
+      gatewayUnavailable: "Couldn’t connect this app. Reconnect and try again.",
+      mountUnavailable: "Couldn’t load this app. Relaunch it and try again.",
+      sandboxTimedOut: "This app took too long to load. Try again.",
+      sandboxUnavailable: "Couldn’t load this app. Relaunch it and try again.",
       initializationTimedOut: "This app took too long to load. Try again.",
-      requestFailed: "This app couldn’t complete the request. Try again.",
-      unsupportedResources: "This app couldn’t load resources. Check the app’s settings.",
-      invalidSandboxUrl: "This app couldn’t open. Check the app’s settings.",
+      requestFailed: "Couldn’t complete this app request. Try again.",
+      unsupportedResources: "Couldn’t load this app’s resources. Try again.",
+      invalidSandboxUrl: "Couldn’t load this app. Check its URL and try again.",
     },
   },
 } satisfies TranslationMap;

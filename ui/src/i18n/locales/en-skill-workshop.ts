@@ -21,10 +21,10 @@ const enSkillWorkshop = {
     skills: {
       title: "Learned skills",
       empty: "No learned skills yet. Your agent saves skills here as it learns from its work.",
-      noneActive: "No active skills. Restore one from Archived, or let the agent learn.",
-      noneArchived: "Nothing archived.",
+      noneActive: "No active skills yet. Restore an archived skill or let the agent learn.",
+      noneArchived: "No archived skills yet.",
       noneDrafts:
-        "No drafts waiting. In Propose mode, background reviews save the skill changes they would make here for you to apply or discard.",
+        "No drafts yet. In Propose mode, background reviews save the skill changes they would make here for you to apply or discard.",
       filterAria: "Show active or archived skills",
       active: "Active",
       uses: "{count} uses",
@@ -46,14 +46,14 @@ const enSkillWorkshop = {
       applyUpdateTitle:
         "Replace the live skill with this draft. The current version is saved first, so you can undo.",
       discard: "Discard",
-      discardTitle: "Delete this draft. No skill changes.",
+      discardTitle: "Delete this draft without changing the skill.",
       diffLive: "Live skill",
       diffDraft: "Draft",
       same: "This draft already matches the live skill. Discard it.",
       tooLarge: "This draft differs too much from the live skill to compare line by line.",
       filesLabel: "Files",
       chatHint:
-        "Want the agent's judgment first? Send /learn drafts in chat to review all drafts together, or /learn drafts {skill} for this skill only.",
+        "Want the agent’s judgment first? Send /learn drafts in Chat to review all drafts together, or /learn drafts {skill} for this skill only.",
     },
     sort: {
       label: "Sort skills",
@@ -109,7 +109,7 @@ const enSkillWorkshop = {
       diffHint: "changes since then",
       diffCurrent: "Today",
       diffVersion: "Before",
-      noDiff: "This version matches today's instructions.",
+      noDiff: "This version matches today’s instructions.",
       diffTooLarge: "This version is too different from today's to compare line by line.",
       backToCurrent: "Back to current",
       archivedNotice: "Archived. The agent no longer sees this skill until you restore it.",
@@ -124,7 +124,7 @@ const enSkillWorkshop = {
       starting: "Opening learning session\u2026",
       title: "Learn from past conversations",
       description: "Open a session where the agent looks for lessons worth saving as skills.",
-      startFailed: "Could not start learning. Check your sessions before trying again.",
+      startFailed: "Couldn’t start learning. Check your sessions before trying again.",
     },
   },
 } satisfies TranslationMap;

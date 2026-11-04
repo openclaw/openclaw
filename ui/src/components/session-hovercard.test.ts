@@ -479,7 +479,9 @@ describe("session hovercard", () => {
         );
         const notice = container.querySelector('[role="status"]');
         expect(notice?.textContent).toContain(
-          status === "rate-limited" ? "GitHub API rate limit reached" : "could not be refreshed",
+          status === "rate-limited"
+            ? "GitHub API rate limit reached"
+            : "Couldn’t refresh GitHub status",
         );
         if (status === "unavailable") {
           expect(notice?.textContent).not.toContain("rate limit");
