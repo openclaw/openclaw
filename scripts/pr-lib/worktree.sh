@@ -33,9 +33,10 @@ repo_root() {
 }
 
 show_pr_workspace() {
-  local root state
+  local root parent state
   root=$(repo_root) || return 1
-  state=$(pr_worktree_state "$root/.worktrees/pr-$1" "" entry) || return 1
+  parent=$(pr_worktree_parent) || return 1
+  state=$(pr_worktree_state "$parent/pr-$1" "" entry) || return 1
   node - "$root" "$state" <<'EOF_WORKSPACE'
 const path = require("node:path");
 const [canonicalRoot, stateJson] = process.argv.slice(2);
@@ -315,7 +316,7 @@ review_transition_recover() {
   mark_pr_operation_side_effects_started || return 1
   node "$(dirname "${BASH_SOURCE[0]}")/review-transition-recovery.mjs" \
     "$pr" "$plan" "$seal" "$(repo_root)" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" \
-    "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID"
+    "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$(pr_worktree_parent)/pr-$pr"
 }
 
 checkout_pr_worktree_target() {
@@ -441,8 +442,9 @@ refresh_main_snapshot() {
 }
 
 provision_pr_worktree() {
-  local root="$1" pr="$2" seed_sha="$3" provisioner_dir
+  local root="$1" pr="$2" seed_sha="$3" provisioner_dir parent
   provisioner_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P) || return 1
+  parent=$(pr_worktree_parent) || return 1
   # Runtime code and workspace aliases follow the wrapper's selected trust anchor.
   # Pass current shell lock facts; the adapter consumes the owner's live predicate.
   (
@@ -451,7 +453,7 @@ provision_pr_worktree() {
     unset PNPM_CONFIG_MODULES_DIR pnpm_config_modules_dir npm_config_modules_dir
     TSX_TSCONFIG_PATH="$provisioner_dir/../../tsconfig.json" \
       node --import "$provisioner_dir/../tsx.mjs" "$provisioner_dir/worktree-provision.mts" \
-        "$root" "$pr" "$seed_sha" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
+        "$root" "$pr" "$seed_sha" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "$parent"
   ) || return 1
 }
 
@@ -476,7 +478,8 @@ enter_worktree() {
     mark_pr_operation_side_effects_started || return 1
   fi
 
-  local dir="$root/.worktrees/pr-$pr"
+  local dir
+  dir="$(pr_worktree_parent)/pr-$pr" || return 1
   local resolved_parent resolved_dir state registration initialized_sha=""
   state=$(pr_worktree_state "$dir" "" entry) || return $?
   resolved_dir=$(printf '%s\n' "$state" | jq -r '.path') || return $?
@@ -490,7 +493,7 @@ enter_worktree() {
     fi
     if [ "$registration" = registered ] ||
       printf '%s\n' "$state" | jq -e '.present or .admin != ""' >/dev/null; then
-      echo "Removing exact stale PR worktree .worktrees/pr-$pr"
+      echo "Removing exact stale PR worktree ${dir#"$root"/}"
     fi
     remove_worktree_if_present "$dir" || return $?
     # Cold bootstrap needs one extra fetch before private FETCH_HEAD exists.
@@ -685,9 +688,10 @@ list_pr_worktrees() {
   root=$(repo_root)
   cd "$root"
 
-  local dir
+  local dir parent
   local found=false
-  for dir in .worktrees/pr-*; do
+  parent=$(pr_worktree_parent) || return 1
+  for dir in "${parent#"$root"/}"/pr-*; do
     [ -d "$dir" ] || continue
     found=true
     local pr
@@ -715,11 +719,13 @@ gc_pr_worktrees() {
   root=$(repo_root)
   cd "$root"
 
-  local dir
+  local dir parent
   local removed=0 selected_status=0
+  parent=$(pr_worktree_parent) || return 1
+  parent=${parent#"$root"/}
   # Select before locks or remote reads: scoped cleanup must not observe sibling PRs.
-  local directories=(".worktrees/pr-$selected_pr")
-  [ -n "$selected_pr" ] || directories=(.worktrees/pr-*)
+  local directories=("$parent/pr-$selected_pr")
+  [ -n "$selected_pr" ] || directories=("$parent"/pr-*)
   for dir in "${directories[@]}"; do
     [ -d "$dir" ] || continue
     [ -z "$selected_pr" ] || selected_status=1

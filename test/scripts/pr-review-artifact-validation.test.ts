@@ -61,7 +61,7 @@ function runValidation(
     fixtureRoot,
     options.orList ? "review_validate_artifacts 42 || exit 1" : "review_validate_artifacts 42",
     [
-      'common_repo_root() { printf "%s\\n" "$fixture_root"; }',
+      'pr_worktree_parent() { printf "%s\\n" "$fixture_root/.worktrees"; }',
       `pr_worktree_state() { printf '{"path":"%s","present":true}\\n' "$fixture_root"; }`,
       options.guardFailure
         ? "review_guard() { REVIEW_MODE=pr; echo 'review head guard failed'; return 1; }"

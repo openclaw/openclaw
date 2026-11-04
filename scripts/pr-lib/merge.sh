@@ -1434,7 +1434,7 @@ merge_run() {
   local root
   root=$(repo_root)
   cd "$root" || return 1
-  cleanup_pr_worktree ".worktrees/pr-$pr" || {
+  cleanup_pr_worktree "$(pr_worktree_parent)/pr-$pr" || {
     cleanup_complete=false
     merge_outcome_print_cleanup_guidance "$pr"
   }

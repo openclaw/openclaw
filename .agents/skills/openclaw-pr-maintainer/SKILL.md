@@ -36,6 +36,7 @@ ghx issue view <issue> --repo openclaw/openclaw \
   --json number,title,state,body,author,assignees,comments
 ```
 
+- `scripts/pr` checkout outside your file-tool scope (worktree-isolated agents): set `OPENCLAW_PR_WORKTREE_ROOT` to an existing absolute directory you can write, such as `$PWD/.worktrees`, before `scripts/pr workspace`; same value for every command of that PR ([landing](references/landing.md#checkout-and-source)).
 - Assignment: [triage](references/triage.md#assignment), before deep work. Mention other assignees; preserve ownership. Account/activity research conditional.
 
 ## Establish the outcome

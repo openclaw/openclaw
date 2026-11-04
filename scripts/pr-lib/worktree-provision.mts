@@ -24,6 +24,8 @@ type ProvisionParams = {
   seed: string;
   lockRef: string;
   ownerOid: string;
+  /** Parent of `pr-<PR>`, resolved by the shell owner (`pr_worktree_parent`). */
+  worktreeRoot: string;
   signal?: AbortSignal;
 };
 type GitPolicyReader = (args: string[]) => ReturnType<typeof executeGitCommand>;
@@ -193,7 +195,8 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
     !/^[1-9][0-9]*$/.test(params.pr) ||
     !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(params.seed) ||
     !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(params.ownerOid) ||
-    params.lockRef !== `refs/openclaw/pr-operation-locks/${params.pr}`
+    params.lockRef !== `refs/openclaw/pr-operation-locks/${params.pr}` ||
+    !path.isAbsolute(params.worktreeRoot)
   ) {
     throw new Error("Invalid native PR provisioning identity.");
   }
@@ -295,7 +298,7 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
         }
       };
       await assertSeed();
-      const worktreeRoot = path.join(root, ".worktrees");
+      const worktreeRoot = params.worktreeRoot;
       const resolvedWorktreeRoot = await fs.realpath(worktreeRoot).catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
           throw error;
@@ -303,9 +306,13 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
         return worktreeRoot;
       });
       const destination = path.join(resolvedWorktreeRoot, `pr-${params.pr}`);
-      // Native PR tooling supports a symlinked parent. Keep that path on Git
-      // rather than registering managed templates under an aliased namespace.
-      const native = resolvedWorktreeRoot !== worktreeRoot || (await needsNativeGit(rawGit, env));
+      // Native PR tooling supports a symlinked or relocated parent. Keep those
+      // paths on Git rather than registering managed templates outside the
+      // canonical namespace.
+      const native =
+        worktreeRoot !== path.join(params.root, ".worktrees") ||
+        resolvedWorktreeRoot !== worktreeRoot ||
+        (await needsNativeGit(rawGit, env));
       const gitBytes = await estimateWorktreeGitBytes(root, params.seed, {
         signal: guard.signal,
         assertCurrent,
@@ -503,11 +510,21 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     process.on(signal, abort);
   }
   try {
-    const [root, pr, seed, lockRef, ownerOid, ...extra] = process.argv.slice(2);
-    if (!root || !pr || !seed || !lockRef || !ownerOid || extra.length) {
-      throw new Error("Usage: worktree-provision.mts <root> <PR> <seed> <lock-ref> <owner-oid>");
+    const [root, pr, seed, lockRef, ownerOid, worktreeRoot, ...extra] = process.argv.slice(2);
+    if (!root || !pr || !seed || !lockRef || !ownerOid || !worktreeRoot || extra.length) {
+      throw new Error(
+        "Usage: worktree-provision.mts <root> <PR> <seed> <lock-ref> <owner-oid> <worktree-root>",
+      );
     }
-    await provisionPrWorktree({ root, pr, seed, lockRef, ownerOid, signal: controller.signal });
+    await provisionPrWorktree({
+      root,
+      pr,
+      seed,
+      lockRef,
+      ownerOid,
+      worktreeRoot,
+      signal: controller.signal,
+    });
   } catch (error) {
     console.error(formatProvisionError(error));
     process.exitCode = 1;

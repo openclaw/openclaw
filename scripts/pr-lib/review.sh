@@ -397,9 +397,9 @@ verify_correction_review_snapshot() {
 # Pure local admission: malformed or unfinished input must not start a fetch or
 # leave an operation lock behind. This does not establish remote freshness.
 review_artifact_preflight() (
-  local pr="$1" ready="${2:-false}" root state target
-  root=$(common_repo_root) || return 1
-  state=$(pr_worktree_state "$root/.worktrees/pr-$pr" "" entry) || return 1
+  local pr="$1" ready="${2:-false}" parent state target
+  parent=$(pr_worktree_parent) || return 1
+  state=$(pr_worktree_state "$parent/pr-$pr" "" entry) || return 1
   target=$(printf '%s\n' "$state" | jq -er 'select(.present == true) | .path') || {
     echo "Missing PR review worktree. Run: scripts/pr review-init $pr"
     return 1

@@ -113,10 +113,20 @@ of sandbox permission or landing readiness.
 
 Confirm that the file tools used to read and edit review artifacts can access
 these physical paths. Shell access alone is not sufficient. A linked task
-worktree does not move PR artifacts into the task directory: the canonical
-repository still owns `.worktrees/pr-<PR>/.local`. `OPENCLAW_PR_TOOLING_ROOT`
-changes third-party dependency sourcing only, never this location or the shared
-lock, workflow-binding, and merge-outcome owners.
+worktree does not move PR artifacts into the task directory by itself: by
+default the canonical repository owns `.worktrees/pr-<PR>/.local`.
+`OPENCLAW_PR_TOOLING_ROOT` changes third-party dependency sourcing only, never
+this location or the shared lock, workflow-binding, and merge-outcome owners.
+
+When the caller's file tools can write only inside its own worktree, set
+`OPENCLAW_PR_WORKTREE_ROOT` to an existing absolute directory there, such as
+`$PWD/.worktrees`, before `scripts/pr workspace`. The PR checkout then lives at
+`$OPENCLAW_PR_WORKTREE_ROOT/pr-<PR>` and is provisioned with native Git. Only
+the checkout moves: it is still a linked worktree of the canonical repository,
+and the operation lock, workflow binding, merge outcome, and containment checks
+stay with the canonical repository. Keep the same value for every command of
+that PR, including merge and `gc`; another root does not see the checkout. Run
+the PR to completion, or clean it up, before removing the caller worktree.
 
 Native PR tooling already supports an operator-provisioned symlink at the
 canonical `.worktrees` parent. The preflight resolves that target, and provisioning
@@ -125,7 +135,7 @@ owners. An existing allowed target can avoid a full clone. Do not repoint a
 shared parent or move existing PR worktrees to solve one task’s access problem;
 provisioning that shared layout belongs to its operator, not the caller.
 
-If no existing supported location is accessible, use a fresh full ordinary
+If neither route is accessible, use a fresh full ordinary
 checkout inside the allowed workspace **before starting the PR workflow**, then
 repeat this preflight. Preserve full history and blobs; do not use a shallow,
 sparse, or linked checkout as a substitute. Never move an active or uncertain

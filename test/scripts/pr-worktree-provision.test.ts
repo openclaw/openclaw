@@ -116,6 +116,41 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
     expect(existsSync(join(physicalParent, ".templates"))).toBe(false);
   });
 
+  it("provisions and reviews under a caller-selected worktree root", () => {
+    const f = coldFixture(false);
+    writeFileSync(f.env.OPENCLAW_CONFIG_PATH!, JSON.stringify({ worktreeAcceleration: true }));
+    // A sandboxed caller can only write inside its own task worktree.
+    const parent = join(f.root, "task", ".worktrees");
+    mkdirSync(parent, { recursive: true });
+    f.env.OPENCLAW_PR_WORKTREE_ROOT = parent;
+    const worktree = join(parent, "pr-42");
+    const init = f.run("review-init");
+    expect(init.status, init.stderr).toBe(0);
+    expect(init.stderr).toContain("PR source checkout: Git checkout.");
+    expect(f.git(worktree, "rev-parse", "--show-toplevel")).toBe(worktree);
+    expect(f.git(worktree, "symbolic-ref", "HEAD")).toBe("refs/heads/temp/pr-42");
+    expect(existsSync(f.worktree)).toBe(false);
+    expect(existsSync(join(parent, ".templates"))).toBe(false);
+    const workspace = f.run("workspace");
+    expect(workspace.status, workspace.stderr).toBe(0);
+    expect(JSON.parse(workspace.stdout)).toMatchObject({
+      canonicalRoot: f.canonical,
+      worktree,
+      reviewJson: join(worktree, ".local/review.json"),
+    });
+    const artifacts = f.run("review-artifacts-init");
+    expect(artifacts.status, artifacts.stdout + artifacts.stderr).toBe(0);
+    expect(existsSync(join(worktree, ".local/review.json"))).toBe(true);
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
+
+    f.env.OPENCLAW_PR_WORKTREE_ROOT = "task/.worktrees";
+    const unresolved = f.run("workspace");
+    expect(unresolved.status).not.toBe(0);
+    expect(unresolved.stderr).toContain(
+      "OPENCLAW_PR_WORKTREE_ROOT must name an existing absolute directory",
+    );
+  });
+
   it.runIf(process.platform === "linux")(
     "keeps native Git provisioning on an unsupported source filesystem",
     async (context) => {
