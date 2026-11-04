@@ -1065,12 +1065,6 @@ An opted-in adapter must honor the existing
   mutation when authority expires while awaiting the response. Expired authority
   blocks later requests; it must not cause an accepted mutation to be replayed.
 
-`ChannelMessageActionContext.abortSignal` is the host-owned cancellation for the
-originating invocation. Canceling it may drop work that was never issued, such as
-a request still waiting in a rate-limit queue or retry backoff. A provider request
-already dispatched must still settle and keep its outcome, so an accepted write is
-never reported as unsent or replayed.
-
 This optional field keeps older adapters source-compatible. An omitted or empty
 declaration leaves newly enabled scheduled actions denied. Existing bundled
 provider-owned interactive paths keep their admission rules. To support the new
@@ -1079,6 +1073,12 @@ upgrade OpenClaw and the plugin, implement the request and retry checks above,
 declare only the covered actions, and load the updated registration. Existing
 direct-operator and interactive actions retain their admission rules. Upgrading
 the plugin does not grant additional authority to an existing job.
+
+`ChannelMessageActionContext.abortSignal` is the host-owned cancellation for the
+originating invocation. Canceling it may drop work that was never issued, such as
+a request still waiting in a rate-limit queue or retry backoff. A provider request
+already dispatched must still settle and keep its outcome, so an accepted write is
+never reported as unsent or replayed.
 
 ## Advanced topics
 

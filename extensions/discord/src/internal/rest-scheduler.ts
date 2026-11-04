@@ -12,8 +12,8 @@ export type RequestPriority = "critical" | "standard" | "background";
 export type RequestQuery = Record<string, string | number | boolean>;
 
 /**
- * Cancellation may drop work only before its first dispatch. A dispatched write
- * keeps its normal outcome (#149277), so state decides instead of a flag.
+ * Cancellation drops an attempt only while it is queued. A dispatched write
+ * keeps its normal outcome (#149277), including when its caller aborts.
  */
 type ScheduledRequestState = "queued" | "dispatched" | "settled";
 
@@ -135,7 +135,7 @@ export class RestScheduler<TData> {
     this.queuedRequests = Math.max(0, this.queuedRequests - 1);
   }
 
-  /** Drops a caller-cancelled request that was never issued; dispatched work settles normally. */
+  /** Drops a queued attempt; dispatched work settles normally. */
   private cancelQueuedRequest(request: ScheduledRequest<TData>): void {
     if (request.state !== "queued") {
       return;

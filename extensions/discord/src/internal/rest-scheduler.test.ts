@@ -34,17 +34,27 @@ describe("RestScheduler", () => {
     const release = createDeferred<void>();
     let active = 0;
     let peak = 0;
-    const scheduler = new RestScheduler(async () => {
+    const scheduler = new RestScheduler(async (request) => {
+      expect(request.path).not.toContain("cancelled");
       active += 1;
       peak = Math.max(peak, active);
       await release.promise;
       active -= 1;
     });
-    const enqueue = (guild: string) =>
-      scheduler.enqueue({ method: "GET", path: `/guilds/${guild}/roles`, priority: "background" });
-    const requests = Array.from({ length: 1000 }, (_, index) => enqueue(`g${index}`));
-
+    const controller = new AbortController();
+    const enqueue = (guild: string, signal?: AbortSignal) =>
+      scheduler.enqueue({
+        method: "GET",
+        path: `/guilds/${guild}/roles`,
+        priority: "background",
+        signal,
+      });
+    const requests = Array.from({ length: 999 }, (_, index) => enqueue(`g${index}`));
+    const cancelled = enqueue("cancelled", controller.signal);
     expect(() => enqueue("overflow")).toThrow("Discord request queue is full");
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+    requests.push(enqueue("replacement"));
 
     release.resolve();
     await Promise.all(requests);
@@ -94,49 +104,5 @@ describe("RestScheduler", () => {
 
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     queued.catch(() => undefined);
-  });
-
-  it("cancels only the aborted queued request and keeps draining the rest", async () => {
-    const release = createDeferred<void>();
-    const started: string[] = [];
-    const scheduler = new RestScheduler<string>(async (request) => {
-      const label = request.data ?? "";
-      started.push(label);
-      if (label === "holder") {
-        await release.promise;
-      }
-      return label;
-    });
-
-    const holder = scheduler.enqueue({
-      method: "POST",
-      path: "/channels/c1/messages",
-      priority: "standard",
-      data: "holder",
-    });
-    expect(started).toEqual(["holder"]);
-
-    const controller = new AbortController();
-    const cancelled = scheduler.enqueue({
-      method: "POST",
-      path: "/channels/c1/messages",
-      priority: "standard",
-      data: "cancelled",
-      signal: controller.signal,
-    });
-    const sibling = scheduler.enqueue({
-      method: "POST",
-      path: "/channels/c1/messages",
-      priority: "standard",
-      data: "sibling",
-    });
-
-    controller.abort();
-    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
-
-    release.resolve();
-    await expect(holder).resolves.toBe("holder");
-    await expect(sibling).resolves.toBe("sibling");
-    expect(started).toEqual(["holder", "sibling"]);
   });
 });
