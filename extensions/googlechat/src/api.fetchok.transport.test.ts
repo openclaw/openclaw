@@ -77,9 +77,14 @@ const account = {
   credentialSource: "env",
 } as ResolvedGoogleChatAccount;
 
-async function listen(server: Server): Promise<string> {
-  const port = await listenOnLoopback(server);
-  return `http://127.0.0.1:${port}`;
+async function withTransportServer(server: Server, run: () => Promise<void>): Promise<void> {
+  try {
+    const port = await listenOnLoopback(server);
+    loopback.baseUrl = `http://127.0.0.1:${port}`;
+    await run();
+  } finally {
+    await closeServer(server);
+  }
 }
 
 async function closeServer(server: Server): Promise<void> {
@@ -140,8 +145,7 @@ describe("Google Chat real guarded transport", () => {
       response.write("{}");
     });
 
-    loopback.baseUrl = await listen(server);
-    try {
+    await withTransportServer(server, async () => {
       const outcome = await withinDeadline(
         deleteGoogleChatMessage({ account, messageName: "spaces/AAA/messages/MISSING" }).catch(
           (error: unknown) => error,
@@ -150,9 +154,7 @@ describe("Google Chat real guarded transport", () => {
       expect(outcome).toBeInstanceOf(GoogleChatApiError);
       expect(outcome).toMatchObject({ status: 404 });
       expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed: true }]);
-    } finally {
-      await closeServer(server);
-    }
+    });
   });
 
   it("delivers task-list fallback at the default chunk limit through the SDK", async () => {
@@ -184,8 +186,7 @@ describe("Google Chat real guarded transport", () => {
           });
         });
 
-        try {
-          loopback.baseUrl = await listen(server);
+        await withTransportServer(server, async () => {
           const paragraph = "A".repeat(31_998);
           const result = await sendDurableMessageBatch({
             cfg: {
@@ -222,9 +223,7 @@ describe("Google Chat real guarded transport", () => {
           expect(messages.every(({ text }) => Buffer.byteLength(text, "utf8") <= 32_000)).toBe(
             true,
           );
-        } finally {
-          await closeServer(server);
-        }
+        });
       },
     );
   });
@@ -243,8 +242,7 @@ describe("Google Chat real guarded transport", () => {
       response.write("{}");
     });
 
-    loopback.baseUrl = await listen(server);
-    try {
+    await withTransportServer(server, async () => {
       await expect(
         withinDeadline(
           deleteGoogleChatMessage({ account, messageName: "spaces/AAA/messages/BBB" }),
@@ -261,13 +259,27 @@ describe("Google Chat real guarded transport", () => {
         }),
       );
       await vi.waitFor(() => expect(socketClosed).toBe(true), { timeout: 1_000 });
-    } finally {
-      await closeServer(server);
-    }
+    });
   });
 
-  it("releases a captured streaming response without waiting for its tee branch", async () => {
-    loopback.cloneResponse = true;
+  it.each([
+    {
+      name: "releases a captured streaming response without waiting for its tee branch",
+      cloneResponse: true,
+      rejectCancellation: false,
+      messageName: "spaces/AAA/messages/CAPTURED",
+      bodyUsed: true,
+    },
+    {
+      name: "still releases the real dispatcher when stream cancellation rejects",
+      cloneResponse: false,
+      rejectCancellation: true,
+      messageName: "spaces/AAA/messages/CANCEL",
+      bodyUsed: false,
+    },
+  ])("$name", async ({ cloneResponse, rejectCancellation, messageName, bodyUsed }) => {
+    loopback.cloneResponse = cloneResponse;
+    loopback.rejectCancellation = rejectCancellation;
     let socketClosed = false;
     const server = createServer((request, response) => {
       request.socket.once("close", () => {
@@ -277,19 +289,14 @@ describe("Google Chat real guarded transport", () => {
       response.write("{}");
     });
 
-    loopback.baseUrl = await listen(server);
-    try {
+    await withTransportServer(server, async () => {
       await expect(
-        withinDeadline(
-          deleteGoogleChatMessage({ account, messageName: "spaces/AAA/messages/CAPTURED" }),
-        ),
+        withinDeadline(deleteGoogleChatMessage({ account, messageName })),
       ).resolves.toBeUndefined();
-      expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed: true }]);
+      expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed }]);
       await closeServer(server);
       await vi.waitFor(() => expect(socketClosed).toBe(true), { timeout: 1_000 });
-    } finally {
-      await closeServer(server);
-    }
+    });
   });
 
   it("preserves Google Chat errors without exposing the bearer token", async () => {
@@ -305,8 +312,7 @@ describe("Google Chat real guarded transport", () => {
       );
     });
 
-    loopback.baseUrl = await listen(server);
-    try {
+    await withTransportServer(server, async () => {
       const outcome = await withinDeadline(
         deleteGoogleChatMessage({ account, messageName: "spaces/AAA/messages/FORBIDDEN" }).then(
           () => undefined,
@@ -320,35 +326,7 @@ describe("Google Chat real guarded transport", () => {
       expect((outcome as Error).message).toContain("Authorization: Bearer");
       expect((outcome as Error).message).not.toContain(proofToken);
       expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed: true }]);
-    } finally {
-      await closeServer(server);
-    }
-  });
-
-  it("still releases the real dispatcher when stream cancellation rejects", async () => {
-    loopback.rejectCancellation = true;
-    let socketClosed = false;
-    const server = createServer((request, response) => {
-      request.socket.once("close", () => {
-        socketClosed = true;
-      });
-      response.writeHead(200, { "Content-Type": "application/json" });
-      response.write("{}");
     });
-
-    loopback.baseUrl = await listen(server);
-    try {
-      await expect(
-        withinDeadline(
-          deleteGoogleChatMessage({ account, messageName: "spaces/AAA/messages/CANCEL" }),
-        ),
-      ).resolves.toBeUndefined();
-      expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed: false }]);
-      await closeServer(server);
-      await vi.waitFor(() => expect(socketClosed).toBe(true), { timeout: 1_000 });
-    } finally {
-      await closeServer(server);
-    }
   });
 
   it("aborts an authenticated in-flight DELETE and closes the real socket", async () => {
@@ -364,8 +342,7 @@ describe("Google Chat real guarded transport", () => {
       controller.abort(new Error("Google Chat transport proof aborted"));
     });
 
-    loopback.baseUrl = await listen(server);
-    try {
+    await withTransportServer(server, async () => {
       const outcome = await withinDeadline(
         deleteGoogleChatMessage({ account, messageName: "spaces/AAA/messages/ABORT" }).then(
           () => undefined,
@@ -378,8 +355,6 @@ describe("Google Chat real guarded transport", () => {
       expect(receivedAuthorization).toBe(`Bearer ${proofToken}`);
       expect(loopback.releases).toEqual([]);
       await vi.waitFor(() => expect(socketClosed).toBe(true), { timeout: 1_000 });
-    } finally {
-      await closeServer(server);
-    }
+    });
   });
 });

@@ -4,6 +4,16 @@ import { en } from "./en.ts";
 // Plugin management and its lazy sibling surfaces register this shared copy on use.
 const enPluginManagement = {
   pluginUi: {
+    actionSessionUnavailable: "This session is no longer available. Reopen the session menu.",
+    actionInactiveSession: "This plugin action is no longer active. Reopen the session menu.",
+    actionInactiveView: "This plugin action is no longer active. Try again from the current view.",
+    actionUnavailableSession:
+      "This plugin action is currently unavailable. Reopen the session menu.",
+    actionUnavailableView:
+      "This plugin action is currently unavailable. Try again from the current view.",
+    activationTimedOut: "Plugin UI initialization timed out. Check the plugin and reload its UI.",
+    settingsTimedOut: "Settings presentation timed out.",
+    settingsLoadFailed: "Settings presentation could not load.",
     sessionRecentMessages: "Recent messages",
     sessionHistoryUnavailable: "Session history could not be loaded. Try again.",
     sessionHistoryEmpty: "No recent messages.",
@@ -136,6 +146,8 @@ const enPluginManagement = {
     },
   },
   pluginsPage: {
+    auditClean: "Clean",
+    auditReview: "Review",
     recommendedPrompts: {
       label: "Recommended prompts",
     },
@@ -371,8 +383,9 @@ const enPluginManagement = {
     configurationDescription: "Settings declared by this plugin.",
     accessCapabilities: "Access & capabilities",
     accessCapabilitiesDescription: "What this plugin can access with the current policy.",
-    promptContextAccess: "Add context to prompts",
-    promptContextAccessDescription: "Allows hooks to add plugin context before a model runs.",
+    promptContextAccess: "Modify prompts",
+    promptContextAccessDescription:
+      "Allows this plugin to add or change the context and instructions sent to the model, which can influence its responses. Only allow this for plugins you trust.",
     conversationAccess: "Read conversation context",
     conversationAccessDescription: "Allows hooks to inspect conversation content.",
     modelOverrideAccess: "Override model selection",

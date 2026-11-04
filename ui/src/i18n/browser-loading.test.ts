@@ -49,7 +49,7 @@ describe("Browser English loading", () => {
         "I annotated the page at https://example.com — the attached screenshot shows my markup.",
       );
       expect(manager.t("browser.errors.downloadFailed", { error: "HTTP 403" })).toBe(
-        "Could not download this file: HTTP 403. Try again, or open it in your browser to save it.",
+        "Couldn’t download this file. Try again, or open it in your browser to save it. HTTP 403",
       );
     },
   );

@@ -8,6 +8,7 @@ import type {
 } from "../../../src/gateway/control-ui-contract.js";
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
 import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
+import { formatNumber } from "../lib/reactive/format.ts";
 import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { sessionOwnerInitials } from "../lib/session-owner.ts";
 import {
@@ -438,8 +439,8 @@ function PullRequestRow(props: { request: SessionDisplayPullRequest }) {
     [
       state(),
       checks(),
-      props.request.additions === undefined ? null : `+${props.request.additions.toLocaleString()}`,
-      props.request.deletions === undefined ? null : `−${props.request.deletions.toLocaleString()}`,
+      props.request.additions === undefined ? null : `+${formatNumber(props.request.additions)}`,
+      props.request.deletions === undefined ? null : `−${formatNumber(props.request.deletions)}`,
       props.request.sourceSessionKey
         ? t("sessionHovercard.taskBranch", { branch: props.request.branch })
         : null,

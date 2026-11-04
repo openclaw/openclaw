@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -107,4 +107,38 @@ it("preserves live hovercard content, focus, and translated actions across updat
     expect(find("__header")?.textContent).toContain("Example session");
     expect(parts()).toMatchObject(populated);
   });
+});
+
+it("formats pull request additions and deletions with the UI locale", () => {
+  const locale = vi.spyOn(i18n, "getLocale").mockReturnValue("de");
+  onTestFinished(() => locale.mockRestore());
+  const view = mountCard(
+    { label: "Example session", hasActiveRun: false, hasAutomation: false },
+    {
+      pullRequests: {
+        status: "ready",
+        rateLimited: false,
+        pullRequests: [
+          {
+            owner: "example",
+            repo: "project",
+            number: 7,
+            branch: "feature",
+            title: "Example request",
+            url: "https://github.com/example/project/pull/7",
+            state: "open",
+            additions: 12345,
+            deletions: 6789,
+          },
+        ],
+      },
+    },
+  );
+  onTestFinished(view.unmount);
+  expect(
+    view.container.querySelector(".session-hovercard__pr-row")?.getAttribute("aria-label"),
+  ).toContain("+" + new Intl.NumberFormat("de").format(12345));
+  expect(
+    view.container.querySelector(".session-hovercard__pr-row")?.getAttribute("aria-label"),
+  ).toContain("−" + new Intl.NumberFormat("de").format(6789));
 });

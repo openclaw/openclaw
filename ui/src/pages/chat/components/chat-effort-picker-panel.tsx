@@ -1,4 +1,4 @@
-import { For, Show, createMemo, onSettled } from "solid-js";
+import { For, createMemo, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { ChatFastModeSelectValue } from "../../../lib/chat/model-select-state.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -119,27 +119,12 @@ type ChatEffortPickerPanelProps = Pick<
     sliderUnanchored: boolean;
     reasoningValueText: string;
     reasoningValueLabel: string;
-    defaultThinkingValue: string;
     speedOptions: { value: ChatFastModeSelectValue; label: string; disabled?: boolean }[];
     selectedSpeed: string;
     onlyStop: ChatEffortPickerParams["thinking"]["options"][number] | undefined;
     onlyStopSelected: boolean;
   };
 };
-
-/** Marks the default level so the trigger can show only the effective level. */
-function EffortDefaultBadge(props: { level: string; defaultLevel: string }) {
-  return (
-    <Show when={props.defaultLevel !== "" && props.level === props.defaultLevel}>
-      <span
-        class="chat-controls__permission-default-badge"
-        style={{ "margin-inline-start": "6px" }}
-      >
-        {t("chat.modelControls.default")}
-      </span>
-    </Show>
-  );
-}
 
 export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
   const view = () => props.view;
@@ -337,10 +322,6 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
                 data-chat-thinking-preview-committed
               >
                 {view().reasoningValueText}
-                <EffortDefaultBadge
-                  level={view().selectedThinkingValue || view().defaultThinkingValue}
-                  defaultLevel={view().defaultThinkingValue}
-                />
               </span>
               <For each={view().sliderStops} keyed={(stop) => stop.value}>
                 {(stop, index) => (
@@ -353,10 +334,6 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
                     hidden
                   >
                     {formatEffortLabel(stop().label)}
-                    <EffortDefaultBadge
-                      level={stop().value}
-                      defaultLevel={view().defaultThinkingValue}
-                    />
                   </span>
                 )}
               </For>

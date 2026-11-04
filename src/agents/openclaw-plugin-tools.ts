@@ -26,7 +26,11 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
-import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import {
+  copyPluginToolMeta,
+  getPluginToolMeta,
+  setPluginToolMeta,
+} from "../plugins/tool-metadata.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import { resolvePluginTools, resolvePluginToolsSteps } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
@@ -264,6 +268,44 @@ function createPluginToolDelivery(params: {
   };
 }
 
+/**
+ * A run's personal-library grant also governs the agent's own skills, which plugins author
+ * through their manifest `agentSkillsDir`. A personal-default requester (several profiles, or
+ * not an administrator) never gets those plugins' tools; a workspace-default requester keeps
+ * them, rechecked against the grant's current administrator authority before every call.
+ */
+function applySkillLibraryGrant(
+  tools: AnyAgentTool[],
+  options: ResolveOpenClawPluginToolsOptions | undefined,
+  registry: ReturnType<typeof getActivePluginRegistry> | undefined,
+): AnyAgentTool[] {
+  const grant = options?.skillLibraryAuthoring;
+  if (!grant) {
+    return tools;
+  }
+  const skillAuthors = new Set(
+    (registry?.plugins ?? []).flatMap((plugin) => (plugin.agentSkillsDir ? [plugin.id] : [])),
+  );
+  return tools.flatMap((tool) => {
+    const pluginId = getPluginToolMeta(tool)?.pluginId;
+    if (!pluginId || !skillAuthors.has(pluginId)) {
+      return [tool];
+    }
+    if (grant.defaultTarget === "personal") {
+      return [];
+    }
+    const guarded: AnyAgentTool = {
+      ...tool,
+      execute: (...args) => {
+        grant.assertWorkspaceCurrent?.({ sandboxed: options?.sandboxed });
+        return tool.execute(...args);
+      },
+    };
+    copyPluginToolMeta(tool, guarded);
+    return [guarded];
+  });
+}
+
 type PluginToolOptions = {
   options?: ResolveOpenClawPluginToolsOptions;
   resolvedConfig?: OpenClawConfig;
@@ -458,9 +500,13 @@ function* resolveOpenClawPluginToolSteps(
         }
       : {}),
   };
-  const pluginTools = captureAgentWorkspaceReadiness(pluginToolInputs.context.sessionKey)
-    ? yield* resolvePluginToolsSteps(resolution)
-    : resolvePluginTools(resolution);
+  const pluginTools = applySkillLibraryGrant(
+    captureAgentWorkspaceReadiness(pluginToolInputs.context.sessionKey)
+      ? yield* resolvePluginToolsSteps(resolution)
+      : resolvePluginTools(resolution),
+    params.options,
+    runtimeRegistry,
+  );
   for (const tool of pluginTools) {
     existingToolNames.add(tool.name);
   }
