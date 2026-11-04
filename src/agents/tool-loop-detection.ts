@@ -571,7 +571,10 @@ export function detectToolCallLoop(
     };
   }
 
-  const globalNoProgressStreak = Math.max(noProgressStreak, getCrossToolNoProgressStreak(history));
+  const globalNoProgressStreak = Math.max(
+    noProgressStreak,
+    getCrossToolNoProgressStreak(history, currentHash),
+  );
   if (globalNoProgressStreak >= GLOBAL_CIRCUIT_BREAKER_THRESHOLD) {
     if (!isIncognitoDiagnosticSession(state)) {
       log.error(

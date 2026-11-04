@@ -175,8 +175,10 @@ describe("tool-loop-detection", () => {
               : jsonResult({ value: kind === "progress" && toolName === "read" ? index : "same" }),
         });
       }
-      const result = detectToolCallLoop(state, "browser", { action: "snapshot" });
+      const result = detectToolCallLoop(state, "exec", {});
       expect(result.stuck && result.level === "critical").toBe(kind === "stable");
+      expect(detectToolCallLoop(state, "browser", {})).toEqual({ stuck: false });
+      expect(detectToolCallLoop(state, "exec", { code: "recover" })).toEqual({ stuck: false });
     },
   );
 

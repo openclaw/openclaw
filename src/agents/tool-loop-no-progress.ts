@@ -1,6 +1,9 @@
 import type { ToolCallRecord } from "../logging/diagnostic-session-state.js";
 
-export function getCrossToolNoProgressStreak(history: readonly ToolCallRecord[]): number {
+export function getCrossToolNoProgressStreak(
+  history: readonly ToolCallRecord[],
+  argsHash: string,
+): number {
   const outcomes = new Map<
     string,
     { toolName: string; resultHash?: string; count: number; concrete: number; vetoes: number }
@@ -39,7 +42,10 @@ export function getCrossToolNoProgressStreak(history: readonly ToolCallRecord[])
   // A first observation is not repetition, and vetoes cannot establish their
   // own outcome. Keep single-tool argument churn under its warning-only owner.
   const repeated = [...outcomes.values()].filter((outcome) => outcome.concrete >= 2);
-  return new Set(repeated.map((outcome) => outcome.toolName)).size > 1
+  // Only participants continue the confirmed loop. A new action must be able
+  // to execute during the existing critical-loop recovery opportunity.
+  return (outcomes.get(argsHash)?.concrete ?? 0) >= 2 &&
+    new Set(repeated.map((outcome) => outcome.toolName)).size > 1
     ? repeated.reduce((count, outcome) => count + outcome.count, 0)
     : 0;
 }
