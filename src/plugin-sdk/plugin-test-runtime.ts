@@ -183,6 +183,30 @@ export async function loadPluginInstanceForTest(params: {
   };
 }
 
+/**
+ * Loads one plugin through the real loader and makes its registry the active one, so its
+ * registered tools, prompt guidance and hooks serve the test. The returned restore reinstates
+ * the previous registry and disposes the plugin; pass it to `onTestFinished`.
+ */
+export async function activatePluginForTest(params: {
+  config: OpenClawConfig;
+  pluginId: string;
+}): Promise<() => Promise<void>> {
+  const { getActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await import("../plugins/runtime.js");
+  const plugin = await loadPluginInstanceForTest(params);
+  const previous = getActivePluginRegistry();
+  setActivePluginRegistry(plugin.registry);
+  return async () => {
+    if (previous) {
+      setActivePluginRegistry(previous);
+    } else {
+      resetPluginRuntimeStateForTest();
+    }
+    await plugin.dispose();
+  };
+}
+
 /** Admits a native harness fixture through the production session mailbox. */
 export async function withAdmittedSessionTurnForTest<T>(
   params: {
