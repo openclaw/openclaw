@@ -4,6 +4,7 @@ const DEFAULT_JSON_PATHS = new Set([
   "heartbeat disable",
   "heartbeat enable",
   "heartbeat last",
+  "heartbeat status",
   "presence",
 ]);
 
