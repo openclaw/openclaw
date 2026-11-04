@@ -6,6 +6,7 @@
 // Synthetic: the provider, which records each turn it runs.
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../../infra/system-events.js";
@@ -35,7 +36,12 @@ import {
 } from "./work-dispatch.js";
 
 const world = vi.hoisted(() => ({
-  /** Every turn the provider ran, in order: `user-N`, `event-N` or `wake`. */
+  /** Names a turn by its prompt: `user-N`, `event-N` or `wake`. */
+  label: (prompt: string) =>
+    prompt.includes("[continuation:wake]")
+      ? "wake"
+      : (/(user|event)-\d/.exec(prompt)?.[0] ?? "other"),
+  /** Every turn the provider ran, in order. */
   effects: [] as string[],
   /** Run ids of the wake turns the provider ran. */
   wakeRunIds: [] as string[],
@@ -51,9 +57,8 @@ vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
     onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => unknown;
   }) => {
     await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
-    const wake = params.prompt.includes("[continuation:wake]");
-    world.effects.push(wake ? "wake" : (/(user|event)-\d/.exec(params.prompt)?.[0] ?? "other"));
-    if (wake) {
+    world.effects.push(world.label(params.prompt));
+    if (world.label(params.prompt) === "wake") {
       world.wakeRunIds.push(params.runId);
     }
     const hold = world.hold;
@@ -136,8 +141,8 @@ async function withSession(mode: "followup" | "steer", run: () => Promise<void>)
   );
 }
 
-function userTurn(n: number) {
-  return getReplyFromConfig(
+const userTurn = (n: number) =>
+  getReplyFromConfig(
     finalizeInboundContext({
       Provider: "webchat",
       Surface: "webchat",
@@ -146,10 +151,10 @@ function userTurn(n: number) {
       Body: `user-${n} please continue`,
     }),
   );
-}
 
-function systemTurn(n: number, trigger: GetReplyOptions["continuationTrigger"]) {
-  return getReplyFromConfig(
+/** The dispatcher's own wake context, with another trigger or none. */
+const systemTurn = (n: number, trigger: GetReplyOptions["continuationTrigger"]) =>
+  getReplyFromConfig(
     finalizeInboundContext({
       Provider: "system",
       Surface: "system",
@@ -160,7 +165,6 @@ function systemTurn(n: number, trigger: GetReplyOptions["continuationTrigger"]) 
     }),
     trigger ? { continuationTrigger: trigger } : undefined,
   );
-}
 
 /** The production election: one continue_work due in 60 s, made due now. */
 async function electDueWake(): Promise<string> {
@@ -178,11 +182,10 @@ async function electDueWake(): Promise<string> {
 
 /** The next turn holds the session after its effect; resolves once it is running. */
 function holdNextTurn() {
-  let entered!: () => void;
-  let release!: () => void;
-  const running = new Promise<void>((resolve) => (entered = resolve));
-  world.hold = { entered, released: new Promise<void>((resolve) => (release = resolve)) };
-  return { running, release };
+  const running = createDeferred();
+  const released = createDeferred();
+  world.hold = { entered: running.resolve, released: released.promise };
+  return { running: running.promise, release: released.resolve };
 }
 
 /** user-2 and user-3 queue behind a running user-1, which then ends: no active run remains. */
@@ -199,17 +202,12 @@ async function queueFollowupsBehindEndedTurn() {
 
 /** The wake reached the session's input queue, waiting, steering or claimed. */
 const wakeEnteredSession = () =>
-  (getExistingFollowupQueue(key)?.entries ?? []).some((input) =>
-    input.source?.prompt.includes("[continuation:wake]"),
+  (getExistingFollowupQueue(key)?.entries ?? []).some(
+    (input) => input.source && world.label(input.source.prompt) === "wake",
   );
 
-function pendingFollowups() {
-  return (getExistingFollowupQueue(key)?.items ?? []).map((item) =>
-    item.prompt.includes("[continuation:wake]")
-      ? "wake"
-      : (/(user|event)-\d/.exec(item.prompt)?.[0] ?? "other"),
-  );
-}
+const pendingFollowups = () =>
+  (getExistingFollowupQueue(key)?.items ?? []).map((item) => world.label(item.prompt));
 
 /**
  * Yield real macrotasks until `done` holds, letting `stepMs` of injected time pass between checks.
@@ -221,7 +219,9 @@ async function until(done: () => boolean | Promise<boolean>, stepMs = 0) {
     if (realNow() > deadline) {
       throw new Error(`stalled with effects ${JSON.stringify(world.effects)}`);
     }
-    await new Promise<void>((resolve) => realSetImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      realSetImmediate(resolve);
+    });
     await settleWorkDispatchCustody();
     await vi.advanceTimersByTimeAsync(stepMs);
   }
