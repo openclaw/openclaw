@@ -1,5 +1,3 @@
-import { mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import {
   connectGatewayClient,
@@ -14,6 +12,10 @@ import type { SessionsListResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  captureNestedSessionProof,
+  openNestedSessionMenu,
+} from "./session-management.creation.test-support.ts";
 
 let instance: OpenClawTestInstance | undefined;
 const parentKey = "agent:main:nested-session-parent";
@@ -80,26 +82,11 @@ suite.define(() => {
           controlUiSessionUrl(suite.server.baseUrl, parentKey) + "#token=" + owner.gatewayToken,
         );
         await waitForControlUiGatewayReady(page);
-        const row = page.locator('[data-session-key="' + parentKey + '"]');
-        await row.waitFor({ state: "visible" });
         await page
           .getByText("Parent planning history stays in the parent.", { exact: true })
           .waitFor({ state: "visible" });
-        await row.hover();
-        await row.click({ button: "right" });
-        await page
-          .getByRole("menuitem", { name: "Pin session", exact: true })
-          .waitFor({ state: "visible" });
-        const proofName = process.env.OPENCLAW_CAPTURE_NESTED_PROOF;
-        const proofDir = new URL("../../../.openclaw/tmp/nested-session-proof/", import.meta.url);
-        if (proofName) {
-          await mkdir(proofDir, { recursive: true });
-          await page.screenshot({
-            path: fileURLToPath(new URL(proofName + "-real-menu.png", proofDir)),
-          });
-        }
-        const action = page.getByRole("menuitem", { name: "New Nested Session", exact: true });
-        await action.waitFor({ state: "visible", timeout: 5_000 });
+        const { action } = await openNestedSessionMenu(page, parentKey);
+        await captureNestedSessionProof(page, "real-menu");
         await action.click();
         const children = async () =>
           (await client.request<SessionsListResult>("sessions.list", { spawnedBy: parentKey }))
@@ -122,11 +109,7 @@ suite.define(() => {
         expect(
           requests.filter((r) => ["agent", "chat.send", "sessions.spawn"].includes(r.method)),
         ).toEqual([]);
-        if (proofName) {
-          await page.screenshot({
-            path: fileURLToPath(new URL("after-real-created.png", proofDir)),
-          });
-        }
+        await captureNestedSessionProof(page, "real-created");
         const childUrl = page.url();
         await page.reload();
         await waitForControlUiGatewayReady(page);

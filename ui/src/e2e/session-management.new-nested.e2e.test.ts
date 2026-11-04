@@ -1,9 +1,10 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import * as ui from "./session-management.compact.test-support.ts";
+import {
+  captureNestedSessionProof,
+  openNestedSessionMenu,
+} from "./session-management.creation.test-support.ts";
 import * as support from "./session-management.test-support.ts";
 
 const suite = support.createSessionManagementE2eSuite();
@@ -24,24 +25,8 @@ suite.define(() => {
         },
       });
       await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, parentKey));
-      const row = page.locator('[data-session-key="' + parentKey + '"]');
-      await row.waitFor({ state: "visible" });
-      await row.hover();
-      await row.click({ button: "right" });
-      await page
-        .getByRole("menuitem", { name: "Pin session", exact: true })
-        .waitFor({ state: "visible", timeout: 10_000 });
-      const action = page.getByRole("menuitem", { name: "New Nested Session", exact: true });
-      if (process.env.OPENCLAW_CAPTURE_NESTED_PROOF) {
-        const proofDir = fileURLToPath(
-          new URL("../../../.openclaw/tmp/nested-session-proof/", import.meta.url),
-        );
-        await mkdir(proofDir, { recursive: true });
-        await page.screenshot({
-          path: path.join(proofDir, process.env.OPENCLAW_CAPTURE_NESTED_PROOF + "-menu.png"),
-        });
-      }
-      await action.waitFor({ state: "visible", timeout: 5_000 });
+      const { action } = await openNestedSessionMenu(page, parentKey);
+      await captureNestedSessionProof(page, "menu");
       await gateway.setMethodResponse(
         "sessions.list",
         support.sessionsListResponse([
@@ -68,16 +53,7 @@ suite.define(() => {
       await page
         .getByRole("menuitem", { name: "New Nested Session", exact: true })
         .waitFor({ state: "hidden" });
-      if (process.env.OPENCLAW_CAPTURE_NESTED_PROOF) {
-        await page.screenshot({
-          path: fileURLToPath(
-            new URL(
-              "../../../.openclaw/tmp/nested-session-proof/after-created.png",
-              import.meta.url,
-            ),
-          ),
-        });
-      }
+      await captureNestedSessionProof(page, "created");
     }));
 
   it("shows a disabled action without parent write permission", () =>
@@ -87,11 +63,7 @@ suite.define(() => {
         operatorScopes: ["operator.read"],
       });
       await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, parentKey));
-      const row = page.locator('[data-session-key="' + parentKey + '"]');
-      await row.waitFor({ state: "visible" });
-      await row.click({ button: "right" });
-      const action = page.getByRole("menuitem", { name: "New Nested Session", exact: true });
-      await action.waitFor({ state: "visible" });
+      const { action } = await openNestedSessionMenu(page, parentKey);
       expect(await action.getAttribute("aria-disabled")).toBe("true");
       expect(await action.getAttribute("title")).toBeTruthy();
       await ui.expectNoRequests(gateway, "sessions.create", "agent", "chat.send");
@@ -101,11 +73,7 @@ suite.define(() => {
     ui.withSessionPage(suite, async (page) => {
       const gateway = await ui.installSessionRows(page, [parent], { sessionKey: parentKey });
       await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, parentKey));
-      const row = page.locator('[data-session-key="' + parentKey + '"]');
-      await row.waitFor({ state: "visible" });
-      await row.click({ button: "right" });
-      const action = page.getByRole("menuitem", { name: "New Nested Session", exact: true });
-      await action.waitFor({ state: "visible" });
+      const { row, action } = await openNestedSessionMenu(page, parentKey);
       await gateway.deferNext("sessions.create");
       await action.click();
       await page
