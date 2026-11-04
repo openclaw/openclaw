@@ -82,6 +82,30 @@ suite.define(() => {
           await page.mouse.up();
         }
       }
+      await page.keyboard.press("Tab");
+      await action.focus();
+      const rawFocus = await action.evaluate((element) => {
+        const rail = element.closest(".sidebar-rail");
+        if (!rail) {
+          throw new Error("Expected the primary action inside the sidebar rail");
+        }
+        const style = getComputedStyle(element);
+        if (!element.matches(":focus-visible") || Number.parseFloat(style.outlineWidth) < 2) {
+          throw new Error("Expected a visible keyboard focus outline");
+        }
+        return {
+          foreground: style.outlineColor,
+          background: style.backgroundColor,
+          surface: getComputedStyle(rail).backgroundColor,
+        };
+      });
+      const focus = await page.evaluate(resolveRenderedColors, rawFocus);
+      for (const background of [focus.background!, focus.surface!]) {
+        const [low, high] = [luminance(background), luminance(focus.foreground!)].toSorted(
+          (a, b) => a - b,
+        );
+        expect((high! + 0.05) / (low! + 0.05), accent + " inset focus").toBeGreaterThanOrEqual(3);
+      }
     }
   });
 });

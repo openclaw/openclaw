@@ -248,11 +248,13 @@ export function applyControlUiAccent(userAccent?: string): void {
   if (!/^#[0-9a-f]{6}$/i.test(accentColor)) {
     return;
   }
+  const focusSurfaces: string[] = [];
   for (const family of ["accent", "primary"]) {
     const background = color ?? resolveThemeColor(computed, "--" + family);
     const hover = color ? undefined : resolveThemeColor(computed, "--" + family + "-hover");
     const states = controlUiAccentStates(background, hover);
     for (const [state, pair] of Object.entries(states)) {
+      focusSurfaces.push(pair.background);
       const suffix = state === "normal" ? "" : "-" + state;
       if (color || state !== "normal") {
         root.style.setProperty("--" + family + suffix, pair.background);
@@ -260,9 +262,12 @@ export function applyControlUiAccent(userAccent?: string): void {
       root.style.setProperty("--" + family + suffix + "-foreground", pair.foreground);
     }
   }
-  const surfaces = LINK_SURFACES.map((surface) => resolveThemeColor(computed, surface)).filter(
-    (surface) => /^#[0-9a-f]{6}$/i.test(surface),
-  );
+  const surfaces = [
+    ...focusSurfaces,
+    ...LINK_SURFACES.map((surface) => resolveThemeColor(computed, surface)).filter((surface) =>
+      /^#[0-9a-f]{6}$/i.test(surface),
+    ),
+  ];
   root.style.setProperty("--ring", controlUiAccentFocus(accentColor, surfaces));
   const mix = (variable: string, amount: number) =>
     "color-mix(in srgb, var(" + variable + ") " + amount + "%, transparent)";

@@ -37,11 +37,23 @@ it.each(["#707070", "#ffff00", "#080808", "#fafafa"])(
   },
 );
 
-it.each(["#ffffff", "#101014"])("keeps the focus ring visible on %s", (surface) => {
+it.each(
+  ["#707070", "#ffff00", "#080808", "#fafafa"].flatMap((accent) =>
+    ["#ffffff", "#101014"].map((surface) => ({ accent, surface })),
+  ),
+)("keeps inset focus visible for $accent on $surface", ({ accent, surface }) => {
   const style = document.documentElement.style;
   style.setProperty("--bg", surface);
-  applyControlUiAccent(surface);
-  expect(contrast(style.getPropertyValue("--ring"), surface)).toBeGreaterThanOrEqual(3);
+  applyControlUiAccent(accent);
+  const ring = style.getPropertyValue("--ring");
+  expect(contrast(ring, surface)).toBeGreaterThanOrEqual(3);
+  for (const family of ["accent", "primary"]) {
+    for (const state of ["", "-hover", "-active"]) {
+      expect(contrast(ring, style.getPropertyValue(`--${family}${state}`))).toBeGreaterThanOrEqual(
+        3,
+      );
+    }
+  }
 });
 
 it("keeps the ring visible on both the page and an elevated control surface", () => {

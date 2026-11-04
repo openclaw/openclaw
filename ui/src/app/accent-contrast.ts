@@ -48,16 +48,23 @@ export function controlUiAccentStates(color: string, hover?: string) {
 }
 
 export function controlUiAccentFocus(color: string, surfaces: readonly string[]): string {
-  const contrast = (candidate: string) =>
-    Math.min(
-      ...surfaces.map((surface) => {
-        const values = [luminance(candidate), luminance(surface)].toSorted((a, b) => b - a);
-        return (values[0]! + 0.05) / (values[1]! + 0.05);
-      }),
+  const backgrounds = [color, ...surfaces].map(luminance);
+  let best = "#000000";
+  let bestContrast = 0;
+  // Inset outlines touch the control fill too. A neutral midtone can contrast
+  // with both a near-black control and a light page when black and white cannot.
+  for (let channel = 0; channel <= 255; channel++) {
+    const candidate = `#${channel.toString(16).padStart(2, "0").repeat(3)}`;
+    const value = luminance(candidate);
+    const contrast = Math.min(
+      ...backgrounds.map(
+        (background) => (Math.max(value, background) + 0.05) / (Math.min(value, background) + 0.05),
+      ),
     );
-  // Keep the hue only when it remains visible on every surface carrying controls.
-  if (contrast(color) >= 3) {
-    return color;
+    if (contrast > bestContrast) {
+      best = candidate;
+      bestContrast = contrast;
+    }
   }
-  return contrast("#000000") > contrast("#ffffff") ? "#000000" : "#ffffff";
+  return best;
 }
