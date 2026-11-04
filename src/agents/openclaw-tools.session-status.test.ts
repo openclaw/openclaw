@@ -116,10 +116,18 @@ function createSessionsModuleMock() {
 function createModelCatalogModuleMock() {
   return {
     loadProviderScopedThinkingCatalog: async () => [],
+    // A run's captured config goes stale after any Gateway config republish; the exact
+    // loader then throws, and session_status must read the published owner instead.
     readPreparedModelCatalog: async () => {
       throw new Error("prepared model catalog owner config was replaced during the read (/tmp)");
     },
     loadPublishedPreparedModelCatalog: async () => [
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        contextWindow: 200000,
+      },
       {
         provider: "openai",
         id: "gpt-5.4",
@@ -146,17 +154,20 @@ function createCommandsStatusRuntimeModuleMock() {
   };
 }
 
+// mock-isolation: Session status reads and mutations use the suite's in-memory session entries.
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.entry.js")>()),
   resolveSessionEntryCandidateTargetForRuntime:
     createSessionsModuleMock().resolveSessionEntryCandidateTarget,
 }));
+// mock-isolation: Gateway requests are observed without connecting to an operator Gateway.
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
 vi.mock("./tools/in-process-gateway.js", () => ({
   callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
   hasGatewayToolRoutingContext: () => false,
 }));
+// mock-isolation: Each scenario supplies its own runtime config instead of reading host state.
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => mockConfig }));
 vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
@@ -180,24 +191,29 @@ vi.mock("../plugins/provider-thinking.js", () => ({
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: () => [],
 }));
+// mock-isolation: Auth profiles are synthetic labels; host credentials must not be discovered.
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: () => ({ profiles: {} }),
   resolveAuthProfileDisplayLabel: () => undefined,
   resolveAuthProfileOrder: () => [],
 }));
+// mock-isolation: Session status uses fixture auth labels without discovering host keys or accounts.
 vi.mock("../agents/model-auth.js", () => ({
   resolveEnvApiKey: () => null,
   resolveUsableCustomProviderApiKey: () => null,
   resolveModelAuthModeAsync: () => "api-key",
 }));
+// mock-isolation: Provider usage is a fixed empty response without remote quota requests.
 vi.mock("../infra/provider-usage.js", () => ({
   resolveUsageProviderId: () => undefined,
   loadProviderUsageSummary: async () => ({ updatedAt: Date.now(), providers: [] }),
 }));
+// mock-isolation: Observe status rendering inputs without loading unrelated status providers.
 vi.mock("../status/status-text.js", createCommandsStatusRuntimeModuleMock);
 vi.mock("../auto-reply/group-activation.js", () => ({
   normalizeGroupActivation: (value: unknown) => value ?? "always",
 }));
+// mock-isolation: Session status observes fixed queue metrics without opening live queues.
 vi.mock("../auto-reply/reply/queue.js", () => ({
   getFollowupQueueDepth: () => 0,
   resolveQueueSettings: () => ({ mode: "interrupt" }),
