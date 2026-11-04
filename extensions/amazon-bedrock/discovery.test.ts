@@ -413,3 +413,16 @@ it("resolves au. and apac. prefixes for regional inference profiles", async () =
     });
   }
 });
+
+it("uses known Grok context for foundation and regional profiles", async () => {
+  const models = await discoverFixture(
+    [foundation("xai.grok-4.6")],
+    [
+      profile("us.xai.grok-4.6", ["xai.grok-4.6"]),
+      profile("global.xai.grok-4.6", ["xai.grok-4.6"]),
+    ],
+  );
+  for (const id of ["xai.grok-4.6", "us.xai.grok-4.6", "global.xai.grok-4.6"]) {
+    expectModel(models, id, { contextWindow: 500_000, maxTokens: 4096 });
+  }
+});
