@@ -378,7 +378,7 @@ export function createApplicationPlacementStartup(
           publish();
         } catch (error) {
           if (!disposed && current()) {
-            showToast({ message: formatUiError(error) });
+            showToast({ severity: "error", message: formatUiError(error) });
           }
         }
       };

@@ -103,15 +103,13 @@ describe("Talk catalog-selected ClawRouter speech", () => {
               talk: {
                 provider: "clawrouter",
                 providers: {
-                  clawrouter: {
-                    ...(gradium
-                      ? { upstreamProvider: "gradium", speakerVoiceId: "synthetic-voice" }
-                      : {
-                          modelId: "openai/tts-1",
-                          speakerVoiceId: "shimmer",
-                          responseFormat: "mp3",
-                        }),
-                  },
+                  clawrouter: gradium
+                    ? { upstreamProvider: "gradium", speakerVoiceId: "synthetic-voice" }
+                    : {
+                        modelId: "openai/tts-1",
+                        speakerVoiceId: "shimmer",
+                        responseFormat: "mp3",
+                      },
                 },
               },
             };
