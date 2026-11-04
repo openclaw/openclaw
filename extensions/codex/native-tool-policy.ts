@@ -9,7 +9,7 @@ export const CODEX_NATIVE_TOOL_REQUIREMENTS = [
 ] as const;
 
 /** OpenClaw tools whose denial is enforced by disabling Codex native delegation. */
-export const CODEX_NATIVE_DELEGATION_DENY_NAMES = [
+const CODEX_NATIVE_DELEGATION_DENY_NAMES = [
   "sessions_send",
   "sessions_list",
   "sessions_history",

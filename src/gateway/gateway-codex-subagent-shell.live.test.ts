@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, it } from "vitest";
 import { assertGatewayAgentsAdmitted } from "../../test/helpers/gateway-agent-admission.js";
 import {
