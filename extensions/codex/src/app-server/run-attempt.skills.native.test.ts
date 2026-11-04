@@ -170,13 +170,18 @@ async function createNativeFixture(modelId: string, contextWindow = 200_000) {
     }
   }
   const fixture = await startResponsesFixture();
-  await writeCodexFixtureConfig({
-    root,
-    codexHome: native.codexHome,
-    modelId,
-    port: fixture.port,
-    contextWindow,
-  });
+  try {
+    await writeCodexFixtureConfig({
+      root,
+      codexHome: native.codexHome,
+      modelId,
+      port: fixture.port,
+      contextWindow,
+    });
+  } catch (error) {
+    await fixture.close();
+    throw error;
+  }
   const attemptOptions: Parameters<typeof runCodexAppServerAttempt>[1] = {
     pluginConfig: {
       appServer: {
