@@ -114,11 +114,13 @@ async function context(mode: string, childType = "local_agent", ancestry?: Ances
   const script = path.join(root, "fixture.mjs");
   await writeFile(script, fixture);
   let current: CliBackendLiveSessionHandle | undefined;
+  const generations: string[] = [];
   const liveSession: CliBackendLiveSessionCapability = {
     fingerprint: "nested-fixture",
     current: () => current,
     register: (handle) => {
       current = handle;
+      generations.push(handle.generation);
       handles.add(handle);
     },
     remove: (handle) => {
@@ -132,7 +134,7 @@ async function context(mode: string, childType = "local_agent", ancestry?: Ances
       await current?.waitForExit();
     },
   };
-  return {
+  const ctx = {
     command: process.execPath,
     args: [script],
     cwd: root,
@@ -154,6 +156,7 @@ async function context(mode: string, childType = "local_agent", ancestry?: Ances
     requestToolPermission: async () => ({ behavior: "deny", message: "unused" }),
     requestUserInput: async () => ({ status: "cancelled", message: "unused" }),
   } satisfies CliBackendExecuteContext;
+  return { ...ctx, generations };
 }
 async function collect(ctx: CliBackendExecuteContext) {
   const records: Record<string, unknown>[] = [];
@@ -212,10 +215,25 @@ it.each([
           : "parent reply";
   expect(results.at(-1)?.result).toBe(expected);
   expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
-  expect(ctx.liveSession.current()?.isIdle()).toBe(true);
+  const retires = mode === "foreground" || mode === "before-input";
+  if (retires) {
+    // Exclusion from this answer does not mean the native descendants stopped.
+    expect(ctx.liveSession.current()).toBeUndefined();
+  } else {
+    expect(ctx.liveSession.current()?.isIdle()).toBe(true);
+  }
+  const firstGeneration = ctx.generations[0];
+  expect(firstGeneration).toBeDefined();
   expect((await collect({ ...ctx, useResume: true, prompt: "next" }))[0]?.result).toBe(
-    "warm reply",
+    retires ? expected : "warm reply",
   );
+  if (retires) {
+    expect(ctx.generations).toHaveLength(2);
+    expect(ctx.generations[1]).not.toBe(firstGeneration);
+    expect(ctx.liveSession.current()).toBeUndefined();
+  } else {
+    expect(ctx.generations).toEqual([firstGeneration]);
+  }
 });
 
 it.each(["local_agent", "local_workflow"])(
@@ -311,7 +329,19 @@ it.each(["owned", "old-input", "notified", "cycle", "orphan"] as const)(
       ...scenario.chain.map((id) => id + " reply"),
     ]);
     expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
-    expect(ctx.liveSession.current()?.isIdle()).toBe(true);
+    // The excluded child never completed: deliver the answer, but retire its process.
+    expect(ctx.liveSession.current()).toBeUndefined();
+    const firstGeneration = ctx.generations[0];
+    expect(firstGeneration).toBeDefined();
+    const next = await collect({ ...ctx, useResume: true, prompt: "next" });
+    expect(next.map((record) => record.result)).toEqual([
+      "waiting",
+      ...scenario.chain.map((id) => id + " reply"),
+    ]);
+    expect(next.at(-1)).not.toHaveProperty("openclaw_interim_result");
+    expect(ctx.generations).toHaveLength(2);
+    expect(ctx.generations[1]).not.toBe(firstGeneration);
+    expect(ctx.liveSession.current()).toBeUndefined();
   },
 );
 
