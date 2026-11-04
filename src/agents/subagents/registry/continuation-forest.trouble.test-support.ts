@@ -163,7 +163,7 @@ export async function crashMidWake(
   // The dying process's timer for this room never fires; the wake is claimed at its due time.
   clearContinuationWorkDispatch(attic.ownerSessionKey);
   await forest.advance(attic.dueAt! - Date.now());
-  const [claimed] = (await consumePendingWork(attic.ownerSessionKey)).filter(
+  const claimed = (await consumePendingWork(attic.ownerSessionKey)).find(
     (work) => work.flowId === attic.id,
   );
   expect(claimed, `${attic.name} was not claimed at its due time`).toBeDefined();

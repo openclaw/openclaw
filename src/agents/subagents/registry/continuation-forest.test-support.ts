@@ -376,10 +376,12 @@ export class ContinuationForest {
     };
     continuationForestSeams.afterDeliveryRowWritten = async (payload, id) => {
       this.touchedRooms.add(payload.sessionKey);
-      if (payload.kind === "systemEvent" && payload.continuationSourceRunId) {
-        this.rows.set(`${payload.continuationSourceRunId}\u0000${payload.sessionKey}`, id);
+      const sourceRunId =
+        payload.kind === "systemEvent" ? payload.continuationSourceRunId : undefined;
+      if (sourceRunId) {
+        this.rows.set(`${sourceRunId}\u0000${payload.sessionKey}`, id);
+        await this.gate(`row:${sourceRunId}>${payload.sessionKey}`);
       }
-      await this.gate(`row:${payload.continuationSourceRunId ?? "none"}>${payload.sessionKey}`);
     };
     continuationForestSeams.clockWait = () => this.clockWait();
     continuationForestSeams.logLine = (subsystem, message) => {
@@ -497,7 +499,9 @@ export class ContinuationForest {
   async sleep(ms: number): Promise<void> {
     const ended = this.clockWait();
     try {
-      await new Promise<void>((resolve) => setTimeout(resolve, ms));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      });
     } finally {
       ended();
     }
@@ -564,12 +568,12 @@ export class ContinuationForest {
 
   /** Advances step by step until `barrier` is reached; fails the story if it is not by `t0 + byMs`. */
   async until(barrier: { point: string; reached: Promise<void> }, byMs: number): Promise<void> {
-    let reached = false;
+    const state = { reached: false };
     void barrier.reached.then(() => {
-      reached = true;
+      state.reached = true;
     });
     await this.settle();
-    while (!reached) {
+    while (!state.reached) {
       if (Date.now() - this.t0 >= byMs) {
         throw new Error(`nobody reached the barrier ${barrier.point} by ${byMs}ms`);
       }
@@ -583,14 +587,14 @@ export class ContinuationForest {
    * clock never runs ahead of real work.
    */
   async whileTimePasses<T>(work: Promise<T>, what: string, maxMs = 120_000): Promise<T> {
-    let done = false;
-    void work.then(
-      () => (done = true),
-      () => (done = true),
-    );
+    const state = { done: false };
+    const finish = () => {
+      state.done = true;
+    };
+    void work.then(finish, finish);
     const deadline = Date.now() + maxMs;
     await this.settle();
-    while (!done) {
+    while (!state.done) {
       if (Date.now() >= deadline) {
         throw new Error(`${what} never finished within ${maxMs}ms`);
       }

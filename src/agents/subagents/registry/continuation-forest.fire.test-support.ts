@@ -28,7 +28,9 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 export function foldCrane(forest: ContinuationForest, election: AnnexElection): void {
   forest.logAttempt(election.id, "attempt");
   void (async () => {
-    await new Promise<void>((resolve) => setTimeout(resolve, FOLD_MS));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, FOLD_MS);
+    });
     await forest.gate(`before-flip:${election.id}`);
     forest.bits.set(election.id, 1);
     forest.logAttempt(election.id, "effect");
@@ -169,7 +171,7 @@ export async function admitRunner(
   forest.spawns.push({ electionId: election.id, childRunId, at: Date.now() });
   forest.childReportsFor(owner).add(`pending:${election.id}`);
   foldCrane(forest, election);
-  return { status: "accepted", childSessionKey, runId: childRunId };
+  return { status: "accepted", context: "isolated", childSessionKey, runId: childRunId };
 }
 
 /** The reply owner's double: a continue_work wake turn, in which the inspector checks the attic. */

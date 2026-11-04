@@ -313,13 +313,13 @@ async function electAttic(forest: ContinuationForest, prince: AnnexNode): Promis
     config: resolveContinuationRuntimeConfig(),
   });
   expect(result.scheduled, `the attic wake of tree ${prince.tree} was not elected`).toBe(true);
-  const [record] = (
+  const record = (
     await listContinuationRecords({
       ownerSessionKey: prince.sessionKey,
       kinds: ["work"],
       statuses: ["queued"],
     })
-  ).filter((candidate) => candidate.stateJson.includes(reason));
+  ).find((candidate) => candidate.stateJson.includes(reason));
   expect(record?.dueAt, `the attic wake of tree ${prince.tree} has no due time`).toBeDefined();
   forest.elections.set(record!.recordId, {
     id: record!.recordId,
