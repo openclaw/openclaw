@@ -335,10 +335,10 @@ it("reuses alternating configurations while keeping cached models private and cu
   await expect(
     fs.access(path.join(home, ".openclaw", "agents", "main", "agent", "models.json")),
   ).rejects.toMatchObject({ code: "ENOENT" });
+  await ensureOpenClawModelsJson({ ...cfg, models: { mode: "merge" } });
   if (process.platform !== "win32") {
     await fs.chmod(modelsPath, 0o644);
   }
-  await ensureOpenClawModelsJson({ ...cfg, models: { mode: "merge" } });
   expect(await ensureOpenClawModelsJson(cfg)).toEqual({});
   expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
   expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
