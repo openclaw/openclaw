@@ -98,7 +98,7 @@ it.each([undefined, true, false])(
     }
     expect(document.activeElement).toBe(anchor());
     if (copied === false) {
-      await expect.element(page.getByRole("status")).toHaveTextContent("Copy failed");
+      await expect.element(page.getByRole("alert")).toHaveTextContent("Copy failed");
     }
     expect(card()).toBeNull();
     expect(anchor().hasAttribute("title")).toBe(false);
