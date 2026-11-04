@@ -87,7 +87,6 @@ export function ChatContextReport(
             (outcome === "failed" || outcome === "offline")
           ) {
             showToast({
-              severity: "error",
               message: t(
                 outcome === "offline"
                   ? "chat.sessionDetails.contextOffline"
