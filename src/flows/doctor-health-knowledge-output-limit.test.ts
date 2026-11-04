@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
 import {
-  createDoctorConfigFixture,
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
@@ -13,7 +13,8 @@ it("plain doctor shows the Knowledge saving-model output-limit warning", async (
   );
   expect(contribution).toHaveLength(1);
   const ctx = createDoctorHealthFlowContext({
-    cfg: createDoctorConfigFixture({
+    // Partial model row: config defaults fill the rest, as Doctor sees authored config.
+    cfg: {
       plugins: { slots: { memory: "knowledge" } },
       agents: { defaults: { model: { primary: "local/small" } } },
       models: {
@@ -21,7 +22,7 @@ it("plain doctor shows the Knowledge saving-model output-limit warning", async (
           local: { baseUrl: "http://local.test/v1", models: [{ id: "small", name: "small" }] },
         },
       },
-    }),
+    } as unknown as OpenClawConfig,
   });
   await runDoctorHealthContributionList(ctx, contribution);
   showDoctorHealthSummary(ctx);
