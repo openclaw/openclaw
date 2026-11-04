@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { AuthProfileAuthorization } from "../agents/auth-profiles/authorization-contract.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -82,7 +83,7 @@ export async function captureCronInferenceForCaller(
 export async function captureCronCreatedInference(params: {
   job: Pick<CronJob, "sessionTarget" | "sessionKey" | "payload">;
   cfg: OpenClawConfig;
-  agentId: string;
+  agentId?: string;
   sessionLookupAgentId?: string;
   caller: InferenceCaller;
   sessionEntry?: SessionEntry;
@@ -112,7 +113,7 @@ export async function captureCronCreatedInference(params: {
     ? await captureCronInferenceForCaller(
         {
           cfg,
-          agentId,
+          agentId: agentId ?? resolveDefaultAgentId(cfg),
           model: job.payload.model,
           isGmailHook:
             (job.payload.externalContentSource ??
