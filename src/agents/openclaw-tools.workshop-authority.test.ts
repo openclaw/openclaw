@@ -14,6 +14,7 @@ import { createOpenClawTools } from "./openclaw-tools.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 let state: OpenClawTestState;
+let config: OpenClawConfig;
 let resetWorkshopPlugin: (() => void) | undefined;
 const skill = (name: string) =>
   `---\nname: ${name}\ndescription: Deploy staging builds\n---\n\nRun the deployment.\n`;
@@ -23,7 +24,7 @@ beforeEach(async () => {
     prefix: "workshop-tool-authority-",
     prepareProfileCatalog: false,
   });
-  const config: OpenClawConfig = {
+  config = {
     agents: { entries: { main: { workspace: state.workspaceDir } } },
     plugins: { enabled: true, allow: ["skill-workshop"] },
     skills: { load: { watch: false } },
@@ -46,11 +47,6 @@ afterEach(async () => {
  */
 async function createUnderCaller(name: string, revokeDuringPreparation: boolean) {
   const runId = randomUUID();
-  const config: OpenClawConfig = {
-    agents: { entries: { main: { workspace: state.workspaceDir } } },
-    plugins: { enabled: true, allow: ["skill-workshop"] },
-    skills: { load: { watch: false } },
-  };
   const tool = createOpenClawTools({
     config,
     agentDir: state.agentDir(),
