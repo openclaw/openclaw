@@ -5,7 +5,11 @@ import {
 } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import "../../styles.css";
-import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
+import {
+  renderAppearance,
+  renderConfigInto,
+  requiredConfigElement,
+} from "./config-view.test-support.tsx";
 
 const catalog = (...themes: ThemeCatalogEntry[]) => ({ error: null, themes });
 const theme = (
@@ -54,11 +58,15 @@ it("offers plugin and personal themes from the shared catalog with their descrip
       }),
     ),
   });
-  const pluginTheme = themeButton(container, "space-pack/xenovessel");
-  expect(pluginTheme?.title).toBe("Alien theme");
+  const pluginTheme = requiredConfigElement(
+    container,
+    '[data-theme-id="space-pack/xenovessel"]',
+    HTMLButtonElement,
+  );
+  expect(pluginTheme.title).toBe("Alien theme");
   expect(pluginTheme.querySelector(".settings-theme-card__palette")).not.toBeNull();
   expect(pluginTheme.querySelector(".settings-theme-card__icon")).toBeNull();
-  pluginTheme?.click();
+  pluginTheme.click();
   expect(setTheme).toHaveBeenCalledWith("space-pack/xenovessel");
   const personalTheme = themeButton(container, "user/candlelight")!;
   expect(personalTheme.textContent).toContain("Candlelight");
