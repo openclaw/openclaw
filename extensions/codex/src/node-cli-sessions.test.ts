@@ -105,12 +105,6 @@ async function writeHistory(records: Array<{ session_id: string; ts: number; tex
   );
 }
 
-const meta = (id: string, cwd: string, timestamp = "2026-05-14T00:10:23.618Z") => ({
-  timestamp,
-  type: "session_meta",
-  payload: { id, cwd },
-});
-
 async function writeRollout(sessionId: string, records: unknown[] = [], large = false) {
   const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
   const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
