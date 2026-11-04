@@ -3045,6 +3045,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/worker-environments/prepared-pool-local-project.test.ts",
   "src/gateway/worker-environments/provider-bootstrap.test.ts",
   "src/gateway/worker-environments/provider-crabbox-runtime-preflight.test.ts",
+  "src/gateway/worker-environments/provider-node-resume.test.ts",
   "src/gateway/worker-environments/provider-provisioning.cancellation.test.ts",
   "src/gateway/worker-environments/provider-provisioning.replay.test.ts",
   "src/gateway/worker-environments/provider-runtime-refresh.test.ts",

@@ -41,7 +41,7 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   const sessions = context.sessions;
   const rootsSettled =
     !sessions.state.loading &&
-    (Boolean(host.sessionData.sessionMutationError ?? sessions.state.error) ||
+    (Boolean(host.sessionData.sessionListError ?? sessions.state.error) ||
       (sessions.canonicalListReady &&
         Boolean(sessions.presentation.result) &&
         !sessions.presentation.resultCached));
@@ -100,7 +100,7 @@ export function captureSidebarSnapshotModel(
     host.sidebarSnapshot ||
     (host.navigationView === "pages" &&
       host.navigationCatalog.dashboards?.readSucceeded !== true) ||
-    host.sessionData.sessionMutationError !== null ||
+    host.sessionData.sessionListError !== null ||
     context.sessions.state.error !== null ||
     host.sessionData.ownerCounts.error !== null ||
     (host.sidebarAgentsMode === "roster" && roster.error !== null) ||
