@@ -46,9 +46,11 @@ if (workerThreads.isMainThread) {
   });
   process.on("message", (message) => {
     if (message?.channel === key && message.action === "sample") {
-      process.send?.({ channel: key, snapshot: snapshot() });
+      process.channel?.ref();
+      process.send?.({ channel: key, snapshot: snapshot() }, () => process.channel?.unref());
     }
   });
+  process.channel?.unref();
   process.on("exit", () => {
     writeFileSync(path.join(output, "gateway-exit.json"), JSON.stringify(snapshot(), null, 2));
   });

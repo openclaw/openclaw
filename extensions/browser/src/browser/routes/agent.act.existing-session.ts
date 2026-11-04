@@ -27,15 +27,15 @@ export function createExistingSessionDeadline(
     : controller.signal;
   const error =
     typeof label === "string" ? new Error(`${label} timed out after ${timeoutMs}ms`) : label;
-  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineAt = performance.now() + timeoutMs;
   const timer = setTimeout(() => controller.abort(error), timeoutMs);
   timer.unref?.();
   return {
     signal,
-    remainingMs: () => Math.max(0, deadlineAt - Date.now()),
+    remainingMs: () => Math.max(0, deadlineAt - performance.now()),
     throwIfAborted: () => {
       // A busy event loop must not turn a late completion into a successful action.
-      if (Date.now() >= deadlineAt && !signal.aborted) {
+      if (performance.now() >= deadlineAt && !signal.aborted) {
         controller.abort(error);
       }
       signal.throwIfAborted();

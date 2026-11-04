@@ -512,6 +512,22 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
       proxies such as vLLM
     - Do not force strict tool schemas or native-only headers
 
+    Both native OpenAI and compatible `openai-completions` routes accept
+    `params.extraBody` (alias `extra_body`). For example, to send an explicit
+    [OpenAI safety identifier](https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers),
+    configure a model with `api: "openai-completions"` and set its per-model
+    params:
+
+    ```json5
+    { extraBody: { safety_identifier: "<stable-user-id-hash>" } }
+    ```
+
+    Supply a stable, non-PII hash yourself; OpenClaw does not derive this value
+    from channel senders or other user identity. A shared static value identifies
+    the shared scope, not each person using it. This passthrough belongs to the
+    embedded OpenClaw runtime; it does not apply to models configured directly
+    with `api: "openai-responses"` or to the native Codex runtime.
+
     If a usable tool schema is incompatible with requested strict mode, the request uses
     `strict: false`. Debug logs report the downgrade under `openai-transport`,
     with a bounded sample of incompatible tools. Built-in and managed Responses

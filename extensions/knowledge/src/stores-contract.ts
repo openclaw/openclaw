@@ -3,6 +3,8 @@ import { Type, type Static } from "typebox";
 export const AGENT_ID = "^[a-z][a-z0-9_-]{0,63}$";
 /** Stable named-store keys. Keys are identities, never paths or display text. */
 export const STORE_KEY = "^[a-z][a-z0-9-]{0,47}$";
+/** A grantable conversation: an agent-scoped session key below the agent's root. */
+export const GRANT_SESSION_KEY = "^agent:[a-z][a-z0-9_-]{0,63}:\\S{1,440}$";
 
 const agent = Type.String({ pattern: AGENT_ID });
 const storeKey = Type.String({ pattern: STORE_KEY });
@@ -54,9 +56,25 @@ const AgentEntry = Type.Object(
 );
 type AgentEntry = Static<typeof AgentEntry>;
 
+const grantAccess = Type.Union([Type.Literal("read"), Type.Literal("read-write")]);
+/** What an owner grant lets a conversation do with its agent's private knowledge. */
+export type GrantAccess = Static<typeof grantAccess>;
+const grantSessionKey = Type.String({ pattern: GRANT_SESSION_KEY, maxLength: 512 });
+/** One owner grant: a conversation's access to its agent's private knowledge. */
+const GrantEntry = Type.Object(
+  { sessionKey: grantSessionKey, agent: Type.String({ maxLength: 120 }), access: grantAccess },
+  { additionalProperties: false },
+);
+export type GrantEntry = Static<typeof GrantEntry>;
+
 export const StoresSnapshot = Type.Object(
   {
     revision,
+    /** Owner conversation grants and the revision grant changes are made against. */
+    grants: Type.Object(
+      { revision, entries: Type.Array(GrantEntry, { maxItems: 500 }) },
+      { additionalProperties: false },
+    ),
     /** Absent when several agents are configured without a default. */
     defaultAgent: Type.Optional(Type.String({ maxLength: 120 })),
     agents: Type.Array(AgentEntry, { maxItems: 200 }),
@@ -97,6 +115,18 @@ export const StoresChangeInput = Type.Object(
   { additionalProperties: false },
 );
 export type StoresChangeInput = Static<typeof StoresChangeInput>;
+
+/** Grant, change or revoke ("none") one conversation's access to its agent's
+ * private knowledge. Thread and other child sessions of the conversation inherit it. */
+export const GrantChangeInput = Type.Object(
+  {
+    expectedRevision: revision,
+    sessionKey: grantSessionKey,
+    access: Type.Union([grantAccess, Type.Literal("none")]),
+  },
+  { additionalProperties: false },
+);
+export type GrantChangeInput = Static<typeof GrantChangeInput>;
 
 /** Typed outcomes; a rejected change never partially applies. */
 const ChangeOutcome = Type.Union([

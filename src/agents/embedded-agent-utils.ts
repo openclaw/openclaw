@@ -57,20 +57,36 @@ export function sanitizeAssistantVisibleStreamText(
   });
 }
 
-export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
+export function createAssistantVisibleStreamText(
+  phase?: AssistantPhase,
+  options?: { preserveTrailingWhitespace?: boolean },
+) {
   return createTextProjection([
     ...assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
       true,
+      options,
     ),
     ...userFacingTextFilters(false, true),
-    trimTextFilter("both", { preserveCodeIndentation: true }),
+    trimTextFilter(options?.preserveTrailingWhitespace ? "start" : "both", {
+      preserveCodeIndentation: true,
+    }),
   ]);
 }
 
-function finalizeAssistantExtraction(errorContext: boolean, extracted: string): string {
-  return errorContext
-    ? renderUserFacingText(extracted, { errorContext: true })
+function finalizeAssistantExtraction(
+  errorContext: boolean,
+  extracted: string,
+  projection?: ReturnType<typeof createTextProjection>,
+): string {
+  if (errorContext) {
+    return renderUserFacingText(extracted, { errorContext: true });
+  }
+  return projection
+    ? (extracted.startsWith(projection.source)
+        ? projection.append(extracted.slice(projection.source.length), extracted)
+        : projection.replace(extracted)
+      ).text
     : sanitizeUserFacingText(extracted);
 }
 
@@ -84,6 +100,7 @@ function prepareEmbeddedAssistantTextForPhase(
   msg: AssistantTextSource,
   requestedPhase: AssistantPhase,
   prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
+  projection?: ReturnType<typeof createTextProjection>,
 ): () => string {
   // Replacement callbacks own their text; source snapshots project inside their callback.
   const nativeToolMarkerBlocks =
@@ -93,7 +110,7 @@ function prepareEmbeddedAssistantTextForPhase(
   const prepareRender = (selectedPhase: AssistantPhase | undefined, renderText: () => string) => {
     const errorContext = msg.stopReason === "error";
     return () => {
-      const extracted = finalizeAssistantExtraction(errorContext, renderText());
+      const extracted = finalizeAssistantExtraction(errorContext, renderText(), projection);
       return selectedPhase === "final_answer" && !extracted.trim() ? "" : extracted;
     };
   };
@@ -215,8 +232,9 @@ export function extractAssistantVisibleText(
 export function extractAssistantCommentaryText(
   msg: AssistantMessage,
   prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
+  projection?: ReturnType<typeof createTextProjection>,
 ): string {
-  return prepareEmbeddedAssistantTextForPhase(msg, "commentary", prepareText)();
+  return prepareEmbeddedAssistantTextForPhase(msg, "commentary", prepareText, projection)();
 }
 
 export function extractEmbeddedAssistantText(msg: AssistantMessage): string {

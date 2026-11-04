@@ -683,6 +683,7 @@ export {
   localCalendarDisabled,
   localOnlyDiscoveryPlugin,
   matrixConfigSchema,
+  matrixDetail,
   matrixDiscoveryPlugin,
   matrixEnabled,
   matrixNeedsSetup,

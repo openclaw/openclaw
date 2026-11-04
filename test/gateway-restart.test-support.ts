@@ -184,12 +184,12 @@ export function writeRestartJsonText(
   });
 }
 
-export function writeRestartTitle(response: ServerResponse, text: string) {
-  writeRestartJsonText(response, text, "title", { object: true, completed: true });
-}
-
-export function readRestartSession(agentDir: string, sessionKey: string) {
-  const database = openNodeSqliteDatabase(path.join(agentDir, "openclaw-agent.sqlite"), {
+export function readRestartSession(
+  agentDir: string,
+  sessionKey: string,
+  storePath = path.join(agentDir, "openclaw-agent.sqlite"),
+) {
+  const database = openNodeSqliteDatabase(storePath, {
     readOnly: true,
   });
   try {

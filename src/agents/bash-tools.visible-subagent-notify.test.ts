@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import { enqueueSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-handoff.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -28,7 +29,6 @@ import {
   runningSession,
 } from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
 

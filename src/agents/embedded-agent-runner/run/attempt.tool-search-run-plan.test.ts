@@ -38,7 +38,8 @@ async function plan(
     toolSearch?: NonNullable<OpenClawConfig["tools"]>["toolSearch"];
   } = {},
 ) {
-  const visibleTools = options.visibleTools ?? [tool("dispatch_action")];
+  const visibleTools =
+    options.visibleTools ?? (options.codeMode ? undefined : [tool("dispatch_action")]);
   const uncompactedTools = options.uncompactedTools ?? [];
   const config: OpenClawConfig = {
     ...options.config,
@@ -113,6 +114,7 @@ async function plan(
         throw new Error("The catalog fixture does not prepare permission changes");
       },
       webSearchUnconfigured: false,
+      hasNativeWebSearch: false,
       codeModeControlsEnabledForRun: surface.codeModeControlsEnabled,
       codeModeSkills: [],
       computerContextEpoch: { value: 0 },
@@ -133,18 +135,21 @@ async function plan(
       toolSurfaceRuntime: {
         ...surface,
         // Fix only upstream compaction facts. The catalog computes every asserted allowlist.
-        compactTools: () => ({
-          ...seed,
-          tools: visibleTools,
-          projectedTools: visibleTools,
-          diagnostics: [],
-          catalog: {
-            ...seed.catalog,
-            tools: visibleTools,
-            catalogRegistered: true,
-            catalogToolCount: options.catalogToolCount ?? 0,
-          },
-        }),
+        compactTools: () =>
+          visibleTools
+            ? {
+                ...seed,
+                tools: visibleTools,
+                projectedTools: visibleTools,
+                diagnostics: [],
+                catalog: {
+                  ...seed.catalog,
+                  tools: visibleTools,
+                  catalogRegistered: true,
+                  catalogToolCount: options.catalogToolCount ?? 0,
+                },
+              }
+            : seed,
       },
       toolSearchConfig: surface.plan.toolSearchConfig,
       toolSearchControlsEnabledForRun: surface.toolSearchControlsEnabled,
@@ -180,6 +185,31 @@ async function plan(
 }
 
 describe("embedded attempt tool catalog", () => {
+  it.each([
+    { allow: ["exec"] },
+    { allow: ["bash"] },
+    { allow: ["read", "write", "exec", "process"] },
+  ])("rejects an empty Code Mode catalog with explicit tools $allow", async ({ allow }) => {
+    const result = await plan({ codeMode: true, allow, clientTools: [] });
+    expect(result.emptyExplicitToolAllowlistError?.message).toContain("No callable tools remain");
+    expect(result.emptyExplicitToolAllowlistError?.message).toContain("Fix the allowlist");
+    expect(result.hasCallableTools).toBe(false);
+  });
+
+  it("admits a shell tool through Code Mode or direct execution", async () => {
+    for (const codeMode of [true, false]) {
+      const result = await plan({
+        codeMode,
+        uncompactedTools: [tool("exec")],
+        ...(codeMode ? {} : { visibleTools: [tool("exec")] }),
+        allow: ["exec"],
+        clientTools: [],
+      });
+      expect(result.emptyExplicitToolAllowlistError).toBeNull();
+      expect(result.hasCallableTools).toBe(true);
+    }
+  });
+
   it("keeps unselected clients direct without promoting MCP or client capabilities", async () => {
     const remote = tool("sessions_spawn");
     setPluginToolMeta(remote, {

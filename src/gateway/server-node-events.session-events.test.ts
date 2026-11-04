@@ -1,10 +1,17 @@
 import "./server-node-events.test-support.js";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import * as runtimeSnapshot from "../config/runtime-snapshot.js";
+import * as pairing from "../infra/device-pairing-node-state.js";
 import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { NodeRegistry } from "./node-registry.js";
 import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
+import { nodeInvokeHandlers } from "./server-methods/nodes.invoke.js";
+import {
+  bindNodeRegistry,
+  createNodeInvokeTestHarness,
+} from "./server-methods/nodes.invoke.test-support.js";
 import type { NodeEventContext, NodeEventHandlerOptions } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
 const { buildNodeEventContext, runtimeMocks } =
@@ -36,52 +43,142 @@ function nodeFixture(nodeId: string, overrides: Partial<NodeEventContext> = {}) 
     handleNodeEvent(ctx, nodeId, { event, payloadJSON: JSON.stringify(payload) }, opts);
 }
 
-it("holds an exec notice before target capture can settle its inline invocation", async () => {
-  const registry = new NodeRegistry();
-  onTestFinished(() => {
-    registry.unregister("inline-conn");
-  });
-  const frames: string[] = [];
-  registerNodeSession(
-    registry,
-    makeClient("inline-conn", "inline-node", frames, { commands: ["system.run"] }),
-  );
-  const sessionKey = "agent:main:inline";
-  const invocation = registry.invoke({
-    nodeId: "inline-node",
-    command: "system.run",
-    timeoutMs: 0,
-    params: { runId: "inline-run", sessionKey },
-  });
-  const request = JSON.parse(frames[0]!).payload;
-  const finish = () =>
-    registry.handleInvokeResult({
-      id: request.id,
-      nodeId: "inline-node",
-      connId: "inline-conn",
-      ok: true,
-      payloadJSON: JSON.stringify({ exitCode: 0, stdout: "inline result" }),
+it.each(["live", "revoked", "inline", "unscoped"])(
+  "keeps original caller custody and delivery for remote exec: %s",
+  async (mode) => {
+    const registry = new NodeRegistry();
+    onTestFinished(() => {
+      registry.unregister("guest-conn");
     });
-  captureTarget.mockImplementationOnce(async () => {
+    const frames: string[] = [];
+    const nodeId = "guest-node";
+    const sessionKey = mode === "unscoped" ? "agent:main:node" : `agent:main:guest-${mode}`;
+    registerNodeSession(
+      registry,
+      makeClient("guest-conn", nodeId, frames, { commands: ["system.run"] }),
+      { pairingGeneration: "guest-generation" },
+    );
+    using pairingCapture = vi.spyOn(pairing, "captureNodePairingGeneration");
+    pairingCapture.mockResolvedValue({ nodeId, key: "guest-generation" });
+    using pairingCurrent = vi.spyOn(pairing, "isNodePairingGenerationCurrent");
+    pairingCurrent.mockResolvedValue(true);
+    let current = true;
+    const release = vi.fn();
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "original-guest",
+      scopes: ["operator.write"],
+      gatewayAccessGrant: null,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("original guest revoked");
+        }
+      },
+      retain: () => release,
+    });
+    const producerTarget = {
+      ...target("main", sessionKey),
+      toolsAllow: ["sessions_spawn"],
+      assertCurrent: authority.assertCurrent,
+    };
+    let finish = () => {};
+    captureTarget.mockImplementation(async () => {
+      finish();
+      return producerTarget;
+    });
+    const deliveryContext = {
+      channel: "telegram",
+      to: "original-chat",
+      accountId: "original-account",
+      threadId: "original-topic",
+    };
+    const invoke = createNodeInvokeTestHarness({
+      nodeHandlers: nodeInvokeHandlers,
+      getRuntimeConfig: () => ({
+        ...runtimeMocks.getRuntimeConfig(),
+        gateway: { nodes: { commands: { allow: ["system.run"] } } },
+      }),
+    });
+    const invocation = invoke({
+      nodeRegistry: bindNodeRegistry(registry),
+      client: {
+        connect: { role: "operator", scopes: ["operator.write"] },
+        internal: {
+          operatorRunAuthority: authority,
+          agentRuntimeIdentity: { kind: "agentRuntime", agentId: "main", sessionKey },
+        },
+      },
+      validateAgentRuntimeApprovalAuthority: () => true,
+      requestParams: {
+        nodeId,
+        command: "system.run",
+        params: {
+          command: ["true"],
+          runId: "guest-run",
+          ...(mode !== "unscoped" && { sessionKey }),
+        },
+        timeoutMs: 0,
+        turnSourceChannel: deliveryContext.channel,
+        turnSourceTo: deliveryContext.to,
+        turnSourceAccountId: deliveryContext.accountId,
+        turnSourceThreadId: deliveryContext.threadId,
+      },
+    });
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    finish = () => {
+      registry.handleInvokeResult({
+        id: JSON.parse(frames[0]!).payload.id,
+        nodeId,
+        connId: "guest-conn",
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stdout: "inline result" }),
+      });
+    };
+    if (mode !== "inline") {
+      finish();
+    }
+    current = mode !== "revoked";
+    const emit = nodeFixture(nodeId, {
+      authorizeNodeSystemRunEvent: (params) =>
+        registry.authorizeSystemRunEventWithState({ ...params, terminal: true }) ?? false,
+    });
+    const completion = emit(
+      "exec.finished",
+      {
+        sessionKey: mode === "unscoped" ? "node" : sessionKey,
+        runId: "guest-run",
+        output: "delayed result",
+        deliveryContext: { channel: "telegram", to: "untrusted-chat" },
+      },
+      { connId: "guest-conn" },
+    );
+    if (mode === "revoked") {
+      await expect(completion).rejects.toThrow("original guest revoked");
+      expectNoCalls(enqueue, handoff);
+    } else {
+      await completion;
+      if (mode === "inline") {
+        expectNoCalls(enqueue, handoff);
+      } else {
+        expect(handoff).toHaveBeenCalledExactlyOnceWith(
+          expect.any(String),
+          expect.objectContaining({
+            expectedTarget: producerTarget,
+            sessionKey,
+            deliveryContext: mode === "unscoped" ? undefined : deliveryContext,
+          }),
+        );
+      }
+    }
     finish();
-    return target("main", sessionKey);
-  });
-  const emit = nodeFixture("inline-node", {
-    authorizeNodeSystemRunEvent: (params) =>
-      registry.authorizeSystemRunEventWithState({
-        ...params,
-        terminal: params.event !== "exec.started",
-      }) ?? false,
-  });
-  await emit(
-    "exec.finished",
-    { sessionKey, runId: "inline-run", output: "inline result" },
-    { connId: "inline-conn" },
-  );
-  finish();
-  await invocation;
-  expectNoCalls(captureTarget, enqueue, handoff);
-});
+    expect((await invocation).mock.calls[0]?.[0]).toBe(true);
+    expect(captureTarget).toHaveBeenCalledExactlyOnceWith(
+      "main",
+      sessionKey,
+      expect.objectContaining({ operatorAuthority: authority }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([
   { event: "notifications.changed", changed: "connection" },
@@ -130,26 +227,3 @@ it.each([
     expectNoCalls(enqueue, handoff);
   },
 );
-
-it("keeps the invocation-owned delivery route instead of node payload hints", async () => {
-  const deliveryContext = {
-    channel: "telegram",
-    to: "original-chat",
-    accountId: "original-account",
-    threadId: "original-topic",
-  };
-  const emit = nodeFixture("node-route", {
-    authorizeNodeSystemRunEvent: () => ({ invocationDeliveryContext: deliveryContext }),
-  });
-  await emit("exec.finished", {
-    sessionKey: "agent:main:route",
-    runId: "route-run",
-    exitCode: 0,
-    output: "done",
-    deliveryContext: { channel: "telegram", to: "untrusted-chat" },
-  });
-  expect(handoff).toHaveBeenCalledExactlyOnceWith(
-    expect.any(String),
-    expect.objectContaining({ deliveryContext }),
-  );
-});
