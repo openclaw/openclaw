@@ -172,6 +172,8 @@ export function FieldRow(props: {
   required?: boolean;
   control: JSX.Element;
   stacked?: boolean;
+  /** Field controls share the form's control column; a stepper hugs the edge like a toggle. */
+  placement?: "column";
   error?: JSX.Element;
   unsupported?: string;
   onOpenRaw?: () => void;
@@ -196,7 +198,13 @@ export function FieldRow(props: {
   );
   return (
     <div
-      class={props.stacked || !hasText() ? "settings-row settings-row--stacked" : "settings-row"}
+      class={[
+        "settings-row",
+        {
+          "settings-row--stacked": props.stacked || !hasText(),
+          "settings-row--field": props.placement === "column",
+        },
+      ]}
     >
       {hasText() && (
         <div class="settings-row__text">

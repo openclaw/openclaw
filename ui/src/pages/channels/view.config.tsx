@@ -27,9 +27,9 @@ function resolveSchemaNode(schema: JsonSchema | null, path: string[]): JsonSchem
 
 const EXTRA_CHANNEL_FIELDS = ["groupPolicy", "streamMode", "dmPolicy"] as const;
 
-export const channelConfigFormId = (channelId: string) => `channel-config-${channelId}`;
+const channelConfigFormId = (channelId: string) => `channel-config-${channelId}`;
 
-export function isSavingChannelConfig(channelId: string, props: ChannelsProps) {
+function isSavingChannelConfig(channelId: string, props: ChannelsProps) {
   return (
     props.savingChannel === channelId || props.mutationBusy?.config || props.config.configSaving
   );

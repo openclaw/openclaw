@@ -239,7 +239,7 @@ function renderWidenedCapabilities(details: CapabilityConsentErrorDetails) {
     <section class="plugins-consent__section oc-section">
       <h3>{t("pluginConsent.widenedTitle")}</h3>
       <p class="plugins-consent__description">
-        {t("pluginConsent.widenedDescription")}
+        {t("pluginConsent.widenedDescription")}{" "}
         {details.acceptedAt
           ? t("pluginConsent.previouslyAccepted", { date: details.acceptedAt })
           : undefined}
@@ -449,7 +449,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
   const confirm = (
     <button
       type="button"
-      class="btn primary oc-action oc-action-primary"
+      class="btn primary"
       disabled={confirmUnavailable() && !props.mutationBlockedReason}
       aria-disabled={!props.canMutate ? "true" : undefined}
       onClick={() => {
