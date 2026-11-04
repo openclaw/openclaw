@@ -274,9 +274,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       bindingIdentity = physicalIdentity;
     }
   }
-  let modelExecution:
-    | ReturnType<NonNullable<typeof params.hostCapabilities.bindModelExecution>>
-    | undefined;
+  let modelExecution: ReturnType<NonNullable<typeof params.hostCapabilities.bindModelExecution>>;
   const assertModelExecutionCurrent = () => modelExecution?.assertCurrent();
   generationAuthorityTransferred = true;
   const {
@@ -354,9 +352,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     ).appServer;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
-  const appServerHomeScope = resolveCodexAppServerHomeScope({
-    appServer: pluginConfig.appServer,
-  });
+  const appServerHomeScope = resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer });
   const nativeCommandAuth = params.runtimePlan?.auth.selectedAuthMode === "native-command";
   if (nativeCommandAuth && usesSupervisionConnection) {
     throw new Error("Native command auth requires an OpenClaw-owned Codex session.");
@@ -532,6 +528,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     execution.assertCurrent();
   };
   try {
+    if (workerHostedCloud && nativeCommandAuth) {
+      // initialize can execute the worker auth command before turn-time model selection.
+      // Retain the requested model now; turn selection replaces this same guard.
+      bindModelExecution({ provider: params.provider, model: params.modelId });
+    }
     const startupBindingBeforeRotation = startupBinding;
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
       assertCurrent,

@@ -228,17 +228,22 @@ it.each(["api-key", "subscription", "native-command"] as const)(
       auth: {
         ...runtimePlan.auth,
         selectedAuthMode: authRequirement,
-        modelRoute: {
-          provider: "openai",
-          modelId: params.modelId,
-          api: authRequirement === "api-key" ? "openai-responses" : "openai-chatgpt-responses",
-          baseUrl:
-            authRequirement === "api-key"
-              ? "https://api.openai.com/v1"
-              : "https://chatgpt.com/backend-api/codex",
-          authRequirement,
-          requestTransportOverrides: "none",
-        },
+        // prepareNativeCommandAuth leaves routing to the worker's native configuration.
+        modelRoute:
+          authRequirement === "native-command"
+            ? undefined
+            : {
+                provider: "openai",
+                modelId: params.modelId,
+                api:
+                  authRequirement === "api-key" ? "openai-responses" : "openai-chatgpt-responses",
+                baseUrl:
+                  authRequirement === "api-key"
+                    ? "https://api.openai.com/v1"
+                    : "https://chatgpt.com/backend-api/codex",
+                authRequirement,
+                requestTransportOverrides: "none",
+              },
       },
     };
     const runtime = createPluginRuntimeMock();
