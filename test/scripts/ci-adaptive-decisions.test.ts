@@ -6,7 +6,7 @@ import { expect, it } from "vitest";
 import { captureAdaptiveGraphDecision } from "../../scripts/lib/ci-adaptive-decision.mts";
 import { collectTestObservations } from "../../scripts/lib/ci-test-observations.mjs";
 
-it("pins an available prior and computes its full diff before subsequent outcomes exist", () => {
+it("uses a bound preflight diff in a shallow checkout before subsequent outcomes exist", () => {
   const root = mkdtempSync(path.join(tmpdir(), "ci-decision-"));
   const git = (...args: string[]) =>
     execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
@@ -85,10 +85,12 @@ it("pins an available prior and computes its full diff before subsequent outcome
     });
     writeFileSync(path.join(root, "src/a.ts"), "export const value = 2;\n");
     const head = commit();
+    const headTree = git("rev-parse", "HEAD^{tree}");
+    writeFileSync(path.join(root, ".git/shallow"), `${head}\n`);
     const current = collectTestObservations(row("inventory", inventory), {
       ...context,
       revision: head,
-      tree: git("rev-parse", "HEAD^{tree}"),
+      tree: headTree,
     });
     const env = { GITHUB_RUN_ID: "200", GITHUB_RUN_ATTEMPT: "1" };
     const bundle = {
@@ -96,7 +98,7 @@ it("pins an available prior and computes its full diff before subsequent outcome
       repository: context.repository,
       cutoffAt: "2026-11-04T00:00:00Z",
       restoredAt: "2026-11-04T00:00:01Z",
-      consumer: { runId: "200", runAttempt: "1", revision: head },
+      consumer: { runId: "200", runAttempt: "1", revision: head, tree: headTree },
       candidates: [
         {
           artifactId: 10,
@@ -107,6 +109,13 @@ it("pins an available prior and computes its full diff before subsequent outcome
           memberPath: "node-run/observations.json",
           memberSha256: "b".repeat(64),
           observations: { observations: baseline },
+          comparison: {
+            baseRevision: base,
+            baseTree,
+            headRevision: head,
+            headTree,
+            changedFiles: ["src/a.ts"],
+          },
         },
       ],
       fallbackReasons: [],
@@ -150,6 +159,9 @@ it("pins an available prior and computes its full diff before subsequent outcome
       "runtime",
       "date-type",
       "hash-type",
+      "comparison-head",
+      "comparison-tree",
+      "comparison-path",
     ] as const) {
       const invalid = structuredClone(bundle);
       if (reason === "future") {
@@ -172,6 +184,15 @@ it("pins an available prior and computes its full diff before subsequent outcome
       }
       if (reason === "hash-type") {
         Object.assign(invalid.candidates[0]!, { memberSha256: ["b".repeat(64)] });
+      }
+      if (reason === "comparison-head") {
+        invalid.candidates[0]!.comparison.headRevision = base;
+      }
+      if (reason === "comparison-tree") {
+        invalid.candidates[0]!.comparison.baseTree = headTree;
+      }
+      if (reason === "comparison-path") {
+        invalid.candidates[0]!.comparison.changedFiles = ["../outside.ts"];
       }
       writeFileSync(target, JSON.stringify(invalid));
       const fallback = captureAdaptiveGraphDecision(options);

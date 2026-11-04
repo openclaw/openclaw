@@ -8,6 +8,7 @@ import {
   downloadActionsArtifactArchive,
   inspectActionsArtifactZipWithPolicy,
 } from "./lib/actions-artifact-archive.mjs";
+import { isObservationPath } from "./lib/ci-test-observations.mjs";
 
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const MAX_MEMBER_BYTES = 8 * 1024 * 1024;
@@ -58,13 +59,14 @@ export async function restoreCiAdaptivePriors(options = {}) {
   const repository = env.GITHUB_REPOSITORY ?? "";
   const root = options.repositoryRoot ?? process.cwd();
   let revision = "";
+  let tree = "";
   try {
-    revision = execFileSync("git", ["rev-parse", "HEAD"], {
+    [revision, tree] = execFileSync("git", ["rev-parse", "HEAD", "HEAD^{tree}"], {
       cwd: root,
       encoding: "utf8",
       timeout: 1000,
       stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+    }).trim().split("\n");
   } catch {
     // Missing checkout identity makes the optional bundle ineligible.
   }
@@ -77,6 +79,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
       runId: env.GITHUB_RUN_ID ?? "",
       runAttempt: env.GITHUB_RUN_ATTEMPT ?? "",
       revision,
+      tree,
     },
     candidates: [],
     fallbackReasons: [],
@@ -86,6 +89,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
     !token ||
     !REPOSITORY.test(repository) ||
     !SHA.test(revision) ||
+    !SHA.test(tree) ||
     !positive(bundle.consumer.runId) ||
     !positive(bundle.consumer.runAttempt)
   ) {
@@ -94,6 +98,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
   }
   const fetchImpl = options.fetchImpl ?? fetch;
   const read = (endpoint) => readJson(fetchImpl, token, repository, endpoint, deadline);
+  const comparisons = new Map();
   try {
     const current = await read(
       `actions/runs/${bundle.consumer.runId}/attempts/${bundle.consumer.runAttempt}`,
@@ -196,11 +201,43 @@ export async function restoreCiAdaptivePriors(options = {}) {
             allowPath: (name) => MEMBER.test(name),
             maxEntryBytes: () => MAX_MEMBER_BYTES,
           });
-          const commit = await read(`git/commits/${run.head_sha}`);
-          requirePrior(
-            commit.sha === run.head_sha && SHA.test(commit.tree?.sha),
-            "prior-tree-unavailable",
-          );
+          let comparison = comparisons.get(run.head_sha);
+          if (!comparison) {
+            // Test checkouts are shallow. Resolve the complete path diff once here,
+            // while preflight owns network access, instead of fetching in every shard.
+            const result = await read(`compare/${run.head_sha}...${revision}?per_page=1&page=1`);
+            requirePrior(
+              result.base_commit?.sha === run.head_sha &&
+                SHA.test(result.base_commit?.commit?.tree?.sha) &&
+                result.merge_base_commit?.sha === run.head_sha &&
+                ["ahead", "identical"].includes(result.status) &&
+                result.behind_by === 0 &&
+                Array.isArray(result.files) && result.files.length < 300,
+              "prior-comparison-unavailable",
+            );
+            const changedFiles = new Set();
+            for (const file of result.files) {
+              requirePrior(isObservationPath(file.filename), "invalid-comparison-path");
+              changedFiles.add(file.filename);
+              if (file.status === "renamed" || file.previous_filename !== undefined) {
+                requirePrior(isObservationPath(file.previous_filename), "invalid-comparison-path");
+                changedFiles.add(file.previous_filename);
+              }
+            }
+            requirePrior(
+              result.status !== "identical" ||
+                (run.head_sha === revision && result.base_commit.commit.tree.sha === tree && changedFiles.size === 0),
+              "invalid-identical-comparison",
+            );
+            comparison = {
+              baseRevision: run.head_sha,
+              baseTree: result.base_commit.commit.tree.sha,
+              headRevision: revision,
+              headTree: tree,
+              changedFiles: [...changedFiles].sort(),
+            };
+            comparisons.set(run.head_sha, comparison);
+          }
           const candidates = [];
           for (const [memberPath, bytes] of files) {
             requirePrior(Date.now() < deadline, "deadline-exceeded");
@@ -217,7 +254,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
                 observations.source?.event === "schedule" &&
                 context?.repository === repository &&
                 context.revision === run.head_sha &&
-                context.tree === commit.tree.sha,
+                context.tree === comparison.baseTree,
               "prior-source-mismatch",
             );
             const preContext = observations.preExecution?.observations?.context;
@@ -240,6 +277,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
               memberPath,
               memberSha256: hash(bytes),
               observations,
+              comparison,
             });
           }
           requirePrior(
