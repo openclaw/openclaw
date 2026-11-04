@@ -23,7 +23,7 @@ import {
 import * as discordMessagingActionRuntime from "../send.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import type { DiscordReactOpts } from "../send.types.js";
-import { parseDiscordTarget, resolveDiscordChannelId } from "../targets.js";
+import { parseDiscordTarget, resolveDiscordChannelId } from "../target-parsing.js";
 import {
   filterDiscordActiveThreadList,
   readDiscordChannelStringField,
@@ -222,6 +222,17 @@ function isDiscordReadAncestryAllowed(params: {
   );
 }
 
+function isDiscordGuildReadTargetVisible(
+  guildInfo: DiscordGuildEntryResolved | null,
+  target: DiscordReadTargetContext,
+): boolean {
+  if (!isDiscordReadAncestryAllowed({ guildInfo, target })) {
+    return false;
+  }
+  const channelConfig = resolveDiscordChannelConfigWithFallback({ ...target, guildInfo });
+  return !channelConfig?.matchSource || channelConfig.allowed;
+}
+
 function isDiscordReadTargetAllowedInGuild(params: {
   groupPolicy: "open" | "disabled" | "allowlist";
   guildInfo: DiscordGuildEntryResolved | null;
@@ -270,7 +281,6 @@ export function createDiscordMessagingActionContext(params: {
   options?: DiscordMessagingActionOptions;
 }): DiscordMessagingActionContext {
   const accountId = readStringParam(params.input, "accountId");
-  const cfgOptions = { cfg: params.cfg };
   const accountConfig = mergeDiscordAccountConfig(
     params.cfg,
     accountId ?? resolveDefaultDiscordAccountId(params.cfg),
@@ -305,16 +315,15 @@ export function createDiscordMessagingActionContext(params: {
       return false;
     }
   };
-  const reactionRuntimeOptions = resolvedReactionAccountId
-    ? createDiscordRuntimeAccountContext({
-        cfg: params.cfg,
-        accountId: resolvedReactionAccountId,
-      })
-    : cfgOptions;
+  const reactionRuntimeOptions = createDiscordRuntimeAccountContext({
+    cfg: params.cfg,
+    accountId: resolvedReactionAccountId,
+  });
   const guildNameById = new Map<string, string | null>();
   const resolveGuildName = async (guildId: string): Promise<string | null> => {
-    if (guildNameById.has(guildId)) {
-      return guildNameById.get(guildId) ?? null;
+    const cached = guildNameById.get(guildId);
+    if (cached !== undefined) {
+      return cached;
     }
     try {
       const guildInfo = await discordMessagingActionRuntime.fetchGuildInfoDiscord(
@@ -415,14 +424,7 @@ export function createDiscordMessagingActionContext(params: {
       }
       return directDmEnabled && groupDmEnabled;
     }
-    if (groupPolicy === "disabled") {
-      return false;
-    }
-    if (!isDiscordReadAncestryAllowed({ guildInfo, target })) {
-      return false;
-    }
-    const channelConfig = resolveDiscordChannelConfigWithFallback({ ...target, guildInfo });
-    return !channelConfig?.matchSource || channelConfig.allowed;
+    return groupPolicy !== "disabled" && isDiscordGuildReadTargetVisible(guildInfo, target);
   };
   return {
     action: params.action,
@@ -554,11 +556,7 @@ export function createDiscordMessagingActionContext(params: {
           fallbackSlug: channelId,
           loadChannel: async (parentId) => channelById.get(parentId),
         });
-        if (!isDiscordReadAncestryAllowed({ guildInfo, target })) {
-          continue;
-        }
-        const channelConfig = resolveDiscordChannelConfigWithFallback({ ...target, guildInfo });
-        if (!channelConfig?.matchSource || channelConfig.allowed) {
+        if (isDiscordGuildReadTargetVisible(guildInfo, target)) {
           visibleChannels.push(channel);
         }
       }
@@ -601,7 +599,7 @@ export function createDiscordMessagingActionContext(params: {
     withOpts,
     withReactionRuntimeOptions: (extra) =>
       ({
-        ...(reactionRuntimeOptions ?? cfgOptions),
+        ...reactionRuntimeOptions,
         ...extra,
       }) as DiscordReactOpts & NonNullable<typeof extra>,
     normalizeMessage: (message: unknown) => {

@@ -47,15 +47,21 @@ export function isDurablyRetryableInboundMediaError(err: unknown): boolean {
     ? typeof err.status === "number" &&
         (err.status === 408 || err.status === 429 || err.status >= 500)
     : err.code === "fetch_failed" &&
-        (isAbortError(err) ||
-          isAbortError(err.cause) ||
-          isRecoverableTelegramNetworkError(err, { context: "polling" }));
+        (isAbortError(err) || isAbortError(err.cause) || isRecoverableTelegramNetworkError(err));
 }
 
 export function hasInboundMedia(msg: Message): boolean {
   return (
     Boolean(msg.media_group_id) ||
     (Array.isArray(msg.photo) && msg.photo.length > 0) ||
-    Boolean(msg.video ?? msg.video_note ?? msg.document ?? msg.audio ?? msg.voice ?? msg.sticker)
+    Boolean(
+      msg.video ??
+      msg.video_note ??
+      msg.animation ??
+      msg.document ??
+      msg.audio ??
+      msg.voice ??
+      msg.sticker,
+    )
   );
 }

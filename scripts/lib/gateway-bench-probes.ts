@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { performance } from "node:perf_hooks";
@@ -120,6 +120,21 @@ export function readProcessRssMb(pid: number | undefined): number | null {
   }
   const rssKb = parseProcessRssKb(result.stdout);
   return rssKb === null ? null : rssKb / 1024;
+}
+
+export function startGatewayRssSampling(child: Pick<ChildProcess, "pid">) {
+  let maxRssMb: number | null = null;
+  const sample = () => {
+    const rssMb = readProcessRssMb(child.pid);
+    if (rssMb != null) {
+      maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
+    }
+    return maxRssMb;
+  };
+  sample();
+  const timer = setInterval(sample, 100);
+  timer.unref?.();
+  return { sample, stop: () => clearInterval(timer) };
 }
 
 export function parseProcessRssKb(raw: string): number | null {
@@ -253,28 +268,20 @@ function parsePsCpuTimeMs(raw: string): number | null {
   if (
     !Number.isFinite(days) ||
     days < 0 ||
-    parts.some((part) => !Number.isFinite(part) || part < 0)
+    parts.some((part) => !Number.isFinite(part) || part < 0) ||
+    (parts.length !== 2 && parts.length !== 3)
   ) {
     return null;
   }
   if (parts.length === 2) {
-    const [minutes, seconds] = parts;
-    return Math.round(
-      (days * 24 * 60 * 60 +
-        expectDefined(minutes, "process CPU minutes") * 60 +
-        expectDefined(seconds, "process CPU seconds")) *
-        1000,
-    );
+    parts.unshift(0);
   }
-  if (parts.length === 3) {
-    const [hours, minutes, seconds] = parts;
-    return Math.round(
-      (days * 24 * 60 * 60 +
-        expectDefined(hours, "process CPU hours") * 60 * 60 +
-        expectDefined(minutes, "process CPU minutes") * 60 +
-        expectDefined(seconds, "process CPU seconds")) *
-        1000,
-    );
-  }
-  return null;
+  const [hours, minutes, seconds] = parts;
+  return Math.round(
+    (days * 24 * 60 * 60 +
+      expectDefined(hours, "process CPU hours") * 60 * 60 +
+      expectDefined(minutes, "process CPU minutes") * 60 +
+      expectDefined(seconds, "process CPU seconds")) *
+      1000,
+  );
 }

@@ -1,0 +1,2 @@
+25
+# Runner regression for explicit npm/npx executable and batch-wrapper selection on injected Windows.

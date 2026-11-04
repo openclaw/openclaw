@@ -3,7 +3,7 @@ import { getAgentRunContext, getAgentRunLifecycleGeneration } from "../infra/age
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import type { ProviderReviewTarget } from "./provider-review.js";
+import { snapshotSessionProviderReview, type ProviderReviewTarget } from "./provider-review.js";
 
 /** Carried only by the existing run owner; never serialized into event metadata. */
 export type ProviderReviewTerminalFact = Readonly<{
@@ -29,7 +29,6 @@ export function captureAgentRunProviderReview(params: {
   expectedWriterRunId: string;
   assertCurrent: () => void;
 }): void {
-  params.assertCurrent();
   const context = getAgentRunContext(params.runId);
   const lifecycleGeneration = getAgentRunLifecycleGeneration();
   if (
@@ -48,14 +47,7 @@ export function captureAgentRunProviderReview(params: {
     ...params.target,
     storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: params.target.agentId }),
   });
-  const review = structuredClone(params.review);
-  if (review.review?.continuation) {
-    Object.freeze(review.review.continuation);
-  }
-  if (review.review) {
-    Object.freeze(review.review);
-  }
-  Object.freeze(review);
+  const review = snapshotSessionProviderReview(params.review);
   // Normal runtime closure releases tools before the retained terminal write settles.
   const assertSourceCurrent = context.assertSourceCurrent;
   const fact: ProviderReviewTerminalFact = Object.freeze({

@@ -6,8 +6,7 @@ import type {
   GatewayClientOptions as BaseGatewayClientOptions,
   GatewayClientRequestOptions,
 } from "../../packages/gateway-client/src/client.js";
-import { markGatewayConnectAssemblyError } from "../../packages/gateway-client/src/request-error.js";
-import { resolveGatewayWebSocketTransport } from "../../packages/gateway-client/src/websocket-transport.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   clearDeviceAuthToken,
   clearOriginDeviceToken,
@@ -15,7 +14,6 @@ import {
   loadDeviceAuthTokenReadOnly,
   loadOriginDeviceToken,
   loadOriginDeviceTokenReadOnly,
-  prepareDeviceAuthStore,
   storeDeviceAuthToken,
   storeOriginDeviceToken,
 } from "../infra/device-auth-store.js";
@@ -75,49 +73,6 @@ function shouldSuppressStoredDeviceAuth(opts: GatewayClientOptions): boolean {
       !opts.agentRuntimeIdentityToken?.trim() &&
       !opts.preferBootstrapToken)
   );
-}
-
-/** Prepare storage before the one-shot RPC budget; connection loads still observe current rows. */
-export async function prepareGatewayClientDeviceAuth(
-  opts: GatewayClientOptions & {
-    url: string;
-    deviceIdentity: NonNullable<GatewayClientOptions["deviceIdentity"]> | null;
-  },
-  signal?: AbortSignal,
-): Promise<void> {
-  signal?.throwIfAborted();
-  if (
-    opts.deviceIdentity === null ||
-    opts.preparedDeviceAuth ||
-    (opts.sharedStateMode === "read-only" && shouldSuppressStoredDeviceAuth(opts))
-  ) {
-    return;
-  }
-  // Leave transport rejection with the client, before it can open token storage.
-  try {
-    if (Object.keys(opts.edgeAuthHeaders ?? {}).length && new URL(opts.url).protocol !== "wss:") {
-      return;
-    }
-    resolveGatewayWebSocketTransport({
-      url: opts.url,
-      tlsFingerprint: opts.tlsFingerprint,
-      env: opts.env,
-      options: {},
-    });
-  } catch {
-    return;
-  }
-  try {
-    await prepareDeviceAuthStore({
-      env: opts.env,
-      signal,
-      readOnly: opts.sharedStateMode === "read-only",
-    });
-  } catch (error) {
-    throw markGatewayConnectAssemblyError(
-      error instanceof Error ? error : new Error(String(error)),
-    );
-  }
 }
 
 export class GatewayClient {
@@ -207,9 +162,9 @@ export class GatewayClient {
     const deviceAuthDeps: Pick<
       GatewayClientHostDeps,
       "loadDeviceAuthToken" | "storeDeviceAuthToken" | "clearDeviceAuthToken"
-    > = deviceAuthScope
-      ? {
-          loadDeviceAuthToken: async (params) => {
+    > = {
+      loadDeviceAuthToken: deviceAuthScope
+        ? async (params) => {
             if (readOnly) {
               return suppressStoredAuth
                 ? null
@@ -221,38 +176,29 @@ export class GatewayClient {
               onSnapshot: observe(params),
             });
             return suppressStoredAuth ? null : load;
-          },
-          storeDeviceAuthToken: readOnly
-            ? () => {}
-            : (params) =>
-                storeOriginDeviceToken({
-                  ...params,
-                  gatewayScope: deviceAuthScope,
-                  ...writeFence(params),
-                }),
-          clearDeviceAuthToken: readOnly
-            ? () => {}
-            : (params) =>
-                clearOriginDeviceToken({
-                  ...params,
-                  gatewayScope: deviceAuthScope,
-                  ...clearFence(params),
-                }),
-        }
-      : readOnly
-        ? {
-            loadDeviceAuthToken: suppressStoredAuth ? () => null : loadDeviceAuthTokenReadOnly,
-            storeDeviceAuthToken: () => {},
-            clearDeviceAuthToken: () => {},
           }
-        : {
-            loadDeviceAuthToken: (params) =>
-              loadDeviceAuthToken({ ...params, onSnapshot: observe(params) }),
-            storeDeviceAuthToken: (params) =>
-              storeDeviceAuthToken({ ...params, ...writeFence(params) }),
-            clearDeviceAuthToken: (params) =>
-              clearDeviceAuthToken({ ...params, ...clearFence(params) }),
-          };
+        : readOnly
+          ? suppressStoredAuth
+            ? () => null
+            : loadDeviceAuthTokenReadOnly
+          : (params) => loadDeviceAuthToken({ ...params, onSnapshot: observe(params) }),
+      storeDeviceAuthToken: readOnly
+        ? () => {}
+        : (params) => {
+            const request = { ...params, ...writeFence(params) };
+            return deviceAuthScope
+              ? storeOriginDeviceToken({ ...request, gatewayScope: deviceAuthScope })
+              : storeDeviceAuthToken(request);
+          },
+      clearDeviceAuthToken: readOnly
+        ? () => {}
+        : (params) => {
+            const request = { ...params, ...clearFence(params) };
+            return deviceAuthScope
+              ? clearOriginDeviceToken({ ...request, gatewayScope: deviceAuthScope })
+              : clearDeviceAuthToken(request);
+          },
+    };
     const preparedDeviceAuthDeps = preparedDeviceAuth
       ? { ...deviceAuthDeps, loadDeviceAuthToken: () => preparedDeviceAuth }
       : deviceAuthDeps;
@@ -266,7 +212,8 @@ export class GatewayClient {
       registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
       logDebug,
       logError,
-      redactForLog: redactToolPayloadText,
+      redactForLog: (message) =>
+        redactToolPayloadText(sanitizeTerminalText(redactToolPayloadText(message))),
       ...baseOptions.hostDeps,
       ...(readOnly
         ? {

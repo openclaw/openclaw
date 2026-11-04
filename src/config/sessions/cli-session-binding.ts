@@ -6,6 +6,15 @@ import type { CliSessionBinding, CliSessionReseedReceipt, SessionEntry } from ".
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 type CliSessionBindingEntry = Pick<SessionEntry, "cliSessionBindings" | "cliSessionIds">;
 
+export function normalizeCliTranscriptCursor(value: CliSessionBinding["transcriptCursor"]) {
+  const localSessionId = normalizeOptionalString(value?.localSessionId);
+  const runId = normalizeOptionalString(value?.runId);
+  const entryId = value?.entryId === null ? null : normalizeOptionalString(value?.entryId);
+  return localSessionId && runId && entryId !== undefined
+    ? { localSessionId, entryId, runId, userEntryId: normalizeOptionalString(value?.userEntryId) }
+    : undefined;
+}
+
 export function normalizeCliSessionReseedReceipt(
   value: CliSessionReseedReceipt | undefined,
 ): CliSessionReseedReceipt | undefined {
@@ -88,6 +97,7 @@ export function getCliSessionBinding(
       mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
       mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
       reseedReceipt: normalizeCliSessionReseedReceipt(fromBindings?.reseedReceipt),
+      transcriptCursor: normalizeCliTranscriptCursor(fromBindings?.transcriptCursor),
     };
   }
   const fromMap = entry.cliSessionIds?.[normalized];
@@ -112,7 +122,12 @@ export function forkCliSessionBindings(
   for (const provider of providers) {
     const binding = getCliSessionBinding(parent, provider);
     if (binding?.resumeCheckpointId && supportsFork(provider)) {
-      const { reseedReceipt: _reseedReceipt, forceReuse: _forceReuse, ...inherited } = binding;
+      const {
+        reseedReceipt: _reseedReceipt,
+        transcriptCursor: _transcriptCursor,
+        forceReuse: _forceReuse,
+        ...inherited
+      } = binding;
       forked[normalizeProviderId(provider)] = { ...inherited, forkNextResume: true };
     }
   }

@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 
@@ -20,8 +21,10 @@ it("checks scoped incarnations in the reader worker before allowing effects", as
         expectedSessionId: "original",
         run,
       });
-    const queries = trackSqliteStatementExecutions(database.db, ["session"], (sql) =>
-      sql.includes("session_nodes") ? "session" : null,
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["session"],
+      (sql) => (sql.includes("session_nodes") ? "session" : null),
     );
     try {
       await expect(access()).resolves.toBe("effect");

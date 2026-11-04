@@ -9,6 +9,40 @@ title: "Configuration — agent sessions"
 
 `session.*` keys: how conversations map to sessions, when a session resets, and who can see or join one.
 
+## Communication defaults
+
+Configure whether sessions may initiate or accept messages from other sessions:
+
+```json5
+{
+  session: {
+    communication: {
+      send: "always",
+      receive: "ask",
+    },
+  },
+}
+```
+
+Both directions accept `always`, `ask`, or `never`; omitted values default to
+`always`. `ask` requires a human decision before sending or admitting the message
+as new peer input. Existing access restrictions still apply to `always`.
+
+The Control UI session menu’s **Advanced** submenu can override either direction. **Reset** removes the
+override, so later configuration changes apply again. Existing explicit overrides
+are not overwritten when defaults change. Resets preserve the session settings,
+new explicit children and forks inherit them, and delegated work remains subject
+to its parent restrictions. Adopting an existing session never replaces its settings.
+Changes apply to new admissions, not already accepted messages.
+
+These preferences do not replace `tools.sessions.visibility`, human sharing, or
+the channel-oriented `sendPolicy`. Requested replies and authorized task results
+retain their existing completion authority. See [Session tools](/concepts/session-tool#communication-preferences).
+
+Older versions do not enforce these preferences. Before downgrading, remove the
+new configuration keys and restore any restrictions through the older version
+of tool and session policy.
+
 ## Session
 
 ```json5
@@ -35,7 +69,7 @@ title: "Configuration — agent sessions"
       discord: { mode: "idle", idleMinutes: 30 },
     },
     resetTriggers: ["/new", "/reset"],
-    store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+    store: "agents/{agentId}/sessions/sessions.json",
     maintenance: {
       mode: "enforce", // enforce (default) | warn
       pruneAfter: "30d",
@@ -81,13 +115,14 @@ title: "Configuration — agent sessions"
 - **`groupScope`**: how groups, rooms, and channels are grouped.
   - `per-group` (default): keep each non-direct peer in its channel-scoped session.
   - `main`: route non-direct peers into the agent main session. Prefer a narrow `bindings[].session.groupScope` override when only selected trusted rooms should share main context.
-- **`notifyOnCreate`**: queue a system notice in the owning agent's Home conversation for each new session (default: `true`). Includes available title, creator, and creation source, without copying messages. Home consumes it on the next turn or scheduled heartbeat. Set `false` to disable. Drafts, incognito sessions, Home itself, hidden internal sessions, and scheduled cron runs are excluded; reopening or resetting an existing session does not notify again. Notices are bounded and in memory, so they do not survive a Gateway restart. See [The main session](/concepts/main-session#what-flows-into-the-main-session).
-- **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing.
+- **`notifyOnCreate`**: queue new-session awareness in the owning agent's Home conversation (default: `true`). Pending creations share one bounded summary with available title, creator, and creation source, without copying messages. Older entries are omitted when the summary is full, leaving queue capacity for reminders and other events. Home consumes it on the next turn or scheduled heartbeat. Set `false` to disable. Drafts, incognito sessions, Home itself, hidden internal sessions, and scheduled cron runs are excluded; reopening or resetting an existing session does not notify again. The summary is in memory and does not survive a Gateway restart. See [The main session](/concepts/main-session#what-flows-into-the-main-session).
+- **`identityLinks`**: map shared identity ids to provider-prefixed peers for cross-channel session sharing.
 - **`resetTriggers`**: explicit commands or phrases that reset the session. Matching is case-insensitive; list each desired spelling because command aliases are not added automatically. For example, `["/tell"]` resets `/tell` messages, while `/steer` keeps its normal steering behavior. Follow-up text after a matching trigger is preserved, including later lines.
 - **`reset`**: primary reset policy. `none` disables automatic reset and is the default; compaction bounds active context instead. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins. `/new` and `/reset` remain available in every mode. Daily reset freshness uses the session row's `sessionStartedAt`; idle reset freshness uses `lastInteractionAt`. Background/system-event writes such as heartbeat, cron wakeups, exec notifications, and gateway bookkeeping can update `updatedAt`, but they do not keep daily/idle sessions fresh.
   - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Doctor migrates legacy `dm` entries to `direct`; the schema rejects `dm`.
 - **`resetByChannel`**: per-channel reset overrides keyed by provider/channel id. When the session's channel has a matching entry, it wins outright over `resetByType`/`reset` for that session. Use only when one channel needs reset behavior different from the type-level policy.
 - **`mainKey`**: accepted but ignored. The per-agent main-session suffix is always `main`; omit this field. Global session scope uses `global` instead.
+- **`store`**: session-store selector. Relative paths resolve against the active state directory (`OPENCLAW_STATE_DIR`, or the selected profile's state directory), independent of the Gateway's working directory. `{agentId}` expands to the owning agent id. Absolute paths and `~` paths keep their explicit locations. If an older version created a second store from a relative path, stop the Gateway and run `openclaw doctor --fix` to merge its sessions with backups before restarting.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
   - `mode`: `enforce` applies age, count, and disk-budget cleanup and is the default; `warn` reports those policies without applying them. The separate opt-in `coldStorage.enabled` switch controls cold transcript extraction independently.
@@ -113,7 +148,11 @@ title: "Configuration — agent sessions"
   - `suggest`: allow `suggest`, where viewers can submit suggestions for the session owner or an `operator.admin` connection to send, queue, edit, or dismiss without granting direct access to send or manage the session.
   - `drafts`: allow `draft`, which hides the session from non-admin, non-owner session lists and event broadcasts.
 
-Session visibility and membership are maintained as canonical sharing state. Structured `session.sharing` events carry an attributed actor; principal-less changes use the additive `session.sharing.evidence` event. Every sharing change also emits the existing `sessions.changed` row refresh, so clients that do not recognize the evidence event still refresh canonical state. These events and `session.suggestion` do not add administrative narration to conversation transcripts. These controls coordinate operators sharing one agent; they are not a security boundary between tenants. Use separate Gateways or agents when work requires isolation.
+Session visibility and membership are maintained in the saved sharing state. Structured `session.sharing` events carry an attributed actor; principal-less changes use the additive `session.sharing.evidence` event. Every sharing change also emits the existing `sessions.changed` row refresh, so clients that do not recognize the evidence event still refresh the saved state. These events and `session.suggestion` do not add administrative narration to conversation transcripts. These controls coordinate operators sharing one agent; they are not a security boundary between tenants. Use separate Gateways or agents when work requires isolation.
+
+For [dashboards](/web/dashboards), revocation prevents new writes from being
+admitted. A dashboard write already in progress when access is revoked may still
+complete; revocation does not retract its saved widget or layout.
 
 </Accordion>
 

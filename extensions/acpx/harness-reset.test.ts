@@ -31,7 +31,7 @@ it("resets every registered ACP harness with a read-only package directory", asy
         state: {
           resolveStateDir,
           // Host-owned identity/lease storage is outside this filesystem contract.
-          openKeyedStore: createEmptyAcpxKeyedStore,
+          openKeyedStoreV2: createEmptyAcpxKeyedStore,
         },
       }),
       registerAgentHarness: (harness) => harnesses.push(harness),
@@ -44,6 +44,8 @@ it("resets every registered ACP harness with a read-only package directory", asy
       "acp-pi",
       "acp-kilocode",
       "acp-copilot",
+      "acp-grok-build",
+      "acp-qoder",
     ]);
     if (process.platform !== "win32" && process.getuid?.() !== 0) {
       await expect(fs.access(packageDir, fs.constants.W_OK)).rejects.toMatchObject({

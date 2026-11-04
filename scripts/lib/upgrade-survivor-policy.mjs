@@ -13,9 +13,30 @@ export const OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE = catalog.oldestSupporte
 export const MINIMUM_UPGRADE_SURVIVOR_BASELINE = "2026.6.1";
 export const CUSTOM_PLUGIN_SIBLINGS_BASELINE = "openclaw@2026.9.4";
 
+// Keep the released strict readers in the matrix after latest/previous advance.
+const PACKAGE_RECOVERY_BASELINES = ["openclaw@2026.9.8", "openclaw@2026.9.9"];
+export function isPackageRecoveryScenario(scenario) {
+  return (
+    scenario === "package-publication-recovery" ||
+    scenario === "package-verification-recovery" ||
+    scenario === "package-stranded-first-hop"
+  );
+}
+export function packageRecoveryBaselines(scenario) {
+  return scenario === "package-stranded-first-hop"
+    ? ["openclaw@2026.9.7"]
+    : PACKAGE_RECOVERY_BASELINES;
+}
+
 // 2026.9.7 retired code mode; older baselines must still seed the migration specimen.
 export function usesStructuredToolSearchAtBaseline(baselineVersion) {
   const comparison = compareReleaseVersions(baselineVersion ?? "", "2026.9.7");
+  return comparison !== null && comparison >= 0;
+}
+
+// The June SQLite cron codec predates persisted owners; July introduced the owner columns.
+export function usesCronOwnerAtBaseline(baselineVersion) {
+  const comparison = compareReleaseVersions(baselineVersion ?? "", "2026.7.1");
   return comparison !== null && comparison >= 0;
 }
 
@@ -52,6 +73,7 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
     scenario !== "abandoned-update" &&
     scenario !== "backup-schedule" &&
+    scenario !== "session-share" &&
     scenario !== "missing-configured-plugin-migration" &&
     scenario !== "missing-load-path" &&
     scenario !== "projects-doctor" &&
@@ -217,8 +239,14 @@ function comparePublishedReleaseVersion(a, b) {
 }
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
+  if (isPackageRecoveryScenario(scenario)) {
+    return packageRecoveryBaselines(scenario).includes(baselineSpec);
+  }
   if (scenario === "backup-schedule") {
     return baselineSpec === "openclaw@2026.9.7";
+  }
+  if (scenario === "session-share") {
+    return baselineSpec === "openclaw@2026.10.7";
   }
   if (scenario === "missing-load-path") {
     const release = parseReleaseVersion((baselineSpec ?? "").replace(/^openclaw@/u, ""));

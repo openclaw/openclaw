@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { floorPositiveFiniteNumber, resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -9,7 +11,11 @@ import type {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runCommandBuffered, withCommandProcessScope } from "openclaw/plugin-sdk/process-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -34,6 +40,10 @@ import {
   unwrapNodeInvokePayload,
 } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogControlFactory } from "./session-catalog-types.js";
+
+const loadSessionCatalogNodeAdoption = createLazyRuntimeModule(
+  () => import("./session-catalog-node-adoption.js"),
+);
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
 export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
@@ -238,6 +248,7 @@ export async function resumeCodexCliSessionOnNode(params: {
   sessionId: string;
   agentId?: string;
   sessionKey?: string;
+  storePath?: string;
   prompt: string;
   cwd?: string;
   timeoutMs?: number;
@@ -245,9 +256,14 @@ export async function resumeCodexCliSessionOnNode(params: {
   let catalogAgentId: string | undefined;
   let catalogHomeId: string | undefined;
   if (params.sessionKey) {
+    const storePath =
+      params.storePath ??
+      params.runtime.agent.session.resolveStorePath(undefined, { agentId: params.agentId });
     const { adoptionSessionKeyRest, CODEX_NODE_SESSION_KEY_PREFIX, readNodeSessionMarker } =
-      await import("./session-catalog-node-adoption.js");
-    const entry = params.runtime.agent.session.getSessionEntry({
+      await loadSessionCatalogNodeAdoption();
+    const entry = await params.runtime.agent.session.getSessionEntryAsync({
+      agentId: params.agentId,
+      storePath,
       sessionKey: params.sessionKey,
       readConsistency: "latest",
     });
@@ -411,8 +427,12 @@ function formatSessionPageTruncation(result: CodexCliSessionsListResult): string
 
 async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<string> {
   const params = parseJsonRecord(paramsJSON);
-  const limit = normalizeLimit(params.limit);
-  const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
+  const limit = resolveIntegerOption(params.limit, DEFAULT_SESSION_LIMIT, {
+    min: 1,
+    max: MAX_SESSION_LIMIT,
+  });
+  // Canonical forms compare equal here; sessions keep their original spelling.
+  const filter = normalizeLowercaseStringOrEmpty(params.filter).normalize("NFC");
   // Absent on a node build that predates the flag, which is the safe default: the bounded scan.
   const searchAll = params.searchAll === true;
   const codexHome = resolveCodexAppServerUserHomeDir();
@@ -612,16 +632,9 @@ function parseJsonRecord(paramsJSON?: string | null): Record<string, unknown> {
   return asNonArrayRecord(safeParseJson(paramsJSON ?? ""));
 }
 
-function normalizeLimit(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.min(MAX_SESSION_LIMIT, Math.max(1, Math.floor(value)))
-    : DEFAULT_SESSION_LIMIT;
-}
-
 function normalizeTimeoutMs(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.min(60 * 60_000, Math.floor(value))
-    : DEFAULT_RESUME_TIMEOUT_MS;
+  const timeoutMs = floorPositiveFiniteNumber(value);
+  return timeoutMs === undefined ? DEFAULT_RESUME_TIMEOUT_MS : Math.min(60 * 60_000, timeoutMs);
 }
 
 function readNodeId(node: CodexCliSessionNodeInfo): string {

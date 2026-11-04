@@ -1,9 +1,18 @@
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
-import { prepareNodeBootstrapArtifact } from "./node-bootstrap-artifact-build.js";
-import type { NodeBootstrapArtifactWorkerInput } from "./node-bootstrap-artifact-contract.js";
+import type {
+  NodeBootstrapArtifactWorkerInput,
+  NodeBootstrapArtifactWorkerTasks,
+} from "./node-bootstrap-artifact-contract.js";
 
-serveWorkerTasks(async (input) => {
-  // SAFETY: the private producer supplies this typed request over its owned worker channel.
-  const { options, temporaryRoot } = input as NodeBootstrapArtifactWorkerInput;
+serveWorkerTasks<
+  NodeBootstrapArtifactWorkerTasks[keyof NodeBootstrapArtifactWorkerTasks]["output"],
+  NodeBootstrapArtifactWorkerInput
+>(async ({ kind, input }) => {
+  if (kind === "bundle") {
+    const { prepareWorkerBundle } = await import("./bundle.js");
+    return await prepareWorkerBundle(input);
+  }
+  const { prepareNodeBootstrapArtifact } = await import("./node-bootstrap-artifact-build.js");
+  const { options, temporaryRoot } = input;
   return await prepareNodeBootstrapArtifact(options, temporaryRoot);
 });

@@ -35,14 +35,14 @@ describe("zaloPlugin pairing.notifyApproval", () => {
   });
 
   it("rejects an unsuccessful approval notification", async () => {
-    hoisted.sendMessage.mockResolvedValue({ ok: false });
+    hoisted.sendMessage.mockRejectedValue(new Error("Zalo rejected the approval"));
     await expect(
       zaloPlugin.pairing!.notifyApproval!({
         cfg: PAIRING_CFG,
         id: "paired-user",
         accountId: "beta",
       }),
-    ).rejects.toThrow("Failed to send message");
+    ).rejects.toThrow("Zalo rejected the approval");
   });
 
   it("uses the approved account's configured proxy", async () => {

@@ -35,14 +35,6 @@ export type ProviderBrowserLoginOptions = {
   bootstrap?: ProviderBrowserLoginBootstrap;
 };
 
-const bootstrapSource: ProviderBrowserLoginBootstrap = async ({
-  startCandidate,
-  seedConversation,
-}) => {
-  await startCandidate();
-  await seedConversation();
-};
-
 export async function startProviderBrowserLoginFixture(options: ProviderBrowserLoginOptions = {}) {
   const instance = await createOpenClawTestInstance({
     name: "provider-browser-login",
@@ -69,60 +61,59 @@ export async function startProviderBrowserLoginFixture(options: ProviderBrowserL
     { key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE },
     (request, response) => {
       void (async () => {
-        const url = new URL(request.url ?? "/", "https://provider.fixture");
-        requests.push(url.pathname);
-        if (url.pathname === "/authorize") {
-          const state = url.searchParams.get("state");
-          const redirect = url.searchParams.get("redirect_uri");
-          if (!state || !redirect || new URL(redirect).origin !== loginOrigin) {
-            response.writeHead(400).end("Unexpected callback origin");
-            return;
+        try {
+          const url = new URL(request.url ?? "/", "https://provider.fixture");
+          requests.push(url.pathname);
+          const json = (value: unknown) => {
+            response.setHeader("Content-Type", "application/json");
+            response.end(JSON.stringify(value));
+          };
+          if (url.pathname === "/authorize") {
+            const state = url.searchParams.get("state");
+            const redirect = url.searchParams.get("redirect_uri");
+            if (!state || !redirect || new URL(redirect).origin !== loginOrigin) {
+              return response.writeHead(400).end("Unexpected callback origin");
+            }
+            authorizations.push({ state, redirect });
+            response.setHeader("Content-Type", "text/html; charset=utf-8");
+            return response.end(
+              `<!doctype html><title>Fixture provider</title><h1>Authorize fixture account</h1><form action="/complete"><input type="hidden" name="state" value="${state}"><button>Approve sign-in</button></form>`,
+            );
           }
-          authorizations.push({ state, redirect });
-          response.setHeader("Content-Type", "text/html; charset=utf-8");
-          response.end(
-            `<!doctype html><title>Fixture provider</title><h1>Authorize fixture account</h1><form action="/complete"><input type="hidden" name="state" value="${state}"><button>Approve sign-in</button></form>`,
-          );
-          return;
-        }
-        if (url.pathname === "/complete") {
-          const state = url.searchParams.get("state");
-          const authorization = authorizations.find((entry) => entry.state === state);
-          if (!authorization) {
-            response.writeHead(400).end();
-            return;
+          if (url.pathname === "/complete") {
+            const state = url.searchParams.get("state");
+            const authorization = authorizations.find((entry) => entry.state === state);
+            if (!authorization) {
+              return response.writeHead(400).end();
+            }
+            const code = `fixture-code-${authorizations.length}`;
+            codes.set(code, authorization.state);
+            const callback = new URL(authorization.redirect);
+            callback.searchParams.set("state", authorization.state);
+            callback.searchParams.set("code", code);
+            return response.writeHead(302, { Location: callback.href }).end();
           }
-          const code = `fixture-code-${authorizations.length}`;
-          codes.set(code, authorization.state);
-          const callback = new URL(authorization.redirect);
-          callback.searchParams.set("state", authorization.state);
-          callback.searchParams.set("code", code);
-          response.writeHead(302, { Location: callback.href }).end();
-          return;
-        }
-        if (url.pathname === "/token") {
-          let body = "";
-          for await (const chunk of request) {
-            body += chunk.toString();
+          if (url.pathname === "/token") {
+            let body = "";
+            for await (const chunk of request) {
+              body += chunk.toString();
+            }
+            const { code, state } = JSON.parse(body);
+            if (
+              typeof code !== "string" ||
+              typeof state !== "string" ||
+              codes.get(code) !== state
+            ) {
+              return response.writeHead(401).end();
+            }
+            codes.delete(code);
+            return json({ key: loginCredential });
           }
-          const { code, state } = JSON.parse(body);
-          if (typeof code !== "string" || typeof state !== "string" || codes.get(code) !== state) {
-            response.writeHead(401).end();
-            return;
+          if (request.headers.authorization !== `Bearer ${loginCredential}`) {
+            return response.writeHead(401).end();
           }
-          codes.delete(code);
-          response.setHeader("Content-Type", "application/json");
-          response.end(JSON.stringify({ key: loginCredential }));
-          return;
-        }
-        if (request.headers.authorization !== `Bearer ${loginCredential}`) {
-          response.writeHead(401).end();
-          return;
-        }
-        response.setHeader("Content-Type", "application/json");
-        if (url.pathname === "/models") {
-          response.end(
-            JSON.stringify([
+          if (url.pathname === "/models") {
+            json([
               {
                 id: "ready",
                 name: "Signed-in fixture model",
@@ -132,46 +123,41 @@ export async function startProviderBrowserLoginFixture(options: ProviderBrowserL
                 maxTokens: 4096,
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               },
-            ]),
-          );
-        } else if (url.pathname === "/chat/completions") {
-          response.setHeader("Content-Type", "text/event-stream");
-          response.end(
-            [
-              {
-                id: "fixture-reply",
-                object: "chat.completion.chunk",
-                created: 1,
-                model: "ready",
-                choices: [
-                  {
-                    index: 0,
-                    delta: { role: "assistant", content: "Signed-in fixture reply" },
-                    finish_reason: null,
-                  },
-                ],
-              },
-              {
-                id: "fixture-reply",
-                object: "chat.completion.chunk",
-                created: 1,
-                model: "ready",
-                choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-              },
-            ]
-              .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
-              .join("") + "data: [DONE]\n\n",
-          );
-        } else {
-          response.writeHead(404).end();
+            ]);
+          } else if (url.pathname === "/chat/completions") {
+            response.setHeader("Content-Type", "text/event-stream");
+            response.end(
+              [
+                {
+                  delta: { role: "assistant", content: "Signed-in fixture reply" },
+                  finish_reason: null,
+                },
+                { delta: {}, finish_reason: "stop" },
+              ]
+                .map(
+                  (choice) =>
+                    `data: ${JSON.stringify({
+                      id: "fixture-reply",
+                      object: "chat.completion.chunk",
+                      created: 1,
+                      model: "ready",
+                      choices: [{ index: 0, ...choice }],
+                    })}\n\n`,
+                )
+                .join("") + "data: [DONE]\n\n",
+            );
+          } else {
+            response.setHeader("Content-Type", "application/json");
+            response.writeHead(404).end();
+          }
+        } catch (error) {
+          console.error("Provider browser login fixture failed", error);
+          if (!response.headersSent) {
+            response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+          }
+          response.end("Provider browser login fixture failed");
         }
-      })().catch((error: unknown) => {
-        console.error("Provider browser login fixture failed", error);
-        if (!response.headersSent) {
-          response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-        }
-        response.end("Provider browser login fixture failed");
-      });
+      })();
     },
   );
   const close = async () => {
@@ -267,38 +253,38 @@ export async function startProviderBrowserLoginFixture(options: ProviderBrowserL
       await instance.startGateway();
       await fs.access(edgeReceipt);
     };
-    await (options.bootstrap ?? bootstrapSource)({
-      instance,
-      startCandidate,
-      seedConversation: async () => {
-        for (const [method, params] of [
-          [
-            "sessions.create",
-            { key: loginSessionKey, agentId: "main", label: "Existing fixture conversation" },
-          ],
-          ["chat.inject", { sessionKey: loginSessionKey, message: loginHistoryMarker }],
-        ] as const) {
-          const result = await instance.cli([
-            "gateway",
-            "call",
-            method,
-            "--json",
-            "--params",
-            JSON.stringify(params),
-          ]);
-          if (result.code !== 0) {
-            throw new Error(`${method} failed: ${result.stderr}`);
-          }
+    const seedConversation = async () => {
+      const call = async (method: string, params: Record<string, unknown>) => {
+        const result = await instance.cli([
+          "gateway",
+          "call",
+          method,
+          "--json",
+          "--params",
+          JSON.stringify(params),
+        ]);
+        if (result.code !== 0) {
+          throw new Error(`${method} failed: ${result.stderr}`);
         }
-      },
-    });
+      };
+      await call("sessions.create", {
+        key: loginSessionKey,
+        agentId: "main",
+        label: "Existing fixture conversation",
+      });
+      await call("chat.inject", { sessionKey: loginSessionKey, message: loginHistoryMarker });
+    };
+    if (options.bootstrap) {
+      await options.bootstrap({ instance, startCandidate, seedConversation });
+    } else {
+      await startCandidate();
+      await seedConversation();
+    }
     return {
       instance,
       baseUrl: `${loginOrigin}/`,
       edgePort,
-      authorizations,
       requests,
-      edgeReceipt,
       close,
     };
   } catch (error) {

@@ -3,16 +3,23 @@ type ClaudeModelRef = {
   params?: Record<string, unknown>;
 };
 
-type ClaudeEffortModelRef = ClaudeModelRef & {
-  thinkingLevelMap?: Record<string, string | null | undefined>;
-};
+/**
+ * Capabilities the provider's model listing advertised for this row, carried as
+ * `params.claudeCapabilities`. Each listed flag overrides the model-id rules
+ * below; rows without the record (or without one flag) keep the id rules.
+ */
+type ClaudeListedCapability = "adaptiveThinking" | "disabledThinking" | "xhighEffort" | "maxEffort";
 
-function normalizeClaudeModelId(modelId?: string): string {
-  const normalized = modelId?.trim().toLowerCase() ?? "";
-  const unprefixed = normalized.startsWith("anthropic/")
-    ? normalized.slice("anthropic/".length)
-    : normalized;
-  return unprefixed.replace(/[._\s]+/g, "-");
+function readListedClaudeCapability(
+  ref: ClaudeModelRef,
+  capability: ClaudeListedCapability,
+): boolean | undefined {
+  const listed = ref.params?.claudeCapabilities;
+  if (typeof listed !== "object" || listed === null) {
+    return undefined;
+  }
+  const value: unknown = Reflect.get(listed, capability);
+  return typeof value === "boolean" ? value : undefined;
 }
 
 export const CLAUDE_FABLE_5_THINKING_PROFILE = {
@@ -71,7 +78,11 @@ export function resolveClaudeHaiku55ModelIdentity(ref: ClaudeModelRef): string |
 export function resolveClaudeModelIdentity(ref: ClaudeModelRef): string {
   const configuredCanonicalModelId =
     typeof ref.params?.canonicalModelId === "string" ? ref.params.canonicalModelId : undefined;
-  const normalized = normalizeClaudeModelId(configuredCanonicalModelId ?? ref.id);
+  const modelId = (configuredCanonicalModelId ?? ref.id)?.trim().toLowerCase() ?? "";
+  const unprefixed = modelId.startsWith("anthropic/")
+    ? modelId.slice("anthropic/".length)
+    : modelId;
+  const normalized = unprefixed.replace(/[._\s]+/g, "-");
   // Routing namespaces can themselves start with "Claude"; only the final
   // path component identifies the backing model.
   const match = /(?:^|[-/])(claude-[^/]+)$/.exec(normalized);
@@ -126,6 +137,15 @@ export function supportsClaudeInHistorySystemMessages(ref: ClaudeModelRef): bool
 
 /** Return whether a Claude model requires adaptive thinking instead of manual budgets. */
 export function requiresClaudeMandatoryAdaptiveThinking(ref: ClaudeModelRef): boolean {
+  const disabledThinking = readListedClaudeCapability(ref, "disabledThinking");
+  if (disabledThinking !== undefined) {
+    // Sonnet 5.5 rejects disabled thinking but still has an off mode (between_tools).
+    return (
+      !disabledThinking &&
+      !requiresClaudeBetweenToolsThinking(ref) &&
+      supportsClaudeAdaptiveThinking(ref)
+    );
+  }
   const modelId = resolveClaudeModelIdentity(ref);
   return (
     resolveClaudeOpus55ModelIdentity(ref) !== undefined ||
@@ -184,8 +204,7 @@ export function resolveClaudeOpus55ModelIdentity(ref: ClaudeModelRef): string | 
   return /^claude-opus-5-5(?=$|[^a-z0-9])/.test(normalized) ? normalized : undefined;
 }
 
-/** Return whether a Claude model supports adaptive thinking. */
-export function supportsClaudeAdaptiveThinking(ref: ClaudeModelRef): boolean {
+function supportsClaudeAdaptiveThinkingById(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
     resolveClaudeHaiku55ModelIdentity(ref) !== undefined ||
@@ -197,10 +216,24 @@ export function supportsClaudeAdaptiveThinking(ref: ClaudeModelRef): boolean {
   );
 }
 
+/** Return whether a Claude model supports adaptive thinking. */
+export function supportsClaudeAdaptiveThinking(ref: ClaudeModelRef): boolean {
+  return (
+    readListedClaudeCapability(ref, "adaptiveThinking") ?? supportsClaudeAdaptiveThinkingById(ref)
+  );
+}
+
 /** Return whether a Claude model has a native 1M-token context window. */
 export function supportsClaude1MContext(ref: ClaudeModelRef): boolean {
-  // The supported families currently coincide; split these predicates if either contract changes.
-  return supportsClaudeAdaptiveThinking(ref);
+  // The id families currently coincide; listed thinking capabilities say nothing about context.
+  return supportsClaudeAdaptiveThinkingById(ref);
+}
+
+/** Return whether Anthropic documents threshold compaction (`compact_20260112`) for a Claude model. */
+export function supportsClaudeServerCompaction(ref: ClaudeModelRef): boolean {
+  // The documented compaction list currently coincides with these id families;
+  // listed thinking capabilities say nothing about compaction.
+  return supportsClaudeAdaptiveThinkingById(ref);
 }
 
 /** Return whether a Claude model supports Anthropic's native fast mode. */
@@ -214,6 +247,10 @@ export function supportsClaudeFastMode(ref: ClaudeModelRef): boolean {
 
 /** Return whether a Claude model supports native max effort. */
 export function supportsClaudeNativeMaxEffort(ref: ClaudeModelRef): boolean {
+  const listed = readListedClaudeCapability(ref, "maxEffort");
+  if (listed !== undefined) {
+    return listed;
+  }
   const modelId = resolveClaudeModelIdentity(ref);
   return (
     resolveClaudeHaiku55ModelIdentity(ref) !== undefined ||
@@ -225,6 +262,10 @@ export function supportsClaudeNativeMaxEffort(ref: ClaudeModelRef): boolean {
 
 /** Return whether a Claude model supports native xhigh effort. */
 export function supportsClaudeNativeXhighEffort(ref: ClaudeModelRef): boolean {
+  const listed = readListedClaudeCapability(ref, "xhighEffort");
+  if (listed !== undefined) {
+    return listed;
+  }
   const modelId = resolveClaudeModelIdentity(ref);
   return (
     resolveClaudeHaiku55ModelIdentity(ref) !== undefined ||
@@ -248,7 +289,9 @@ export function requiresClaudeDefaultSampling(ref: ClaudeModelRef): boolean {
  * narrower route-specific contract.
  */
 export function resolveClaudeNativeThinkingLevelMap(
-  ref: ClaudeEffortModelRef,
+  ref: ClaudeModelRef & {
+    thinkingLevelMap?: Record<string, string | null | undefined>;
+  },
 ): Record<string, string | null | undefined> | undefined {
   if (ref.thinkingLevelMap !== undefined) {
     return ref.thinkingLevelMap;

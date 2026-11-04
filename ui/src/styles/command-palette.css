@@ -1,6 +1,14 @@
+.cmd-palette[data-attachment-drop-active] {
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+}
+
+.cmd-palette[data-attachment-drop-active] > * {
+  opacity: 0.5;
+}
+
 .cmd-palette__attachments {
   --chat-composer-editor-inset-inline: 14px;
-  --chat-composer-editor-inset-block: 6px;
+  --chat-attachment-inset-block: 6px;
   --chat-attachment-hit-slop: 12px;
   --chat-box-inset: 8px;
   flex: 0 0 auto;
@@ -99,7 +107,7 @@
   gap: 12px;
   margin: 2px 0;
   padding: 10px 12px;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   font-size: 14px;
   transition: background var(--duration-fast) ease;
 }
@@ -143,16 +151,6 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.cmd-palette__plugin-icon--fallback {
-  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
-  color: var(--text-strong);
-}
-
-.cmd-palette__plugin-icon--fallback svg {
-  width: 18px;
-  height: 18px;
 }
 
 .cmd-palette__avatar {
@@ -276,19 +274,6 @@
   opacity: 0.55;
 }
 
-.cmd-palette__create kbd {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  color: inherit;
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: inherit;
-}
-
 .cmd-palette__no-results {
   display: flex;
   flex: 1 1 auto;
@@ -366,19 +351,6 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-}
-
-.cmd-palette__footer kbd {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1px 5px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.4;
 }
 
 @media (max-width: 560px) {

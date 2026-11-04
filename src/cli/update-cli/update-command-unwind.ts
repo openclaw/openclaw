@@ -1,11 +1,14 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { ExitError } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   createUpdateCommandFailureResult,
@@ -92,8 +95,21 @@ export async function withUpdateCommandRecoveryUnwind(
     ) {
       throw await settlePending(error);
     }
+    // A forward deadline before activation leaves this live owner responsible
+    // for the failed receipt. Lost custody and activated state stay pending.
+    let preparationTimeout = false;
+    if (error instanceof UpdateActivationTimeoutError && !recoveryState.ledgerHandoffOwned) {
+      try {
+        const current = getUpdateRun(run.runId, run);
+        preparationTimeout =
+          current?.status === "running" &&
+          ["requested", "staging", "validating"].includes(current.phase);
+      } catch (cause) {
+        throw await settlePending(pendingFailure(cause, error));
+      }
+    }
     if (
-      error instanceof UpdateCommandRecoveryPendingError ||
+      (error instanceof UpdateCommandRecoveryPendingError && !preparationTimeout) ||
       error instanceof UpdateRecoveryRequiredError ||
       opts.recovery
     ) {
@@ -122,6 +138,18 @@ export async function withUpdateCommandRecoveryUnwind(
   if (!recoveryState.ledgerHandoffOwned) {
     // The admitted newer runtime owns canonical history after handoff. The old
     // process must not reopen a database that it may no longer understand.
+    // Successful foreground activation keeps its pair for the post-ready owner.
+    // Unwind precedes terminal preparation, so retain that same live continuation
+    // here without admitting failure compensation or Windows autostart effects.
+    const pluginCohort =
+      !failure &&
+      !recoveryState.windowsTaskAutoStartRecovery &&
+      run.completionOwner === "gateway-restart" &&
+      run.gatewayRestartRequired === true &&
+      hasDeferredUpdateCommandTerminalResult(run) &&
+      run.executorFence
+        ? { runId: run.runId, fence: run.executorFence }
+        : undefined;
     const admitRecovery = async () => {
       // A lost live context or a successful callback is not fresh-install proof.
       // Reconcile all affected state roots read-only before native compensation.
@@ -132,7 +160,7 @@ export async function withUpdateCommandRecoveryUnwind(
           continue;
         }
         paths.add(file);
-        await assertUpdateRecoveryAdmission({ env });
+        await assertUpdateRecoveryAdmission({ env, pluginCohort });
       }
     };
     try {
@@ -189,6 +217,10 @@ export async function withUpdateCommandRecoveryUnwind(
     failure = mergeWindowsTaskRecoveryFailure(failure, error);
   }
   if (failure) {
+    // Reported exits still unwind recovery above, but are not new update failures.
+    if (failure.error instanceof ExitError) {
+      throw failure.error;
+    }
     if (!recoveryState.ledgerHandoffOwned && !hasDeferredUpdateCommandTerminalResult(run)) {
       if (failure.error instanceof UpdateCommandFailure) {
         completeUpdateCommandRun(failure.error.result, run);

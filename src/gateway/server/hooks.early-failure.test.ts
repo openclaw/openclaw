@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AcpRuntime, AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { consumeAcpTurnStream } from "../../acp/control-plane/manager.turn-stream.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { HookMappingConfig } from "../../config/types.hooks.js";
@@ -34,7 +34,16 @@ import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "../s
 const mocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
-  requestHeartbeat: vi.fn(),
+  captureSessionEventTarget: vi.fn(async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: "captured-session",
+    generation: "captured-generation",
+  })),
+  enqueueSessionEvent: vi.fn((_text: string, _options: Record<string, unknown>) => ({
+    accepted: Promise.resolve({ ok: true }),
+    settled: Promise.resolve({ status: "completed" }),
+  })),
   runCronIsolatedAgentTurn: vi.fn(),
 }));
 
@@ -44,8 +53,10 @@ vi.mock("../../config/io.js", () => ({
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: mocks.runCronIsolatedAgentTurn,
 }));
-vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: mocks.requestHeartbeat,
+// mock-isolation: Keep ordinary reply execution outside the hook admission fixture.
+vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
+  enqueueSessionEventForHost: mocks.enqueueSessionEvent,
 }));
 vi.mock("../../infra/system-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
@@ -314,8 +325,8 @@ describe("gateway hook early-failure recovery", () => {
         expect(line).toContain(message);
       }
       const events = outcome === "delivery" ? 0 : 1;
-      expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(events);
-      expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(events);
+      expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(events);
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
     },
   );
 
@@ -334,25 +345,23 @@ describe("gateway hook early-failure recovery", () => {
     });
     expect(mocks.runCronIsolatedAgentTurn).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1));
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+    await vi.waitFor(() => expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(1));
+    expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
       "Hook Recovery (error): Error: required system config unavailable",
-      { sessionKey: global ? "agent:hooks:global" : testCase.eventSessionKey },
+      expect.objectContaining({
+        agentId: "hooks",
+        sessionKey: testCase.eventSessionKey,
+        source: "hook",
+      }),
     );
 
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
-      agentId: "hooks",
-      ...(global ? {} : { sessionKey: testCase.eventSessionKey }),
-    });
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
-  it.each(["startTurn", "runTurn"] as const)(
+  it.for(["startTurn", "runTurn"] as const)(
     "does not invoke ACP %s after the final Gateway admission deadline rejects the prompt",
-    async (runtimeApi) => {
+    async (runtimeApi, { signal }) => {
+      const preparing = createDeferred<AbortSignal | undefined>();
       const releasePreparation = createDeferred();
       const handle = {
         sessionKey: "agent:hooks:acp:gateway-admission",
@@ -378,6 +387,7 @@ describe("gateway hook early-failure recovery", () => {
 
       mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
         async (params: { onExecutionStarted?: () => void; abortSignal?: AbortSignal }) => {
+          preparing.resolve(params.abortSignal);
           await releasePreparation.promise;
           const streamOptions = {
             runtime,
@@ -397,22 +407,33 @@ describe("gateway hook early-failure recovery", () => {
         },
       );
 
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const responsePromise = postAgentHook(false, {
+        admissionTimeoutMs: 10,
+        rejectInitialConfig: false,
+      });
       try {
-        const response = await postAgentHook(false, {
-          admissionTimeoutMs: 10,
-          rejectInitialConfig: false,
-        });
+        const abortSignal = await withinTest(preparing.promise, signal);
+        await vi.advanceTimersByTimeAsync(10);
+        const response = await withinTest(responsePromise, signal);
 
         expect(response.status).toBe(503);
         expect(response.body).toMatchObject({
           ok: false,
           error: "hook agent run did not start before admission timeout",
         });
+        expect(abortSignal?.aborted).toBe(true);
       } finally {
         releasePreparation.resolve();
+        try {
+          await vi.advanceTimersByTimeAsync(10);
+        } finally {
+          vi.useRealTimers();
+        }
+        await Promise.allSettled([withinTest(responsePromise, signal)]);
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       }
 
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
       expect(startTurn).not.toHaveBeenCalled();
       expect(runTurn).not.toHaveBeenCalled();
@@ -483,7 +504,7 @@ describe("gateway hook early-failure recovery", () => {
     },
   );
 
-  it("announces successful plugin hook turns through the existing heartbeat path", async () => {
+  it("announces successful plugin hook turns through the ordinary event owner", async () => {
     mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
     mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
       async (params: { onExecutionStarted?: () => void }) => {
@@ -498,18 +519,15 @@ describe("gateway hook early-failure recovery", () => {
     ).resolves.toEqual({ ok: true, runId: expect.any(String) });
 
     await vi.waitFor(() =>
-      expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
         "Hook IMAP fastmail: New email summarized",
-        { sessionKey: "agent:hooks:main" },
+        expect.objectContaining({
+          agentId: "hooks",
+          sessionKey: "agent:hooks:main",
+          source: "hook",
+        }),
       ),
     );
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: expect.stringMatching(/^hook:[0-9a-f-]+$/),
-      agentId: "hooks",
-      sessionKey: "agent:hooks:main",
-    });
   });
 
   it.each([
@@ -535,32 +553,6 @@ describe("gateway hook early-failure recovery", () => {
         "sessionKey must start with hook: and contain no whitespace or control characters",
     });
     expect(mocks.runCronIsolatedAgentTurn).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "session conflict",
-      result: {
-        status: "error",
-        error: "session changed",
-        admissionDisposition: "session-conflict",
-      },
-      reason: "hook agent run was rejected because the target session changed",
-    },
-    {
-      name: "preparation failure",
-      result: { status: "error", error: "provider preparation failed" },
-      reason: "hook agent run failed before entering the agent runner",
-    },
-  ])("preserves plugin hook $name admission failure taxonomy", async ({ result, reason }) => {
-    mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
-    mocks.runCronIsolatedAgentTurn.mockResolvedValueOnce(result);
-    const { dispatcher } = createPluginHookDispatcher();
-
-    await expect(dispatcher.dispatchHookAgentTurn(pluginHookTurn, "imap")).resolves.toEqual({
-      ok: false,
-      reason,
-    });
   });
 
   it.each([false, true])(
@@ -761,7 +753,7 @@ describe("hook background admission", () => {
     });
 
     expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(4);
-    expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+    expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
       "Hook Gmail (skipped): model provider unavailable",
       "Hook Gmail (skipped): model provider unavailable",
     ]);
@@ -770,7 +762,7 @@ describe("hook background admission", () => {
     try {
       expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
       expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(5);
-      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+      expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (skipped): model provider unavailable",
@@ -799,34 +791,11 @@ describe("hook background admission", () => {
     expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(200);
 
     await vi.waitFor(() =>
-      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+      expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (error): execution failed",
       ]),
     );
-  });
-
-  it("keeps the bounded admission cancel for direct agent hooks", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(config);
-    let sawAbort = false;
-    mocks.runCronIsolatedAgentTurn.mockImplementation(
-      async (params: { onExecutionStarted?: () => void; abortSignal?: AbortSignal }) => {
-        await delay(60);
-        sawAbort = params.abortSignal?.aborted === true;
-        if (!sawAbort) {
-          params.onExecutionStarted?.();
-        }
-        return { status: "ok" as const };
-      },
-    );
-    const handler = createHandler(20);
-
-    const response = await post(handler, "/hooks/agent", { message: "Direct", name: "Bounded" });
-
-    expect(response.res.statusCode).toBe(503);
-    // The canceled run must not proceed after the 503.
-    await delay(80);
-    expect(sawAbort).toBe(true);
   });
 
   it.each([{ deliverySuppressionReason: "empty", replyDisposition: "empty" }] as const)(

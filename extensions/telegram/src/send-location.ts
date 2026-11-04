@@ -6,7 +6,6 @@ import {
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { withTelegramNativeQuoteFallback } from "./reply-parameters.js";
 import {
-  logTelegramOutboundSendOk,
   toAcceptedThreadScopedParams,
   withTelegramApiContext,
   type TelegramApiContext,
@@ -30,8 +29,7 @@ export async function sendLocationTelegram(
       throw new Error("Telegram location is required.");
     }
     const hasName = Boolean(location.name);
-    const hasAddress = Boolean(location.address);
-    if (hasName !== hasAddress) {
+    if (hasName !== Boolean(location.address)) {
       throw new Error("Telegram venues require both location.name and location.address.");
     }
 
@@ -80,12 +78,11 @@ export async function sendLocationTelegram(
         }, retryLabel);
       },
     });
-    const result = delivery.result;
     const acceptedParams = toAcceptedThreadScopedParams(delivery.acceptedParams);
     return finalizeTelegramOutbound({
       context,
       prepared,
-      result,
+      result: delivery.result,
       resultContext: `${label} send`,
       ...(botUserId !== undefined ? { botUserId } : {}),
       text: formatLocationText(location),
@@ -94,17 +91,6 @@ export async function sendLocationTelegram(
         : {}),
       promptContextProjectionPlan: opts.promptContextProjectionPlan,
       onDeliveryResult: opts.onDeliveryResult,
-      beforeActivity: ({ messageId, chatId }) =>
-        logTelegramOutboundSendOk({
-          accountId: account.accountId,
-          chatId,
-          messageId,
-          operation: hasName ? "sendVenue" : "sendLocation",
-          deliveryKind: label,
-          messageThreadId: acceptedParams?.message_thread_id,
-          replyToMessageId: opts.replyToMessageId,
-          silent: opts.silent,
-        }),
     });
   });
 }

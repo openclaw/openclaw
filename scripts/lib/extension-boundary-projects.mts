@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { serverFS } from "typescript/fs";
 import {
   isTypeScriptPackageEntry,
   listBuiltRuntimeEntryCandidates,
@@ -71,7 +72,7 @@ export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: 
       ...exportTargets(pkg.main),
     ]);
     // Ambient module declarations need roots even when there is no import edge to them.
-    const roots = new Set(declarations);
+    const roots = new Set<string>(declarations);
     for (const target of targets) {
       if (!/\.[cm]?[jt]sx?$/u.test(target)) {
         continue;
@@ -204,10 +205,13 @@ export async function resolveExtensionBoundaryPreparation(
       cwd: boundary.root,
       configFileName: config,
       fs: {
+        stat: serverFS.fakeStat,
+        writeFile: serverFS.useOS,
+        removeFile: serverFS.useOS,
         fileExists(file) {
           return owned(file)
             ? currentSdkDeclaration(file) || declaration(file) !== null
-            : undefined;
+            : serverFS.useOS;
         },
         readFile(file) {
           // The first pass never consumes cache contents. A later pass follows only
@@ -215,12 +219,12 @@ export async function resolveExtensionBoundaryPreparation(
           return owned(file) && !currentSdkDeclaration(file)
             ? declaration(file)
               ? ""
-              : null
-            : undefined;
+              : undefined
+            : serverFS.useOS;
         },
         directoryExists(directory) {
           if (!owned(directory)) {
-            return undefined;
+            return serverFS.useOS;
           }
           if (boundary.resolve(directory) === pluginOutput) {
             return true;
@@ -232,17 +236,17 @@ export async function resolveExtensionBoundaryPreparation(
         },
         getAccessibleEntries(directory) {
           if (!owned(directory)) {
-            return undefined;
+            return serverFS.useOS;
           }
           if (boundary.resolve(directory) === pluginOutput) {
-            return { files: [], directories: [...producerIds] };
+            return { files: [], directories: [...producerIds], symlinks: undefined };
           }
           const location = sourceLocation(directory);
           if (
             !location ||
             !fs.statSync(location.source, { throwIfNoEntry: false })?.isDirectory()
           ) {
-            return { files: [], directories: [] };
+            return { files: [], directories: [], symlinks: undefined };
           }
           const entries = fs.readdirSync(location.source, { withFileTypes: true });
           return {
@@ -259,11 +263,12 @@ export async function resolveExtensionBoundaryPreparation(
                   ),
               ),
             ],
+            symlinks: undefined,
             directories: entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
           };
         },
         realpath(file) {
-          return owned(file) ? boundary.assert(file) : undefined;
+          return owned(file) ? boundary.assert(file) : serverFS.useOS;
         },
       },
     });

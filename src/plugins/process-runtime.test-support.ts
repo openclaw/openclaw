@@ -1,5 +1,46 @@
+import { createTestEntrypoint } from "../infra/runtime-entrypoint.test-support.ts";
+
+const entrypoint = createTestEntrypoint(import.meta.url, "plugins");
+
 // The child probes share invocation-owned preparation and module state.
 export const pluginProcessRuntimeEntrypoints = {
+  installRecordCommit: entrypoint("install-record-commit"),
+  lifecycleLease: entrypoint("plugin-lifecycle-lease"),
+  installedPluginIndex: entrypoint("installed-plugin-index-store"),
+  installedPluginIndexWrite: entrypoint("installed-plugin-index-store-write"),
+  sourceSnapshot: entrypoint("plugin-source-snapshot-artifact"),
+  sourceCapture: entrypoint("plugin-generation-capture"),
+  snapshotPreparation: entrypoint("plugin-generation-worker"),
+  directoryInventory: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/directory-walk",
+    distWorkerPath: "infra/directory-walk.js",
+  },
+  installCommand: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../cli/plugins-install-command",
+    distWorkerPath: "cli/plugins-install-command.js",
+  },
+  config: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../config/config",
+    distWorkerPath: "config/config.js",
+  },
+  hookInstalls: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../hooks/installs",
+    distWorkerPath: "hooks/installs.js",
+  },
+  installedPluginRecords: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "installed-plugin-index-records",
+    distWorkerPath: "plugins/installed-plugin-index-records.js",
+  },
+  delegatedAuthority: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/agent-run-registry",
+    distWorkerPath: "infra/agent-run-registry.js",
+  },
   hooks: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "hooks",

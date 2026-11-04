@@ -22,6 +22,20 @@ describe("session display visibility", () => {
   it("separates automation and operator-named sessions from system-created lanes", () => {
     const cases: [Parameters<typeof isSystemCreatedSessionRow>[0], boolean][] = [
       [{ key: "agent::main::cron::nightly", createdActor: { type: "system" } }, false],
+      [{ key: "agent:main:main:active-memory:abcdef123456" }, true],
+      [{ key: "agent:main:dashboard:conversation:active-memory:abcdef123456" }, true],
+      [{ key: "agent:main:active-memory:abcdef123456" }, true],
+      [
+        {
+          key: "agent:main:main:active-memory:abcdef123456",
+          displayName: "memory search agent",
+        },
+        true,
+      ],
+      [{ key: "agent:main:main", displayName: "memory search agent" }, false],
+      [{ key: "agent:main:explicit:active-memory" }, false],
+      [{ key: "agent:main:explicit:active-memory:not-a-recall" }, false],
+      [{ key: "agent:main:main:active-memory:abcdef123456:child" }, false],
       [{ key: "agent:main:probe", createdVia: "internal", label: " " }, true],
       [
         { key: "agent:main:operator-work", createdVia: "run", createdActor: { type: "human" } },

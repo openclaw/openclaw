@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { cronRuns } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron run filter typography E2E",
@@ -33,21 +34,16 @@ suite.define(() => {
                 hasMore: false,
                 nextOffset: null,
               },
-              "cron.runs": {
-                entries: [],
-                total: 0,
-                offset: 0,
-                limit: 50,
-                hasMore: false,
-                nextOffset: null,
-              },
+              "cron.runs": cronRuns([]),
               "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
             },
           });
 
           await page.goto(`${suite.server.baseUrl}cron`);
           await page.getByRole("tab", { name: "Run history", exact: true }).click();
-          const labels = page.locator(".cron-run-filters .cron-filter-dropdown__trigger span");
+          const labels = page.locator(
+            ".cron-run-filters .cron-filter-dropdown__trigger > .oc-menu-item__label > span",
+          );
           await expect.poll(() => labels.count()).toBe(3);
           const fontSizes = await labels.evaluateAll((elements) =>
             elements.map((element) => getComputedStyle(element).fontSize),
@@ -55,7 +51,7 @@ suite.define(() => {
           expect(new Set(fontSizes).size).toBe(1);
 
           await page.getByRole("button", { name: "Sort Newest first", exact: true }).click();
-          await page.locator('wa-dropdown-item[value="asc"]').click();
+          await page.locator('[data-value="asc"]').click();
           await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
           await expect
             .poll(async () =>

@@ -22,7 +22,7 @@ const fixture = workerData as CommitFixture;
 const progress = new Int32Array(fixture.progress);
 await once(port, "message");
 const admitted = once(port, "message");
-port.postMessage({ type: "admission-request", operationId: 1, admissionId: 1 });
+port.postMessage({ type: "admission-request", operationId: 1 });
 await admitted;
 const database = openNodeSqliteDatabase(fixture.databasePath);
 database.exec("BEGIN IMMEDIATE; UPDATE proof SET value = 2");

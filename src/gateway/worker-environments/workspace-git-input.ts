@@ -52,12 +52,18 @@ export async function writeWorkspaceGitInput(params: {
   ref: string;
   entries: readonly WorkerWorkspaceManifestEntry[];
   readVerifiedContent: (entry: WorkerWorkspaceManifestEntry) => Promise<Uint8Array>;
+  existingObjects?: ReadonlyMap<string, string>;
   message?: { chunks: readonly Uint8Array[]; byteLength: number };
+  parentCommit?: string;
+  result?: "tree";
   assertBeforeMutation?: () => void;
 }): Promise<void> {
   const entries = params.entries.toSorted((left, right) => left.path.localeCompare(right.path));
   async function* chunks() {
     for (const [index, entry] of entries.entries()) {
+      if (params.existingObjects?.has(entry.path)) {
+        continue;
+      }
       const content = await params.readVerifiedContent(entry);
       yield Buffer.from(`blob\nmark :${index + 1}\ndata ${content.byteLength}\n`);
       yield content;
@@ -67,7 +73,7 @@ export async function writeWorkspaceGitInput(params: {
       `commit ${params.ref}\nmark :${entries.length + 1}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${params.message?.byteLength ?? 0}\n`,
     );
     yield* params.message?.chunks ?? [];
-    yield Buffer.from("\ndeleteall\n");
+    yield Buffer.from(`\n${params.parentCommit ? `from ${params.parentCommit}\n` : ""}deleteall\n`);
     for (let offset = 0; offset < entries.length; offset += 256) {
       yield Buffer.from(
         entries
@@ -79,12 +85,14 @@ export async function writeWorkspaceGitInput(params: {
                 : (entry.mode & 0o111) !== 0
                   ? "100755"
                   : "100644";
-            return `M ${mode} :${offset + index + 1} ${quoteFastImportPath(entry.path)}\n`;
+            return `M ${mode} ${params.existingObjects?.get(entry.path) ?? `:${offset + index + 1}`} ${quoteFastImportPath(entry.path)}\n`;
           })
           .join(""),
       );
     }
-    yield Buffer.from(`\nget-mark :${entries.length + 1}\ndone\n`);
+    yield Buffer.from(
+      `\n${params.result === "tree" ? `ls :${entries.length + 1} ""` : `get-mark :${entries.length + 1}`}\ndone\n`,
+    );
   }
   const directory = await fsRoot(path.dirname(params.inputPath));
   await directory.create(path.basename(params.inputPath), chunks(), {

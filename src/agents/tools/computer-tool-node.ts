@@ -1,10 +1,11 @@
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   ComputerActParams,
   ComputerActResult,
   ComputerUseCapabilityDescriptor,
+  ComputerUseV2ActionName,
   ScreenSnapshotParams,
 } from "../../plugins/computer-use-contract.js";
 import {
@@ -250,7 +251,13 @@ export class ComputerToolSession {
     input: Record<string, unknown>;
     gatewayOpts: GatewayCallOptions;
     signal?: AbortSignal;
-  }): Promise<ResolvedComputerTarget> {
+  }): Promise<
+    | ResolvedComputerTarget
+    | {
+        unavailableAction: ComputerToolAction;
+        availableActions: readonly ComputerUseV2ActionName[];
+      }
+  > {
     this.assertOpen();
     const explicitHost = params.input.target;
     if (explicitHost !== undefined && explicitHost !== "gateway" && explicitHost !== "node") {
@@ -368,9 +375,7 @@ export class ComputerToolSession {
     }
     const providerAction = params.action === "take_control" ? "screenshot" : params.action;
     if (!advertisedActions.includes(providerAction)) {
-      throw new Error(
-        `${COMPUTER_CONTRACT_MISMATCH}: computer ${targetKey} does not advertise action ${params.action}`,
-      );
+      return { unavailableAction: params.action, availableActions: advertisedActions };
     }
     validateCapabilityBoundInput({
       action: providerAction,

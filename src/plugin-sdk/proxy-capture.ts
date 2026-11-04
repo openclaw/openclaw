@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for debug proxy capture configuration, storage, reads, and events.
- */
 export {
   createDebugProxyWebSocketAgent,
   resolveDebugProxySettings,

@@ -18,7 +18,7 @@ export type CallManagerContext = {
   providerCallIdMap: Map<string, CallId>;
   processedEventIds: Set<string>;
   /** Provider call IDs reserved for reject hangup; avoids duplicate hangup calls. */
-  rejectedProviderCallIds: Map<string, symbol>;
+  rejectedProviderCallIds: Set<string>;
   provider: VoiceCallProvider | null;
   config: VoiceCallConfig;
   coreSession?: VoiceCallCoreSessionConfig;

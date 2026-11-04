@@ -9,6 +9,7 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createNullWriter } from "../../shared/null-writer.js";
+import type { GatewayRestartSnapshot } from "./restart-health.types.js";
 
 type DaemonAction = "install" | "uninstall" | "start" | "stop" | "restart";
 
@@ -22,22 +23,21 @@ type DaemonHintKind =
   | "wsl-systemd"
   | "generic";
 
-type DaemonHintItem = {
-  kind: DaemonHintKind;
-  text: string;
-};
-
-type DaemonActionResponse = {
+export type DaemonActionResponse = {
   ok: boolean;
   action: DaemonAction;
   result?: string;
   message?: string;
   error?: string;
   hints?: string[];
-  hintItems?: DaemonHintItem[];
+  hintItems?: {
+    kind: DaemonHintKind;
+    text: string;
+  }[];
   warnings?: string[];
   definitionBackup?: GatewayServiceDefinitionBackupReceipt;
   service?: ReturnType<typeof buildDaemonServiceSnapshot>;
+  readiness?: GatewayRestartSnapshot;
 };
 
 const DAEMON_HINT_PREFIXES: readonly (readonly [string, DaemonHintKind])[] = [
@@ -45,7 +45,7 @@ const DAEMON_HINT_PREFIXES: readonly (readonly [string, DaemonHintKind])[] = [
   ["Restart the container or the service that manages it for ", "container-restart"],
   ["systemd user services are unavailable;", "systemd-unavailable"],
   ["On a headless server (SSH/no desktop session):", "systemd-headless"],
-  ["Also ensure XDG_RUNTIME_DIR is set:", "systemd-headless"],
+  ["Also check that XDG_RUNTIME_DIR is set:", "systemd-headless"],
   [
     "If you're in a container, run the gateway in the foreground instead of",
     "container-foreground",
@@ -70,8 +70,6 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
     notLoadedText: service.notLoadedText,
   };
 }
-
-type DaemonEmit = (payload: Omit<DaemonActionResponse, "action">) => void;
 
 export function createDaemonActionContext(params: {
   action: DaemonAction;
@@ -100,7 +98,7 @@ export function createDaemonActionContext(params: {
     defaultRuntime.writeJson({ ...payloadWithContext, ...(rebind ? { rebind } : {}) });
   };
   // Message-bearing successes opt into text; emit remains JSON-only.
-  const emitMessage: DaemonEmit = (payload) => {
+  const emitMessage: (payload: Omit<DaemonActionResponse, "action">) => void = (payload) => {
     emit(payload);
     if (!params.json && payload.message) {
       defaultRuntime.log(payload.message);

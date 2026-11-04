@@ -44,10 +44,8 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
     onInput: () => {},
     frames: { send, onMessage: receiver },
   } satisfies OpenClawPluginNodeHostCommandIo;
-  let resolveChild!: (child: ChildProcessWithoutNullStreams) => void;
-  const childCreated = new Promise<ChildProcessWithoutNullStreams>((resolve) => {
-    resolveChild = resolve;
-  });
+  const { promise: childCreated, resolve: resolveChild } =
+    Promise.withResolvers<ChildProcessWithoutNullStreams>();
   let privateHome: string | undefined;
   const create = transport.createStdioTransport;
   vi.spyOn(transport, "createStdioTransport").mockImplementation(
@@ -165,7 +163,7 @@ describe("Codex node native readiness", () => {
       expect(cleanupStarted).not.toHaveBeenCalled();
       expect(harness.release).not.toHaveBeenCalled();
       expect(harness.command.hasActiveWork?.()).toBe(true);
-      await expect(access(harness.privateHome)).resolves.toBeUndefined();
+      await access(harness.privateHome);
 
       receipt.resolve();
       await harness.outcome;
@@ -199,7 +197,7 @@ describe("Codex node native readiness", () => {
       expect(harness.child.signalCode).toBeNull();
       expect(harness.release).not.toHaveBeenCalled();
       expect(harness.command.hasActiveWork?.()).toBe(true);
-      await expect(access(harness.privateHome)).resolves.toBeUndefined();
+      await access(harness.privateHome);
       await expect(harness.command.onDisconnect?.()).rejects.toThrow("did not terminate");
 
       failedClose.mockRestore();
@@ -276,4 +274,24 @@ describe("Codex node native readiness", () => {
       }
     },
   );
+
+  it("decodes the exec-server exit diagnostic without a U+FFFD when the retained byte tail splits a multi-byte sequence", async () => {
+    const harness = await startFixture();
+    try {
+      // 150 lines of 20 three-byte CJK chars + newline = 9150 bytes. The retained
+      // 4 KiB tail starts at byte 5054 (0x11e), a continuation byte inside a
+      // 3-byte char, so decoding the raw tail produced a leading U+FFFD.
+      // Each line is 61 bytes < 4 KiB, so it passes the per-line diagnostic check.
+      await harness.stderr(("汉".repeat(20) + "\n").repeat(150));
+      expect(harness.receiver).not.toHaveBeenCalled();
+      harness.child.stdin.end(JSON.stringify({ exit: 1 }) + "\n");
+      const error = await harness.outcome;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/exited/);
+      expect((error as Error).message).not.toContain("\uFFFD");
+      expect((error as Error).message).toContain("汉");
+    } finally {
+      await harness.cleanup();
+    }
+  });
 });

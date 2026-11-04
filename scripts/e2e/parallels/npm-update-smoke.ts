@@ -46,7 +46,10 @@ import {
   type Provider,
   type ProviderAuth,
 } from "./common.ts";
-import { runWindowsBackgroundPowerShell } from "./guest-transports.ts";
+import {
+  runWindowsBackgroundPowerShell,
+  windowsBackgroundPowerShellTimeoutMs,
+} from "./guest-transports.ts";
 import { resolveMacosPrlctlInvocation, runMacosHostCommand } from "./macos-exec.ts";
 import { resolveMacosDesktopHome, resolveMacosDesktopUser } from "./macos-users.ts";
 import { linuxUpdateScript, macosUpdateScript, windowsUpdateScript } from "./npm-update-scripts.ts";
@@ -85,6 +88,7 @@ interface Job {
   lastOutputAt: number;
   lastPhase: string;
   logPath: string;
+  platform: Platform;
   promise: Promise<number>;
   retry?: () => Job;
   rerunCommand: string;
@@ -107,36 +111,12 @@ interface MacosUpdateExec {
   ownerUser: string;
 }
 
-interface NpmUpdateSummary {
-  packageSpec: string;
-  updateTarget: string;
-  updateExpected: string;
-  updateTargetBuildCommit: string;
-  updateTargetPackageVersion: string;
-  updateTargetTarball: string;
-  provider: Provider;
-  latestVersion: string;
-  currentHead: string;
-  harnessCheckoutVersion: string;
-  harnessTargetFamily: string;
-  runDir: string;
-  slowestTiming?: {
-    durationMs: number;
-    label: string;
-    phase: "fresh" | "fresh-target" | "update";
-  };
-  totalDurationMs: number;
-  fresh: Record<Platform, string>;
-  freshTarget: Record<Platform, string>;
-  freshTargetSpec: string;
-  update: Record<Platform, { status: string; version: string }>;
-  timings: Array<{
-    durationMs: number;
-    label: string;
-    logPath: string;
-    phase: "fresh" | "fresh-target" | "update";
-    status: string;
-  }>;
+interface JobTiming {
+  durationMs: number;
+  label: string;
+  logPath: string;
+  phase: "fresh" | "fresh-target" | "update";
+  status: string;
 }
 
 const macosVmDefault = "macOS Tahoe";
@@ -587,7 +567,6 @@ export class NpmUpdateSmoke {
   private updateTargetTarball = "";
   private targetTarballPath = "";
   private targetTarballBuildCommit = "";
-  private targetDependencyPackages: NpmRegistryPackage[] = [];
   private targetRegistryPackages: NpmRegistryPackage[] = [];
   private targetTarballVersion = "";
   private targetRegistryHostUrl = "";
@@ -602,7 +581,7 @@ export class NpmUpdateSmoke {
   private freshTargetStatus = platformRecord("skip");
   private updateStatus = platformRecord("skip");
   private updateVersion = platformRecord("skip");
-  private timings: NpmUpdateSummary["timings"] = [];
+  private timings: JobTiming[] = [];
 
   constructor(options: NpmUpdateOptions) {
     this.updateTimeouts = resolveUpdateTimeouts();
@@ -725,7 +704,7 @@ export class NpmUpdateSmoke {
     await this.monitorJobs(phase, jobs);
     const retries: Job[] = [];
     for (const job of jobs) {
-      const platform = this.platformFromLabel(job.label);
+      const platform = job.platform;
       if ((await job.promise) === 0) {
         statuses[platform] = "pass";
         this.recordTiming(phase, job, "pass");
@@ -749,7 +728,7 @@ export class NpmUpdateSmoke {
     await this.monitorJobs(`${phase}-retry`, retries);
     for (const job of retries) {
       const status = (await job.promise) === 0 ? "pass" : "fail";
-      const platform = this.platformFromLabel(job.label);
+      const platform = job.platform;
       statuses[platform] = status;
       this.recordTiming(phase, job, status);
       if (status !== "pass") {
@@ -808,6 +787,7 @@ export class NpmUpdateSmoke {
       lastOutputAt: startedAt,
       lastPhase: "starting",
       logPath,
+      platform,
       promise: Promise.resolve(1),
       retry:
         attempt === 1
@@ -842,7 +822,7 @@ export class NpmUpdateSmoke {
         buildCommitShort: this.targetTarballBuildCommit.slice(0, 7),
         path: hostedTarballPath,
         version: this.targetTarballVersion,
-        registryPackages: [...this.targetDependencyPackages, ...this.targetRegistryPackages],
+        registryPackages: this.targetRegistryPackages,
       };
     } else if (!this.options.updateTarget || this.options.updateTarget === "local-main") {
       const providerConfig = resolveProviderConfig(this.options.provider);
@@ -937,21 +917,24 @@ export class NpmUpdateSmoke {
 
   private async runSameGuestUpdates(): Promise<void> {
     const jobs: Job[] = [];
-    if (this.options.platforms.has("macos")) {
-      ensureVmRunning(this.macosVm);
-      jobs.push(this.spawnUpdate("macOS", "macos", (ctx) => this.runMacosUpdate(ctx)));
-    }
-    if (this.options.platforms.has("windows")) {
-      ensureVmRunning(this.windowsVm);
-      jobs.push(this.spawnUpdate("Windows", "windows", (ctx) => this.runWindowsUpdate(ctx)));
-    }
-    if (this.options.platforms.has("linux")) {
-      ensureVmRunning(this.linuxVm);
-      jobs.push(this.spawnUpdate("Linux", "linux", (ctx) => this.runLinuxUpdate(ctx)));
+    for (const [platform, label, vm, runGuest] of [
+      ["macos", "macOS", this.macosVm, this.guestMacos.bind(this)],
+      ["windows", "Windows", this.windowsVm, this.guestWindows.bind(this)],
+      ["linux", "Linux", this.linuxVm, this.guestLinux.bind(this)],
+    ] as const) {
+      if (!this.options.platforms.has(platform)) {
+        continue;
+      }
+      ensureVmRunning(vm);
+      jobs.push(
+        this.spawnUpdate(label, platform, (ctx) =>
+          runGuest(this.updateScript(platform), this.updateTimeouts.timeoutMs, ctx),
+        ),
+      );
     }
     await this.monitorJobs("update", jobs);
     for (const job of jobs) {
-      const platform = this.platformFromLabel(job.label);
+      const platform = job.platform;
       const status = (await job.promise) === 0 ? "pass" : "fail";
       this.updateStatus[platform] = status;
       this.updateVersion[platform] = await extractLastOpenClawVersionFromLog(job.logPath);
@@ -978,6 +961,7 @@ export class NpmUpdateSmoke {
       lastOutputAt: startedAt,
       lastPhase: "starting",
       logPath,
+      platform,
       promise: Promise.resolve(1),
       rerunCommand: `inspect ${logPath}; rerun aggregate phase with --platform ${platform}`,
       startedAt,
@@ -994,7 +978,13 @@ export class NpmUpdateSmoke {
         label,
         run: ({ signal }) => fn({ append, signal }),
         timeoutDescription: `${this.updateTimeouts.seconds}s plus cleanup backstop`,
-        timeoutMs: this.updateTimeouts.withCleanupMs,
+        timeoutMs:
+          platform === "windows"
+            ? (addTimerTimeoutGraceMs(
+                windowsBackgroundPowerShellTimeoutMs(this.updateTimeouts.timeoutMs),
+                updateCleanupBackstopMs,
+              ) ?? 1)
+            : this.updateTimeouts.withCleanupMs,
       });
     })().finally(() => {
       job.durationMs = Date.now() - job.startedAt;
@@ -1003,34 +993,18 @@ export class NpmUpdateSmoke {
     return job;
   }
 
-  private async runMacosUpdate(ctx: UpdateJobContext): Promise<void> {
-    await this.guestMacos(this.updateScript("macos"), this.updateTimeouts.timeoutMs, ctx);
-  }
-
-  private runWindowsUpdate(ctx: UpdateJobContext): Promise<void> {
-    return this.guestWindows(this.updateScript("windows"), this.updateTimeouts.timeoutMs, ctx);
-  }
-
-  private async runLinuxUpdate(ctx: UpdateJobContext): Promise<void> {
-    await this.guestLinux(this.updateScript("linux"), this.updateTimeouts.timeoutMs, ctx);
-  }
-
   private updateScript(platform: Platform): string {
-    const input = {
+    const buildScript = {
+      macos: macosUpdateScript,
+      windows: windowsUpdateScript,
+      linux: linuxUpdateScript,
+    }[platform];
+    return buildScript({
       auth: this.authForPlatform(platform),
       expectedNeedle: this.updateExpectedNeedle,
       npmRegistry: this.targetRegistryUrl,
       updateTarget: this.updateTargetEffective,
-    };
-    switch (platform) {
-      case "macos":
-        return macosUpdateScript(input);
-      case "windows":
-        return windowsUpdateScript(input);
-      case "linux":
-        return linuxUpdateScript(input);
-    }
-    return die("unsupported platform");
+    });
   }
 
   private authForPlatform(platform: Platform): ProviderAuth {
@@ -1038,22 +1012,14 @@ export class NpmUpdateSmoke {
   }
 
   private async monitorJobs(label: string, jobs: Job[]): Promise<void> {
-    const pending = new Set(jobs.map((job) => job.label));
-    while (pending.size > 0) {
+    let pending = jobs;
+    while (pending.length > 0) {
       await new Promise((resolve) => {
         setTimeout(resolve, 15_000);
       });
-      for (const job of jobs) {
-        if (!pending.has(job.label)) {
-          continue;
-        }
-        if (job.done) {
-          pending.delete(job.label);
-        }
-      }
-      if (pending.size > 0) {
-        const status = jobs
-          .filter((job) => pending.has(job.label))
+      pending = pending.filter((job) => !job.done);
+      if (pending.length > 0) {
+        const status = pending
           .map((job) => {
             const elapsed = Math.floor((Date.now() - job.startedAt) / 1000);
             const stale = Math.floor((Date.now() - job.lastOutputAt) / 1000);
@@ -1178,7 +1144,8 @@ export class NpmUpdateSmoke {
       beforeLaunchAttempt: () => ensureVmRunning(this.windowsVm),
       label: "Windows update",
       script,
-      timeoutMs,
+      commandTimeoutMs: timeoutMs,
+      timeoutMs: windowsBackgroundPowerShellTimeoutMs(timeoutMs),
       vmName: this.windowsVm,
     });
   }
@@ -1370,13 +1337,6 @@ export class NpmUpdateSmoke {
     }
   }
 
-  private platformFromLabel(label: string): Platform {
-    if (label === "macOS") {
-      return "macos";
-    }
-    return label.toLowerCase() as Platform;
-  }
-
   private dumpLogTail(logPath: string): void {
     const log = run("tail", ["-n", "80", logPath], { check: false }).stdout;
     if (log) {
@@ -1411,59 +1371,44 @@ export class NpmUpdateSmoke {
       ]);
       this.targetTarballVersion = targetPackageJson.version ?? "";
       this.targetTarballBuildCommit = targetBuildCommit;
-      this.targetDependencyPackages = await Promise.all(
-        this.options.dependencyTarballs.map(async (dependencyTarball) => {
-          const tarballPath = path.resolve(dependencyTarball);
-          if (!existsSync(tarballPath)) {
-            throw new Error(`dependency tarball does not exist: ${tarballPath}`);
-          }
-          const dependencyPackage = await extractPackageJsonFromTgz<{
-            name?: string;
-            version?: string;
-          }>(tarballPath, "package/package.json");
-          const name = dependencyPackage.name ?? "";
-          const version = dependencyPackage.version ?? "";
-          if (!name || !version || name === "openclaw") {
-            throw new Error(`dependency tarball has invalid package metadata: ${tarballPath}`);
-          }
-          if (targetPackageJson.dependencies?.[name] !== version) {
-            throw new Error(
-              `target tarball requires ${name}@${targetPackageJson.dependencies?.[name] ?? "<missing>"}, but companion tarball provides ${version}`,
-            );
-          }
-          return { name, version, tarballPath };
-        }),
-      );
-      this.targetRegistryPackages = await Promise.all(
-        this.options.registryPackageTarballs.map(async (registryPackageTarball) => {
-          const tarballPath = path.resolve(registryPackageTarball);
-          if (!existsSync(tarballPath)) {
-            throw new Error(`registry package tarball does not exist: ${tarballPath}`);
-          }
-          const registryPackage = await extractPackageJsonFromTgz<{
-            name?: string;
-            version?: string;
-          }>(tarballPath, "package/package.json");
-          const name = registryPackage.name ?? "";
-          const version = registryPackage.version ?? "";
-          if (!name || !version || name === "openclaw") {
-            throw new Error(`registry package tarball has invalid metadata: ${tarballPath}`);
-          }
-          if (version !== this.targetTarballVersion) {
-            throw new Error(
-              `registry package ${name}@${version} does not match candidate ${this.targetTarballVersion}`,
-            );
-          }
-          return { name, version, tarballPath };
-        }),
-      );
-      const registryPackageNames = new Set(
-        [...this.targetDependencyPackages, ...this.targetRegistryPackages].map((pkg) => pkg.name),
-      );
-      if (
-        registryPackageNames.size !==
-        this.targetDependencyPackages.length + this.targetRegistryPackages.length
-      ) {
+      const readTarballs = (tarballs: string[], kind: "dependency" | "registry package") =>
+        Promise.all(
+          tarballs.map(async (tarball) => {
+            const tarballPath = path.resolve(tarball);
+            if (!existsSync(tarballPath)) {
+              throw new Error(`${kind} tarball does not exist: ${tarballPath}`);
+            }
+            const pkg = await extractPackageJsonFromTgz<{
+              name?: string;
+              version?: string;
+            }>(tarballPath, "package/package.json");
+            const name = pkg.name ?? "";
+            const version = pkg.version ?? "";
+            if (!name || !version || name === "openclaw") {
+              throw new Error(
+                `${kind} tarball has invalid ${kind === "dependency" ? "package " : ""}metadata: ${tarballPath}`,
+              );
+            }
+            if (kind === "dependency") {
+              if (targetPackageJson.dependencies?.[name] !== version) {
+                throw new Error(
+                  `target tarball requires ${name}@${targetPackageJson.dependencies?.[name] ?? "<missing>"}, but companion tarball provides ${version}`,
+                );
+              }
+            } else if (version !== this.targetTarballVersion) {
+              throw new Error(
+                `registry package ${name}@${version} does not match candidate ${this.targetTarballVersion}`,
+              );
+            }
+            return { name, version, tarballPath };
+          }),
+        );
+      this.targetRegistryPackages = [
+        ...(await readTarballs(this.options.dependencyTarballs, "dependency")),
+        ...(await readTarballs(this.options.registryPackageTarballs, "registry package")),
+      ];
+      const registryPackageNames = new Set(this.targetRegistryPackages.map((pkg) => pkg.name));
+      if (registryPackageNames.size !== this.targetRegistryPackages.length) {
         throw new Error("candidate registry tarballs must have unique package names");
       }
       if (!this.targetTarballVersion || !this.targetTarballBuildCommit) {
@@ -1538,7 +1483,7 @@ export class NpmUpdateSmoke {
 
   private async writeSummary(): Promise<string> {
     const slowestTiming = this.timings.toSorted((a, b) => b.durationMs - a.durationMs)[0];
-    const summary: NpmUpdateSummary = {
+    const summary = {
       currentHead: this.currentHeadShort,
       fresh: this.freshStatus,
       freshTarget: this.freshTargetStatus,

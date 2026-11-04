@@ -2,8 +2,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import {
   type JsonlHeadWindow,
   readJsonlHead,
@@ -88,7 +92,7 @@ export function matchesSessionFilter(session: CodexCliSessionSummary, filter: st
     return true;
   }
   return [session.sessionId, session.cwd, session.lastMessage].some((value) =>
-    value?.toLowerCase().includes(filter),
+    normalizeLowercaseStringOrEmpty(value).normalize("NFC").includes(filter),
   );
 }
 
@@ -735,8 +739,5 @@ async function readFirstLine(file: string): Promise<string | undefined> {
 }
 
 function truncateText(value: string, max: number): string {
-  if (value.length <= max) {
-    return value;
-  }
-  return `${truncateUtf16Safe(value, Math.max(0, max - 3))}...`;
+  return truncateWithMarker(value, max, { marker: "...", reserve: 3, trimEnd: false });
 }

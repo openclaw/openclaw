@@ -689,6 +689,7 @@ public struct ChatNewSessionOptionsPopover: View {
                     Text("Create Thread").font(OpenClawChatTypography.formControl.weight(.medium))
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(OpenClawChatTheme.accent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(
                     self.agentOptions.isLoading || self.isCreating || self.agentOptions.selectedAgentID.isEmpty || self

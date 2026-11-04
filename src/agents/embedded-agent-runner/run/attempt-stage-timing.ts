@@ -15,21 +15,6 @@ export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
 const EMBEDDED_RUN_STAGE_WARN_TOTAL_MS = 10_000;
 const EMBEDDED_RUN_STAGE_WARN_STAGE_MS = 5_000;
 
-export function shouldWarnEmbeddedRunStageSummary(
-  summary: StageTimingSummary,
-  options?: {
-    totalThresholdMs?: number;
-    stageThresholdMs?: number;
-  },
-): boolean {
-  const totalThresholdMs = options?.totalThresholdMs ?? EMBEDDED_RUN_STAGE_WARN_TOTAL_MS;
-  const stageThresholdMs = options?.stageThresholdMs ?? EMBEDDED_RUN_STAGE_WARN_STAGE_MS;
-  return (
-    summary.totalMs >= totalThresholdMs ||
-    summary.stages.some((stage) => stage.durationMs >= stageThresholdMs)
-  );
-}
-
 export function createEmbeddedRunStageSummaryEmitter(options: {
   label: string;
   log: {
@@ -54,16 +39,21 @@ export function logEmbeddedRunStageSummary(
   summary: StageTimingSummary,
   log: Parameters<typeof createEmbeddedRunStageSummaryEmitter>[0]["log"],
   prefix: () => string,
-  thresholds?: Parameters<typeof shouldWarnEmbeddedRunStageSummary>[1],
+  thresholds?: { totalThresholdMs?: number; stageThresholdMs?: number },
 ): void {
-  const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary, thresholds);
+  const shouldWarn =
+    summary.totalMs >= (thresholds?.totalThresholdMs ?? EMBEDDED_RUN_STAGE_WARN_TOTAL_MS) ||
+    summary.stages.some(
+      (stage) =>
+        stage.durationMs >= (thresholds?.stageThresholdMs ?? EMBEDDED_RUN_STAGE_WARN_STAGE_MS),
+    );
   if (shouldWarn || log.isEnabled("trace")) {
     const message = formatEmbeddedRunStageSummary(prefix(), summary);
     log[shouldWarn ? "warn" : "trace"](message);
   }
 }
 
-export function formatEmbeddedRunStageSummary(prefix: string, summary: StageTimingSummary): string {
+function formatEmbeddedRunStageSummary(prefix: string, summary: StageTimingSummary): string {
   const stages = formatStageTimings(summary.stages);
   return `${prefix} pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=${summary.totalMs} stages=${stages}`;
 }

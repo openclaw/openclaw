@@ -98,6 +98,16 @@ Related:
 - [Logging](/logging)
 - [Doctor](/gateway/doctor)
 
+## macOS LAN commands fail with No route to host
+
+When the Gateway runs but LAN commands fail with `EHOSTUNREACH` while the same
+operation works in Terminal, check the service runtime's **Local Network**
+permission. A LaunchAgent can have different access from Terminal, and Doctor
+does not currently diagnose that permission. Follow [Local Network access for
+the Gateway](/platforms/mac/permissions#local-network-access-for-the-gateway),
+then retry through the Gateway. Routing, firewall, and device failures can produce
+the same error.
+
 ## macOS launchd supervisor loop with duplicate gateway/node LaunchAgents
 
 Use this when a macOS install keeps restarting every few seconds, `openclaw`
@@ -252,7 +262,7 @@ Choose the capture backend indicated by `kernel.core_pattern`:
   ```
 
   `core_pattern` is host-wide: this replaces capture for other processes too.
-  Ensure the directory is writable by the Gateway service user and accessible
+  Check that the directory is writable by the Gateway service user and accessible
   inside any service filesystem sandbox. Restore the previous pattern after
   capture. This temporary `sysctl` setting does not survive reboot.
 

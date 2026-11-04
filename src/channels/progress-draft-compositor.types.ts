@@ -59,6 +59,10 @@ export type ChannelProgressDraftCompositorParams = {
   shouldStartNow?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
   reasoningLinePrefix?: string;
   commentaryLinePrefix?: string;
+  /** Prefix tool rows with their text glyph (`🛠️ Exec`); default plain. */
+  toolIcons?: boolean;
+  /** Compact consecutive keyed, prepared tool invocations in status-only progress mode. */
+  compactToolRuns?: boolean;
   reasoningGate?: boolean;
   commentaryItalics?: boolean;
   now?: () => number;
