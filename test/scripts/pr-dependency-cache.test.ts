@@ -305,7 +305,7 @@ describePosix("PR cache identity recovery", () => {
       expect(
         after.reduce(
           (count, row, index) =>
-            count + Object.keys(row).filter((key) => row[key] !== before[index][key]).length,
+            count + Object.keys(row).filter((key) => row[key] !== before[index]![key]).length,
           0,
         ),
       ).toBe(8);

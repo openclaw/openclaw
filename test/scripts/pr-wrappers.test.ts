@@ -1137,7 +1137,7 @@ exit "$status"
     );
     expect(retained).toHaveLength(1);
     expect(extracted.stderr).toContain(
-      "Retaining PR recovery anchor without cache cleanup: " + join(fixture.root, retained[0]),
+      "Retaining PR recovery anchor without cache cleanup: " + join(fixture.root, retained[0]!),
     );
     expect(readFileSync(database)).toEqual(recoveredBytes);
     expect(existsSync(marker)).toBe(false);
