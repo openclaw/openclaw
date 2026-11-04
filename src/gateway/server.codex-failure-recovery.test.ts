@@ -9,9 +9,11 @@ import nodeProcess from "node:process";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
+import * as gatewayFixture from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { model as createModel } from "../agents/model-catalog-fixtures.test-support.js";
 import { captureEnv } from "../test-utils/env.js";
 
 // Native plugins share the actual host graph, outside Vitest's transformed graph.
@@ -56,6 +58,10 @@ async function startNativeGatewayWithClient(
 ) {
   const startupEnv = captureEnv([...GATEWAY_STARTUP_MUTATED_ENV_KEYS, "OPENCLAW_CONFIG_PATH"]);
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  const close = async () => {
+    await server?.close();
+    startupEnv.restore();
+  };
   try {
     await fs.writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
     process.env.OPENCLAW_CONFIG_PATH = params.configPath;
@@ -63,31 +69,21 @@ async function startNativeGatewayWithClient(
     clearConfigCache();
     clearSessionStoreCacheForTest();
     const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const started = await startClaimedGateway(claim, () =>
+    server = await startClaimedGateway(claim, () =>
       startGatewayServer(claim.port, {
         bind: "loopback",
         auth: { mode: "token", token: params.token },
         controlUiEnabled: false,
       }),
     );
-    server = started;
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${claim.port}`,
       token: params.token,
       onEvent: params.onEvent,
     });
-    return {
-      client,
-      server: {
-        close: async () => {
-          await started.close();
-          startupEnv.restore();
-        },
-      },
-    };
+    return { client, server: { close } };
   } catch (error) {
-    await server?.close();
-    startupEnv.restore();
+    await close();
     throw error;
   }
 }
@@ -96,6 +92,13 @@ type ProviderRequest = { body: string; threadId: string | string[] | undefined }
 type ReadyThread = { threadId: string; clientId: string; action: string };
 type NativeProcess = EventEmitter &
   Pick<ChildProcess, "stdin" | "stdout" | "pid" | "exitCode" | "signalCode" | "kill">;
+
+// Capture an own function before spying; forwarding calls supply their live receiver.
+function originalMethod<T, K extends keyof T>(owner: T, key: K): T[K] {
+  const prop: TypedPropertyDescriptor<T[K]> = Object.getOwnPropertyDescriptor(owner, key) ?? {};
+  assert(typeof prop.value === "function");
+  return prop.value;
+}
 
 const RECOVERY_FAILURE_TEXT =
   "⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
@@ -163,8 +166,7 @@ module.exports = {
       const workerInputs = new Set<Worker["stdin"]>();
       const onWorker = (worker: Worker) => workerInputs.add(worker.stdin);
       nodeProcess.on("worker", onWorker);
-      // oxlint-disable-next-line typescript/unbound-method -- Preserve each emitter receiver through emit.call below.
-      const emit = EventEmitter.prototype.emit;
+      const emit = originalMethod(EventEmitter.prototype, "emit");
       const observe = vi.spyOn(EventEmitter.prototype, "emit").mockImplementation(function (
         this: EventEmitter,
         event,
@@ -182,8 +184,7 @@ module.exports = {
         }
         return emit.call(this, event, ...args);
       });
-      // oxlint-disable-next-line typescript/unbound-method -- Preserve each Worker receiver through postMessage.call below.
-      const postMessage = Worker.prototype.postMessage;
+      const postMessage = originalMethod(Worker.prototype, "postMessage");
       const launch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
         this: Worker,
         message,
@@ -214,12 +215,7 @@ module.exports = {
         res.writeHead(req.method === "GET" && req.url === "/v1/responses" ? 426 : 404).end();
         return;
       }
-      let body = "";
-      req.setEncoding("utf8");
-      req.on("data", (chunk: string) => {
-        body += chunk;
-      });
-      req.on("end", () => {
+      void gatewayFixture.readRequestText(req).then((body) => {
         const request = { body, threadId: req.headers["thread-id"] };
         const reply = (text: string, id: string) =>
           writeOpenAiResponsesText(res, { text, messageId: id, responseId: `${id}-response` });
@@ -255,17 +251,9 @@ module.exports = {
     });
     onTestFinished(async () => {
       releaseSibling.resolve();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await gatewayFixture.closeHttpServer(server);
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    assert(address && typeof address !== "string", "controlled provider must bind a local port");
-    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    const baseUrl = `${await gatewayFixture.listenLoopback(server)}/v1`;
     const values = {
       HOME: root,
       USERPROFILE: root,
@@ -319,17 +307,7 @@ module.exports = {
             baseUrl: "https://api.openai.com/v1",
             apiKey: "synthetic-local-only",
             api: "openai-responses",
-            models: [
-              {
-                id: model,
-                name: "Synthetic model",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128000,
-                maxTokens: 1024,
-              },
-            ],
+            models: [createModel(model, "Synthetic model", { contextWindow: 128000 })],
           },
         },
       },
@@ -591,8 +569,7 @@ function holdNativeExit(
   expect(matches).toHaveLength(1);
   const child = matches[0]?.[0];
   assert(child?.stdin && child.pid, "the native thread must belong to a captured process");
-  const stdin = child.stdin;
-  const pid = child.pid;
+  const { stdin, pid } = child;
   const waiting = createDeferred();
   const exited = createDeferred();
   let closing = false;
@@ -678,11 +655,8 @@ function holdNativeExit(
       vi.useRealTimers();
       child.off("newListener", onListener);
       restoreExitConfirmation();
-      end.mockRestore();
-      destroy.mockRestore();
-      signal.mockRestore();
+      [end, destroy, signal, childKill].forEach((mock) => mock.mockRestore());
       syncBuiltinESMExports();
-      childKill.mockRestore();
       stdin.end();
       killChild("SIGCONT");
     },
