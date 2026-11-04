@@ -3,6 +3,10 @@ import type { ModelCostConfig } from "@openclaw/llm-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  openSessionArchiveDecodedStream,
+  SESSION_ARCHIVE_ZSTD_SUFFIX,
+} from "../config/sessions/archive-compression.js";
+import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
@@ -71,6 +75,8 @@ function parseJsonlRecord(line: Buffer): Record<string, unknown> | undefined {
 
 async function scanJsonlRange(params: {
   filePath: string;
+  /** Compressed archives decode whole; their offsets count plaintext bytes. */
+  archive: boolean;
   startOffset: number;
   endOffset: number;
   checkProgress?: () => void;
@@ -79,10 +85,12 @@ async function scanJsonlRange(params: {
   if (params.endOffset <= params.startOffset) {
     return params.startOffset;
   }
-  const stream = fs.createReadStream(params.filePath, {
-    start: params.startOffset,
-    end: params.endOffset - 1,
-  });
+  const stream = params.archive
+    ? openSessionArchiveDecodedStream(params.filePath)
+    : fs.createReadStream(params.filePath, {
+        start: params.startOffset,
+        end: params.endOffset - 1,
+      });
   // Retain fragments until a line is complete; growing a contiguous carry buffer
   // would repeatedly copy and rescan large transcript records.
   const lineChunks: Buffer[] = [];
@@ -159,7 +167,12 @@ type RollupScanInput = {
 async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostRollupEntry> {
   const previousCheckpoint =
     params.previous?.checkpoint.kind === "jsonl" ? params.previous.checkpoint : undefined;
+  // Archives are read from their durable source: freshness, identity, and the
+  // checkpoint all describe the compressed file, which is never appended to.
+  const archive = params.file.sourcePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
+  const readPath = archive ? params.file.sourcePath : params.file.filePath;
   const identityMatches =
+    !archive &&
     previousCheckpoint &&
     previousCheckpoint.device === params.file.device &&
     previousCheckpoint.inode === params.file.inode &&
@@ -174,8 +187,9 @@ async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostR
   const startOffset = appendOnly ? (previousCheckpoint?.parsedOffset ?? 0) : 0;
   const scan = createUsageRollupScan({ ...params, appendOnly });
   let pendingRecords: Record<string, unknown>[] = [];
-  const processedOffset = await scanJsonlRange({
-    filePath: params.file.filePath,
+  const scannedOffset = await scanJsonlRange({
+    filePath: readPath,
+    archive,
     startOffset,
     endOffset: params.file.size,
     checkProgress: params.checkProgress,
@@ -200,17 +214,18 @@ async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostR
       return entry ? [entry] : [];
     }),
   );
-  const postStats = await fs.promises.stat(params.file.filePath);
+  const processedOffset = archive ? params.file.size : scannedOffset;
+  const postStats = await fs.promises.stat(readPath);
   if (
     postStats.dev !== params.file.device ||
     postStats.ino !== params.file.inode ||
     postStats.size < params.file.size
   ) {
-    throw new Error(`transcript changed identity while scanning: ${params.file.filePath}`);
+    throw new Error(`transcript changed identity while scanning: ${readPath}`);
   }
-  const anchorHash = await readJsonlAnchorHash(params.file.filePath, processedOffset);
+  const anchorHash = await readJsonlAnchorHash(readPath, processedOffset);
   if (!anchorHash) {
-    throw new Error(`transcript checkpoint unavailable: ${params.file.filePath}`);
+    throw new Error(`transcript checkpoint unavailable: ${readPath}`);
   }
   return scan.finish({
     kind: "jsonl",

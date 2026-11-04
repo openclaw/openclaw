@@ -1,6 +1,7 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
+import { isSessionArchiveDecodeError } from "../config/sessions/archive-compression.js";
 import {
   formatSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
@@ -11,6 +12,7 @@ import { readSessionColdTranscript } from "../config/sessions/session-cold-stora
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
+import { formatErrorMessage } from "./errors.js";
 import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
   readSessionCostUsageRollupRowsInDatabase,
@@ -49,6 +51,10 @@ import {
   type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import { projectUsageCostQuartersInWorker } from "./session-cost-usage-worker-overview.js";
+import {
+  createSupersededArchiveKeyResolver,
+  createUsageCostRollupPruner,
+} from "./session-cost-usage-worker-prune.js";
 import {
   createUsageCostWorkerPriceResolver,
   scanUsageCostRollupInWorker,
@@ -112,7 +118,6 @@ export async function executeUsageCostWorker(
     operation.kind === "refresh" ? usageRefreshInputs(location.databasePath) : undefined;
   const { access, readFacts, readFreshness, inventory } = createUsageCostCollectionAccess({
     input,
-    control,
     target,
     readStore,
     readCheckpoint: (marker) => {
@@ -402,36 +407,33 @@ export async function executeUsageCostWorker(
   for (const file of files) {
     livePaths.add(file.filePath);
   }
+  const supersededArchiveKey = createSupersededArchiveKeyResolver(files);
+  const supersededArchiveRows: Array<{ row: SessionCostUsageRollupRow; current: string }> = [];
+  const pruner = createUsageCostRollupPruner((batch) =>
+    host(
+      "prune-rows",
+      batch,
+      batch.map((row) => row.value.buffer),
+    ),
+  );
   let pruned = false;
   if (!operation.sessionFiles) {
-    let batch: UsageCostWorkerHostEffects["prune-rows"]["input"] = [];
-    let batchBytes = 0;
-    const sendBatch = async () => {
-      const transfers = batch.map((row) => row.value.buffer);
-      // Settle each bounded snapshot before producing more, releasing writer custody between batches.
-      await host("prune-rows", batch, transfers);
-      batch = [];
-      batchBytes = 0;
-    };
     for (const row of rows) {
       if (livePaths.has(row.key)) {
         continue;
       }
-      const value = new TextEncoder().encode(row.valueJson);
-      const rowBytes = value.byteLength + 2 * row.key.length;
-      // Preserve single-row delivery for oversized metadata without growing other batches.
-      if (batch.length > 0 && (batch.length >= 1024 || batchBytes + rowBytes > 1024 * 1024)) {
-        await sendBatch();
+      const current = supersededArchiveKey(row.key);
+      if (current) {
+        supersededArchiveRows.push({ row, current });
+        continue;
       }
-      batch.push({ key: row.key, value, updatedAt: row.updatedAt });
-      batchBytes += rowBytes;
+      await pruner.prune(row);
       pruned = true;
     }
-    if (batch.length > 0) {
-      await sendBatch();
-    }
+    await pruner.flush();
   }
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
+  const unreadable = new Map<string, unknown>();
   const stale = [];
   for (const file of filesByPath.values()) {
     const old = minMtimeMs !== undefined && file.mtimeMs < minMtimeMs;
@@ -573,20 +575,31 @@ export async function executeUsageCostWorker(
         }
       }
     }
-    const entry =
-      previous &&
-      !envelope?.projection &&
-      isUsageCostRollupFresh({ checkpoint: previous.checkpoint, file })
-        ? { ...previous, version: USAGE_COST_ROLLUP_VERSION }
-        : await scanUsageCostRollupInWorker({
-            file,
-            previous,
-            pricingFingerprint: operation.pricingFingerprint,
-            resolveCosts,
-            readGeneration,
-            readRows,
-            checkProgress: control.throwIfCancelled,
-          });
+    let entry: UsageCostRollupEntry;
+    try {
+      entry =
+        previous &&
+        !envelope?.projection &&
+        isUsageCostRollupFresh({ checkpoint: previous.checkpoint, file })
+          ? { ...previous, version: USAGE_COST_ROLLUP_VERSION }
+          : await scanUsageCostRollupInWorker({
+              file,
+              previous,
+              pricingFingerprint: operation.pricingFingerprint,
+              resolveCosts,
+              readGeneration,
+              readRows,
+              checkProgress: control.throwIfCancelled,
+            });
+    } catch (error) {
+      // Rescanning bytes that cannot be decoded cannot succeed; the rest of the batch commits.
+      if (file.kind !== "jsonl" || !isSessionArchiveDecodeError(error)) {
+        throw error;
+      }
+      unreadable.set(file.sourcePath, error);
+      completedFiles++;
+      continue;
+    }
     const { valueJson, blob, partitions } = partitionUsageCostRollup(entry);
     const replacePartitions = previous === undefined || !envelope?.projection;
     const previousPartitions = new Map(
@@ -656,14 +669,36 @@ export async function executeUsageCostWorker(
   }
   // Refresh completion (including a yielded batch) promises committed totals.
   await flush();
+  const unscanned = new Set(stale.slice(completedFiles).map(({ file }) => file.filePath));
+  const undecodable = new Set(
+    [...unreadable.keys()].flatMap((sourcePath) =>
+      files.filter((file) => file.sourcePath === sourcePath).map((file) => file.filePath),
+    ),
+  );
+  for (const { row, current } of supersededArchiveRows) {
+    if (!undecodable.has(current) && !unscanned.has(current)) {
+      await pruner.prune(row);
+      changed = true;
+    }
+  }
+  await pruner.flush();
+  const unreadableFiles = unreadable.size
+    ? {
+        unreadableFiles: [...unreadable].map(([sessionFile, error]) => ({
+          sessionFile,
+          message: formatErrorMessage(error),
+        })),
+      }
+    : {};
   if (stale.length === completedFiles) {
-    return { kind: "refresh", changed };
+    return { kind: "refresh", changed, ...unreadableFiles };
   }
   const remaining = stale.slice(completedFiles).map(({ file }) => file);
   const remainingPaths = new Set(remaining.map((file) => file.filePath));
   return {
     kind: "refresh",
     changed,
+    ...unreadableFiles,
     // Keep every requested alias pending even when scanning deduplicated physical keys.
     remainingFiles: (operation.sessionFiles
       ? requestedFiles.filter((file) => remainingPaths.has(file.filePath))

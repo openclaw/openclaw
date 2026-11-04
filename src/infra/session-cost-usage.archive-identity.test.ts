@@ -466,10 +466,8 @@ describe("usage archive identity", () => {
     expect(sessions).toEqual([{ sessionId, sessionFile, mtime: sourceStats.mtimeMs }]);
 
     const resolved = expectDefined(await resolveTranscript(sessionFile), "resolved archive");
-    expect(resolved).toMatchObject({
-      size: Buffer.byteLength(serialize(manager)),
-      mtimeMs: sourceStats.mtimeMs,
-    });
+    // Identity describes the durable compressed source; resolving never decodes it.
+    expect(resolved).toMatchObject({ size: sourceStats.size, mtimeMs: sourceStats.mtimeMs });
     expect(resolved.filePath).not.toBe(sessionFile);
 
     const cacheLookup = { agentId, config, sessions: [{ sessionId, sessionFile }] };
@@ -577,7 +575,7 @@ describe("usage archive identity", () => {
     expect(rows.map((row) => row.key)).toEqual([replacement.filePath]);
     const fingerprint = await resolveUsageCostPricingFingerprint(config, state.agentDir());
     const rollup = expectDefined(rows[0], "replacement archive rollup");
-    const size = Buffer.byteLength(serialize(manager));
+    const { size } = await fs.stat(sessionFile);
     expect(decodeUsageCostRollupEnvelope(rollup.valueJson, fingerprint)?.checkpoint).toMatchObject({
       kind: "jsonl",
       parsedOffset: size,
@@ -602,11 +600,13 @@ describe("usage archive identity", () => {
     expect(rows).toHaveLength(1);
     await fs.writeFile(sessionFile, "not a zstd frame");
 
-    await expect(resolveTranscript(sessionFile)).resolves.toBeUndefined();
+    // The new bytes have a new identity; only a scan discovers they cannot be decoded.
+    expect((await resolveTranscript(sessionFile))?.filePath).not.toBe(rows[0]!.key);
     expect(await discoverAllSessions({ agentId: "main" })).toMatchObject([
       { sessionId: manager.getSessionId(), sessionFile },
     ]);
-    await expect(refreshCostUsageCacheForAgent(main)).rejects.toThrow();
+    // The rest of the batch commits; this archive keeps its last usage.
+    await expect(refreshCostUsageCacheForAgent(main)).resolves.toBe("refreshed");
     expect(readRollups("main")).toEqual(rows);
   });
 });
