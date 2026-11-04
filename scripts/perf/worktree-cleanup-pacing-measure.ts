@@ -234,7 +234,7 @@ const scheduler = new GatewayScheduler({
 const removals: Array<{ id: string; atMs: number; wallMs: number }> = [];
 const admissions: number[] = [];
 const gc = managedWorktrees.gc.bind(managedWorktrees);
-managedWorktrees.gc = async (params = {}) => {
+managedWorktrees.gc = async (params) => {
   const beforeRemoval = params.beforeRemoval;
   if (beforeRemoval) {
     params.beforeRemoval = async () => {
