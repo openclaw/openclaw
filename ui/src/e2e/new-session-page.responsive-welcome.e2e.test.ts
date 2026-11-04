@@ -226,7 +226,7 @@ suite.define(() => {
     await pollCount(suggestions).toBe(4);
     expect(await suggestions.allTextContents()).toEqual([
       "What can you do?",
-      "Tour OpenClaw's code and docs",
+      "Tour OpenClaw’s code and docs",
       "Investigate an issue in a sandbox",
       "Fix a bug and open a draft PR",
     ]);
