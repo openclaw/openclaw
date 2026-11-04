@@ -365,9 +365,10 @@ until their dependent enforcement changes land.
 - GitHub ghost jobs (runnerless queued copies of the same job name) can follow
   any rerun request, single-job or batched, and make that attempt unsealable.
   Send at most one rerun request per child, only after the child is terminal;
-  never stack separate job reruns on one child. When `rerun`, `continue`,
-  `status`, or `watch` reports duplicate jobs or ghost jobs, stop rerunning that
-  FRV: cancel the attempt and start a fresh all-group FRV.
+  never stack separate job reruns on one child. Duplicates can settle within
+  the controller's 60-second reconciliation window; once a command reports
+  ghost jobs (duplicates that persisted), stop rerunning that FRV: cancel the
+  attempt and start a fresh all-group FRV.
 - `continue --failed` reruns each failed child once per invocation. If a child
   it reran fails again, it exits immediately with the attempt and remaining
   rerun budget instead of waiting for siblings; rerun `continue --failed` only

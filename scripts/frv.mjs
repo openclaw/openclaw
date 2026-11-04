@@ -3631,11 +3631,12 @@ async function pollRelease(state, client, pending, observation, readOptions) {
           }
         }
         const duplicates = duplicateJobNames(jobs);
-        // Attempts briefly list overlapping jobs while GitHub materializes them.
+        // Attempts briefly list overlapping jobs while GitHub materializes them; only a
+        // final attempt that still holds duplicates is unsealable ghost-job evidence.
         if (duplicates.length > 0 && (final || pending.has(scanned))) {
           report(
-            `duplicates:${runId}:${attempt}`,
-            `${child.key} run ${runId} attempt ${attempt} holds duplicate jobs: ${duplicates.join(", ")}; ${GHOST_JOBS_ADVICE}`,
+            `duplicates:${runId}:${attempt}${final ? ":final" : ""}`,
+            `${child.key} run ${runId} attempt ${attempt} holds duplicate jobs: ${duplicates.join(", ")}; ${final ? GHOST_JOBS_ADVICE : "they may still settle; recheck before rerunning"}`,
             run.html_url,
           );
         }

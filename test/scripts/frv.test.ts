@@ -2950,6 +2950,46 @@ describe("FRV watch", () => {
     expect(getJobLog).toHaveBeenLastCalledWith(5, expect.anything());
   });
 
+  it("advises a fresh FRV only for duplicate jobs that persist into a final attempt", async () => {
+    const ci = child("normalCi", "101");
+    let polls = 0;
+    const duplicateJobs = (status: string) => [
+      { ...job("test"), id: 900, status: "completed" },
+      { ...job("test", status === "completed" ? "success" : ""), id: 901, status },
+    ];
+    const client = {
+      ...unsealedWatcherReads,
+      repository: REPOSITORY,
+      getRun: async (runId: string) =>
+        runId === "77"
+          ? rootRun(1, polls > 2 ? "failure" : null)
+          : runFor(ci, 1, polls > 2 ? "failure" : null),
+      getParentJobs: async () => [
+        {
+          conclusion: "success",
+          id: 5,
+          name: "Run normal full CI",
+          run_attempt: 1,
+          status: "completed",
+        },
+      ],
+      getJobLog: async () =>
+        `2026-09-29T22:00:00.1Z Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)\n`,
+      getAttemptJobs: async () => duplicateJobs(++polls > 2 ? "completed" : "queued"),
+    };
+    const messages: string[] = [];
+    await watchRelease("77", client, {
+      emit: (event: { message: string }) => messages.push(event.message),
+      intervalMs: 0,
+      statePath: path.join(tempDirs.make("frv-duplicates-"), "state.json"),
+    });
+    const duplicates = messages.filter((message) => message.includes("duplicate jobs"));
+    expect(duplicates).toEqual([
+      "normalCi run 101 attempt 1 holds duplicate jobs: test; they may still settle; recheck before rerunning",
+      "normalCi run 101 attempt 1 holds duplicate jobs: test; GitHub ghost jobs detected; stop rerunning, cancel that attempt, and start a fresh all-group FRV",
+    ]);
+  });
+
   it.each(["reported", "restamped", "omitted", "rerun", "recovered"])(
     "labels carried-forward blockers once per effective attempt across restarts (%s)",
     async (kind) => {
