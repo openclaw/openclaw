@@ -36,7 +36,8 @@ import { closeSkillsWatchers, refreshSkillsDiscovery } from "./refresh.js";
 const worker = vi.hoisted(() =>
   vi.fn<(input: unknown) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>>(),
 );
-vi.mock("../../infra/worker-task-server.js", () => ({
+vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
   serveWorkerTasks: (handler: (input: unknown) => SkillsDiscoveryOutput) =>
     worker.mockImplementation(handler),
 }));

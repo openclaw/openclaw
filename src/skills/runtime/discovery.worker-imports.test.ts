@@ -12,7 +12,8 @@ import {
 const worker = vi.hoisted(() =>
   vi.fn<(input: SkillsDiscoveryInput) => Promise<SkillsDiscoveryOutput>>(),
 );
-vi.mock("../../infra/worker-task-server.js", () => ({
+vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
   serveWorkerTasks: (read: Parameters<typeof worker.mockImplementation>[0]) =>
     worker.mockImplementation(read),
 }));

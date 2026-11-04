@@ -10,9 +10,7 @@ import { splitSkillSourcePlan } from "./workspace-skill-source-plan.js";
 import { resolveWorkspaceSkillSourcePlan } from "./workspace-skill-sources.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(async () => {
-  await closeSkillsWatchers(true);
-});
+afterEach(() => closeSkillsWatchers(true));
 
 const writeSkill = (root: string, name: string, description: string) =>
   writeFixture({
