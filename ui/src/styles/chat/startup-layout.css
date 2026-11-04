@@ -411,10 +411,14 @@ div.chat-thread:where(.chat-thread--annotations) {
 }
 
 .chat-pane__connection-slot {
-  /* Zero intrinsic width keeps feedback out of header sizing; the remaining gap clips it. */
+  /* Zero intrinsic width keeps feedback out of header sizing; the indicator floats below. */
   flex: 1 1 0;
   width: 0;
-  overflow: hidden;
+}
+
+/* Pane notices and suggestions start below the floating connection indicator. */
+.sidebar-region:has(> .sidebar-region__header .chat-pane__connection) {
+  --chat-floating-status-offset: 38px;
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions {
@@ -489,6 +493,11 @@ div.chat-thread:where(.chat-thread--annotations) {
 /* Desktop composition; mobile keeps its own presenter and touch targets. */
 .chat-pane__header:not(.chat-pane__header--mobile) {
   --chat-pane-header-icon-size: 32px;
+
+  /* Lift the header's stacking context so its floating connection indicator
+     paints over the transcript below. */
+  position: relative;
+  z-index: 3;
 
   min-height: var(--desktop-header-height, calc(var(--rail-header-height) - var(--space-1)));
   padding-inline: 12px 8px;
@@ -637,16 +646,22 @@ div.chat-thread:where(.chat-thread--annotations) {
     display: block;
   }
 
+  /* Floats at the pane's top center, below the header, like the pane notice lane. */
   & .chat-pane__connection {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
     display: inline-flex;
     align-items: center;
     gap: 16px;
-    height: 28px;
-    max-width: 100%;
-    padding-inline: 8px;
-    border-radius: var(--radius-sm);
-    background: color-mix(in srgb, var(--warn) 10%, transparent);
+    height: 30px;
+    max-width: min(34rem, calc(100% - 24px));
+    padding-inline: 10px;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--warn) 12%, var(--popover));
+    box-shadow: var(--shadow-sm);
     color: var(--warn);
+    transform: translateX(-50%);
     font-size: 12px;
     white-space: nowrap;
   }
