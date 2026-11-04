@@ -517,22 +517,10 @@ it.each(cases)(
         expect(exitGate.child.signalCode).toBeNull();
         expect(nodeProcess.kill(exitGate.pid, 0)).toBe(true);
       } else if (shutdown === "unconfirmed") {
-        const hasShutdownFailure = () =>
-          lifecycleErrors
-            .get(continued.runId)
-            ?.some((message) => message.includes(SHUTDOWN_FAILURE_DETAIL)) === true;
-        // Graceful shutdown and physical-exit confirmation have separate budgets,
-        // with real process inspection between them. Run each pending deadline only
-        // after the intervening I/O has had a chance to schedule it.
-        for (let turn = 0; turn < 1_000 && !hasShutdownFailure(); turn += 1) {
-          if (vi.getTimerCount() > 0) {
-            await vi.advanceTimersToNextTimerAsync();
-          } else {
-            await new Promise<void>((resolve) => {
-              setImmediate(resolve);
-            });
-          }
-        }
+        expect(await wait(continued.runId)).toMatchObject({
+          status: "error",
+          error: RECOVERY_FAILURE_TEXT,
+        });
         expect(lifecycleErrors.get(continued.runId)).toEqual(
           expect.arrayContaining([expect.stringContaining(SHUTDOWN_FAILURE_DETAIL)]),
         );
@@ -609,10 +597,12 @@ function holdNativeExit(
   };
   child.on("newListener", onListener);
   const end = vi.spyOn(stdin, "end").mockImplementation(() => {
+    // Pause only controls that release the child explicitly. Missing-exit proof
+    // needs real deadlines across asynchronous native containment.
+    if (!closing && !withholdExitConfirmation) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
     closing = true;
-    // Hold the shutdown clock with the child: binding reads and chat.abort
-    // must precede the exit deadline, even when the host is busy.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     return stdin;
   });
   const destroy = vi.spyOn(stdin, "destroy").mockImplementation(() => stdin);
