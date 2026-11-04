@@ -129,7 +129,7 @@ describe("system.info", () => {
     eventLoop.cpuCoreRatio = 0.6;
     readCpus.mockReturnValue([]);
     vi.mocked(Date.now).mockReturnValue(sampleTime + 1_999);
-    vi.mocked(performance.now).mockReturnValue(sampleElapsed + 1_999);
+    vi.spyOn(performance, "now").mockReturnValue(sampleElapsed + 1_999);
     await handler(request);
 
     expect(respond).toHaveBeenCalledTimes(2);
@@ -169,7 +169,7 @@ describe("system.info", () => {
     sampleTime += 24 * 60 * 60_000;
     sampleElapsed += 24 * 60 * 60_000;
     vi.mocked(Date.now).mockReturnValue(sampleTime);
-    vi.mocked(performance.now).mockReturnValue(sampleElapsed);
+    vi.spyOn(performance, "now").mockReturnValue(sampleElapsed);
     await handler(request);
     expect(readCpus).not.toHaveBeenCalled();
     expect(respond.mock.calls[2]?.[1]).toMatchObject({
@@ -274,7 +274,7 @@ describe("system.info", () => {
         availableBytes: 256,
       }));
       vi.mocked(Date.now).mockReturnValue(sampleTime + wallClockStep + 29_999);
-      vi.mocked(performance.now).mockReturnValue(sampleElapsed + 29_999);
+      vi.spyOn(performance, "now").mockReturnValue(sampleElapsed + 29_999);
       await handler(request);
       expect(readDisk).toHaveBeenCalledTimes(1);
       expect(respond.mock.calls[1]?.[1]).toEqual({
@@ -283,7 +283,7 @@ describe("system.info", () => {
         loadAverage: [4, 5, 6],
       });
       vi.mocked(Date.now).mockReturnValue(sampleTime + wallClockStep + 30_000);
-      vi.mocked(performance.now).mockReturnValue(sampleElapsed + 30_000);
+      vi.spyOn(performance, "now").mockReturnValue(sampleElapsed + 30_000);
       await handler(request);
       expect(readDisk).toHaveBeenCalledTimes(2);
       expect(respond.mock.calls[2]?.[1]).toMatchObject({
