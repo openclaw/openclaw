@@ -8,6 +8,10 @@
 // Worker update announcements use this same guarded recovery; unsaved work
 // blocks automatic reloads and leaves the Reload banner available.
 import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
+import {
+  monotonicDeadlineAfter,
+  remainingMonotonicMs,
+} from "../../../src/shared/monotonic-time.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
@@ -308,12 +312,12 @@ async function waitForReachableControlUiDocument(
   isCurrent: () => boolean,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  const deadline = Date.now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
+  const deadline = monotonicDeadlineAfter(deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
   for (let attempt = 0; ; attempt += 1) {
     if (signal?.aborted || !isCurrent()) {
       return false;
     }
-    const remaining = deadline - Date.now();
+    const remaining = remainingMonotonicMs(deadline);
     if (attempt > 0 && remaining <= 0) {
       return false;
     }
@@ -329,7 +333,7 @@ async function waitForReachableControlUiDocument(
     if (reachable) {
       return true;
     }
-    const remainingWait = deadline - Date.now();
+    const remainingWait = remainingMonotonicMs(deadline);
     if (remainingWait <= 0) {
       return false;
     }

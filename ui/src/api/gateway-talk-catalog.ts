@@ -5,6 +5,10 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sleepWithAbort } from "@openclaw/retry";
+import {
+  monotonicDeadlineAfter,
+  remainingMonotonicMs,
+} from "../../../src/shared/monotonic-time.ts";
 
 /** Warming retries share one bounded wait and the owning connection's cancellation. */
 export async function requestTalkCatalog<T>(
@@ -16,7 +20,7 @@ export async function requestTalkCatalog<T>(
     resolveSafeTimeoutDelayMs(options?.timeoutMs ?? 10_000, { minMs: 0 }),
     10_000,
   );
-  const deadline = Date.now() + timeoutMs;
+  const deadline = monotonicDeadlineAfter(timeoutMs);
   const signal = options?.signal
     ? AbortSignal.any([options.signal, connectionSignal])
     : connectionSignal;
@@ -35,11 +39,11 @@ export async function requestTalkCatalog<T>(
         throw error;
       }
       const delay = resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 250, { minMs: 250 });
-      if (Date.now() + delay >= deadline) {
+      if (remainingMonotonicMs(deadline) <= delay) {
         throw error;
       }
       await sleepWithAbort(delay, signal);
-      const remaining = deadline - Date.now();
+      const remaining = remainingMonotonicMs(deadline);
       if (remaining <= 0) {
         throw error;
       }
