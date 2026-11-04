@@ -60,8 +60,7 @@ describe("Templates discovery", () => {
     const { detail } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
     await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
     const section = detail.querySelector(".plugin-capabilities")!;
-    expect(section.querySelector("h2 > span")?.textContent).toBe(String(names.length));
-    const titles = [...section.querySelectorAll(".plugin-capability__copy strong")].map(
+    const titles = [...section.querySelectorAll(".settings-row__title")].map(
       (node) => node.textContent,
     );
     expect(titles).toEqual(ordered);

@@ -440,10 +440,11 @@ export const iconData = {
     "M10 10.5V6a2 2 0 0 0-4 0v8",
     "M6 14v-2a2 2 0 0 0-4 0v4c0 4.4 3.6 8 8 8h2c4.4 0 8-3.6 8-8v-5a2 2 0 0 0-4 0v2",
   ),
+  // Lucide key (ISC).
   key: strokeIconData([
-    ["circle", { cx: "7.5", cy: "15.5", r: "5.5" }],
-    ["path", { d: "m21 2-9.6 9.6" }],
-    ["path", { d: "m15.5 7.5 3 3L22 7l-3-3" }],
+    ["path", { d: "m2 21 9.6-9.6" }],
+    ["path", { d: "m7.5 15.5 2.3 2.3a1 1 0 0 1 0 1.4l-2.1 2.1a1 1 0 0 1-1.4 0L4 19" }],
+    ["circle", { cx: "15.5", cy: "7.5", r: "5.5" }],
   ]),
   flag: strokePathData("M5 22V4", "M5 4c5-4 9 4 14 0v11c-5 4-9-4-14 0"),
   lock: strokeIconData([

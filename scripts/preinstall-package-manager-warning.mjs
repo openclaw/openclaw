@@ -464,7 +464,12 @@ export function warnIfNonPnpmLifecycle(env = process.env, warn = console.warn) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  if (enforceSupportedNodeRuntime() && removeLegacyPackageInstallGuard()) {
+  // `npm exec` hides lifecycle output and failures, and replaces no installed release.
+  // Let its throwaway install finish so the launcher can report the runtime problem.
+  if (
+    (enforceSupportedNodeRuntime() || process.env.npm_command === "exec") &&
+    removeLegacyPackageInstallGuard()
+  ) {
     warnIfNonPnpmLifecycle();
   } else {
     process.exitCode = 1;
