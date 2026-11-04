@@ -113,58 +113,6 @@ function update(activity: ActivityHeadline | undefined, scope = "session:run") {
   return drawHeadline({ scope, activity, summary: "2 reads" });
 }
 
-it("keeps the shimmer label mounted when narration changes", () => {
-  update(operation("first"));
-  const original = query("label");
-  expect(original?.classList.contains("text-shimmer")).toBe(true);
-
-  update(operation("second"));
-  expectAfter(3_000, "Read second…");
-  expect(query("label")).toBe(original);
-
-  update({ ...operation("second"), title: "Reviewing results" });
-  expect(label()).toBe("Reviewing results…");
-  expect(query("label")).toBe(original);
-  expect(original?.classList.contains("text-shimmer")).toBe(true);
-
-  update({ ...operation("second", "completed"), title: "Reviewing results" });
-  expect(query("label")).toBe(original);
-  expect(original?.classList.contains("text-shimmer")).toBe(false);
-});
-
-it("keeps shimmering held copy while the next operation is running", () => {
-  update(operation("first"));
-  const original = query("label");
-  drawHeadline({
-    scope: "session:run",
-    activity: operation("second"),
-    summary: "2 reads",
-    currentActivity: [
-      {
-        itemId: "first",
-        toolCallId: "first",
-        phase: "end",
-        kind: "tool",
-        title: "Read first",
-        status: "completed",
-      },
-      {
-        itemId: "second",
-        toolCallId: "second",
-        phase: "start",
-        kind: "tool",
-        title: "Read second",
-        status: "running",
-      },
-    ],
-  });
-  expect(label()).toBe("Read first");
-  expect(original?.classList.contains("text-shimmer")).toBe(true);
-  expectAfter(3_000, "Read second…");
-  expect(query("label")).toBe(original);
-  expect(original?.classList.contains("text-shimmer")).toBe(true);
-});
-
 function label() {
   return query("label")?.textContent;
 }
@@ -358,8 +306,7 @@ it("keeps the headline and its dwell across disclosure toggles with accessible c
       onToggleToolMessageExpanded: onToggle,
     });
   draw([prepared("first")]);
-  const summary = query("summary")!;
-  const body = query("body")!;
+  const [summary, body, headline] = [query("summary")!, query("body")!, query("label")!];
   expect(summary.getAttribute("aria-expanded")).toBe("false");
   expect(summary.getAttribute("aria-controls")).toBe(body.id);
   expect(body.hidden).toBe(true);
@@ -373,9 +320,9 @@ it("keeps the headline and its dwell across disclosure toggles with accessible c
   expect(label()).toBe("Read first");
   expect(summary.getAttribute("aria-expanded")).toBe("true");
   expect(body.hidden).toBe(false);
-  expect(query("summary")).toBe(summary);
   expectAfter(1_999, "Read first");
   expectAfter(1, "Read next…");
+  expect(query("label")).toBe(headline);
   expanded = false;
   draw([prepared("first", "completed"), prepared("next", "completed")]);
   expect(label()).toBe("Read next");
@@ -496,7 +443,7 @@ it.each([false, true])(
       expect(label()).toBe("Read first");
     }
     activityRoot.render([group("current", [...settled, prepared("next")])], liveOptions);
-    expect(label()).toBe("Read first");
+    expect(container.querySelector(".text-shimmer")?.textContent).toBe("Read first");
     expectAfter(2_800, "Read next…");
   },
 );

@@ -86,8 +86,6 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
   );
   const shown = () => display().headline;
   const name = () => shown()?.name;
-  // The readable caption may lag behind the active operation; its shimmer must not.
-  const running = () => props.activity?.status === "running";
   return (
     <>
       <Show
@@ -119,24 +117,28 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
       </Show>
       <span ref={(element) => props.contentRef?.(element)} class="chat-tool-disclosure__content">
         <Show
-          when={shown()?.title}
+          when={Boolean(shown()?.title)}
+          keyed
           fallback={
             <Show when={!props.bubbleMode}>
               <span class="chat-activity-group__label">{props.summary}</span>
             </Show>
           }
         >
-          <span
-            class={[
-              "chat-activity-group__label",
-              {
-                "chat-activity-group__label--running text-shimmer": running(),
-              },
-            ]}
-          >
-            {shown()?.title}
-            {!props.bubbleMode && shown()?.status === "running" ? "…" : ""}
-          </span>
+          {(_hasTitle) => (
+            <span
+              class={[
+                "chat-activity-group__label chat-activity-group__label--live",
+                {
+                  "chat-activity-group__label--running text-shimmer":
+                    props.activity?.status === "running",
+                },
+              ]}
+            >
+              {shown()?.title}
+              {!props.bubbleMode && shown()?.status === "running" ? "…" : ""}
+            </span>
+          )}
         </Show>
       </span>
       <Show when={shown()?.title}>
