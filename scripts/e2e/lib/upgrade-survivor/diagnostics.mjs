@@ -86,6 +86,7 @@ const nativePluginUiLogs = ["", "native-ui-opt-out/"]
   ]);
 const logNames = [
   "baseline-install.log",
+  "config-recipe.json",
   "baseline-companion.json",
   "install.log",
   "update.json",
