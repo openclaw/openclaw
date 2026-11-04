@@ -30,7 +30,10 @@ vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
 }));
 const hostMemory = vi.hoisted(() => ({ freeBytes: vi.fn(() => 8 * 1024 ** 3) }));
-vi.mock("../../infra/host-memory.js", () => ({ readHostFreeMemoryBytes: hostMemory.freeBytes }));
+vi.mock("../../infra/host-memory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/host-memory.js")>()),
+  readHostFreeMemoryBytes: hostMemory.freeBytes,
+}));
 const LOW_MEMORY = 512 * 1024 ** 2;
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
@@ -428,14 +431,15 @@ describe("plugin-owned CLI execution host boundary", () => {
   );
 
   it("closes the least recently used idle process before low memory starts another", async () => {
-    const [older, busy, recent] = await Promise.all(
-      ["older", "busy", "recent"].map(async (name) => {
-        const { context } = await createExecution({ runId: `memory-${name}` });
-        context.params.sessionId = `memory-${name}`;
-        context.params.sessionKey = `agent:main:memory-${name}`;
-        return registerOwnerSession(context, name, name !== "busy");
-      }),
-    );
+    const owner = async (name: string) => {
+      const { context } = await createExecution({ runId: `memory-${name}` });
+      context.params.sessionId = `memory-${name}`;
+      context.params.sessionKey = `agent:main:memory-${name}`;
+      return registerOwnerSession(context, name, name !== "busy");
+    };
+    const older = await owner("older");
+    const busy = await owner("busy");
+    const recent = await owner("recent");
     // A later turn on the oldest process makes it the most recently used.
     older.capability.activate(older.handle);
     const { context } = await createExecution({ runId: "memory-new" });
