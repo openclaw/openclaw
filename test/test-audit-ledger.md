@@ -199,14 +199,22 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `db6ac584cf20`: investigate first-case failure cleanup in
+Pinned main `db6ac584cf20`: guarantee first-case cleanup in
 `extensions/codex/src/app-server/node-app-server-transport.test.ts`.
-Source inspection shows the caller-owned client can remain registered when an
-early assertion skips explicit shutdown and synthetic duplex closure. The primary
-is unchanged in this prerequisite draft; all four declarations/five expanded
-cases and normal shutdown assertions remain. Native dependency qualification,
-actual early-failure custody proof and the minimal test-only repair are pending.
-No real native process or live Gateway leak is claimed.
+An `onTestFinished` hook resolves the fixture's synthetic duplex closure and
+awaits the existing caller-owned client release. All four declarations/five
+expanded cases, inputs and original assertions remain, including normal shutdown
+ordering. Four added test lines have an equal separate allocation; production is
+unchanged.
+
+The untouched and clean repaired suites pass all five cases. An identical
+temporary early assertion failure leaves the original client registered after
+its test hooks and all file hooks; the repaired case has released that exact
+client before observation. Both probes preserve the same intended failure and
+four passing siblings. Diagnostic cleanup runs only after observation and closes
+only that fixture. All four inventories match, and all temporary source edits
+are restored. This proves real client/transport fixture custody through a
+synthetic duplex, not a native process or live Gateway leak.
 
 ## Completed source review
 
