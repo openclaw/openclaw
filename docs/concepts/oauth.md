@@ -8,6 +8,10 @@ read_when:
 title: "OAuth"
 ---
 
+In **Settings → Models**, choose **Add account** to save a provider sign-in.
+**Accounts** are saved ways to use a provider; API keys supplied by config or the
+environment remain managed at their source. **Sign out** removes the saved sign-in.
+
 OpenClaw supports OAuth ("subscription auth") for providers that offer it,
 notably **OpenAI Codex (ChatGPT OAuth)** and **Anthropic Claude CLI reuse**.
 For Anthropic, the practical split is:
@@ -38,9 +42,9 @@ same entry point:
 openclaw models auth login --provider <id>
 ```
 
-In the Control UI, open **Settings → Models → Connect provider** to save a
-supported account without requesting a model reply. **Connect provider** in
-Models opens the same picker and connection flow. Choose **Test & use** when
+In the Control UI, open **Settings → Models → Add account** to save a
+supported account without requesting a model reply. **Add account** in
+Model Setup opens the same picker and connection flow. Choose **Test & use** when
 you want to verify a model and select it. Plugins that only support full setup
 keep their separate setup action.
 

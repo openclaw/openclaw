@@ -85,7 +85,7 @@ export function ChatImageActions(props: {
       const blob = await props.readOriginalBlob();
       downloadImageBlob(blob, props.title);
     } catch {
-      showToast({ message: t("chat.imageLightbox.downloadFailed") });
+      showToast({ severity: "error", message: t("chat.imageLightbox.downloadFailed") });
     }
   };
   const copy = async () => {
@@ -96,7 +96,7 @@ export function ChatImageActions(props: {
       await copyImageToClipboard(props.readOriginalBlob);
       showToast({ message: t("common.copied") });
     } catch {
-      showToast({ message: t("chat.imageLightbox.copyFailed") });
+      showToast({ severity: "error", message: t("chat.imageLightbox.copyFailed") });
     }
   };
   const id = `chat-image-actions-${++nextMenuId}`;

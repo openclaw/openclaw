@@ -9,11 +9,13 @@ title: "Control UI and API keys"
 
 ## Configure providers in the Control UI
 
-Open **Settings → Models** in the Control UI to add, replace, or remove provider
-API keys. The page and `openclaw models auth paste-api-key` use the same credential
+Open **Settings → Models** in the Control UI and choose **Add account** to save a
+provider sign-in or API key. A provider is the company or service; an account is a
+saved way to use it. The page and `openclaw models auth paste-api-key` use the same credential
 writer: key material stays in the auth store, and configured providers reference
 the saved profile. Environment-provided keys remain managed by the Gateway
-process environment. The page shows credential sources without revealing keys.
+process environment. The page distinguishes saved accounts from API keys managed in config or the
+environment without revealing keys.
 
 Saving a key and refreshing the catalog are separate outcomes. If refresh fails,
 the saved key remains; follow the reported recovery step. Removing a stored key

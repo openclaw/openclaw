@@ -41,7 +41,7 @@ suite.define(() => {
       await textarea.fill("/help");
       await expect.poll(() => sendButton.isDisabled()).toBe(false);
       await sendButton.click();
-      await page.getByText("Available Commands", { exact: true }).waitFor();
+      await page.getByText("Available commands", { exact: true }).waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await expect.poll(() => welcome.count()).toBe(0);
       await expect.poll(() => setupAction.count()).toBe(1);
@@ -72,9 +72,9 @@ suite.define(() => {
       await setupAction.click();
       await expectSetupRoute(page);
       await page.goBack();
-      await textarea.fill("Start a conversation.");
+      await textarea.fill("Start a session.");
       await expect.poll(() => sendButton.isDisabled()).toBe(true);
-      expect(await textarea.inputValue()).toBe("Start a conversation.");
+      expect(await textarea.inputValue()).toBe("Start a session.");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });

@@ -65,7 +65,7 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
   await search.waitFor();
   const inventoryGeometry = await page.evaluate(() => {
     const surface = document.querySelector<HTMLElement>(".settings-page.oc-app-surface");
-    const title = surface?.querySelector<HTMLElement>(".content-header--settings h1.page-title");
+    const title = document.querySelector<HTMLElement>(".content-header--settings h1.page-title");
     const tabs = surface?.querySelector<HTMLElement>(".plugins-settings-tabs.oc-segmented");
     const searchField = surface?.querySelector<HTMLElement>(".plugins-settings-search");
     const section = surface?.querySelector<HTMLElement>("#plugin-settings-panel .settings-group");
@@ -119,7 +119,7 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
   await workboardRow.waitFor();
   const workboardLink = workboardRow.getByRole("link", { name: /Workboard/iu });
   expect(await workboardLink.getAttribute("href")).toBe("/settings/plugins/workboard");
-  const enabledStatus = workboardRow.locator('.settings-status[data-plugin-state="enabled"]');
+  const enabledStatus = workboardRow.locator('[data-plugin-state="enabled"]');
   expect(await enabledStatus.count()).toBe(1);
   expect(await enabledStatus.getAttribute("title")).toBe("Enabled");
   expect(await workboardRow.getByRole("switch").count()).toBe(0);
@@ -521,7 +521,7 @@ suite.define(() => {
       await page.getByRole("searchbox", { name: "Search settings", exact: true }).last().waitFor();
       expect(await gateway.getRequests("plugins.inspect")).toHaveLength(1);
 
-      await page.getByRole("checkbox", { name: "Add context to prompts", exact: true }).waitFor();
+      await page.getByRole("checkbox", { name: "Modify prompts", exact: true }).waitFor();
       await page
         .getByRole("checkbox", { name: "Read conversation context", exact: true })
         .waitFor();
@@ -750,7 +750,7 @@ suite.define(() => {
       await search.fill("Allow prompt changes");
       await page.getByRole("heading", { name: "Permissions", exact: true }).waitFor();
       expect(await page.locator(".plugin-editor__empty").count()).toBe(0);
-      const permissionRow = page.locator('[data-setting="hooks.allowPromptInjection"]');
+      const permissionRow = page.locator('[data-setting="hooks.allowPromptModification"]');
       const permission = permissionRow.getByRole("checkbox");
       const inspections = (await gateway.getRequests("plugins.inspect")).length;
       await gateway.deferNext("plugins.inspect");
@@ -775,7 +775,7 @@ suite.define(() => {
           entries: {
             workboard: {
               enabled: false,
-              hooks: { allowPromptInjection: true },
+              hooks: { allowPromptModification: true },
               config: { refreshMinutes: 15, notifications: false },
             },
           },
@@ -956,7 +956,7 @@ suite.define(() => {
         .click();
       await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
       expect(
-        await page.getByRole("checkbox", { name: "Add context to prompts", exact: true }).count(),
+        await page.getByRole("checkbox", { name: "Modify prompts", exact: true }).count(),
       ).toBe(0);
 
       await page.getByRole("alert").filter({ hasText: "Configuration unavailable" }).waitFor();
@@ -964,7 +964,7 @@ suite.define(() => {
       await gateway.setMethodResponse("config.get", configMocks["config.get"]);
       await page.getByRole("button", { name: "Retry", exact: true }).click();
       await page.getByLabel("Workspace label", { exact: true }).waitFor();
-      await page.getByRole("checkbox", { name: "Add context to prompts", exact: true }).waitFor();
+      await page.getByRole("checkbox", { name: "Modify prompts", exact: true }).waitFor();
       expect(await gateway.getRequests("config.get")).toHaveLength(configRequests + 1);
     });
   });

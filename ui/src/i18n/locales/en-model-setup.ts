@@ -8,7 +8,7 @@ const enModelSetup = {
       description:
         "Find saved accounts or set up a local model for {agent}. This changes only this agent’s model, not the defaults for other agents.",
       useForAgent: "Test & use for this agent",
-      connectForAgent: "Add & use for this agent",
+      connectForAgent: "Add account for this agent",
       connectProvider: "Add account",
       returnToModels: "Back to Models",
       otherSoftware: "Other detected software",
@@ -42,7 +42,7 @@ const enModelSetup = {
       gatewayTooOld: "Update the Gateway to set up models.",
     },
     candidates: {
-      title: "Found on the computer running OpenClaw",
+      title: "Available models",
       recommended: "Recommended",
       credentialsReady: "Account ready",
       detected: "Detected",
@@ -83,10 +83,12 @@ const enModelSetup = {
     },
     prepare: {
       title: "Run a model locally",
-      intro: "Use a local model service or set up a private GGUF model on the computer running OpenClaw.",
+      intro:
+        "Use a local model service or set up a private GGUF model on the computer running OpenClaw.",
       ollamaButton: "Check & set up",
       ollamaLabel: "Ollama",
-      ollamaHint: "Use Ollama on the computer running OpenClaw to set up a model that supports tools",
+      ollamaHint:
+        "Use Ollama on the computer running OpenClaw to set up a model that supports tools",
       llamaCppLabel: "llama.cpp",
       providerNotReady:
         "Couldn’t find a usable local model from {provider}. Review the setup result, then try again.",
@@ -202,7 +204,7 @@ const enModelSetup = {
       gatewayReconnecting: "Disconnected. Waiting to reconnect…",
       notComplete: "You’re signed in, but model setup isn’t complete yet.",
     },
-    providerConnected: "{provider} is connected",
+    providerConnected: "{provider} is ready",
   },
 } satisfies TranslationMap;
 
