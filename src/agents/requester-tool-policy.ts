@@ -55,7 +55,9 @@ type RequesterToolPolicyResolution = {
   /** Full ancestor ceiling retained by descendants and completion, even when execution differs. */
   inheritedToolPolicyForSpawn?: SandboxToolPolicy;
   delegatedToolPolicy?: DelegatedToolPolicy;
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "scheduled-run";
+  /** With "scheduled-run": the per-run session of the run whose own turn the mark records. */
+  inheritedToolPolicyRunSessionKey?: string;
 };
 
 type SenderPolicyMode = "always" | "when-sender-id" | "never";
@@ -82,6 +84,7 @@ export function isInternalOwnerRequester(params: {
 
 type RequesterToolPolicyParams = {
   requesterOrigin?: RequesterOrigin;
+  operatorProfileId?: string | null;
   conversationId?: string | null;
   chatType?: string;
   config?: OpenClawConfig;
@@ -112,7 +115,27 @@ type RequesterToolPolicyParams = {
   requireConfiguredGroupAccount?: boolean;
   /** Policy prepared by the trusted channel ingress owner for this conversation. */
   conversationPolicy?: SandboxToolPolicy;
+  /** Host-only: the per-run session the cron isolated runner freshly minted for this turn's run. */
+  trustedScheduledRunSessionKey?: string;
 };
+
+/** Whether requester facts identify a sender; blank values do not. */
+export function hasSenderIdentity(
+  facts: Partial<
+    Record<"senderId" | "senderName" | "senderUsername" | "senderE164", string | null>
+  >,
+): boolean {
+  return Boolean(
+    facts.senderId?.trim() ||
+    facts.senderName?.trim() ||
+    facts.senderUsername?.trim() ||
+    facts.senderE164?.trim(),
+  );
+}
+
+function toRequesterStoreKey(config: OpenClawConfig | undefined, sessionKey: string): string {
+  return config ? resolveRequesterStoreKey(config, sessionKey) : sessionKey.trim();
+}
 
 function policyFromEnvelope(
   envelope: ReturnType<typeof resolvePersistedSubagentToolPolicyEnvelope>,
@@ -144,7 +167,8 @@ function resolveDelegatedPolicy(
       sessionPolicy?: SandboxToolPolicy;
       policyForSpawn?: SandboxToolPolicy;
       delegatedToolPolicy?: DelegatedToolPolicy;
-      inheritedToolPolicySource?: "sender";
+      inheritedToolPolicySource?: "sender" | "scheduled-run";
+      inheritedToolPolicyRunSessionKey?: string;
     } {
   const provenance = normalizeInputProvenance(params.inputProvenance);
   const hasExternalRequester =
@@ -209,7 +233,7 @@ function resolveDelegatedPolicy(
         JSON.stringify([
           entry.inheritedToolAllow.toSorted(),
           entry.inheritedToolDeny.toSorted(),
-          entry.inheritedToolPolicySource,
+          entry.inheritedToolPolicySource === "sender",
           entry.delegatedToolPolicy?.requesterDeny.toSorted(),
         ]);
       if (
@@ -250,7 +274,18 @@ function resolveDelegatedPolicy(
                   : undefined,
               }
             : {}),
-          inheritedToolPolicySource: envelope.inheritedToolPolicySource,
+          // A scheduled-run mark survives a batch only when every completing child
+          // carries it for the same run.
+          ...(envelopes.every(
+            (entry) =>
+              entry?.inheritedToolPolicySource === envelope.inheritedToolPolicySource &&
+              entry?.inheritedToolPolicyRunSessionKey === envelope.inheritedToolPolicyRunSessionKey,
+          )
+            ? {
+                inheritedToolPolicySource: envelope.inheritedToolPolicySource,
+                inheritedToolPolicyRunSessionKey: envelope.inheritedToolPolicyRunSessionKey,
+              }
+            : {}),
         }
       : { delegated: false };
   }
@@ -273,6 +308,7 @@ function resolveDelegatedPolicy(
         delegatedToolPolicy: executionPolicy ? ownEnvelope.delegatedToolPolicy : undefined,
         policyForSpawn: policyFromEnvelope(ownEnvelope),
         inheritedToolPolicySource: ownEnvelope.inheritedToolPolicySource,
+        inheritedToolPolicyRunSessionKey: ownEnvelope.inheritedToolPolicyRunSessionKey,
       };
     }
   }
@@ -372,7 +408,32 @@ export function resolveRequesterToolPolicies(
     !delegatedPolicy.delegated ||
     (delegatedPolicy.source === "persisted-child" && params.requesterOrigin !== undefined);
   const requester = params.requesterOrigin ?? params;
-  const senderPolicyMode = params.senderPolicyMode ?? "always";
+  const origin = params.requesterOrigin;
+  const markedRunSessionKey = delegatedPolicy.delegated
+    ? delegatedPolicy.inheritedToolPolicyRunSessionKey
+    : undefined;
+  // A child keeps its snapshot instead of "*" only when the request is the senderless,
+  // non-operator work of the exact run whose own turn spawned it (or its spawning
+  // sub-agent) without sender policy; spawn recorded that run's fresh session key, and
+  // only that run's own turn stamps its origin with it (another turn on the same
+  // session, such as another job, a hook or an operator, carries no stamp).
+  const markedRunStoreKey =
+    markedRunSessionKey !== undefined
+      ? toRequesterStoreKey(params.config, markedRunSessionKey)
+      : undefined;
+  const isSenderlessSpawningRequester =
+    delegatedPolicy.delegated &&
+    delegatedPolicy.inheritedToolPolicySource === "scheduled-run" &&
+    markedRunStoreKey !== undefined &&
+    origin?.scheduledRunSessionKey !== undefined &&
+    !hasSenderIdentity(origin) &&
+    !origin.operatorProfileId &&
+    !params.operatorProfileId &&
+    toRequesterStoreKey(params.config, origin.sessionKey) === markedRunStoreKey &&
+    toRequesterStoreKey(params.config, origin.scheduledRunSessionKey) === markedRunStoreKey;
+  const senderPolicyMode = isSenderlessSpawningRequester
+    ? "never"
+    : (params.senderPolicyMode ?? "always");
   const shouldResolveSenderPolicy =
     senderPolicyMode === "always" ||
     (senderPolicyMode === "when-sender-id" && Boolean(requester.senderId));
@@ -393,7 +454,15 @@ export function resolveRequesterToolPolicies(
         })
       : undefined;
   if (delegatedPolicy.delegated) {
-    // Senderless resumes and verified completion handoffs retain their snapshot;
+    const inheritedToolPolicySource =
+      toolPolicyRestrictsTools(groupPolicy) || toolPolicyRestrictsTools(senderPolicy)
+        ? "sender"
+        : isSenderlessSpawningRequester || !resolveCurrentRequesterPolicy
+          ? delegatedPolicy.inheritedToolPolicySource
+          : delegatedPolicy.inheritedToolPolicySource === "sender"
+            ? "sender"
+            : undefined;
+    // Origin-free resumes and verified completion handoffs retain their snapshot;
     // resolving them without requester identity would select an unrelated wildcard.
     return {
       delegated: true,
@@ -408,12 +477,29 @@ export function resolveRequesterToolPolicies(
           : delegatedPolicy.policy,
       inheritedToolPolicyForSpawn: delegatedPolicy.policyForSpawn ?? delegatedPolicy.policy,
       delegatedToolPolicy: delegatedPolicy.delegatedToolPolicy,
-      inheritedToolPolicySource:
-        toolPolicyRestrictsTools(groupPolicy) || toolPolicyRestrictsTools(senderPolicy)
-          ? "sender"
-          : delegatedPolicy.inheritedToolPolicySource,
+      inheritedToolPolicySource,
+      ...(inheritedToolPolicySource === "scheduled-run" && markedRunSessionKey
+        ? { inheritedToolPolicyRunSessionKey: markedRunSessionKey }
+        : {}),
     };
   }
+  const trustedRunSessionKey = params.trustedScheduledRunSessionKey
+    ? toRequesterStoreKey(params.config, params.trustedScheduledRunSessionKey)
+    : undefined;
+  // Mark only a turn the isolated runner ran on the per-run session it freshly
+  // minted (a host fact, never key shape): no sender, no operator, no other session.
+  const scheduledRunSessionKey =
+    senderPolicyMode === "never" &&
+    trustedRunSessionKey &&
+    !hasSenderIdentity(params) &&
+    !hasSenderIdentity(origin ?? {}) &&
+    !params.operatorProfileId &&
+    !origin?.operatorProfileId &&
+    params.sessionKey !== undefined &&
+    toRequesterStoreKey(params.config, params.sessionKey) === trustedRunSessionKey &&
+    (!origin || toRequesterStoreKey(params.config, origin.sessionKey) === trustedRunSessionKey)
+      ? trustedRunSessionKey
+      : undefined;
   const inheritedEnvelope = resolvePersistedSubagentToolPolicyEnvelope(subagentSessionKey, {
     cfg: params.config,
     store: subagentStore,
@@ -423,18 +509,23 @@ export function resolveRequesterToolPolicies(
     subagentSessionKey,
     { store: subagentStore },
   );
+  const senderRestricted =
+    inheritedEnvelope?.inheritedToolPolicySource === "sender" ||
+    toolPolicyRestrictsTools(groupPolicy) ||
+    toolPolicyRestrictsTools(senderPolicy);
   return {
     delegated: false,
     requesterPolicySource: "current-request",
     groupPolicy,
     senderPolicy,
-    inheritedToolPolicySource:
-      inheritedEnvelope?.inheritedToolPolicySource === "sender" ||
-      toolPolicyRestrictsTools(groupPolicy) ||
-      toolPolicyRestrictsTools(senderPolicy)
-        ? "sender"
-        : undefined,
-
+    ...(senderRestricted
+      ? { inheritedToolPolicySource: "sender" as const }
+      : scheduledRunSessionKey
+        ? {
+            inheritedToolPolicySource: "scheduled-run" as const,
+            inheritedToolPolicyRunSessionKey: scheduledRunSessionKey,
+          }
+        : {}),
     subagentPolicy,
     inheritedToolPolicy,
     sessionInheritedToolPolicy: inheritedToolPolicy,

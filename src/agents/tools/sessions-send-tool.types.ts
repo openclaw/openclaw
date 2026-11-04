@@ -32,7 +32,7 @@ export type SessionsSendToolOptions = {
   agentSessionKey?: string;
   agentSessionId?: string;
   requesterTurnRunId?: string;
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "scheduled-run";
   agentChannel?: string;
   requesterOrigin?: DeliveryContext;
   sandboxed?: boolean;

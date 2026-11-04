@@ -93,7 +93,8 @@ export async function createInitialSubagentSession(input: {
   >["childSessionPatch"];
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "scheduled-run";
+  inheritedToolPolicyRunSessionKey?: string;
   delegatedToolPolicy?: SessionEntry["delegatedToolPolicy"];
   modelPatch: Partial<
     Extract<
@@ -122,9 +123,16 @@ export async function createInitialSubagentSession(input: {
     blindPrompt: params.blind ? true : undefined,
     inheritedToolPolicyVersion: 1,
     ...(params.delegatedToolPolicy ? { delegatedToolPolicy: params.delegatedToolPolicy } : {}),
-    ...(params.inheritedToolPolicySource
-      ? { inheritedToolPolicySource: params.inheritedToolPolicySource }
-      : {}),
+    // A scheduled-run mark is persisted only with the run it names.
+    ...(params.inheritedToolPolicySource === "sender"
+      ? { inheritedToolPolicySource: "sender" as const }
+      : params.inheritedToolPolicySource === "scheduled-run" &&
+          params.inheritedToolPolicyRunSessionKey
+        ? {
+            inheritedToolPolicySource: "scheduled-run" as const,
+            inheritedToolPolicyRunSessionKey: params.inheritedToolPolicyRunSessionKey,
+          }
+        : {}),
     ...inheritedToolAllowPatch(params.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(params.inheritedToolDenylist),
     ...params.modelPatch,

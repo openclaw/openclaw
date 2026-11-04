@@ -21,9 +21,17 @@ export type RequesterOrigin = Readonly<{
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  /**
+   * Set only on the origin of a detached scheduled run's own turn on the per-run session the
+   * runner freshly minted; carried unchanged to that run's sub-agents, never taken from flat input.
+   */
+  scheduledRunSessionKey?: string;
 }>;
 
-type RequesterOriginCaptureInput = Omit<Partial<RequesterOrigin>, "accountId" | "chatType"> & {
+type RequesterOriginCaptureInput = Omit<
+  Partial<RequesterOrigin>,
+  "accountId" | "chatType" | "scheduledRunSessionKey"
+> & {
   requesterOrigin?: RequesterOrigin;
   agentAccountId?: string | null;
   messageChannel?: string | null;
@@ -98,6 +106,7 @@ export function captureRequesterOrigin(
     senderName: facts.senderName,
     senderUsername: facts.senderUsername,
     senderE164: facts.senderE164,
+    scheduledRunSessionKey: source?.scheduledRunSessionKey,
   };
   // JSON persistence drops undefined keys; replay must capture the same envelope.
   for (const [key, value] of Object.entries(origin)) {
@@ -106,6 +115,42 @@ export function captureRequesterOrigin(
     }
   }
   return Object.freeze(origin);
+}
+
+/**
+ * Stamps the origin a scheduled run's own turn hands to its tools, from the host's requester
+ * policy result only: its sub-agents keep their snapshot for that run's work, not for any other
+ * turn opened on the same session.
+ */
+export function stampScheduledRunOrigin(
+  origin: RequesterOrigin | undefined,
+  policy: {
+    delegated?: boolean;
+    inheritedToolPolicySource?: string;
+    inheritedToolPolicyRunSessionKey?: string;
+  },
+): RequesterOrigin | undefined {
+  const runSessionKey =
+    !policy.delegated && policy.inheritedToolPolicySource === "scheduled-run"
+      ? policy.inheritedToolPolicyRunSessionKey
+      : undefined;
+  return origin && runSessionKey
+    ? Object.freeze({ ...origin, scheduledRunSessionKey: runSessionKey })
+    : origin;
+}
+
+/**
+ * Keeps a nested same-run caller's run stamp when the run's owner identity supplies the origin:
+ * adds it only to an unstamped owner origin of the same session, never invents one.
+ */
+export function carryScheduledRunStamp(
+  owner: RequesterOrigin | undefined,
+  nested: RequesterOrigin | undefined,
+): RequesterOrigin | undefined {
+  const stamp = nested?.scheduledRunSessionKey;
+  return owner && stamp && !owner.scheduledRunSessionKey && owner.sessionKey === nested.sessionKey
+    ? Object.freeze({ ...owner, scheduledRunSessionKey: stamp })
+    : owner;
 }
 
 /** Attribution only: selecting another participant does not make that person the initiator. */
@@ -186,5 +231,11 @@ export function decodeRequesterOrigin(value: unknown): RequesterOrigin | undefin
     return undefined;
   }
   facts.messageThreadId = thread;
+  if (record.scheduledRunSessionKey !== undefined) {
+    if (typeof record.scheduledRunSessionKey !== "string") {
+      return undefined;
+    }
+    facts.scheduledRunSessionKey = record.scheduledRunSessionKey;
+  }
   return captureRequesterOrigin({ requesterOrigin: facts });
 }

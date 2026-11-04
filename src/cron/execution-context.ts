@@ -115,6 +115,8 @@ export type ScheduledExecutionFacts = Readonly<{
   occurrence: Readonly<{ runId: string; executionRevision: string }>;
   principal: ScheduledPrincipal;
   placement: ScheduledPlacement;
+  /** A detached run's own per-run session, set only when the isolated runner freshly minted it. */
+  freshRunSessionKey?: string;
   authority: ScheduledAuthority;
   toolPolicy: ScheduledToolPolicy;
   resources: ScheduledResourceScopes;
@@ -142,6 +144,8 @@ export type ScheduledAdmissionFacts = Readonly<{
   occurrence: Readonly<{ runId: string; executionRevision: string }>;
   agentId: string;
   runSessionKey: string;
+  /** Set only by the isolated runner, for the per-run session it freshly minted. */
+  freshRunSessionKey?: string;
   agentMainSessionKey: string;
   agentSandboxMode: "off" | "non-main" | "all";
   creatorRoleSandbox?: "required";
@@ -445,6 +449,12 @@ export function buildScheduledExecutionContext(
       occurrence: facts.occurrence,
       principal,
       placement,
+      // In-session runs share a conversation session that other turns also use.
+      ...(placement !== "in-session" &&
+      facts.freshRunSessionKey &&
+      facts.freshRunSessionKey === facts.runSessionKey
+        ? { freshRunSessionKey: facts.freshRunSessionKey }
+        : {}),
       authority,
       toolPolicy: {
         ...(allow ? { allow } : {}),

@@ -39,6 +39,7 @@ type PersistedSessionCapabilityEntry = Pick<
   | "completionOwnerSessionKey"
   | "inheritedToolPolicyVersion"
   | "inheritedToolPolicySource"
+  | "inheritedToolPolicyRunSessionKey"
   | "inheritedToolAllow"
   | "inheritedToolDeny"
   | "delegatedToolPolicy"
@@ -185,6 +186,7 @@ const capabilityFields = [
   "completionOwnerSessionKey",
   "inheritedToolPolicyVersion",
   "inheritedToolPolicySource",
+  "inheritedToolPolicyRunSessionKey",
   "inheritedToolAllow",
   "inheritedToolDeny",
   "delegatedToolPolicy",

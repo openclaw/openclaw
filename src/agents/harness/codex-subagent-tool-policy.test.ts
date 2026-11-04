@@ -1,7 +1,9 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureSessionEntryCurrentCheckAsync } from "../../plugin-sdk/session-binding-runtime.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { isToolAllowedByPolicies } from "../tool-policy-match.js";
@@ -86,6 +88,69 @@ describe("Codex subagent native tool policy", () => {
     expect(config["features.code_mode"]).toBe(false);
     for (const key of ["agents.enabled", "features.multi_agent", "features.multi_agent_v2"]) {
       expect(config[key], key).toBe(false);
+    }
+  });
+
+  it("keeps a scheduled run child's prepared requester facts current while the run row changes", async () => {
+    const run = "agent:main:cron:nightly:run:r1";
+    const child = "agent:main:subagent:run-child";
+    const store = path.join(tempDirs.make(), "sessions.json");
+    const write = (sessionKey: string, entry: Parameters<typeof replaceSessionEntry>[1]) =>
+      replaceSessionEntry({ sessionKey, storePath: store }, entry);
+    await write(run, { sessionId: "run-session", updatedAt: 1, agentHarnessId: "codex" });
+    const childEntry = {
+      sessionId: "run-child",
+      updatedAt: 1,
+      spawnDepth: 1,
+      spawnedBy: run,
+      inheritedToolPolicyVersion: 1 as const,
+      inheritedToolPolicySource: "scheduled-run" as const,
+      inheritedToolPolicyRunSessionKey: run,
+    };
+    await write(child, childEntry);
+    const policy = await preparePluginHarnessToolPolicies(
+      {
+        agentId: "main",
+        provider: "openai",
+        modelId: "test-model",
+        sessionKey: child,
+        sessionId: "run-child",
+        requesterOrigin: { sessionKey: run, scheduledRunSessionKey: run },
+        config: { session: { store }, tools: { toolsBySender: { "*": { deny: ["read"] } } } },
+      },
+      codex.CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
+      codex.CODEX_NATIVE_TOOL_REQUIREMENTS,
+      { provider: "openai", model: "test-model" },
+    );
+    const facts = policy.webSearchPolicy?.requesterFacts ?? [];
+    expect(isToolAllowedByPolicies("read", policy.runtimePolicies)).toBe(true);
+    expect(facts.map(({ query }) => query.sessionKey)).toEqual([child]);
+    // The checks Codex retains for the turn and its tool calls.
+    const sources = await Promise.all(
+      facts.map(async ({ query, facts: recorded }) => {
+        const source = await captureSessionEntryCurrentCheckAsync({
+          ...query,
+          fields: recorded?.map(({ field }) => field) ?? [],
+          errorMessage: "requester policy changed",
+        });
+        expect(
+          recorded?.every(({ field, value }) => isDeepStrictEqual(source.entry?.[field], value)),
+        ).toBe(true);
+        return source;
+      }),
+    );
+    try {
+      // Compaction rotates the run's session id; fallback and post-prompt sync rewrite it.
+      await write(run, { sessionId: "run-compacted", updatedAt: 2, agentHarnessId: "pi" });
+      for (const source of sources) {
+        await expect(source.assertCurrent()).resolves.toBeUndefined();
+      }
+      await write(child, { ...childEntry, inheritedToolDeny: ["exec"] });
+      await expect(sources[0]?.assertCurrent()).rejects.toThrow("requester policy changed");
+    } finally {
+      for (const source of sources) {
+        source.release?.();
+      }
     }
   });
 });

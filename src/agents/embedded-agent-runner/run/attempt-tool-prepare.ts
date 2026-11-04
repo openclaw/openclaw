@@ -255,6 +255,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     inputProvenance: attempt.inputProvenance,
     trustedInternalHandoff: attempt.trustedInternalHandoff,
     pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
+    operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
   });
   const computerTransport = resolveSessionPlacementComputer(
     attempt.admittedRunContext.operationalRunInstance,

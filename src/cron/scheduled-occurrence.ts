@@ -31,6 +31,8 @@ type ScheduledOccurrenceRun = {
   agentId: string;
   runId: string;
   runSessionKey: string;
+  /** Set only by the isolated runner: the per-run session it freshly minted for this run. */
+  freshRunSessionKey?: string;
   toolsAllow?: readonly string[];
   /** Restored operator source authority, when the occurrence carries one. */
   operatorAuthority?: AdmittedRunOperatorAuthority;

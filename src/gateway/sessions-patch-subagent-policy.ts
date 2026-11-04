@@ -64,6 +64,10 @@ export function applySessionsPatchSubagentPolicy(params: {
     if (raw !== undefined) {
       // An operator-modified ceiling cannot retain a spawn-owned exception to the old snapshot.
       delete next.delegatedToolPolicy;
+      delete next.inheritedToolPolicyRunSessionKey;
+      if (next.inheritedToolPolicySource === "scheduled-run") {
+        delete next.inheritedToolPolicySource;
+      }
     }
     if (raw === null) {
       delete next[field];

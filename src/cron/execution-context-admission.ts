@@ -216,6 +216,7 @@ export function assembleScheduledAdmissionFacts(
     runId: string;
     agentId: string;
     runSessionKey: string;
+    freshRunSessionKey?: string;
     toolsAllow?: readonly string[];
     /** The creator role's sandbox, when the caller read it without the resident profile catalog. */
     creatorRoleSandbox?: "required" | "none";
@@ -232,6 +233,7 @@ export function assembleScheduledAdmissionFacts(
     },
     agentId: params.agentId,
     runSessionKey: params.runSessionKey,
+    ...(params.freshRunSessionKey ? { freshRunSessionKey: params.freshRunSessionKey } : {}),
     agentMainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId }),
     agentSandboxMode: resolveSandboxConfigForAgent(params.cfg, params.agentId).mode,
     ...((params.creatorRoleSandbox ??
@@ -363,6 +365,7 @@ export async function admitScheduledOccurrence(
             runId: run.runId,
             agentId: run.agentId,
             runSessionKey: run.runSessionKey,
+            freshRunSessionKey: run.freshRunSessionKey,
             toolsAllow: run.toolsAllow,
           },
           parentRow,

@@ -9,6 +9,7 @@ import { isToolWrappedWithBeforeToolCallHook } from "./before-tool-call-metadata
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { captureDelegatedToolPolicyAssertion } from "./delegated-tool-policy.js";
+import { carryScheduledRunStamp } from "./requester-origin.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
 import {
   buildPluginToolGroups,
@@ -65,7 +66,10 @@ export function createCodingToolsGatewayCaller(params: {
           sessionKey: sessionKey.trim(),
           requesterOrigin:
             activeCaller?.agentId === agentId && activeCaller.sessionKey === sessionKey.trim()
-              ? (activeCaller.requesterOrigin ?? capabilityProfile.requesterOrigin)
+              ? (carryScheduledRunStamp(
+                  activeCaller.requesterOrigin,
+                  capabilityProfile.requesterOrigin,
+                ) ?? capabilityProfile.requesterOrigin)
               : capabilityProfile.requesterOrigin,
           sessionEventToolsAllow: params.sessionEventSourcePolicy?.toolsAllow,
           sessionEventSettings: params.sessionEventSourcePolicy?.settings ?? {
