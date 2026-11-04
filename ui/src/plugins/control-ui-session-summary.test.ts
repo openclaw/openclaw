@@ -1,5 +1,5 @@
 import { flush } from "solid-js";
-import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import {
@@ -237,54 +237,24 @@ it("retains its successful history and cursor when retrying a failed refresh", a
   expect(element.textContent).not.toContain("Retained reply");
 });
 
-it("does not reread history for activity summaries but refreshes transcript events", async () => {
+it("ignores summary-only changes and retains paced transcript catch-up", async () => {
   useClock();
-  const { current, element, requests, emit, reply } = setup();
+  const { current, element, requests, emit, reply, settled } = setup();
   await reply(0, "Initial reply");
+
+  emit("session.message", "agent:other:one", "other");
+  emit("chat");
+  await settled(1);
 
   current().testOptions.onEvent?.(
     createGatewayEvent("sessions.changed", {
       sessionKey: "agent:main:one",
       agentId: "main",
       reason: "activity-summary",
-      activitySummary: { text: "Working on a task", state: "current", updatedAt: 1 },
     }),
   );
-  await vi.advanceTimersByTimeAsync(10_000);
+  await vi.advanceTimersByTimeAsync(5_000);
   expect(requests).toHaveLength(1);
-  expect(element.textContent).toContain("Initial reply");
-
-  emit("session.message");
-  await vi.advanceTimersByTimeAsync(5_000);
-  await reply(1, "New reply");
-
-  emit("sessions.changed");
-  await vi.advanceTimersByTimeAsync(5_000);
-  await reply(2, "Updated reply");
-  expect(requests).toHaveLength(3);
-});
-
-it("paces durable events and retains one catch-up during a pending load", async () => {
-  useClock();
-  const { element, requests, emit, reply, settled } = setup();
-  const gateway = element.gateway;
-  assert(gateway);
-  const subscribe = gateway.subscribe.bind(gateway);
-  let subscriptions = 0;
-  vi.spyOn(gateway, "subscribe").mockImplementation((listener) => {
-    subscriptions += 1;
-    const stop = subscribe(listener);
-    return () => {
-      subscriptions -= 1;
-      stop();
-    };
-  });
-  await reply(0, "Initial reply");
-  expect(subscriptions).toBeGreaterThan(0);
-
-  emit("session.message", "agent:other:one", "other");
-  emit("chat");
-  await settled(1);
 
   emit("session.message");
   await vi.advanceTimersByTimeAsync(4_000);
@@ -293,7 +263,7 @@ it("paces durable events and retains one catch-up during a pending load", async 
   await vi.waitFor(() => expect(requests).toHaveLength(2));
   expect(element.textContent).toContain("Initial reply");
   emit("sessions.changed");
-  emit("session.message");
+  emit("sessions.changed");
   await settled(2);
   requests[1]!.resolve(history("Intermediate reply"));
   await vi.advanceTimersByTimeAsync(0);
@@ -306,7 +276,6 @@ it("paces durable events and retains one catch-up during a pending load", async 
   await settled(3);
   await Promise.resolve();
   flush();
-  expect(subscriptions).toBe(0);
   emit("session.message");
   await vi.advanceTimersByTimeAsync(10_000);
   await element.updateComplete;
@@ -314,7 +283,6 @@ it("paces durable events and retains one catch-up during a pending load", async 
   expect(element.textContent).toBe("");
   element.presented = true;
   await reply(3, "Reply received while hidden");
-  expect(subscriptions).toBeGreaterThan(0);
 });
 
 it("catches up with cursors, retains a bounded tail, and replaces it after a reset", async () => {

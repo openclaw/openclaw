@@ -1,2 +1,0 @@
-# Regression: summary-only events must not reread history; message/session events still must.
-27
