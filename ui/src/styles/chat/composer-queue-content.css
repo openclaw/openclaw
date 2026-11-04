@@ -430,11 +430,13 @@
   cursor: default;
 }
 
-.chat-queue__clear {
+.chat-queue__clear,
+.chat-queue__resume {
   color: var(--muted);
 }
 
-.chat-queue__clear:hover {
+.chat-queue__clear:hover,
+.chat-queue__resume:hover {
   color: var(--text);
 }
 
