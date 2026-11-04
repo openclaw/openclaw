@@ -119,7 +119,7 @@ export function prepareBackgroundSessionCompletion(params: {
       ) ?? { id: agentId };
       const identity = context.agentIdentity.get(agentId);
       showToast({
-        fifo: true,
+        placement: "top-right",
         avatar: {
           id: agentId,
           name: normalizeAgentTargetLabel(agent, identity),
