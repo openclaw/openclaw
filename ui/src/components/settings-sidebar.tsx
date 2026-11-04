@@ -315,7 +315,7 @@ function EmbeddedSettingsHeader(props: SettingsSidebarProps) {
           <span aria-hidden="true">
             <Icon name="chevronLeft" />
           </span>
-          {t("common.back")}
+          <span class="native-embed-header__back-label">{t("common.back")}</span>
         </button>
       </Show>
       <h1 class="page-title">

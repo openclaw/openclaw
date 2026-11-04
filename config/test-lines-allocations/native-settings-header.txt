@@ -1,0 +1,2 @@
+18
+# Extend embedded navigation to catch the hidden Skills heading and misaligned agent row.

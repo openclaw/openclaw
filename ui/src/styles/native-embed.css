@@ -34,6 +34,7 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
 }
 
 .native-embed-header,
+.native-embed-header + .settings-sidebar__agent,
 .settings-embed-list {
   width: 100%;
   max-width: 760px;
@@ -61,6 +62,21 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
   flex: 0 0 auto;
 }
 
+.native-embed-header__back > span {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Center the visible capitals, not the fonts' different ascender/descender space. */
+.native-embed-header .page-title,
+.native-embed-header__back .native-embed-header__back-label {
+  text-box: trim-both cap alphabetic;
+}
+
+.native-embed-header__back .native-embed-header__back-label {
+  display: block;
+}
+
 .native-embed-header__back svg {
   width: 20px;
   height: 20px;
@@ -70,8 +86,16 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
   margin-inline-start: auto;
 }
 
-.shell--embed-settings .content-header .page-title {
+.shell--embed-settings .content-header:not(.plugins-hub-header) .page-title {
   display: none;
+}
+
+.native-embed-header + .settings-sidebar__agent {
+  padding-inline: 0;
+}
+
+.native-embed-header + .settings-sidebar__agent .agent-select__trigger {
+  padding-inline: 0;
 }
 
 .shell--embed-settings .content-header,
