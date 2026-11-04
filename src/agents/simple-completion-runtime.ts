@@ -34,7 +34,7 @@ import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugi
 import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import {
-  applySecretRefHeaderSentinels,
+  applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
   getApiKeyForModelCore,
@@ -379,6 +379,7 @@ async function prepareSimpleCompletionModelCore(
 
   resolvedModel = attachProviderAuthAuthority(resolvedModel, getProviderAuthAuthority(auth));
   let authValue = rawApiKey;
+  let hasRuntimeAuthExchange = false;
   if (rawApiKey) {
     const runtimeAuth = await prepareProviderRuntimeAuth({
       provider: resolvedModel.provider,
@@ -404,6 +405,7 @@ async function prepareSimpleCompletionModelCore(
       provider: resolvedModel.provider,
       preparedAuth: runtimeAuth,
     });
+    hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
     authValue = preparedAuth?.apiKey?.trim() || rawApiKey;
     resolved.authStorage.setRuntimeApiKey(resolvedModel.provider, authValue);
     resolvedModel = applyPreparedRuntimeAuthToModel(resolvedModel, preparedAuth);
@@ -426,8 +428,12 @@ async function prepareSimpleCompletionModelCore(
   assertCurrent?.();
   params.signal?.throwIfAborted();
   const modelRuntime = getModelRegistryRuntime(resolved.modelRegistry);
-  const model = applySecretRefHeaderSentinels(
+  // Same header contract as agent runs and compaction: `authHeader` providers get
+  // a Bearer header, except when runtime auth exchanged the credential (the SDK
+  // reads the exchanged token from authStorage).
+  const model = applyAuthHeaderOverride(
     applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
+    hasRuntimeAuthExchange ? null : resolvedAuth,
     params.cfg,
   );
   const providerRuntimeHandle = resolveProviderRuntimePluginHandle({
