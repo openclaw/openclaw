@@ -72,7 +72,7 @@ const enLabs = {
     hostDesktop: {
       title: "This computer’s desktop",
       description:
-        "Watch and control this computer from the Desktop panel through its existing VNC or Screen Sharing server.",
+        "Watch and control the computer running OpenClaw from the Desktop panel through its existing VNC or Screen Sharing server.",
     },
     workerDesktop: {
       title: "Cloud device desktop",
