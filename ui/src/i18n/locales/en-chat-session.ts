@@ -8,7 +8,7 @@ const enChatSession = {
   chat: {
     settingErrors: {
       model: "Couldn’t change the model. Try again. {error}",
-      thinking: "Couldn’t change the thinking level. Try again. {error}",
+      thinking: "Couldn’t change effort. Try again. {error}",
       speed: "Couldn’t change the speed. Try again. {error}",
       contextWindow: "Couldn’t change the context window. Try again. {error}",
       accessProgram: "Couldn’t change the access program. Try again. {error}",

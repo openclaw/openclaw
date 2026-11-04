@@ -28,7 +28,7 @@ suite.define(() => {
     });
     const summary = page
       .getByRole("log", { name: "Chat" })
-      .getByText("Couldn’t change the thinking level. Try again. Example service unavailable", {
+      .getByText("Couldn’t change effort. Try again. Example service unavailable", {
         exact: true,
       });
     await summary.waitFor();
