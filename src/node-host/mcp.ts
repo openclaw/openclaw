@@ -8,13 +8,19 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { assignSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
 import { listAllMcpTools } from "../agents/mcp-catalog-listing.js";
-import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
+import {
+  isAppOnlyMcpTool,
+  readMcpToolUiMetadata,
+  sanitizeMcpMetadataText,
+  summarizeServerCapabilities,
+} from "../agents/mcp-metadata.js";
 import {
   McpSdkCompatibilityError,
   mcpCallToolResultSchema,
 } from "../agents/mcp-sdk-compatibility.js";
-import { createMcpToolFilter } from "../agents/mcp-tool-filter.js";
+import { createListedMcpToolFilter } from "../agents/mcp-tool-filter.js";
 import {
   normalizeMcpToolCatalog,
   type McpToolCatalogMetadata,
@@ -29,12 +35,13 @@ import {
 import { VERSION } from "../version.js";
 import type { NodeHostClient } from "./client.js";
 import { bindNodeMcpElicitation } from "./mcp-elicitation.js";
+import { listEnabledNodeHostMcpServers } from "./mcp-server-config.js";
 
 const NODE_MCP_PLUGIN_ID = "node-mcp";
 const NODE_MCP_DESCRIPTION_MAX_CHARS = 1_024;
 const NODE_MCP_NAME_MAX_CHARS = 64;
 const NODE_MCP_SERVER_FRAGMENT_MAX_CHARS = 31;
-const NODE_MCP_ERROR_MAX_CHARS = 1_024;
+export const NODE_MCP_ERROR_MAX_CHARS = 1_024;
 const NODE_MCP_MAX_DESCRIPTORS = 128;
 const NODE_MCP_MAX_DESCRIPTOR_BYTES = 1024 * 1024;
 const NODE_MCP_MAX_CATALOG_BYTES = 10 * 1024 * 1024;
@@ -223,6 +230,9 @@ export async function startNodeHostMcpManager(
       },
     ]),
   );
+  const safeServerNames = assignSafeServerNames(
+    Object.keys(servers ?? {}).filter((name) => states.has(name)),
+  );
   let closed = false;
   let startupComplete = false;
 
@@ -294,19 +304,23 @@ export async function startNodeHostMcpManager(
     signal: AbortSignal,
     resetRetryDelay = false,
   ) => {
-    // Node-host tools use their own descriptor names, so filters stay raw-only here.
-    const isToolAllowed = createMcpToolFilter(state.config.toolFilter);
-    const normalized = await listAllMcpTools(session.client, session.requestTimeoutMs, signal).then(
-      (tools) =>
-        normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
-          isToolAllowed(toolName) ? "include" : "exclude",
-        ),
-    );
+    const tools = await listAllMcpTools(session.client, session.requestTimeoutMs, signal);
     if (closed || state.current !== session) {
       return;
     }
+    const isToolAllowed = createListedMcpToolFilter(
+      state.config.toolFilter,
+      safeServerNames.get(state.serverName) ?? state.serverName,
+      tools,
+      summarizeServerCapabilities(session.client.getServerCapabilities()),
+    );
+    const normalized = normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (name) =>
+      isToolAllowed(name) ? "include" : "exclude",
+    );
     session.toolMetadata = normalized.metadata;
-    state.listedTools = normalized.tools;
+    state.listedTools = normalized.tools.filter(
+      (tool) => !isAppOnlyMcpTool(readMcpToolUiMetadata(tool)),
+    );
     if (resetRetryDelay) {
       state.retryDelayMs = NODE_MCP_RETRY_INITIAL_MS;
     }
@@ -488,14 +502,17 @@ export async function startNodeHostMcpManager(
 
   return {
     descriptors,
-    async callMcpTool(params: {
-      server: string;
-      tool: string;
-      arguments?: Record<string, unknown>;
-      elicitationId?: string;
-      timeoutMs?: number;
-      signal?: AbortSignal;
-    }) {
+    async callMcpTool(
+      this: void,
+      params: {
+        server: string;
+        tool: string;
+        arguments?: Record<string, unknown>;
+        elicitationId?: string;
+        timeoutMs?: number;
+        signal?: AbortSignal;
+      },
+    ) {
       const state = states.get(params.server);
       const session = state?.current;
       if (!state || !session?.connected) {
@@ -602,15 +619,4 @@ export async function startNodeHostMcpManager(
       await Promise.allSettled(closing);
     },
   };
-}
-
-function listEnabledNodeHostMcpServers(
-  servers: Record<string, McpServerConfig> | undefined,
-): ReadonlyArray<readonly [string, McpServerConfig]> {
-  return Object.entries(servers ?? {})
-    .filter(
-      ([serverName, config]) =>
-        serverName.length > 0 && serverName === serverName.trim() && config.enabled !== false,
-    )
-    .toSorted(([left], [right]) => left.localeCompare(right));
 }

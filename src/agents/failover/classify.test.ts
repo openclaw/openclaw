@@ -107,6 +107,16 @@ describe("failover classification", () => {
       ).toEqual(reason ? { kind: "reason", reason } : null),
   );
 
+  it.each([400, 422])("preserves provider-owned service failures on HTTP %i", (status) => {
+    const signal = { status, message: "Upstream account unavailable", errorType: "server_error" };
+    expect(classifyFailoverSignal(signal, noPlugin)).toEqual({ kind: "reason", reason: "format" });
+    expect(
+      classifyFailoverSignal(signal, {
+        providerPlugin: { id: "prepared-owner", classifyFailoverReason: () => "server_error" },
+      }),
+    ).toEqual({ kind: "reason", reason: "server_error" });
+  });
+
   it.each([400, 422])("leaves placeholder-only HTTP %i failures unclassified", (status) => {
     for (const body of [
       "[Malformed diagnostic JSON redacted]",

@@ -290,7 +290,10 @@ export function classifyFailoverClassificationFromHttpStatus(
     // 400/422 are ambiguous: inspect the payload first so provider-specific
     // rate limits, auth failures, model-not-found errors, and billing signals
     // are not collapsed into generic "format" failures.
-    if (messageClassification && messageReason !== "server_error") {
+    if (
+      messageClassification &&
+      (messageReason !== "server_error" || opts?.preserveProviderSignalClassification)
+    ) {
       return messageClassification;
     }
     // An empty or fully redacted body cannot establish request-format semantics.
