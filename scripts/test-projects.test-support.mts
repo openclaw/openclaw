@@ -91,6 +91,7 @@ import {
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mts";
+import { isGitWorktreeRoot } from "./check-file-utils.ts";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import {
   getChangedPathFacts,
@@ -1448,6 +1449,9 @@ let cachedExplicitTestTargetFiles: string[] | null = null;
 let cachedExplicitTestTargetFilesCwd: string | null = null;
 
 function listExplicitTestTargetFilesFromGit(cwd: string) {
+  if (!isGitWorktreeRoot(cwd)) {
+    return null;
+  }
   const result = spawnSync(
     "git",
     [
@@ -2226,7 +2230,7 @@ function listImportGraphGrepMatches(
   // Git's fixed-string prefilter rescans for each term. Large frontiers use the
   // source reader's single-pass multi-term matcher over the same inventory.
   const result =
-    missing.length <= 64
+    missing.length <= 64 && isGitWorktreeRoot(cwd)
       ? spawnSync(
           "git",
           ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],

@@ -458,6 +458,7 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
     const sourceRoot = process.cwd();
     const hook = fileURLToPath(new URL("./fixtures/native-runner-signals.mjs", import.meta.url));
     mkdirSync(path.join(checkout, "src"), { recursive: true });
+    // This standalone checkout must not borrow its temporary parent's artifact lock.
     mkdirSync(path.join(checkout, ".git"));
     mkdirSync(path.join(root, "home"));
     writeFileSync(
@@ -554,7 +555,6 @@ it.runIf(process.platform !== "win32")(
   async ({ signal }) => {
     await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
-      mkdirSync(path.join(checkoutRoot, ".git"));
       const childPidPath = path.join(fixtureRoot, "child.pid");
       const wrapperPidPath = path.join(fixtureRoot, "wrapper.pid");
       const childPath = path.join(fixtureRoot, "resistant-child.mjs");

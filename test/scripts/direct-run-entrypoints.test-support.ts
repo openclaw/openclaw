@@ -103,6 +103,8 @@ export async function withShimFixture<T>(
   );
   const commands: Array<Promise<NodeResult>> = [];
   const outcome = (async () => {
+    // Keep artifact ownership in this synthetic checkout, not an enclosing repository.
+    mkdirSync(path.join(checkoutRoot, ".git"), { recursive: true });
     for (const source of [
       wrapper,
       "scripts/tsx.mjs",
