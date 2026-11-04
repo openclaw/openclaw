@@ -205,6 +205,16 @@ Costs are estimated from your model pricing config:
 models.providers.<provider>.models[].cost
 ```
 
+Prices and estimated cost buckets can be partial. An omitted rate is unknown, not
+zero. A measured zero token count or an explicit zero rate can establish a zero
+bucket; missing counts cannot. A total estimate is available only when every
+bucket is known. A provider-billed total, including zero, remains authoritative
+even when its component costs are unknown.
+
+Reports retain known subtotals and count unpriced entries and incomplete cost
+breakdowns separately. Time-series totals remain unavailable after an unpriced
+call. Unknown amounts display as unavailable rather than `$0.00`.
+
 These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
 `cacheWrite`. If both pricing and a recorded amount are missing, `/usage full`
 omits cost; use `/usage tokens` or a custom `messages.usageTemplate` when you need
@@ -227,7 +237,7 @@ the summed tokens as one large request. Provider-billed totals, including zero,
 take precedence over catalog estimates and remain visible even when token counts
 are unavailable. Unknown token counts are not inferred from a billed amount.
 
-Transcript reports preserve valid recorded per-call totals and allocations, including priority/flex adjustments, and use current catalog pricing only for missing costs or unknown-price zero placeholders.
+Transcript reports preserve valid recorded per-call totals and allocations, including priority/flex adjustments, and use current catalog pricing only for missing costs. A recorded zero total is not repriced.
 Anthropic fast-mode estimates multiply base and tier rates alike, preserving tier thresholds and mixed 5-minute/1-hour cache-write pricing.
 
 Omitting `cost`, or setting it to `{}`, inherits the catalog pricing schedule.
