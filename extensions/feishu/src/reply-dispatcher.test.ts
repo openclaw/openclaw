@@ -700,7 +700,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(settled?.messageIds).toContain("om_voice");
     expect(settled?.messageIds ?? []).not.toContain("om_stream");
   });
-
   type RecordedFeishuDelivery = {
     kind: "tool" | "block" | "final";
     delivery: Awaited<ReturnType<TypingDispatcherOptions["deliver"]>>;
@@ -1071,6 +1070,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["stale", ["A1.A2.", ["A1.A2."], 2, "A1. N", 1, "A1. N D."], ["A1.A2.\n\nA1. N", "A1. N D."]],
     ["rw", ["Z", ["Z"], null, "BA1.A2.", ["A1.A2."], 1, "BA1.A2.C"], ["Z", "BA1.A2.", "BA1.A2.C"]],
     ["two throws", ["X.", ["X."], 3, "X. X.", ["X."], 3, "X. X. D."], ["X.", "X.", "X. D."]],
+    ["next message", [["X."], 2, 3, "X. Y.", ["X."], 3, "X. Y. Z."], ["X.", "X. Y.", "X. Y. Z."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();

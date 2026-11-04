@@ -295,6 +295,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   type PendingStreamingDelivery = {
     result: FeishuReplyDeliveryResult;
     infoKind?: string;
+    epoch: number;
     previewCovered?: { text: string; epoch: number; from: number };
     resolve: (result: FeishuReplyDeliveryResult) => void;
     reject: (error: unknown) => void;
@@ -581,6 +582,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const { promise: finalization, resolve, reject } = createDeferred<FeishuReplyDeliveryResult>();
     pendingStreamingDeliveries.push({
       result,
+      epoch: previewEpoch,
       ...(infoKind ? { infoKind } : {}),
       ...(previewCovered ? { previewCovered } : {}),
       resolve,
@@ -810,6 +812,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     Map<string, Promise<FeishuReplyDeliveryResult>>
   >();
   const creditedRecoveries = new WeakSet<object>();
+  // The assistant message whose block first met a recovery; no later message may credit it.
+  const recoveryEpochs = new WeakMap<object, number>();
 
   const ensureVisibleStreamingDelivery = async (
     result: FeishuReplyDeliveryResult | undefined,
@@ -872,6 +876,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             const advanceOnce = (recovery: object | undefined, next: string) => {
               if (
                 recovery &&
+                recoveryEpochs.get(recovery) === completion.epoch &&
                 !creditedRecoveries.has(recovery) &&
                 !completions.some(
                   (other) =>
@@ -903,6 +908,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 completion.result.content,
                 completion.infoKind,
               );
+              if (providerFinalized && !recoveryEpochs.has(providerFinalized)) {
+                recoveryEpochs.set(providerFinalized, completion.epoch);
+              }
               // A static recovery delivered this block, so the preview it consumed is shown.
               const covered = completion.previewCovered;
               if (
@@ -918,6 +926,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               const fallbackPartial = isChannelPartialDeliveryError(fallbackError)
                 ? fallbackError.deliveryResult
                 : undefined;
+              if (fallbackPartial && !recoveryEpochs.has(fallbackPartial)) {
+                recoveryEpochs.set(fallbackPartial, completion.epoch);
+              }
               const covered = completion.previewCovered;
               const sent = fallbackPartial?.content;
               const content = completion.result.content;
