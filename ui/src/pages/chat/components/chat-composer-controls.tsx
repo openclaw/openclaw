@@ -1,11 +1,15 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createSignal, createUniqueId, lazy, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Kbd } from "../../../components/solid/kbd.tsx";
+import { Kbd, KeyboardShortcut } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { registerSessionNavigationEnglish } from "../../../i18n/locales/en-session-navigation.ts";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
+import {
+  isApplePlatform,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../../../lib/keyboard-shortcut-contract.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
@@ -364,7 +368,12 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
         <span slot="content">
           {label()} <Kbd keys="⏎" inline />
           {" · "}
-          {alternateLabel()} <Kbd keys={t("chat.sendShortcutModifierEnter")} inline />
+          {alternateLabel()}{" "}
+          {isApplePlatform() ? (
+            <Kbd keys={t("chat.sendShortcutModifierEnter")} inline />
+          ) : (
+            <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} inline />
+          )}
         </span>
       </Show>
       <button
