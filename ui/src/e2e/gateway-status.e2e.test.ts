@@ -65,7 +65,7 @@ suite.define(() => {
         );
         await page.goto(`${suite.server.baseUrl}cron`);
         await page
-          .getByText("Couldn’t view scheduled tasks. Ask an admin to grant operator.read.", {
+          .getByText("Couldn’t view scheduled tasks. Ask an admin to grant read access.", {
             exact: true,
           })
           .waitFor();

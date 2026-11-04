@@ -1440,7 +1440,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatVerboseLevel).toBeNull();
     expect(getChatHistoryLoadState(state)).toMatchObject({
       phase: "failed",
-      message: "Couldn’t view session history. Ask an admin to grant operator.read.",
+      message: "Couldn’t view session history. Ask an admin to grant read access.",
       retryable: false,
     });
     expect(state.lastError).toBeNull();

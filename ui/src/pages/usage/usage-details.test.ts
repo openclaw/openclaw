@@ -115,7 +115,7 @@ it("clears retained details and preserves read authorization errors while draini
   pending.reject(authorizationError);
   await Promise.all([timeline, conversation]);
 
-  const error = "Couldn’t view usage details. Ask an admin to grant operator.read.";
+  const error = "Couldn’t view usage details. Ask an admin to grant read access.";
   for (const detail of [details.timeSeries, details.sessionLogs]) {
     expect(detail.data).toBeNull();
     expect(detail.status).toEqual(status(error, false));
