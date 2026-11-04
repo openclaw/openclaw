@@ -196,6 +196,8 @@ describe("production lint suppressions", () => {
         // The diagnostics probe restores Session.post and invokes it with its live receiver.
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
+        "scripts/perf/gateway-runtime-exit-listeners-preload.mjs|unicorn/require-post-message-target-origin|1",
+        // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
         // The stack probe compares V8's formatter callback identity without invoking it.
         "scripts/perf/jiti-stack-format.ts|typescript/unbound-method|1",

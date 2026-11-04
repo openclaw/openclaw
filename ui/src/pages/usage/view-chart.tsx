@@ -2,6 +2,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import { formatUsd } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import "../../components/tooltip.ts";
@@ -51,12 +52,7 @@ const TOKEN_TYPE_COLORS = {
 function formatAxisCost(value: number, scale: number): string {
   const digits =
     scale >= 10 ? 0 : scale > 0 ? Math.min(8, Math.max(2, Math.ceil(-Math.log10(scale / 2)))) : 2;
-  return value.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
+  return formatUsd(value, digits);
 }
 
 /** Rounds an axis maximum up to 1, 2 or 5 times a power of ten. */

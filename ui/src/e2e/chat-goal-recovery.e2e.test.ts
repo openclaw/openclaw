@@ -53,9 +53,12 @@ suite.define(() => {
       await exactButton(page, "Edit goal").click();
       const objective = page.locator(".agent-chat__composer-combobox textarea");
       const save = exactButton(page, "Save goal");
-      const invalid = page.getByText("Goal update is invalid. Check the objective and try again.", {
-        exact: true,
-      });
+      const invalid = page.getByText(
+        "Couldn’t update the goal. Check the objective and try again.",
+        {
+          exact: true,
+        },
+      );
       await objective.fill("x".repeat(16_001));
       await save.click();
       await expect
@@ -144,7 +147,9 @@ suite.define(() => {
         await original.click();
         if (legacyScope) {
           await page
-            .getByText("Goal update was not sent because its recovery request could not be saved.")
+            .getByText(
+              "Couldn’t save the recovery request. Free browser storage and try again. Your goal update wasn’t sent.",
+            )
             .waitFor();
           expect(await gateway.getRequests(method)).toHaveLength(0);
           expect(

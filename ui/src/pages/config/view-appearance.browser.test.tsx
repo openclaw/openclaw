@@ -1,4 +1,61 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { normalizeThemePalette } from "../../app/theme-palette.ts";
+import { i18n } from "../../i18n/index.ts";
+
+it("localizes a palette failure captured before Settings opens", async () => {
+  let failure: unknown;
+  try {
+    normalizeThemePalette("light", {}, undefined);
+  } catch (error) {
+    failure = error;
+  }
+  const original = i18n.t.bind(i18n);
+  const translate = vi
+    .spyOn(i18n, "t")
+    .mockImplementation((key, params) =>
+      key === "configView.appearance.themeImport.missingToken"
+        ? "Localized missing " + params?.token
+        : original(key, params),
+    );
+  onTestFinished(() => translate.mockRestore());
+  const { container } = renderAppearance({
+    themeCatalog: { themes: [], error: failure instanceof Error ? failure : String(failure) },
+  });
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  await vi.waitFor(() => expect(container.textContent).toContain("Localized missing background"));
+});
+
+it("localizes unnamed themes and the system typeface inside the default option", async () => {
+  const original = i18n.t.bind(i18n);
+  const translate = vi.spyOn(i18n, "t").mockImplementation((key, params) => {
+    if (key === "configView.appearance.customTheme") {
+      return "Localized unnamed theme";
+    }
+    if (key === "configView.appearance.fonts.system") {
+      return "Localized system font";
+    }
+    return original(key, params);
+  });
+  onTestFinished(() => translate.mockRestore());
+  const { container } = renderAppearance({
+    theme: "custom",
+    hasCustomTheme: true,
+    customThemeLabel: "",
+    fontUi: undefined,
+    fontChat: undefined,
+  });
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  await updatePickers(container);
+  expect(container.textContent).toContain("Localized unnamed theme");
+  const fontRow = settingsRow(container, original("configView.appearance.fonts.ui"));
+  await openPicker(required(fontRow, "openclaw-select-picker", HTMLElement) as SelectPicker);
+  expect(translate).toHaveBeenCalledWith("configView.appearance.fonts.themeFace", {
+    theme: "Localized unnamed theme",
+    face: "Localized system font",
+  });
+});
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";

@@ -33,7 +33,7 @@ const catalog = {
         connectors: "Plugins",
         webSearch: "Web search",
         webSearchGloballyDisabled:
-          "Web search is off in Gateway config (tools.web.search.enabled). It can’t be turned on for a single chat.",
+          "Web search is off in Gateway config (tools.web.search.enabled). It can’t be turned on for a single session.",
         webSearchClearStaleEnable: "Web search is off in Settings. Remove this session’s override.",
         managePlugins: "Manage plugins",
         manageSkills: "Manage skills",
@@ -43,8 +43,8 @@ const catalog = {
         scopeLabel: "Availability",
         scopeSession: "This session",
         scopeEverywhere: "Everywhere",
-        scopeSessionHint: "Saved for all chats, but on only in this one.",
-        scopeEverywhereHint: "Saved and on in every chat.",
+        scopeSessionHint: "Saved for all sessions, but on only in this one.",
+        scopeEverywhereHint: "Saved and on in every session.",
         toolAccess: {
           label: "Tool access",
           loading: "Loading tools…",

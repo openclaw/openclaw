@@ -29,7 +29,6 @@ export const SessionsCreateToolSchema = Type.Object(
     ),
     group: SessionsCreateParamsSchema.properties.category,
     model: SessionsCreateParamsSchema.properties.model,
-    permissionMode: SessionsCreateParamsSchema.properties.permissionMode,
   },
   { additionalProperties: false },
 );

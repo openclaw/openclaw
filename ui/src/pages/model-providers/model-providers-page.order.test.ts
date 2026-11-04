@@ -94,7 +94,7 @@ describe("ModelProvidersPage profile actions", () => {
 
     await waitForSolid(() => {
       expect(page.view.props.authStatus?.unavailable?.code).toBe("PREPARED_MODEL_AUTH_UNAVAILABLE");
-      expect(toast.toast?.message).toBe(warning);
+      expect(toast.toasts[0]?.options.message).toBe(warning);
     });
     await toast.updateComplete;
     await vi.dynamicImportSettled();
@@ -275,7 +275,7 @@ describe("ModelProvidersPage profile actions", () => {
       const { modal: initialModal, dialog } = await openConfirmation();
       let modal = initialModal;
       expect(page.renderRoot.contains(modal)).toBe(false);
-      expect(dialog.getAttribute("aria-label")).toBe("Log out work@example.com");
+      expect(dialog.getAttribute("aria-label")).toBe("Log out work@example.com?");
       expectContent(modal, ["work@example.com"]);
       expect(requestCount(request, "models.authLogout")).toBe(0);
       click(modal, "button[autofocus]");

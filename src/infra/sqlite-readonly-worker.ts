@@ -372,6 +372,15 @@ export function closeSqliteReadOnlyWorkersForBroker(broker: SpawnBrokerHost): Pr
 
 export function runSqliteReadOnlyWorkerOnce(
   pathname: string,
+  options: { mode: "staging-sweep"; signal?: AbortSignal },
+): Promise<import("./sqlite-snapshot-reclamation.js").SqliteSnapshotReclamation>;
+export function runSqliteReadOnlyWorkerOnce(
+  pathname: string,
+  options: SqliteReadOnlyWorkerOptions,
+  launch?: Pick<SqliteReadOnlyWorkerLaunch, "env" | "cwd"> & { deadlineOwnedByCaller?: boolean },
+): Promise<SqliteReadOnlyWorkerValue>;
+export function runSqliteReadOnlyWorkerOnce(
+  pathname: string,
   options: SqliteReadOnlyWorkerOptions,
   launch?: Pick<SqliteReadOnlyWorkerLaunch, "env" | "cwd"> & {
     deadlineOwnedByCaller?: boolean;

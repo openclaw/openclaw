@@ -72,9 +72,9 @@ suite.define(() => {
       await setupAction.click();
       await expectSetupRoute(page);
       await page.goBack();
-      await textarea.fill("Start a conversation.");
+      await textarea.fill("Start a session.");
       await expect.poll(() => sendButton.isDisabled()).toBe(true);
-      expect(await textarea.inputValue()).toBe("Start a conversation.");
+      expect(await textarea.inputValue()).toBe("Start a session.");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
