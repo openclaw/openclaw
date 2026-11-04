@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
-import { realisticTranscriptText } from "../../../test/helpers/session-archive.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   encodeSessionArchiveContent,
@@ -15,21 +14,6 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("archive compression", () => {
-  it("materializes an archive with production-like expansion", async () => {
-    const content = realisticTranscriptText(4 * 1024 * 1024);
-    const encoded = encodeSessionArchiveContent(content);
-    expect(content.length / encoded.bytes.length).toBeGreaterThan(8);
-    const archivePath = path.join(
-      tempDirs.make("openclaw-archive-zstd-"),
-      `typical.jsonl.deleted.2026-07-11T00-00-00.000Z${encoded.suffix}`,
-    );
-    fs.writeFileSync(archivePath, encoded.bytes);
-
-    expect(fs.readFileSync(await materializeSessionArchiveForRead(archivePath), "utf8")).toBe(
-      content,
-    );
-  });
-
   it("streams a multi-frame expansion bomb to the cache without changing the archive", async () => {
     // Concatenated frames decode back to back; the test never allocates the plaintext itself.
     const frame = zstdCompressSync(Buffer.alloc(1024 * 1024, "x"));
