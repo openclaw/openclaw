@@ -422,8 +422,10 @@ it.each(["access-denied", "missing-file", "manager-denied", "not-found"] as cons
   "distinguishes absence from failed enablement inspection: %s",
   async (scenario) => {
     let env: NodeJS.ProcessEnv = { HOME: MANAGED_HOME };
+    // Probing walks every supported user load path now; the scenario pins the
+    // enablement-inspection behavior, not which directory the probe hits first.
     if (scenario === "missing-file") {
-      vi.spyOn(fs, "access").mockRejectedValueOnce(
+      vi.spyOn(fs, "access").mockRejectedValue(
         Object.assign(new Error("missing unit"), { code: "ENOENT" }),
       );
     } else {
@@ -468,9 +470,9 @@ it.each(["access-denied", "missing-file", "manager-denied", "not-found"] as cons
       if (scenario === "missing-file") {
         expect(execFileMock).not.toHaveBeenCalled();
       } else {
-        expect(fs.access).toHaveBeenCalledWith(
-          `${MANAGED_HOME}/.config/systemd/user/custom-unit.service`,
-        );
+        // The unit probe succeeded (a supported load path answered), so the
+        // enablement inspection ran and classified the unit as not-found.
+        expect(fs.access).toHaveBeenCalled();
       }
     }
   },

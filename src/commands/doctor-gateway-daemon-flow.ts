@@ -37,6 +37,7 @@ import {
   readGatewayRestartHandoffSync,
 } from "../infra/restart-handoff.js";
 import { isWSL } from "../infra/wsl.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { sleep } from "../utils.js";
 import { gatewayInstallErrorHint } from "./daemon-install-helpers.js";
@@ -379,7 +380,21 @@ export async function maybeRepairGatewayDaemon(params: {
     }
     note("Gateway service not installed.", "Gateway");
     if (process.platform === "linux") {
-      const systemGatewayServices = await findSystemGatewayServices();
+      let systemGatewayServices: ExtraGatewayService[] = [];
+      try {
+        systemGatewayServices = await findSystemGatewayServices();
+      } catch (error) {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
+        // An unreadable unit directory is not proof of absence; surface it and
+        // keep the install flow from acting on caller defaults.
+        note(
+          "System unit directories could not be scanned; skip service installation until reviewed.",
+          "Gateway",
+        );
+        return;
+      }
       if (systemGatewayServices.length > 0) {
         note(renderBlockingSystemGatewayServices(systemGatewayServices), "Gateway");
         return;

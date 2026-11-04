@@ -42,11 +42,11 @@ import {
   readSystemdServiceExecStart,
   resolveInstalledSystemdServiceNameCandidates,
   resolveSystemdServiceName,
-  resolveSystemdUnitPathForName,
 } from "./systemd-service-files.js";
 import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from "./systemd-system.js";
 import {
   DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS,
+  resolveSystemdUnitLoadDirectories,
   resolveSystemdUnitLoadPaths,
 } from "./systemd-unit-load-paths.js";
 import { parseSystemdInlineEnvironment } from "./systemd-unit.js";
@@ -513,14 +513,19 @@ async function findSystemdGatewayScope(
 ): Promise<SystemdServiceReadTarget | null> {
   const candidates = resolveInstalledSystemdServiceNameCandidates(env);
   const names = scope === "system" ? systemdInstalledNameProbes(candidates) : candidates;
-  const directories = scope === "system" ? DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS : [undefined];
+  // User units may live in any supported systemd load path (XDG config/data,
+  // /etc/systemd/user, runtime, ...); probing only the config home would let an
+  // installed-but-unprobed unit read as absent. Filesystem errors other than
+  // ENOENT propagate so the caller keeps the inconclusive (unknown) verdict.
+  const directories =
+    scope === "system"
+      ? DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS
+      : resolveSystemdUnitLoadDirectories(env, resolveDaemonHomeDir(env), process.geteuid?.())
+          .userDirs;
   for (const name of names) {
     const unitName = `${name}.service`;
     for (const dir of directories) {
-      const unitPath =
-        dir === undefined
-          ? resolveSystemdUnitPathForName(env, name)
-          : path.posix.join(dir, unitName);
+      const unitPath = path.posix.join(dir, unitName);
       try {
         await fs.access(unitPath);
       } catch (error) {

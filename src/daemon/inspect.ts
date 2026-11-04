@@ -212,29 +212,7 @@ async function scanLaunchdDir(params: {
   return results;
 }
 
-export async function findSystemGatewayServices(): Promise<ExtraGatewayService[]> {
-  if (process.platform !== "linux") {
-    return [];
-  }
-
-  const results: ExtraGatewayService[] = [];
-  try {
-    for (const dir of DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS) {
-      results.push(
-        ...(
-          await scanSystemdDir({
-            dir,
-            scope: "system",
-          })
-        ).map(projectService),
-      );
-    }
-  } catch {
-    return [];
-  }
-
-  return results;
-}
+export { findSystemGatewayServices } from "./systemd-system-services.js";
 
 async function scanWindowsStartupEntries(
   env: Record<string, string | undefined>,

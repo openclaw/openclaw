@@ -276,3 +276,53 @@ it("keeps refusing an installed unit when the manager is unavailable", async () 
     }),
   ).rejects.toMatchObject({ reason: unavailable });
 });
+
+it("keeps refusing a unit installed in a non-config user load path", async () => {
+  const unitPath = `/openclaw-service-proof/data-path/data/systemd/user/openclaw-gateway.service`;
+  missingFiles(unitPath, unitPath);
+  const native = await execSpy();
+  native.mockImplementation(async () => ({
+    ...nativeResult(
+      "",
+      "System has not been booted with systemd as init system (PID 1). Can't operate.",
+    ),
+    termination: "exit",
+  }));
+  await expect(
+    readGatewayServiceState(resolveGatewayService(), {
+      env: {
+        ...serviceEnv("data-path"),
+        XDG_DATA_HOME: "/openclaw-service-proof/data-path/data",
+        DBUS_SESSION_BUS_ADDRESS: undefined,
+      },
+      ...strictRead,
+    }),
+  ).rejects.toMatchObject({ reason: unavailable });
+});
+
+it("keeps the strict read inconclusive when the system unit inventory is unreadable", async () => {
+  mockProcessPlatform("linux");
+  const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
+  vi.spyOn(fs, "readFile").mockRejectedValue(missing());
+  vi.spyOn(fs, "access").mockRejectedValue(missing());
+  vi.spyOn(fs, "readdir").mockImplementation(async (dir) => {
+    if (dir === "/etc/systemd/system") {
+      throw denied();
+    }
+    return [];
+  });
+  const native = await execSpy();
+  native.mockImplementation(async () => ({
+    ...nativeResult(
+      "",
+      "System has not been booted with systemd as init system (PID 1). Can't operate.",
+    ),
+    termination: "exit",
+  }));
+  await expect(
+    readGatewayServiceState(resolveGatewayService(), {
+      env: { ...serviceEnv("unreadable"), DBUS_SESSION_BUS_ADDRESS: undefined },
+      ...strictRead,
+    }),
+  ).rejects.toMatchObject({ reason: unavailable });
+});

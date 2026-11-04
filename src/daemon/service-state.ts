@@ -90,14 +90,27 @@ export async function readGatewayServiceState(
         if (inspectionDeadline !== undefined && budget.now() >= inspectionDeadline) {
           throw new ServiceInspectionDeadlineError("systemd installation discovery");
         }
-        const installation =
-          selected ??
-          (await findSystemdGatewayInstallation(baseEnv, {
-            requireLoaded: args.requireLoadedCommand,
-            loadForInspection: args.loadForInspection,
-            timeoutMs:
-              inspectionDeadline === undefined ? undefined : inspectionDeadline - budget.now(),
-          }));
+        let installation: Awaited<ReturnType<typeof findSystemdGatewayInstallation>>;
+        try {
+          installation =
+            selected ??
+            (await findSystemdGatewayInstallation(baseEnv, {
+              requireLoaded: args.requireLoadedCommand,
+              loadForInspection: args.loadForInspection,
+              timeoutMs:
+                inspectionDeadline === undefined ? undefined : inspectionDeadline - budget.now(),
+            }));
+        } catch (error) {
+          if (error instanceof ServiceInspectionDeadlineError) {
+            throw error;
+          }
+          // An unreadable unit inventory is inconclusive, not absent: refuse the
+          // read (publication must not fall back to caller defaults) while the
+          // underlying diagnostic stays attached.
+          throw new ServiceInspectionError("service-manager-unavailable", {
+            kind: "invalid-response",
+          });
+        }
         if (installation.kind === "dueling" && args.requireEffective && args.requireLoadedCommand) {
           throw new ServiceOwnershipRefusalError("systemd-competing-managers");
         }

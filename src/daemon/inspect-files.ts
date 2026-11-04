@@ -18,7 +18,10 @@ export type ExtraGatewayService = {
   windowsStartupEntry?: string;
 };
 
-type ScannedGatewayService = ExtraGatewayService & { extra: boolean; managedGateway: boolean };
+export type ScannedGatewayService = ExtraGatewayService & {
+  extra: boolean;
+  managedGateway: boolean;
+};
 
 export function isPotentialGatewayServiceName(
   name: string,
