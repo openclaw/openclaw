@@ -522,7 +522,11 @@ it("borrows an open database while an unrelated cold open awaits its reply", asy
 
 it("releases broker client capacity and drains after synchronous cold path failures", async ({
   signal,
+  skip,
 }) => {
+  if (process.platform === "win32") {
+    skip(); // File symlinks require privileges on Windows.
+  }
   const broker = new SqliteWorkerBroker();
   const loop = databasePath();
   fs.symlinkSync(loop, loop);

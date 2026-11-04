@@ -161,7 +161,10 @@ it("reserves cold admission synchronously before a later database turn", async (
 
 it.for(["ELOOP", "EACCES"])(
   "releases cold open custody after synchronous %s",
-  async (code, { signal }) => {
+  async (code, { signal, skip }) => {
+    if (code === "ELOOP" && process.platform === "win32") {
+      skip(); // File symlinks require privileges on Windows.
+    }
     const admission = inputAdmission();
     const file = databasePath();
     if (code === "ELOOP") {
