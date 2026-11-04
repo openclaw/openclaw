@@ -1,4 +1,3 @@
-import { channel } from "node:diagnostics_channel";
 /** Native composition entry for ordinary, restricted, and cold provider-hook loading. */
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
@@ -161,17 +160,10 @@ const loaderBindings: NativePluginLoadBindings = {
       resolveProviderAuthProfileApiKey: authAvailability.resolveProviderAuthProfileApiKey,
       resolveApiKeyForProvider: async (
         params: Parameters<PluginCapabilityCatalogHostContext["resolveApiKeyForProvider"]>[0],
-      ) => {
-        captureProviderPhase("loader:auth-import-start");
-        const runtime = await import("./runtime/runtime-model-auth.runtime.js");
-        captureProviderPhase("loader:auth-import-end");
-        captureProviderPhase("loader:auth-call-start");
-        try {
-          return await runtime.resolveProviderRuntimeApiKey(params);
-        } finally {
-          captureProviderPhase("loader:auth-call-end");
-        }
-      },
+      ) =>
+        (await import("./runtime/runtime-model-auth.runtime.js")).resolveProviderRuntimeApiKey(
+          params,
+        ),
       captureWsEvent,
       captureWsEventAsync,
       createDebugProxyWebSocketAgent,
@@ -428,15 +420,4 @@ export function resolveNativePluginModelAuth(): PluginRuntime["modelAuth"] {
 }
 export function resolveNativePluginModelConfig(): PluginRuntime["modelConfig"] {
   return { ...loaderBindings.modelConfig };
-}
-
-// Temporary secret-free CI attribution probe; removed after the owned fixture is qualified.
-function captureProviderPhase(
-  phase: string,
-  values: Record<string, number | null | undefined> = {},
-) {
-  const probe = channel("openclaw.clawrouter.fixture-phase");
-  if (probe.hasSubscribers) {
-    probe.publish({ phase, wallMs: Date.now(), monotonicMs: performance.now(), ...values });
-  }
 }

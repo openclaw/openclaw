@@ -1,4 +1,3 @@
-import { channel } from "node:diagnostics_channel";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { DiagnosticWorkerRetainedData } from "../infra/diagnostic-process-types.js";
@@ -108,7 +107,6 @@ export async function getCachedLiveCatalogValue<T>(params: {
   now?: () => number;
 }): Promise<T> {
   params.signal?.throwIfAborted();
-  captureProviderPhase("catalog:cache-entry");
   const rawNow = params.now?.() ?? Date.now();
   const ttlMs = params.ttlMs ?? 30_000;
   // Uncached callers must neither reuse nor disturb an existing entry.
@@ -126,18 +124,15 @@ export async function getCachedLiveCatalogValue<T>(params: {
   // SAFETY: Callers reuse key parts only for the same catalog loader and result type.
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
   if (existing?.result.state === "fulfilled" && !refresh && existing.expiresAt > rawNow) {
-    captureProviderPhase("catalog:cache-fulfilled");
     return await consumeLiveCatalog(existing, params.signal);
   }
   // SAFETY: The pending alias has the same load identity and stable acquisition budget.
   const shared = liveCatalogCache.get(pendingKey) as LiveCatalogCacheEntry<T> | undefined;
   if (shared?.result.state === "pending" && shared.expiresAt > rawNow) {
-    captureProviderPhase("catalog:cache-pending");
     return await consumeLiveCatalog(shared, params.signal);
   }
   liveCatalogCache.delete(key);
   // Read-only metadata may finish and warm the cache after every observer cancels.
-  captureProviderPhase("catalog:cache-load-start");
   const pending = { state: "pending" as const, value: params.load() };
   const entry: LiveCatalogCacheEntry<T> = {
     expiresAt: rawNow + ttlMs,
@@ -202,15 +197,4 @@ export function getLiveCatalogRetainedData(): DiagnosticWorkerRetainedData[] {
     { structure: "catalog-source", entries: values.length, ...estimateRetainedDataSize(values) },
     { structure: "catalog-request", entries: pending, approximateBytes: 0 },
   ];
-}
-
-// Temporary secret-free CI attribution probe; removed after the owned fixture is qualified.
-function captureProviderPhase(
-  phase: string,
-  values: Record<string, number | null | undefined> = {},
-) {
-  const probe = channel("openclaw.clawrouter.fixture-phase");
-  if (probe.hasSubscribers) {
-    probe.publish({ phase, wallMs: Date.now(), monotonicMs: performance.now(), ...values });
-  }
 }

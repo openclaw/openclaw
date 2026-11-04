@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { channel } from "node:diagnostics_channel";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelServingContextLimit } from "../agents/model-serving-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -29,10 +28,6 @@ export async function withProviderCatalogDiscoveryBudget<T>(
   providerTimeouts?: Readonly<Record<string, number>>,
 ): Promise<T> {
   const parent = capture.getStore();
-  captureProviderPhase("catalog:budget-parent", {
-    parentDeadlineMs: parent?.discoveryBudget?.deadlineMs,
-    timeoutMs,
-  });
   const current: CatalogExpiryCapture = {
     ...(parent ?? {
       providers: new Map(),
@@ -50,9 +45,6 @@ export async function withProviderCatalogDiscoveryBudget<T>(
       ),
     },
   };
-  captureProviderPhase("catalog:budget-created", {
-    deadlineMs: current.discoveryBudget?.deadlineMs,
-  });
   const value = await capture.run(current, load);
   if (parent && current.expiresAt !== undefined) {
     parent.expiresAt = Math.min(parent.expiresAt ?? Infinity, current.expiresAt);
@@ -147,16 +139,5 @@ export function recordLiveCatalogExpiry(expiresAt: number): void {
   const current = capture.getStore();
   if (current) {
     current.expiresAt = Math.min(current.expiresAt ?? Infinity, expiresAt);
-  }
-}
-
-// Temporary secret-free CI attribution probe; removed after the owned fixture is qualified.
-function captureProviderPhase(
-  phase: string,
-  values: Record<string, number | null | undefined> = {},
-) {
-  const probe = channel("openclaw.clawrouter.fixture-phase");
-  if (probe.hasSubscribers) {
-    probe.publish({ phase, wallMs: Date.now(), monotonicMs: performance.now(), ...values });
   }
 }

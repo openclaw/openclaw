@@ -1,12 +1,11 @@
-import type { ServerResponse } from "node:http";
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import type { ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { upsertAuthProfileAsync, type OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { getSpeechProvider, type SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech";
 import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
 import { synthesizeSpeech, textToSpeechTelephony } from "openclaw/plugin-sdk/tts-runtime";
 import { describe, expect, it } from "vitest";
-import { captureProviderPhases, recordProviderFixturePhase } from "./phase-capture.test-support.js";
 
 const AUDIO = Buffer.from([0x49, 0x44, 0x33, 1, 2, 3]);
 type Request = {
@@ -84,7 +83,6 @@ async function withFixture(
               expect(req.headers["x-api-key"]).toBeUndefined();
             }
             if (req.url === "/v1/catalog") {
-              recordProviderFixturePhase("fixture:speech-catalog-get");
               catalogRequests.push(req.headers.authorization ?? "");
               const route =
                 catalog.route ??
@@ -446,68 +444,64 @@ describe("ClawRouter native speech", () => {
     );
   });
 
-  it(
-    "honors explicit speech keys over ambient auth while keeping selected profiles terminal",
-    captureProviderPhases("speech-explicit-key", async () => {
-      await withFixture(
-        async ({ cfg, home, tts, requests, request }) => {
-          const agentDir = home + "/.openclaw/agents/main/agent";
-          await upsertAuthProfileAsync({
-            agentDir,
-            profileId: "clawrouter:speech",
-            credential: { type: "api_key", provider: "clawrouter", key: "fixture-stored-router" },
+  it("honors explicit speech keys over ambient auth while keeping selected profiles terminal", async () => {
+    await withFixture(
+      async ({ cfg, home, tts, requests, request }) => {
+        const agentDir = home + "/.openclaw/agents/main/agent";
+        await upsertAuthProfileAsync({
+          agentDir,
+          profileId: "clawrouter:speech",
+          credential: { type: "api_key", provider: "clawrouter", key: "fixture-stored-router" },
+        });
+        await upsertAuthProfileAsync({
+          agentDir,
+          profileId: "openai:speech",
+          credential: { type: "api_key", provider: "openai", key: "fixture-stored-openai" },
+        });
+        const provider = speech(cfg);
+        const storedCfg = withoutKey(cfg);
+        // This call includes cold auth-owner setup in the end-to-end budget, as TTS does.
+        await expect(
+          provider.synthesize({ ...request(), cfg: storedCfg, timeoutMs: 30_000 }),
+        ).resolves.toMatchObject({ audioBuffer: AUDIO });
+        await expect(
+          provider.synthesize(
+            request({ profileId: "clawrouter:speech", apiKey: "fixture-inline-must-not-win" }),
+          ),
+        ).resolves.toMatchObject({ audioBuffer: AUDIO });
+        for (const profileId of ["clawrouter:missing", "openai:speech"]) {
+          await expect(provider.synthesize(request({ profileId }))).rejects.toThrow(
+            "Selected speech auth profile is unavailable for ClawRouter",
+          );
+        }
+        for (const route of ["tts", "talk"] as const) {
+          const apiKey = "fixture-explicit-" + route;
+          const providerConfig =
+            route === "talk"
+              ? provider.resolveTalkConfig!({
+                  cfg,
+                  baseTtsConfig: { providers: { clawrouter: {} } },
+                  talkProviderConfig: { apiKey },
+                  timeoutMs: 5000,
+                })
+              : { apiKey };
+          const result = await tts({
+            cfg: { ...cfg, tts: { providers: { clawrouter: providerConfig } } },
+            text: "Explicit " + route + " key",
           });
-          await upsertAuthProfileAsync({
-            agentDir,
-            profileId: "openai:speech",
-            credential: { type: "api_key", provider: "openai", key: "fixture-stored-openai" },
-          });
-          const provider = speech(cfg);
-          const storedCfg = withoutKey(cfg);
-          await expect(
-            provider.synthesize({ ...request(), cfg: storedCfg }),
-          ).resolves.toMatchObject({
-            audioBuffer: AUDIO,
-          });
-          await expect(
-            provider.synthesize(
-              request({ profileId: "clawrouter:speech", apiKey: "fixture-inline-must-not-win" }),
-            ),
-          ).resolves.toMatchObject({ audioBuffer: AUDIO });
-          for (const profileId of ["clawrouter:missing", "openai:speech"]) {
-            await expect(provider.synthesize(request({ profileId }))).rejects.toThrow(
-              "Selected speech auth profile is unavailable for ClawRouter",
-            );
-          }
-          for (const route of ["tts", "talk"] as const) {
-            const apiKey = "fixture-explicit-" + route;
-            const providerConfig =
-              route === "talk"
-                ? provider.resolveTalkConfig!({
-                    cfg,
-                    baseTtsConfig: { providers: { clawrouter: {} } },
-                    talkProviderConfig: { apiKey },
-                    timeoutMs: 5000,
-                  })
-                : { apiKey };
-            const result = await tts({
-              cfg: { ...cfg, tts: { providers: { clawrouter: providerConfig } } },
-              text: "Explicit " + route + " key",
-            });
-            expect(result).toMatchObject({ success: true, audioBuffer: AUDIO });
-          }
-          expect(requests.map((req) => req.auth)).toEqual([
-            "Bearer fixture-stored-router",
-            "Bearer fixture-stored-router",
-            "Bearer fixture-explicit-tts",
-            "Bearer fixture-explicit-talk",
-          ]);
-        },
-        undefined,
-        "fixture-env-router",
-      );
-    }),
-  );
+          expect(result).toMatchObject({ success: true, audioBuffer: AUDIO });
+        }
+        expect(requests.map((req) => req.auth)).toEqual([
+          "Bearer fixture-stored-router",
+          "Bearer fixture-stored-router",
+          "Bearer fixture-explicit-tts",
+          "Bearer fixture-explicit-talk",
+        ]);
+      },
+      undefined,
+      "fixture-env-router",
+    );
+  });
 
   it("never borrows an OpenAI credential and preserves service grant failures without exposing keys", async () => {
     await withFixture(

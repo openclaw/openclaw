@@ -1,4 +1,3 @@
-import { channel } from "node:diagnostics_channel";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readLiveModelCatalogString } from "../../packages/normalization-core/src/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
@@ -290,7 +289,6 @@ async function fetchLiveProviderModelCatalogPage(
   },
 ): Promise<{ body: unknown; finalUrl: string; requestHeaders: Headers; rows: readonly unknown[] }> {
   const requestHeaders = buildHeaders(params, params.safeReplayHeaders);
-  captureProviderPhase("catalog:before-guard", { timeoutMs: params.timeoutMs });
   const { response, finalUrl, release } = await params.fetchGuard({
     url: params.url,
     init: {
@@ -329,10 +327,6 @@ export async function fetchLiveProviderModelRows(
 ): Promise<readonly unknown[]> {
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
   const budget = getProviderCatalogDiscoveryBudget();
-  captureProviderPhase("catalog:acquisition", {
-    deadlineMs: budget?.deadlineMs,
-    timeoutMs: budget?.timeoutMs,
-  });
   const timeoutMs = Math.min(
     resolveProviderCatalogDiscoveryTimeoutMs(params.providerId, params.timeoutMs),
     budget ? budget.deadlineMs - performance.now() : Infinity,
@@ -433,15 +427,4 @@ export async function fetchLiveProviderModelIds(
     modelIds.push(modelId);
   }
   return modelIds;
-}
-
-// Temporary secret-free CI attribution probe; removed after the owned fixture is qualified.
-function captureProviderPhase(
-  phase: string,
-  values: Record<string, number | null | undefined> = {},
-) {
-  const probe = channel("openclaw.clawrouter.fixture-phase");
-  if (probe.hasSubscribers) {
-    probe.publish({ phase, wallMs: Date.now(), monotonicMs: performance.now(), ...values });
-  }
 }
