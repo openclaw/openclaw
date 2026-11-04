@@ -174,7 +174,7 @@ describe("Model Setup explicit discovery", () => {
       } else {
         await waitForFast(() =>
           expect(page.querySelector(".model-setup-wizard .callout.warning")?.textContent).toContain(
-            "Could not confirm cancellation",
+            "Couldn’t confirm cancellation",
           ),
         );
         expect(page.textContent).toContain(error.message);

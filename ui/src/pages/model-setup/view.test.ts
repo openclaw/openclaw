@@ -429,7 +429,7 @@ describe("renderModelSetup", () => {
     const copy = container.querySelector<HTMLButtonElement>(".wizard-sign-in__code button");
     copy?.click();
 
-    const feedback = copied ? "Copied!" : "Copy failed";
+    const feedback = copied ? "Copied" : "Couldn’t copy. Try again.";
     await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe(feedback));
     expect(copy?.getAttribute("aria-label")).toBeNull();
     expect(execCommand).toHaveBeenCalledWith("copy");
@@ -610,7 +610,7 @@ describe("renderModelSetup", () => {
       expect(container.querySelector(".content-header")).toBeNull();
       expect(container.querySelector(".model-setup__current")).toBeNull();
       expect(text(container)).toContain("for Writer");
-      expect(text(container)).toContain("not the global defaults");
+      expect(text(container)).toContain("This changes only this agent’s model.");
       expect(container.querySelector('[data-auth-choice="openai-oauth"]')).toBeNull();
       expect(container.querySelector('[data-prepare-choice="ollama"]')).not.toBeNull();
       for (const option of [install, custom]) {

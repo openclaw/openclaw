@@ -38,6 +38,7 @@ async function copyProvisionedFile(params: {
       { root: params.sourceRoot, relativePath: source },
       {
         overwrite: false,
+        clone: "auto",
         maxBytes: Infinity,
         preserveSourceMode: true,
         preserveMetadata: true,

@@ -39,7 +39,8 @@ Anthropic Messages, OpenAI-compatible Chat Completions, Google, Mistral, and
 OpenAI Responses calls stop waiting for payload and response hooks when the
 request signal aborts. A hook can continue running after cancellation; embedding
 hosts can retain that work through `observePendingProviderWork` until it
-settles.
+settles. Native provider transports get the same payload-hook behavior from
+`applyProviderPayloadHook`.
 
 Hosts that attach request state to async contexts should supply
 `runInDetachedAsyncContext` from a context-free root initialized before requests

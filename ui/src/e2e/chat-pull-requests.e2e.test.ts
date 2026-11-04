@@ -159,7 +159,7 @@ suite.define(() => {
     await pollCount(page.locator('.chat-pr__publication-outcome[data-state="failed"]')).toBe(1);
     await closeChatDetails(page);
     await emitPullRequests(gateway, watchedKey, empty);
-    await pollText(pill).toContain("Publish failed");
+    await pollText(pill).toContain("Couldn’t publish");
   });
 
   it("keeps one mobile pill across a PR's publication lifecycle", async () => {

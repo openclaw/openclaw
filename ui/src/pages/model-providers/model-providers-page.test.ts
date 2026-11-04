@@ -284,7 +284,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.querySelector(".model-providers__profiles")).toBeNull();
     expect(page.renderRoot.textContent).not.toContain("owner@example.com");
     expect(page.querySelector(".model-providers__credentials")?.textContent).toContain(
-      "OAuth profiles: 1",
+      "Signed-in accounts: 1",
     );
   });
 
@@ -563,7 +563,7 @@ describe("ModelProvidersPage agent scope", () => {
     const form = page.querySelector("[data-models-key-dialog]");
     expect(
       [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
-    ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
+    ).toEqual(["Added anthropic", "config.get failed after provider add"]);
   });
 
   it.each([
@@ -595,7 +595,7 @@ describe("ModelProvidersPage agent scope", () => {
 
     expect(page.view.props.messages.add).toEqual({
       kind: "success",
-      text: "Provider anthropic added.",
+      text: "Added anthropic",
       ...(warning ? { warning } : {}),
     });
   });
@@ -770,11 +770,13 @@ describe("ModelProvidersPage agent scope", () => {
         agentId: "main",
       }),
     );
-    await vi.waitFor(() => expect(toast.toast?.message).toBe("Priority could not be saved"));
+    await vi.waitFor(() =>
+      expect(toast.toasts[0]?.options.message).toBe("Priority could not be saved"),
+    );
     await toast.updateComplete;
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
-      expect(toast.querySelector('[role="status"]')?.textContent).toContain(
+      expect(toast.querySelector('[role="alert"]')?.textContent).toContain(
         "Priority could not be saved",
       ),
     );
@@ -782,7 +784,7 @@ describe("ModelProvidersPage agent scope", () => {
 
     expect(page.querySelector('[role="alert"]')).toBeNull();
     expect(page.view.props.messages.openai).toBeUndefined();
-    expect(toast.querySelector(".app-toast--bottom .app-toast__icon")).not.toBeNull();
+    expect(toast.querySelector(".app-toast-lane--top-center .app-toast__icon")).not.toBeNull();
     expect(
       [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
         (row) => row.dataset.profileId,
