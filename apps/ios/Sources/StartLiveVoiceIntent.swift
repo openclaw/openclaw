@@ -29,6 +29,11 @@ struct OpenClawShortcuts: AppShortcutsProvider {
             shortTitle: "Start Live Voice",
             systemImageName: "waveform")
         AppShortcut(
+            intent: OpenLiveVoiceIntent(),
+            phrases: ["Open session voice in \(.applicationName)"],
+            shortTitle: "Open Session Voice",
+            systemImageName: "waveform")
+        AppShortcut(
             intent: CheckSessionStatusIntent(),
             phrases: ["Check status in \(.applicationName)"],
             shortTitle: "Check Status",
