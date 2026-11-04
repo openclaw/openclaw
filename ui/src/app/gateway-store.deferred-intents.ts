@@ -66,6 +66,7 @@ export function createGatewayDeferredIntents(host: {
       return;
     }
     showToast({
+      placement: "top-right",
       message: t("connection.offlineChangesDiscarded", { count: String(discarded.length) }),
     });
   };

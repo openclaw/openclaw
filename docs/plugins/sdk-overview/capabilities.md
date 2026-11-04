@@ -38,6 +38,12 @@ worker, storage, or embedding provider must satisfy. Part of the
 | `api.registerWebSearchProvider(...)`             | Web search                                                                        |
 | `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                           |
 
+`openclaw/plugin-sdk/speech-provider` exports `buildGradiumSpeechRequestBody`
+and `DEFAULT_GRADIUM_VOICE_ID` for native unary speech. The payload helper
+preserves `only_audio: true`, the native voice and output format, and encoded
+padding settings. Direct and catalog-scoped proxy providers share this payload;
+each transport retains its own credential and destination policy.
+
 Transcript source providers that share an account namespace with an inbound
 channel declare an `accountOwnership` descriptor with that channel id and a
 shared account resolver. OpenClaw then

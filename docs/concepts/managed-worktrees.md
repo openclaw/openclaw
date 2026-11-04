@@ -47,6 +47,12 @@ requested worktree name or existing session title can name the checkout.
 Otherwise, allocation chooses a short generated name while display-title
 generation runs in the background.
 
+Worktree registration waits at most 30 seconds for a shared repository Git
+operation, including object repair. After one second it logs the wait; if the
+operation remains busy, creation reports a retryable error naming the repository
+wait. A timed-out registration cannot create a checkout later. Git operations
+that have already started retain their normal execution and cleanup budgets.
+
 Pull-request statistics may refresh Git's cached file timestamps in a managed
 checkout; they do not stage content or change commits. Statistics for user-managed
 checkouts keep their index unchanged.
@@ -134,6 +140,11 @@ unchanged hashes while detecting same-size edits and files moved by directory
 renames. Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
 open does not rewrite their inventories.
+
+Archive preparation compares live sandbox files with that accepted tree in the
+filesystem worker. If Git already preserves every accepted file and directory,
+cleanup needs no separate workspace overlay. Ignored files and empty directories
+still retain their restore receipt, and owner protection gates removal.
 
 This storage format requires [shared-state schema 35](/reference/database-schemas/state-schema-history#state-schema-35).
 Let pending workspace operations settle before downgrading. Older builds refuse
@@ -361,7 +372,7 @@ For partial clones, OpenClaw inventories missing objects before estimating check
 
 Empty pack directories skip pack mutation admission; threshold-gated commit-graph and loose-object maintenance still runs. Packs arriving after that inventory are handled by the next maintenance pass.
 
-Pack consolidation keeps promisor and ordinary packs separate. Each group selects up to 1,024 of its smallest eligible packs, capped at 16 GiB of pack data and 128 MiB of index data per pass. The index budget admits multiple large fetch indexes; a budget smaller than two ordinary indexes would leave their packs permanently fragmented. Consolidation combines at least two packs only when the smaller inputs together reach the largest selected pack's size. Otherwise it leaves that largest pack untouched and considers the smaller batch. The index budget bounds object metadata even for highly compressed inputs. Git verifies each selected pack and index, then streams all their objects into a replacement without fetching missing partial-clone objects. Inputs retire only after Git publishes the verified replacement. Kept packs, cruft packs, and packs outside the batch remain untouched. This size-based policy lets bounded batches keep converging below 16 packs without repeatedly rewriting a large pack for tiny additions. Maintenance removes optional multi-pack-index lookup metadata, including stale indexes, so Git uses individual pack indexes without a repository-wide rebuild. Verification and rewriting each have a 30-minute subprocess budget. Backlogs drain over successive passes; consolidation does not guarantee a fixed pack count for arbitrary repository growth or impose an operating-system RSS limit. Consolidation uses low-priority Git subprocesses, one thread per pack process, and idle I/O priority where `ionice` is available. On delegated Linux services, maintenance runs in the resource-limited `agent-exec` group. Foreground Git retains its Gateway placement. Maintenance acquires the project checkout lease without waiting, skips busy projects without consuming their hourly slot, and shares repository mutation ownership with fetch. The checkout lease also prevents concurrent maintenance owners from rewriting the same project.
+Pack consolidation keeps promisor and ordinary packs separate. Each group selects up to 1,024 of its smallest eligible packs, capped at 16 GiB of pack data and 128 MiB of index data per pass. The index budget admits multiple large fetch indexes; a budget smaller than two ordinary indexes would leave their packs permanently fragmented. Consolidation combines at least two packs only when the smaller inputs together reach the largest selected pack's size. Otherwise it leaves that largest pack untouched and considers the smaller batch. The index budget bounds object metadata even for highly compressed inputs. Git verifies each selected pack and index, then streams all their objects into a replacement without fetching missing partial-clone objects. Inputs retire only after Git publishes the verified replacement. Kept packs, cruft packs, and packs outside the batch remain untouched. This size-based policy lets bounded batches keep converging below 16 packs without repeatedly rewriting a large pack for tiny additions. Maintenance removes optional multi-pack-index lookup metadata, including stale indexes, so Git uses individual pack indexes without a repository-wide rebuild. Verification and rewriting each have a 30-minute subprocess budget. Backlogs drain over successive passes; consolidation does not guarantee a fixed pack count for arbitrary repository growth or impose an operating-system RSS limit. Consolidation uses low-priority Git subprocesses, one thread per pack process, and idle I/O priority where `ionice` is available. On delegated Linux services, maintenance runs in the resource-limited `agent-exec` group. Foreground Git retains its Gateway placement. Maintenance acquires the project checkout lease without waiting and skips busy projects without consuming their hourly slot. Losing the lease mid-pass defers that repository to its next hourly pass instead of suspending maintenance. Verification and rewriting run beside fetch and other ref updates; only retiring the replaced inputs waits for the repository's ref-mutation queue. The checkout lease also prevents concurrent maintenance owners from rewriting the same project.
 
 A fresh clone is not a replacement for a managed project's object store: remote
 history does not include its unpublished commits, local branches, snapshots, or
@@ -372,7 +383,7 @@ Do not substitute native `maintenance run --task=incremental-repack` on partial
 clones: Git versions including 2.56 can combine promisor and ordinary packs
 without retaining the promisor marker, then expire the original promisor pack.
 
-On Linux, maintenance also removes up to 256 abandoned `tmp_pack_*` files per pass once they are older than 24 hours. An isolated native helper must obtain an exclusive Linux file lease, which detects open users across user IDs and blocks new opens through deletion. It rechecks each file's identity, size, and timestamps before unlinking it. A live user, unsupported filesystem lease, or changed file preserves that temporary file. Other platforms retain temporary packs. Installing an update requires no migration or immediate repack; the next ordinary maintenance pass applies these bounds.
+On Linux, maintenance also removes up to 256 abandoned temporary pack files (`tmp_pack_*`, `tmp_idx_*`, and other `tmp_*_` files Git leaves when interrupted) per pass once they are older than 24 hours. An isolated native helper must obtain an exclusive Linux file lease, which detects open users across user IDs and blocks new opens through deletion. It rechecks each file's identity, size, and timestamps before unlinking it. A live user, unsupported filesystem lease, or changed file preserves that temporary file. Other platforms retain temporary packs. Installing an update requires no migration or immediate repack; the next ordinary maintenance pass applies these bounds.
 
 Transient fetch failures, including an incomplete object transfer, retry once after one second within the original fetch timeout. Cancellation and expired workspace authority stop recovery; a second failure surfaces the Git error. See [Retry policy](/concepts/retry#managed-git-operations).
 
