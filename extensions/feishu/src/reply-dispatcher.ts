@@ -809,6 +809,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     FeishuReplyDeliveryResult,
     Map<string, Promise<FeishuReplyDeliveryResult>>
   >();
+  const creditedRecoveries = new WeakSet<object>();
 
   const ensureVisibleStreamingDelivery = async (
     result: FeishuReplyDeliveryResult | undefined,
@@ -866,6 +867,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 : { disposition: "closed", result: noVisibleFeishuReplyDelivery };
           for (const completion of completions) {
             const deliveryError = closeOutcome.error;
+            // Equal blocks share one recovery that shows a single copy. It moves the checkpoint once,
+            // and never over a preview copy while an equal block without preview needs it.
+            const advanceOnce = (recovery: object | undefined, next: string) => {
+              if (
+                recovery &&
+                !creditedRecoveries.has(recovery) &&
+                !completions.some(
+                  (other) =>
+                    other !== completion &&
+                    !other.previewCovered &&
+                    other.result.content === completion.result.content,
+                )
+              ) {
+                creditedRecoveries.add(recovery);
+                setClosedPreview(next, completion.previewCovered?.epoch);
+              }
+            };
             if (closeOutcome.disposition === "discarded") {
               const retained = mergeFeishuReplyDeliveryResults(
                 [closeOutcome.result, completion.result],
@@ -894,7 +912,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 // Nothing before this block may be unshown, such as a block whose recovery failed.
                 covered.from <= closedPreviewText.length
               ) {
-                setClosedPreview(covered.text, covered.epoch);
+                advanceOnce(providerFinalized, covered.text);
               }
             } catch (fallbackError: unknown) {
               const fallbackPartial = isChannelPartialDeliveryError(fallbackError)
@@ -913,7 +931,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               ) {
                 const accepted = covered.text.slice(0, -content.length) + sent;
                 if (accepted.length > closedPreviewText.length) {
-                  setClosedPreview(accepted, covered.epoch);
+                  advanceOnce(fallbackPartial, accepted);
                 }
               }
               const fallbackCause =
