@@ -1,7 +1,6 @@
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type {
-  ModelCatalogCost,
   ModelCatalogModel,
   NormalizedModelCatalogRow,
 } from "@openclaw/model-catalog-core/model-catalog-types";
@@ -100,16 +99,6 @@ export function readManifestProviderDefaultModelRef(
   return defaultModel ? buildModelCatalogRef(providerId, defaultModel) : undefined;
 }
 
-function cloneManifestCatalogCost(cost: ModelCatalogCost): ModelDefinitionConfig["cost"] {
-  return {
-    input: cost.input ?? 0,
-    output: cost.output ?? 0,
-    cacheRead: cost.cacheRead ?? 0,
-    cacheWrite: cost.cacheWrite ?? 0,
-    ...(cost.tieredPricing ? { tieredPricing: cost.tieredPricing } : {}),
-  };
-}
-
 function buildManifestCatalogModelInput(
   model: ModelCatalogModel,
   filterDocument = false,
@@ -130,12 +119,6 @@ function buildManifestCatalogModel(
   model: ModelCatalogModel,
   options: { providerId?: string; filterDocument?: boolean } = {},
 ): ModelDefinitionConfig & Pick<ModelCatalogModel, "contextWindows" | "contextWindowDefault"> {
-  if (model.contextWindow === undefined) {
-    throw new Error(`Manifest modelCatalog row ${model.id} is missing contextWindow`);
-  }
-  if (model.maxTokens === undefined) {
-    throw new Error(`Manifest modelCatalog row ${model.id} is missing maxTokens`);
-  }
   const id = options.providerId
     ? normalizeConfiguredProviderCatalogModelId(options.providerId, model.id, new Map())
     : model.id;
@@ -146,7 +129,7 @@ function buildManifestCatalogModel(
     ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
     reasoning: model.reasoning ?? false,
     input: buildManifestCatalogModelInput(model, options.filterDocument),
-    cost: cloneManifestCatalogCost(model.cost ?? {}),
+    cost: model.cost ? { ...model.cost } : undefined,
     contextWindow: model.contextWindow,
     ...(model.contextWindows
       ? { contextWindows: model.contextWindows.map((option) => ({ ...option })) }
@@ -211,11 +194,7 @@ export function buildEffectiveManifestProviderConfig(
   if (!firstRow?.baseUrl || !firstRow.api) {
     return undefined;
   }
-  const models = rows.flatMap((row) =>
-    !row.contextWindow || !row.maxTokens
-      ? []
-      : [buildManifestCatalogModel(row, { filterDocument: true })],
-  );
+  const models = rows.map((row) => buildManifestCatalogModel(row, { filterDocument: true }));
   return models.length > 0 ? { baseUrl: firstRow.baseUrl, api: firstRow.api, models } : undefined;
 }
 

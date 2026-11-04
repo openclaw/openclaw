@@ -11,6 +11,22 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 
+// OpenClaw synthesizes these caps when the provider's real output limit is unknown.
+// Keep them out of Bedrock adaptive requests so Bedrock can use its native default.
+const OPENCLAW_FALLBACK_MODEL_MAX_TOKENS = new Set([4096, 8192, 16_384]);
+
+export function resolveAdaptiveBedrockMaxTokens(
+  model: Pick<ProviderRuntimeModel, "maxTokens">,
+  baseMaxTokens: number | undefined,
+): number | undefined {
+  if (baseMaxTokens !== undefined) {
+    return baseMaxTokens;
+  }
+  return model.maxTokens === undefined || OPENCLAW_FALLBACK_MODEL_MAX_TOKENS.has(model.maxTokens)
+    ? undefined
+    : model.maxTokens;
+}
+
 const BASE_CLAUDE_THINKING_LEVELS = [
   { id: "off" },
   { id: "minimal" },

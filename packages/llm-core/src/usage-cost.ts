@@ -12,8 +12,47 @@ import type {
 // a config/catalog reload supplies a new schedule rather than mutating active tiers.
 const sortedPricingTiers = new WeakMap<RawPricingTier[], PricingTier[]>();
 
-const finiteOrZero = (value: number | undefined): number =>
-  typeof value === "number" && Number.isFinite(value) ? value : 0;
+const costBuckets = ["input", "output", "cacheRead", "cacheWrite"] as const;
+
+const nonNegativeFinite = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+/** Preserve partial recorded costs and independently authoritative billed totals. */
+export function normalizeUsageCost(value: unknown): Usage["cost"] | undefined {
+  const raw = asOptionalRecord(value);
+  if (!raw) {
+    return undefined;
+  }
+  const cost: Usage["cost"] = {};
+  for (const key of [...costBuckets, "total"] as const) {
+    const amount = nonNegativeFinite(raw[key]);
+    if (amount !== undefined) {
+      cost[key] = amount;
+    }
+  }
+  if (cost.total !== undefined && raw.totalOrigin === "provider-billed") {
+    cost.totalOrigin = "provider-billed";
+  }
+  if (cost.total === undefined) {
+    cost.total = completeCostTotal(cost);
+    if (cost.total === undefined) {
+      delete cost.total;
+    }
+  }
+  return Object.keys(cost).length ? cost : undefined;
+}
+
+function completeCostTotal(cost: Usage["cost"]): number | undefined {
+  let total = 0;
+  for (const key of costBuckets) {
+    const amount = cost[key];
+    if (amount === undefined) {
+      return undefined;
+    }
+    total += amount;
+  }
+  return Number.isFinite(total) ? total : undefined;
+}
 
 function normalizeTieredPricing(raw: RawPricingTier[] | undefined): PricingTier[] | undefined {
   if (!raw || raw.length === 0) {
@@ -49,24 +88,30 @@ function normalizeTieredPricing(raw: RawPricingTier[] | undefined): PricingTier[
 }
 
 export function normalizeModelCostConfig(cost: RawModelCostConfig): ModelCostConfig {
-  const normalizedTiers = normalizeTieredPricing(cost.tieredPricing);
-  return {
-    input: cost.input,
-    output: cost.output,
-    cacheRead: cost.cacheRead,
-    cacheWrite: cost.cacheWrite,
-    ...(normalizedTiers ? { tieredPricing: normalizedTiers } : {}),
-  };
+  const result: ModelCostConfig = {};
+  for (const key of costBuckets) {
+    const rate = nonNegativeFinite(cost[key]);
+    if (rate !== undefined) {
+      result[key] = rate;
+    }
+  }
+  const tiers = normalizeTieredPricing(cost.tieredPricing);
+  if (tiers) {
+    result.tieredPricing = tiers;
+  }
+  return result;
 }
 
-export function normalizeResolvedPricing(cost: Partial<RawModelCostConfig>): ModelCostConfig {
-  return normalizeModelCostConfig({
-    input: finiteOrZero(cost.input),
-    output: finiteOrZero(cost.output),
-    cacheRead: finiteOrZero(cost.cacheRead),
-    cacheWrite: finiteOrZero(cost.cacheWrite),
-    ...(cost.tieredPricing ? { tieredPricing: cost.tieredPricing } : {}),
-  });
+export function normalizeResolvedPricing(cost: RawModelCostConfig): ModelCostConfig;
+export function normalizeResolvedPricing(
+  cost: RawModelCostConfig | undefined,
+): ModelCostConfig | undefined;
+export function normalizeResolvedPricing(
+  cost: RawModelCostConfig | undefined,
+): ModelCostConfig | undefined {
+  return !cost || typeof cost !== "object" || Array.isArray(cost)
+    ? undefined
+    : normalizeModelCostConfig(cost);
 }
 
 function selectPricingRates(cost: RawModelCostConfig, promptTokens: number): ModelCostRates {
@@ -90,28 +135,57 @@ function selectPricingRates(cost: RawModelCostConfig, promptTokens: number): Mod
   return matched ?? sorted.findLast((tier) => promptTokens >= tier.range[0]) ?? sorted[0] ?? cost;
 }
 
-/** Price one model call, selecting its tier before billing the separate token buckets. */
+/** Price only measured quantities or qualified zero rates; never synthesize missing buckets. */
 export function calculateUsageCost(
   usage: Partial<Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite" | "cacheWrite1h">>,
-  pricing: RawModelCostConfig,
+  pricing: RawModelCostConfig | undefined,
 ): Usage["cost"] {
-  const input = finiteOrZero(usage.input);
-  const output = finiteOrZero(usage.output);
-  const cacheRead = finiteOrZero(usage.cacheRead);
-  const cacheWrite = finiteOrZero(usage.cacheWrite);
-  const rates = selectPricingRates(pricing, input + cacheRead + cacheWrite);
-  const cacheWrite1h = Math.min(cacheWrite, Math.max(0, finiteOrZero(usage.cacheWrite1h)));
-  const cacheWrite5m = cacheWrite - cacheWrite1h;
-  const cost = {
-    input: (input * rates.input) / 1_000_000,
-    output: (output * rates.output) / 1_000_000,
-    cacheRead: (cacheRead * rates.cacheRead) / 1_000_000,
-    // One-hour writes are a subset, priced at twice the selected input rate.
-    cacheWrite: (cacheWrite5m * rates.cacheWrite + cacheWrite1h * rates.input * 2) / 1_000_000,
-    total: 0,
+  const input = nonNegativeFinite(usage.input);
+  const cacheRead = nonNegativeFinite(usage.cacheRead);
+  const cacheWrite = nonNegativeFinite(usage.cacheWrite);
+  const promptTokens =
+    input !== undefined && cacheRead !== undefined && cacheWrite !== undefined
+      ? input + cacheRead + cacheWrite
+      : undefined;
+  const rates: ModelCostRates = !pricing
+    ? {}
+    : pricing.tieredPricing?.length && promptTokens === undefined
+      ? {}
+      : selectPricingRates(pricing, promptTokens ?? 0);
+  const price = (count: number | undefined, rate: number | undefined): number | undefined => {
+    const qualifiedRate = nonNegativeFinite(rate);
+    if (count === 0 || qualifiedRate === 0) {
+      return 0;
+    }
+    const amount =
+      count !== undefined && qualifiedRate !== undefined
+        ? (count * qualifiedRate) / 1_000_000
+        : undefined;
+    return nonNegativeFinite(amount);
   };
-  cost.total = cost.input + cost.output + cost.cacheRead + cost.cacheWrite;
-  return cost;
+  const cost: Usage["cost"] = {};
+  for (const key of costBuckets) {
+    const amount = price(nonNegativeFinite(usage[key]), rates[key]);
+    if (amount !== undefined) {
+      cost[key] = amount;
+    }
+  }
+  // An observed one-hour subset needs its own input rate, not a guessed cache-write price.
+  const oneHour = nonNegativeFinite(usage.cacheWrite1h);
+  if (oneHour !== undefined && oneHour > 0) {
+    const boundedOneHour = cacheWrite === undefined ? oneHour : Math.min(cacheWrite, oneHour);
+    const shortCost = price(
+      cacheWrite === undefined ? undefined : cacheWrite - boundedOneHour,
+      rates.cacheWrite,
+    );
+    const longCost = price(boundedOneHour, rates.input === undefined ? undefined : rates.input * 2);
+    if (shortCost === undefined || longCost === undefined) {
+      delete cost.cacheWrite;
+    } else {
+      cost.cacheWrite = shortCost + longCost;
+    }
+  }
+  return normalizeUsageCost(cost) ?? {};
 }
 
 /** Provider-reported token counts for one embedding request. */

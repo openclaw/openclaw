@@ -110,20 +110,23 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     },
   );
 
-  it("computes costUsd from accumulated usage including cache pricing", async () => {
-    const prepared = await prepareStats({
-      config: COST_CONFIG,
-      usage: {
-        input: 1_000_000,
-        output: 500_000,
-        cacheRead: 2_000_000,
-        cacheWrite: 250_000,
-        total: 3_750_000,
-      },
-    });
-    // (1M*$1 + 0.5M*$2 + 2M*$0.5 + 0.25M*$4) per million tokens.
-    expect(prepared.agentMeta.costUsd).toBeCloseTo(4, 10);
-  });
+  it.each([500_000, 0])(
+    "computes costUsd from complete usage with %s output tokens",
+    async (output) => {
+      const prepared = await prepareStats({
+        config: COST_CONFIG,
+        usage: {
+          input: 1_000_000,
+          output,
+          cacheRead: 2_000_000,
+          cacheWrite: 250_000,
+          total: 3_250_000 + output,
+        },
+      });
+      // Input and cache buckets cost $3; observed zero output contributes exactly $0.
+      expect(prepared.agentMeta.costUsd).toBeCloseTo(3 + (output * 2) / 1_000_000, 10);
+    },
+  );
 
   it.each([
     { firstCost: 0, tokens: { input: 150_000, output: 100 } },
@@ -146,6 +149,8 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
 
   it.each`
     name                               | input
+    ${"missing output quantity"}       | ${{ config: COST_CONFIG, usage: { input: 1_000_000, cacheRead: 0, cacheWrite: 0 } }}
+    ${"mixed recorded linear costs"}   | ${{ config: COST_CONFIG, attempts: [{ input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.25 } }] }}
     ${"partially priced tiered calls"} | ${{ config: modelConfig({ cost: { ...cost, tieredPricing: [{ range: [200_000], input: 2, output: 4, cacheRead: 1, cacheWrite: 8 }] } }), attempts: [{ input: 150_000, output: 100, cost: { total: 0.125 } }, { input: 150_000, output: 100 }] }}
     ${"unpriced model"}                | ${{ provider: "no-cost-provider", model: "uncosted-model", config: COST_CONFIG, usage: { input: 1_000_000, output: 500_000, total: 1_500_000 } }}
     ${"no usage"}                      | ${{ config: COST_CONFIG }}

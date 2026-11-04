@@ -813,7 +813,9 @@ describe("worker inference provider runtime", () => {
       const runtime = setup();
       const terminal = finalMessage();
       terminal.usage = structuredClone(tokens ? usage : makeZeroUsageSnapshot());
-      terminal.usage.cost.total = cost ?? 0;
+      if (cost !== undefined) {
+        terminal.usage.cost.total = cost;
+      }
       if (billed) {
         terminal.usage.cost.totalOrigin = "provider-billed";
       }

@@ -12,7 +12,7 @@ import {
 
 type Raw = Parameters<typeof normalizeUsage>[0];
 const contextUsage = { state: "available", promptTokens: 10, totalTokens: 12 } as const;
-it("starts independent zero-count and zero-cost snapshots", () => {
+it("starts independent zero-count snapshots without inventing pricing", () => {
   const first = makeZeroUsageSnapshot();
   first.input = 12;
   first.cost.total = 0.5;
@@ -22,7 +22,7 @@ it("starts independent zero-count and zero-cost snapshots", () => {
     cacheRead: 0,
     cacheWrite: 0,
     totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    cost: {},
   });
 });
 it.each([
@@ -198,3 +198,24 @@ it.each(["cacheWrite1h", "cacheWrite5m"] as const)(
     }
   },
 );
+
+it.each([{ input: 0 }, { input: 0.2 }, { total: 0, totalOrigin: "provider-billed" as const }])(
+  "persists partial and zero recorded costs without adding missing buckets: %j",
+  (cost) => {
+    const storedUsage = JSON.stringify({ cost });
+    const restored = normalizeUsage(JSON.parse(storedUsage));
+    expect(restored?.cost).toEqual(cost);
+    expect(normalizeUsage(restored)).toEqual(restored);
+  },
+);
+it("retains independent provider billing when token accounting is unavailable", () => {
+  expect(
+    normalizeUsage({
+      usageReport: { state: "unavailable" },
+      cost: { total: 0, totalOrigin: "provider-billed" },
+    }),
+  ).toMatchObject({
+    cost: { total: 0, totalOrigin: "provider-billed" },
+    usageReport: { state: "unavailable" },
+  });
+});

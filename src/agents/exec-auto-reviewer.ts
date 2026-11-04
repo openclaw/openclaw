@@ -327,7 +327,7 @@ function resolveExecReviewerMaxTokens(
   thinking?: ExecReviewerConfig["thinking"],
 ): number {
   const modelMaxTokens =
-    Number.isFinite(model.maxTokens) && model.maxTokens > 0
+    model.maxTokens !== undefined && Number.isFinite(model.maxTokens) && model.maxTokens > 0
       ? Math.max(1, Math.floor(model.maxTokens))
       : Number.POSITIVE_INFINITY;
   // Reasoning can share the completion limit with the verdict, including provider defaults.

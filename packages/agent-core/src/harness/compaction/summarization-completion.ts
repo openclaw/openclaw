@@ -38,6 +38,12 @@ import {
   serializeConversationWithinBudget,
 } from "./utils.js";
 
+/** Clamp a local summary budget only when the model has a positive output ceiling. */
+export function resolveSummaryMaxTokens(model: Model, requested: number): number {
+  const limit = model.maxTokens;
+  return limit !== undefined && limit > 0 ? Math.min(requested, limit) : requested;
+}
+
 // Margin for the chars-per-token heuristic and the provider's message framing.
 const SUMMARY_WINDOW_SAFETY_MARGIN = 1.2;
 const SUMMARY_FRAMING_TOKENS = 1_024;

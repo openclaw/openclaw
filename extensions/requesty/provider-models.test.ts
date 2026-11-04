@@ -111,7 +111,7 @@ it("skips non-chat, malformed, and duplicate rows without dropping later rows", 
     makeRequestyRow({ id: "gemini-2.5-pro" }),
   ]);
   expect(models.map((model) => model.id)).toEqual(["claude-sonnet-4-6", "gemini-2.5-pro"]);
-  expect(models[0]?.cost.output).toBe(15);
+  expect(models[0]?.cost?.output).toBe(15);
 });
 
 it.each([

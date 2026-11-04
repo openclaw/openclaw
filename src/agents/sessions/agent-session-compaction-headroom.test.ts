@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -117,7 +118,7 @@ it.each([
         const tokens = inputTokens(context.systemPrompt, context.messages, context.tools);
         // This registered provider defaults to its model output cap; the owner must
         // preserve valid requests without assuming every provider shares that rule.
-        const outputCap = options?.maxTokens ?? activeModel.maxTokens;
+        const outputCap = expectDefined(options?.maxTokens ?? activeModel.maxTokens, "fixture cap");
         const accepted = tokens + outputCap <= model.contextWindow;
         const foreground = !session.isCompacting;
         if (queued && foreground && accepted) {

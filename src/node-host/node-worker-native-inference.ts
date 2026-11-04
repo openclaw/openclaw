@@ -58,7 +58,7 @@ export function snapshotNodeWorkerNativeInference(
         maxTokens: configured.maxTokens,
         reasoning: configured.reasoning,
         thinkingLevelMap: configured.thinkingLevelMap,
-        cost: {
+        cost: configured.cost && {
           input: configured.cost.input,
           output: configured.cost.output,
           cacheRead: configured.cost.cacheRead,

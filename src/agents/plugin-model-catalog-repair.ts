@@ -1,6 +1,5 @@
 /** Pure repair rules for OpenClaw-generated plugin model catalogs. */
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeModelCostForCatalog } from "./model-cost-normalization.js";
 
 export const PLUGIN_MODEL_CATALOG_GENERATED_BY = "openclaw-plugin-model-catalog-v1";
 
@@ -20,7 +19,7 @@ export function isGeneratedPluginModelCatalog(value: unknown): value is Record<s
   return isRecord(value) && value.generatedBy === PLUGIN_MODEL_CATALOG_GENERATED_BY;
 }
 
-/** Removes unusable transport rows and completes numeric partial costs with the writer's rule. */
+/** Removes unusable transport rows while preserving unknown and partial pricing. */
 export function repairPluginModelCatalogTransportMetadata(
   contents: string,
 ): PluginModelCatalogRepair {
@@ -46,7 +45,7 @@ export function repairPluginModelCatalogTransportMetadata(
 
   let removedModelCount = 0;
   let inspectionIncomplete = false;
-  let completedCostModelCount = 0;
+  const completedCostModelCount = 0;
   const providers: Record<string, unknown> = {};
   for (const [providerId, provider] of Object.entries(parsed.providers)) {
     if (!isRecord(provider) || !Array.isArray(provider.models)) {
@@ -67,12 +66,7 @@ export function repairPluginModelCatalogTransportMetadata(
         providerChanged = true;
         continue;
       }
-      const completed = modelRecord ? normalizeModelCostForCatalog(modelRecord) : model;
-      if (completed !== model) {
-        completedCostModelCount += 1;
-        providerChanged = true;
-      }
-      models.push(completed);
+      models.push(model);
     }
     providers[providerId] = providerChanged ? { ...provider, models } : provider;
   }

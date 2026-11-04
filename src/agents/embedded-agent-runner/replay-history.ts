@@ -7,7 +7,7 @@ import {
   isCompactionReplayCheckpoint,
   replaceCompactionReplayOwnerContent,
 } from "@openclaw/ai/transports";
-import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeUsageCost } from "@openclaw/llm-core";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -427,32 +427,12 @@ function normalizeAssistantUsageSnapshot(usage: unknown) {
     cacheWrite,
     ...(normalized.contextUsage ? { contextUsage: { ...normalized.contextUsage } } : {}),
     totalTokens,
-    ...(cost ? { cost } : {}),
+    cost: cost ?? {},
   };
 }
 
 function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["cost"] | undefined {
-  const cost = asOptionalObjectRecord(asOptionalObjectRecord(usage)?.cost);
-  if (!cost) {
-    return undefined;
-  }
-  const values = ["input", "output", "cacheRead", "cacheWrite", "total"].map((field) =>
-    toFiniteCostNumber(cost[field]),
-  );
-  if (values.every((value) => value === undefined)) {
-    return undefined;
-  }
-  const [
-    input = 0,
-    output = 0,
-    cacheRead = 0,
-    cacheWrite = 0,
-    total = input + output + cacheRead + cacheWrite,
-  ] = values;
-  // Keep authoritative provider billing provenance through replay repair. Dropping it
-  // turns a real zero-dollar total back into a local estimate during later accounting.
-  const totalOrigin = cost.totalOrigin === "provider-billed" ? cost.totalOrigin : undefined;
-  return { input, output, cacheRead, cacheWrite, total, ...(totalOrigin ? { totalOrigin } : {}) };
+  return normalizeUsageCost(asOptionalObjectRecord(usage)?.cost);
 }
 
 function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[] {

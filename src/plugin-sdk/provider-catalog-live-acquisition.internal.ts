@@ -390,6 +390,12 @@ export function liveModelCatalogAuthCacheKey(
   return selectLiveModelCatalogRequestApiKey(params);
 }
 
+export function getCachedLiveProviderModelRows<T>(
+  params: CachedLiveProviderModelRowsParams & { readRows: (body: unknown) => readonly T[] },
+): Promise<readonly T[]>;
+export function getCachedLiveProviderModelRows(
+  params: CachedLiveProviderModelRowsParams,
+): Promise<readonly unknown[]>;
 export async function getCachedLiveProviderModelRows(
   params: CachedLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {

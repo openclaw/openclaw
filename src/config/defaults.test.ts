@@ -1,4 +1,4 @@
-import { normalizeModelCostConfig } from "@openclaw/llm-core";
+import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAgentIds } from "../agents/agent-roster.js";
@@ -444,7 +444,7 @@ describe("applyModelDefaults catalog seeding", () => {
     expect(
       estimateUsageCost({
         usage: { input: 200, output: 100, cacheRead: 50, cacheWrite: 10 },
-        cost: normalizeModelCostConfig(model.cost),
+        cost: normalizeResolvedPricing(model.cost),
       }),
     ).toBeCloseTo(expectedUsd, 10);
   });
@@ -492,3 +492,33 @@ describe("applyModelDefaults catalog seeding", () => {
     expect(model.reasoning).toBe(false);
   });
 });
+
+it.each([undefined, {}, { input: 0 }, { output: 2 }])(
+  "keeps missing catalog rates absent when applying config defaults: %j",
+  (cost) => {
+    const configured = applyModelDefaults(
+      {
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: "https://pricing.example/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "unlisted",
+                  name: "Unlisted",
+                  reasoning: false,
+                  input: ["text"],
+                  maxTokens: 1024,
+                  cost,
+                },
+              ],
+            },
+          },
+        },
+      },
+      { manifestRegistry: { plugins: [] } },
+    );
+    expect(configured.models?.providers?.fixture?.models[0]?.cost).toEqual(cost);
+  },
+);

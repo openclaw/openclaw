@@ -1,4 +1,4 @@
-import type { ModelThinkingLevel } from "@openclaw/llm-core/types";
+import type { ModelThinkingLevel, RawModelCostConfig } from "@openclaw/llm-core/types";
 import type { TSchema } from "typebox";
 import type {
   ModelApi,
@@ -26,12 +26,7 @@ type AgentRuntimeModel = {
   baseUrl?: string;
   reasoning?: boolean;
   input?: readonly string[];
-  cost?: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-  };
+  cost?: RawModelCostConfig;
   contextWindow?: number;
   maxTokens?: number;
   contextTokens?: number;

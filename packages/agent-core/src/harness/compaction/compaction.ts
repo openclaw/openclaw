@@ -18,7 +18,7 @@ import {
   parseCompactionDetails,
 } from "./compaction-details.js";
 import { resolveCompactionThreshold } from "./compaction-threshold.js";
-import { runSummarizationCompletion } from "./summarization-completion.js";
+import { resolveSummaryMaxTokens, runSummarizationCompletion } from "./summarization-completion.js";
 import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
   clearCompactionPendingAskSection,
@@ -319,9 +319,9 @@ export async function generateSummary(
   runtime?: AgentCoreCompletionRuntimeDeps,
   summaryPrompt?: CompactionSummaryPrompt,
 ): Promise<Result<string, CompactionError>> {
-  const maxTokens = Math.min(
+  const maxTokens = resolveSummaryMaxTokens(
+    model,
     Math.floor((summaryPrompt?.kind === "turn-prefix" ? 0.5 : 0.8) * reserveTokens),
-    model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
   );
   const selectedPrompt =
     summaryPrompt?.kind === "turn-prefix"

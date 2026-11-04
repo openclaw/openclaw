@@ -205,6 +205,20 @@ Costs are estimated from your model pricing config:
 models.providers.<provider>.models[].cost
 ```
 
+Prices and estimated cost buckets can be partial. An omitted rate is unknown, not
+zero. A measured zero token count or an explicit zero rate can establish a zero
+bucket; missing counts cannot. A total estimate is available only when every
+bucket is known. A provider-billed total, including zero, remains authoritative
+even when its component costs are unknown.
+
+ClawRouter uses the selected endpoint's pricing card when present. An explicitly
+unpriced endpoint stays unknown; only an absent endpoint card inherits global
+model pricing.
+
+Reports retain known subtotals and count unpriced entries and incomplete cost
+breakdowns separately. Time-series totals remain unavailable after an unpriced
+call. Unknown amounts display as unavailable rather than `$0.00`.
+
 These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
 `cacheWrite`. If both pricing and a recorded amount are missing, `/usage full`
 omits cost; use `/usage tokens` or a custom `messages.usageTemplate` when you need
@@ -227,7 +241,7 @@ the summed tokens as one large request. Provider-billed totals, including zero,
 take precedence over catalog estimates and remain visible even when token counts
 are unavailable. Unknown token counts are not inferred from a billed amount.
 
-Transcript reports preserve valid recorded per-call totals and allocations, including priority/flex adjustments, and use current catalog pricing only for missing costs or unknown-price zero placeholders.
+Transcript reports preserve valid recorded per-call totals and allocations, including priority/flex adjustments, and use current catalog pricing only for missing costs. A recorded zero total is not repriced.
 Anthropic fast-mode estimates multiply base and tier rates alike, preserving tier thresholds and mixed 5-minute/1-hour cache-write pricing.
 
 Omitting `cost`, or setting it to `{}`, inherits the catalog pricing schedule.
@@ -367,3 +381,18 @@ See [Skills](/tools/skills) for the exact skill list overhead formula.
 - [API usage and costs](/reference/api-usage-costs)
 - [Prompt caching](/reference/prompt-caching)
 - [Usage tracking](/concepts/usage-tracking)
+
+## Unknown model limits
+
+Missing catalog `contextWindow` and `maxTokens` values remain unknown through
+model selection and runtime resolution. The model stays listed. A router
+reservation default or monetary policy does not establish either provider limit.
+
+An explicit caller or configured `maxTokens` value is an execution budget. A
+known model output ceiling constrains it; an unknown ceiling does not supply a
+default. `contextTokens` is a local context budget and does not fill a missing
+provider context window. Known context windows constrain local budgets.
+
+Anthropic Messages requires a positive output bound before sending a request.
+Supply an explicit `maxTokens` value or qualified model output metadata. Missing
+or invalid bounds fail before the paid POST, without removing the catalog row.

@@ -274,7 +274,8 @@ export const executePreparedWorkerInference = async (
     const model = providerModel;
     if (
       [request.options.maxTokens, ...Object.values(request.options.thinkingBudgets ?? {})].some(
-        (budget) => budget !== undefined && budget > model.maxTokens,
+        (budget) =>
+          budget !== undefined && model.maxTokens !== undefined && budget > model.maxTokens,
       )
     ) {
       return inferenceError("invalid-context");

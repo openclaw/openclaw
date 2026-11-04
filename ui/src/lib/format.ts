@@ -230,6 +230,9 @@ export function toNumber(value: string, fallback: number): number {
 
 /** Formats USD using the UI locale, retaining the caller's scale-specific precision. */
 export function formatCost(cost: number | null | undefined): string {
+  if (cost == null || !Number.isFinite(cost)) {
+    return "—";
+  }
   const value = cost != null && Number.isFinite(cost) && cost !== 0 ? cost : 0;
   const digits = value === 0 ? 2 : value < 0.01 ? 4 : value < 1 ? 3 : 2;
   return formatUsd(value, digits);

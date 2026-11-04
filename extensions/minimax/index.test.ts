@@ -17,7 +17,7 @@ import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import minimaxPlugin from "./index.js";
 
-const m31Model: Model<"anthropic-messages"> = {
+const m31Model: Model<"anthropic-messages"> & { maxTokens: number } = {
   id: "MiniMax-M3.1-Flash",
   name: "MiniMax M3.1 Flash",
   provider: "minimax",

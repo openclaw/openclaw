@@ -105,7 +105,7 @@ export function applyResponsesCacheWritePricing(
   reported: ResponsesTerminalUsagePayload | undefined | null,
   promptCacheTtl?: StreamOptions["promptCacheTtl"],
 ): void {
-  if (usage.cacheWrite === 0) {
+  if (usage.cacheWrite === 0 || usage.cost.cacheWrite === undefined) {
     return;
   }
   const details = reported?.input_tokens_details?.cache_write_tokens_details;
@@ -124,7 +124,9 @@ export function applyResponsesCacheWritePricing(
   // Catalog prices cover 30m writes; each 12h write costs one additional unit.
   const extendedCost = usage.cost.cacheWrite * (extendedWrites / usage.cacheWrite);
   usage.cost.cacheWrite += extendedCost;
-  usage.cost.total += extendedCost;
+  if (usage.cost.total !== undefined && usage.cost.totalOrigin !== "provider-billed") {
+    usage.cost.total += extendedCost;
+  }
 }
 
 /** Reasoning tokens are reported by the agent path only; the package path does not track them. */

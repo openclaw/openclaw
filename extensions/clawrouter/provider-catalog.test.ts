@@ -29,6 +29,7 @@ function catalogProvider(
     nativeCapabilities?: unknown;
     supportedReasoningEfforts?: string[];
     pricing?: typeof PRICING;
+    endpointPricing?: Record<string, { pricing: Partial<typeof PRICING> | null }>;
   } = {},
 ) {
   return {
@@ -127,7 +128,7 @@ describe("ClawRouter provider catalog", () => {
       input: ["text", "image"],
       cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
       contextWindow: 1_000_000,
-      maxTokens: 64_000,
+      maxTokens: undefined,
     });
     expect(openai?.thinkingLevelMap).toEqual({
       off: "none",
@@ -160,6 +161,59 @@ describe("ClawRouter provider catalog", () => {
       name: "Google Gemini · google/gemini-3.5-flash",
       api: "google-generative-ai",
       baseUrl: "https://clawrouter.example/v1/native/google-gemini/v1beta",
+    });
+  });
+
+  it.each([
+    ["absent", undefined, { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }],
+    ["unpriced", null, undefined],
+    [
+      "zero",
+      {
+        inputMicrosPerMillion: 0,
+        outputMicrosPerMillion: 0,
+        cachedInputMicrosPerMillion: 0,
+        cacheWrite5mInputMicrosPerMillion: 0,
+      },
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ],
+    ["partial", { inputMicrosPerMillion: 2_000_000 }, { input: 2 }],
+  ] as const)("preserves the selected Messages endpoint's %s pricing", async (_, pricing, cost) => {
+    const model = {
+      pricing: PRICING,
+      endpointPricing: pricing === undefined ? undefined : { messages: { pricing } },
+    };
+    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
+      response: Response.json({
+        providers: [
+          catalogProvider(
+            "anthropic",
+            "Anthropic",
+            "claude-sonnet-4-6",
+            ["llm.messages"],
+            [["/v1/messages", "anthropic.messages", "messages"]],
+            model,
+          ),
+          catalogProvider("deepseek", "DeepSeek", "deepseek-v4-flash", ["llm.chat"], [], model),
+        ],
+      }),
+      finalUrl: "https://clawrouter.example/v1/catalog",
+      release: async () => undefined,
+    });
+    const provider = await buildClawRouterProviderConfig({
+      apiKey: "clawrouter-test-key",
+      baseUrl: "https://clawrouter.example/v1",
+    });
+    expect(provider.models).toHaveLength(2);
+    const messages = provider.models.find((row) => row.id === "anthropic/claude-sonnet-4-6");
+    expect(messages).toMatchObject({
+      api: "anthropic-messages",
+      baseUrl: "https://clawrouter.example/v1/native/anthropic",
+    });
+    expect(messages?.cost).toEqual(cost);
+    expect(provider.models.find((row) => row.id === "deepseek/deepseek-v4-flash")).toMatchObject({
+      api: "openai-completions",
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
     });
   });
 
@@ -289,7 +343,7 @@ describe("ClawRouter provider catalog", () => {
       input: ["text", "image"],
       contextWindow: 1_050_000,
       contextTokens: 272_000,
-      maxTokens: 64_000,
+      maxTokens: 128_000,
     });
     expect(
       provider.models.find((model) => model.id === "deepseek/deepseek-v4-flash"),
@@ -329,7 +383,11 @@ describe("ClawRouter provider catalog", () => {
     });
     const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
     for (const model of provider.models) {
-      expect(model).toMatchObject({ input: ["text"], contextWindow: 200_000, maxTokens: 32_768 });
+      expect(model).toMatchObject({
+        input: ["text"],
+        contextWindow: undefined,
+        maxTokens: undefined,
+      });
     }
   });
 
@@ -413,16 +471,19 @@ describe("ClawRouter provider catalog", () => {
     expect(provider.models.map((model) => model.id)).toEqual(["defaults", "duplicate"]);
     expect(provider.models[1]).toMatchObject({
       name: "First",
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 2 },
-      contextWindow: 200_000,
-      maxTokens: 32_768,
+      cost: { cacheRead: 0 },
+      contextWindow: undefined,
+      maxTokens: undefined,
       params: { clawrouterRoute: { serviceTiers: ["priority", "priority", "default"] } },
     });
     expect(provider.models[0]).toMatchObject({
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200_000,
-      maxTokens: 32_768,
+      cost: undefined,
+      contextWindow: undefined,
+      maxTokens: undefined,
     });
+    expect(provider.models[1]?.cost?.input).toBeUndefined();
+    expect(provider.models[1]?.cost?.output).toBeUndefined();
+    expect(provider.models[1]?.cost?.cacheWrite).toBeUndefined();
     expect(provider.models[0]?.params?.clawrouterRoute).not.toHaveProperty("serviceTiers");
   });
 

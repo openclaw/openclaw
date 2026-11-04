@@ -468,7 +468,8 @@ describe("matrix task billing", () => {
   const missingCache = { input: 10, output: 4, totalTokens: 24, cost: { total: 0.01 } };
   it.each([
     ["missing response usage", undefined, false, false],
-    ["placeholder price", usage(1, 0), true, false],
+    ["absent price", { ...usage(1), cost: undefined }, true, false],
+    ["recorded zero price", usage(1, 0), true, true],
     ["provider-billed zero", usage(1, 0, "provider-billed"), true, true],
     ["missing cache bucket", missingCache, false, false],
   ] as const)("accounts for %s", (_label, observation, complete, costComplete) => {

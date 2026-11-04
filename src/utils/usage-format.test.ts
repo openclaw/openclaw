@@ -215,7 +215,7 @@ describe("usage cost estimation", () => {
     const total = () => estimateAggregateUsageCost({ ...unpriced, usage: toNormalizedUsage(run) });
     expect(total()).toBe(0);
     expect(toNormalizedUsage(run)?.cost?.totalOrigin).toBeUndefined();
-    mergeUsageIntoAccumulator(run, normalizeUsage({ input: 1_000, cost: { total: 0 } }));
+    mergeUsageIntoAccumulator(run, normalizeUsage({ input: 1_000 }));
     expect(total()).toBeUndefined();
     mergeUsageIntoAccumulator(run, recorded);
     expect(total()).toBeUndefined();

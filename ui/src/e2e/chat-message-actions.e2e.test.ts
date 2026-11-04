@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -290,6 +293,36 @@ suite.define(() => {
         )
         .toBe(true);
       expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
+    }),
+  );
+
+  it.each([
+    ["unknown", undefined, "—"],
+    ["zero", { total: 0 }, "$0.00"],
+  ] as const)("preserves %s message cost through the real chat view", (name, cost, expected) =>
+    withPage(async ({ page }) => {
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Cost evidence." }],
+            timestamp: Date.now() - 300_000,
+            usage: { input: 120, output: 30, cost },
+            __openclaw: { id: "cost-evidence", seq: 1 },
+          },
+        ],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const group = page.locator(".chat-group.assistant").filter({ hasText: "Cost evidence." });
+      await group.hover();
+      await group.locator(".msg-meta__summary").hover();
+      const details = group.locator(".msg-meta__details");
+      await details.waitFor({ state: "visible" });
+      const frame = await takeControlUiScreenshotFrame(page, details, [details], {
+        animations: "disabled",
+      });
+      await writeFile(path.join(suite.artifactDir, `cost-${name}.png`), frame.png);
+      expect(await group.locator(".msg-meta__cost").textContent()).toBe(expected);
     }),
   );
 

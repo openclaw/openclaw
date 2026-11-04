@@ -76,16 +76,20 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
             const cost = entry.costBreakdown;
             if (cost?.total !== undefined) {
               usageTotals.totalCost += cost.total;
-              usageTotals.inputCost += cost.input ?? 0;
-              usageTotals.outputCost += cost.output ?? 0;
-              usageTotals.cacheReadCost += cost.cacheRead ?? 0;
-              usageTotals.cacheWriteCost += cost.cacheWrite ?? 0;
-            } else if (entry.costTotal === undefined) {
+            } else if (entry.costTotal !== undefined) {
+              usageTotals.totalCost += entry.costTotal;
+            } else {
               usageTotals.missingCostEntries = 1;
               const modelKey = `${normalizeOptionalString(entry.provider) ?? "unknown"}/${normalizeOptionalString(entry.model) ?? "unknown"}`;
               usageTotals.missingCostByModel = { [modelKey]: 1 };
-            } else {
-              usageTotals.totalCost += entry.costTotal;
+            }
+            for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+              const amount = cost?.[key];
+              if (amount !== undefined) {
+                usageTotals[`${key}Cost`] += amount;
+              } else {
+                usageTotals.missingCostBreakdownEntries = 1;
+              }
             }
           }
           const timestamp = entry.timestamp?.getTime();

@@ -14,7 +14,12 @@ import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
-  Object.assign(usage.cost, calculateUsageCost(usage, model.cost));
+  const billed = usage.cost.totalOrigin === "provider-billed" ? usage.cost.total : undefined;
+  usage.cost =
+    usage.usageReport?.state === "unavailable" ? {} : calculateUsageCost(usage, model.cost);
+  if (billed !== undefined) {
+    applyProviderReportedUsageCost(usage, billed);
+  }
   return usage.cost;
 }
 

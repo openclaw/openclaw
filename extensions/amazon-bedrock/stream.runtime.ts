@@ -90,6 +90,7 @@ import {
 } from "./bedrock-options.js";
 import {
   isClaude5BedrockModel,
+  resolveAdaptiveBedrockMaxTokens,
   resolveBedrockClaudeThinkingProfile,
   supportsBedrockNativeMaxEffort,
 } from "./thinking-policy.js";
@@ -116,20 +117,6 @@ function normalizeAdaptiveClaudeToolChoice(
     return "auto";
   }
   return toolChoice;
-}
-
-// OpenClaw synthesizes these caps when the provider's real output limit is unknown.
-// Keep them out of Bedrock adaptive requests so Bedrock can use its native default.
-const OPENCLAW_FALLBACK_MODEL_MAX_TOKENS = new Set([4096, 8192, 16_384]);
-
-function resolveAdaptiveBedrockMaxTokens(
-  model: Model<"bedrock-converse-stream">,
-  baseMaxTokens: number | undefined,
-): number | undefined {
-  if (baseMaxTokens !== undefined) {
-    return baseMaxTokens;
-  }
-  return OPENCLAW_FALLBACK_MODEL_MAX_TOKENS.has(model.maxTokens) ? undefined : model.maxTokens;
 }
 
 const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (

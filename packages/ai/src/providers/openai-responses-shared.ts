@@ -79,12 +79,12 @@ export function applyResponsesServiceTierPricing(
     return;
   }
 
-  usage.cost.input *= multiplier;
-  usage.cost.output *= multiplier;
-  usage.cost.cacheRead *= multiplier;
-  usage.cost.cacheWrite *= multiplier;
-  usage.cost.total =
-    usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+  for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
+    const value = usage.cost[key];
+    if (value !== undefined && !(key === "total" && usage.cost.totalOrigin === "provider-billed")) {
+      usage.cost[key] = value * multiplier;
+    }
+  }
 }
 
 export function applyCommonResponsesParams<TApi extends Api>(

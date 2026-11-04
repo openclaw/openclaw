@@ -36,7 +36,6 @@ import {
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "../model-suppression.js";
 import {
@@ -60,14 +59,14 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     baseUrl: row.baseUrl ?? "",
     reasoning: row.reasoning,
     input: resolveProviderModelInput({ input: row.input }),
-    cost: normalizeResolvedPricing(row.cost ?? {}),
-    contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    cost: normalizeResolvedPricing(row.cost),
+    contextWindow: row.contextWindow,
     contextWindows: row.contextWindows?.map((option) => ({ ...option })),
     contextWindowDefault: row.contextWindowDefault,
     contextTokens: row.contextTokens,
     ...(row.parameterCount !== undefined ? { parameterCount: row.parameterCount } : {}),
     ...(row.family ? { family: row.family } : {}),
-    maxTokens: row.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    maxTokens: row.maxTokens,
     thinkingLevelMap: row.thinkingLevelMap ? { ...row.thinkingLevelMap } : undefined,
     headers: row.headers,
     compat: row.compat,

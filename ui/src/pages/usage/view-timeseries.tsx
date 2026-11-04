@@ -70,12 +70,17 @@ export function deriveTimeSeries(
     cacheWrite: 0,
     totalTokens: 0,
     totalCost: 0,
+    missingCostEntries: 0,
   };
   for (const point of selectedPoints) {
     for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) {
       filteredTokens[key] += point[key];
     }
-    filteredTokens.totalCost += point.cost;
+    if (point.cost === undefined) {
+      filteredTokens.missingCostEntries += 1;
+    } else {
+      filteredTokens.totalCost += point.cost;
+    }
   }
   const first = selectedPoints[0];
   const last = selectedPoints.at(-1);
@@ -111,13 +116,13 @@ export function deriveTimeSeries(
       filteredUsage,
     };
   }
-  let cumTokens = 0,
-    cumCost = 0;
+  let cumTokens = 0;
+  let cumCost: number | undefined = 0;
   const isCumulative = mode === "cumulative";
   const breakdownByType = mode === "per-turn" && breakdownMode === "by-type";
   const points = rangePoints.map((p) => {
     cumTokens += p.totalTokens;
-    cumCost += p.cost;
+    cumCost = cumCost !== undefined && p.cost !== undefined ? cumCost + p.cost : undefined;
     return {
       timestamp: p.timestamp,
       input: p.input,

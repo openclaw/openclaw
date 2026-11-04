@@ -156,7 +156,7 @@ describe("doctor generated plugin model catalog migration", () => {
     expect(readCatalogCacheRow(agentDir, "ollama")).toEqual(before);
   });
 
-  it("repairs only partial retained costs and persists the repair across reopening", async () => {
+  it("preserves unknown and partial retained costs across reopening", async () => {
     const agentDir = createAgentDir();
     await seedCatalogs(agentDir, {
       ollama: generatedCatalog("ollama"),
@@ -186,33 +186,15 @@ describe("doctor generated plugin model catalog migration", () => {
     overwriteCatalog(agentDir, "ollama", retained);
     const before = readCatalogCacheRow(agentDir, "ollama");
     const sibling = readCatalogCacheRow(agentDir, "anthropic");
-    expect(await migrate(agentDir, false)).toBe(true);
-    expect(readCatalogCacheRow(agentDir, "ollama")).toEqual(before);
-    expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(sibling);
-    expect(terminalNote.note).toHaveBeenCalledWith(
-      expect.stringContaining("contains repairable model rows"),
-      "Plugin model catalogs",
-    );
-
-    expect(await migrate(agentDir)).toBe(true);
-    expect(terminalNote.note).toHaveBeenCalledWith(
-      expect.stringContaining("completed the cost of 1 model row(s)"),
-      "Doctor changes",
-    );
+    expect(await migrate(agentDir, false)).toBe(false);
+    expect(await migrate(agentDir)).toBe(false);
     await closeOpenClawAgentDatabasesAsync(agentDir);
     const repaired = readCatalogCacheRow(agentDir, "ollama");
-    expect(JSON.parse(repaired.value_json)).toEqual({
-      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-      providers: {
-        ollama: {
-          ...provider,
-          models: [
-            { ...partial, cost: { ...partial.cost, cacheRead: 0, cacheWrite: 0 } },
-            ...unchanged,
-          ],
-        },
-      },
-    });
+    expect(repaired).toEqual(before);
+    expect(JSON.parse(repaired.value_json).providers.ollama.models).toEqual([
+      partial,
+      ...unchanged,
+    ]);
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toContainEqual({
       pluginId: "ollama",
       contents: repaired.value_json,

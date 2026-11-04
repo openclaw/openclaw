@@ -267,7 +267,7 @@ describe("hosted model pricing", () => {
         "venice/zero-fixture": { input: 0, output: 0 },
       },
     });
-    expect(costFor(config, "zero-fixture", agentDir, "venice")).toEqual(tokenRates(0, 0));
+    expect(costFor(config, "zero-fixture", agentDir, "venice")).toEqual({ input: 0, output: 0 });
   });
 
   // The bundled Anthropic manifest prices its claude-cli backend as anthropic.
@@ -323,7 +323,7 @@ describe("hosted model pricing", () => {
   });
 
   const catalogRates = tokenRates(2, 8, 0.5, 1);
-  const catalogTiers: ModelDefinitionConfig["cost"]["tieredPricing"] = [
+  const catalogTiers: NonNullable<ModelDefinitionConfig["cost"]>["tieredPricing"] = [
     { ...catalogRates, range: [0, 201] },
     { ...tokenRates(4, 16, 1, 2), range: [201, Infinity] },
   ];
@@ -458,12 +458,12 @@ describe("hosted model pricing", () => {
         model,
         allowPluginNormalization: false,
       });
-    expect(preparedCost("gpt-authored")).toEqual(tokenRates(0, 3));
+    expect(preparedCost("gpt-authored")).toEqual({ output: 3 });
     expect(preparedCost("missing")).toBeUndefined();
   });
 
   it("invalidates pricing fingerprints when authored empty tiers replace inherited tiers", () => {
-    const cost = {} as ModelDefinitionConfig["cost"];
+    const cost: NonNullable<ModelDefinitionConfig["cost"]> = {};
     const config = configFor(hostedUrl, [{ id: "gpt-authored", name: "Authored GPT", cost }]);
     const agentDir = tempDirs.make("openclaw-empty-tier-pricing-");
     expect(costFor(config, "gpt-authored", agentDir)).toEqual({
@@ -483,7 +483,7 @@ describe("hosted model pricing", () => {
       resolveModelCostConfigFingerprint(configFor(privateUrl)),
     );
     expect(costFor(configFor("https://fc-proxy.example.com/v1"), "gpt-external", agentDir)).toEqual(
-      tokenRates(2.5, 10, 1.25),
+      { input: 2.5, output: 10, cacheRead: 1.25 },
     );
     expect(costFor(configFor(privateUrl), "gpt-catalog", agentDir)).toBeUndefined();
     expect(costFor(configFor(hostedUrl), "unknown-model", agentDir)).toBeUndefined();
@@ -633,8 +633,8 @@ describe("OpenRouter routing shortcut estimates", () => {
     const config = configFor(routerUrl, [], "openrouter");
     const resolve = (model: string, provider = "openrouter") =>
       resolveModelCostConfig({ config, agentDir, provider, model });
-    expect(resolve("openai/gpt-catalog:nitro")).toEqual(tokenRates(7, 8));
-    expect(resolve("openai/gpt-catalog:free")).toEqual(tokenRates(3, 4));
+    expect(resolve("openai/gpt-catalog:nitro")).toEqual({ input: 7, output: 8 });
+    expect(resolve("openai/gpt-catalog:free")).toEqual({ input: 3, output: 4 });
     for (const suffix of [
       "batch",
       "extended",
@@ -729,8 +729,8 @@ describe("standalone v2 pricing", () => {
 
   it.each([
     ["vendor/catalogued", undefined],
-    ["gateway/vendor/rowpriced", tokenRates(4, 20)],
-    ["litegate/vendor/listed", tokenRates(2.5, 5)],
+    ["gateway/vendor/rowpriced", { input: 4, output: 20 }],
+    ["litegate/vendor/listed", { input: 2.5, output: 5 }],
   ] as const)("resolves standalone pricing for %s", (ref, cost) => {
     const slash = ref.indexOf("/");
     expect(costFor({}, ref.slice(slash + 1), undefined, ref.slice(0, slash))).toEqual(cost);
@@ -797,9 +797,7 @@ describe("inline v2 pricing", () => {
       models: [{ id: "native/model" }],
     });
     expect(resolveModelCostConfig({ config, provider: "fixture", model: "native/model" })).toEqual(
-      expected
-        ? { input: expected.input, output: expected.output ?? 0, cacheRead: 0, cacheWrite: 0 }
-        : undefined,
+      expected,
     );
   });
 

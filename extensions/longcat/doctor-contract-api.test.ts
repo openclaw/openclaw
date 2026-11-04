@@ -63,7 +63,7 @@ describe("LongCat doctor contract", () => {
       },
       ...customized,
     ]);
-    expect(config.models?.providers?.longcat?.models?.[0]?.cost.cacheWrite).toBe(0.75);
+    expect(config.models?.providers?.longcat?.models?.[0]?.cost?.cacheWrite).toBe(0.75);
     expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
       config: result.config,
       changes: [],

@@ -108,12 +108,17 @@ export function createAnthropicVertexStreamFn(
         : requiresClaudeMandatoryAdaptiveThinking(transportModel)
           ? undefined
           : "off");
+    const boundedMaxTokens = clampMaxTokensToModel(
+      transportModel,
+      options?.maxTokens ?? transportModel.maxTokens,
+    );
+    if (boundedMaxTokens === undefined || !Number.isFinite(boundedMaxTokens)) {
+      throw new RangeError("Anthropic Vertex requires an explicit or qualified maxTokens bound");
+    }
     const opts: AnthropicVertexTransportOptions = copyProviderAcceptanceObserver(options, {
       client,
       ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
-      maxTokens: Math.floor(
-        clampMaxTokensToModel(transportModel, options?.maxTokens ?? transportModel.maxTokens),
-      ),
+      maxTokens: Math.floor(boundedMaxTokens),
       signal: options?.signal,
       cacheRetention: options?.cacheRetention,
       sessionId: options?.sessionId,

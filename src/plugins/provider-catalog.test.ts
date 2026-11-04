@@ -147,3 +147,32 @@ describe("buildSingleProviderApiKeyCatalog", () => {
     );
   });
 });
+
+it.each([undefined, 2048])(
+  "retains manifest rows with output ceiling %s and unknown context",
+  (maxTokens) => {
+    const catalog: ModelCatalogProvider = {
+      api: "anthropic-messages",
+      baseUrl: "https://models.example",
+      models: [{ id: "unknown", maxTokens }],
+    };
+    const raw = buildManifestModelProviderConfig({ providerId: "fixture", catalog });
+    const effective = buildEffectiveManifestProviderConfig(
+      normalizeModelCatalogProviderRows({
+        provider: "fixture",
+        providerCatalog: catalog,
+        source: "manifest",
+      }),
+    );
+    for (const config of [raw, effective]) {
+      expect(config?.models).toHaveLength(1);
+      expect(config?.models[0]).toMatchObject({
+        id: "unknown",
+        contextWindow: undefined,
+        maxTokens,
+      });
+      const storedConfig = JSON.stringify(config);
+      expect(JSON.parse(storedConfig).models[0]).not.toHaveProperty("contextWindow");
+    }
+  },
+);

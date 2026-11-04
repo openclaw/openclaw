@@ -46,6 +46,10 @@ import {
 } from "./provider-model-shared.js";
 
 export { LiveModelCatalogHttpError, runLiveProviderCatalog };
+export {
+  resolveProviderCatalogDiscoveryTimeoutMs,
+  withProviderCatalogDiscoveryBudget,
+} from "../plugins/provider-catalog-expiry.js";
 export { fetchLiveProviderModelIds, getCachedLiveProviderModelRows };
 export {
   fetchLiveProviderModelRows,

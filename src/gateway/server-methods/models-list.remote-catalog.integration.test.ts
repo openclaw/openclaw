@@ -254,7 +254,7 @@ it.for([1, 2])(
         const runModel = (run: typeof oldRun) =>
           run.snapshot.createStores().modelRegistry.find("kimi", "remote-first");
         const oldModel = expectDefined(runModel(oldRun), "old run model");
-        expect(oldModel.cost.input).toBe(1);
+        expect(oldModel.cost?.input).toBe(1);
         pausePublication = true;
         body = encode(next);
         expect((await refresh()).status).toBe("updated");
@@ -282,12 +282,12 @@ it.for([1, 2])(
             price(config),
           ),
         ).toBe(1);
-        expect(oldModel.cost.input).toBe(1);
+        expect(oldModel.cost?.input).toBe(1);
         await using newRun = await acquireAgentRunPreparedModelRuntime(input, {
           catalogMode: "static",
         });
         const newModel = expectDefined(runModel(newRun), "new run model");
-        expect(newModel.cost.input).toBe(7);
+        expect(newModel.cost?.input).toBe(7);
         const retirement = new AbortController();
         const retainedBuild = startSerializedSnapshotBuildBatch(
           [
@@ -355,8 +355,8 @@ it.for([1, 2])(
         expect(kimiIds(await waitForRows("remote-last"))).toContain("remote-last");
         expect(currentPrice()).toBe(11);
         expect(currentPrice("remote-last")).toBe(13);
-        expect(oldModel.cost.input).toBe(1);
-        expect(runModel(newRun)?.cost.input).toBe(7);
+        expect(oldModel.cost?.input).toBe(1);
+        expect(runModel(newRun)?.cost?.input).toBe(7);
 
         const beforeDisable = await client.request<{ hash: string }>("config.get", {});
         await client.request("config.patch", {
@@ -376,7 +376,7 @@ it.for([1, 2])(
         await waitForRows("remote-first", () => providerThread !== disabledThread);
         expect(currentPrice("remote-last")).toBeUndefined();
         expect(providerThread).not.toBe(disabledThread);
-        expect([oldModel.cost.input, newModel.cost.input]).toEqual([1, 7]);
+        expect([oldModel.cost?.input, newModel.cost?.input]).toEqual([1, 7]);
         expect(unexpectedRestart).not.toHaveBeenCalled();
       } finally {
         commit.resolve();

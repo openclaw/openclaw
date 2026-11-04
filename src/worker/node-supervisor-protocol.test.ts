@@ -1,9 +1,12 @@
 import { expect, it } from "vitest";
+import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
+import type { AssistantMessage } from "../llm/types.js";
 import {
   testWorkerLaunchInput,
   testNodeWorkerLaunchIdentity,
 } from "../node-host/node-worker-supervisor.test-support.js";
 import * as protocol from "./node-supervisor-protocol.js";
+import { toWorkerTranscriptMessage } from "./transcript-message.js";
 
 const launchInput = () => testWorkerLaunchInput("/tmp/worker", "turn-1");
 const identity = testNodeWorkerLaunchIdentity(launchInput());
@@ -59,6 +62,39 @@ it("preserves published authoring and negotiated idle retention in launch identi
     expect(() => parseLaunch({ ...input, idleRetention: false })).toThrow("INVALID_REQUEST");
   }
 });
+
+const recordedCosts: AssistantMessage["usage"]["cost"][] = [
+  {},
+  { input: 0 },
+  { output: 0.25 },
+  { total: 0, totalOrigin: "provider-billed" },
+  { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+];
+it.each(recordedCosts)(
+  "preserves partial-cost launch identity over the actual JSON wire (%j)",
+  (cost) => {
+    const message: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "retained result" }],
+      api: "openai-completions",
+      provider: "synthetic",
+      model: "synthetic-model",
+      usage: { ...createUsageFixture(1, 1, 2), cost },
+      stopReason: "stop",
+      timestamp: 1,
+    };
+    const projected = toWorkerTranscriptMessage(message, "launch");
+    if (!projected || projected.kind !== "complete" || projected.message.role !== "assistant") {
+      throw new Error("expected projected assistant message");
+    }
+    const input = launchInput();
+    input.descriptor.assignment.initialMessages = [projected.message];
+    expect(protocol.nodeWorkerPlanHash(parseLaunch(input))).toBe(
+      protocol.nodeWorkerPlanHash(input),
+    );
+    expect(projected.message.usage.cost).toStrictEqual(cost);
+  },
+);
 
 it("rejects malformed authoring, unnegotiated lifetimes, and mismatched turn identities", () => {
   const input = launchInput();

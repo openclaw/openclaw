@@ -419,7 +419,7 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
     },
     addUntimestamped(rollup: SessionUsageRollupData["untimestamped"]): void {
       for (const [index, field] of TOTAL_FIELDS.entries()) {
-        extraTotals[index] = extraTotals[index]! + rollup.totals[field];
+        extraTotals[index] = extraTotals[index]! + (rollup.totals[field] ?? 0);
       }
       if (rollup.totals.missingCostByModel) {
         addMissing((missingState().row ??= {}), Object.entries(rollup.totals.missingCostByModel));
@@ -440,7 +440,7 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
         const base = id * MODEL_WIDTH;
         models[base + MODEL_COUNT] = models[base + MODEL_COUNT]! + entry.count;
         for (const [index, field] of TOTAL_FIELDS.entries()) {
-          models[base + index] = models[base + index]! + entry.totals[field];
+          models[base + index] = models[base + index]! + (entry.totals[field] ?? 0);
         }
         if (entry.totals.missingCostByModel) {
           addMissingTo(missingState().models, id, Object.entries(entry.totals.missingCostByModel));

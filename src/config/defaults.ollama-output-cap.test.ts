@@ -54,10 +54,10 @@ it.each([
   expect(materialize("ollama-cloud", id, cloud)?.maxTokens).toBe(expected);
 });
 
-it.each<[string, string, number, Partial<ModelDefinitionConfig>?, number?]>([
+it.each<[string, string, number | undefined, Partial<ModelDefinitionConfig>?, number?]>([
   ["custom", cloud, 262_144],
   ["custom:cloud", local, 262_144],
-  ["custom", local, 8192],
+  ["custom", local, undefined],
   ["minimax-m3", local, 8192],
   ["kimi-k3", local, 8192],
   ["minimax-m3", local, 8192, { baseUrl: cloud }],
@@ -67,7 +67,7 @@ it.each<[string, string, number, Partial<ModelDefinitionConfig>?, number?]>([
   ["minimax-m3", local, 1024, { maxTokens: 1024 }],
   ["custom", cloud, 1024, { maxTokens: 1024 }],
   ["custom", cloud, 2048, {}, 2048],
-])("materializes %s at %s with cap %i", (id, baseUrl, expected, model, providerCap) => {
+])("materializes %s at %s with cap %s", (id, baseUrl, expected, model, providerCap) => {
   const actual = materialize(
     "ollama",
     id,

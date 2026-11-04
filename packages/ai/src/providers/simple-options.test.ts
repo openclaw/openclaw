@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Model } from "../types.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
-import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
+import {
+  adjustMaxTokensForThinking,
+  buildBaseOptions,
+  clampMaxTokensToModel,
+} from "./simple-options.js";
 
 function makeModel(overrides: Partial<Model> = {}): Model {
   return makeProviderModel("test-api", "test-provider", "test-model", {
@@ -30,5 +34,24 @@ describe("simple stream max-token clamp", () => {
       json_schema: { name: "result", strict: true, schema: { type: "object" } },
     };
     expect(buildBaseOptions(makeModel(), { responseFormat })).toMatchObject({ responseFormat });
+  });
+});
+
+it.each([
+  [undefined, 256],
+  [128, 128],
+  [512, 256],
+])("clamps an explicit budget against ceiling %s", (ceiling, expected) => {
+  expect(clampMaxTokensToModel(makeModel({ maxTokens: ceiling }), 256)).toBe(expected);
+});
+it("does not invent an output bound from a thinking budget", () => {
+  expect(adjustMaxTokensForThinking(undefined, undefined, "low")).toEqual({
+    maxTokens: undefined,
+    thinkingBudget: 2048,
+  });
+  expect(adjustMaxTokensForThinking(256, undefined, "low").maxTokens).toBe(2304);
+  expect(adjustMaxTokensForThinking(256, 1024, "low")).toEqual({
+    maxTokens: 1024,
+    thinkingBudget: 0,
   });
 });

@@ -11,7 +11,6 @@ import type { Api } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { isStringOption } from "../../utils/string-readers.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
@@ -187,12 +186,10 @@ export function completeInlineProviderModel(
     api: model.api ?? providerConfig.api ?? "openai-responses",
     baseUrl: model.baseUrl ?? "",
     reasoning: model.reasoning ?? false,
-    cost: model.cost ?? normalizeResolvedPricing({}),
-    contextWindow:
-      model.contextWindow ?? Math.max(model.contextTokens ?? 0, DEFAULT_CONTEXT_TOKENS),
-    ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" as const } : {}),
+    cost: normalizeResolvedPricing(model.cost),
+    contextWindow: model.contextWindow,
     contextTokens: model.contextTokens,
-    maxTokens: model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    maxTokens: model.maxTokens,
     ...(providerConfig.authHeader !== undefined ? { authHeader: providerConfig.authHeader } : {}),
   };
 }

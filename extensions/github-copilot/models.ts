@@ -177,6 +177,7 @@ export function selectCopilotStarterModel(
 export const COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS = 10_000;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
 type CopilotCatalogModel = Omit<ModelDefinitionConfig, "input"> & {
+  maxTokens: number;
   api: NonNullable<ModelDefinitionConfig["api"]>;
   input: ProviderRuntimeModel["input"];
 };

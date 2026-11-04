@@ -1,4 +1,4 @@
-import { hasBillableUsage, hasRecordedUsageCost, USAGE_COST_COMPONENTS } from "../usage.js";
+import { hasBillableUsage, USAGE_COST_COMPONENTS } from "../usage.js";
 import type { NormalizedUsage } from "../usage.js";
 import type { EmbeddedAgentMeta } from "./types.js";
 
@@ -38,18 +38,14 @@ export const mergeUsageIntoAccumulator = (
   target: UsageAccumulator,
   usage: NormalizedUsage | undefined,
 ) => {
-  if (usage?.costStatus) {
-    target.costStatus = usage.costStatus;
-    if (usage.costStatus === "unavailable") {
-      target.cost = "unavailable";
-    }
-  }
-  if (usage?.usageReport?.state === "unavailable") {
-    target.usageReport = usage.usageReport;
-    target.cost = "unavailable";
+  if (!usage) {
     return;
   }
-  if (!hasBillableUsage(usage)) {
+  const unavailable = usage.usageReport?.state === "unavailable";
+  if (unavailable) {
+    target.usageReport = usage.usageReport;
+  }
+  if (!unavailable && !hasBillableUsage(usage)) {
     return;
   }
   target.usageReport ??= usage.usageReport;
@@ -71,31 +67,43 @@ export const mergeUsageIntoAccumulator = (
   }
   target.reasoningTokens += usage.reasoningTokens ?? 0;
   target.total += callTotal;
-  if (target.cost === "unavailable" || !usage.cost) {
+  const previous = target.cost;
+  // Never-priced complete counters can use linear catalog pricing. Partial or
+  // mixed recorded prices remain incomplete and must not be reconstructed.
+  if (
+    !unavailable &&
+    usage.cost === undefined &&
+    usage.costStatus === undefined &&
+    target.costStatus === undefined &&
+    (previous === undefined || previous === "unavailable") &&
+    USAGE_COST_COMPONENTS.every((key) => usage[key] !== undefined)
+  ) {
     target.cost = "unavailable";
     return;
   }
-  const cost: NonNullable<NormalizedUsage["cost"]> = {
-    total: (target.cost?.total ?? 0) + usage.cost.total,
-  };
-  if (
-    usage.cost.totalOrigin === "provider-billed" &&
-    (!target.cost || target.cost.totalOrigin === "provider-billed")
-  ) {
-    cost.totalOrigin = "provider-billed";
-  }
-  if (
-    cost.total === 0 &&
-    hasRecordedUsageCost(usage.cost) &&
-    (!target.cost || hasRecordedUsageCost(target.cost))
-  ) {
-    for (const key of USAGE_COST_COMPONENTS) {
-      const component = (target.cost?.[key] ?? 0) + (usage.cost[key] ?? 0);
-      if (component !== 0) {
-        cost[key] = component;
+  const cost: NonNullable<NormalizedUsage["cost"]> = {};
+  for (const key of [...USAGE_COST_COMPONENTS, "total"] as const) {
+    const amount =
+      !unavailable || usage.cost?.totalOrigin === "provider-billed" ? usage.cost?.[key] : undefined;
+    if (
+      !(key === "total" && usage.costStatus === "unavailable") &&
+      amount !== undefined &&
+      (previous === undefined || (previous !== "unavailable" && previous[key] !== undefined))
+    ) {
+      const sum = (previous?.[key] ?? 0) + amount;
+      if (Number.isFinite(sum)) {
+        cost[key] = sum;
       }
     }
   }
+  if (
+    cost.total !== undefined &&
+    usage.cost?.totalOrigin === "provider-billed" &&
+    (!previous || (previous !== "unavailable" && previous.totalOrigin === "provider-billed"))
+  ) {
+    cost.totalOrigin = "provider-billed";
+  }
+  target.costStatus = cost.total === undefined ? "unavailable" : "complete";
   target.cost = cost;
 };
 
@@ -117,21 +125,32 @@ export const mergeAttemptRunStatsIntoAccumulator = (
 
 export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {
   if (usage.usageReport?.state === "unavailable") {
-    return { usageReport: { state: "unavailable" }, contextUsage: { state: "unavailable" } };
+    return {
+      usageReport: { state: "unavailable" },
+      contextUsage: { state: "unavailable" },
+      ...(usage.cost && usage.cost !== "unavailable" && usage.cost.total !== undefined
+        ? { cost: { ...usage.cost }, costStatus: "complete" }
+        : {}),
+    };
   }
   const hasUsage =
     USAGE_COST_COMPONENTS.some((key) => usage[key] > 0) ||
     usage.reasoningTokens > 0 ||
     usage.total > 0;
-  const cost = usage.cost === "unavailable" ? undefined : usage.cost;
+  const cost =
+    usage.cost === "unavailable" || !usage.cost || Object.keys(usage.cost).length === 0
+      ? undefined
+      : usage.cost;
   if (!usage.usageReport && !hasUsage && !cost) {
     return undefined;
   }
   const derivedTotal = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  const completeUnpricedCounters = usage.cost === "unavailable" && usage.costStatus === undefined;
   return {
     ...(usage.usageReport ? { usageReport: usage.usageReport } : {}),
-    input: usage.usageReport ? usage.input : usage.input || undefined,
-    output: usage.usageReport ? usage.output : usage.output || undefined,
+    input: usage.usageReport || completeUnpricedCounters ? usage.input : usage.input || undefined,
+    output:
+      usage.usageReport || completeUnpricedCounters ? usage.output : usage.output || undefined,
     cacheRead: usage.cacheReadReported ? usage.cacheRead : usage.cacheRead || undefined,
     cacheWrite: usage.cacheWriteReported ? usage.cacheWrite : usage.cacheWrite || undefined,
     ...(usage.cacheWrite1h !== undefined ? { cacheWrite1h: usage.cacheWrite1h } : {}),
@@ -139,8 +158,6 @@ export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | un
     ...(usage.reasoningTokens > 0 ? { reasoningTokens: usage.reasoningTokens } : {}),
     total: usage.usageReport ? usage.total : usage.total || derivedTotal || undefined,
     ...(cost ? { cost: { ...cost } } : {}),
-    ...(usage.costStatus
-      ? { costStatus: usage.cost === "unavailable" ? "unavailable" : "complete" }
-      : {}),
+    ...(usage.costStatus ? { costStatus: usage.costStatus } : {}),
   };
 };

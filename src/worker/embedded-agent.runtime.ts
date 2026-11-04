@@ -145,7 +145,8 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       ((params.inferenceOptions?.maxTokens !== undefined &&
         params.inferenceOptions.maxTokens !== model.maxTokens) ||
         Object.values(params.inferenceOptions?.thinkingBudgets ?? {}).some(
-          (budget) => budget !== undefined && budget > model.maxTokens,
+          (budget) =>
+            budget !== undefined && model.maxTokens !== undefined && budget > model.maxTokens,
         ))
     ) {
       throw new Error("Worker inference options exceed or override the node-local model budget");

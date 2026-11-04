@@ -100,9 +100,9 @@ describe("usage fixed-precision costs", () => {
       [-1234.5, 2, "-$1,234.50"],
       [0.0001, 4, "$0.0001"],
       [0, 6, "$0.000000"],
-      [Number.NaN, 2, "$NaN"],
-      [Number.POSITIVE_INFINITY, 4, "$∞"],
-      [Number.NEGATIVE_INFINITY, 6, "-$∞"],
+      [Number.NaN, 2, "—"],
+      [Number.POSITIVE_INFINITY, 4, "—"],
+      [Number.NEGATIVE_INFINITY, 6, "—"],
       [1234.5, 2, "$1,234.50"],
     ] as const;
     for (const [value, decimals, expected] of costs) {

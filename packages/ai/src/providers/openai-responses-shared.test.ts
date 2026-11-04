@@ -881,7 +881,7 @@ describe("processResponsesStream", () => {
     );
     const applyServiceTierPricing = vi.fn(
       (usage: AssistantMessage["usage"], tier: ResponseCreateParamsStreaming["service_tier"]) => {
-        if (tier === "priority") {
+        if (tier === "priority" && usage.cost.total !== undefined) {
           usage.cost.total *= 2;
         }
       },

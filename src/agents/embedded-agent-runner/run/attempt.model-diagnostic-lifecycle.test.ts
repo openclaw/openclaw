@@ -706,7 +706,12 @@ describe("model diagnostic lifecycle", () => {
           requestPayloadBytes: Buffer.byteLength(JSON.stringify(payload), "utf8"),
           responseStreamBytes:
             Buffer.byteLength(delta, "utf8") + Buffer.byteLength(JSON.stringify(terminal), "utf8"),
-          usage: { ...baseUsage, total: 28, promptTokens: 16, cost: { total: 0 } },
+          usage: {
+            ...baseUsage,
+            total: 28,
+            promptTokens: 16,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
         }),
       ]);
       expect(events[0]).not.toHaveProperty("promptStats");

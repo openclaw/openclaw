@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { Model } from "../llm/types.js";
@@ -137,7 +138,7 @@ describe("captured model catalog generations", () => {
     const a = first.createStores();
     const b = second.createStores();
     const selected = a.modelRegistry.find("synthetic", "first")!;
-    selected.cost.input = 999;
+    expectDefined(selected.cost, "selected fixture pricing").input = 999;
     selected.input.push("image");
     a.authStorage.setRuntimeApiKey("synthetic", "synthetic-runtime-credential");
     for (const stores of [b, f.capture().createStores()]) {
@@ -147,7 +148,7 @@ describe("captured model catalog generations", () => {
       });
       expect(stores.authStorage.hasAuth("synthetic")).toBe(false);
     }
-    expect(f.model.cost.input).toBe(1);
+    expect(f.model.cost?.input).toBe(1);
     expect(f.createStores).toHaveBeenCalledTimes(3);
   });
 

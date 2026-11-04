@@ -285,7 +285,7 @@ describe("grouped chat rendering", () => {
       "R438.4k",
       "W307",
     ]);
-    expect(elementText(".msg-meta__cost")).toContain("$0.12");
+    expect(elementText(".msg-meta__cost")).toBe("—");
   });
 
   it("renders relative and compact dates while clamping clock skew", () => {

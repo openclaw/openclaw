@@ -110,3 +110,10 @@ describe("resolved model Tool Search policy", () => {
     expect(resolved).toHaveProperty("toolSearchMode", expected);
   });
 });
+
+it.each([undefined, {}, { input: 0 }, { output: 2 }])(
+  "preserves runtime price facts %j",
+  (cost) => {
+    expect(resolve({ cost }).cost).toEqual(cost);
+  },
+);

@@ -351,7 +351,7 @@ it("surfaces blocked Google prompts without a reason as typed stream errors", as
     errorType: "google_prompt_blocked",
     errorMessage: "Google prompt blocked (PROMPT_BLOCKED): Prompt violates provider safety policy",
     content: [],
-    usage: { input: 10, cacheRead: 2, totalTokens: 12 },
+    usage: { input: 10, cacheRead: 2, totalTokens: 12, usageReport: { state: "available" } },
   });
   expect(result.usage.cost.total).toBeGreaterThan(0);
 });

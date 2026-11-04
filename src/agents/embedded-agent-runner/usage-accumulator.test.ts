@@ -45,6 +45,7 @@ describe("usage-accumulator", () => {
       output: 0,
       total: 0,
       usageReport: { state: "available" },
+      costStatus: "unavailable",
     });
   });
 
@@ -83,6 +84,8 @@ describe("usage-accumulator", () => {
       cacheWrite5m: 2_011,
       total: 251_505,
     });
+    expect(run?.cost).toBeUndefined();
+    expect(run?.costStatus).toBeUndefined();
   });
 
   it("carries complete costs across attempts without claiming provider provenance", () => {
@@ -158,4 +161,23 @@ describe("usage-accumulator", () => {
       expect(normalized).not.toHaveProperty(sibling);
     },
   );
+});
+
+it("keeps partial aggregate buckets and incomplete totals through nested accumulation", () => {
+  const first = normalizedAttempt(
+    { input: 2, cost: { input: 0.1 } },
+    { input: 3, cost: { input: 0.2, total: 0.5 } },
+  );
+  expect(first?.cost?.input).toBeCloseTo(0.3);
+  expect(first?.cost?.total).toBeUndefined();
+  expect(first?.costStatus).toBe("unavailable");
+  expect(normalizedAttempt(first)?.costStatus).toBe("unavailable");
+});
+it("aggregates billed zero without fabricating a cost breakdown", () => {
+  const billed: UsageInput = { cost: { total: 0, totalOrigin: "provider-billed" } };
+  expect(normalizedAttempt(billed, billed)).toMatchObject({
+    cost: { total: 0, totalOrigin: "provider-billed" },
+    costStatus: "complete",
+  });
+  expect(normalizedAttempt(billed, billed)?.cost?.input).toBeUndefined();
 });

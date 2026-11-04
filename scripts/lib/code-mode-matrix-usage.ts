@@ -4,11 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
-import {
-  hasRecordedUsageCost,
-  normalizeUsage,
-  type NormalizedUsage,
-} from "../../src/agents/usage.js";
+import { normalizeUsage, type NormalizedUsage } from "../../src/agents/usage.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -777,7 +773,7 @@ export function collectMatrixUsage(
     } else {
       reasoningTokens += reasoning;
     }
-    if (usage?.cost && hasRecordedUsageCost(usage.cost)) {
+    if (usage?.cost?.total !== undefined) {
       scope.knownCostUsd += usage.cost.total;
       sessionUsage.knownCostUsd += usage.cost.total;
       costProvenance.add(

@@ -335,7 +335,7 @@ export function estimateUsageCost(params: {
     }
     cost = normalizeResolvedPricing(params.declaredCost);
   }
-  if (!usage || !cost || usage.usageReport?.state === "unavailable") {
+  if (!usage || usage.usageReport?.state === "unavailable") {
     return undefined;
   }
   const total = calculateUsageCost(usage, cost).total;
@@ -350,11 +350,14 @@ export function estimateAggregateUsageCost(
   },
 ): number | undefined {
   const usage = params.usage;
+  if (usage?.cost?.totalOrigin === "provider-billed" || usage?.costStatus === "complete") {
+    return usage.cost?.total;
+  }
   if (usage?.usageReport?.state === "unavailable") {
     return undefined;
   }
-  if (usage?.costStatus) {
-    return usage.costStatus === "complete" ? usage.cost?.total : undefined;
+  if (usage?.costStatus === "unavailable") {
+    return undefined;
   }
   if (usage?.cost && hasRecordedUsageCost(usage.cost)) {
     return usage.cost.total;

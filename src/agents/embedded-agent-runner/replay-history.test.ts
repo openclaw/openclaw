@@ -657,3 +657,19 @@ describe("normalizeAssistantReplayContent", () => {
     expect(normalize([kept, sentinel])).toStrictEqual([kept]);
   });
 });
+
+it.each([{}, { input: 0.2 }, { total: 0, totalOrigin: "provider-billed" }] as const)(
+  "preserves partial pricing in replay history %j",
+  async (cost) => {
+    const message = assistant([textBlock("answer")], "stop");
+    message.usage = { ...message.usage, input: 1, cost };
+    const history = await validateReplayTurns({
+      messages: [user("hello"), message],
+      modelApi: "anthropic-messages",
+    });
+    const replayed = history.find((entry) => entry.role === "assistant");
+    expect(replayed?.usage.cost).toEqual(cost);
+    const storedCost = JSON.stringify(replayed?.usage.cost);
+    expect(JSON.parse(storedCost)).toEqual(cost);
+  },
+);

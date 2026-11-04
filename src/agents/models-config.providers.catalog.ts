@@ -9,7 +9,6 @@ import {
 } from "../config/model-provider-rows.js";
 import type { ModelProviderConfig as ProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeModelCostForCatalog } from "./model-cost-normalization.js";
 import {
   createConfiguredProviderCatalogModelIdNormalizer,
   type ModelManifestNormalizationContext,
@@ -59,14 +58,6 @@ function normalizeProviderModelsForConfig(
       seenById.set(id, nextModels.length);
     }
     nextModels.push(normalizedModel);
-  }
-
-  for (const [index, model] of nextModels.entries()) {
-    const normalized = normalizeModelCostForCatalog(model);
-    if (normalized !== model) {
-      nextModels[index] = normalized;
-      mutated = true;
-    }
   }
 
   return mutated ? { ...provider, models: nextModels } : provider;

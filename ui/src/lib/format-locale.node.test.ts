@@ -40,7 +40,7 @@ describe("active UI locale formatting", () => {
           }).format(0.00000125),
         );
       }
-      expect(formatCost(undefined)).toBe(formatCost(0));
+      expect(formatCost(undefined)).toBe("—");
       expect(formatNumber(12345)).toBe(new Intl.NumberFormat(language).format(12345));
     }
   });

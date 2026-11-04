@@ -134,10 +134,10 @@ const ModelDefinitionSchema = Type.Object({
   ),
   cost: Type.Optional(
     Type.Object({
-      input: Type.Number(),
-      output: Type.Number(),
-      cacheRead: Type.Number(),
-      cacheWrite: Type.Number(),
+      input: Type.Optional(Type.Number()),
+      output: Type.Optional(Type.Number()),
+      cacheRead: Type.Optional(Type.Number()),
+      cacheWrite: Type.Optional(Type.Number()),
     }),
   ),
   contextWindow: Type.Optional(Type.Number()),

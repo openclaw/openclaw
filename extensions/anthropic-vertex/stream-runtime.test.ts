@@ -258,6 +258,16 @@ describe("createAnthropicVertexStreamFn", () => {
     });
   });
 
+  it("requires a request bound before entering the transport when catalog limits are absent", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = { ...makeModel({ id: "custom-model" }), maxTokens: undefined };
+    expect(() => streamFn(model, { messages: [] }, {})).toThrow(/maxTokens bound/);
+    expect(streamAnthropicMock).not.toHaveBeenCalled();
+    void streamFn(model, { messages: [] }, { maxTokens: 256, reasoning: "off" });
+    expect(streamTransportOptions(streamAnthropicMock).maxTokens).toBe(256);
+  });
+
   it.each([
     ["defaults to the model limit instead of the old 32000 cap", 128000, undefined, 128000],
     ["clamps requests to the model limit", 128000, 999999, 128000],

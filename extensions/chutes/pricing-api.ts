@@ -1,11 +1,8 @@
 import { normalizeModelPricingCatalog } from "openclaw/plugin-sdk/model-catalog-pricing";
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** Chutes publishes numeric USD-per-million rates, not OpenRouter's per-token strings. */
-export function normalizeChutesModelPricing(
-  value: unknown,
-): ModelDefinitionConfig["cost"] | undefined {
+export function normalizeChutesModelPricing(value: unknown) {
   const pricing = asOptionalRecord(value);
   const input = asFiniteNumberInRange(pricing?.prompt, { min: 0 });
   const output = asFiniteNumberInRange(pricing?.completion, { min: 0 });

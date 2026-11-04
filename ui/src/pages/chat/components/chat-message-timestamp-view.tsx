@@ -1,4 +1,4 @@
-import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -116,7 +116,7 @@ type GroupMeta = {
   output: number;
   cacheRead: number;
   cacheWrite: number;
-  cost: number;
+  cost?: number;
   model: string | null;
   contextPercent: number | null;
 };
@@ -130,6 +130,7 @@ export function extractGroupMeta(
   let cacheRead = 0;
   let cacheWrite = 0;
   let cost = 0;
+  let costComplete = true;
   let model: string | null = null;
   let hasUsage = false;
   let maxPromptTokens = 0;
@@ -146,7 +147,20 @@ export function extractGroupMeta(
     if (typeof m.model === "string" && m.model !== "gateway-injected") {
       model = m.model;
     }
-    if (asNullableRecord(asNullableRecord(m.usage)?.usageReport)?.state === "unavailable") {
+    const usageRecord = asOptionalRecord(m.usage);
+    const callUnavailable = asOptionalRecord(usageRecord?.usageReport)?.state === "unavailable";
+    const callCost = asOptionalRecord(usageRecord?.cost) ?? asOptionalRecord(m.cost);
+    if (
+      typeof callCost?.total === "number" &&
+      Number.isFinite(callCost.total) &&
+      callCost.total >= 0 &&
+      (!callUnavailable || callCost.totalOrigin === "provider-billed")
+    ) {
+      cost += callCost.total;
+    } else if (usageRecord) {
+      costComplete = false;
+    }
+    if (callUnavailable) {
       usageUnavailable = true;
       continue;
     }
@@ -176,17 +190,6 @@ export function extractGroupMeta(
         );
       }
     }
-    // Producers write cost nested under usage.cost (the AssistantMessage
-    // shape); a bare message.cost never exists, so reading only it left the
-    // popover's $ line permanently dead.
-    const c =
-      // SAFETY: Assistant usage stores a structured cost separately from its numeric token fields.
-      (usage as { cost?: { total?: number } } | undefined)?.cost ??
-      // SAFETY: The fallback reads the same total-only cost shape as the usage metadata above.
-      (m.cost as Record<string, number> | undefined);
-    if (c?.total) {
-      cost += c.total;
-    }
   }
 
   if (usageUnavailable) {
@@ -196,7 +199,7 @@ export function extractGroupMeta(
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
-      cost: 0,
+      cost: costComplete ? cost : undefined,
       model,
       contextPercent: null,
     };
@@ -212,7 +215,15 @@ export function extractGroupMeta(
       ? Math.min(Math.round((promptTokens / contextWindow) * 100), 100)
       : null;
 
-  return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    cost: hasUsage && costComplete ? cost : undefined,
+    model,
+    contextPercent,
+  };
 }
 
 const TOKEN_FIELDS = [
@@ -238,8 +249,8 @@ function MessageMetadata(props: { meta: GroupMeta | null }) {
           </Show>
         )}
       </For>
-      <Show when={props.meta && props.meta.cost > 0}>
-        <span class="msg-meta__cost">{formatCost(props.meta?.cost ?? 0)}</span>
+      <Show when={props.meta && (!props.meta.usageUnavailable || props.meta.cost !== undefined)}>
+        <span class="msg-meta__cost">{formatCost(props.meta?.cost)}</span>
       </Show>
       <Show when={props.meta && props.meta.contextPercent !== null}>
         <span
@@ -273,7 +284,7 @@ export function MessageMeta(props: { timestamp: number; meta: GroupMeta | null }
       props.meta.output ||
       props.meta.cacheRead ||
       props.meta.cacheWrite ||
-      props.meta.cost > 0 ||
+      props.meta.cost !== undefined ||
       props.meta.contextPercent !== null ||
       props.meta.model,
     );

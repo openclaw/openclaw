@@ -711,7 +711,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       res.config.models?.providers?.mistral?.models?.map((model) => ({
         id: model.id,
         maxTokens: model.maxTokens,
-        cacheRead: model.cost.cacheRead,
+        cacheRead: model.cost?.cacheRead,
       })),
     ).toEqual([
       { id: "mistral-large-latest", maxTokens: 16384, cacheRead: 0.05 },
@@ -737,7 +737,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(
       res.config.models?.providers?.mistral?.models?.map((model) => ({
         id: model.id,
-        cacheRead: model.cost.cacheRead,
+        cacheRead: model.cost?.cacheRead,
       })),
     ).toEqual([
       { id: "codestral-latest", cacheRead: 0.03 },

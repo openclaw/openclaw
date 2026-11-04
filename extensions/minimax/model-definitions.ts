@@ -32,6 +32,7 @@ export const MINIMAX_LM_STUDIO_COST = {
 type MinimaxCatalogId = keyof typeof MINIMAX_TEXT_MODEL_CATALOG;
 type MinimaxTextModelDefinition = Omit<ModelDefinitionConfig, "input"> & {
   input: Array<"text" | "image">;
+  maxTokens: number;
 };
 
 const MINIMAX_API_COSTS = new Map<string, ModelDefinitionConfig["cost"]>([

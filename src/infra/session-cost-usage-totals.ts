@@ -29,6 +29,9 @@ export function cloneCostUsageTotals(totals: CostUsageTotals): CostUsageTotals {
     cacheReadCost: totals.cacheReadCost,
     cacheWriteCost: totals.cacheWriteCost,
     missingCostEntries: totals.missingCostEntries,
+    ...(totals.missingCostBreakdownEntries
+      ? { missingCostBreakdownEntries: totals.missingCostBreakdownEntries }
+      : {}),
     ...(totals.missingCostByModel ? { missingCostByModel: { ...totals.missingCostByModel } } : {}),
   };
 }
@@ -45,6 +48,10 @@ export function addCostUsageTotals(target: CostUsageTotals, source: CostUsageTot
   target.cacheReadCost += source.cacheReadCost;
   target.cacheWriteCost += source.cacheWriteCost;
   target.missingCostEntries += source.missingCostEntries;
+  if (source.missingCostBreakdownEntries) {
+    target.missingCostBreakdownEntries =
+      (target.missingCostBreakdownEntries ?? 0) + source.missingCostBreakdownEntries;
+  }
   if (source.missingCostByModel) {
     target.missingCostByModel ??= {};
     for (const [model, count] of Object.entries(source.missingCostByModel)) {

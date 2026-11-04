@@ -103,17 +103,20 @@ it("normalizes configured provider rows with explicit manifest registry policies
   expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
 });
 
-it.each([undefined, 4096])("defaults output tokens without inventing context (%s)", (maxTokens) => {
-  const model = applyModelDefaults(providerConfig("myproxy", {}, { maxTokens })).models?.providers
-    ?.myproxy?.models?.[0];
-  expect(model).toMatchObject({
-    reasoning: false,
-    input: ["text"],
-    maxTokens: maxTokens ?? 8192,
-  });
-  expect([model?.contextWindow, model?.contextTokens]).toEqual([undefined, undefined]);
-  expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-});
+it.each([undefined, 4096])(
+  "preserves explicit output bounds without inventing facts (%s)",
+  (maxTokens) => {
+    const model = applyModelDefaults(providerConfig("myproxy", {}, { maxTokens })).models?.providers
+      ?.myproxy?.models?.[0];
+    expect(model).toMatchObject({
+      reasoning: false,
+      input: ["text"],
+      maxTokens,
+    });
+    expect([model?.contextWindow, model?.contextTokens]).toEqual([undefined, undefined]);
+    expect(model?.cost).toBeUndefined();
+  },
+);
 
 it.each([
   { id: "mistral-large-latest", contextWindow: 262_144, maxTokens: 262_144, expected: 16384 },

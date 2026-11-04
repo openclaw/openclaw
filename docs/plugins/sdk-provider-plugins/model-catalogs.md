@@ -44,6 +44,23 @@ provider requests.
 
 ## Live model discovery
 
+Custom catalog hooks can use `getCachedLiveProviderModelRows` from
+`openclaw/plugin-sdk/provider-catalog-live-runtime` with a typed `readRows`
+validator. Its inferred result retains that validator's row type. Validate the
+complete provider envelope before returning rows; validation errors are failed
+acquisitions, while a validated empty array is an authoritative empty result.
+Include the original credential, profile and declared operation in custom cache
+keys. Do not pass those rows through a seed-based normalizer when absence is a
+provider fact.
+
+For a hook that first acquires route declarations and then acquires their
+catalogs, the same entrypoint exposes `resolveProviderCatalogDiscoveryTimeoutMs`
+and `withProviderCatalogDiscoveryBudget`. Wrap the complete sequence in that
+budget. It intersects the existing parent deadline; it does not restart or extend
+an admitted operation. Forward the caller signal to every acquisition. Shared
+metadata loads retain their existing bounded lifetime when a caller stops
+waiting, and a cancelled caller must not publish their eventual result.
+
 For interactive setup of an OpenAI-compatible custom endpoint, reuse
 `discoverOpenAICompatibleLocalModels` from `openclaw/plugin-sdk/provider-setup`.
 Pass the resolved API key, `rawResult: true`, and `discoverRuntimeContext: false`

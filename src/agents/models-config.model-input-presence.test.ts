@@ -110,9 +110,9 @@ it.each(["merge", "replace"] as const)(
     const merged = mode === "merge";
     const inheritedInput = merged ? ["text", "image"] : undefined;
     const expected = [
-      ["middle", inheritedInput, { ...(merged ? rates : zeroCost), input: 7 }],
-      ["bare", ["text"], { ...(merged ? rates : zeroCost), input: 2 }],
-      ["custom/bare", inheritedInput, { ...(merged ? scopedRates : zeroCost), output: 8 }],
+      ["middle", inheritedInput, { ...(merged ? rates : {}), input: 7 }],
+      ["bare", ["text"], { ...(merged ? rates : {}), input: 2 }],
+      ["custom/bare", inheritedInput, { ...(merged ? scopedRates : {}), output: 8 }],
       ["exact", inheritedInput, merged ? rates : undefined],
       ...(merged ? [["discovered-only", ["text", "image"], rates]] : []),
     ];

@@ -13,7 +13,7 @@ import type { CostUsageTotals } from "./session-cost-usage.types.js";
 export const USAGE_COST_QUARTER_SCOPE = "session-cost-usage-quarters-v1";
 
 export const QUARTER_MS = 15 * 60 * 1000;
-const FORMAT = 2;
+const FORMAT = 3;
 
 export const TOTAL_FIELDS = [
   "input",
@@ -27,6 +27,7 @@ export const TOTAL_FIELDS = [
   "cacheReadCost",
   "cacheWriteCost",
   "missingCostEntries",
+  "missingCostBreakdownEntries",
 ] as const;
 export const MESSAGE_FIELDS = [
   "total",
@@ -156,7 +157,7 @@ export function encodeUsageCostQuarters(
   const toolIndex = new Map<string, number>();
   const missingKeys: string[] = [];
   const missingIndex = new Map<string, number>();
-  const totalsValues = (totals: CostUsageTotals) => TOTAL_FIELDS.map((field) => totals[field]);
+  const totalsValues = (totals: CostUsageTotals) => TOTAL_FIELDS.map((field) => totals[field] ?? 0);
   const pushMissing = (table: number, row: number, totals: CostUsageTotals) => {
     for (const [key, count] of Object.entries(totals.missingCostByModel ?? {})) {
       push(table, [row, dictionary(missingKeys, missingIndex, key, key), count]);

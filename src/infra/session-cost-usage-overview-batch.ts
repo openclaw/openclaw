@@ -22,7 +22,7 @@ export type UsageOverviewBatch = {
 
 // TOTAL_FIELDS.length in session-cost-usage-quarters.ts; kept local so the Gateway reader
 // does not load the quarter codec.
-const TOTALS_WIDTH = 11;
+const TOTALS_WIDTH = 12;
 
 /** Packed row layout shared by the worker fold (writer) and `readUsageOverviewBatch`. */
 export const ROW = {
@@ -169,6 +169,7 @@ function readTotals(values: Float64Array, offset: number): CostUsageTotals {
     cacheReadCost: values[offset + 8]!,
     cacheWriteCost: values[offset + 9]!,
     missingCostEntries: values[offset + 10]!,
+    ...(values[offset + 11] ? { missingCostBreakdownEntries: values[offset + 11]! } : {}),
   };
   return totals;
 }
