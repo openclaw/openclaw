@@ -358,7 +358,7 @@ export class SessionLinkTitler {
   private remember<T>(cache: Map<string, CacheEntry<T>>, key: string, entry: CacheEntry<T>): void {
     cache.delete(key);
     cache.set(key, entry);
-    this.pruneCaches();
+    pruneMapToMaxSize(cache, CACHE_LIMIT + this.registered.size);
   }
 
   private pruneCaches(): void {
