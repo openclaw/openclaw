@@ -1,5 +1,8 @@
 // Owner-level Team-shaped list workload; transport/tool-turn proof stays in team-shape-stress.ts.
 // Run on an approved quiet host with --expose-gc --import ./scripts/tsx.mjs.
+// --row-churn adds 1/2/3-second metadata changes, --clients fanout and --list-every reads.
+// --churn-subagents supplies live child records; --count-work is verify-only instrumentation.
+// --client-clock-step separates synchronous fanout clocks from elapsed clocks between list reads.
 // --collector-presentation adds prepared event rows for an unrestricted operator.
 // --list-shape sidebar|full|search|agent|mixed isolates warm list allocation and CPU per shape.
 // Shape mode seeds --sessions rows across --agents (default 8); mixed keeps the filter/page mix.
@@ -18,15 +21,12 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { transformSync } from "esbuild";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
-import type {
-  GatewaySessionRow,
-  SessionsListResult,
-} from "../../src/gateway/session-utils.types.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeStressFixture } from "./team-shape-stress-fixture.ts";
@@ -43,6 +43,14 @@ const { values } = parseArgs({
     "running-candidates": { type: "boolean", default: false },
     reconciliation: { type: "boolean", default: false },
     "metadata-churn": { type: "boolean", default: false },
+    "row-churn": { type: "boolean", default: false },
+    "churn-subagents": { type: "boolean", default: false },
+    "live-sessions": { type: "string", default: "23" },
+    clients: { type: "string", default: "20" },
+    "same-audience": { type: "boolean", default: false },
+    "list-every": { type: "string", default: "5" },
+    "client-clock-step": { type: "string", default: "0" },
+    "count-work": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     golden: { type: "string" },
     "sort-rows": { type: "string" },
@@ -61,7 +69,20 @@ assert(values.mode === "timing" || values.mode === "allocation" || values.mode =
 assert(!values["cpu-profile"] || values.mode === "timing", "Separate CPU and heap sampling");
 assert(global.gc, "Run with --expose-gc");
 // Pin only the runtime projection owners; fixture, transport, and measurement stay identical.
-if (values["source-ref"]) {
+const sourceHashes: Record<string, string> = {};
+let workStage = "setup";
+const workCounts: Record<string, Record<string, number>> = {};
+if (values["count-work"]) {
+  assert.equal(values.mode, "verify", "Count instrumentation is separate from performance samples");
+  Object.defineProperty(globalThis, Symbol.for("openclaw.session-row-bench-work"), {
+    configurable: true,
+    value: (kind: string, key: string) => {
+      const counts = (workCounts[`${workStage}:${kind}`] ??= {});
+      counts[key] = (counts[key] ?? 0) + 1;
+    },
+  });
+}
+{
   const sources = new Map(
     [
       "src/agents/agent-runtime-metadata.ts",
@@ -72,22 +93,67 @@ if (values["source-ref"]) {
       "src/gateway/session-row-model-facts.ts",
       "src/gateway/session-row-projection-materialize.ts",
       "src/gateway/session-utils-list.ts",
+      "src/gateway/session-row-presentation.ts",
+      "src/gateway/session-row-prepared-read.ts",
+      "src/gateway/session-row-materialization.ts",
+      "src/gateway/session-row-projection.ts",
+      "src/gateway/session-row-projection-revisions.ts",
+      "src/gateway/session-row-publication.ts",
+      "src/gateway/session-event-projection.ts",
     ].map((file) => [
       new URL(`../../${file}`, import.meta.url).href,
-      execFileSync("git", ["show", `${values["source-ref"]}:${file}`], { encoding: "utf8" }),
+      values["source-ref"]
+        ? execFileSync("git", ["show", `${values["source-ref"]}:${file}`], { encoding: "utf8" })
+        : readFileSync(new URL(`../../${file}`, import.meta.url), "utf8"),
     ]),
   );
+  for (const [url, source] of sources) {
+    sourceHashes[url.slice(url.indexOf("/src/") + 1)] = createHash("sha256")
+      .update(source)
+      .digest("hex");
+  }
   registerHooks({
     load(url, context, nextLoad) {
-      const source = sources.get(url);
-      return source === undefined
-        ? nextLoad(url, context)
-        : { format: "module-typescript", source, shortCircuit: true };
+      let source = sources.get(url);
+      if (source === undefined) {
+        return nextLoad(url, context);
+      }
+      if (values["count-work"] && url.endsWith("/session-utils-row.ts")) {
+        source = source
+          .replace(
+            "const { cfg, key, entry } = input;",
+            'Reflect.get(globalThis, Symbol.for("openclaw.session-row-bench-work"))("materialize", input.key); const { cfg, key, entry } = input;',
+          )
+          .replace(
+            "const row = { ...materialized.row };",
+            'Reflect.get(globalThis, Symbol.for("openclaw.session-row-bench-work"))("present", materialized.row.key); const row = { ...materialized.row };',
+          );
+      }
+      return {
+        format: "module",
+        source: transformSync(source, {
+          loader: "ts",
+          format: "esm",
+          target: "esnext",
+          keepNames: false,
+          sourcefile: url,
+        }).code,
+        shortCircuit: true,
+      };
     },
   });
 }
 const integer = (
-  name: "sessions" | "agents" | "iterations" | "warmup" | "updates-per-list",
+  name:
+    | "sessions"
+    | "agents"
+    | "iterations"
+    | "warmup"
+    | "updates-per-list"
+    | "live-sessions"
+    | "clients"
+    | "list-every"
+    | "client-clock-step",
   min = 1,
 ) => parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const sessions = integer("sessions", values["list-shape"] ? 200 : 100);
@@ -95,6 +161,11 @@ const agents = integer("agents", 4);
 const iterations = integer("iterations");
 const warmup = integer("warmup");
 const updatesPerList = integer("updates-per-list", 0);
+const liveSessions = integer("live-sessions", 0);
+const clients = integer("clients");
+const listEvery = integer("list-every");
+const clientClockStep = integer("client-clock-step", 0);
+assert(!values["row-churn"] || updatesPerList === 0, "Row churn owns its run updates");
 const root = path.resolve(values["state-dir"]);
 const presentationSourceHash = createHash("sha256")
   .update(readFileSync(new URL("../../src/gateway/session-row-presentation.ts", import.meta.url)))
@@ -232,7 +303,7 @@ Date.now = () => clock;
 const cases: SessionsListParams[] = [];
 const profileId = "team-shape-profile-0";
 const viewer: GatewayClient | undefined =
-  values["sort-workload"] || values["collector-presentation"]
+  values["sort-workload"] || values["collector-presentation"] || values["row-churn"]
     ? {
         connect: {
           minProtocol: PROTOCOL_VERSION,
@@ -244,6 +315,7 @@ const viewer: GatewayClient | undefined =
             mode: "webchat",
           },
           role: "operator",
+          caps: ["session-row-deltas", "session-event-field-refs"],
           scopes: [
             "operator.read",
             "operator.write",
@@ -372,26 +444,57 @@ if (values["list-shape"] && values["list-shape"] !== "mixed") {
   cases.splice(0, cases.length, query);
 }
 
-function canonicalResult(result: SessionsListResult | GatewaySessionRow): string {
-  const omitted = new Set(["ts", "rowsRevision", "rowRevision", "runtimeMs", "snapshotAt"]);
+const viewers = Array.from({ length: clients }, (_, index) => {
+  if (!viewer) {
+    return undefined;
+  }
+  const id = values["same-audience"] ? profileId : `team-shape-profile-${index}`;
+  return {
+    ...viewer,
+    connId: `synthetic-viewer-${index}`,
+    authenticatedUserProfile: { ...viewer.authenticatedUserProfile!, profileId: id },
+    preparedSessionProfile: { profileId: id, aliases: new Set([id]), role: null },
+  };
+});
+
+const ancestorRevisions = new Map<string, number>();
+function canonicalResult(result: unknown): string {
+  const omitted = new Set([
+    "ts",
+    "rowsRevision",
+    "rowRevision",
+    ...(values["row-churn"] ? [] : ["runtimeMs", "snapshotAt"]),
+  ]);
   return JSON.stringify(result, (key, value: unknown) => {
     if (omitted.has(key)) {
       return undefined;
     }
     if (typeof value === "string") {
+      if (key === "ancestorRevision" || (key === "revision" && /^[0-9a-f-]{36}$/.test(value))) {
+        let revision = ancestorRevisions.get(value);
+        if (revision === undefined) {
+          revision = ancestorRevisions.size;
+          ancestorRevisions.set(value, revision);
+        }
+        return `<ancestor-revision-${revision}>`;
+      }
       return value.replaceAll(root, "<synthetic-state>");
     }
     return value;
   });
 }
 
-function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
+function sampledBytes(profile: HeapProfiler.SamplingHeapProfile): Record<string, number> & {
+  total: number;
+  list: number;
+} {
   let total = 0;
   let prepared = 0;
   let roster = 0;
   let list = 0;
   let sort = 0;
   let comparator = 0;
+  const families: Record<string, number> = {};
   const visit = (
     node: HeapProfiler.SamplingHeapProfileNode,
     inPrepared = false,
@@ -399,7 +502,34 @@ function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
     inList = false,
     inSort = false,
     inComparator = false,
+    ancestors = new Set<string>(),
   ) => {
+    const owned = new Set(ancestors);
+    const { functionName, url } = node.callFrame;
+    if (functionName === "materializeSessionRow") {
+      owned.add("materialization");
+    }
+    if (functionName === "presentSessionRow") {
+      owned.add("presentation");
+    }
+    if (functionName === "readSessionRowInputs") {
+      owned.add("rowInputs");
+    }
+    if (functionName === "publish" && url.includes("session-row")) {
+      owned.add("rowPublication");
+    }
+    if (url.includes("session-event-projection")) {
+      owned.add("eventProjection");
+    }
+    if (url.endsWith("/session-utils-list.ts")) {
+      owned.add("listModule");
+    }
+    if (functionName === "filterSessionEntries") {
+      owned.add("filtering");
+    }
+    for (const family of owned) {
+      families[family] = (families[family] ?? 0) + node.selfSize;
+    }
     const preparedFrame = inPrepared || node.callFrame.functionName === "withPreparedExactRows";
     const rosterFrame = inRoster || node.callFrame.functionName === "withAgentRosterFactsBatch";
     const listFrame = inList || node.callFrame.functionName === "listProjectedSessions";
@@ -413,11 +543,11 @@ function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
     sort += sortFrame ? node.selfSize : 0;
     comparator += comparatorFrame ? node.selfSize : 0;
     for (const child of node.children) {
-      visit(child, preparedFrame, rosterFrame, listFrame, sortFrame, comparatorFrame);
+      visit(child, preparedFrame, rosterFrame, listFrame, sortFrame, comparatorFrame, owned);
     }
   };
   visit(profile.head);
-  return { total, prepared, roster, list, sort, comparator };
+  return { total, prepared, roster, list, sort, comparator, ...families };
 }
 
 function sampledCpu(profile: Profiler.Profile) {
@@ -433,6 +563,10 @@ function sampledCpu(profile: Profiler.Profile) {
     "resolveGatewaySessionThinkingProjectionInternal",
     "resolveAvailableAgentHarnessPolicy",
     "projectGatewaySessionRunState",
+    "materializeSessionRow",
+    "presentSessionRow",
+    "readSessionRowInputs",
+    "publish",
   ]);
   const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
   const parents = new Map(
@@ -598,11 +732,11 @@ try {
     publications.publishSubagentRunChanges([next.childSessionKey], [next.runId]);
     updates++;
   };
-  const read = (index: number) =>
+  const read = (index: number, client = viewer) =>
     lists.listProjectedSessions({
       projection: projection!,
       opts: cases[index % cases.length]!,
-      client: viewer,
+      client,
       acceptsSerializedJson: true,
     });
   const capture = async () => {
@@ -645,7 +779,227 @@ try {
     }
   >();
   const responses = values.mode === "verify" ? createHash("sha256") : undefined;
+  const churnMetrics = { changes: 0, broadcasts: 0, deliveries: 0, lists: 0, eventCpuMicros: 0 };
+  const eventDurations: number[] = [];
+  const churnTargets = rows
+    .filter(
+      (row) =>
+        row.entry &&
+        row.entry.archivedAt === undefined &&
+        row.key.startsWith(
+          values["churn-subagents"] ? "agent:main:subagent:" : "agent:main:dashboard:",
+        ),
+    )
+    .slice(0, liveSessions);
+  const eventDigest = values.mode === "verify" ? createHash("sha256") : undefined;
+  const liveReadback: Record<string, unknown> = {};
+  const { prepareSessionEventProjection } =
+    await import("../../src/gateway/session-event-projection.js");
+  const { prepareProjectedSessionSharing } = await import("../../src/gateway/session-sharing.js");
+  const { ConnectionSessionRows } =
+    await import("../../src/gateway/session-ancestor-references.js");
+  const { resolveSessionEventAgentScope } =
+    await import("../../src/gateway/session-request-agent.js");
+  const { createVisibleActiveSessionRunProjector } =
+    await import("../../src/gateway/server-methods/session-active-runs.js");
+  const references = new Map<GatewayClient, InstanceType<typeof ConnectionSessionRows>>();
+  if (values["row-churn"]) {
+    assert.equal(churnTargets.length, liveSessions, "Fixture needs enough live dashboard rows");
+    for (const [index, target] of churnTargets.entries()) {
+      const runId = `prepared-churn-${index}`;
+      const token = registry.claimAgentRunContext(
+        runId,
+        {
+          agentId: target.agentId,
+          sessionKey: target.key,
+          sessionId: target.entry!.sessionId,
+          lifecycleStartedAt: clock,
+          projectSessionActive: true,
+          isControlUiVisible: true,
+        },
+        { trackOwner: true, ownsContext: true },
+      );
+      assert(token);
+      claims.set(runId, token);
+      if (values["churn-subagents"]) {
+        const ownerKey = target.entry!.parentSessionKey ?? target.entry!.spawnedBy ?? parent.key;
+        const liveRun: SubagentRunRecord = {
+          runId,
+          childSessionKey: target.key,
+          childAgentId: target.agentId,
+          childSessionIdentity: { sessionId: target.entry!.sessionId },
+          requesterSessionKey: ownerKey,
+          requesterAgentId: "main",
+          requesterDisplayKey: ownerKey,
+          controllerSessionKey: ownerKey,
+          task: "Synthetic live row churn",
+          cleanup: "keep",
+          generation: 1,
+          createdAt: clock,
+          execution: { status: "running", startedAt: clock },
+          delivery: { status: "not_required" },
+        };
+        memory.subagentRuns.set(runId, liveRun);
+        active.push(liveRun);
+        publications.publishSubagentRunChanges([target.key], [runId]);
+      }
+    }
+  }
+  const churn = async (count: number, measured: boolean) => {
+    for (let step = 0; step < count; step++) {
+      clock += 1_000;
+      sequence++;
+      for (const [index, target] of churnTargets.entries()) {
+        if ((sequence + index) % (1 + (index % 3)) !== 0) {
+          continue;
+        }
+        workStage = measured ? "change" : "warmup";
+        const before = process.threadCpuUsage();
+        const scope = {
+          agentId: target.agentId,
+          storePath: target.storeTarget.storePath,
+          sessionKey: target.key,
+        };
+        const entry = sessionEntries.loadSessionEntry(scope);
+        assert(entry);
+        sessionEntries.replaceSessionEntrySync(scope, {
+          ...entry,
+          updatedAt: clock,
+          lastActivityAt: clock,
+          inputTokens: (entry.inputTokens ?? 0) + 32,
+          outputTokens: (entry.outputTokens ?? 0) + 16,
+          status: undefined,
+          lifecycleRunId: `prepared-churn-${index}`,
+          activeWriterRunId: `prepared-churn-${index}`,
+        });
+        await projection!.ensureMaterialized();
+        const used = process.threadCpuUsage(before);
+        if (measured) {
+          churnMetrics.changes++;
+          updateCpuMicros += used.user + used.system;
+        }
+        workStage = measured ? "event" : "warmup";
+        const eventBefore = process.threadCpuUsage();
+        const eventStarted = performance.now();
+        await withPreparedEventRow(
+          projection,
+          { agentId: target.agentId, key: target.key },
+          (prepared, ancestors) => {
+            assert(prepared);
+            const publish = prepareSessionEventProjection(projection!, prepared, {
+              ancestors,
+              reuseEnvelope: true,
+            })(
+              "sessions.changed",
+              { sessionKey: target.key, agentId: target.agentId, reason: "activity" },
+              { sessionKeys: [target.key], agentId: target.agentId },
+              {
+                isCurrentProjection: (owner) => owner === projection,
+                resolveAgentScope: (key, agentId) =>
+                  resolveSessionEventAgentScope(cfg, key, agentId),
+                forgetAncestors: (key) => {
+                  for (const history of references.values()) {
+                    if (key) {
+                      history.forget(key);
+                    } else {
+                      history.clearAncestors();
+                    }
+                  }
+                },
+                references: (client) => {
+                  let history = references.get(client);
+                  if (!history) {
+                    references.set(client, (history = new ConnectionSessionRows()));
+                  }
+                  return history;
+                },
+                createRunProjector: () =>
+                  createVisibleActiveSessionRunProjector(
+                    projection!.state.rowContext.projectedAgentRuns,
+                    undefined,
+                    undefined,
+                    projection!.physicalPaths,
+                  ),
+              },
+            );
+            assert(publish);
+            for (const client of viewers) {
+              assert(client);
+              const sharing = prepareProjectedSessionSharing({
+                cfg,
+                client,
+                isMember: (value, id) =>
+                  projection!.hasMembership(value.storePath, value.storeKey, id),
+              });
+              const sharingTarget = projection!.sharingTarget({
+                key: target.key,
+                agentId: target.agentId,
+              });
+              if (!sharingTarget || !sharing.canReadTarget(sharingTarget)) {
+                continue;
+              }
+              const delivered = publish(client);
+              if (!delivered) {
+                continue;
+              }
+              eventDigest?.update(canonicalResult(delivered.payload));
+              if (values.mode === "verify" && !liveReadback[target.key]) {
+                const wireRow =
+                  typeof delivered.payload === "object" && delivered.payload !== null
+                    ? Reflect.get(delivered.payload, "session")
+                    : undefined;
+                const full =
+                  typeof wireRow === "object" && wireRow !== null
+                    ? Reflect.get(wireRow, "full")
+                    : undefined;
+                if (typeof full === "object" && full !== null) {
+                  liveReadback[target.key] = Object.fromEntries(
+                    ["active", "status", "startedAt", "runtimeMs", "activeRunIds"].map((key) => [
+                      key,
+                      Reflect.get(full, key),
+                    ]),
+                  );
+                }
+              }
+              delivered.delivered?.(client);
+              if (measured) {
+                churnMetrics.deliveries++;
+              }
+            }
+          },
+        );
+        if (measured) {
+          const eventUsed = process.threadCpuUsage(eventBefore);
+          churnMetrics.eventCpuMicros += eventUsed.user + eventUsed.system;
+          churnMetrics.broadcasts++;
+          eventDurations.push(performance.now() - eventStarted);
+        }
+      }
+      if (sequence % listEvery === 0) {
+        workStage = measured ? "list" : "warmup";
+        for (const client of viewers) {
+          clock += clientClockStep;
+          const before = process.threadCpuUsage();
+          const started = performance.now();
+          const result = await read(sequence, client);
+          const used = process.threadCpuUsage(before);
+          responses?.update(canonicalResult(result));
+          if (measured) {
+            churnMetrics.lists++;
+            listCpuMicros += used.user + used.system;
+            durations.push(performance.now() - started);
+            returnedRows += result.count;
+          }
+        }
+      }
+    }
+    workStage = "outside";
+  };
   const run = async (count: number, measured: boolean) => {
+    if (values["row-churn"]) {
+      await churn(count, measured);
+      return;
+    }
     for (let index = 0; index < count; index++) {
       clock += 1_000;
       let before = process.threadCpuUsage();
@@ -786,6 +1140,13 @@ try {
   const used = process.threadCpuUsage(before);
   const elapsedMs = performance.now() - started;
   const afterSelections = workMetrics.getSessionRowSelectionMetrics();
+  const materialization = Object.fromEntries(
+    Object.entries(afterSelections.materialization).flatMap(([key, value]) =>
+      typeof value === "number"
+        ? [[key, value - (Reflect.get(beforeSelections.materialization, key) as number)]]
+        : [],
+    ),
+  );
   const allocation =
     values.mode === "allocation"
       ? (await inspector.post("HeapProfiler.stopSampling")).profile
@@ -817,6 +1178,7 @@ try {
     writeFileSync(path.join(root, "cpu.cpuprofile"), JSON.stringify(cpu));
   }
   const golden = {
+    ...(values["row-churn"] && eventDigest ? { events: eventDigest.digest("hex") } : {}),
     initial: initialGolden,
     final: await capture(),
     ...(responses ? { responses: responses.digest("hex") } : {}),
@@ -855,8 +1217,43 @@ try {
     candidateSelections(afterSelections) - candidateSelections(beforeSelections);
   const sampled = cpu ? sampledCpu(cpu) : undefined;
   durations.sort((a, b) => a - b);
+  eventDurations.sort((a, b) => a - b);
   const result = {
+    rowChurn: values["row-churn"]
+      ? {
+          liveSessions,
+          clients,
+          listEvery,
+          sameAudience: values["same-audience"],
+          clientClockStep,
+          simulatedSeconds: iterations,
+          subagents: values["churn-subagents"],
+          ...churnMetrics,
+          materialization,
+          updateCpuMsPerChange: updateCpuMicros / 1000 / churnMetrics.changes,
+          broadcastCpuMs: churnMetrics.eventCpuMicros / 1000 / churnMetrics.broadcasts,
+          listCpuMs: listCpuMicros / 1000 / churnMetrics.lists,
+          broadcastLatencyMs: {
+            median: eventDurations[Math.floor(eventDurations.length * 0.5)],
+            p95: eventDurations[Math.floor(eventDurations.length * 0.95)],
+            max: eventDurations.at(-1),
+          },
+          sampledBytesPerChange: bytes ? bytes.total / churnMetrics.changes : undefined,
+          sampledInclusiveBytesPerBroadcast: bytes
+            ? (bytes.eventProjection ?? 0) / churnMetrics.broadcasts
+            : undefined,
+          sampledInclusiveListBytesPerCall: bytes
+            ? (bytes.listModule ?? 0) / churnMetrics.lists
+            : undefined,
+          workCounts: values["count-work"] ? workCounts : undefined,
+          liveKeys: churnTargets.map((row) => row.key),
+          liveReadback: values.mode === "verify" ? liveReadback : undefined,
+          scope:
+            "Accelerated 1/2/3-second canonical metadata commits and prepared event projection fanout. Includes periodic sidebar lists; excludes sockets, encoding, transcript persistence and worker allocation. Counters instrumented only in verify mode. Selected source modules use production name-elided compilation on both arms.",
+        }
+      : undefined,
     mode: values.mode,
+    sourceHashes,
     presentationSourceHash,
     filterSourceHash,
     listShape: values["list-shape"],
@@ -894,12 +1291,17 @@ try {
     returnedRows,
     elapsedMs,
     threadCpuMs: (used.user + used.system) / 1000,
-    listCpuMsPerCall: listCpuMicros / 1000 / iterations,
-    updateCpuMsPerCall: updateCpuMicros / 1000 / iterations,
+    listCpuMsPerCall:
+      listCpuMicros / 1000 / (values["row-churn"] ? churnMetrics.lists : iterations),
+    updateCpuMsPerCall:
+      updateCpuMicros / 1000 / (values["row-churn"] ? churnMetrics.changes : iterations),
     allocatedBytes: bytes,
     allocatedBytesPerList:
-      bytes &&
-      Object.fromEntries(Object.entries(bytes).map(([key, value]) => [key, value / iterations])),
+      values["row-churn"] || !bytes
+        ? undefined
+        : Object.fromEntries(
+            Object.entries(bytes).map(([key, value]) => [key, value / iterations]),
+          ),
     targetSelfCpuMicros: sampled?.selfMicros,
     targetInclusiveCpuMicros: sampled?.inclusiveMicros,
     bySearch: Object.fromEntries(bySearch),
@@ -913,6 +1315,7 @@ try {
   console.log(JSON.stringify(result));
 } finally {
   Date.now = realNow;
+  Reflect.deleteProperty(globalThis, Symbol.for("openclaw.session-row-bench-work"));
   if (connected) {
     inspector.disconnect();
   }

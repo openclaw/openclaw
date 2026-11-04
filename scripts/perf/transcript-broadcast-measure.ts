@@ -80,6 +80,12 @@
 // before post-window collection or teardown; give each arm fresh, distinct paths.
 // --node-policy-churn adds a paired synthetic node and node list/describe/invoke traffic;
 // use memory-soak --mixed-rpc --plugins 40 --list-interval-ms 500 for policy load.
+// --session-row-churn-seconds 30 with transcript-broadcast --runs 23 --clients 20
+// --exact-clients 20 --row-mode sidebar --list-interval-ms 5000 --chunks 35
+// --chunk-interval-ms 1000 keeps real runs live while every key receives
+// token/activity metadata patches and transcript appends at staggered 1–3 s intervals
+// throughout 30 s (30/15/10 updates per key, 430 of each write across 23 keys).
+// The fixture plugin uses the public session writer; status remains run-owner controlled.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -179,6 +185,7 @@ const { values } = parseArgs({
     "sqlite-reply-census": { type: "boolean", default: false },
     "capture-responses": { type: "boolean", default: false },
     "list-filter-churn": { type: "boolean", default: false },
+    "session-row-churn-seconds": { type: "string", default: "0" },
     "trace-gc": { type: "boolean", default: false },
     "worker-memory": { type: "boolean", default: false },
     "worker-snapshots": { type: "boolean", default: false },
@@ -734,6 +741,20 @@ if (
 }
 const chunkCount = integer(values.chunks, "--chunks");
 const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-ms", 0);
+const sessionRowChurnSeconds = integer(
+  values["session-row-churn-seconds"],
+  "--session-row-churn-seconds",
+  0,
+);
+if (
+  sessionRowChurnSeconds &&
+  (scenario !== "transcript-broadcast" ||
+    chunkCount * chunkIntervalMs < sessionRowChurnSeconds * 1000 + 2000)
+) {
+  throw new Error(
+    "Session row churn requires transcript-broadcast and a stream lasting churn seconds + 2 seconds",
+  );
+}
 const providerDelayMs = integer(values["provider-delay-ms"], "--provider-delay-ms", 0);
 const sandboxTurnTimeoutMs = values["sandbox-turn-timeout-ms"]
   ? integer(values["sandbox-turn-timeout-ms"], "--sandbox-turn-timeout-ms")
@@ -1823,6 +1844,46 @@ let reloadPluginId: string | undefined;
 let scopePluginId: string | undefined;
 let updateReloadPlugin: (() => number) | undefined;
 const pluginUpdateLatenciesMs: number[] = [];
+if (sessionRowChurnSeconds) {
+  const id = "synthetic-session-row-churn";
+  const pluginDir = path.join(output, id);
+  mkdirSync(pluginDir);
+  writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id,
+      activation: { onStartup: true },
+      configSchema: { type: "object", additionalProperties: false },
+    }),
+  );
+  writeFileSync(
+    path.join(pluginDir, "index.cjs"),
+    `module.exports = { id: ${JSON.stringify(id)}, register(api) {
+  api.registerGatewayMethod("benchmark.sessionRowChurn", async ({ params, respond }) => {
+    if (!/^agent:main:transcript-broadcast-measure-child-\\d+$/.test(params.key))
+      throw new Error("Row churn requires an owned synthetic session");
+    const entry = await api.runtime.agent.session.prepareSessionEntryPatch({
+      agentId: "main", sessionKey: params.key,
+      prepare: existing => ({ updatedAt: Date.now(),
+        inputTokens: (existing.inputTokens ?? 0) + 16,
+        outputTokens: (existing.outputTokens ?? 0) + 32,
+        totalTokens: (existing.totalTokens ?? 0) + 48 }),
+    });
+    if (!entry) throw new Error("Synthetic row disappeared during churn");
+    respond(true, { key: params.key, sessionId: entry.sessionId,
+      updatedAt: entry.updatedAt, inputTokens: entry.inputTokens,
+      outputTokens: entry.outputTokens, totalTokens: entry.totalTokens, status: entry.status });
+  }, { scope: "operator.write" });
+} };\n`,
+  );
+  cfg.plugins = {
+    ...cfg.plugins,
+    enabled: true,
+    allow: [...new Set([...(cfg.plugins?.allow ?? []), id])],
+    load: { ...cfg.plugins?.load, paths: [...(cfg.plugins?.load?.paths ?? []), pluginDir] },
+    entries: { ...cfg.plugins?.entries, [id]: { enabled: true } },
+  };
+}
 if (
   scenario === "plugins.reload" ||
   scenario === "plugin.scope" ||
@@ -3719,6 +3780,14 @@ const keys = Array.from({ length: sessionCount }, (_, index) =>
       ? `agent:main:transcript-broadcast-measure-${port}-child-${index}`
       : `agent:main:transcript-broadcast-measure-child-${index}`,
 );
+const rowChurnSchedule = sessionRowChurnSeconds
+  ? keys.map((key, index) => ({
+      key,
+      phaseMs: (index / keys.length) * 1000,
+      intervalMs: 1000 * (1 + (index % 3)),
+      updates: Math.ceil((sessionRowChurnSeconds - index / keys.length) / (1 + (index % 3))),
+    }))
+  : [];
 const historyNamespace = verifyHistoryReplay ? "memory-soak-history" : "reopen-history";
 const historySeedPath = path.join(root, `${historyNamespace}.json`);
 if (values["seed-history"]) {
@@ -5406,7 +5475,7 @@ async function connectClient(index: number) {
       ) {
         sessionEventRuns.get(payload.sessionKey)?.resolve(payload.runId);
       }
-      if (values["activity-summaries"]) {
+      if (values["activity-summaries"] || sessionRowChurnSeconds) {
         const decoded = rowEvents.project(event);
         if (decoded.missingBaseline) {
           subscriberFailure ??= new Error(`client ${index} lost its session row baseline`);
@@ -6937,6 +7006,7 @@ try {
       mixedRpcMethods.map((method) => [method, []]),
     );
     const listLatencies = rpcLatencies["sessions.list"]!;
+    const rowChurnReceipts: Array<Record<string, unknown>> = [];
     const usageCacheStatuses: Record<string, number> = {};
     const initialPollPhasesMs: number[] = [];
     let streamStart: Awaited<ReturnType<typeof runRound>> | undefined;
@@ -6957,6 +7027,59 @@ try {
       const stopped = new Promise<void>((resolve) => {
         stopPolling = resolve;
       });
+      const rowChurnWork = sessionRowChurnSeconds
+        ? (async () => {
+            while (true) {
+              if (activePrimaryStreams === runCount) {
+                break;
+              }
+              if (!polling) {
+                throw new Error("The live-run cohort ended before row churn started");
+              }
+              assertGatewayAlive();
+              await delay(10);
+            }
+            const start = performance.now();
+            await Promise.all(
+              rowChurnSchedule.map(async ({ key, phaseMs, intervalMs, updates }, index) => {
+                for (let step = 0; step < updates; step++) {
+                  await delay(Math.max(0, start + phaseMs + step * intervalMs - performance.now()));
+                  if (!polling || activePrimaryStreams !== runCount) {
+                    throw new Error("Row churn outlived the full live-run cohort");
+                  }
+                  const started = performance.now();
+                  const metadata = await rpc(sender, "benchmark.sessionRowChurn", { key });
+                  const injected = await rpc(sender, "chat.inject", {
+                    sessionKey: key,
+                    message: `Synthetic live row ${index}, update ${step}.`,
+                  });
+                  if (
+                    !isRecord(metadata) ||
+                    typeof metadata.totalTokens !== "number" ||
+                    !isRecord(injected) ||
+                    injected.ok !== true ||
+                    typeof injected.messageId !== "string"
+                  ) {
+                    throw new Error("Synthetic row churn did not commit both writes");
+                  }
+                  rowChurnReceipts.push({
+                    key,
+                    step,
+                    intervalMs,
+                    metadata,
+                    messageId: injected.messageId,
+                    startedAtEpochMs: performance.timeOrigin + started,
+                    durationMs: performance.now() - started,
+                  });
+                }
+              }),
+            );
+          })().catch((error: unknown) => {
+            subscriberFailure ??= error instanceof Error ? error : new Error(String(error));
+            polling = false;
+            stopPolling();
+          })
+        : undefined;
       // Exercise the real transcript commit/publication path independently of model turns.
       const churnWork = values["team-stress"]
         ? (async () => {
@@ -7311,6 +7434,7 @@ try {
         : undefined;
       try {
         streamStart = await runScenario(round);
+        await rowChurnWork;
         if ((values["dashboard-rpc"] || pollBetweenRounds) && !values["turn-start-phases"]) {
           // Keep polling between bursts of agent work.
           const pacedUntil = Math.min(
@@ -7330,6 +7454,7 @@ try {
         polling = false;
         stopPolling();
         await listWork;
+        await rowChurnWork;
         await churnWork;
         await scrapeWork;
       }
@@ -7442,6 +7567,9 @@ try {
     if (clients.some((client) => client.ws.readyState !== client.ws.OPEN)) {
       throw new Error("a subscriber was lost during the measured round");
     }
+    if (rowChurnReceipts.length !== rowChurnSchedule.reduce((sum, row) => sum + row.updates, 0)) {
+      throw new Error("The measured round did not complete every declared row churn write");
+    }
     if (
       turnScenario &&
       ((!values["turn-start-phases"] && peakPrimaryStreams !== Math.min(runCount, sessionCount)) ||
@@ -7542,6 +7670,18 @@ try {
     const sample = {
       round,
       scenario,
+      ...(sessionRowChurnSeconds
+        ? {
+            rowChurn: {
+              sessions: keys.length,
+              seconds: sessionRowChurnSeconds,
+              schedule: rowChurnSchedule,
+              metadataPatches: rowChurnReceipts.length,
+              transcriptAppends: rowChurnReceipts.length,
+              receipts: rowChurnReceipts,
+            },
+          }
+        : {}),
       ...(values["stress-network-tool"] ? { networkToolRequests } : {}),
       allocation,
       ...(values["config-capture-counts"]
@@ -8347,6 +8487,7 @@ try {
     presenceDeltas: values["presence-deltas"],
     sessionEnvelopeRefs: values["session-envelope-refs"],
     listIntervalMs,
+    sessionRowChurnSeconds,
     pollBetweenRounds,
     mixedRpc: values["mixed-rpc"],
     usageRpc: values["usage-rpc"],
