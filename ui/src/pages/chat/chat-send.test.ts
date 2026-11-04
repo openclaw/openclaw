@@ -2325,7 +2325,7 @@ describe("handleSendChat", () => {
       .mockImplementationOnce(async () => {
         events.push("think-failed");
         return {
-          content: "Failed to set thinking level: gateway closed during command",
+          content: "Couldn’t change effort. Try again. gateway closed during command",
           failed: true,
         };
       })

@@ -555,7 +555,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
   });
 });
 
-it("reports the last-run prompt budget through /usage", async () => {
+it("reports the last-reply prompt budget through /usage", async () => {
   const request = vi.fn(async () => ({
     session: row("agent:main:main", {
       totalTokens: 160_000,

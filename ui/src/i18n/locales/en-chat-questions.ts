@@ -32,7 +32,7 @@ const enChatQuestions = {
       storeReplacement: "Replaces {name} — last updated {updated}",
       storeReplacementBy: "Replaces {name} — last updated {updated} by {updatedBy}",
       submitting: "Submitting…",
-      submitFailed: "Could not submit: {error}",
+      submitFailed: "Couldn’t submit your answer. Try again. {error}",
       answered: "Answered",
       answeredElsewhere: "Answered elsewhere",
       unavailable: "Unavailable",

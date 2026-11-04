@@ -6,6 +6,13 @@ import { en } from "./en.ts";
 // This copy follows its lazy rendering consumers; shared labels stay in en.ts.
 const enChatSession = {
   chat: {
+    settingErrors: {
+      model: "Couldn’t change the model. Try again. {error}",
+      thinking: "Couldn’t change effort. Try again. {error}",
+      speed: "Couldn’t change the speed. Try again. {error}",
+      contextWindow: "Couldn’t change the context window. Try again. {error}",
+      accessProgram: "Couldn’t change the access program. Try again. {error}",
+    },
     savedConversation: "{status} · Saved conversation",
     sessionAutomation: {
       everyDuration: "Every {duration}",
@@ -29,7 +36,7 @@ const enChatSession = {
       settings: "Task progress settings",
       progressHidden: "Task progress hidden in this browser.",
       automationError: en.chat.sessionDetails.automationError,
-      automationUpdateError: "Couldn't update automations.",
+      automationUpdateError: "Couldn’t update automations. Try again.",
       automationShowMore: "Show more",
       automationUnavailable: en.chat.sessionDetails.automationUnavailable,
       automationOffline: "Offline · last-known automations",
@@ -230,7 +237,7 @@ const enChatSession = {
       loading: "Loading chat",
       showEarlier: "Show earlier",
       retryEarlier: "Retry earlier messages",
-      earlierUnavailable: "Couldn’t load earlier messages",
+      earlierUnavailable: "Couldn’t load earlier messages. Try again.",
       earlierInterrupted: "History refreshed before this page loaded. Try again.",
       earlierHint: "Scroll up for earlier messages",
       noMatches: "No matching messages",
