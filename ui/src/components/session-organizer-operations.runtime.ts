@@ -133,7 +133,10 @@ export async function deleteSessionsBatch(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.deleteSessionsStale", { count: String(rows.length) }) });
+    showToast({
+      severity: "error",
+      message: t("sessionsView.deleteSessionsStale", { count: String(rows.length) }),
+    });
     return;
   }
   if (!confirmed) {
@@ -462,13 +465,15 @@ export async function forkSession(
   deps: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
-) {
+  options: { title?: string } = {},
+): Promise<SidebarSessionMutationResult> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return;
+    return "stale";
   }
   const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
   const createParams = {
     parentSessionKey: session.key,
+    ...(options.title?.trim() ? { label: options.title.trim() } : {}),
     fork: true,
     ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
       ? { forkFrom: "last-completed" as const }
@@ -476,26 +481,32 @@ export async function forkSession(
     agentId,
   };
   if (
-    !requireSessionMutationAccess(deps, scope, { method: "sessions.create", params: createParams })
+    !requireSessionMutationAccess(deps, scope, {
+      method: "sessions.create",
+      params: createParams,
+      sessionScope: true,
+      session,
+    })
   ) {
-    return;
+    return "failed";
   }
   try {
     const key = await scope.sessions.create(createParams, { signal: scope.signal });
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
+      return "stale";
     }
     if (key) {
       deps.selectSession(key);
-    } else {
-      deps.sessionData.publishSessionMutationError(
-        scope,
-        scope.sessions.state.error ?? t("newSession.createFailed"),
-      );
+      return "completed";
     }
+    deps.sessionData.publishSessionMutationError(
+      scope,
+      scope.sessions.state.error ?? t("newSession.createFailed"),
+    );
   } catch (error) {
     deps.sessionData.publishSessionMutationError(scope, error);
   }
+  return "failed";
 }
 
 export async function stopCloudWorker(
@@ -518,7 +529,10 @@ export async function stopCloudWorker(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.stopCloudWorkerStale", { session: session.label }) });
+    showToast({
+      severity: "error",
+      message: t("sessionsView.stopCloudWorkerStale", { session: session.label }),
+    });
     return;
   }
   if (!confirmed) {
@@ -569,7 +583,10 @@ export async function deleteSession(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.deleteSessionStale", { session: session.label }) });
+    showToast({
+      severity: "error",
+      message: t("sessionsView.deleteSessionStale", { session: session.label }),
+    });
     return;
   }
   if (!confirmed) {

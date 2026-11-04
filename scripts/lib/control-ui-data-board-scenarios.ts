@@ -14,7 +14,6 @@ import { navigation, openInteractionPanel } from "./control-ui-interaction-navig
 import type {
   InteractionEvidence,
   InteractionFixtureOverrides,
-  InteractionSandbox,
   InteractionScenario,
 } from "./control-ui-interaction-scenarios.ts";
 
@@ -39,7 +38,7 @@ async function settle(page: Page) {
   );
 }
 
-function boardSnapshot(revision = 1): BoardSnapshot {
+function boardSnapshot(revision = 1, widgetCount = tabCount * widgetsPerTab): BoardSnapshot {
   return {
     sessionKey,
     revision,
@@ -49,7 +48,7 @@ function boardSnapshot(revision = 1): BoardSnapshot {
       position: index,
       chatDock: "right",
     })),
-    widgets: Array.from({ length: tabCount * widgetsPerTab }, (_, index) => ({
+    widgets: Array.from({ length: widgetCount }, (_, index) => ({
       name: `data-widget-${index}`,
       tabId: `data-${Math.floor(index / widgetsPerTab)}`,
       title: `Data widget ${index}`,
@@ -61,6 +60,7 @@ function boardSnapshot(revision = 1): BoardSnapshot {
       position: index % widgetsPerTab,
       grantState: "none",
       revision: index === 0 ? revision : 1,
+      instanceId: `data-report-${index}`,
       props: {
         blocks: [
           {
@@ -83,12 +83,14 @@ function boardSnapshot(revision = 1): BoardSnapshot {
 }
 
 /** Saved core reports exercise the production board without synthetic iframe processes. */
-function createDataBoardFixture(_sandbox?: InteractionSandbox): InteractionFixtureOverrides {
+function createDataBoardFixture(
+  widgetCount = tabCount * widgetsPerTab,
+): InteractionFixtureOverrides {
   return {
     featureMethods: ["board.get"],
     featureEvents: ["board.changed"],
     controlUiWidgetKinds: [{ pluginId: "session", kind: "session:report", label: "Report" }],
-    methodResponses: { "board.get": boardSnapshot() },
+    methodResponses: { "board.get": boardSnapshot(1, widgetCount) },
   };
 }
 
@@ -255,7 +257,7 @@ async function assertWorkspacePopulation(gateway: MockGatewayControls) {
   };
 }
 
-async function waitForBoard(page: Page, tab = 0) {
+async function waitForBoard(page: Page, tab = 0, expectedWidgets = widgetsPerTab) {
   await page
     .locator(
       `${boardHost} [data-widget-name="data-widget-${tab * widgetsPerTab}"] openclaw-report-widget svg`,
@@ -265,7 +267,7 @@ async function waitForBoard(page: Page, tab = 0) {
     ({ selector, count }) =>
       document.querySelectorAll(`${selector} openclaw-board-widget-cell:not([hidden])`).length ===
       count,
-    { selector: boardHost, count: widgetsPerTab },
+    { selector: boardHost, count: expectedWidgets },
   );
   await settle(page);
 }
@@ -281,6 +283,67 @@ async function boardReportCounts(page: Page) {
 async function prepareBoard(page: Page) {
   await openInteractionPanel(page);
   await waitForBoard(page);
+}
+
+function boardLiveUpdateScenario(
+  id: string,
+  widgetCount: number,
+  prepareResponse = false,
+  responseDelayMs = 0,
+): InteractionScenario {
+  let deferredRequestCount = 0;
+  return {
+    id,
+    dataPage: "board",
+    ...(responseDelayMs ? { explicitOnly: true } : {}),
+    route: controlUiSessionPath(sessionKey),
+    expected: `A board receipt updates one report from ${widgetCount} saved widgets.`,
+    fixtureOverrides: () => createDataBoardFixture(widgetCount),
+    rowSelector: ".board-report__point, .board-report__metrics dd",
+    prepare: async (page, gateway) => {
+      await openInteractionPanel(page);
+      await waitForBoard(page, 0, Math.min(widgetCount, widgetsPerTab));
+      if (prepareResponse) {
+        await gateway.setMethodResponse("board.get", boardSnapshot(2, widgetCount));
+      }
+      if (responseDelayMs) {
+        deferredRequestCount = await gateway.deferNext("board.get", { sessionKey });
+      }
+    },
+    run: async (page, gateway) => {
+      if (!prepareResponse) {
+        await gateway.setMethodResponse("board.get", boardSnapshot(2, widgetCount));
+      }
+      await gateway.emitGatewayEvent("board.changed", {
+        sessionKey,
+        revision: 2,
+        widget: "data-widget-0",
+      });
+      if (responseDelayMs) {
+        await gateway.waitForRequest("board.get", {
+          after: deferredRequestCount,
+          match: { sessionKey },
+        });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, responseDelayMs);
+        });
+        await gateway.resolveDeferred("board.get", undefined, { match: { sessionKey } });
+      }
+      await page.waitForFunction(
+        (selector) =>
+          document.querySelector(
+            `${selector} [data-widget-name="data-widget-0"] .board-report__metrics dd`,
+          )?.textContent === "2",
+        boardHost,
+      );
+      await settle(page);
+      return {
+        totalWidgets: widgetCount,
+        ...(responseDelayMs ? { addedRpcResponseDelayMs: responseDelayMs } : {}),
+        ...(await boardReportCounts(page)),
+      };
+    },
+  };
 }
 
 async function prepareGallery(page: Page) {
@@ -757,7 +820,7 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     dataPage: "board",
     route: controlUiSessionPath(sessionKey),
     expected: "Opening Dashboard renders 250 saved core reports from a 1,000-widget board.",
-    fixtureOverrides: createDataBoardFixture,
+    fixtureOverrides: () => createDataBoardFixture(),
     rowSelector: "openclaw-board-widget-cell",
     prepare: async (page) => {
       await page.locator(".chat-thread").first().waitFor();
@@ -776,7 +839,7 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     dataPage: "board",
     route: controlUiSessionPath(sessionKey),
     expected: "Switching tabs retains the previous 250 widget instances and presents the next 250.",
-    fixtureOverrides: createDataBoardFixture,
+    fixtureOverrides: () => createDataBoardFixture(),
     rowSelector: "openclaw-board-widget-cell",
     prepare: prepareBoard,
     run: async (page) => {
@@ -790,7 +853,7 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     dataPage: "board",
     route: controlUiSessionPath(sessionKey),
     expected: "Returning to a visited tab preserves its already rendered report bodies.",
-    fixtureOverrides: createDataBoardFixture,
+    fixtureOverrides: () => createDataBoardFixture(),
     rowSelector: "openclaw-report-widget",
     prepare: async (page) => {
       await prepareBoard(page);
@@ -805,33 +868,32 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
       return boardReportCounts(page);
     },
   },
+  boardLiveUpdateScenario("data-board-live-update", tabCount * widgetsPerTab),
   {
-    id: "data-board-live-update",
-    dataPage: "board",
-    route: controlUiSessionPath(sessionKey),
-    expected: "A board receipt updates one report while preserving all 250 visible widgets.",
-    fixtureOverrides: createDataBoardFixture,
-    rowSelector: ".board-report__point, .board-report__metrics dd",
-    prepare: prepareBoard,
-    run: async (page, gateway) => {
-      await gateway.setMethodResponse("board.get", boardSnapshot(2));
-      await gateway.emitGatewayEvent("board.changed", { sessionKey, revision: 2 });
-      await page.waitForFunction(
-        (selector) =>
-          document.querySelector(
-            `${selector} [data-widget-name="data-widget-0"] .board-report__metrics dd`,
-          )?.textContent === "2",
-        boardHost,
-      );
-      await settle(page);
-    },
+    ...boardLiveUpdateScenario("data-board-live-update-staged", tabCount * widgetsPerTab, true),
+    explicitOnly: true,
   },
+  // Current new-write cap; the existing 1,000-widget case is an over-cap stress fixture.
+  boardLiveUpdateScenario("data-board-live-update-production", 48, true),
+  boardLiveUpdateScenario(
+    "data-board-live-update-rpc-delay-100ms",
+    tabCount * widgetsPerTab,
+    false,
+    100,
+  ),
+  boardLiveUpdateScenario(
+    "data-board-live-update-staged-rpc-delay-100ms",
+    tabCount * widgetsPerTab,
+    true,
+    100,
+  ),
+  boardLiveUpdateScenario("data-board-live-update-production-rpc-delay-100ms", 48, true, 100),
   {
     id: "data-board-scroll",
     dataPage: "board",
     route: controlUiSessionPath(sessionKey),
     expected: "Scrolling the 250-widget board preserves its mounted reports.",
-    fixtureOverrides: createDataBoardFixture,
+    fixtureOverrides: () => createDataBoardFixture(),
     prepare: prepareBoard,
     run: async (page) => {
       const scroll = await scrollSurface(page, boardHost);
@@ -839,6 +901,42 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
         .locator(`${boardHost} [data-widget-name="data-widget-249"] openclaw-report-widget svg`)
         .waitFor();
       return { ...scroll, ...(await boardReportCounts(page)) };
+    },
+  },
+  {
+    id: "data-board-report-focus",
+    explicitOnly: true,
+    dataPage: "board",
+    diagnostic: "Offscreen card focus and top-layer menu correctness; not a timing comparison.",
+    route: controlUiSessionPath(sessionKey),
+    expected:
+      "Focusing an offscreen report reveals its content and an unclipped, dismissible menu.",
+    fixtureOverrides: () => createDataBoardFixture(),
+    prepare: prepareBoard,
+    run: async (page) => {
+      const card = page.locator(`${boardHost} openclaw-board-widget-cell`).filter({
+        has: page.locator('[data-widget-name="data-widget-249"]'),
+      });
+      await card.locator(".board-widget").focus();
+      await card.locator("openclaw-report-widget svg").waitFor();
+      const trigger = card.locator(".board-widget__menu-trigger");
+      await trigger.click();
+      const menu = page.locator(".board-widget__menu-panel:visible");
+      await menu.waitFor();
+      const bounds = await menu.boundingBox();
+      const viewport = page.viewportSize()!;
+      if (!bounds || bounds.y < 0 || bounds.y + bounds.height > viewport.height + 1) {
+        throw new Error("Focused report menu is clipped outside the viewport");
+      }
+      await page.keyboard.press("Escape");
+      await settle(page);
+      const returned = await trigger.evaluate(
+        (element) => element.matches(":focus") && element.getAttribute("aria-expanded") === "false",
+      );
+      if (!returned) {
+        throw new Error("Report menu did not dismiss and return keyboard focus");
+      }
+      return { offscreenReportFocused: true, menuFitsViewport: true, menuFocusReturned: true };
     },
   },
   {

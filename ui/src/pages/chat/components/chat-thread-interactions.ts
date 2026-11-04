@@ -32,6 +32,7 @@ import type { SubagentRoster } from "../chat-spawned-subagent.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
+import type { FailedMessageEditSource } from "../failed-message-edit.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation-state.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { createAsyncQuestionPresentation } from "./chat-async-question.ts";
@@ -67,9 +68,9 @@ export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
-    turnVideoMessages?: ReadonlyMap<
+    turnMediaMessages?: ReadonlyMap<
       string,
-      readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
+      readonly import("./chat-turn-media-gallery.ts").TurnMediaMessage[]
     >;
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
@@ -94,10 +95,19 @@ export type ChatThreadProps = Omit<
   | "presented"
   | "agentId"
   | "mediaPolicyKey"
-  | "getTurnVideoMessages"
+  | "getTurnMediaMessages"
   | "onOpenWorkspaceFile"
 > &
-  ChatWelcomeIdentityProps &
+  Pick<
+    ChatWelcomeIdentityProps,
+    | "currentAgentId"
+    | "agents"
+    | "assistantName"
+    | "assistantAvatar"
+    | "assistantAvatarUrl"
+    | "assistantAvatarSource"
+    | "sessionHost"
+  > &
   ChatSendStatusActions &
   SubagentRoster & {
     applicationContext?: ApplicationContext;
@@ -119,6 +129,7 @@ export type ChatThreadProps = Omit<
     transcriptMetadata?: ChatTranscriptMetadata;
     announceTranscript?: boolean;
     loading: boolean;
+    restoring?: boolean;
     routeLoadingSkeleton?: boolean;
     /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
     historyPagination?: ChatHistoryBoundaryProps;
@@ -145,6 +156,7 @@ export type ChatThreadProps = Omit<
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
+    failedMessageEditSource?: FailedMessageEditSource;
     failureActionsRunId?: string;
     onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
@@ -169,6 +181,7 @@ export type ChatThreadProps = Omit<
     typingOverflow?: ChatTypingOverflow;
     onOpenSidebar?: (content: SidebarContent) => void;
     onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
+    onOpenManagedArtifact?: (href: string) => boolean;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
     onNavigate?: (routeId: "cron", options: { search: string }) => void;
     onChatScroll?: (event: Event) => void;

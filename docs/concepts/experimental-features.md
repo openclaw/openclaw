@@ -27,7 +27,7 @@ available for user-installed browser code.
 | Codex harness  | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
 | Code Mode      | `tools.codeMode.enabled`                                                | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
 | Cloud workers  | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
-| Claws          | `gateway.controlUi.experimental.claws`                                  | You want to explore and add official ClawHub agents from the Control UI                                                           | [Claws](/cli/claws)                                                                    |
+| Templates      | `gateway.controlUi.experimental.templates`                              | You want to explore and add official ClawHub agents from the Control UI                                                           | [Templates](/cli/templates)                                                            |
 | Host Desktop   | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
 | Advisor        | `plugins.entries.advisor.enabled`                                       | You want an advisor model to periodically check a conversation's agent work and give the agent one short correction               | [Advisor](#advisor)                                                                    |
 | Speech bubbles | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
@@ -40,7 +40,7 @@ Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
 Labs includes Speech bubbles, Decision assistance, Advisor, Code Mode, Tool Search for all models,
-Claws, Host Desktop, and Cloud Worker Desktop. Under the default reload mode,
+Templates, Host Desktop, and Cloud Worker Desktop. Under the default reload mode,
 desktop availability updates in connected Control UI pages. Code Mode and Tool
 Search changes take effect for future agent runs. The Cloud Worker Desktop lab
 controls access to existing desktop-capable workers; changing a profile’s
@@ -52,7 +52,7 @@ by default, while an existing explicit
 config path remains an advanced opt-out, not a Labs requirement. It does not
 disable bundled views or backend operations.
 
-Claws is off by default. Turning it on permits official starter discovery and
+Templates is off by default. Turning it on permits official starter discovery and
 Add in Agents, Gateway catalog/Add methods, and local CLI Add. Add creates an
 ordinary agent and installs its requirements; repeating Add creates another
 agent. Turning the switch off blocks new Add operations, but existing agents

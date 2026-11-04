@@ -206,7 +206,13 @@ describe("LabsPage", () => {
 
   it.each([
     ["Code Mode", "codeMode", false, codeMode({ enabled: true }), codeMode({ enabled: null })],
-    ["Claws", "claws", false, experimental({ claws: true }), experimental({ claws: null })],
+    [
+      "Templates",
+      "templates",
+      false,
+      experimental({ templates: true }),
+      experimental({ templates: null }),
+    ],
     [
       "Host Desktop",
       "hostDesktop",
@@ -225,7 +231,7 @@ describe("LabsPage", () => {
     ["Code Mode", "codeMode", true, codeMode({ enabled: false }), codeMode({ enabled: "auto" })],
     ["Code Mode", "codeMode", true, codeMode(false), codeMode(null)],
     ["Speech bubbles", "chatBubbles", true, {}, experimental({ chatBubbles: true })],
-    ["Claws", "claws", true, {}, experimental({ claws: true })],
+    ["Templates", "templates", true, {}, experimental({ templates: true })],
     ["Host Desktop", "hostDesktop", true, hostEnabled(false), hostEnabled(true)],
     ["Cloud Worker Desktop", "workerDesktop", true, workerDesktop(false), workerDesktop(true)],
     ["Advisor", "advisor", true, {}, advisor({ enabled: true })],
@@ -311,15 +317,11 @@ describe("LabsPage", () => {
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
-  it("shows default provenance", async () => {
-    const inherited = await mountPage({});
-    expect(labRow(inherited.page, "Code Mode").textContent).not.toContain("Using default:");
-    inherited.unmount();
-
+  it("does not narrate the default in the row", async () => {
     const overridden = await mountPage({
       tools: { codeMode: { enabled: "auto" }, swarm: { enabled: false } },
     });
-    expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Disabled");
+    expect(labRow(overridden.page, "Code Mode").textContent).not.toContain("Default:");
   });
 });
 

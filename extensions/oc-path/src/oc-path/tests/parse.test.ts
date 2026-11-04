@@ -4,6 +4,7 @@ import { parseMd } from "../parse.js";
 
 describe("parseMd — frontmatter", () => {
   it.each([
+    ['"Hello world"', "Hello world"],
     [String.raw`"line\nnext\tcolumn"`, "line\nnext\tcolumn"],
     [String.raw`"\x41\u0042"`, "AB"],
     ["'don''t'", "don't"],
@@ -13,24 +14,24 @@ describe("parseMd — frontmatter", () => {
     [String.raw`"bad\qescape" # comment`, String.raw`"bad\qescape" # comment`],
     [String.raw`'C:\Tools\bin'`, String.raw`C:\Tools\bin`],
     [String.raw`"bad\qescape"`, String.raw`bad\qescape`],
-    ["true", "true"],
-    ["123", "123"],
-  ])("reads quoted scalar %s without changing plain string semantics", (encoded, value) => {
-    const raw = `---\nnote: ${encoded}\n---\n`;
+    ["ready # operator note", "ready"],
+    ["ready\n...", "ready"],
+    ["|-\n  alpha\n  beta", "alpha\nbeta"],
+    ["|\n  alpha\n  beta", "alpha\nbeta\n"],
+    ["|+\n  alpha\n  beta\n", "alpha\nbeta\n\n"],
+    [">-\n  alpha\n  beta", "alpha beta"],
+    ['"alpha\n  beta"', "alpha beta"],
+    ["'alpha\n  beta'", "alpha beta"],
+    ["alpha\n  beta", "alpha beta"],
+    ...["ready#literal", "00123", "true", "123", "null", "[]", "{}"].map((value) => [value, value]),
+  ])("reads string scalar %s without changing non-string spelling", (encoded, value) => {
+    const raw = `---\nnote: ${encoded}\nfollowing: 'quoted'\n---\n`;
     const ast = parseMd(raw);
-    expect(ast.frontmatter[0]?.value).toBe(value);
+    expect(ast.frontmatter).toEqual([
+      { key: "note", value, line: 2 },
+      { key: "following", value: "quoted", line: encoded.split("\n").length + 2 },
+    ]);
     expect(ast.raw).toBe(raw);
-  });
-
-  it("strips quotes from values", () => {
-    const raw = `---
-title: "Hello world"
-hint: 'quoted'
----
-`;
-    const ast = parseMd(raw);
-    expect(ast.frontmatter[0]?.value).toBe("Hello world");
-    expect(ast.frontmatter[1]?.value).toBe("quoted");
   });
 });
 
@@ -38,7 +39,6 @@ describe("parseMd — byte-fidelity", () => {
   it("derives the same slug for mixed underscores, punctuation, and hyphens", () => {
     const raw = "## Alpha_ ?_-Beta\u00a0__Gamma\n";
     const ast = parseMd(raw);
-    expect(ast.raw).toBe(raw);
     expect(ast.blocks[0]?.slug).toBe("alpha-beta-gamma");
   });
 

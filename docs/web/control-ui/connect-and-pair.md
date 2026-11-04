@@ -10,6 +10,12 @@ sidebarTitle: "Connect and pair"
 
 Reach the Control UI from a new browser, phone, or network, and fix the connection when it fails.
 
+If the page says **No access to this Gateway**, automatic retries stop. Sign in as
+a different user or ask a Gateway administrator to grant your account operator
+access, then choose **Connect**. Returning to the tab or restoring your network
+does not retry an access denial. Temporary connection failures still reconnect
+with capped exponential backoff and jitter.
+
 ## Device pairing (first connection)
 
 After gateway auth succeeds, connecting from a new browser or device usually requires a **one-time pairing approval**, shown as `disconnected (1008): pairing required`. On the Gateway host, `openclaw dashboard` is the preferred owner path: it opens a short-lived, single-use pairing link and leaves that exact signed browser with a durable administrator credential. Opening a fresh link in the same browser also repairs a previously limited credential; another browser profile cannot inherit or replay the grant.
@@ -178,6 +184,8 @@ switch that disables device identity.
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
 ## Blank Control UI page
+
+Browsers without module-script support show **This browser is not supported**. Open the Control UI in an up-to-date browser, or update your system WebView.
 
 If the browser loads a blank dashboard and DevTools shows no useful error, an extension or early content script may have prevented the JavaScript module app from evaluating. The static page includes a plain HTML recovery panel that appears when `<openclaw-app>` does not complete its first render after startup. While the browser is still downloading the initial app modules, the panel shows **Control UI is still loading** and leaves those downloads running. Once module loading finishes without a render, automatic recovery can request a fresh page. **Keep waiting** cancels a pending recovery request and gives the current page more time; **Try again** explicitly reloads it.
 

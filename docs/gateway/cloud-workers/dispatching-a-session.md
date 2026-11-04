@@ -8,7 +8,7 @@ How an authorized session reaches a cloud destination, what the Control UI requi
 
 ## Dispatching a session
 
-Administrators can run an authorized session on a configured cloud profile, including a fresh workspace without a repository. Session ownership and participation checks are revalidated before placement lifecycle changes commit.
+Administrators can run an authorized session on a configured cloud profile, including a fresh workspace without a repository. An operator with `operator.write` can also dispatch a session they created to a profile listed in their current role’s `workerProfiles`. An omitted or empty list grants no additional cloud dispatch access. Session ownership and current role grants are revalidated before placement lifecycle changes commit. Setup scripts and moves to cloud profiles remain administrator-only.
 
 Fresh workspaces can be created and dispatched concurrently. Creating another session's workspace does not invalidate a dispatch already in preparation; changes to the selected session's own workspace binding or archive status still prevent stale dispatch.
 
@@ -16,8 +16,8 @@ If the session already has an active turn, `sessions.dispatch` returns a busy er
 
 In the Control UI, open **New Session** and choose a **Cloud** destination. A cloud destination is available when these eligibility gates pass:
 
-1. The connected operator has `operator.admin` scope.
-2. `environments.list` advertises at least one configured profile.
+1. The connected operator has `operator.write` scope and either administrator access or an explicit role grant.
+2. `environments.list` advertises at least one configured profile in `dispatchableProfileIds`.
 3. The selected agent runtime advertises cloud placement support.
 
 Without an explicitly selected folder, project, or worktree, remote sessions default to **New workspace**: an empty, isolated working directory. You can also choose **New workspace** from the project picker. No repository, initial commit, or Gateway folder is required. OpenClaw uses a private backing repository for each fresh session so workspace snapshots, recovery, and cleanup keep their normal behavior; sessions do not share Git remotes or history. Existing local files are not copied into the new workspace.

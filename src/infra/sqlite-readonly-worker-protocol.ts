@@ -1,13 +1,15 @@
 import path from "node:path";
 import { toUSVString } from "node:util";
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { PreservedOrphanTaskDelivery } from "../state/openclaw-state-db-task-delivery-recovery-preservation.js";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import type { SqlitePrivateSnapshotFamily } from "./sqlite-readonly-location.types.js";
 import type {
   SqliteReadOnlyOperationCommand,
   SqliteReadOnlyOperationResult,
 } from "./sqlite-readonly-operation-types.js";
+import type { SqliteSnapshotReclamation } from "./sqlite-snapshot-reclamation.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 // Keep the one-shot execFile output limit when inspections use IPC.
@@ -24,27 +26,30 @@ export type SqliteReadOnlyWorkerMode =
   | "staged-async"
   | "metadata"
   | "consolidated"
-  | "reclaim"
+  | "task-delivery-recovery"
   | "auth-profile-rows"
   | "operation"
   | "staging-create"
   | "staging-create-legacy"
   | "staging-reconcile"
+  | "staging-sweep"
   | "staging-retire";
 export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
   return (
     mode === "staging-create" ||
     mode === "staging-create-legacy" ||
     mode === "staging-reconcile" ||
+    mode === "staging-sweep" ||
     mode === "staging-retire"
   );
 }
 
 export type SqliteReadOnlyWorkerResult =
+  | { ok: true; reclamation: SqliteSnapshotReclamation }
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
   | { ok: true; generation: string }
-  | { ok: true; warnings: string[] }
+  | { ok: true; taskDeliveryRecovery: PreservedOrphanTaskDelivery }
   | { ok: false; message: string };
 
 export class SqliteReadOnlyInspectionContentionError extends Error {}
@@ -73,6 +78,14 @@ export type SqliteReadOnlyWorkerOptions =
   | SqliteAuthProfileReadOptions
   | SqliteReadOnlyOperationOptions
   | {
+      mode: "task-delivery-recovery";
+      recoveryDirectory: string;
+      sourcePath: string;
+      signal?: AbortSignal;
+      stagingRoot?: never;
+      expectedSourceIdentity?: never;
+    }
+  | {
       mode: "private-fork";
       family: SqlitePrivateSnapshotFamily;
       stagingRoot: string;
@@ -87,7 +100,12 @@ export type SqliteReadOnlyWorkerOptions =
   | {
       mode: Exclude<
         SqliteReadOnlyWorkerMode,
-        "auth-profile-rows" | "operation" | "private-fork" | "staged-sync" | "staged-async"
+        | "auth-profile-rows"
+        | "operation"
+        | "private-fork"
+        | "staged-sync"
+        | "staged-async"
+        | "task-delivery-recovery"
       >;
       stagingRoot?: string;
       signal?: AbortSignal;
@@ -98,6 +116,9 @@ export function sqliteReadOnlyWorkerRequestArgs(
   options: SqliteReadOnlyWorkerOptions,
 ): string[] {
   const args = [options.mode, path.resolve(pathname)];
+  if (options.mode === "task-delivery-recovery") {
+    return [...args, path.resolve(options.recoveryDirectory), path.resolve(options.sourcePath)];
+  }
   const stagingRoot = options.stagingRoot && path.resolve(options.stagingRoot);
   if (options.mode === "private-fork") {
     return [...args, stagingRoot ?? "", JSON.stringify(options.family)];
@@ -128,9 +149,10 @@ export type SqliteReadOnlyWorkerOutput =
     }
   | { kind: "launch-failed"; error: Error };
 export type SqliteReadOnlyWorkerValue =
+  | SqliteSnapshotReclamation
   | string
-  | string[]
   | SqliteAuthProfileRows
+  | PreservedOrphanTaskDelivery
   | SqliteReadOnlyOperationResult;
 export const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 
@@ -142,13 +164,27 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
     return false;
   }
   return (
+    (value.ok === true &&
+      "reclamation" in value &&
+      isRecord(value.reclamation) &&
+      [value.reclamation.removed, value.reclamation.bytes, value.reclamation.skipped].every(
+        (count) => typeof count === "number" && Number.isFinite(count) && count >= 0,
+      )) ||
     (value.ok === true && "location" in value && typeof value.location === "string") ||
     (value.ok === true &&
       "contentVersion" in value &&
       typeof value.contentVersion === "string" &&
       /^(?:[a-f0-9]{64})?$/.test(value.contentVersion)) ||
     (value.ok === true && "generation" in value && typeof value.generation === "string") ||
-    (value.ok === true && "warnings" in value && isStringArray(value.warnings)) ||
+    (value.ok === true &&
+      "taskDeliveryRecovery" in value &&
+      isRecord(value.taskDeliveryRecovery) &&
+      Object.keys(value.taskDeliveryRecovery).length === 2 &&
+      typeof value.taskDeliveryRecovery.count === "number" &&
+      Number.isSafeInteger(value.taskDeliveryRecovery.count) &&
+      value.taskDeliveryRecovery.count > 0 &&
+      typeof value.taskDeliveryRecovery.payloadSha256 === "string" &&
+      /^[a-f0-9]{64}$/u.test(value.taskDeliveryRecovery.payloadSha256)) ||
     (value.ok === false && "message" in value && typeof value.message === "string")
   );
 }
@@ -187,6 +223,10 @@ function parseSqliteReadOnlyWorkerResult(
 
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
+  mode: "task-delivery-recovery",
+): PreservedOrphanTaskDelivery;
+export function readSqliteReadOnlyWorkerValue(
+  params: SqliteReadOnlyWorkerOutput,
   mode:
     | "sync"
     | "private-fork"
@@ -199,10 +239,6 @@ export function readSqliteReadOnlyWorkerValue(
     | "file-generation"
     | "update-generation",
 ): string;
-export function readSqliteReadOnlyWorkerValue(
-  params: SqliteReadOnlyWorkerOutput,
-  mode: "reclaim",
-): string[];
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
   mode: SqliteReadOnlyWorkerMode,
@@ -259,14 +295,17 @@ export function readSqliteReadOnlyWorkerValue(
   ) {
     return result.location;
   }
+  if (mode === "staging-sweep" && "reclamation" in result) {
+    return result.reclamation;
+  }
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;
   }
   if ((mode === "file-generation" || mode === "update-generation") && "generation" in result) {
     return result.generation;
   }
-  if (mode === "reclaim" && "warnings" in result) {
-    return result.warnings;
+  if (mode === "task-delivery-recovery" && "taskDeliveryRecovery" in result) {
+    return result.taskDeliveryRecovery;
   }
   throw createSqliteReadOnlyWorkerError(
     "returned a result for a different operation",

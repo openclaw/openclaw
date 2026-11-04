@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -7,17 +6,12 @@ import {
   pruneStandaloneRuntime,
   standaloneResourceCategory,
 } from "../../scripts/lib/bun-standalone-sidecar.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function fixture(files: string[]) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-sidecar-"));
-  roots.push(root);
+  const root = tempDirs.make("standalone-sidecar-");
   const runtime = path.join(root, "runtime");
   for (const name of files) {
     const filename = path.join(runtime, name);

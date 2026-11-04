@@ -74,7 +74,7 @@ suite.define(() => {
           ),
         )
         .toBe("#ff8066");
-      await polledText(accentSection.locator("#settings-accent-status")).toContain("Using Coral");
+      await polledText(accentSection.locator("#settings-accent-status")).toContain("Coral");
       await expect.poll(storedSettings).toMatchObject({ accent: "#ff8066" });
       await capture(page, "coral-selected-with-reset.png");
 

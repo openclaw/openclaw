@@ -12,6 +12,7 @@ import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execu
 
 export function readAgentDatabaseRequestPreparation(): {
   startupJournal: boolean;
+  startupCancellation?: Int32Array<SharedArrayBuffer>;
   deletion?: AgentDeletionWorkerGuard;
 } {
   const attachment = takeSqliteWorkerOperationAdmissionAttachment();
@@ -24,9 +25,26 @@ export function readAgentDatabaseRequestPreparation(): {
   }
   return {
     startupJournal: attachment.startupJournal,
+    // SAFETY: The private host admission owns this Gateway-lifetime cancellation cell.
+    startupCancellation: attachment.startupCancellation as
+      | Int32Array<SharedArrayBuffer>
+      | undefined,
     // SAFETY: The host sends this typed guard; its live owner compares it before SQL.
     deletion: attachment.deletion as AgentDeletionWorkerGuard | undefined,
   };
+}
+
+/** Cancellation belongs to Gateway startup, never the first caller of shared preparation. */
+export function agentDatabaseStartupInspectionSignal(cancellation: Int32Array): AbortSignal {
+  const controller = new AbortController();
+  const abort = () =>
+    controller.abort(new Error("Gateway stopped during agent database inspection"));
+  if (Atomics.load(cancellation, 0) !== 0) {
+    abort();
+  } else {
+    void Promise.resolve(Atomics.waitAsync(cancellation, 0, 0).value).then(abort);
+  }
+  return controller.signal;
 }
 
 /** Physical preparation outlives individual waits; registry notifications retain caller context. */

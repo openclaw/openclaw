@@ -410,12 +410,12 @@ describe("clawhub packages", () => {
 
   it("requests official search results before ClawHub applies the result cap", async () => {
     const { url } = jsonRequest({ results: [] });
-    const query = { query: " research ", family: "claw", isOfficial: true, limit: 1 } as const;
+    const query = { query: " research ", family: "template", isOfficial: true, limit: 1 } as const;
     await expect(searchClawHubPackages(query)).resolves.toEqual([]);
     expect(url().pathname).toBe("/api/v1/packages/search");
     expect(Object.fromEntries(url().searchParams)).toEqual({
       q: "research",
-      family: "claw",
+      family: "template",
       isOfficial: "true",
       limit: "1",
     });

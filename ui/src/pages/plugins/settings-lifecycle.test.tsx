@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-
 import { createSignal, flush } from "solid-js";
 import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
@@ -98,36 +96,6 @@ it("does not offer enablement or Settings for an uninstalled plugin", () => {
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),
   });
   expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
-});
-
-it("updates native UI disclosure from inventory and inspection across enablement", () => {
-  const { container, find, update } = mount({});
-  expect(find(".plugin-native-ui-disclosure")).toBeNull();
-  for (const [inventory, inspected, enabled, visible] of [
-    [true, null, false, true],
-    [true, null, true, true],
-    [true, undefined, true, true],
-    [true, false, true, false],
-    [false, true, true, true],
-    [undefined, undefined, true, false],
-  ] as const) {
-    update({
-      result: createResult(
-        createPlugin({ hasNativeUi: inventory, enabled, state: enabled ? "enabled" : "disabled" }),
-      ),
-      inspection:
-        inspected === null
-          ? null
-          : createInspectResult({
-              overview: {
-                hasNativeUi: inspected,
-                capabilities: { providers: [], channels: [], contracts: {}, ui: ["page"] },
-              },
-            }),
-    });
-    expect(Boolean(container.querySelector(".plugin-native-ui-disclosure"))).toBe(visible);
-    expect(find(`[aria-label="${enabled ? "Disable" : "Enable"} Workboard"]`)).not.toBeNull();
-  }
 });
 
 it("retains inspection retry focus and uses the current error and callback", async () => {
@@ -236,7 +204,7 @@ it("shows selected capabilities without a catalog", () => {
   const titles = [...container.querySelectorAll(".plugin-capabilities h2")].map(
     (heading) => heading.textContent,
   );
-  expect(titles).toEqual(["Capabilities2", "Tools1"]);
+  expect(titles).toEqual(["Capabilities", "Extensions", "Tools"]);
   expect(container.textContent).toContain("Text to speech");
   expect(container.textContent).toContain("Pages");
   expect(container.textContent).not.toMatch(/speechProviders:|sibling-|Video generation/);

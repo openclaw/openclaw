@@ -51,6 +51,7 @@ suite.define(() => {
           messages: Array.from({ length: 80 }, (_, index) => message(index + 3)),
           hasMore: true,
           nextOffset: 80,
+          olderCursor: "older-recall",
           totalMessages: 82,
           sessionId: "recall-session",
         },
@@ -85,7 +86,7 @@ suite.define(() => {
     await thread.getByText("Earlier prompt", { exact: true }).waitFor();
     const requests = await gateway.getRequests("chat.history");
     expect(requests).toHaveLength(1);
-    expect(requests[0]?.params).toMatchObject({ offset: 80 });
+    expect(requests[0]?.params).toMatchObject({ cursor: "older-recall" });
     await textarea.press("ArrowUp");
     await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
     await textarea.press("ArrowUp");
@@ -104,6 +105,7 @@ suite.define(() => {
     const historyPage = (messages: unknown[], nextOffset: number) => ({
       messages,
       nextOffset,
+      olderCursor: `older-activity-${nextOffset}`,
       hasMore: true,
       totalMessages: 2072,
       sessionId: "activity-history",
@@ -162,7 +164,7 @@ suite.define(() => {
       await thread.hover();
       await page.mouse.wheel(0, -100_000);
       await gateway.waitForRequest("chat.history", {
-        match: { sessionKey: "agent:main:main", offset: 72 },
+        match: { sessionKey: "agent:main:main", cursor: "older-activity-72" },
       });
       await waitForChatScrollIdle(page);
       // Let virtualization settle, then anchor the same retained bubble before delivery.
@@ -284,6 +286,7 @@ suite.define(() => {
           messages,
           hasMore,
           nextOffset,
+          ...(hasMore ? { olderCursor: `older-prepend-${nextOffset}` } : {}),
           totalMessages,
           sessionId: "prepend-session",
         });

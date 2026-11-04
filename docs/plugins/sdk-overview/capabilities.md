@@ -17,6 +17,7 @@ worker, storage, or embedding provider must satisfy. Part of the
 
 | Method                                           | What it registers                                                                 |
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `api.registerDecisionProvider(...)`              | Typed decision inference with V1 or prepared V2 execution                         |
 | `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
 | `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                     |
 | `api.registerStorageProvider(...)`               | Opaque object storage for named locations                                         |
@@ -36,6 +37,12 @@ worker, storage, or embedding provider must satisfy. Part of the
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                       |
 | `api.registerWebSearchProvider(...)`             | Web search                                                                        |
 | `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                           |
+
+`openclaw/plugin-sdk/speech-provider` exports `buildGradiumSpeechRequestBody`
+and `DEFAULT_GRADIUM_VOICE_ID` for native unary speech. The payload helper
+preserves `only_audio: true`, the native voice and output format, and encoded
+padding settings. Direct and catalog-scoped proxy providers share this payload;
+each transport retains its own credential and destination policy.
 
 Transcript source providers that share an account namespace with an inbound
 channel declare an `accountOwnership` descriptor with that channel id and a
@@ -94,6 +101,39 @@ Providers store opaque bytes. Core owns location initialization, marker identity
 namespacing, encryption, and health classification; consumers own retention.
 Providers must not create or interpret location markers or expose credentials in
 `displayTarget` or errors. See [Storage locations](/concepts/storage-locations).
+
+### Repository preparation integrations
+
+A deployment can select an optional repository policy with
+`gateway.repositoryIntegration`. The plugin declares
+`contracts.repositoryIntegrations: ["repository"]` and calls
+`api.registerRepositoryIntegration(...)` with the version 1
+`RepositoryIntegration` contract from `openclaw/plugin-sdk/plugin-entry`.
+Registration alone does not select it. A selected owner that is missing,
+disabled, unloaded, or disposed blocks admission rather than falling back.
+
+The integration interprets authenticated connection metadata and admits source
+access for worker repository preparation with native, GitHub App, and managed
+OAuth or PAT credentials. Selecting a managed profile does not bypass policy:
+admission runs before refresh or profile lookup, while the native managed-profile
+owner retains credential reading and rotation. Policy admission does not request
+a native bearer for a managed profile. Its `withIdentity` callback
+receives the original caller, exact session and request binding, current profile
+reader, and a live `assertCurrent` guard. Check that guard after awaited policy
+work and immediately before effects. The native issuer retains signing keys;
+policy receives only public App selection facts. Returned credential callbacks
+remain bound to the plugin instance and stop working after its disposal.
+
+Dispatch carries this admission through cold provisioning, prepared-workspace
+binding, and repository checkout. A fresh authenticated chat can supply a new
+admission for redispatch; previous dispatch callbacks cannot be reused after the
+request finishes. Credentials and callbacks are never stored in environment
+snapshots or sent over RPC. The dispatch owner revokes temporary App credentials
+on success or failure. The `preparedCapacity` descriptor is `"image"` or
+`"repository"`; native preparation and capacity accounting remain host-owned.
+This contract does not replace publication policy or enable a standing reserve.
+Without a selected integration, native credential and trusted-proxy behavior is
+unchanged.
 
 ### Worker providers
 
@@ -154,6 +194,44 @@ Before ordinary enrollment or project capture, call `options.prepareNodeRuntime(
 Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be safe to repeat, and `inspect({ leaseId, profile })`, which returns `active`, `dormant`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. Providers may also return up to 10 ordered, unique `fallbackPorts` (integer ports from 1 through 65535, excluding the primary `port`); core validates and persists those advertised candidates for checks safe to repeat, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands are rejected and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. For ordinary leases, omission retains the legacy dedicated-host behavior; prepared-workspace registration requires an explicit `sharedHost: false` in the provision result. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
 `WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; username?: string; allowsResize?: boolean; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be an absolute path on the worker (POSIX or Windows). Setting `allowsResize: false` restricts a native desktop from provider-wide virtual-display resizing. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The owning SSH or node carrier reads the password on the worker when needed and never persists it in the Gateway store. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; args?: string[]; cdpPort: number }` or `{ id: "terminal"; executablePath: string; args?: string[] }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields. Optional `args` are fixed by the provider and travel with its admitted launcher, never supplied by the viewer. They run without a shell on the node; each argument is NUL-free and bounded to 4 KiB, with at most 32 arguments and 8 KiB total. Gateway validation accepts POSIX and Windows absolute paths independently of the Gateway OS; the node validates its native path syntax. An optional `username` identifies the lease-owned ARD account, with its password read from `passwordFilePath` and kept transient between the node and Gateway. Managed ARD account authentication requires the node carrier; credentials never enter the browser. Ordinary host desktops retain their existing viewer-supplied ARD credentials.
 Providers with renewable leases can also implement `renew(leaseId)`.
+
+#### Retained worker disks
+
+The optional retained lifecycle uses the generic `WorkerRetentionPolicy`,
+`WorkerRetentionOperation`, and `WorkerRetentionObservation` types exported from
+`openclaw/plugin-sdk/plugin-entry`. Provision options and inspection/destruction
+lease inputs carry `retention?: WorkerRetentionPolicy`: version `1`, an immutable
+`ownerBinding`, and finite positive `computeWindowSeconds`. Freeze this acquisition
+policy before effects and preserve it on every replay and lifecycle call. Retention
+requires the original `WorkerResourceReceipt`; it cannot adopt a replacement disk.
+
+Providers may implement `setRetainedState({ leaseId, profile, resourceReceipt,
+retention, operation, assertCurrent, signal? })`, returning a normalized observation.
+The host persists the operation before submission: `id`, `action` (`pause` or
+`resume`), and `expectedClaimRevision`. Revalidate live authority after awaits and
+immediately before effects. An uncertain reply preserves that same operation and
+its preconditions for retry; do not mint another operation or compute window.
+Completion requires independent exact-resource and policy readback, not an
+optimistic command reply. The provider owns its native claim format and API; core
+receives only `claimRevision`, `state`, `computeExpiresAtMs`, and an optional
+operation with phase `pending` or `observed`.
+
+Inspection returns `retention?: WorkerRetentionObservation`. Only a verified
+`running` observation within the authorized compute window qualifies as `active`.
+Retained `suspended`, `transitioning`, `expired`, and `unavailable` observations
+remain `dormant`, preserving disk custody. Malformed or mismatched evidence throws;
+neither unknown state nor compute expiry authorizes disk deletion. Inspection,
+heartbeat, and ordinary activity never open or extend a retained compute window.
+Explicit destruction retains the original receipt and must still confirm release.
+
+The bundled Crabbox adapter checks its selected executable for Linux Azure Sandbox
+`session-disk-retention-v1` and `pause-resume` support before allocation. It uses
+the released `crabbox.session-disk.v1` observation contract, fixed owner-binding
+and lifecycle-operation flags, and no retained heartbeat loop. This seam does not
+activate retention by itself. Crabbox 0.80.0 metadata alone is not end-to-end
+readiness evidence: retained restart/reconnect integration remains an activation
+gate, and a separately corrected development build is not a released dependency.
+
 `inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core can pass an optional `signal` in `inspect({ leaseId, profile, signal })` to cancel an observation during shutdown. Forward it to inspection commands and settle owned commands before rejecting; cancellation does not prove lease absence or authorize teardown. Core fences an authoritatively absent environment and invokes the normal teardown; shared or unknown host isolation still requires acknowledgment that the exact worker stopped. A shared host must not be stopped or unpaired merely to release its logical lease.
 
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must
@@ -161,6 +239,13 @@ also be listed in `contracts.embeddingProviders` in the plugin manifest. This
 is the generic embedding surface for reusable vector generation. Memory search
 consumes this generic provider surface. The older memory-specific registrar and
 manifest contract were removed after their August 2026 migration window.
+
+Bundled embedding providers can receive an optional host-injected
+`acquireLocalService` hook matching the existing public
+`PluginRuntime["llm"]["acquireLocalService"]` shape. It leases only the configured
+local service. Forward the caller's signal, observe readiness through the optional
+target callback `onReadinessWait`, and release the lease after the provider request
+settles.
 
 Embedding providers can type their asynchronous `batchEmbed(...)` capability with
 `EmbeddingProviderBatchRuntime` from
@@ -202,6 +287,12 @@ The four explicit codecs are `decisionBatchV1ToV2`,
 `undefined` instead of being coerced. Malformed batch input throws
 `DecisionContractError`. They preserve values rather than performing inference,
 thresholding, argmax, probability normalization, or accounting estimates.
+
+`isDecisionBatchV1Representable(batch)` validates V2 input and narrows its types
+without creating a V1 request. It returns `false` for unsupported kinds, explicit
+JSON scalars, or resource limits, including V1's 256-question ceiling. Malformed
+input throws `DecisionContractError`. Use it when preserving V1 admission while
+encoding a native protocol directly; it does not grant execution authority.
 
 System One adapters can share `encodeSystemOneQuestions` and
 `decodeSystemOneResponse` from the same entrypoint. Encoding renames Boolean
@@ -272,6 +363,37 @@ sort/tag/box questions or other unrepresentable data return `unsupported-input`
 across the V1 boundary. They never become fabricated probabilities or labels.
 Existing V1 providers retain their documented execution contract. External
 plugins adopt V2 only after a host release exports the required V2 SDK surface.
+
+### Provider implementation boundaries
+
+Provider plugins own model eligibility, native input limits, answer semantics,
+and HTTP or worker execution. Keep these decisions in the plugin when separating
+its adapter, codec, and executor:
+
+| Responsibility                                                                       | Owner                   |
+| ------------------------------------------------------------------------------------ | ----------------------- |
+| Versioned evidence, questions, answers, validation, and lossless conversion          | Decision data contracts |
+| Consumer identity, model policy, selection, and accepted usage                       | Runtime coordination    |
+| Capacity, deadlines, circuit state, version bridging, and physical settlement        | Provider host           |
+| Selected route, capabilities, agent/profile credentials, and private transport facts | Prepared inference      |
+| Native protocol mappings, provider eligibility, and transport or worker execution    | Provider plugin         |
+
+Register through `api.registerDecisionProvider` and import contracts from
+`openclaw/plugin-sdk/decisions`. The prepared adapter projects the selected
+model, auth, request, and lifetime facts into plugin-local execution. Pure codecs
+encode requests and decode native responses without resolving credentials,
+selecting routes, performing I/O, or recording usage. Consumers continue to use
+`api.runtime.decisions.evaluateV2`; they do not construct provider contexts.
+Preserving V1 admission with `isDecisionBatchV1Representable` does not require
+converting native execution or results through V1.
+
+For HTTP adapters, retain complete prepared request metadata when checking
+responses for reflected credentials. The existing
+`createProviderCredentialMatcher` helper from `openclaw/plugin-sdk/provider-http`
+can account for replacement-auth headers and prefixes, plus configured header
+names. Structural result validation cannot detect leaked credentials. Preserve
+live admission checks after DNS or queue waits, and await response/transport
+release before settling the operation.
 
 ## Decision models (contract version 1)
 

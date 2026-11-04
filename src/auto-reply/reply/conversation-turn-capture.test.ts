@@ -685,6 +685,15 @@ describe("conversation turn capture", () => {
         ctx: inboundReply(setup, operationId),
       }),
     ).resolves.toBe(true);
+    expect(appendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: setup.sessionId, sessionKey: setup.sessionKey }),
+      expect.objectContaining({
+        id: `conversation-turn-reply-${operationId}`,
+        customType: "openclaw.conversation-turn-reply",
+        appendMode: "side",
+      }),
+      expect.any(Function),
+    );
     const reply = await pending.wait();
     expect(reply).toMatchObject({ text: "ordinary reply" });
     expect(reply).not.toHaveProperty("transcriptArtifactId");

@@ -52,7 +52,7 @@ describe("session goals", () => {
     );
     const tooltip = wrapper?.parentElement as (HTMLElement & { content: string }) | null;
     expect(tooltip?.content).toBe(`${label} (12k/50k): Ship the web goal indicator`);
-    expect(container.querySelectorAll("tbody tr")).toHaveLength(2);
+    expect(container.querySelectorAll(".session-data-row, .session-details-row")).toHaveLength(2);
 
     document.body.append(container);
     try {

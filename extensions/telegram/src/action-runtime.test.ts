@@ -21,6 +21,7 @@ import {
   resetTelegramMessageCacheForTest,
 } from "./runtime.test-support.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
+import { getTopicName, resolveTelegramDirectTopicNameCacheScope } from "./topic-name-cache.js";
 
 describe("Telegram registered action authority and input contracts", () => {
   const fixture = useTelegramHttpFixture();
@@ -154,6 +155,34 @@ describe("Telegram registered action authority and input contracts", () => {
     },
   );
 
+  it.each(["123", "-1001"])(
+    "records topic edits in the metadata owner's scope for %s",
+    async (chatId) => {
+      cfg.agents = { ownership: "explicit", entries: { main: {}, ops: {} } };
+      cfg.bindings = [{ agentId: "ops", match: { channel: "telegram", accountId: "alerts" } }];
+      cfg.channels!.telegram!.defaultAccount = "alerts";
+      cfg.channels!.telegram!.accounts = { alerts: { botToken: "654321:topic-edit-fixture" } };
+      cfg.channels!.telegram!.actions = { editForumTopic: true };
+      await invoke("topic-edit", { chatId, threadId: 77, name: "Explicit topic title" });
+      const ownerStore = resolveStorePath(cfg.session?.store, { agentId: "ops" });
+      const scope =
+        chatId === "123"
+          ? resolveTelegramDirectTopicNameCacheScope(ownerStore, "alerts")
+          : ownerStore;
+      expect(await getTopicName(chatId, 77, scope)).toBe("Explicit topic title");
+      expect(
+        await getTopicName(
+          chatId,
+          77,
+          resolveTelegramDirectTopicNameCacheScope(ownerStore, "other"),
+        ),
+      ).toBeUndefined();
+      expect(
+        await getTopicName(chatId, 77, resolveStorePath(cfg.session?.store, { agentId: "main" })),
+      ).toBeUndefined();
+    },
+  );
+
   it("requires host-owned current-message authority for reactions, edits and deletes", async () => {
     const params = {
       chatId: "telegram:-1001:topic:77",
@@ -196,6 +225,19 @@ describe("Telegram registered action authority and input contracts", () => {
       deleted: false,
       warning: expect.stringContaining("message can't be deleted"),
     });
+  });
+
+  it.each([
+    ["after a lost delete response", [{ resetConnection: true } as const]],
+    ["when it is already gone", []],
+  ])("reports a delete as done %s", async (_case, before) => {
+    rejections.push(...before, "Bad Request: message to delete not found");
+    const params = { chatId: "telegram:-1001:topic:77", messageId: 456 };
+    const result = await invoke("delete", params, trusted);
+    expect(result.details).toEqual({ ok: true, deleted: true });
+    expect(requests.map(({ method }) => method)).toEqual(
+      Array.from({ length: before.length + 1 }, () => "deleteMessage"),
+    );
   });
 
   it.each(["77"])(

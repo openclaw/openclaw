@@ -22,8 +22,7 @@ const enLabs = {
     configureFeature: "Configure {name}",
     decisionAssistance: {
       title: "Decision assistance",
-      description:
-        "Enable experimental assistance from your configured Decision model. See the documentation for supported uses, setup, and data handling.",
+      description: "Enable experimental assistance from your configured Decision model.",
       optedIn: "Preference saved.",
       loading: "Loading setting…",
       unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
@@ -65,9 +64,9 @@ const enLabs = {
       description:
         "Try speech bubbles with compact tool activity. Home uses bubbles by default while enabled; each browser keeps its explicit conversation choices. Disabling this lab restores the standard view without clearing those choices.",
     },
-    claws: {
-      title: "Claws",
-      description: "Claws are ready-made agents for specific tasks.",
+    templates: {
+      title: "Templates",
+      description: "Templates are ready-made agents for specific tasks.",
     },
     hostDesktop: {
       title: "Host Desktop",

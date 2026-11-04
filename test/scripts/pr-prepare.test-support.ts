@@ -113,7 +113,7 @@ function createPublisherRepo(tempDirs: PublisherTempDirs) {
   const sameTree = git("commit-tree", `${candidate}^{tree}`, "-p", source, "-m", "foreign");
   const advance = git("commit-tree", `${source}^{tree}`, "-p", source, "-m", "foreign advance");
   git("init", "-q", "--bare", remote);
-  git("remote", "add", "origin", remote);
+  git("remote", "add", "origin", "../remote.git");
   git("push", "-q", "origin", `${candidate}:refs/heads/objects`, `${source}:refs/heads/topic`);
   git("--git-dir", remote, "symbolic-ref", "refs/pull/4242/head", "refs/heads/topic");
   const local = join(repoDir, ".local");
@@ -174,11 +174,10 @@ export function createPublisherRepoFactory(dirs: {
     const repoDir = join(root, "repo");
     const remote = join(root, "remote.git");
     const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
-    // Each case owns complete refs, indexes and object stores, without alternates or hardlinks.
+    // The sibling-relative origin follows the copy; Git state is never shared.
     cpSync(template.repoDir, repoDir, copyOptions);
     cpSync(template.remote, remote, copyOptions);
     const { env, git } = createPublisherGit(repoDir);
-    git("remote", "set-url", "origin", remote);
     return {
       ...template,
       ...artifactFiles(join(repoDir, ".local")),

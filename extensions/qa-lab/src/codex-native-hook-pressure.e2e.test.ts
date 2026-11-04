@@ -9,7 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { closeQaHttpServer, dispatchQaHttpRequest } from "./bus-server.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import {
@@ -627,7 +627,11 @@ export default {
               remainingObservedOrDescendantRelays: { live: 0, zombies: 0 },
             });
           }
-          expect(utilityRequests).toBeGreaterThan(0);
+          // Terminal activity recaps run asynchronously after agent.wait completes.
+          await vi.waitFor(() => expect(utilityRequests, gateway.logs()).toBeGreaterThan(0), {
+            timeout: 5_000,
+            interval: 25,
+          });
         } finally {
           const stopped = await owner.stop();
           await sockets.close();
