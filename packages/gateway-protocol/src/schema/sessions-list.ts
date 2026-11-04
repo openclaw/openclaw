@@ -35,7 +35,12 @@ export const SessionsListParamsSchema = closedObject({
   activeOnly: Type.Optional(Type.Boolean()),
   /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */
   requireLastInteraction: Type.Optional(Type.Boolean()),
-  sortBy: Type.Optional(stringLiteralUnion(["updatedAt", "lastInteractionAt", "activity"])),
+  /** Unread uses the existing shared session read state, then updatedAt without pin priority. */
+  sortBy: Type.Optional(
+    stringLiteralUnion(["updatedAt", "lastInteractionAt", "activity", "unread"]),
+  ),
+  /** Exclude conversations with a future snooze deadline before pagination. */
+  excludeSnoozed: Type.Optional(Type.Boolean()),
   includeGlobal: Type.Optional(Type.Boolean()),
   includeUnknown: Type.Optional(Type.Boolean()),
   /** Exclude subagent sessions before facets and pagination. */

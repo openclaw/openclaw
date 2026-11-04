@@ -3741,13 +3741,12 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   }
 }
 
+/* A narrower centered column than the composer keeps recents secondary to the draft. */
 .agent-chat__recents {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: min(100%, 520px);
-  margin-top: 12px;
-  text-align: left;
+  width: calc(100% - var(--chat-composer-side-inset, 36px));
+  max-width: 560px;
+  margin: 12px auto 0;
+  text-align: start;
 }
 
 .agent-chat__recents-title {
@@ -3756,21 +3755,35 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
-  margin: 0 0 2px 12px;
+  margin: 0 0 6px;
+  padding-inline: 15px;
+}
+
+.agent-chat__recent-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.agent-chat__recent-item {
+  margin: 0;
 }
 
 .agent-chat__recent {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 8px 12px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  width: 100%;
+  padding: 8px 15px;
   border-radius: var(--radius-md);
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 13px;
-  text-align: left;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: start;
   transition: background 0.15s;
 }
 
@@ -3779,30 +3792,56 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: var(--surface-hover);
 }
 
-.agent-chat__recent-name,
-.agent-chat__recent-sub {
+.agent-chat__recent-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
-  white-space: nowrap;
+}
+
+.agent-chat__recent-name,
+.agent-chat__recent-mention {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-chat__recent-name {
+  font-size: 14px;
   font-weight: 500;
+  line-height: 20px;
+  color: var(--text);
 }
 
-.agent-chat__recent-sub {
-  color: var(--muted);
+.agent-chat__recent--unread .agent-chat__recent-name {
+  color: var(--text-strong);
+}
+
+.agent-chat__recent-dot {
+  position: absolute;
+  inset-inline-start: 2px;
+  top: 15px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  visibility: hidden;
+}
+
+.agent-chat__recent--unread .agent-chat__recent-dot {
+  visibility: visible;
+}
+
+.agent-chat__recent-mention {
   font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
 }
 
 .agent-chat__recent-time {
-  /* The timestamp never yields width: the name and subtitle truncate first, so
-     every row keeps a one-line timestamp flush with the right edge. */
-  flex: none;
-  margin-left: auto;
   color: var(--muted);
   font-size: 12px;
+  line-height: 20px;
   font-variant-numeric: tabular-nums;
   text-align: end;
   white-space: nowrap;

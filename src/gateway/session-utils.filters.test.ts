@@ -436,3 +436,45 @@ it("keeps profile selectors, authenticated involvement, and their owner facets d
     }
   }
 });
+
+it.each([true, false])(
+  "ranks shared unread sessions and filters snoozed or empty rows before paging (ordered=%s)",
+  (ordered) => {
+    const store = rows({
+      ...Object.fromEntries(
+        Array.from({ length: 305 }, (_, i) => [
+          "read-" + i,
+          { updatedAt: 1000 - i, lastInteractionAt: 10, lastReadAt: 20 },
+        ]),
+      ),
+      "unread-a": { updatedAt: 30, lastInteractionAt: 10, lastReadAt: 5 },
+      "unread-b": { updatedAt: 30, lastInteractionAt: 10, lastReadAt: 5 },
+      "unread-older": { updatedAt: 20, lastInteractionAt: 10, lastReadAt: 5 },
+      "read-pinned": { updatedAt: 1, lastInteractionAt: 10, lastReadAt: 20, pinnedAt: 2000 },
+      snoozed: {
+        updatedAt: 4000,
+        lastInteractionAt: 10,
+        lastReadAt: 5,
+        snoozedUntil: Number.MAX_SAFE_INTEGER,
+      },
+      archived: { updatedAt: 3000, lastInteractionAt: 10, lastReadAt: 5, archivedAt: 40 },
+      empty: { updatedAt: 2000, markedUnreadAt: 50 },
+    });
+    const projection = projectionFixture({ store });
+    for (const [offset, expected] of [
+      [0, ["unread-a", "unread-b", "unread-older", "read-0", "read-1"]],
+      [5, ["read-2", "read-3", "read-4", "read-5", "read-6"]],
+    ] as const) {
+      const opts = {
+        sortBy: "unread",
+        requireLastInteraction: true,
+        excludeSnoozed: true,
+        limit: 5,
+        offset,
+      } as const;
+      const prepared = prepareSessionRowSelection(projection, opts, { ordered });
+      const selected = selectSessionEntries({ ...prepared, entriesSorted: ordered });
+      expect(selected.entries.map(([key]) => key)).toEqual(expected.map(sessionKey));
+    }
+  },
+);

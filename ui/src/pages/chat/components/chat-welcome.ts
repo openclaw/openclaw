@@ -1,3 +1,4 @@
+import type { MentionInboxItem } from "../../../../../packages/gateway-protocol/src/schema/human-mentions.js";
 import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
 import { hasOperatorWriteAccess } from "../../../app/operator-access.ts";
 import { resolveAgentTextAvatar } from "../../../lib/agents/display.ts";
@@ -10,13 +11,13 @@ import { readCachedAvatarImageUrl } from "../../../lib/identity-avatar-loader.ts
 import {
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
-  resolveSessionWorkSubtitle,
 } from "../../../lib/session-display.ts";
 import { filterVisibleSessionRows } from "../../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../../lib/sessions/session-key.ts";
+import { isSessionSnoozed } from "../../../lib/sessions/session-snooze.ts";
 
 const WELCOME_RECENT_SESSION_LIMIT = 5;
 
@@ -82,8 +83,6 @@ export function resolveAssistantDisplayAvatar(
   };
 }
 
-export type WelcomeRecentSession = ReturnType<typeof prepareWelcomeRecentSessions>[number];
-
 /**
  * Recent user-created chats for the welcome screen: the sidebar's visible-row
  * rules (no archived/cron/subagent/spawned rows, scoped to the active agent)
@@ -94,6 +93,8 @@ export function prepareWelcomeRecentSessions(
   sessions: SessionsListResult | null | undefined,
   sessionKey: string | undefined,
   defaultAgentId: string,
+  mentions: readonly MentionInboxItem[] = [],
+  now = Date.now(),
 ) {
   if (!sessions) {
     return [];
@@ -108,17 +109,38 @@ export function prepareWelcomeRecentSessions(
       .filter(
         (row) =>
           !areUiSessionKeysEquivalent(row.key, sessionKey) &&
+          row.hiddenFromInvolvingMe !== true &&
+          !isSessionSnoozed(row, now) &&
+          (row.lastInteractionAt ?? 0) > 0 &&
           !resolveChannelSessionInfo(row.key, row.channel).channelSession,
       )
-      // Pure recency, unlike the sidebar's pin-aware sort: a "Recent chats"
-      // list capped at five must not let stale pinned rows hide newer chats.
-      .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.key.localeCompare(b.key))
+      // The Gateway ranks the full query before pagination; preserve that same
+      // shared unread/recency order while applying local display exclusions.
+      .toSorted(
+        (a, b) =>
+          Number(b.unread === true) - Number(a.unread === true) ||
+          (b.updatedAt ?? 0) - (a.updatedAt ?? 0) ||
+          (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
+      )
       .slice(0, WELCOME_RECENT_SESSION_LIMIT)
-      .map((row) => ({
-        key: row.key,
-        name: resolveSessionDisplayName(row.key, row),
-        subtitle: resolveSessionWorkSubtitle(row),
-        updatedAt: row.updatedAt,
-      }))
+      .map((row) => {
+        // Only the current recipient's authorized Inbox supplies attribution.
+        // Dismissal/expiry removes this detail, never the session's involvement.
+        const mention = mentions
+          .filter(
+            (item) =>
+              item.agentId === agentId &&
+              item.expiresAt > now &&
+              areUiSessionKeysEquivalent(item.sessionKey, row.key),
+          )
+          .toSorted((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))[0];
+        return {
+          key: row.key,
+          name: resolveSessionDisplayName(row.key, row),
+          unread: row.unread === true,
+          mention,
+          updatedAt: row.updatedAt,
+        };
+      })
   );
 }

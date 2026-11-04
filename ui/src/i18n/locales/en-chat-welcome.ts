@@ -5,7 +5,9 @@ import { en } from "./en.ts";
 const catalog = {
   chat: {
     welcome: {
-      recentSessions: "Recent chats",
+      recentSessions: "Recent sessions",
+      mentionedYou: "mentioned you",
+      unreadSession: "{name} (unread)",
       suggestions: {
         whatCanYouDo: en.chat.welcome.suggestions.whatCanYouDo,
         summarizeRecentSessions: "Summarize my recent sessions",

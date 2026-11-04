@@ -1,17 +1,26 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
-import type { AgentsListResult } from "../../../api/types.ts";
+import { createMemo, For, Show } from "solid-js";
+import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import "../../../components/openclaw-mascot.tsx";
 import { registerChatWelcomeEnglish } from "../../../i18n/locales/en-chat-welcome.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
+import { projectGateway, projectSidebarAttention } from "../../../lib/reactive/application.ts";
+import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
+import { projectSource } from "../../../lib/reactive/projection.ts";
+import {
+  parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+  type UiSessionDefaultsHost,
+} from "../../../lib/sessions/session-key.ts";
+import { welcomeSessionListQuery } from "../../../lib/sessions/session-requests.ts";
 import {
   resolveAssistantDisplayAvatar,
   resolveWelcomeSuggestionKeys,
-  type WelcomeRecentSession,
+  prepareWelcomeRecentSessions,
   type WelcomeSuggestionAuth,
 } from "./chat-welcome.ts";
 
@@ -36,6 +45,10 @@ export type ChatWelcomeIdentityProps = {
 };
 
 export type ChatWelcomeProps = {
+  applicationContext?: Pick<ApplicationContext, "gateway" | "sessions"> &
+    Partial<Pick<ApplicationContext, "sidebarAttention">>;
+  sessionKey?: string;
+  sessions?: SessionsListResult | null;
   /** Existing agent picker, shown in the new-session welcome heading. */
   assistantNameControl?: JSX.Element;
   /** Hint owned by the new-session draft flow. */
@@ -49,10 +62,85 @@ export type ChatWelcomeProps = {
 } & ChatWelcomeIdentityProps;
 
 /** The new-session draft's welcome block. */
-export function ChatWelcome(
-  props: ChatWelcomeProps & { preparedRecents?: readonly WelcomeRecentSession[] },
-) {
+export function ChatWelcome(props: ChatWelcomeProps) {
   const welcomeRef = createBackgroundLayoutRef("welcome");
+  const context = createMemo(() => props.applicationContext);
+  const gateway = createMemo(() => {
+    const owner = context()?.gateway;
+    return owner ? projectGateway(owner) : undefined;
+  });
+  const scope = createMemo(
+    () => {
+      const snapshot = gateway()?.read().snapshot;
+      return {
+        sessionKey: props.sessionKey,
+        agentId:
+          parseAgentSessionKey(props.sessionKey)?.agentId ??
+          resolveUiSelectedGlobalAgentId(props.sessionHost ?? {}),
+        profileId:
+          snapshot?.hello?.policy?.hasMultipleSessionSharingIdentities === true
+            ? snapshot.selfUser?.id
+            : undefined,
+        identityPending: Boolean(snapshot && snapshot.selfUser === undefined),
+      };
+    },
+    {
+      equals: (a, b) =>
+        a.sessionKey === b.sessionKey &&
+        a.agentId === b.agentId &&
+        a.profileId === b.profileId &&
+        a.identityPending === b.identityPending,
+    },
+  );
+  const sessions = createMemo(() => {
+    const owner = context()?.sessions;
+    const selected = scope();
+    if (!owner || selected.identityPending) {
+      return undefined;
+    }
+    const query = welcomeSessionListQuery(selected.agentId, Boolean(selected.profileId));
+    // Membership (including mentions and personal hide/show) is decided by the
+    // Gateway before pagination, independently of the primary All owners roster.
+    return projectSource(
+      { owner, query },
+      {
+        read: (source) => source.owner.listSnapshot(source.query).result,
+        subscribe: (source, notify) => {
+          const stop = source.owner.subscribeList(source.query, notify);
+          void source.owner.refreshList(source.query);
+          return stop;
+        },
+        equality: "revision",
+      },
+    );
+  });
+  const inbox = createMemo(() => {
+    const owner = context()?.sidebarAttention;
+    return owner ? projectSidebarAttention(owner) : undefined;
+  });
+  const mentions = createMemo(
+    () =>
+      (inbox()?.read() ?? [])
+        .filter((entry) => entry.type === "mention")
+        .map((entry) => entry.mention),
+    {
+      equals: (a, b) => a.length === b.length && a.every((item, index) => item === b[index]),
+    },
+  );
+  const excluded = createMemo(() => props.hideSecondaryContent || props.modelSetupRequired);
+  const presented = createMemo(() => !excluded() && !props.fadeSecondaryContent);
+  const recentSessions = createParkedProjection(() => {
+    if (excluded()) {
+      return [];
+    }
+    i18nRevision();
+    return prepareWelcomeRecentSessions(
+      context() ? sessions()?.read() : props.sessions,
+      scope().sessionKey,
+      scope().agentId,
+      mentions(),
+    );
+  }, presented);
   return (
     <Show
       when={!props.modelSetupRequired}
@@ -106,7 +194,7 @@ export function ChatWelcome(
           >
             <div class="agent-chat__welcome-secondary-inner">
               <Show
-                when={props.preparedRecents?.length}
+                when={recentSessions().length}
                 fallback={
                   <div class="agent-chat__suggestions">
                     <For each={resolveWelcomeSuggestionKeys(props.operatorAuth)}>
@@ -128,23 +216,42 @@ export function ChatWelcome(
               >
                 <div class="agent-chat__recents">
                   <div class="agent-chat__recents-title">{t("chat.welcome.recentSessions")}</div>
-                  <For each={props.preparedRecents}>
-                    {(row) => (
-                      <button
-                        type="button"
-                        class="agent-chat__recent"
-                        onClick={() => props.onOpenSession?.(row.key)}
-                      >
-                        <span class="agent-chat__recent-name">{row.name}</span>
-                        <Show when={row.subtitle}>
-                          {(subtitle) => <span class="agent-chat__recent-sub">{subtitle()}</span>}
-                        </Show>
-                        <span class="agent-chat__recent-time">
-                          {formatRelativeTimestamp(row.updatedAt, { fallback: "" })}
-                        </span>
-                      </button>
-                    )}
-                  </For>
+                  <ul class="agent-chat__recent-list">
+                    <For each={recentSessions()} keyed={(row) => row.key}>
+                      {(row) => (
+                        <li class="agent-chat__recent-item">
+                          <button
+                            type="button"
+                            class={[
+                              "agent-chat__recent",
+                              { "agent-chat__recent--unread": row().unread },
+                            ]}
+                            aria-label={
+                              row().unread
+                                ? t("chat.welcome.unreadSession", { name: row().name })
+                                : undefined
+                            }
+                            onClick={() => props.onOpenSession?.(row().key)}
+                          >
+                            <span class="agent-chat__recent-dot" aria-hidden="true" />
+                            <span class="agent-chat__recent-content">
+                              <span class="agent-chat__recent-name">{row().name}</span>
+                              <Show when={row().mention}>
+                                {(mention) => (
+                                  <span class="agent-chat__recent-mention">
+                                    {mention().senderLabel} {t("chat.welcome.mentionedYou")}
+                                  </span>
+                                )}
+                              </Show>
+                            </span>
+                            <span class="agent-chat__recent-time">
+                              {formatRelativeTimestamp(row().updatedAt, { fallback: "" })}
+                            </span>
+                          </button>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
                 </div>
               </Show>
             </div>

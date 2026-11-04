@@ -430,6 +430,9 @@ export function filterSessionEntries(
   for (const pair of candidateEntries) {
     const key = pair[0];
     const entry = pair[1];
+    if (opts.excludeSnoozed === true && (entry.snoozedUntil ?? 0) > now) {
+      continue;
+    }
     if (
       opts.requireLastInteraction === true &&
       (!isFinitePositiveTimestamp(entry.lastInteractionAt) ||

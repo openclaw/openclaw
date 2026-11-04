@@ -42,6 +42,11 @@ export function canApplySessionListSnapshot(
   observedRow?: SessionListRowLookup,
   viewerProfileId?: string,
 ): boolean {
+  // Ranked and clock-filtered windows need Gateway membership, not a locally
+  // reordered bounded page; unread changes can admit an unseen conversation.
+  if (options.sortBy || options.excludeSnoozed || options.requireLastInteraction) {
+    return false;
+  }
   const parsed = parseSessionChangedEvent(payload);
   const countsOnly = options.includeOwnerSessionCounts === true;
   if (
@@ -549,6 +554,9 @@ export function isPrimarySessionListQuery(options: SessionListScope): boolean {
     !query.search &&
     !query.ownerId &&
     query.involvingMe !== true &&
+    query.sortBy === undefined &&
+    query.excludeSnoozed !== true &&
+    query.requireLastInteraction !== true &&
     query.includeOwnerSessionCounts !== true &&
     query.excludeSubagents !== true &&
     query.excludeCron !== true &&

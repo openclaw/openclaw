@@ -105,6 +105,23 @@ or the connection changes.
 Session shortcuts show their own emoji or image, or title initials when no icon
 is set. Only a running ring and unread dot decorate these shortcuts.
 
+### Recent sessions
+
+**Recent sessions** on New Session shows up to five
+conversations for the active agent, with unread sessions first and newest updates
+first within each group. Its unread dot uses the same session read state as the
+sidebar, not a separate per-person read history. Mentions do not affect ordering.
+
+On signed-in multi-user Gateways, eligibility uses your **Involving me** sessions.
+Personal hide/show choices, archive and snooze state, and a recorded real
+interaction are evaluated before pagination. **All owners** remains available in
+the sidebar for discovering other conversations; single-user Gateways do not
+apply the personal involvement filter.
+
+A currently accessible Inbox mention can show its sender below the session title.
+Dismissing or expiring that Inbox item removes the attribution, not the session
+from your personal list.
+
 ### Session owner filter
 
 Each view has one header row. In Sessions, the title is the owner-filter chip:

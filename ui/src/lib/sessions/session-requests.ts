@@ -45,6 +45,26 @@ export const SESSION_SEARCH_SCOPE = {
   excludeDock: true,
 } as const satisfies SessionListOptions;
 
+/** Welcome uses Gateway ranking and eligibility before the bounded display window. */
+export function welcomeSessionListQuery(agentId: string, personal: boolean) {
+  return {
+    ...DEFAULT_SESSION_LIST_QUERY,
+    rowMode: "sidebar",
+    agentId,
+    involvingMe: personal || undefined,
+    sortBy: "unread",
+    requireLastInteraction: true,
+    excludeSnoozed: true,
+    excludeSubagents: true,
+    excludeCron: true,
+    excludeSystem: true,
+    includeGlobal: false,
+    includeUnknown: false,
+    includeDerivedTitles: true,
+    includeLastMessage: false,
+  } as const satisfies SessionListOptions;
+}
+
 export function dashboardSessionListQuery(agentId?: string | null): SessionListOptions {
   const normalizedAgentId = agentId?.trim();
   return {
@@ -105,6 +125,8 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
     "includeDerivedTitles",
     "includeLastMessage",
     "includeOwnerSessionCounts",
+    "requireLastInteraction",
+    "excludeSnoozed",
     "ownerFirst",
     "involvingMe",
   ] as const) {
@@ -131,6 +153,9 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
     if (value) {
       params[key] = value;
     }
+  }
+  if (options.sortBy) {
+    params.sortBy = options.sortBy;
   }
   if (options.boardFace) {
     params.boardFace = options.boardFace;

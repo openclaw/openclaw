@@ -580,7 +580,7 @@ export function prepareProjectedSessionPresentation(
       select: (retained?: WeakMap<object, SessionListFilteredEntries>) => SessionEntrySelection,
     ) {
       // Membership, clocks, and transient runs are not owned by metadata partitions.
-      const live = opts.activeOnly || opts.activityPulseBoundaries;
+      const live = opts.activeOnly || opts.activityPulseBoundaries || opts.excludeSnoozed;
       if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
         return select();
       }

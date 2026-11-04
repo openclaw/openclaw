@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as pinPolicy from "../config/sessions/session-pin-policy.js";
 import {
   compareSessionEntryPairs,
+  mergeSessionEntryPages,
   sortAndLimitSessionEntries,
   type SessionEntryPair,
 } from "./session-list-order.js";
@@ -15,6 +16,7 @@ function entries(): SessionEntryPair[] {
       sessionId: `session-${i}`,
       updatedAt: (i * 37) % 23,
       createdAt: i % 11,
+      markedUnreadAt: i % 3 === 0 ? 1 : undefined,
       lastActivityAt: i % 3 === 0 ? i % 17 : undefined,
       lastInteractionAt: i % 5 === 0 ? i % 19 : undefined,
       pinnedAt: i % 7 === 0 ? i % 13 : undefined,
@@ -26,7 +28,7 @@ function entries(): SessionEntryPair[] {
 }
 
 describe("sortAndLimitSessionEntries", () => {
-  it.each([undefined, "updatedAt", "lastInteractionAt", "activity"] as const)(
+  it.each([undefined, "updatedAt", "lastInteractionAt", "activity", "unread"] as const)(
     "preserves the existing comparator's ordering for %s",
     (sortBy) => {
       const random = entries();
@@ -97,6 +99,7 @@ describe("sortAndLimitSessionEntries", () => {
             sessionId: `random-${trial}-${index}`,
             updatedAt: clock() ?? 0,
             createdAt: clock(),
+            markedUnreadAt: random() % 3 === 0 ? 1 : undefined,
             lastActivityAt: clock(),
             lastInteractionAt: clock(),
             pinnedAt: clock(),
@@ -107,7 +110,7 @@ describe("sortAndLimitSessionEntries", () => {
           },
         ];
       });
-      for (const sortBy of ["updatedAt", "activity", "lastInteractionAt"] as const) {
+      for (const sortBy of ["updatedAt", "activity", "lastInteractionAt", "unread"] as const) {
         const expected = input.toSorted((a, b) => compareSessionEntryPairs(a, b, sortBy));
         for (const limit of [1, 200, 201, undefined]) {
           expect(sortAndLimitSessionEntries(input, limit, sortBy)).toEqual(
@@ -117,4 +120,23 @@ describe("sortAndLimitSessionEntries", () => {
       }
     }
   });
+});
+
+it("ranks unread first without pin priority across partition pages", () => {
+  const input: SessionEntryPair[] = [
+    ["read-new", { sessionId: "read-new", updatedAt: 100 }],
+    ["unread-old", { sessionId: "unread-old", updatedAt: 1, markedUnreadAt: 1 }],
+    ["pinned-read", { sessionId: "pinned-read", updatedAt: 50, pinnedAt: 200 }],
+    ["unread-new", { sessionId: "unread-new", updatedAt: 10, markedUnreadAt: 1 }],
+  ];
+  const expected = ["unread-new", "unread-old", "read-new", "pinned-read"];
+  expect(sortAndLimitSessionEntries(input, undefined, "unread").map(([key]) => key)).toEqual(
+    expected,
+  );
+  const pages = [input.slice(0, 2), input.slice(2)].map((page) =>
+    sortAndLimitSessionEntries(page, undefined, "unread"),
+  );
+  expect(mergeSessionEntryPages(pages, 3, "unread").map(([key]) => key)).toEqual(
+    expected.slice(0, 3),
+  );
 });

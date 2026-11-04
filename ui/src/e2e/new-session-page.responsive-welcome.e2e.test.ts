@@ -20,6 +20,7 @@ const recent = (id: string, label: string, updatedAt: number) => ({
   kind: "direct",
   label,
   updatedAt,
+  lastInteractionAt: updatedAt,
 });
 const sessionList = (sessions: ReturnType<typeof recent>[], ts = Date.now()) => ({
   count: sessions.length,
