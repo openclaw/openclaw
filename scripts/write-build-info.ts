@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { OPENCLAW_BUILD_CAPABILITIES } from "../src/build-capabilities.ts";
+import { DECLARED_BUILD_CAPABILITIES } from "../src/build-capabilities.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
@@ -128,7 +128,7 @@ export function resolveBuildInfo(options: ResolveBuildInfoOptions = {}): BuildIn
     commit,
     builtAt,
     buildId,
-    capabilities: [...OPENCLAW_BUILD_CAPABILITIES],
+    capabilities: [...DECLARED_BUILD_CAPABILITIES],
   };
 }
 

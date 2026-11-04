@@ -101,10 +101,11 @@ async function run(command: "fence-status" | "interrupt-fenced") {
   return { exitCode, output: JSON.parse(String(world.runtime.log.mock.lastCall?.[0])) };
 }
 
-/** A wake claimed and fenced by the real writers, whose Gateway then died before delivery. */
-async function fencedWake(sessionKey: string): Promise<{ recordId: string; runId: string }> {
+/** A due continue_work wake, queued as the election leaves it. */
+async function dueWake(sessionKey: string): Promise<string> {
   const recordId = newContinuationRecordId();
   const now = Date.now();
+  const state = { sessionKey, hop: 1, delayMs: 0, electedAt: now, dueAt: now, maxChainLength: 10 };
   await createContinuationRecord({
     recordId,
     kind: "work",
@@ -112,18 +113,14 @@ async function fencedWake(sessionKey: string): Promise<{ recordId: string; runId
     status: "queued",
     createdAt: now,
     dueAt: now,
-    stateJson: JSON.stringify(
-      encodeWorkState({
-        sessionKey,
-        hop: 1,
-        delayMs: 0,
-        electedAt: now,
-        dueAt: now,
-        maxChainLength: 10,
-        reason: "send the weekly report",
-      }),
-    ),
+    stateJson: JSON.stringify(encodeWorkState(state)),
   });
+  return recordId;
+}
+
+/** A wake claimed and fenced by the real writers, whose Gateway then died before delivery. */
+async function fencedWake(sessionKey: string): Promise<{ recordId: string; runId: string }> {
+  const recordId = await dueWake(sessionKey);
   const [claimed] = await consumePendingWork(sessionKey);
   const runId = `run-${recordId}`;
   expect(await markPendingWorkTurnStarted(claimed!, runId)).toMatchObject({ allowed: true });
@@ -136,7 +133,9 @@ const readRecord = async (recordId: string) =>
 async function interruptedNoticeRows() {
   return (
     await loadPendingSessionDeliveries(captureOpenClawStateWorkerContext({ env: process.env }))
-  ).filter((entry) => entry.kind === "systemEvent" && entry.text.startsWith(NOTICE_TAG));
+  ).flatMap((entry) =>
+    entry.kind === "systemEvent" && entry.text.startsWith(NOTICE_TAG) ? [entry] : [],
+  );
 }
 
 /** The stopped store: the state database and whichever of its sidecars exist, byte for byte. */
@@ -156,25 +155,7 @@ describe("openclaw continuations", () => {
     const a = await fencedWake("agent:main:fence-a");
     const b = await fencedWake("agent:main:fence-b");
     // A due, unfenced wake: recovery would claim and drive it. The drain must leave it alone.
-    const unfenced = newContinuationRecordId();
-    await createContinuationRecord({
-      recordId: unfenced,
-      kind: "work",
-      ownerSessionKey: "agent:main:fence-c",
-      status: "queued",
-      createdAt: Date.now(),
-      dueAt: Date.now(),
-      stateJson: JSON.stringify(
-        encodeWorkState({
-          sessionKey: "agent:main:fence-c",
-          hop: 1,
-          delayMs: 0,
-          electedAt: Date.now(),
-          dueAt: Date.now(),
-          maxChainLength: 10,
-        }),
-      ),
-    });
+    const unfenced = await dueWake("agent:main:fence-c");
     const unfencedBefore = await readRecord(unfenced);
     // The Gateway is stopped: no process holds the store open.
     resetContinuationCustodyProjection();
@@ -214,7 +195,7 @@ describe("openclaw continuations", () => {
         noticeDeliveryId: rows[0]?.id,
         noticeDeliveryStatus: "pending",
       });
-      expect(rows[0]?.kind === "systemEvent" && rows[0].text).toContain(`run-${recordId}`);
+      expect(rows[0]?.text).toContain(`run-${recordId}`);
     }
     // Never a turn, never a claim: the unfenced wake is exactly as it was.
     expect(world.turns).toBe(0);
@@ -343,9 +324,7 @@ describe("openclaw continuations", () => {
     const row = (await interruptedNoticeRows()).find((entry) =>
       entry.text.includes(drained.recordId),
     );
-    expect(row?.kind === "systemEvent" && row.text).toContain(
-      `started its turn as run ${drained.runId}`,
-    );
+    expect(row?.text).toContain(`started its turn as run ${drained.runId}`);
     expect(after).toMatchObject({ status: "failed", failureReason: INTERRUPTED });
     expect(receipt.output).toMatchObject({
       interrupted: 1,
