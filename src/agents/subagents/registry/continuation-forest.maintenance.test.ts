@@ -194,6 +194,9 @@ describe("the burning annex: store maintenance past the cap", () => {
 
     await turns.release();
     await forest.advanceTo(NIGHTFALL_MS);
+    expect
+      .soft(forest.logLines.filter(({ message }) => message.includes(":return-refused]")))
+      .toEqual([]);
     await forest.expectForestHolds();
     await maintain(forest, { maxEntries: 2 });
     expect(rooms(forest)).not.toContain(relay.sessionKey);
