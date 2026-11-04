@@ -166,6 +166,23 @@ their paths, `ambientOwnerId`, and a `note` when another ambient owner is retain
 
 Options: `--agent <id>`, `--json`.
 
+## Effective tool diagnostics
+
+Explain why each tool is allowed, excluded, or unavailable for one session, with the profile, deny, allowlist, session, or runtime rule behind every decision.
+
+```bash
+openclaw agents tools "agent:main:main"
+openclaw agents tools "agent:work:main" --agent work --json
+```
+
+| Flag                                             | Description                     |
+| ------------------------------------------------ | ------------------------------- |
+| `--agent <id>`                                   | Agent id that owns the session. |
+| `--json`                                         | Raw `tools.effective` response. |
+| `--url` / `--token` / `--password` / `--timeout` | Gateway transport options.      |
+
+Backed by the `tools.effective` Gateway RPC. Requires a running Gateway and an existing session key.
+
 ### `agents bind`
 
 Options: `--agent <id>` (defaults to the current default agent), `--bind <channel[:accountId]>` (repeatable), `--json`.

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   bindings: vi.fn(),
   bind: vi.fn(),
   delete: vi.fn(),
+  tools: vi.fn(),
   list: vi.fn(),
   exit: vi.fn(),
   verbose: vi.fn(),
@@ -34,6 +35,9 @@ vi.mock("../../commands/agents.commands.bind.js", async (importOriginal) => ({
 
 // mock-isolation: CLI parsing must not delete persisted agents.
 vi.mock("../../commands/agents.commands.delete.js", () => ({ agentsDeleteCommand: mocks.delete }));
+
+// mock-isolation: Tool diagnostics must not read live tool sets.
+vi.mock("../../commands/agents-tools.js", () => ({ agentsToolsCommand: mocks.tools }));
 
 // mock-isolation: Agent enumeration is a controlled command collaborator.
 vi.mock("../../commands/agents.commands.list.js", () => ({ agentsListCommand: mocks.list }));
@@ -146,6 +150,11 @@ describe("agent command registration", () => {
       "unbind",
     ],
     ["delete worker-a --force --json", mocks.delete, { id: "worker-a", force: true }],
+    [
+      "tools agent:work:main --agent work --json",
+      mocks.tools,
+      { sessionKey: "agent:work:main", agent: "work", json: true },
+    ],
   ] as const)(
     "dispatches agents %s",
     async (args, command, options, operation?: "bind" | "unbind") => {
