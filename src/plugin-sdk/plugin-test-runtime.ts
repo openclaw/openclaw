@@ -267,6 +267,7 @@ export {
 export { addTestHook } from "../plugins/hooks.test-helpers.js";
 export { createPluginRecord } from "../plugins/status.test-helpers.js";
 export { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+export { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 export { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 export { useProviderCatalogMetadata } from "./test-helpers/provider-catalog.js";
 export { useProviderToolSchemaRuntimeForTest } from "./test-helpers/provider-tool-schemas.test-support.js";
@@ -372,3 +373,31 @@ export {
 } from "./test-helpers/plugin-runtime-mock.js";
 
 export { createHookRunner } from "../plugins/hooks.js";
+
+/** Real registered consumer ownership for adapter stream/lifecycle integration tests. */
+export async function createTestPluginRuntimeOwner(pluginId: string) {
+  const [{ createRuntimeTestRegistry }, { createOwnershipRecord }, lifecycle, instances, runtime] =
+    await Promise.all([
+      import("../plugins/registry-runtime.test-helpers.js"),
+      import("../plugins/registry-ownership.test-support.js"),
+      import("../plugins/registry-lifecycle.js"),
+      import("../plugins/plugin-instance-scope.js"),
+      import("../plugins/runtime/index.js"),
+    ]);
+  const builder = createRuntimeTestRegistry(runtime.createPluginRuntime());
+  const record = createOwnershipRecord(pluginId);
+  const api = builder.createApi(record, { config: {} });
+  const instance = instances.getPluginInstance(record);
+  if (!instance) {
+    throw new Error("Registered consumer has no plugin instance");
+  }
+  lifecycle.markPluginRegistryActive(builder.registry);
+  return {
+    runtime: api.runtime,
+    revoke: () => lifecycle.revokePluginRecord(builder.registry, record),
+    async dispose() {
+      await instance.dispose();
+      lifecycle.markPluginRegistryRetired(builder.registry);
+    },
+  };
+}

@@ -2,6 +2,7 @@
 export { measureTranscriptDeltaBytes } from "../realtime-transcription/transcript-bytes.js";
 export type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 export type {
+  RealtimeTranscriptionAudioFormat,
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
   RealtimeTranscriptionProviderId,
@@ -15,3 +16,7 @@ export {
   type RealtimeTranscriptionWebSocketSessionOptions,
   type RealtimeTranscriptionWebSocketTransport,
 } from "../realtime-transcription/websocket-session.js";
+export {
+  createFiniteRealtimeTranscriptionSession,
+  type FiniteRealtimeTranscriptionSessionOptions,
+} from "../realtime-transcription/finite-session.js";

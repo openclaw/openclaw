@@ -1,7 +1,11 @@
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createFiniteRealtimeTranscriptionSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
+  RealtimeTranscriptionSession,
+  RealtimeTranscriptionSessionCreateRequest,
+  RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
@@ -96,6 +100,138 @@ function readErrorDetail(event: ElevenLabsRealtimeTranscriptionEvent): string {
   );
 }
 
+function toElevenLabsRealtimeWsUrl(config: ReturnType<typeof normalizeProviderConfig>): string {
+  const url = new URL(
+    `${normalizeElevenLabsRealtimeBaseUrl(config.baseUrl)}/v1/speech-to-text/realtime`,
+  );
+  url.searchParams.set("model_id", config.modelId ?? ELEVENLABS_REALTIME_DEFAULT_MODEL);
+  url.searchParams.set(
+    "audio_format",
+    config.audioFormat ?? ELEVENLABS_REALTIME_DEFAULT_AUDIO_FORMAT,
+  );
+  url.searchParams.set(
+    "commit_strategy",
+    config.commitStrategy ?? ELEVENLABS_REALTIME_DEFAULT_COMMIT_STRATEGY,
+  );
+  url.searchParams.set("include_timestamps", "false");
+  url.searchParams.set("include_language_detection", "false");
+  if (config.languageCode) {
+    url.searchParams.set("language_code", config.languageCode);
+  }
+  if (config.vadSilenceThresholdSecs != null) {
+    url.searchParams.set("vad_silence_threshold_secs", String(config.vadSilenceThresholdSecs));
+  }
+  if (config.vadThreshold != null) {
+    url.searchParams.set("vad_threshold", String(config.vadThreshold));
+  }
+  if (config.minSpeechDurationMs != null) {
+    url.searchParams.set("min_speech_duration_ms", String(config.minSpeechDurationMs));
+  }
+  if (config.minSilenceDurationMs != null) {
+    url.searchParams.set("min_silence_duration_ms", String(config.minSilenceDurationMs));
+  }
+  return url.toString();
+}
+
+function createElevenLabsUtteranceSession(
+  req: RealtimeTranscriptionSessionCreateRequest,
+  config: ReturnType<typeof normalizeProviderConfig>,
+  apiKey: string,
+  createWebSocketSession: PluginCapabilityCatalogContext["createRealtimeTranscriptionWebSocketSession"],
+): RealtimeTranscriptionSession {
+  const utterance = req.utterance;
+  if (
+    !utterance ||
+    utterance.format.encoding !== "pcm_s16le" ||
+    utterance.format.sampleRate !== 16000 ||
+    utterance.format.channels !== 1
+  ) {
+    throw new Error("ElevenLabs finite transcription requires mono PCM16 at 16000 Hz");
+  }
+  if (config.modelId && config.modelId !== ELEVENLABS_REALTIME_DEFAULT_MODEL) {
+    throw new Error(`ElevenLabs finite transcription does not support model ${config.modelId}`);
+  }
+  const finiteConfig = {
+    ...config,
+    audioFormat: "pcm_16000",
+    sampleRate: 16000,
+    commitStrategy: "manual" as const,
+  };
+  return createFiniteRealtimeTranscriptionSession({
+    callbacks: req,
+    signal: utterance.signal,
+    // Serialize acknowledgments well below Scribe's ~36-second automatic commit.
+    // Each acknowledged segment covers its complete byte interval, even on long input.
+    segmentBytes: 16000 * 2 * 8,
+    frameBytes: 16000 * 2,
+    alignmentBytes: 2,
+    createSession: (callbacks) => {
+      let transport: RealtimeTranscriptionWebSocketTransport | undefined;
+      let started = false;
+      const session = createWebSocketSession<ElevenLabsRealtimeTranscriptionEvent>({
+        providerId: "elevenlabs",
+        callbacks,
+        lifecycle: "utterance",
+        url: () => toElevenLabsRealtimeWsUrl(finiteConfig),
+        headers: { "xi-api-key": apiKey },
+        sendAudio: (audio, currentTransport) => {
+          if (
+            !currentTransport.sendJson({
+              message_type: "input_audio_chunk",
+              audio_base_64: audio.toString("base64"),
+              sample_rate: 16000,
+              commit: false,
+            })
+          ) {
+            throw new Error("ElevenLabs finite transcription could not send audio");
+          }
+        },
+        onMessage: (event, currentTransport) => {
+          if (event.message_type === "session_started") {
+            transport = currentTransport;
+            started = true;
+            currentTransport.markReady();
+            return;
+          }
+          if (typeof event.error === "string" || event.message_type?.includes("error")) {
+            const error = new Error(readErrorDetail(event));
+            if (!started) {
+              currentTransport.failConnect(error);
+            } else {
+              callbacks.onError?.(error);
+            }
+            return;
+          }
+          if (event.message_type === "partial_transcript" && typeof event.text === "string") {
+            callbacks.onPartial?.(event.text);
+          } else if (event.message_type === "committed_transcript") {
+            if (typeof event.text !== "string") {
+              callbacks.onError?.(new Error("ElevenLabs committed transcript is missing text"));
+              return;
+            }
+            callbacks.onTranscript?.(event.text);
+          }
+        },
+      });
+      return {
+        session,
+        commit: () => {
+          if (
+            !transport?.sendJson({
+              message_type: "input_audio_chunk",
+              audio_base_64: "",
+              sample_rate: 16000,
+              commit: true,
+            })
+          ) {
+            throw new Error("ElevenLabs finite transcription could not commit input");
+          }
+        },
+      };
+    },
+  });
+}
+
 function resolveElevenLabsRealtimeApiKey(
   config: ReturnType<typeof normalizeProviderConfig>,
 ): string | null | undefined {
@@ -121,6 +257,10 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
     aliases: ["elevenlabs-realtime", "scribe-v2-realtime"],
     defaultModel: ELEVENLABS_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 40,
+    utterance: {
+      formats: [{ encoding: "pcm_s16le", sampleRate: 16000, channels: 1 }],
+      models: [ELEVENLABS_REALTIME_DEFAULT_MODEL],
+    },
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured,
@@ -131,7 +271,14 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }
-      const baseUrl = normalizeElevenLabsRealtimeBaseUrl(config.baseUrl);
+      if (req.utterance) {
+        return createElevenLabsUtteranceSession(
+          req,
+          config,
+          apiKey,
+          createRealtimeTranscriptionWebSocketSession,
+        );
+      }
       const sampleRate = config.sampleRate ?? ELEVENLABS_REALTIME_DEFAULT_SAMPLE_RATE;
       const commitStrategy = config.commitStrategy ?? ELEVENLABS_REALTIME_DEFAULT_COMMIT_STRATEGY;
       let pendingTimestampEcho: string | undefined;
@@ -139,36 +286,7 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
       return createRealtimeTranscriptionWebSocketSession<ElevenLabsRealtimeTranscriptionEvent>({
         providerId: "elevenlabs",
         callbacks: req,
-        url: () => {
-          const url = new URL(`${baseUrl}/v1/speech-to-text/realtime`);
-          url.searchParams.set("model_id", config.modelId ?? ELEVENLABS_REALTIME_DEFAULT_MODEL);
-          url.searchParams.set(
-            "audio_format",
-            config.audioFormat ?? ELEVENLABS_REALTIME_DEFAULT_AUDIO_FORMAT,
-          );
-          url.searchParams.set("commit_strategy", commitStrategy);
-          url.searchParams.set("include_timestamps", "false");
-          url.searchParams.set("include_language_detection", "false");
-          if (config.languageCode) {
-            url.searchParams.set("language_code", config.languageCode);
-          }
-          if (config.vadSilenceThresholdSecs != null) {
-            url.searchParams.set(
-              "vad_silence_threshold_secs",
-              String(config.vadSilenceThresholdSecs),
-            );
-          }
-          if (config.vadThreshold != null) {
-            url.searchParams.set("vad_threshold", String(config.vadThreshold));
-          }
-          if (config.minSpeechDurationMs != null) {
-            url.searchParams.set("min_speech_duration_ms", String(config.minSpeechDurationMs));
-          }
-          if (config.minSilenceDurationMs != null) {
-            url.searchParams.set("min_silence_duration_ms", String(config.minSilenceDurationMs));
-          }
-          return url.toString();
-        },
+        url: () => toElevenLabsRealtimeWsUrl(config),
         headers: { "xi-api-key": apiKey },
         connectTimeoutMessage: "ElevenLabs realtime transcription connection timeout",
         reconnectLimitMessage: "ElevenLabs realtime transcription reconnect limit reached",

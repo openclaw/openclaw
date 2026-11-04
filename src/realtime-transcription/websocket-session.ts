@@ -4,6 +4,7 @@ import type WebSocket from "ws";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { createNodeProxyAgent } from "../infra/net/node-proxy-agent.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { captureWsEventAsync } from "../proxy-capture/runtime.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
@@ -44,6 +45,8 @@ export type RealtimeTranscriptionWebSocketSessionOptions<Event = unknown> = {
     | (() => Record<string, string> | Promise<Record<string, string>>);
   maxQueuedBytes?: number;
   maxReconnectAttempts?: number;
+  /** Finite audio must never be silently dropped or resumed on a new provider session. */
+  lifecycle?: "continuous" | "utterance";
   onClose?: (transport: RealtimeTranscriptionWebSocketTransport) => void;
   onMessage?: (event: Event, transport: RealtimeTranscriptionWebSocketTransport) => void;
   onOpen?: (transport: RealtimeTranscriptionWebSocketTransport) => void;
@@ -95,6 +98,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   private readonly flowId = randomUUID();
   private readonly options: RealtimeTranscriptionWebSocketSessionOptions<Event>;
   private transport: RealtimeTranscriptionWebSocketTransport | undefined;
+  private readonly owner = getPluginRuntimeGatewayRequestScope()?.transcriptionOwner;
   private cancelConnecting: (() => void) | undefined;
 
   constructor(options: RealtimeTranscriptionWebSocketSessionOptions<Event>) {
@@ -110,7 +114,13 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     );
   }
 
+  private assertOwnerCurrent(): void {
+    this.owner?.signal?.throwIfAborted();
+    this.owner?.assertCurrent();
+  }
+
   async connect(): Promise<void> {
+    this.assertOwnerCurrent();
     const previousSocket = this.ws;
     this.connectionGeneration += 1;
     this.cancelConnecting?.();
@@ -147,6 +157,10 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.clearQueuedAudio();
     const socket = this.ws;
     const transport = this.transport;
+    if (this.options.lifecycle === "utterance") {
+      this.forceClose(socket);
+      return;
+    }
     if (!socket || socket.readyState !== WEBSOCKET_OPEN || !transport) {
       this.forceClose(socket);
       return;
@@ -272,6 +286,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           handleBackpressure();
           return false;
         }
+        this.assertOwnerCurrent();
         this.capture({ direction: "outbound", kind: "ws-frame", payload });
         socket.send(payload);
         return true;
@@ -329,6 +344,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           }
 
           this.currentUrl = connection.url;
+          this.assertOwnerCurrent();
           socket = new NpmWebSocket(this.currentUrl, {
             headers: connection.headers,
             maxPayload: REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES,
@@ -421,6 +437,17 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
             );
             return;
           }
+          if (this.options.lifecycle === "utterance") {
+            this.closed = true;
+            this.clearQueuedAudio();
+            this.forceClose(socket);
+            this.emitError(
+              new Error(
+                `${this.options.providerId} transcription connection lost before completion`,
+              ),
+            );
+            return;
+          }
           void this.attemptReconnect(generation);
         });
       })();
@@ -473,6 +500,17 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 
   private queueAudio(audio: Buffer): void {
+    if (
+      this.options.lifecycle === "utterance" &&
+      this.queuedBytes + audio.byteLength >
+        (this.options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES)
+    ) {
+      this.close();
+      this.emitError(
+        new Error(`${this.options.providerId} transcription audio queue exceeded its byte limit`),
+      );
+      return;
+    }
     const queued = copyOwnedBuffer(audio);
     this.queuedAudio.push(queued);
     this.queuedBytes += queued.byteLength;
