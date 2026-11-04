@@ -73,7 +73,6 @@ import {
 import { createComposerPlaceholder } from "./composer-placeholder.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import type { NewSessionComposerTextarea } from "./composer-textarea.ts";
-import type { NewSessionVisibility } from "./create-params.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { NewSessionModelControlView } from "./model-control-view.tsx";
 import type { NewSessionModelControl } from "./model-control.ts";
@@ -110,14 +109,11 @@ export type NewSessionComposerOptions = {
   onComposerWidthChange?: (value: string | undefined) => void;
   voiceControl?: JSX.Element;
   messageLocked?: boolean;
-  visibility?: NewSessionVisibility;
-  draftAvailable?: boolean;
   capabilityMenu?: ChatComposerCapabilityMenuSource;
   toolOverrides?: SessionToolOverrides | null;
   onInput: (message: string, mentions?: readonly HumanMention[]) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
-  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
   onBackgroundSubmit?: () => void;
 };

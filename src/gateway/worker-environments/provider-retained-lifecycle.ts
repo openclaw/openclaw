@@ -23,6 +23,7 @@ export function createWorkerRetainedLifecycle(
     providerFor: (id: string) => WorkerProvider;
     requireCurrentOwner: (record: WorkerEnvironmentRecord) => WorkerEnvironmentRecord;
     refreshRuntime: ReturnType<typeof createWorkerRuntimeRefresher>["refresh"];
+    resumeNode: ReturnType<typeof createWorkerRuntimeRefresher>["resumeNodeInOperation"];
   },
 ) {
   const now = options.now ?? Date.now;
@@ -288,6 +289,11 @@ export function createWorkerRetainedLifecycle(
         // Restart must not mistake a partial runtime refresh for usable readiness.
         await setRuntimeAdmission(resumed, request.assertCurrent, signal, false);
         const reconnectSignal = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
+        await options.resumeNode(resumed.environmentId, {
+          signal: reconnectSignal,
+          assertCurrent: assertRunning,
+        });
+        assertRunning();
         await options.waitForRetainedNode(resumed.nodeDeviceId!, {
           signal: reconnectSignal,
           assertCurrent: assertRunning,

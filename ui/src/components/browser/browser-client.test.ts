@@ -194,7 +194,7 @@ describe("downloadBrowserDocument", () => {
           "https://assets.example.test/report",
           new AbortController().signal,
         ),
-      ).rejects.toThrow("No file returned.");
+      ).rejects.toThrow("Couldn’t download this file. No file was returned. Try again.");
     },
   );
 });

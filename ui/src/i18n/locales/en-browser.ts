@@ -48,7 +48,8 @@ const enBrowser = {
       downloadFailed:
         "Couldn’t download this file. Try again, or open it in your browser to save it.\n{error}",
       downloadEmpty: "Couldn’t download this file. No file was returned. Try again.",
-      screenshotPathMissing: "Couldn’t capture the page. No screenshot path was returned. Try again.",
+      screenshotPathMissing:
+        "Couldn’t capture the page. No screenshot path was returned. Try again.",
       screenshotFetchTimedOut: "Couldn’t load the screenshot in time. Try again.",
       screenshotFetchFailed: "Couldn’t load the screenshot ({status}). Try again.",
       screenshotReadFailed: "Couldn’t read the screenshot. Try again.",

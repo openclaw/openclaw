@@ -562,7 +562,6 @@ export class PaletteSessionDraft {
       }
     };
     showToast({
-      fifo: true,
       message: `${resolveSessionDisplayName(result.key, row)}: ${status}`,
       actionLabel: t("sessionsView.openSession"),
       onAction: openSession,

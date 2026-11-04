@@ -521,7 +521,7 @@ suite.define(() => {
         .toBe("page");
       await settingsSearch.fill("sandbox access");
       const toolsResult = settingsSidebar.getByRole("link", {
-        name: "Tools Agent Defaults",
+        name: "Tools Agent defaults",
         exact: true,
       });
       await expect.poll(() => toolsResult.isVisible()).toBe(true);
