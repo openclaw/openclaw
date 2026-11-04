@@ -119,7 +119,7 @@ it("keeps successful responses and existing two-argument SDK calls usable", asyn
 
 it("honors the reader TTL while preserving the shipped one-argument reader", async () => {
   const cache = await import("./web-search-provider-common.js");
-  const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+  const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
   const key = "query:reader-ttl";
   cache.writeCachedSearchPayload(key, { text: "original" }, 900_000);
   expect(cache.readCachedSearchPayload(key, 0)).toBeUndefined();

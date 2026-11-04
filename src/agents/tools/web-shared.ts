@@ -6,6 +6,7 @@ import {
   resolveIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 export type CacheEntry<T> = {
   value: T;
   expiresAt: number;
@@ -44,7 +45,7 @@ export function readCache<T>(
   if (!entry || ttlMs <= 0) {
     return null;
   }
-  const now = Date.now();
+  const now = monotonicNow();
   if (now >= entry.expiresAt) {
     cache.delete(key);
     return null;
@@ -62,7 +63,7 @@ export function writeCache<T>(
   if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
     return;
   }
-  const now = Date.now();
+  const now = monotonicNow();
   pruneMapToMaxSize(cache, DEFAULT_CACHE_MAX_ENTRIES - 1);
   cache.set(key, {
     value,
