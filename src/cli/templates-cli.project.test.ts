@@ -40,20 +40,6 @@ const devPlan = (index: number) => (payloads()[index] as { plan: TemplateAddPlan
 describe("Template project CLI", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it.each([
-    { option: "name", code: "invalid_package_name" },
-    { option: "agentId", code: "invalid_agent_id" },
-  ])("rejects an explicitly empty $option before creating a project", async ({ option, code }) => {
-    const root = join(tempDirs.make("openclaw-template-empty-identity-"), "project");
-    await expect(runTemplatesCreateCommand(root, { [option]: "", json: true })).rejects.toThrow(
-      "__exit__:1",
-    );
-    expect(payloads()).toMatchObject([
-      { schemaVersion: "openclaw.templateProject.v1", ok: false, error: { code } },
-    ]);
-    expect(existsSync(root)).toBe(false);
-  });
-
   it("previews a Template with ordinary sessions_spawn authority", async () => {
     await runTemplatesDevCommand("src/templates/fixtures/delegating-agent", {
       workspace: join(tempDirs.make("openclaw-template-delegation-preview-"), "workspace"),
@@ -97,18 +83,17 @@ describe("Template project CLI", () => {
     expect(first.template.packageRoot).toMatch(/^template-artifact:sha256:/u);
   });
 
-  it("uses command-specific schemas for build and dev failures", async () => {
-    const missing = join(tempDirs.make("openclaw-template-errors-"), "missing");
-    await expect(
-      runTemplatesBuildCommand(missing, {
-        out: join(tempDirs.make("openclaw-template-error-output-"), "missing.tgz"),
-        json: true,
-      }),
-    ).rejects.toThrow("__exit__:1");
-    await expect(runTemplatesDevCommand(missing, { json: true })).rejects.toThrow("__exit__:1");
-    expect(payloads()).toMatchObject([
-      { schemaVersion: "openclaw.templateBuild.v1", ok: false },
-      { schemaVersion: "openclaw.templateDev.v1", ok: false },
-    ]);
+  it.for([
+    [runTemplatesCreateCommand, { name: "" }, "Project", "invalid_package_name"],
+    [runTemplatesCreateCommand, { agentId: "" }, "Project", "invalid_agent_id"],
+    [runTemplatesBuildCommand, {}, "Build", undefined],
+    [runTemplatesDevCommand, {}, "Dev", undefined],
+  ] as const)("reports failure %#", async ([run, opts, kind, code]) => {
+    const root = join(tempDirs.make("openclaw-template-errors-"), "missing");
+    await expect(run(root, { ...opts, json: true })).rejects.toThrow("__exit__:1");
+    const schemaVersion = `openclaw.template${kind}.v1`;
+    expect(payloads()).toMatchObject([{ schemaVersion, ok: false }]);
+    expect(payloads()[0]).toMatchObject({ error: { code: code ?? expect.any(String) } });
+    expect(existsSync(root)).toBe(false);
   });
 });
