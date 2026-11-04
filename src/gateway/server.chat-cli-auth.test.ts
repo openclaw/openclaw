@@ -360,8 +360,20 @@ async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal)
     ).toBeUndefined();
     const beforeRevocation = await launches();
     const requestsBeforeRevocation = requests.length;
-    expect(await post("native")).toMatchObject({ status: 502, body: { ok: false } });
-    expect(await launches()).toBe(beforeRevocation);
+    const refused = await post("native");
+    expect(refused).toMatchObject({ status: 502, body: { ok: false } });
+    expect(
+      await launches(),
+      JSON.stringify({
+        status: refused.status,
+        requestsBeforeRevocation,
+        requestsAfterRevocation: requests.length,
+        events: await fs
+          .readFile(path.join(nativeRoot, "execution-events.jsonl"), "utf8")
+          .then((events) => ({ limitReached: events.length >= 65_536, events }))
+          .catch(() => "unavailable"),
+      }),
+    ).toBe(beforeRevocation);
     expect(requests).toHaveLength(requestsBeforeRevocation);
   } finally {
     try {

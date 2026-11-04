@@ -58,7 +58,7 @@ export function createClaudeCliGatewayConfig(
 export const createClaudeAuthFixture = (workspaceDir: string, projectDir: string) => String.raw`
 const assert = require("node:assert/strict");
 const { randomUUID } = require("node:crypto");
-const { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } = require("node:fs");
+const { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { createInterface } = require("node:readline");
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
@@ -74,6 +74,18 @@ if (process.argv.includes("auth")) {
   process.exit(0);
 }
 appendFileSync(join(nativeRoot, "execution-launches.log"), "launch\n");
+const trace = (event) => {
+  const file = join(nativeRoot, "execution-events.jsonl");
+  if (existsSync(file) && statSync(file).size >= 65_536) return;
+  appendFileSync(file, JSON.stringify({
+    pid: process.pid, event,
+    flags: ["-p", "--print", "--input-format", "--session-id", "--resume", "--tools", "--settings", "--mcp-config"]
+      .filter((flag) => process.argv.includes(flag)),
+    oauthDescriptorPresent: process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR !== undefined,
+    apiKeyDescriptorPresent: process.env.CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR !== undefined,
+  }) + "\n");
+};
+trace("launch");
 const descriptor = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR;
 let credential = nativeLogin
   ? JSON.parse(readFileSync(join(nativeRoot, ".credentials.json"), "utf8")).claudeAiOauth?.accessToken
@@ -96,6 +108,8 @@ for (const name of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE
 let currentHistory;
 createInterface({ input: process.stdin }).on("line", async (line) => {
   const message = JSON.parse(line);
+  trace(message.type === "user" ? "user" :
+    message.type === "control_request" && message.request?.subtype === "initialize" ? "initialize" : "other");
   if (message.type === "control_request" && message.request.subtype === "initialize") {
     send({ type: "control_response", response: {
       subtype: "success", request_id: message.request_id, response: { commands: [], models: [] },
