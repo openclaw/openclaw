@@ -3,14 +3,10 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { setEnvironmentData, Worker } from "node:worker_threads";
 import { expectDefined as requireValue } from "@openclaw/normalization-core/expect";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  fixtureReceiptWorkerClientSource,
-  openFixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { observeWorkerActivity } from "../../test/helpers/worker-activity.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   encodeSessionArchiveContent,
@@ -26,7 +22,9 @@ import {
 import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -46,6 +44,8 @@ import {
   createUsageTranscriptEntry as assistantEntry,
   encodeOversizedUsageRollup,
 } from "./session-cost-usage-fixtures.test-support.js";
+import { usageCostPartitionKey } from "./session-cost-usage-partitions.js";
+import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
 import {
   observeUsageWorkerReads,
   withUsageWorkerPreload,
@@ -94,6 +94,19 @@ const archiveEntry = {
     content: "synthetic archived message",
   },
 };
+async function writeArchive(root: string, sessionId: string, encoding: "plain" | "zstd" = "zstd") {
+  const content = transcriptText(sessionId, archiveEntry);
+  const encoded =
+    encoding === "plain"
+      ? { suffix: "", bytes: Buffer.from(content) }
+      : encodeSessionArchiveContent(content);
+  const archive = path.join(
+    await sessionsDirectory(root),
+    `${sessionId}.jsonl.reset.2026-02-05T12-00-00.000Z${encoded.suffix}`,
+  );
+  await fs.writeFile(archive, encoded.bytes);
+  return { archive, encoded };
+}
 type ReadProbe = Awaited<ReturnType<typeof observeUsageWorkerReads>>;
 async function expectNoRead(
   probe: ReadProbe,
@@ -126,7 +139,7 @@ it("refuses unvalidated legacy session keys before assigning usage ownership", a
   });
 });
 
-it("reuses discovered inputs and rollups across append, rewrite, and rollup replacement", async () => {
+it("reads recorded usage across append, rewrite, and rollup replacement without transcript scans", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const probe = await observeUsageWorkerReads(state.stateDir, []);
     await probe.run(async () => {
@@ -137,14 +150,15 @@ it("reuses discovered inputs and rollups across append, rewrite, and rollup repl
         sessionId: "usage-rewrite",
         storePath: database.path,
       });
-      const sessionFile = formatSqliteSessionFileMarker({
-        agentId: scope.agentId,
-        sessionId: scope.sessionId,
-        storePath: database.path,
-      });
+      const sessionFile = formatSqliteSessionFileMarker({ ...scope, storePath: database.path });
       const refresh = () => refreshUsage({ agentId: "main", sessionFiles: [sessionFile] });
-      const cached = () =>
-        loadCached({ agentId: "main", sessions: [{ sessionFile }], requestRefresh: false });
+      const cached = (reportBudgetBytes?: number) =>
+        loadCached({
+          agentId: "main",
+          sessions: [{ sessionFile }],
+          requestRefresh: false,
+          reportBudgetBytes,
+        });
       expect(await cached()).toMatchObject({
         summaries: [null],
         cacheStatus: { status: "stale", cachedFiles: 0, pendingFiles: 1, staleFiles: 1 },
@@ -177,23 +191,26 @@ it("reuses discovered inputs and rollups across append, rewrite, and rollup repl
         ]);
       });
       await refresh();
+      await probe.clear();
+      expect(await discoverAllSessions({ agentId: "main" })).toEqual([
+        { sessionId: scope.sessionId, sessionFile, mtime: expect.any(Number) },
+      ]);
       expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 3 }] });
-      let discovered = await discoverAllSessions({ agentId: "main" });
-      const expectDiscovered = async (
-        sessions: Awaited<ReturnType<typeof discoverAllSessions>>,
-        summaries: Array<{ totalTokens: number } | null>,
-        status: "fresh" | "partial" | "stale",
-      ) => {
-        await probe.clear();
-        expect(
-          await loadCached({ agentId: "main", sessions, requestRefresh: false }),
-        ).toMatchObject({ summaries, cacheStatus: { status } });
-        await expectNoRead(probe, "transcript-stats");
-      };
-      await expectDiscovered(discovered, [{ totalTokens: 3 }], "fresh");
+      expect(await loadSessionCostSummary({ agentId: "main", sessionFile })).toMatchObject({
+        totalTokens: 3,
+        totalCost: 3,
+      });
+      expect(await cached(0)).toMatchObject({
+        summaries: [null],
+        cacheStatus: { status: "partial", staleFiles: 0 },
+      });
+      await expectNoRead(probe, "transcript-stats");
       await probe.clear();
       await refresh();
       await expectNoRead(probe, "cache");
+      await expectNoRead(probe, "transcript-stats");
+      await refreshUsage({ agentId: "main" });
+      await expectNoRead(probe, "transcript-stats");
       const generation = transact((owner) => {
         const rewritten = rewriteSqliteTranscriptEventRowsInTransaction(owner, scope, [
           {
@@ -206,8 +223,16 @@ it("reuses discovered inputs and rollups across append, rewrite, and rollup repl
         return rewritten;
       });
       expect(generation).toEqual(expect.any(String));
-      const rewrittenDiscovery = await discoverAllSessions({ agentId: "main" });
-      await expectDiscovered(rewrittenDiscovery, [null], "stale");
+      await probe.clear();
+      expect(await cached()).toMatchObject({
+        summaries: [null],
+        cacheStatus: { status: "stale" },
+      });
+      expect(await cached(0)).toMatchObject({
+        summaries: [null],
+        cacheStatus: { status: "stale", staleFiles: 1 },
+      });
+      await expectNoRead(probe, "transcript-stats");
       await probe.clear();
       await refresh();
       expect(await cached()).toMatchObject({
@@ -221,15 +246,21 @@ it("reuses discovered inputs and rollups across append, rewrite, and rollup repl
       const reads = await probe.read();
       expect(reads.some((entry) => entry.kind === "transcript-stats")).toBe(true);
       expect(reads.filter((entry) => entry.kind === "hot-watermark")).toEqual([]);
-      await expectDiscovered(discovered, [null], "partial");
-      discovered = rewrittenDiscovery;
       transact((owner) => append(owner, [message("fourth", "third", 5)]));
+      await probe.clear();
+      expect(await cached()).toMatchObject({
+        summaries: [{ totalTokens: 14, staleSince: expect.any(Number) }],
+        cacheStatus: { status: "partial" },
+      });
+      await expectNoRead(probe, "transcript-stats");
       await probe.clear();
       await refresh();
       const appendReads = await probe.read();
       expect(appendReads.filter((entry) => entry.kind === "cache")).toEqual([]);
+      expect(
+        appendReads.filter((entry) => entry.kind === "transcript-stats" && !entry.bounded),
+      ).toEqual([]);
       expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 19 }] });
-      await expectDiscovered(discovered, [{ totalTokens: 19 }], "fresh");
 
       // Another in-process writer replaces the derived row. Its receipt must
       // invalidate the retained rollup before refresh rebuilds it from canonical stats.
@@ -242,37 +273,203 @@ it("reuses discovered inputs and rollups across append, rewrite, and rollup repl
   });
 });
 
+it("filters refresh work before reading historical transcripts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { archive, encoded } = await writeArchive(state.stateDir, "excluded-archive");
+    const { archive: recordedArchive } = await writeArchive(state.stateDir, "recorded-archive");
+    const probe = await observeUsageWorkerReads(state.stateDir, [archive, recordedArchive]);
+    await probe.run(async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const historical = ["uncached-history", "recorded-history"].map((sessionId) => {
+        const scope = resolveSqliteTranscriptScope({
+          agentId: "main",
+          sessionKey: `agent:main:${sessionId}`,
+          sessionId,
+          storePath: database.path,
+        });
+        return {
+          scope,
+          sessionFile: formatSqliteSessionFileMarker({ ...scope, storePath: database.path }),
+        };
+      });
+      const transact = <T>(write: (owner: typeof database) => T) =>
+        runOpenClawAgentWriteTransaction(write, { agentId: "main", path: database.path });
+      for (const { scope } of historical) {
+        transact((owner) => {
+          writeSessionEntry(owner, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+          appendTranscriptEventsInTransaction(
+            owner,
+            scope,
+            [
+              { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId },
+              { ...assistantEntry(10, { cost: 1 }), id: "first", parentId: null },
+            ],
+            { scheduleProjectionReconcile: false },
+          );
+        });
+      }
+      const oversized = encodeSessionArchiveContent("x".repeat(2 * 1024 * 1024));
+      await fs.writeFile(archive, oversized.bytes);
+      await probe.clear();
+      await expect(refreshUsage({ agentId: "main" })).rejects.toThrow(/decompressed bytes/);
+      await expectNoRead(probe, "transcript-stats");
+      await fs.writeFile(archive, encoded.bytes);
+      const sessions = await writeSessions(
+        await sessionsDirectory(state.stateDir),
+        ["current", "quarter-gap", "removed"],
+        (index) => assistantEntry(index + 2, { cost: 1 }),
+      );
+      const current = sessions[0]!;
+      const gap = sessions[1]!;
+      const recorded = historical[1]!;
+      await refreshUsage({
+        agentId: "main",
+        sessionFiles: [recorded.sessionFile, recordedArchive, ...sessionPaths(sessions)],
+      });
+      const retained = storedRollup(recorded.sessionFile);
+      const archiveReadPath = materializeSessionArchiveForRead(recordedArchive);
+      const retainedArchive = storedRollup(archiveReadPath);
+      await fs.rm(archiveReadPath);
+      const quarterKey = usageCostPartitionKey(gap.sessionFile, "2026-09-01");
+      transact((owner) => {
+        owner.db
+          .prepare("DELETE FROM cache_entries WHERE scope = ? AND key = ?")
+          .run(USAGE_COST_QUARTER_SCOPE, quarterKey);
+        appendTranscriptEventsInTransaction(
+          owner,
+          recorded.scope,
+          [{ ...assistantEntry(7, { cost: 1 }), id: "second", parentId: "first" }],
+          { scheduleProjectionReconcile: false },
+        );
+      });
+      await fs.rm(sessions[2]!.sessionFile);
+      await fs.appendFile(
+        current.sessionFile,
+        JSON.stringify(assistantEntry(2, { cost: 1 })) + "\n",
+      );
+      // Keep the SQLite owner's mutation timestamps intact; only this file is in range.
+      const startMs = Date.now() + 86_400_000;
+      await fs.utimes(current.sessionFile, new Date(startMs), new Date(startMs));
+      await probe.clear();
+      expect(await refreshUsage({ agentId: "main", startMs })).toBe("refreshed");
+      await expectNoRead(probe, "transcript-stats");
+      await expectNoRead(probe);
+      expect(storedRollup(recorded.sessionFile)).toEqual(retained);
+      expect(storedRollup(archiveReadPath)).toEqual(retainedArchive);
+      expect(
+        readRows("main")
+          .map((row) => row.key)
+          .toSorted(),
+      ).toEqual(
+        [recorded.sessionFile, archiveReadPath, current.sessionFile, gap.sessionFile].toSorted(),
+      );
+      expect(
+        database.db
+          .prepare("SELECT count(*) AS count FROM cache_entries WHERE scope = ? AND key = ?")
+          .get(USAGE_COST_QUARTER_SCOPE, quarterKey),
+      ).toEqual({ count: 1 });
+      expect(
+        await loadCached({
+          agentId: "main",
+          sessions: [current, gap],
+          requestRefresh: false,
+        }),
+      ).toMatchObject({ summaries: [{ totalTokens: 4 }, { totalTokens: 3 }] });
+
+      await probe.clear();
+      await refreshUsage({ agentId: "main", startMs, sessionFiles: [recorded.sessionFile] });
+      expect((await probe.read()).some((entry) => entry.kind === "transcript-stats")).toBe(true);
+      expect(
+        await loadCached({
+          agentId: "main",
+          sessions: [{ sessionFile: recorded.sessionFile }],
+          requestRefresh: false,
+        }),
+      ).toMatchObject({ summaries: [{ totalTokens: 17 }], cacheStatus: { status: "fresh" } });
+    });
+  });
+});
+
+it.each(["table-missing", "schema-missing"] as const)(
+  "preserves usage rollups when source metadata is unavailable (%s)",
+  async (reason) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const source = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: state.path("usage-source.sqlite"),
+      });
+      const scope = resolveSqliteTranscriptScope({
+        agentId: "main",
+        sessionKey: "agent:main:unavailable-source",
+        sessionId: "unavailable-source",
+        storePath: source.path,
+      });
+      const sessionFile = formatSqliteSessionFileMarker({ ...scope, storePath: source.path });
+      const params = { agentId: "main", storePath: source.path };
+      const append = (events: Parameters<typeof appendTranscriptEventsInTransaction>[2]) =>
+        runOpenClawAgentWriteTransaction(
+          (owner) =>
+            appendTranscriptEventsInTransaction(owner, scope, events, {
+              scheduleProjectionReconcile: false,
+            }),
+          { agentId: "main", path: source.path },
+        );
+      append([
+        { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId },
+        { ...assistantEntry(10, { cost: 1 }), id: "first", parentId: null },
+      ]);
+      await refreshUsage({ ...params, sessionFiles: [sessionFile] });
+      const before = readRows("main");
+      expect(before).toHaveLength(1);
+      const pricingFingerprint = JSON.parse(before[0]!.valueJson).pricingFingerprint as string;
+      append([{ ...assistantEntry(7, { cost: 1 }), id: "second", parentId: "first" }]);
+      const table = reason === "table-missing" ? "transcript_events" : "schema_meta";
+      source.db.exec(`ALTER TABLE ${table} RENAME TO unavailable_usage_source`);
+      try {
+        await expect(refreshUsage(params)).rejects.toMatchObject({
+          name: "SessionMetadataUnavailableError",
+          reason,
+        });
+        expect(readRows("main")).toEqual(before);
+        await expect(
+          runUsageCostWorker(prepareUsageCostWorker(params), {
+            kind: "summary",
+            pricingFingerprint,
+            startMs: 0,
+            endMs: Date.now(),
+            dayBucket: utcBucket,
+          }),
+        ).resolves.toMatchObject({
+          kind: "summary",
+          summary: { totals: { totalTokens: 0 } },
+        });
+        expect(readRows("main")).toEqual(before);
+      } finally {
+        source.db.exec(`ALTER TABLE unavailable_usage_source RENAME TO ${table}`);
+      }
+      if (reason === "table-missing") {
+        await closeOpenClawAgentDatabaseByPathAsync(source.path);
+        unregisterOpenClawAgentDatabase({ agentId: "main", path: source.path });
+        await fs.rm(source.path);
+        expect(await refreshUsage(params)).toBe("refreshed");
+        expect(readRows("main")).toEqual([]);
+      }
+    });
+  },
+);
+
 it.each(["zstd", "plain"] as const)(
   "inventories %s archives without reading payloads and materializes only for a summary",
   async (encoding) => {
     const root = tempDirs.make("openclaw-usage-worker-metadata-");
-    const sessionsDir = await sessionsDirectory(root);
     const sessionId = `metadata-${encoding}`;
-    const content = transcriptText(sessionId, archiveEntry);
-    const encoded =
-      encoding === "plain"
-        ? { suffix: "", bytes: Buffer.from(content) }
-        : encodeSessionArchiveContent(content);
-    const archive = path.join(
-      sessionsDir,
-      `${sessionId}.jsonl.reset.2026-02-05T12-00-00.000Z${encoded.suffix}`,
-    );
-    await fs.writeFile(archive, encoded.bytes);
+    const { archive } = await writeArchive(root, sessionId, encoding);
     const { mtimeMs } = await fs.stat(archive);
     const reads = await observeUsageWorkerReads(root, [archive]);
     await reads.run(async () => {
       expect(await discoverAllSessions({ agentId: "main" })).toEqual([
         { sessionId, sessionFile: archive, mtime: mtimeMs },
       ]);
-      expect(
-        await runUsageCostWorker(
-          prepareUsageCostWorker({ agentId: "main", sessionFiles: [archive] }),
-          { kind: "inventory", sessionFiles: [archive] },
-        ),
-      ).toEqual({
-        kind: "inventory",
-        files: [{ kind: "jsonl", sourcePath: archive, sessionId, mtimeMs }],
-      });
       await expectNoRead(reads);
       expect(
         await loadSessionCostSummary({ agentId: "main", sessionFile: archive }),
@@ -284,19 +481,10 @@ it.each(["zstd", "plain"] as const)(
 
 it("joins compressed archive materialization before settling summary cancellation", async ({
   signal,
-  onTestFinished,
 }) => {
-  const receipts = await openFixtureReceiptChannel();
-  onTestFinished(() => receipts.close());
   const root = tempDirs.make("openclaw-usage-worker-native-archive-");
-  const sessionsDir = await sessionsDirectory(root);
-  const encoded = encodeSessionArchiveContent(transcriptText("native-archive", archiveEntry));
+  const { archive, encoded } = await writeArchive(root, "native-archive");
   expect(encoded.suffix).toBe(".zst");
-  const archive = path.join(
-    sessionsDir,
-    `native-archive.jsonl.reset.2026-02-05T12-00-00.000Z${encoded.suffix}`,
-  );
-  await fs.writeFile(archive, encoded.bytes);
   const entered = path.join(root, "native-entered");
   const release = new Int32Array(new SharedArrayBuffer(4));
   setEnvironmentData(entered, release.buffer);
@@ -310,18 +498,16 @@ it("joins compressed archive materialization before settling summary cancellatio
     preload,
     `const fs = require("node:fs");
 const zlib = require("node:zlib");
-const { getEnvironmentData, isMainThread, threadId } = require("node:worker_threads");
-${fixtureReceiptWorkerClientSource(receipts.broadcastName).replace(
-  'import { BroadcastChannel as FixtureReceiptBroadcastChannel } from "node:worker_threads";',
-  'const { BroadcastChannel: FixtureReceiptBroadcastChannel } = require("node:worker_threads");',
-)}
+const { BroadcastChannel, getEnvironmentData, isMainThread, threadId } = require("node:worker_threads");
 if (!isMainThread) {
   const compressed = Buffer.from(${JSON.stringify(encoded.bytes.toString("base64"))}, "base64");
   const decompress = zlib.zstdDecompressSync;
   zlib.zstdDecompressSync = function(bytes, ...args) {
     if (!Buffer.from(bytes).equals(compressed)) return Reflect.apply(decompress, this, [bytes, ...args]);
     fs.writeFileSync(${JSON.stringify(entered)}, String(threadId));
-    sendReceipt(${JSON.stringify(entered)}, "entered");
+    const activity = new BroadcastChannel(${JSON.stringify(`${entered}:activity`)});
+    activity.postMessage(threadId);
+    activity.close();
     const release = new Int32Array(getEnvironmentData(${JSON.stringify(entered)}));
     while (Atomics.load(release, 0) === 0) Atomics.wait(release, 0, 0);
     const result = Reflect.apply(decompress, this, [bytes, ...args]);
@@ -334,8 +520,8 @@ if (!isMainThread) {
   );
   try {
     await withUsageWorkerPreload(root, preload, async () => {
-      using posts = vi.spyOn(Worker.prototype, "postMessage");
       using terminate = vi.spyOn(Worker.prototype, "terminate");
+      const activeWorker = observeWorkerActivity(`${entered}:activity`);
       const scope = new AsyncWorkScope();
       const reason = new Error("summary owner closed");
       let summarySettled = false;
@@ -348,28 +534,17 @@ if (!isMainThread) {
         return result;
       });
       try {
-        // The marker precedes both the receipt and any summary settlement.
-        await withinTest(
+        // The durable marker precedes both the activity receipt and summary settlement.
+        const worker = await withinTest(
           Promise.race([
-            receipts.waitFor(entered, "entered"),
+            activeWorker,
             outcome.then(async () => {
               expect(Number(await fs.readFile(entered, "utf8"))).toBeGreaterThan(0);
+              return activeWorker;
             }),
           ]),
           signal,
         );
-        const dispatch = posts.mock.calls.findIndex(
-          ([message]) =>
-            isRecord(message) &&
-            isRecord(message.input) &&
-            message.input.kind === "usage-cost" &&
-            isRecord(message.input.operation) &&
-            message.input.operation.kind === "refresh",
-        );
-        const worker = posts.mock.contexts[dispatch];
-        if (!(worker instanceof Worker)) {
-          throw new Error("Expected the usage refresh worker");
-        }
         expect(worker.threadId).toBe(Number(await fs.readFile(entered, "utf8")));
         scope.beginClose(reason);
         const draining = scope.drain().then(() => {

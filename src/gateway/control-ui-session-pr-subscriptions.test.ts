@@ -124,11 +124,38 @@ describe("control UI session PR subscriptions", () => {
     expect(readCurrent).not.toHaveBeenCalled();
   });
 
+  it("validates an unchanged passive audience in one synchronous pass", async () => {
+    const readSource = createTestSessionPrReadSource();
+    const assertCurrent = vi.fn();
+    const target: ControlUiSessionPrTarget = {
+      params: { sessionKey: "session", agentId: "main" },
+      identity: "session",
+      readSource,
+      source: null,
+      taskReceiptsOnly: true,
+      assertCurrent,
+    };
+    const active = start({ prepareRead: async () => async () => target });
+    for (let index = 0; index < 64; index++) {
+      await active.replace(`reader-${index}`, [], new Set(), new Set(["session"]));
+    }
+    assertCurrent.mockClear();
+    const pending = active.pollNow();
+    try {
+      // Live guards still run for every viewer, without a promise/yield for each one.
+      expect(assertCurrent).toHaveBeenCalledTimes(64);
+    } finally {
+      await pending;
+    }
+  });
+
   it.each([
     { facts: "category", invalidated: undefined, refresh: false },
+    { facts: "participants", invalidated: undefined, refresh: false },
     { facts: undefined, invalidated: "category", refresh: false },
     { facts: "category", invalidated: true, refresh: true },
     { facts: "unchanged", invalidated: true, refresh: true },
+    { facts: "participants", invalidated: true, refresh: true },
   ] as const)(
     "refreshes=$refresh for facts=$facts, invalidated=$invalidated",
     async ({ facts, invalidated, refresh }) => {

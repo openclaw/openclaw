@@ -18,7 +18,6 @@ const enPluginManagement = {
     dashboardEmpty: "This session has no dashboard widgets yet.",
     customPluginsDisabled: en.pluginUi.customPluginsDisabled,
     customPluginsEnableHint: en.pluginUi.customPluginsEnableHint,
-    openLabs: en.pluginUi.openLabs,
     surface: {
       "session-list": "Session list",
       composer: "Composer",
@@ -31,6 +30,7 @@ const enPluginManagement = {
     clawhub: {
       retryStatus: "Status unavailable · Retry",
       viewDetails: "View details",
+      signIn: "Sign in",
     },
   },
   custodian: {
@@ -136,6 +136,9 @@ const enPluginManagement = {
     },
   },
   pluginsPage: {
+    recommendedPrompts: {
+      label: "Recommended prompts",
+    },
     compatibilityDeprecatedDated:
       "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
     compatibilityDeprecatedUndated:
@@ -252,24 +255,35 @@ const enPluginManagement = {
         "The credential could not be saved. Your draft is still available; try saving again.",
     },
     detailCapabilities: "Capabilities",
+    detailExtensions: "Extensions",
     uiCapabilities: {
-      page: { name: "Pages", description: "Adds pages to OpenClaw." },
-      navigation: { name: "Navigation", description: "Adds links to OpenClaw navigation." },
-      panel: { name: "Panels", description: "Adds interface panels." },
-      action: { name: "Actions", description: "Adds buttons or menu actions." },
+      page: { name: "Pages", description: "Adds dedicated plugin pages." },
+      navigation: { name: "Navigation", description: "Adds destinations to the app sidebar." },
+      panel: { name: "Panels", description: "Adds panels you can open beside a conversation." },
+      action: {
+        name: "Actions",
+        description: "Adds buttons or menu items in the composer, session header, or session menu.",
+      },
       accessory: {
         name: "Session accessories",
-        description: "Adds information or controls alongside sessions.",
+        description: "Shows information or controls in the session header.",
       },
-      widget: { name: "Dashboard widgets", description: "Adds widgets to the dashboard." },
-      inline: { name: "Inline views", description: "Shows native plugin views in conversations." },
+      widget: {
+        name: "Dashboard widgets",
+        description: "Adds widgets you can place on session dashboards.",
+      },
+      inline: {
+        name: "Inline views",
+        description: "Shows interactive plugin content within chat messages.",
+      },
       replacement: {
         name: "Interface replacements",
-        description: "Replaces supported parts of the interface.",
+        description:
+          "Offers alternate app views. Choose them in Plugins → Advanced → Customize UI.",
       },
       "link-reader": {
         name: "Link previews",
-        description: "Shows previews and details for supported links.",
+        description: "Opens supported links in a plugin-provided reader.",
       },
     },
     capabilityFamilies: {
@@ -336,14 +350,19 @@ const enPluginManagement = {
       edit: "Edit",
       connected: "Connected",
       configured: "Configured",
-      editAccount: "Edit {name} connection",
       editCredential: "Edit {name}",
-      connectAccount: "Connect {name}",
+      connectAccount: "Sign in to {name}",
+      signOut: "Sign out",
+      signOutAccount: "Sign out of {name}",
+      signOutConfirmTitle: "Sign out of {name}?",
+      signOutUnavailable: "Sign-out could not open. Your account is still connected; try again.",
+      signOutConfirmMessage:
+        "OpenClaw removes the saved sign-in for {name}. Its tools stop working until you sign in again.",
       configure: "Configure",
       configureCredential: "Configure {name}",
-      connect: "Connect",
-      requestFailed: "Sign-in did not finish. Try connecting again.",
-      sessionExpired: "This sign-in session expired. Try connecting again.",
+      connect: "Sign in",
+      requestFailed: "Sign-in did not finish. Try signing in again.",
+      sessionExpired: "This sign-in session expired. Try signing in again.",
     },
     toggleNamed: "Enable or disable {name}",
     schemaUnavailable: "Plugin settings schema is unavailable.",
@@ -515,6 +534,7 @@ const enPluginManagement = {
     disabled: "Disabled",
     available: "Available",
     needsAttention: "Needs attention",
+    needsSetup: "Needs setup",
     included: "Included",
     global: "Global",
     workspace: "Workspace",
@@ -540,6 +560,8 @@ const enPluginManagement = {
       "Plugin availability changed. Refresh the catalog to see its current state.",
     installDestinationChanged:
       "The Gateway or operator changed. Install the plugin again to request a fresh review.",
+    installBlockedByUpdate:
+      "Installation blocked: an OpenClaw upgrade is in progress, try again when it finishes.",
   },
 } satisfies TranslationMap;
 

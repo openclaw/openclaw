@@ -180,8 +180,7 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
         .spyOn(subagentRegistry, "activateSubagentRegistry")
         .mockImplementation((resolver) => {
           activationEntered.resolve();
-          const settled = releaseActivation.promise.then(() => activate(resolver).settled);
-          return { initial: settled, pending: new Map(), settled };
+          return releaseActivation.promise.then(() => activate(resolver));
         });
       onTestFinished(() => {
         releaseActivation.resolve();

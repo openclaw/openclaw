@@ -16,8 +16,10 @@ import {
   noteActiveCronJobRemoval,
   requestActiveCronJobCancellation,
 } from "../cron/active-jobs.js";
+import { readCronRunHistoryPageForTests } from "../cron/run-history.test-support.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
 import { createCronCompletionDeliveryFence } from "../cron/service/delivery-attempt-fence.js";
+import { finishCronRun } from "../cron/service/run-history.js";
 import { markServiceCronJobActive } from "../cron/service/run-receipts.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
@@ -56,6 +58,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { finalizeCronCompletionAnnouncement } from "./server-cron-completion.js";
+import { sendGatewayCronFailureAlert } from "./server-cron-notifications.js";
 import * as assistantContent from "./server-methods/chat-assistant-content.js";
 
 async function createCompletionFixture(
@@ -227,6 +230,17 @@ async function createCompletionFixture(
     assertText,
     assertNoResults: () => assertMessages(),
     finalize,
+    async recordHistory(result: Awaited<ReturnType<typeof finalize>>) {
+      await finishCronRun(service, {
+        job,
+        event: { ...result, jobId: job.id, action: "finished", status: "ok", runAtMs: 1000 },
+      });
+      return readCronRunHistoryPageForTests({
+        storeKey: cronStoreKey(cronStorePath),
+        jobId: job.id,
+        limit: 1,
+      }).entries[0];
+    },
     async loadReleasedRows() {
       const jobJson = JSON.stringify(releasedJob);
       runOpenClawStateWriteTransaction(({ db }) => {
@@ -327,6 +341,41 @@ async function withCompletionFixture(
 describe("completion announcement", () => {
   const confirmed = { deliveryAttempted: true, delivered: true };
 
+  it("records a failure alert once in its destination, not the creating conversation", async () => {
+    await withCompletionFixture("command", async (fixture) => {
+      fixture.cfg.gateway = undefined;
+      fixture.job.sessionKey = fixture.destination.sessionKey;
+      const onDeliverySettled = vi.fn(async () => {});
+      await sendGatewayCronFailureAlert({
+        deps: {},
+        logger: { warn: vi.fn() },
+        resolveCronAgent: () => ({ agentId: "main", cfg: fixture.cfg }),
+        job: fixture.job,
+        routing: { defaultAgentId: "main" },
+        payload: { text: "Scheduled command failed." },
+        channel: "telegram",
+        to: "123",
+        mode: "announce",
+        onDeliverySettled,
+      });
+      expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ text: "Scheduled command failed." }),
+      );
+      expect(await fixture.messages(fixture.destination)).toEqual([
+        expect.objectContaining({
+          content: [{ type: "text", text: "Scheduled command failed." }],
+          provider: "openclaw",
+          model: "automation-result",
+        }),
+      ]);
+      await fixture.assertText("Scheduled command failed.");
+      expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
+        delivered: true,
+        status: "delivered",
+      });
+    });
+  });
+
   it("commits the effective post-hook payload shown to the recipient", async () => {
     await withCompletionFixture(
       "command",
@@ -371,6 +420,12 @@ describe("completion announcement", () => {
 
         const result = await fixture.finalize();
         if (failure === "none") {
+          expect(await fixture.recordHistory(result)).toMatchObject({
+            delivered: true,
+            delivery: {
+              receipts: [{ channel: "telegram", to: "123", messageId: "notification-message" }],
+            },
+          });
           await expect(fixture.finalize()).resolves.toMatchObject(confirmed);
         }
 

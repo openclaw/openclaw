@@ -3,6 +3,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createConfigIO,
   readConfigFileSnapshotForWrite,
@@ -157,6 +158,59 @@ function resolveConfigRestartRequirement(params: {
   };
 }
 
+/**
+ * `openclaw config set/patch/unset` route here while a Gateway owns the state and keep the
+ * offline write's outcomes. Stable Gateways close the request schema, so the connection
+ * identity carries this rather than a request field.
+ */
+function isCliRoutedConfigPatch(
+  mode: string,
+  client: Parameters<typeof resolveControlPlaneActor>[0],
+): boolean {
+  const cli = client?.connect?.client;
+  return (
+    mode === "config.patch" &&
+    cli?.id === GATEWAY_CLIENT_NAMES.CLI &&
+    cli.mode === GATEWAY_CLIENT_MODES.CLI
+  );
+}
+
+/**
+ * Responds when an awaited runtime application did not fully apply, and reports whether it
+ * did. A CLI-routed write keeps the offline outcome: persisted and restarting is success.
+ */
+export function respondConfigWriteApplicationOutcome(params: {
+  outcome: RuntimeConfigWriteApplicationStatus;
+  mode: "config.patch" | "config.apply";
+  client: Parameters<typeof resolveControlPlaneActor>[0];
+  respond: RespondFn;
+  success: Record<string, unknown>;
+  persistedConfig: Record<string, unknown>;
+}): boolean {
+  const { outcome, mode } = params;
+  if (outcome === "applied") {
+    return false;
+  }
+  if (outcome === "restart-pending" && isCliRoutedConfigPatch(mode, params.client)) {
+    params.respond(true, { ...params.success, restartPending: true }, undefined);
+    return true;
+  }
+  const message =
+    outcome === "applied-restart-required"
+      ? `${mode} persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision`
+      : outcome === "restart-pending"
+        ? `${mode} persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision`
+        : `${mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
+  params.respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, message, {
+      details: { persistedConfig: params.persistedConfig },
+    }),
+  );
+  return true;
+}
+
 /** Returns whether a managed config write can settle without restarting the Gateway. */
 export function shouldAwaitGatewayConfigApplication(params: {
   changedPaths: string[];
@@ -180,13 +234,7 @@ export async function commitGatewayConfigWrite(params: {
   disconnectSharedAuthClients?: boolean;
   awaitRuntimeApplication?: boolean;
   respond?: RespondFn;
-}): Promise<{
-  path: string;
-  config: OpenClawConfig;
-  hash: string | null;
-  application?: Promise<RuntimeConfigWriteApplicationStatus>;
-  queueFollowUp: () => void;
-}> {
+}) {
   const previousRuntimeConfig =
     params.context?.getCommittedRuntimeConfig?.() ?? params.snapshot.config;
   const application = params.awaitRuntimeApplication
@@ -262,17 +310,11 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   // Restart delivery uses generic :thread: parsing plus plugin-owned session grammars.
   const sessionDelivery = await extractDeliveryInfo(sessionKey);
   const actor = resolveControlPlaneActor(params.client);
-  const cli = params.client?.connect?.client;
   const restartRequirement = resolveConfigRestartRequirement({
     ...params,
-    // `openclaw config set/patch/unset` route here while a Gateway owns the state and keep
-    // the offline write's reload-off contract: persist, and the CLI prints a restart hint.
-    // Control UI and RPC patches still restart. Stable Gateways close the request schema,
-    // so the connection identity carries this rather than a request field.
-    deferRestartWhenReloadOff:
-      params.mode === "config.patch" &&
-      cli?.id === GATEWAY_CLIENT_NAMES.CLI &&
-      cli.mode === GATEWAY_CLIENT_MODES.CLI,
+    // The offline write's reload-off contract: persist, and the CLI prints a restart hint.
+    // Control UI and RPC patches still restart.
+    deferRestartWhenReloadOff: isCliRoutedConfigPatch(params.mode, params.client),
   });
   const payload: RestartSentinelPayload = {
     kind: params.kind,

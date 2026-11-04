@@ -518,6 +518,8 @@ export function authorizeSessionAgentRun(
   params: {
     cfg: OpenClawConfig;
     client: GatewayClient | null;
+    /** File readers reuse the admission policy with read-specific recovery guidance. */
+    sandboxRequiredMessage?: string;
     target: Pick<SessionSharingTarget, "agentId" | "canonicalKey"> & {
       entry?: Pick<SessionEntry, "sandbox">;
     };
@@ -539,7 +541,8 @@ export function authorizeSessionAgentRun(
   ) {
     return errorShape(
       ErrorCodes.FORBIDDEN,
-      `Your operator role requires a sandboxed session; create a new session instead of running in "${params.target.canonicalKey}".`,
+      params.sandboxRequiredMessage ??
+        `Your operator role requires a sandboxed session; create a new session instead of running in "${params.target.canonicalKey}".`,
     );
   }
   return null;
@@ -554,7 +557,10 @@ export function authorizeSessionSharingTarget(
     ? prepared.value
     : params.cfg && operatorSessionCap(params.client, params.cfg);
   const role = prepared?.role ?? resolveSessionSharingRole(params, { value: sessionCap });
-  if (sessionCap === "none" && role !== "owner" && role !== "admin") {
+  if (
+    (sessionCap === "none" && role !== "owner" && role !== "admin") ||
+    (sessionCap === "invited" && role === "viewer")
+  ) {
     return hiddenSessionNotFound(params.target.canonicalKey);
   }
   if (params.requireOwner && !canManageSessionSharing(role)) {
@@ -563,7 +569,7 @@ export function authorizeSessionSharingTarget(
       `Only the session creator or an admin can ${params.ownerAction ?? "archive or restore this session"}.`,
     );
   }
-  const capped = sessionCap === "view" || sessionCap === "suggest";
+  const capped = sessionCap === "invited" || sessionCap === "view" || sessionCap === "suggest";
   // Draft membership is inactive, while an explicit role caps even shared visibility.
   const canMutate =
     visibility === "draft"

@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -10,12 +10,13 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
-  resolveConversationCapabilityProfile,
+  resolveConversationCapabilityPolicy,
   type ResolvedConversationCapabilityProfile,
 } from "../../agents/conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
 import {
   bindReplyToolAuthorityCallerRead,
+  readReplyInputChannel,
   recordPreparedToolAuthorityRead,
   type PreparedQuestionCallerRead,
   type ReplyToolAuthorityCaller,
@@ -55,6 +56,8 @@ import {
   type ReplyMessageJoinObservation,
 } from "../../sessions/session-controller.message-join-observation.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { getCommandOwnerAuthority } from "../command-owner-authority.js";
+import { readTransferredRequesterProfile } from "../requester-profile.js";
 import { MessageInjectionPolicyMismatchError } from "./message-injection-authority.js";
 import {
   captureReplyToolAuthoritySession,
@@ -62,7 +65,10 @@ import {
   withReplyToolAuthorityCohort,
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
-import { projectReplyToolAuthorityInput } from "./reply-tool-authority-inbound.js";
+import {
+  captureReplyToolAuthorityContinuation,
+  projectReplyToolAuthorityInput,
+} from "./reply-tool-authority-inbound.js";
 import {
   captureMemoryReplyToolAuthoritySession,
   prepareMemoryReplyToolAuthorityCaller,
@@ -81,8 +87,9 @@ export function resolveReplyToolAuthorityContext(
   const execution = snapshot.run;
   const provider = route?.provider ?? execution.provider;
   const model = route?.model ?? execution.model;
-  const capabilityProfile = resolveConversationCapabilityProfile({
+  const policy = resolveConversationCapabilityPolicy({
     requesterOrigin: execution.requesterOrigin,
+    operatorAuthority: snapshot.operatorAuthority ?? null,
     config: execution.config,
     sessionId: execution.sessionId,
     // Capability identity follows execution, not the independent sandbox policy owner.
@@ -116,13 +123,13 @@ export function resolveReplyToolAuthorityContext(
     scheduledToolPolicy: execution.scheduledToolPolicy,
     runtimePluginToolGrant: execution.runtimePluginToolGrant,
   });
-  return { provider, model, capabilityProfile };
+  return { provider, model, capabilityProfile: { policy } };
 }
 
 /** Screen needs browser control; theme remains requester-scoped without it. */
 export function resolveReplyPersonalToolTargets(
   input: ReplyToolAuthorityInput,
-  preparedProfile: ResolvedConversationCapabilityProfile,
+  preparedProfile: Pick<ResolvedConversationCapabilityProfile, "policy">,
 ) {
   const target = input.run.gatewayUiCommandTarget;
   let policies: ReturnType<typeof resolveConversationToolPolicies> | undefined;
@@ -159,16 +166,21 @@ export function resolveReplyOperatorAuthorityKey(
   if (!authority) {
     return "";
   }
-  const source = authority.source ?? authority;
-  let identity = operatorAuthorityIdentities.keys.get(source);
-  if (identity === undefined) {
-    identity = operatorAuthorityIdentities.nextId++;
-    operatorAuthorityIdentities.keys.set(source, identity);
-  }
+  const identities = [authority.source ?? authority, authority.invocation].map((owner) => {
+    if (!owner) {
+      return null;
+    }
+    let identity = operatorAuthorityIdentities.keys.get(owner);
+    if (identity === undefined) {
+      identity = operatorAuthorityIdentities.nextId++;
+      operatorAuthorityIdentities.keys.set(owner, identity);
+    }
+    return identity;
+  });
   return JSON.stringify([
     authority.profileId,
     [...new Set(authority.scopes.map((scope) => scope.trim()).filter(Boolean))].toSorted(),
-    identity,
+    ...identities,
   ]);
 }
 
@@ -192,76 +204,69 @@ function resolveFollowupRunToolAuthorityFingerprint(
     snapshot,
     capabilityProfile,
   );
-  return createHash("sha256")
-    .update(
-      stableStringify({
-        requesterPrincipalKey: resolveRequesterPrincipalKey({
-          ...execution,
-          messageChannel: snapshot.originatingChannel,
-          operatorAuthority: authority,
-        }),
-        provider,
-        model,
-        policy: capabilityProfile.policy,
-        // Main's tools retain originating credit. Without explicit collaboration,
-        // a different requester uses the followup path instead of those closures.
-        gitContributorProfileId: isMainGitContributorScope({
-          agentId:
-            execution.agentId ?? parseAgentSessionKey(execution.sessionKey)?.agentId ?? "main",
-          config: execution.config ?? {},
-          sessionKey: execution.sessionKey ?? "",
-        })
-          ? execution.gitContributorProfileId
-          : undefined,
-        operatorAuthority: authority
-          ? {
-              scopes: [...new Set(authority.scopes)].toSorted(),
-              rolePolicy: authority.rolePolicy,
-              gatewayAccessGrant:
-                authority.gatewayAccessGrant === undefined
-                  ? resolveReplyOperatorAuthorityKey(authority)
-                  : authority.gatewayAccessGrant,
-              modelPolicy:
-                readOperatorModelPolicyMembership(authority.modelPolicy) ??
-                resolveReplyOperatorAuthorityKey(authority),
-            }
-          : undefined,
-        toolsAllow: snapshot.toolsAllow,
-        toolsAllowIntersection: snapshot.toolsAllow
-          ? readToolAllowlistIntersection(snapshot.toolsAllow)
-          : undefined,
-        disableTools: snapshot.disableTools === true,
-        forceRestartSafeTools: snapshot.forceRestartSafeTools === true,
-        forceCodeModeTools: snapshot.forceCodeModeTools === true,
-        sessionFile: execution.sessionFile,
-        agentDir: execution.agentDir,
-        workspaceDir: execution.workspaceDir,
-        cwd: execution.cwd,
-        permissionMode: execution.permissionMode,
-        toolOverrides: execution.toolOverrides,
-        execOverrides: execution.execOverrides,
-        elevatedLevel: execution.elevatedLevel,
-        bashElevated: execution.bashElevated,
-        traceAuthorized: execution.traceAuthorized === true,
-        // Automatic credential rotation retains the turn; explicit account pins stay exact.
-        authProfile:
-          execution.authProfileIdSource === "auto"
-            ? { source: "auto" }
-            : { id: execution.authProfileId },
-        clientCaps: [...new Set(execution.clientCaps ?? [])].toSorted(),
-        // Own-profile targets retain the running turn's original bindings.
-        gatewayUiCommandTarget:
-          authority && screenTarget?.profileId === authority.profileId
-            ? { ownProfile: true }
-            : screenTarget,
-        themeProfileId:
-          authority && themeProfileId === authority.profileId
-            ? { ownProfile: true }
-            : themeProfileId,
-        toolBindings: execution.toolBindings,
+  return sha256Hex(
+    stableStringify({
+      requesterPrincipalKey: resolveRequesterPrincipalKey({
+        ...execution,
+        messageChannel: snapshot.originatingChannel,
+        operatorAuthority: authority,
       }),
-    )
-    .digest("hex");
+      provider,
+      model,
+      policy: capabilityProfile.policy,
+      // Main's tools retain originating credit. Without explicit collaboration,
+      // a different requester uses the followup path instead of those closures.
+      gitContributorProfileId: isMainGitContributorScope({
+        agentId: execution.agentId ?? parseAgentSessionKey(execution.sessionKey)?.agentId ?? "main",
+        config: execution.config ?? {},
+        sessionKey: execution.sessionKey ?? "",
+      })
+        ? execution.gitContributorProfileId
+        : undefined,
+      operatorAuthority: authority
+        ? {
+            scopes: [...new Set(authority.scopes)].toSorted(),
+            rolePolicy: authority.rolePolicy,
+            gatewayAccessGrant:
+              authority.gatewayAccessGrant === undefined
+                ? resolveReplyOperatorAuthorityKey(authority)
+                : authority.gatewayAccessGrant,
+            modelPolicy:
+              readOperatorModelPolicyMembership(authority.modelPolicy) ??
+              resolveReplyOperatorAuthorityKey(authority),
+          }
+        : undefined,
+      toolsAllow: snapshot.toolsAllow,
+      toolsAllowIntersection: snapshot.toolsAllow
+        ? readToolAllowlistIntersection(snapshot.toolsAllow)
+        : undefined,
+      disableTools: snapshot.disableTools === true,
+      sessionFile: execution.sessionFile,
+      agentDir: execution.agentDir,
+      workspaceDir: execution.workspaceDir,
+      cwd: execution.cwd,
+      permissionMode: execution.permissionMode,
+      toolOverrides: execution.toolOverrides,
+      execOverrides: execution.execOverrides,
+      elevatedLevel: execution.elevatedLevel,
+      bashElevated: execution.bashElevated,
+      traceAuthorized: execution.traceAuthorized === true,
+      // Automatic credential rotation retains the turn; explicit account pins stay exact.
+      authProfile:
+        execution.authProfileIdSource === "auto"
+          ? { source: "auto" }
+          : { id: execution.authProfileId },
+      clientCaps: [...new Set(execution.clientCaps ?? [])].toSorted(),
+      // Own-profile targets retain the running turn's original bindings.
+      gatewayUiCommandTarget:
+        authority && screenTarget?.profileId === authority.profileId
+          ? { ownProfile: true }
+          : screenTarget,
+      themeProfileId:
+        authority && themeProfileId === authority.profileId ? { ownProfile: true } : themeProfileId,
+      toolBindings: execution.toolBindings,
+    }),
+  );
 }
 
 export async function prepareFollowupRunToolAuthorityFingerprint(
@@ -340,14 +345,32 @@ export function prepareReplyToolAuthority(
     >
   > {
   const capturedJoinObservation = joinObservation ? structuredClone(joinObservation) : undefined;
+  const channelOwner = getCommandOwnerAuthority(run.run);
+  const inputChannel = readReplyInputChannel(run.run);
   const snapshot = captureReplyToolAuthorityInput(run);
   const requesterPrincipalKey = resolveRequesterPrincipalKey({
     ...snapshot.run,
     messageChannel: snapshot.originatingChannel,
     operatorAuthority: snapshot.operatorAuthority,
   });
-  const projectInput = (caller?: ReplyToolAuthorityCaller) =>
-    projectReplyToolAuthorityInput(snapshot, caller);
+  // Historical identity follows this selected policy binding, not the browser
+  // connection or causal initiator that may have delegated to another requester.
+  const directRequester = readTransferredRequesterProfile(run);
+  const selectedProfileId = snapshot.run.requesterOrigin
+    ? snapshot.run.requesterOrigin.operatorProfileId
+    : (snapshot.operatorAuthority?.profileId ?? snapshot.run.operatorProfileId);
+  const requesterProfileId =
+    (!snapshot.run.inputProvenance || snapshot.run.inputProvenance.kind === "external_user") &&
+    (!selectedProfileId || selectedProfileId === directRequester?.id)
+      ? directRequester?.id
+      : undefined;
+  const projectInput = (caller?: ReplyToolAuthorityCaller, preserveIncumbentAuthority = false) =>
+    projectReplyToolAuthorityInput(
+      snapshot,
+      caller,
+      requesterPrincipalKey,
+      preserveIncumbentAuthority,
+    );
   const env = { ...process.env };
   const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
   const agentId = sessionKey
@@ -546,18 +569,34 @@ export function prepareReplyToolAuthority(
     projectRequester: project,
   };
   bindReplyToolAuthorityCallerRead(result.projectAsync, (caller, expected, route, assertActive) => {
+    const {
+      continuationKind,
+      allowPendingUserInputAnswer,
+      assertCurrent: assertContinuationCurrent,
+    } = captureReplyToolAuthorityContinuation({
+      snapshot,
+      caller,
+      requesterPrincipalKey,
+      requesterProfileId,
+      channelOwner,
+      inputChannel,
+    });
     const assertCurrent = () => {
       assertActive();
       assertOpen();
+      assertContinuationCurrent();
     };
     assertCurrent();
     return {
       assertCurrent,
+      continuationKind,
+      allowPendingUserInputAnswer,
       joinObservation: capturedJoinObservation,
       prepare: async () => {
-        const projected = projectInput(caller);
+        const projected = projectInput(caller, continuationKind !== undefined);
         const policyInputs = projected === snapshot ? [snapshot] : [snapshot, projected];
         const assertCallerCurrent = () => {
+          assertCurrent();
           const participant = caller && "kind" in caller ? caller.caller : caller;
           if (participant && !("requesterOrigin" in participant)) {
             assertCurrentOperatorAuthority(participant.operatorAuthority);

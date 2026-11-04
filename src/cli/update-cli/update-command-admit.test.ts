@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readConfigFileSnapshot } from "../../config/io.runtime.js";
 import * as deferredPluginMigrations from "../../infra/deferred-plugin-migrations.js";
-import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
 import {
@@ -22,10 +21,12 @@ import * as pluginMigrationResources from "../../plugins/doctor-migration-resour
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { runCli } from "../run-main.js";
 import { registerUpdateCli } from "../update-cli.js";
 import * as schemaPreflight from "./schema-preflight.js";
 import { updateAdmitCommand } from "./update-command-admit.js";
+import { snapshotUpdateFixtureFiles } from "./update-command-filesystem-snapshot.test-support.js";
 import * as pluginPreflight from "./update-command-plugin-preflight.js";
 
 const forbidden = vi.hoisted(() => ({
@@ -56,7 +57,7 @@ let stdout: string;
 let stderr: string;
 
 function writeConfig(value: unknown) {
-  fs.writeFileSync(configPath, JSON.stringify(value));
+  writeFixtureJsonSync(configPath, value);
 }
 
 function readVerdict(): UpdateAdmissionVerdict {
@@ -66,17 +67,7 @@ function readVerdict(): UpdateAdmissionVerdict {
 }
 
 function snapshotFiles() {
-  return listDirectoryTreeStrictSync(home)
-    .map((walkEntry) => walkEntry.dirent)
-    .filter((entry) => entry.isFile())
-    .map((entry) => {
-      const filename = path.join(entry.parentPath, entry.name);
-      return [
-        path.relative(home, filename),
-        fs.readFileSync(filename).toString("hex"),
-        fs.statSync(filename).mode,
-      ];
-    });
+  return snapshotUpdateFixtureFiles(home);
 }
 
 beforeEach(() => {
@@ -96,10 +87,7 @@ beforeEach(() => {
   const stateDir = path.join(home, "profile");
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(stateDir);
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw", version: "2026.9.1" });
   configPath = path.join(stateDir, "openclaw.json");
   contextPath = path.join(home, "context.json");
   context = {
@@ -148,6 +136,25 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
+  it("admits the legacy Claws preference for candidate Doctor without rewriting config", async () => {
+    writeConfig({
+      gateway: {
+        controlUi: { experimental: { customPlugins: true, chatBubbles: true, claws: true } },
+      },
+    });
+    const before = snapshotFiles();
+    await updateAdmitCommand(contextPath);
+    expect(process.exitCode).toBe(0);
+    expect(readVerdict()).toMatchObject({
+      verdict: "admit",
+      reasons: [],
+      warnings: [{ code: "config-warning", message: expect.stringContaining("legacy fields") }],
+      facts: { checks: expect.arrayContaining([{ name: "config", status: "warn" }]) },
+    });
+    expect(snapshotFiles()).toEqual(before);
+    expect((await readConfigFileSnapshot({ observe: false })).valid).toBe(false);
+  });
+
   it("attests family config through existing admission without mutation", async () => {
     writeConfig({ database: { families: { workboard: { engine: "sqlite" } } } });
     const before = snapshotFiles();
@@ -161,25 +168,19 @@ describe("candidate update admission", () => {
     const pluginId = "pending-settings";
     const pluginDir = path.join(home, pluginId);
     fs.mkdirSync(pluginDir);
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: pluginId,
-        version: "1.0.0",
-        openclaw: { extensions: ["./index.js"] },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        configSchema: {
-          type: "object",
-          properties: { root: { type: "string" } },
-          additionalProperties: false,
-        },
-      }),
-    );
+    writeFixtureJsonSync(path.join(pluginDir, "package.json"), {
+      name: pluginId,
+      version: "1.0.0",
+      openclaw: { extensions: ["./index.js"] },
+    });
+    writeFixtureJsonSync(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: pluginId,
+      configSchema: {
+        type: "object",
+        properties: { root: { type: "string" } },
+        additionalProperties: false,
+      },
+    });
     fs.writeFileSync(path.join(pluginDir, "index.js"), "throw new Error('must not activate');\n");
     writeConfig({
       plugins: {
@@ -288,7 +289,7 @@ describe("candidate update admission", () => {
       context.supervisor.version = supervisor;
       context.target.channel = supervisor.includes("beta") ? "beta" : "stable";
       context.target.spec = spec;
-      fs.writeFileSync(contextPath, JSON.stringify(context));
+      writeFixtureJsonSync(contextPath, context);
       const candidateRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url })!;
       expect(candidateRoot).not.toBe(root);
       const inventory = path.join(home, "candidate-inventory");
@@ -496,7 +497,7 @@ describe("candidate update admission", () => {
       } else if (selector === "environment") {
         vi.stubEnv("OPENCLAW_OAUTH_DIR", oauthDir);
       } else if (selector === "prefixed-include") {
-        fs.writeFileSync(path.join(stateDir, "auth-selector.json"), JSON.stringify(selected));
+        writeFixtureJsonSync(path.join(stateDir, "auth-selector.json"), selected);
         fs.writeFileSync(configPath, 'unexpected prefix\n{"$include":"auth-selector.json"}');
       } else if (selector !== "default") {
         fs.writeFileSync(
@@ -516,23 +517,20 @@ describe("candidate update admission", () => {
         fs.mkdirSync(store, { recursive: true });
       } else {
         fs.mkdirSync(path.dirname(store), { recursive: true });
-        fs.writeFileSync(
-          store,
-          JSON.stringify({
-            version: 1,
-            profiles: {
-              "openai-codex:default": {
-                type: "oauth",
+        writeFixtureJsonSync(store, {
+          version: 1,
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              oauthRef: {
+                source: "openclaw-credentials",
                 provider: "openai-codex",
-                oauthRef: {
-                  source: "openclaw-credentials",
-                  provider: "openai-codex",
-                  id: (storeKind === "referenced" ? "a" : "c").repeat(32),
-                },
+                id: (storeKind === "referenced" ? "a" : "c").repeat(32),
               },
             },
-          }),
-        );
+          },
+        });
       }
       const before = snapshotFiles();
 
@@ -766,24 +764,18 @@ describe("candidate update admission", () => {
     async (shape) => {
       const pluginDir = path.join(home, "older-whatsapp");
       fs.mkdirSync(pluginDir);
-      fs.writeFileSync(
-        path.join(pluginDir, "package.json"),
-        JSON.stringify({
-          name: "@openclaw/whatsapp",
-          version: "2026.9.7",
-          openclaw: { extensions: ["./index.js"] },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(pluginDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "whatsapp",
-          channels: ["whatsapp"],
-          configSchema: { type: "object", additionalProperties: false },
-          channelConfigs: { whatsapp: { schema: { type: "object" } } },
-          doctorContract: { configRepair: true },
-        }),
-      );
+      writeFixtureJsonSync(path.join(pluginDir, "package.json"), {
+        name: "@openclaw/whatsapp",
+        version: "2026.9.7",
+        openclaw: { extensions: ["./index.js"] },
+      });
+      writeFixtureJsonSync(path.join(pluginDir, "openclaw.plugin.json"), {
+        id: "whatsapp",
+        channels: ["whatsapp"],
+        configSchema: { type: "object", additionalProperties: false },
+        channelConfigs: { whatsapp: { schema: { type: "object" } } },
+        doctorContract: { configRepair: true },
+      });
       fs.writeFileSync(
         path.join(pluginDir, "index.js"),
         "throw new Error('admission must not activate the plugin');\n",
@@ -890,25 +882,19 @@ module.exports = {
   it("validates plugin compatibility against the candidate despite inherited host identity", async () => {
     const pluginDir = path.join(home, "version-sensitive-plugin");
     fs.mkdirSync(pluginDir);
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "candidate-version-fixture",
-        version: "1.0.0",
-        openclaw: { extensions: ["./index.js"], compat: { pluginApi: ">=2026.1.0" } },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "candidate-version-fixture",
-        configSchema: {
-          type: "object",
-          properties: { enabled: { type: "boolean" } },
-          additionalProperties: false,
-        },
-      }),
-    );
+    writeFixtureJsonSync(path.join(pluginDir, "package.json"), {
+      name: "candidate-version-fixture",
+      version: "1.0.0",
+      openclaw: { extensions: ["./index.js"], compat: { pluginApi: ">=2026.1.0" } },
+    });
+    writeFixtureJsonSync(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "candidate-version-fixture",
+      configSchema: {
+        type: "object",
+        properties: { enabled: { type: "boolean" } },
+        additionalProperties: false,
+      },
+    });
     fs.writeFileSync(
       path.join(pluginDir, "index.js"),
       "throw new Error('metadata inspection must not activate plugins');\n",

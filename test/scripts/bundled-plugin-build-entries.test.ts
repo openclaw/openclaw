@@ -390,6 +390,7 @@ describe("bundled plugin build entries", () => {
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
     const excludedPackageDirs = collectRootPackageExcludedExtensionDirs();
+    expect(excludedPackageDirs.has("node_modules")).toBe(false);
     const secretBackedPluginIds = new Set<string>();
     for (const { entryPath, entry, pluginId } of bundledChannelEntries()) {
       if (!entry.includes('exportName: "channelSecrets"')) {

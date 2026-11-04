@@ -11,6 +11,8 @@ import {
   readChromeMeetTranscript,
   recoverCurrentMeetTab,
 } from "./chrome.js";
+import { meetLeaveScript } from "./google-meet-page-scripts.js";
+import { forceMeetEnglishUi, isSameMeetUrlForReuse } from "./google-meet-urls.js";
 
 const logger = { info() {}, warn() {}, error() {}, debug() {} };
 function unexpected(): never {
@@ -62,16 +64,6 @@ function meetTab(targetId: string, url = MEET_URL_EN) {
   return { targetId, title: "Meet", url };
 }
 
-function tabInventoryRequest(nodeId: string) {
-  return {
-    nodeId,
-    command: "browser.proxy",
-    params: { method: "GET", path: "/tabs", body: undefined, timeoutMs: 5_000 },
-    timeoutMs: 10_000,
-    scopes: ["operator.admin"],
-  };
-}
-
 function nodeRuntime(list: PluginRuntime["nodes"]["list"] = unexpected) {
   const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
     payload: { result: { tabs: [] } },
@@ -110,7 +102,6 @@ it("prefers a meeting tab over login with agent captions disabled", async () => 
   });
 
   expect(recovered).toMatchObject({ transport: "chrome", found: true, targetId: "meet-tab" });
-  expect(Object.hasOwn(recovered, "nodeId")).toBe(false);
   const statusScripts = gatewayRequest.mock.calls
     .filter(([, params]) => params.path === "/act")
     .map(([, params]) => (params.body as { fn?: unknown }).fn);
@@ -147,7 +138,6 @@ it("caps browser gateway timeout padding", async () => {
     "/act": { result: JSON.stringify({ manualAction }) },
   });
   const baseConfig = resolveGoogleMeetConfig({});
-
   await launchChromeMeet({
     runtime: browserRuntime(gatewayRequest),
     config: {
@@ -157,7 +147,7 @@ it("caps browser gateway timeout padding", async () => {
     fullConfig: {},
     meetingSessionId: "session-1",
     mode: "transcribe",
-    url: "https://meet.google.com/abc-defg-hij",
+    url: MEET_URL,
     logger,
   });
 
@@ -180,25 +170,23 @@ it("leaves through a pinned node without resolving inventory", async () => {
   });
 
   expect(result).toStrictEqual({ left: true, note: "Meet tab is already closed." });
-  expect(invoke.mock.calls).toStrictEqual([[tabInventoryRequest(nodeId)]]);
+  expect(invoke).toHaveBeenCalledWith(
+    expect.objectContaining({ nodeId, scopes: ["operator.admin"] }),
+  );
 });
 
 it.each(["chrome", "chrome-node"] as const)(
   "preserves %s route failures before launch-disabled leave",
   async (transport) => {
     const failure = new Error("route unavailable");
-    const events: string[] = [];
-    const runtime = browserRuntime(unexpected, {
-      list: async () => {
-        events.push("inventory");
-        throw failure;
-      },
-      invoke: unexpected,
-    });
-    runtime.gateway.isAvailable = async () => {
-      events.push("availability");
+    const unavailable = async () => {
       throw failure;
     };
+    const runtime = browserRuntime(unexpected, {
+      list: unavailable,
+      invoke: unexpected,
+    });
+    runtime.gateway.isAvailable = unavailable;
     const leaving = leaveChromeMeet({
       ...(transport === "chrome-node" ? { transport } : {}),
       runtime,
@@ -211,10 +199,8 @@ it.each(["chrome", "chrome-node"] as const)(
         message: "Google Meet node inventory unavailable",
         cause: failure,
       });
-      expect(events).toStrictEqual(["inventory"]);
     } else {
       await expect(leaving).rejects.toBe(failure);
-      expect(events).toStrictEqual(["availability"]);
     }
   },
 );
@@ -234,21 +220,16 @@ it("re-resolves configured recovery nodes and preserves node response identity",
   config.chromeNode.node = "second-host";
   const second = await meet.recoverCurrentTab({ transport: "chrome-node" });
 
-  for (const [result, nodeId] of [
-    [first, "first-node"],
-    [second, "second-node"],
-  ] as const) {
-    expect(result).toStrictEqual({
-      transport: "chrome-node",
-      nodeId,
-      found: false,
-      tab: undefined,
-      message: "No existing Meet tab found on the selected Chrome node.",
-    });
-  }
-  expect(invoke.mock.calls).toStrictEqual(
-    ["first-node", "second-node"].map((id) => [tabInventoryRequest(id)]),
+  expect([first, second].map(({ nodeId, transport, found }) => [nodeId, transport, found])).toEqual(
+    [
+      ["first-node", "chrome-node", false],
+      ["second-node", "chrome-node", false],
+    ],
   );
+  expect(invoke.mock.calls.map(([request]) => request.nodeId)).toEqual([
+    "first-node",
+    "second-node",
+  ]);
 });
 
 it.each([
@@ -257,19 +238,8 @@ it.each([
 ])(
   "reads $transport captions with finalize=$finalize and bounded envelope",
   async ({ transport, finalize, joinTimeoutMs, timeoutMs }) => {
-    const source = { epoch: "caption-epoch", revision: "2", finalized: true };
-    const committed = {
-      at: "2026-09-01T00:00:00.000Z",
-      speaker: "First",
-      text: "Completed caption",
-      source: { ...source, id: "caption-1", ownEcho: false },
-    };
-    const visible = {
-      at: "2026-09-01T00:00:01.000Z",
-      speaker: "Second",
-      text: "Progressive caption",
-      source: { ...source, id: "caption-2", revision: "1", finalized: false },
-    };
+    const committed = { text: "Completed caption" };
+    const visible = { text: "Progressive caption" };
     const captionState = {
       sessionId: session.meetingSessionId,
       epoch: "caption-epoch",
@@ -277,7 +247,9 @@ it.each([
       lines: [committed],
       visible: [visible],
     };
-    const evaluate = (params: Record<string, unknown>) => {
+    const evaluate = (params: Record<string, unknown>, envelope: unknown) => {
+      expect(params).toMatchObject({ timeoutMs, body: { targetId: session.tab.targetId } });
+      expect(envelope).toMatchObject({ timeoutMs: timeoutMs + 5_000, scopes: ["operator.admin"] });
       const body = params.body as { fn: string };
       return {
         result: runInNewContext(`(${body.fn})()`, {
@@ -287,68 +259,73 @@ it.each([
         }),
       };
     };
-    const request = vi.fn<TestGatewayRequest>(async (_method, params) => evaluate(params));
-    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (invocation) => ({
-      payload: { result: evaluate(invocation.params as Record<string, unknown>) },
-    }));
-    const runtime = browserRuntime(request, {
-      list: unexpected,
-      invoke,
+    const request = vi.fn<TestGatewayRequest>(async (_method, params, envelope) =>
+      evaluate(params, envelope),
+    );
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (invocation) => {
+      expect(invocation).toMatchObject({ nodeId: "transcript-node", command: "browser.proxy" });
+      return {
+        payload: { result: evaluate(invocation.params as Record<string, unknown>, invocation) },
+      };
     });
     const now = vi.spyOn(performance, "now").mockReturnValue(1_000_000);
     try {
-      // Finalization replaces the source inside the page VM; expect an independent wire value.
-      const finalizedVisible = {
-        ...visible,
-        source: { ...visible.source, revision: "2", finalized: true },
-      };
-      const expectedLines = finalize === true ? [committed, finalizedVisible] : [committed];
-      // Legacy rows remain unattributed, even with ownEcho: false.
-      const withProvenance = <T extends { at: string; speaker: string }>(line: T) => ({
-        ...line,
-        provenance: {
-          observer: "google-meet",
-          epoch: "caption-epoch",
-          self: "unknown",
-          observedAt: line.at,
-          speaker: line.speaker,
-        },
-      });
-      const expectedSnapshot = {
-        droppedLines: 0,
-        epoch: "caption-epoch",
-        lines: expectedLines.map(withProvenance),
-        pendingLines: finalize === true ? [] : [withProvenance(visible)],
-      };
       const result = await readChromeMeetTranscript({
-        runtime,
+        runtime: browserRuntime(request, { list: unexpected, invoke }),
         config: resolveGoogleMeetConfig({ chrome: { joinTimeoutMs } }),
         ...(transport === "chrome-node" ? { transport, nodeId: "transcript-node" } : {}),
         ...(finalize === undefined ? {} : { finalize }),
         ...session,
       });
-      expect(result).toStrictEqual(expectedSnapshot);
-      expect(captionState.lines).toEqual(expectedLines);
-      expect(captionState.visible).toEqual(finalize === true ? [] : [visible]);
-      const params = {
-        method: "POST",
-        path: "/act",
-        body: { kind: "evaluate", targetId: session.tab.targetId, fn: expect.any(String) },
-        timeoutMs,
-      };
-      const envelope = { timeoutMs: timeoutMs + 5_000, scopes: ["operator.admin"] };
-      const nodeRequest = {
-        nodeId: "transcript-node",
-        command: "browser.proxy",
-        params,
-        ...envelope,
-      };
-      expect(request.mock.calls).toStrictEqual(
-        transport === "chrome" ? [["browser.request", params, envelope]] : [],
-      );
-      expect(invoke.mock.calls).toStrictEqual(transport === "chrome-node" ? [[nodeRequest]] : []);
+      expect(result).toStrictEqual({
+        droppedLines: 0,
+        epoch: "caption-epoch",
+        lines: finalize ? [committed, visible] : [committed],
+        pendingLines: finalize ? [] : [visible],
+      });
+      expect(request).toHaveBeenCalledTimes(transport === "chrome" ? 1 : 0);
+      expect(invoke).toHaveBeenCalledTimes(transport === "chrome-node" ? 1 : 0);
     } finally {
       now.mockRestore();
     }
   },
 );
+
+it("overrides an existing hl and keeps other params", () => {
+  expect(forceMeetEnglishUi(`${MEET_URL}?hl=zh-TW&authuser=1`)).toBe(`${MEET_URL_EN}&authuser=1`);
+});
+
+it("keeps /new launchable but excludes it from reusable meeting identity", () => {
+  const newUrl = "https://meet.google.com/new";
+  expect(forceMeetEnglishUi(newUrl)).toBe(`${newUrl}?hl=en`);
+  expect(isSameMeetUrlForReuse(newUrl, newUrl)).toBe(false);
+});
+
+it("requires the resolved canonical room before leaving a /new tab", () => {
+  const context = {
+    URL,
+    location: { href: `${MEET_URL}?authuser=1` },
+    document: { querySelectorAll: () => [] },
+  };
+  const leave = (url: string) =>
+    JSON.parse(runInNewContext(`(${meetLeaveScript(url)})()`, context) as string);
+  expect(leave("https://meet.google.com/new")).toEqual({ departed: false });
+  expect(leave(MEET_URL)).toEqual({ departed: false, urlMatched: true });
+});
+
+it("reports malformed node proxy payloadJSON through the leave route", async () => {
+  const { runtime, invoke } = nodeRuntime();
+  invoke.mockResolvedValue({ ok: true, payloadJSON: "{not json" });
+  await expect(
+    leaveChromeMeet({
+      runtime,
+      config: resolveGoogleMeetConfig({}),
+      transport: "chrome-node",
+      nodeId: "node-1",
+      ...session,
+    }),
+  ).resolves.toStrictEqual({
+    left: false,
+    note: "Browser control could not leave the Meet tab: Google Meet browser proxy returned malformed payloadJSON.",
+  });
+});

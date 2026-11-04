@@ -49,10 +49,8 @@ import type {
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-transcript-reports.worker.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { withMemoryReportWorker } from "./session-actor-transcript-reports.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";

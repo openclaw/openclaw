@@ -14,6 +14,7 @@ import {
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
+import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { classifySqliteMutation } from "./sqlite-schema-mutation.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
@@ -40,32 +41,19 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 function snapshot() {
-  const entries: (Pick<fs.Stats, "dev" | "ino" | "mode"> & {
-    name: string;
-    content?: Buffer | string;
-  })[] = [];
-  const visit = (name: string) => {
+  const names = [".", ...listDirectoryTreeStrictSync(root).map((entry) => entry.relativePath)];
+  return names.map((name) => {
     const file = path.join(root, name);
     const stat = fs.lstatSync(file);
-    entries.push({
-      name,
-      dev: stat.dev,
-      ino: stat.ino,
-      mode: stat.mode,
-      ...(stat.isSymbolicLink()
+    return Object.assign(
+      { name, dev: stat.dev, ino: stat.ino, mode: stat.mode },
+      stat.isSymbolicLink()
         ? { content: fs.readlinkSync(file) }
         : stat.isFile()
           ? { content: fs.readFileSync(file) }
-          : {}),
-    });
-    if (stat.isDirectory()) {
-      for (const child of fs.readdirSync(file).toSorted()) {
-        visit(path.join(name, child));
-      }
-    }
-  };
-  visit(".");
-  return entries;
+          : {},
+    );
+  });
 }
 
 async function authority() {

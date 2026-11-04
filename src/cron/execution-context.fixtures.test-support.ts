@@ -1,6 +1,9 @@
 // Fixture replay shared by the development replay script and the fixture tests.
 import { assembleScheduledAdmissionFacts } from "./execution-context-admission.js";
-import { compareScheduledDecisions } from "./execution-context-projection.js";
+import {
+  compareScheduledDecisions,
+  type ScheduledInferenceRuntimeFacts,
+} from "./execution-context-projection.js";
 import {
   buildScheduledExecutionContext,
   type ScheduledAdmissionFacts,
@@ -13,6 +16,8 @@ export type ScheduledContextFixture = {
   job: CronStoredJob;
   parentRow?: NonNullable<ScheduledAdmissionFacts["parentRow"]>;
   owner?: boolean;
+  /** Runtimes the replay resolved for a bound job; see ScheduledInferenceRuntimeFacts. */
+  inferenceRuntimes?: ScheduledInferenceRuntimeFacts;
   expected?: ScheduledContextFixtureOutcome;
 };
 
@@ -45,7 +50,7 @@ export function replayScheduledContextFixture(
     fixture.owner,
   );
   const result = buildScheduledExecutionContext(job, facts);
-  const divergence = compareScheduledDecisions(job, facts, result);
+  const divergence = compareScheduledDecisions(job, facts, result, fixture.inferenceRuntimes);
   return {
     status: result.status,
     ...(result.status === "ready"

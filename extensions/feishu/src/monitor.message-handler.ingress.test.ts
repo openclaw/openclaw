@@ -330,17 +330,11 @@ it("admits controls during an active turn while ordinary messages retain FIFO or
 
 describe("Feishu durable ingress debounce lifecycle", () => {
   it("releases a claim acquired after ingress abandonment instead of enqueueing it", async () => {
-    const transport = createLifecycle();
-    const logicalClaim = createClaim("delayed-admission");
+    const { transport, logicalClaim, event, harness } = createTurn("delayed", { noClaim: true });
     const pending =
       createDeferred<Awaited<ReturnType<typeof dedup.claimUnprocessedFeishuMessage>>>();
-    const harness = createHarness({
-      lifecycles: new Map([["evt-delayed", transport.lifecycle]]),
-      claims: [],
-      adoptTurn: true,
-    });
     harness.claim.mockReturnValueOnce(pending.promise);
-    const handling = harness.handler(createTextEvent("evt-delayed", "om-delayed", "hello"));
+    const handling = harness.handler(event);
     transport.controller.abort();
     await transport.lifecycle.onAbandoned();
     pending.resolve({ kind: "claimed", handle: logicalClaim });

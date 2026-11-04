@@ -15,9 +15,12 @@ import {
   parseRemoteWorkspaceManifestEnvelope,
   type RemoteWorkspaceManifestEnvelope,
 } from "./workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+useAgedWorkspaceHashClock();
+afterEach(() => vi.restoreAllMocks());
 
 it.each([
   { operation: "clone", reason: "clone-failed", stage: "git clone" },

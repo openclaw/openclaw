@@ -11,7 +11,7 @@ import {
 } from "../../lib/chat/commands.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
   createReactiveDraftHarness,
@@ -179,6 +179,29 @@ describe("chat composer suggestion accessibility", () => {
     refresh.resolve();
     await refresh.promise;
     await waitForSolid(() => expect(optionNames(container)).toEqual(["default", "low", "ultra"]));
+  });
+
+  it("keeps the keyboard-selected command when a pending catalog refresh settles", async () => {
+    replaceSlashCommands([
+      { key: "pair", name: "pair", description: "Generate setup codes." },
+      { key: "pair-device", name: "pair-device", description: "Pair a specific device." },
+    ]);
+    const refresh = createDeferred();
+    const { container } = createReactiveDraftHarness({ onSlashIntent: () => refresh.promise });
+    inputDraftAtEnd(container, "/pair");
+    await waitForSolid(() => expect(optionNames(container)).toEqual(["/pair", "/pair-device"]));
+    keydownComposer(container, "ArrowDown");
+    const selectedId = activeId(container);
+    expect(selectedId).toBe("chat-single-slash-option-command-pair-device");
+
+    refresh.resolve();
+    await refresh.promise;
+    await Promise.resolve();
+    flush();
+    expect(activeId(container)).toBe(selectedId);
+    expect(container.querySelector(`#${selectedId}`)?.getAttribute("aria-selected")).toBe("true");
+    keydownComposer(container, "Enter");
+    expect(getComposerTextarea(container).value).toBe("/pair-device ");
   });
 
   it.each([false, true])(

@@ -3,7 +3,8 @@ import { en } from "./en.ts";
 
 const enCron = {
   cron: {
-    adminRequired: "Browsing only. Automation changes require operator.admin access.",
+    adminRequired:
+      "Browsing only. Only the human owner or an administrator can change this automation.",
     runNotStarted: {
       notDue: "This automation is not due yet.",
       alreadyRunning: "This automation is already running.",
@@ -21,6 +22,8 @@ const enCron = {
       triggerIntervalTooShort:
         "Condition-triggered automations must run at least every 30 seconds.",
       cronExprRequired: "Cron expression is required.",
+      cronExprInvalid: "Enter 5 fields like 0 9 * * * or 6 fields like 0 0 9 * * *.",
+      cronTzInvalid: "Enter a valid IANA timezone, such as America/New_York.",
       staggerAmountInvalid: "Stagger must be greater than 0.",
       triggerScriptRequired: "Trigger script is required when the condition trigger is enabled.",
       triggerScriptPayloadUnsupported:
@@ -135,6 +138,10 @@ const enCron = {
       deliveryNotRequested: "Not requested",
     },
     form: {
+      humanOwner: "Owner",
+      humanOwnerHelp:
+        "The owner can edit this automation. Transferring pauses it and clears the previous owner’s captured credentials.",
+      ownerUnassigned: "Unassigned",
       requiredSr: "required",
       fieldName: "Name",
       description: "Description",
@@ -170,6 +177,10 @@ const enCron = {
       summaryEveryHours: "Runs every {amount} hours",
       summaryEveryDays: "Runs every {amount} days",
       summaryOnce: "Runs once at {at}",
+      configuredTime: "Configured time",
+      summaryConfiguredAt: "Configured time: {at}",
+      nextRunAt: "Next run at {at}",
+      noNextRun: "No next run scheduled",
       summaryCron: "Cron schedule {expr}",
       summaryCronTz: "Cron schedule {expr} ({tz})",
       timezoneOptional: "Timezone",
@@ -305,7 +316,7 @@ const enCron = {
       cancel: "Cancel",
     },
     jobState: {
-      next: "Next",
+      nextRelative: "Next {at}",
     },
     runEntry: {
       noSummary: "No summary.",

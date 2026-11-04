@@ -14,7 +14,7 @@ import {
   type CurrentReadAuthority,
 } from "../../shared/current-read-authority.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
-import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
+import { assertAgentDatabaseReadAdmitted } from "../../state/agent-database-admission.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { listUserProfileAuthLinksAsync } from "../../state/user-model-accounts.js";
 import { prepareChatAccountSelection } from "./chat-account-selection.js";
@@ -107,8 +107,9 @@ export function createGatewayChatMetadataRuntime(params: {
   const notifyChanged = (facts?: PreparedGenerationFacts, catalogStatusChanged = false) => {
     const previous = lastNotifiedFacts;
     lastNotifiedFacts = facts;
+    // Cooldown views still refresh, but they do not announce a changed model inventory.
     const modelCatalogChanged =
-      !previous || !facts || !generationFactsMatch(previous, facts, "catalog");
+      !previous || !facts || !generationFactsMatch(previous, facts, "catalog-notification");
     params.onChanged?.({
       modelCatalogChanged,
       ...(!modelCatalogChanged && catalogStatusChanged
@@ -339,6 +340,7 @@ export function createGatewayChatMetadataRuntime(params: {
   });
 
   const readCurrent = async <Result>(
+    agentId: string,
     project: (generation: PreparedMetadataGeneration) => Promise<PreparedProjection<Result>>,
   ): Promise<Result> => {
     assertOpen();
@@ -362,6 +364,7 @@ export function createGatewayChatMetadataRuntime(params: {
     if (!readProjection.isCurrent()) {
       throw new ChatMetadataSnapshotUnavailableError();
     }
+    assertAgentDatabaseReadAdmitted(agentId);
     return readProjection.read();
   };
 
@@ -381,12 +384,13 @@ export function createGatewayChatMetadataRuntime(params: {
     ) {
       return undefined;
     }
+    assertAgentDatabaseReadAdmitted(request.agentId);
     return published;
   };
   const readModelsList = async (
     request: PreparedModelsListRequest,
   ): Promise<ModelsListResult | undefined> => {
-    assertAgentDatabaseAdmitted(request.agentId);
+    assertAgentDatabaseReadAdmitted(request.agentId);
     const agentId = normalizeAgentId(request.agentId);
     const key = JSON.stringify([
       agentId,
@@ -408,7 +412,7 @@ export function createGatewayChatMetadataRuntime(params: {
     }
     let result: ModelsListResult | undefined;
     try {
-      result = await readCurrent(async (read) => {
+      result = await readCurrent(request.agentId, async (read) => {
         const prepared = await read.modelLists.read(request);
         return prepared ?? { isCurrent: () => true, read: () => undefined };
       });
@@ -431,7 +435,7 @@ export function createGatewayChatMetadataRuntime(params: {
   };
 
   const read = async (readParams: ChatMetadataReadParams): Promise<ChatMetadataResult> => {
-    assertAgentDatabaseAdmitted(readParams.agentId);
+    assertAgentDatabaseReadAdmitted(readParams.agentId);
     const { draftAccountSelection: draft, isCurrent } = readParams;
     const assertCurrent = isCurrent
       ? () => {
@@ -453,7 +457,7 @@ export function createGatewayChatMetadataRuntime(params: {
     const sessionEntry: ChatMetadataSessionEntry | undefined = draft
       ? { authProfileOverride: draft.authProfileId, authProfileOverrideSource: "user" }
       : readParams.sessionEntry;
-    return await readCurrent<ChatMetadataResult>(async (generation) => {
+    return await readCurrent<ChatMetadataResult>(readParams.agentId, async (generation) => {
       const agentId = normalizeAgentId(readParams.agentId);
       const agent = await prepareAgent(generation, agentId);
       if (!agent) {
@@ -529,7 +533,7 @@ export function createGatewayChatMetadataRuntime(params: {
   const readStartup = async (
     readParams: ChatStartupProjectionReadParams,
   ): Promise<ChatStartupProjectionResult | undefined> => {
-    assertAgentDatabaseAdmitted(readParams.agentId);
+    assertAgentDatabaseReadAdmitted(readParams.agentId);
     const profiles = resolveSessionCatalogProfiles(
       readParams.sessionEntry,
       params.getConfig(),
@@ -576,6 +580,7 @@ export function createGatewayChatMetadataRuntime(params: {
         return undefined;
       }
     }
+    assertAgentDatabaseReadAdmitted(readParams.agentId);
     if (agent && !agent.owner.isCurrent()) {
       return undefined;
     }

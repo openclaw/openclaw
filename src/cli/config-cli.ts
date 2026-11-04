@@ -1,8 +1,10 @@
 import type { Command } from "commander";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
+import { formatConfigFilePath } from "../config/logging.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
 import { danger, success, warn } from "../globals.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
@@ -14,6 +16,7 @@ import {
   writeRuntimeJson,
   writeRuntimeStdout,
 } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
@@ -67,26 +70,25 @@ async function runConfigMutation(
     runtime?: RuntimeEnv;
     throwOnError?: boolean;
     localStateOwner?: ConfigMutationOwner;
+    preparationSignal?: AbortSignal;
   },
   prepare: () => Promise<Omit<ConfigOperationParams, "runtime" | "options">>,
   jsonOutput = Boolean(opts.cliOptions.json),
 ) {
   const runtime = opts.runtime ?? defaultRuntime;
   const { handleConfigMutationError, runConfigOperations } = await import("./config-cli-runner.js");
+  let inputPrepared = false;
   try {
+    opts.preparationSignal?.throwIfAborted();
     const prepared = await prepare();
+    if (opts.preparationSignal?.aborted) {
+      return;
+    }
+    inputPrepared = true;
     const databaseOnly =
       opts.localStateOwner !== undefined &&
       prepared.operations.length > 0 &&
       prepared.operations.every(({ setPath }) => setPath[0] === "database");
-    // Previews and owner-routed writes inspect installed plugin state without write custody.
-    const prepareReadOnly = async () => {
-      if (!databaseOnly && !getDatabaseEngineSelection()) {
-        const { readConfigSnapshotForEngineSelection } =
-          await import("../commands/config-preflight-snapshot.js");
-        await readConfigSnapshotForEngineSelection();
-      }
-    };
     const run = (commit?: ConfigOperationParams["commit"]) =>
       runConfigOperations({
         runtime,
@@ -98,7 +100,12 @@ async function runConfigMutation(
     if (!opts.localStateOwner) {
       await run();
     } else if (opts.cliOptions.dryRun) {
-      await prepareReadOnly();
+      // Previews inspect installed plugin state without write custody.
+      if (!databaseOnly && !getDatabaseEngineSelection()) {
+        const { readConfigSnapshotForEngineSelection } =
+          await import("../commands/config-preflight-snapshot.js");
+        await readConfigSnapshotForEngineSelection();
+      }
       await run();
     } else {
       const { runWithLocalStateOwner } = await import("./local-state-owner.js");
@@ -119,31 +126,8 @@ async function runConfigMutation(
               // The Gateway stays the single config writer: this process prepares the same
               // change it would write offline and the owner commits it against baseHash.
               onForeignOwner: async ({ env, requestOwner }) => {
-                const current = await requestOwner<{ hash?: unknown; path?: unknown }>(
-                  "config.get",
-                  {},
-                );
-                // The diff is prepared from this command's file; bind it to the file the owner writes.
-                const { resolveIdentityPathViaExistingAncestorSync: identity } =
-                  await import("../infra/boundary-path.js");
-                const selected = resolveConfigPath(env);
-                if (
-                  typeof current.path !== "string" ||
-                  identity(current.path) !== identity(selected)
-                ) {
-                  throw new Error(
-                    `The running Gateway owns this state directory but uses config file ${typeof current.path === "string" ? shortenHomePath(current.path) : "<unknown>"}, not ${shortenHomePath(selected)}. Nothing was sent and no settings were saved. Rerun with the Gateway's config path, or stop the Gateway through its service owner and rerun this exact command.`,
-                  );
-                }
-                await prepareReadOnly();
-                await run(async (change) => {
-                  const { buildConfigOwnerPatch } = await import("./config-cli-owner-patch.js");
-                  const result = await requestOwner<{ restart?: unknown }>(
-                    "config.patch",
-                    buildConfigOwnerPatch(change, current.hash),
-                  );
-                  return result.restart ? "The Gateway is restarting to apply it." : undefined;
-                });
+                const { bindConfigOwner } = await import("./config-cli-owner-patch.js");
+                await run(await bindConfigOwner(requestOwner, env));
               },
             }),
         ...(databaseOnly ? { databaseAccess: "none" } : { databaseEngine: "configured" }),
@@ -151,6 +135,9 @@ async function runConfigMutation(
       });
     }
   } catch (err) {
+    if (!inputPrepared && opts.preparationSignal?.aborted) {
+      return;
+    }
     if (opts.throwOnError) {
       throw err;
     }
@@ -197,7 +184,8 @@ export async function runConfigPatch(opts: {
   runtime?: RuntimeEnv;
   localStateOwner?: ConfigMutationOwner;
 }) {
-  return runConfigMutation(opts, async () => {
+  const signal = opts.cliOptions.stdin ? getAsyncWorkSignal() : undefined;
+  return runConfigMutation({ ...opts, preparationSignal: signal }, async () => {
     const { configPatchModeError, readConfigPatchOperations } =
       await import("./config-cli-input.js");
     if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
@@ -260,7 +248,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
         writeRuntimeJson(runtime, formatCliJsonFailure(message));
         exitCliAfterOutput(runtime, 1);
       }
-      runtime.error(danger(message));
+      runtime.error(danger(terminalText`${message}`));
       exitCliAfterOutput(runtime, 1);
     }
     if (
@@ -281,7 +269,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       writeRuntimeJson(runtime, formatCliJsonFailure(err));
       exitCliAfterOutput(runtime, 1);
     }
-    runtime.error(danger(formatErrorMessage(err)));
+    runtime.error(danger(terminalText`${formatErrorMessage(err)}`));
     exitCliAfterOutput(runtime, 1);
   }
 }
@@ -469,7 +457,7 @@ export function registerConfigCli(program: Command) {
         }
         writeRuntimeStdout(runtime, `${path}\n`);
       } catch (err) {
-        runtime.error(danger(formatErrorMessage(err)));
+        runtime.error(danger(terminalText`${formatErrorMessage(err)}`));
         exitCliAfterOutput(runtime, 1);
       }
     });
@@ -489,7 +477,7 @@ export function registerConfigCli(program: Command) {
           properties: { $schema: { type: "string" }, ...schema.properties },
         });
       } catch (err) {
-        runtime.error(danger(`Config schema error: ${formatErrorMessage(err)}`));
+        runtime.error(danger(terminalText`Config schema error: ${formatErrorMessage(err)}`));
         exitCliAfterOutput(runtime, 1);
       }
     });
@@ -529,7 +517,7 @@ export function registerConfigCli(program: Command) {
               0,
             );
           } else {
-            runtime.error(danger(`Config file not found: ${shortPath}`));
+            runtime.error(danger(`Config file not found: ${formatConfigFilePath(outputPath)}`));
             runtime.error(
               `Create one with ${formatCliCommand("openclaw onboard")} or run ${formatCliCommand("openclaw doctor --fix")}.`,
             );
@@ -547,7 +535,7 @@ export function registerConfigCli(program: Command) {
               issues,
             });
           } else {
-            runtime.error(`Config needs correction: ${shortPath}`);
+            runtime.error(`Config needs correction: ${formatConfigFilePath(outputPath)}`);
             for (const line of renderConfigValidationIssueLines(snapshot, "-")) {
               runtime.error(`  ${line}`);
             }
@@ -565,7 +553,7 @@ export function registerConfigCli(program: Command) {
         if (json) {
           writeRuntimeJson(runtime, { valid: true, path: outputPath, warnings }, 0);
         } else {
-          runtime.log(success(`Config valid: ${shortPath}`));
+          runtime.log(success(`Config valid: ${formatConfigFilePath(outputPath)}`));
           if (warnings.length > 0) {
             runtime.log(warn(`${warnings.length} warning(s):`));
             for (const line of formatConfigIssueLines(warnings, warn("!"), {
@@ -586,7 +574,7 @@ export function registerConfigCli(program: Command) {
             0,
           );
         } else {
-          runtime.error(danger(`Config validation error: ${formatErrorMessage(err)}`));
+          runtime.error(danger(terminalText`Config validation error: ${formatErrorMessage(err)}`));
         }
         exitCliAfterOutput(runtime, 1);
       }

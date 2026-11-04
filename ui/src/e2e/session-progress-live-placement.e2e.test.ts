@@ -436,46 +436,49 @@ suite.define(() => {
         })),
       },
     ];
-
-    for (const variant of variants) {
-      const sessionKey = `agent:main:progress-${variant.name}`;
-      await suite.withPage(
-        {
-          colorScheme: "dark",
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { height: 700, width: 980 },
-        },
-        async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-            methodResponses: {
-              "progressCard.get": {
-                card: {
-                  markdown,
-                  revision: 1,
-                  sessionKey,
-                  steps: variant.steps,
-                  updatedAt: 1,
-                },
-              },
-              "sessions.list": chatSessionListResponse([
-                {
-                  key: sessionKey,
-                  kind: "direct",
-                  label: `Progress ${variant.name}`,
-                  updatedAt: 1,
-                },
-              ]),
+    const sessionKey = "agent:main:progress-markdown-only";
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 700, width: 980 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+          methodResponses: {
+            "progressCard.get": {
+              card: { markdown, revision: 1, sessionKey, updatedAt: 1 },
             },
-            sessionKey,
-          });
+            "sessions.list": chatSessionListResponse([
+              {
+                key: sessionKey,
+                kind: "direct",
+                label: "Progress markdown-only",
+                updatedAt: 1,
+              },
+            ]),
+          },
+          sessionKey,
+        });
 
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-          await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
-          await openChatDetails(page);
-          const card = page.locator('[data-progress-card-placement="details"]');
-          const body = page.locator(".chat-details-desktop-body");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
+        await openChatDetails(page);
+        const card = page.locator('[data-progress-card-placement="details"]');
+        const body = page.locator(".chat-details-desktop-body");
+        for (const variant of variants) {
+          if (variant.steps) {
+            await gateway.setMethodResponse("progressCard.get", {
+              card: { markdown, revision: 2, sessionKey, steps: variant.steps, updatedAt: 2 },
+            });
+            await gateway.emitGatewayEvent("progressCard.changed", { revision: 2, sessionKey });
+            await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(2);
+          }
+          await expect
+            .poll(() => card.locator(".session-progress-card__step").count())
+            .toBe(variant.steps?.length ?? 0);
           await expect.poll(() => card.isVisible()).toBe(true);
           await expect.poll(() => card.getAttribute("open")).toBe("");
 
@@ -492,6 +495,10 @@ suite.define(() => {
           expect(bodyLayout.scrollHeight).toBeGreaterThan(bodyLayout.clientHeight);
 
           await card.getByRole("button", { name: "Task progress options", exact: true }).focus();
+          await body.evaluate((node) => {
+            node.scrollTop = 0;
+          });
+          await expect.poll(() => body.evaluate((node) => node.scrollTop)).toBe(0);
           await page.keyboard.press("End");
           await expect.poll(() => body.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
           await page.keyboard.press("Home");
@@ -518,9 +525,9 @@ suite.define(() => {
             expect(await page.evaluate(() => window.scrollY)).toBe(0);
             await captureProof(page, `tall-${variant.name}-final-step.png`);
           }
-        },
-      );
-    }
+        }
+      },
+    );
   });
 
   it.each([

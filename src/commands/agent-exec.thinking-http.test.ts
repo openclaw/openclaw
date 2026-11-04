@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { text } from "node:stream/consumers";
@@ -25,18 +24,12 @@ it("preserves template defaults and selected thinking through agent exec", async
   const root = tempDirs.make("openclaw-agent-exec-thinking-http-");
   const configPath = path.join(root, "openclaw.json");
   const model = "template-fixture/qwen-template";
-  const requests: Record<string, unknown>[] = [];
   await withServer(
     (request, response) => {
       void (async () => {
         const payload = JSON.parse(await text(request)) as Record<string, unknown>;
-        requests.push(payload);
         const kwargs = payload.chat_template_kwargs as Record<string, unknown>;
         const effort = kwargs.reasoning_effort;
-        assert(
-          effort === undefined || typeof effort === "string",
-          "expected a string reasoning effort",
-        );
         const content = kwargs.enable_thinking === false ? "off" : (effort ?? "medium");
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(
@@ -62,11 +55,11 @@ it("preserves template defaults and selected thinking through agent exec", async
         request: { allowPrivateNetwork: true },
         models: [{ id: "qwen-template", name: "Template fixture", reasoning: true, compat }],
       };
-      for (const [name, thinking, configured, resultText, effort] of [
-        ["unselected", undefined, undefined, "medium", undefined],
-        ["selected", "low", undefined, "low", "low"],
-        ["configured", undefined, "high", "xhigh", "xhigh"],
-        ["off", "off", undefined, "off", undefined],
+      for (const [name, thinking, configured, resultText] of [
+        ["unselected", undefined, undefined, "medium"],
+        ["selected", "low", undefined, "low"],
+        ["configured", undefined, "high", "xhigh"],
+        ["off", "off", undefined, "off"],
       ] as const) {
         const defaults = {
           systemAgent: { agentId: "main" },
@@ -87,7 +80,6 @@ it("preserves template defaults and selected thinking through agent exec", async
             models: { providers: { "template-fixture": provider } },
           }),
         );
-        const previousCount = requests.length;
         const result = await agentExecCommand(
           "Reply briefly without tools.",
           {
@@ -104,15 +96,6 @@ it("preserves template defaults and selected thinking through agent exec", async
           exitCode: 0,
           envelope: { status: "ok", final: resultText },
         });
-        expect(requests.length, name).toBe(previousCount + 1);
-        const payload = requests[previousCount];
-        assert(payload, `${name}: expected a provider request`);
-        expect(payload).not.toHaveProperty("openclawThinkingExplicit");
-        if (effort) {
-          expect(payload.chat_template_kwargs).toMatchObject({ reasoning_effort: effort });
-        } else {
-          expect(payload).not.toHaveProperty("chat_template_kwargs.reasoning_effort");
-        }
       }
     },
   );

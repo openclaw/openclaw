@@ -19,11 +19,9 @@ import type {
   PersonHeaders,
   SessionCatalogRenderSnapshot,
 } from "./app-sidebar-session-render-types.ts";
-import {
-  renderChildSessionLoadError,
-  renderPendingSessionCreateRow,
-} from "./app-sidebar-session-row-render.tsx";
+import { renderChildSessionLoadError } from "./app-sidebar-session-row-render.tsx";
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
+import { PersonalSessionGroups } from "./personal-session-groups.tsx";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
 function RosterLoadMore(props: {
@@ -52,13 +50,7 @@ function RosterLoadMore(props: {
   );
 }
 
-function renderSessionListBody(params: {
-  host: SidebarSessionListHost;
-  sections: RenderableSessionSection[];
-  nativeSessionsHaveMore: boolean;
-  catalogs: SessionCatalogRenderSnapshot;
-  catalogRenderer: SessionCatalogGroupsRenderer;
-}) {
+function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) {
   const host = createMemo(() => params.host);
   const personHeaders = createMemo<PersonHeaders | undefined>(() => {
     if (host().sessionsGrouping !== "person") {
@@ -135,18 +127,9 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer;
 }) {
   const host = createMemo(() => params.host);
-  // A create for a rendered custom group is placed by that section instead.
-  const unplacedCreate = createMemo(() => {
-    const pending = host().pendingSessionCreate();
-    const category = pending?.category;
-    return category && params.sections.some((section) => section.category === category)
-      ? undefined
-      : pending;
-  });
   return renderSessionListFrame(
     host,
     <div class="sidebar-recent-sessions">
-      {renderPendingSessionCreateRow(unplacedCreate)}
       {renderSessionListBody(params)}
       <RosterLoadMore
         host={host()}
@@ -203,7 +186,12 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
   );
 }
 
-export function renderSessionListFrame(host: () => SidebarSessionListHost, body: JSX.Element) {
+/** The roster leads with its agents; the session list keeps its own sections first. */
+export function renderSessionListFrame(
+  host: () => SidebarSessionListHost,
+  body: JSX.Element,
+  bodyFirst = false,
+) {
   const home = createMemo(() =>
     host().sidebarAgentsMode === "roster" ? null : host().mainSessionRow(),
   );
@@ -243,8 +231,11 @@ export function renderSessionListFrame(host: () => SidebarSessionListHost, body:
           {t("sessionsView.moveToTopLevel")}
         </div>
       ) : undefined}
-      {renderSessionMutationError(host())} <PinnedSessionSection host={host()} />
-      {body}
+      {renderSessionMutationError(host())}
+      {bodyFirst ? body : undefined}
+      <PinnedSessionSection host={host()} />
+      <PersonalSessionGroups host={host()} />
+      {bodyFirst ? undefined : body}
     </section>
   );
 }

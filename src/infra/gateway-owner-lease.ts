@@ -4,10 +4,14 @@ import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { isLiveStateRead } from "../state/artifact-preserving-state-reads.js";
 import { readAgentDatabaseLeaseProvenance } from "../state/openclaw-agent-db-lease-provenance.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
+  executeExistingOpenClawStateRead,
+  isArtifactPreservingStateRead,
+  withArtifactPreservingStateReads,
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
@@ -42,14 +46,17 @@ import { captureGatewayStateOwner, type StateDatabaseSchemaLease } from "./gatew
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import type { EngineConnection } from "./sql-connection.js";
+import { sqliteExtendedResultCode } from "./sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
-import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
-import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
+import type { AsyncPreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { prepareSqliteReadOnlyLocationAwaited } from "./sqlite-snapshot-source.js";
 import {
   runSqliteImmediateTransactionSync,
   runSqliteSingleStatementSync,
 } from "./sqlite-transaction.js";
+import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import { STARTUP_MIGRATION_LEASE_TTL_MS } from "./startup-migration-checkpoint.js";
 import { readStateLeaseProcessOwnerStatus } from "./state-lease-process-owner.js";
 
@@ -97,7 +104,12 @@ export async function assertGatewayOwnerLeaseStopped(
   }
   const context = captureOpenClawStateReadWorkerContext({ env, path: pathname });
   const source = captureOpenClawStateReadSource();
-  const transport = source.createTransport({ type: "gatewayOwnerLease.read", schemaMaintenance });
+  const transport = source.createTransport(
+    { type: "gatewayOwnerLease.read", schemaMaintenance },
+    undefined,
+    undefined,
+    true,
+  );
   const controller = new AbortController();
   const callerSignal = getAsyncWorkSignal();
   const signal = callerSignal
@@ -112,7 +124,7 @@ export async function assertGatewayOwnerLeaseStopped(
       owner.assertDatabaseAccess(pathname);
     },
   };
-  let prepared: PreparedSqliteReadOnlyLocation | undefined;
+  let prepared: AsyncPreparedSqliteReadOnlyLocation | undefined;
   let releaseSnapshot: (() => void) | undefined;
   let read: Promise<OpenClawStateReadOutcome> | undefined;
   let closing: Promise<void> | undefined;
@@ -140,8 +152,13 @@ export async function assertGatewayOwnerLeaseStopped(
   let outcome: OpenClawStateReadOutcome | undefined;
   try {
     authority.assertCurrent();
-    if (schemaMaintenance && !isStatePostgres()) {
-      prepared = prepareSqliteReadOnlyLocationSync(pathname);
+    if (schemaMaintenance && !isStatePostgres() && !isLiveStateRead()) {
+      prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
+        signal,
+        // Offline custody follows restored files; cached read admission can retain the old inode.
+        expectedSourceIdentity: readDatabasePathIdentitySync(pathname),
+      });
+      authority.assertCurrent();
       releaseSnapshot = retainSnapshotTempDirectory(
         prepared.cleanupRoot ?? path.dirname(prepared.location),
       );
@@ -149,7 +166,7 @@ export async function assertGatewayOwnerLeaseStopped(
     read = transport.startRead(
       {
         context,
-        // Offline custody permits a direct worker read; only repair needs a private snapshot.
+        // Gateway credential preparation uses live reads; offline repair preserves artifacts.
         location: prepared?.location ?? pathname,
         snapshotRoot: prepared?.cleanupRoot,
         checkFreshAdmission: false,
@@ -206,13 +223,70 @@ export function readGatewayOwnerLease(
 ): GatewayOwnerLeaseIdentity | undefined {
   const operation = ({ db }: { db: EngineConnection }) =>
     readGatewayOwnerLeaseFromDatabase(db, params.port);
-  return params.current || params.openStateSchemaReadAdmission
-    ? withExistingOpenClawStateDatabaseCurrentReadOnly(
-        operation,
-        { env: params.env },
-        params.openStateSchemaReadAdmission,
-      )
-    : withExistingOpenClawStateDatabaseReadOnly(operation, { env: params.env });
+  if (!params.current && !params.openStateSchemaReadAdmission) {
+    return withExistingOpenClawStateDatabaseReadOnly(operation, { env: params.env });
+  }
+  // Reading the current lease needs no write authority, even when its owner is unknown.
+  const allowNativeRead =
+    !isStatePostgres() && !params.openStateSchemaReadAdmission && !isArtifactPreservingStateRead()
+      ? true
+      : undefined;
+  try {
+    return withExistingOpenClawStateDatabaseCurrentReadOnly(
+      operation,
+      { env: params.env, allowNativeRead },
+      params.openStateSchemaReadAdmission,
+    );
+  } catch (error) {
+    // SQLITE_READONLY_ROLLBACK needs private recovery; cleanup aggregates must still fail.
+    if (!allowNativeRead || isLiveStateRead() || sqliteExtendedResultCode(error) !== 776) {
+      throw error;
+    }
+    return withExistingOpenClawStateDatabaseCurrentReadOnly(operation, { env: params.env });
+  }
+}
+
+/** Descriptive inspection awaits the existing read owner instead of blocking native lifecycle guards. */
+export async function readGatewayOwnerLeaseAsync(
+  params: { env?: NodeJS.ProcessEnv; port?: number; signal?: AbortSignal } = {},
+): Promise<GatewayOwnerLeaseIdentity | undefined> {
+  const callerSignal = getAsyncWorkSignal();
+  const signal = resolveSqliteInspectionSignal(
+    params.signal && callerSignal
+      ? AbortSignal.any([params.signal, callerSignal])
+      : (params.signal ?? callerSignal),
+  );
+  const context = captureOpenClawStateReadWorkerContext({ env: params.env });
+  const live = !isStatePostgres() && !isArtifactPreservingStateRead();
+  const read = (native?: true) =>
+    executeExistingOpenClawStateRead(
+      { env: params.env },
+      { type: "gatewayOwnerLease.read", schemaMaintenance: false },
+      {
+        context,
+        current: true,
+        signal,
+        live: native,
+        snapshotPreparation: "awaited",
+        preferIndependentWarmRead: true,
+      },
+    );
+  const reply = await (live ? read(true) : withArtifactPreservingStateReads(read)).catch(
+    (error: unknown) => {
+      // Only hot-journal recovery needs a private source; cleanup failures must still fail.
+      if (!live || isLiveStateRead() || sqliteExtendedResultCode(error) !== 776) {
+        throw error;
+      }
+      return withArtifactPreservingStateReads(read);
+    },
+  );
+  signal?.throwIfAborted();
+  context.maintenanceScope?.assertReadAdmission();
+  context.admission.assertCurrent();
+  const lease = reply?.lease;
+  return lease && (params.port === undefined || lease.port === params.port)
+    ? { ...lease, state: readStateLeaseProcessOwnerStatus(lease, lease.heartbeatAt) }
+    : undefined;
 }
 
 /** Publish only while the caller holds the Gateway lifecycle coordinator. */

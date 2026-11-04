@@ -31,6 +31,7 @@ const CLI_STARTUP_TIMELINE_PHASE = "cli.startup";
 const STARTUP_PROGRESS_PHASES = new Set([
   "entry.run-main-import",
   "cli.main.gateway-run-select-environment",
+  "cli.main.gateway-run-select-environment-imports",
   "cli.main.gateway-run-imports",
   "cli.main.gateway-run-pre-bootstrap",
   "cli.main.gateway-run-bootstrap",
@@ -39,6 +40,15 @@ const STARTUP_PROGRESS_PHASES = new Set([
 const BOOTSTRAP_PROGRESS_PHASES = new Set([
   "cli.bootstrap.admission.database-readiness",
   "gateway.server-start-import",
+]);
+const ENVIRONMENT_PROGRESS_PHASES = new Set([
+  "cli.environment.imports",
+  "cli.environment.config-import",
+  "cli.environment.config-read",
+  "cli.environment.config-recovery",
+  "cli.environment.config.recovery.health-read",
+  "cli.environment.config-guard",
+  "cli.environment.pin-runtime-paths",
 ]);
 
 type GatewayBootstrapStep = {
@@ -104,7 +114,8 @@ export async function measureGatewayBootstrapStep<T>(
   const progressEnabled =
     BOOTSTRAP_PROGRESS_PHASES.has(name) ||
     (isForegroundGatewayRunArgv(process.argv) &&
-      (name.startsWith("cli.bootstrap.") ||
+      (ENVIRONMENT_PROGRESS_PHASES.has(name) ||
+        name.startsWith("cli.bootstrap.") ||
         name === "cli.command.config-ready" ||
         name === "cli.command.config-guard-import"));
   if (!traceEnabled && !progressEnabled) {

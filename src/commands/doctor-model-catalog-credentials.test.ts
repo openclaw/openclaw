@@ -7,9 +7,12 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "../agents/auth-profiles/credential-fixtures.test-support.js";
+import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
+import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
+  mergeAuthProfileStores,
 } from "../agents/auth-profiles/persisted.js";
 import {
   closeAuthProfileReadPool,
@@ -18,6 +21,7 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import {
   encodePluginModelCatalogRelativePath,
   loadPersistedPluginModelCatalogsReadOnly,
@@ -100,11 +104,14 @@ function markerStore(
   };
 }
 
-function repairDuringPrompt(params: ReturnType<typeof migrationParams>, repair: () => void) {
+function repairDuringPrompt(
+  params: ReturnType<typeof migrationParams>,
+  repair: () => void | Promise<unknown>,
+) {
   params.prompter = {
     ...createDoctorPrompter({ runtime: params.runtime, options: {} }),
     confirmAutoFix: async () => {
-      repair();
+      await repair();
       return true;
     },
   };
@@ -151,6 +158,72 @@ afterEach(async () => {
 });
 
 describe("doctor model catalog credential migration", () => {
+  it.each([false, true])(
+    "keeps shared auth effective instead of importing a stale catalog key (during prompt: %s)",
+    async (duringPrompt) => {
+      const state = createState();
+      const agentDir = path.join(state.stateDir, "agents", "helper", "agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+      writeCatalog(agentDir, "stale-catalog-key");
+      const source = fs.readFileSync(path.join(agentDir, "models.json"));
+      const params = migrationParams(state, { agents: agentConfig(state, "helper", agentDir) });
+      const installShared = () =>
+        persistAuthProfileBatch({
+          stateDir: state.stateDir,
+          profiles: [{ profileId: "custom:default", credential: credential("current-shared-key") }],
+        });
+      if (duringPrompt) {
+        repairDuringPrompt(params, installShared);
+      } else {
+        await installShared();
+      }
+
+      const result = await maybeMigrateModelCatalogCredentials(params);
+
+      const shared = loadPersistedSharedAuthProfileStore(state.env)!;
+      expect(resolveSharedAuthStorePath(state.env)).toBe(
+        path.join(state.stateDir, "state", "openclaw.sqlite"),
+      );
+      const local = loadPersistedAuthProfileStore(agentDir) ?? createAuthProfileStoreFixture({});
+      expect(result.migrated).toBe(0);
+      expect(result.warnings.join("\n")).toMatch(/custom.*shared.*custom:default/);
+      expect(local.profiles).toEqual({});
+      const effective = mergeAuthProfileStores(shared, local);
+      expect(resolveAuthProfileOrder({ store: effective, provider: "custom" })).toEqual([
+        "custom:default",
+      ]);
+      expect(effective.profiles["custom:default"]).toEqual(credential("current-shared-key"));
+      expect(fs.readFileSync(path.join(agentDir, "models.json"))).toEqual(source);
+    },
+  );
+
+  it.each(["main", "helper"])(
+    "warns about an unproven %s models-json shadow without changing credentials",
+    async (agentId) => {
+      const state = createState();
+      const agentDir = path.join(state.stateDir, "agents", agentId, "agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+      const shared = createAuthProfileStoreFixture({ "custom:default": credential("shared-key") });
+      const local = createAuthProfileStoreFixture({
+        "custom:models-json": credential("local-key"),
+      });
+      await persistAuthProfileBatch({
+        stateDir: state.stateDir,
+        profiles: [{ profileId: "custom:default", credential: shared.profiles["custom:default"] }],
+      });
+      saveAuthProfileStore(local, agentDir);
+
+      const result = await state.migrate({ agents: agentConfig(state, agentId, agentDir) });
+
+      expect(result).toMatchObject({ migrated: 0, removed: 0 });
+      expect(result.warnings.join("\n")).toContain(
+        `openclaw models auth logout 'custom:models-json' --agent '${agentId}' --yes`,
+      );
+      expect(loadPersistedAuthProfileStore(agentDir)).toEqual(local);
+      expect(loadPersistedSharedAuthProfileStore(state.env)).toEqual(shared);
+    },
+  );
+
   it("refuses malformed UTF-8 root catalog credentials while importing healthy config", async () => {
     const state = createState();
     const catalogPath = path.join(state.agentDir, "models.json");

@@ -9,6 +9,12 @@ export const SKILL_AUTHORING_STANDARDS_PROMPT = [
   "- Keep in SKILL.md what every run needs; move what only some runs need into references/, templates/, or scripts/ and point to it from the step that needs it.",
 ].join("\n");
 
+/** What counts as a skill lesson and how it lands; shared by background review and /learn. */
+export const SKILL_LEARNING_METHOD_PROMPT = [
+  "Change a skill only for a repeatable procedure: a class of task this user will ask for again, where the next run on a different request of that class would go wrong or redo work without the change. Evidence: the user corrected the method; a non-obvious method worked after trial and error; a skill you used had a wrong, missing, or outdated step. Facts true of only one request (one product, order, menu, date, place, or booking) stay out of skills.",
+  "Each skill covers one class of task: sharpen the step a lesson changes in the skill for its class, or create one focused skill when no skill covers that class. Give an unrelated class its own skill rather than a new branch in an existing one. When two listed skills cover the same class, merge them: patch the survivor, then archive the other with absorbed_into. Every change must alter what the agent does next time; keep the skill short by replacing stale lines rather than appending.",
+].join("\n");
+
 export const SKILL_DO_NOT_CAPTURE_PROMPT = [
   "Do not capture:",
   "- environment-specific or transient failures (missing binaries, unset credentials, flaky network); capture the fix only when it is durable;",

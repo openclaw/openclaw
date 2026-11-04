@@ -110,8 +110,8 @@ assert.equal(summary.fixture["externalization-selection"].rows, 0);
 assert.equal(summary.full["externalization-selection"].rows, 128);
 assert.equal(summary.mixed["externalization-selection"].rows, 1);
 for (const phase of ["selection", "mutation"]) {
-  assert.equal(summary.fixture[phase].calls, 3);
-  assert.equal(summary.mixed[phase].calls, 3);
+  assert.equal(summary.fixture[phase].calls, 2);
+  assert.equal(summary.mixed[phase].calls, 2);
   assert(summary.mixed[phase].entryBytes > 0);
 }
 assert.equal(summary.full.admission.calls, 4, "Keep preparation and final ownership checks");

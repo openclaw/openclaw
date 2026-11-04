@@ -154,7 +154,8 @@ it.each<OverlayCase>([
     {
       baseUrl: `${capturedRoute.baseUrl}/`,
       params: { configured: true },
-      thinkingLevelMap: { off: null, max: "max" },
+      // A partial map keeps the captured row's other keys, including its `off: null`.
+      thinkingLevelMap: { max: "max" },
     },
     false,
   ],
@@ -280,8 +281,9 @@ it.each<OverlayCase>([
         input: override.input ?? (hasDonor ? ["text", "image"] : undefined),
         contextWindow: override.contextWindow ?? (hasDonor ? 128_000 : undefined),
         contextTokens: override.contextTokens ?? (hasDonor ? 96_000 : undefined),
-        thinkingLevelMap:
-          override.thinkingLevelMap ?? (hasDonor ? { off: null, high: "high" } : undefined),
+        thinkingLevelMap: hasDonor
+          ? { off: null, high: "high", ...override.thinkingLevelMap }
+          : override.thinkingLevelMap,
         thinkingPolicyProvider: hasDonor ? thinkingOwner : undefined,
       });
       expect(

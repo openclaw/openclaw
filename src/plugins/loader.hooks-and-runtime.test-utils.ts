@@ -345,7 +345,6 @@ ${channelPluginSource({
     );
     const plugin = writePlugin({
       id: "auto-enabled-load-path-channel",
-      filename: "auto-enabled-load-path-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
 ${channelPluginSource({
   pluginId: "auto-enabled-load-path-channel",

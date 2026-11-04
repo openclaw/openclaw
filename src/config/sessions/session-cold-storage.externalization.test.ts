@@ -197,7 +197,7 @@ it("keeps cross-generation history hot while archiving and externalizing a mixed
     externalizedTranscripts: 1,
   });
   const after = fixture.snapshot();
-  expect(after.events).toEqual(before.events.filter((row) => row.session_id !== "mixed-eligible"));
+  expect(after.events).toEqual(before.events);
   expect(after.nodes).toEqual(before.nodes);
   expect(after.windows).toEqual(before.windows);
   expect(readSessionColdTranscript(fixture.database(), "mixed-eligible")?.event_count).toBe(1);

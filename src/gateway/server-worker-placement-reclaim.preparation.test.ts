@@ -501,7 +501,11 @@ it.each([
       attaching.release.resolve();
       const result = await stopping;
       if (advance === "replacement" || advance === "incarnation") {
-        expect(result).toBeInstanceOf(Error);
+        expect(result).toMatchObject({
+          message: expect.stringContaining(
+            advance === "replacement" ? "worker changed before cancellation" : "Session",
+          ),
+        });
         f.expectCancellationBlocked();
       } else {
         if (action === "archive") {
@@ -729,7 +733,6 @@ async function barrierFixture(name: string) {
   });
   const run = vi.fn(async () => ({ ...placement, state: "reclaimed" as const }) as never);
   return {
-    placement,
     cancel,
     run,
     admit: (onInterrupt?: () => void) =>
@@ -774,27 +777,20 @@ it("one failed Stop cannot reopen ingress while another Stop still owns its clos
   (await f.admit()).release();
 });
 
-it.each(["authorization", "incarnation", "worker"] as const)(
+it.each(["authorization", "incarnation"] as const)(
   "rejects changed %s after cancellation and reopens admission on failure",
   async (change) => {
     const f = await barrierFixture(`changed-${change}`);
     const entered = createPlacementTestHold();
     let authorized = true;
     const interrupted = vi.fn();
-    const signalled = vi.fn();
     const acquired = await f.admit(() => {
       interrupted();
       acquired.release();
     });
     f.cancel.mockImplementation(async ({ assertCurrent }) => {
-      if (change !== "worker") {
-        assertCurrent();
-      }
+      assertCurrent();
       await entered.wait();
-      if (change === "worker") {
-        assertCurrent();
-        signalled();
-      }
     });
     try {
       const stop = f.prepare({
@@ -805,18 +801,11 @@ it.each(["authorization", "incarnation", "worker"] as const)(
         },
       });
       const rejected = expect(stop).rejects.toThrow(
-        change === "authorization"
-          ? "access revoked"
-          : change === "worker"
-            ? "worker changed before cancellation"
-            : "Session",
+        change === "authorization" ? "access revoked" : "Session",
       );
       await entered.entered.promise;
       if (change === "authorization") {
         authorized = false;
-      } else if (change === "worker") {
-        // Replacement must not mutate the captured owner snapshot.
-        f.placement.generation++;
       } else {
         await f.replaceEntry("replacement-with-same-session-id");
       }
@@ -824,7 +813,6 @@ it.each(["authorization", "incarnation", "worker"] as const)(
       await rejected;
       expect(interrupted).not.toHaveBeenCalled();
       expect(f.run).not.toHaveBeenCalled();
-      expect(signalled).not.toHaveBeenCalled();
       (await f.admit()).release();
     } finally {
       entered.release.resolve();

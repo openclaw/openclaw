@@ -1,5 +1,7 @@
 import type { CronCompactJob, CronJob, CronJobsListResult, CronRunsResult } from "../api/types.ts";
-import type { CronFormState } from "../lib/cron/types.ts";
+import { DEFAULT_CRON_FORM as defaultCronForm } from "../lib/cron/state.ts";
+
+const emptyPage = { offset: 0, limit: 50, hasMore: false, nextOffset: null };
 
 export function createCronJob(id: string, name: string, overrides: Partial<CronJob> = {}): CronJob {
   return {
@@ -26,10 +28,7 @@ export function cronJobsListResponse(
     jobs,
     snapshotRevision: "cron-jobs-fixture",
     total: jobs.length,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
+    ...emptyPage,
     ...overrides,
   };
 }
@@ -41,10 +40,7 @@ export function createCronRunsResult(
   return {
     entries,
     total: entries.length,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
+    ...emptyPage,
     ...overrides,
   };
 }
@@ -91,61 +87,4 @@ export function cronListResponseFixture(input: CronJobsListResult | CronListFixt
   };
 }
 
-export const DEFAULT_CRON_FORM: CronFormState = {
-  name: "",
-  description: "",
-  agentId: "",
-  sessionKey: "",
-  clearAgent: false,
-  enabled: true,
-  deleteAfterRun: false,
-  scheduleKind: "every",
-  eventSource: "mcp-events",
-  eventServer: "",
-  eventName: "",
-  eventArguments: "{}",
-  scheduleAt: "",
-  everyAmount: "30",
-  everyUnit: "minutes",
-  cronExpr: "0 7 * * *",
-  cronTz: "",
-  scheduleExact: false,
-  staggerAmount: "",
-  staggerUnit: "seconds",
-  activeHoursEnabled: false,
-  activeHoursStart: "09:00",
-  activeHoursEnd: "17:00",
-  activeHoursTimezone: "",
-  idleOnly: false,
-  payloadSkipIfScratchEmpty: false,
-  deliveryTarget: "",
-  deliveryDirectPolicy: "",
-  triggerEnabled: false,
-  triggerScript: "",
-  triggerOnce: false,
-  sessionTarget: "isolated",
-  wakeMode: "now",
-  payloadKind: "agentTurn",
-  payloadLocked: false,
-  payloadText: "",
-  payloadModel: "",
-  payloadThinking: "",
-  payloadLightContext: false,
-  payloadIncludeReasoning: false,
-  deliveryMode: "none",
-  deliveryChannel: "last",
-  deliveryTo: "",
-  deliveryAccountId: "",
-  deliveryBestEffort: false,
-  deliveryThreadId: undefined,
-  deliveryCompletionDestination: undefined,
-  deliveryFailureDestination: undefined,
-  failureAlertMode: "inherit",
-  failureAlertAfter: "",
-  failureAlertCooldownSeconds: "",
-  failureAlertChannel: "last",
-  failureAlertTo: "",
-  failureAlertDeliveryMode: "",
-  failureAlertAccountId: "",
-  timeoutSeconds: "",
-};
+export const DEFAULT_CRON_FORM = { ...defaultCronForm };

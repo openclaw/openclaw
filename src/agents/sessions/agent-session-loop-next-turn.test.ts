@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import {
   createAssistantMessageEventStream,
   type Context,
@@ -68,6 +69,18 @@ const toolStream = (model: Model, name: string, id = "call") =>
     createAssistant(model, [{ type: "toolCall", id, name, arguments: {} }], "toolUse"),
   );
 
+function queueSnapshot(session: AgentSession) {
+  return {
+    steering: [...session.getSteeringMessages()],
+    followUp: [...session.getFollowUpMessages()],
+  };
+}
+
+function expectQueues(session: AgentSession, steering: string[] = [], followUp: string[] = []) {
+  expect(queueSnapshot(session)).toEqual({ steering, followUp });
+  expect(session.pendingMessageCount).toBe(steering.length + followUp.length);
+}
+
 function recordRequests(
   respond: (model: Model, index: number) => ReturnType<typeof textStream> = (model) =>
     textStream(model),
@@ -91,9 +104,7 @@ type NextTurnContext = Parameters<
 
 function nextTurnPreparer(session: AgentSession) {
   const hook = session.agent.prepareNextTurnWithContext;
-  if (!hook) {
-    throw new Error("context-aware next-turn hook was not installed");
-  }
+  assert(hook, "context-aware next-turn hook was not installed");
   const message = createAssistant(testModel, "turn complete");
   const newMessages = [message];
   return (context: NextTurnContext) => hook({ message, toolResults: [], context, newMessages });
@@ -208,11 +219,10 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       } else {
         setSteeringRuntimeContextRetention(session, true);
         const user = { role: "user" as const, content: "Queued user", timestamp };
-        const clock = vi.spyOn(Date, "now").mockReturnValue(timestamp);
-        try {
+        {
+          using clock = vi.spyOn(Date, "now");
+          clock.mockReturnValue(timestamp);
           attachSteeringRuntimeContext(user, { text });
-        } finally {
-          clock.mockRestore();
         }
         session.agent.steer(user);
       }
@@ -349,12 +359,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         async () => await (admissionCount++ === 0 ? firstGate : secondGate).promise,
       );
     };
-    let finishResponse: (() => void) | undefined;
-    const requests = recordRequests((model) => {
-      const response = heldResponse(model);
-      finishResponse = () => response.finish("finished");
-      return response.stream;
-    });
+    const { requests, finish } = mockHeldRun("finished");
     const { session } = await createTestSession({ extension: handlers });
     const settled = vi.fn();
     session.subscribe((event) => {
@@ -373,7 +378,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
 
     await expect(secondPrompt).rejects.toThrow("Agent is already processing a prompt");
     expect(settled).not.toHaveBeenCalled();
-    finishResponse?.();
+    finish();
     await firstPrompt;
     expect(settled).toHaveBeenCalledOnce();
   });
@@ -437,11 +442,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         followUp: readonly string[];
       }> = [];
       const recordQueue = (type: "queue_update" | "image_message_start") => {
-        queueEvents.push({
-          type,
-          steering: [...session.getSteeringMessages()],
-          followUp: [...session.getFollowUpMessages()],
-        });
+        queueEvents.push({ type, ...queueSnapshot(session) });
       };
       session.subscribe((event) => {
         if (event.type === "queue_update") {
@@ -472,9 +473,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       expect(sessionManager.getEntries()).toContainEqual(
         expect.objectContaining({ type: "message", message: queuedImage }),
       );
-      expect(session.pendingMessageCount).toBe(0);
-      expect(session.getSteeringMessages()).toEqual([]);
-      expect(session.getFollowUpMessages()).toEqual([]);
+      expectQueues(session);
       expect(queueEvents).toEqual([
         { type: "queue_update", ...scenario.initialQueue },
         { type: "queue_update", steering: [], followUp: [] },
@@ -491,58 +490,20 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const { queues, start } = queuedState(session);
     const [firstSteer, secondSteer] = queues.steeringQueue.messages;
     const [followUp] = queues.followUpQueue.messages;
-    if (!firstSteer || !secondSteer || !followUp) {
-      throw new Error("expected duplicate queued messages");
-    }
+    assert(firstSteer && secondSteer && followUp, "expected duplicate queued messages");
     await start(secondSteer);
     await start(secondSteer);
-    expect(session.getSteeringMessages()).toEqual(["same queued text"]);
-    expect(session.getFollowUpMessages()).toEqual(["same queued text"]);
-    expect(session.pendingMessageCount).toBe(2);
+    expectQueues(session, ["same queued text"], ["same queued text"]);
 
     await start(followUp);
-    expect(session.getSteeringMessages()).toEqual(["same queued text"]);
-    expect(session.getFollowUpMessages()).toEqual([]);
-    expect(session.pendingMessageCount).toBe(1);
+    expectQueues(session, ["same queued text"]);
 
     await start(firstSteer);
     expect(session.pendingMessageCount).toBe(0);
   });
 
-  it("keeps decorated queue ownership process-local and byte-invisible", async () => {
-    const { session } = await createTestSession();
-    const recorder = createUserTurnTranscriptRecorder({
-      input: { text: "visible transcript prompt" },
-      target: createTestUserTurnTranscriptTarget(),
-    });
-    await session.steer(
-      "runtime prompt",
-      [image],
-      recorder,
-      [{ path: "/tmp/image.png", contentType: "image/png" }],
-      undefined,
-      "decorated-message",
-    );
-    const { queues, start } = queuedState(session);
-    const [message] = queues.steeringQueue.messages;
-    if (!message) {
-      throw new Error("expected decorated queued message");
-    }
-    const serialized = JSON.stringify(message);
-    const restored = JSON.parse(serialized) as QueuedMessage;
-    await start(restored);
-    expect(session.getSteeringMessages()).toEqual(["runtime prompt"]);
-    expect(JSON.stringify(message)).toBe(serialized);
-
-    await start(message);
-    await start(message);
-
-    expect(session.getSteeringMessages()).toEqual([]);
-    expect(session.pendingMessageCount).toBe(0);
-  });
-
   it.each([false, true])(
-    "keeps accepted steering bytes stable across transcript persistence (image: %s)",
+    "keeps steering bytes stable and queue ownership process-local (image: %s)",
     async (withImage) => {
       const { session, sessionManager } = await createTestSession();
       const admittedAt = 1717570800000;
@@ -556,16 +517,20 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         target: createTestUserTurnTranscriptTarget(),
       });
       const queued = vi.spyOn(session.agent, "admitSteeringMessage");
-      const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
-      try {
-        await session.steer("Expanded runtime prompt", withImage ? [image] : undefined, recorder);
-      } finally {
-        clock.mockRestore();
+      {
+        using clock = vi.spyOn(Date, "now");
+        clock.mockReturnValue(queuedAt);
+        await session.steer(
+          "Expanded runtime prompt",
+          withImage ? [image] : undefined,
+          recorder,
+          withImage ? [{ path: "/tmp/image.png", contentType: "image/png" }] : undefined,
+          undefined,
+          "decorated-message",
+        );
       }
       const message = queued.mock.calls[0]?.[0];
-      if (!message || message.role !== "user") {
-        throw new Error("expected queued user message");
-      }
+      assert(message?.role === "user", "expected queued user message");
       const accepted = JSON.stringify(message);
       const guard = guardSessionManager(sessionManager);
       const entryId = guard.appendMessage(message);
@@ -581,6 +546,14 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
           content: withImage ? message.content : "Visible transcript prompt",
         },
       });
+      const { start } = queuedState(session);
+      await start(JSON.parse(accepted) as QueuedMessage);
+      expect(session.getSteeringMessages()).toEqual(["Expanded runtime prompt"]);
+      expect(JSON.stringify(message)).toBe(accepted);
+      await start(message);
+      await start(message);
+      expect(session.getSteeringMessages()).toEqual([]);
+      expect(session.pendingMessageCount).toBe(0);
     },
   );
 

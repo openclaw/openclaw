@@ -16,6 +16,18 @@ function personId(index: number) {
   return `team-person-${String(index + 1).padStart(3, "0")}`;
 }
 
+export function teamScalePersonAvatar(index: number) {
+  return {
+    contentType: "image/svg+xml",
+    body:
+      index % 6 === 2
+        ? "synthetic invalid image"
+        : `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="hsl(${(index * 37) % 360} 55% 45%)"/><text x="20" y="26" fill="white" text-anchor="middle" font-size="17">${index + 1}</text></svg>`,
+    ...(index % 6 === 1 ? { status: 404 } : {}),
+    ...(index % 6 === 3 ? { delayMs: 600 } : {}),
+  };
+}
+
 export function createTeamScalePeople(
   count: number,
   now: number,

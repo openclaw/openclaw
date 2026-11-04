@@ -5,7 +5,8 @@ import { mountSolid as mountStatefulSolid } from "../../../test-helpers/solid-re
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { projectChatSystemNotice } from "../chat-system-notice.ts";
 import { renderChatComposerNotices } from "../chat-view-notices.tsx";
-import { ChatNotice } from "./chat-divider.tsx";
+import { ChatNotice } from "./chat-notice-view.tsx";
+import { nativeRows } from "./chat-transcript-rows.ts";
 
 let container: HTMLDivElement;
 let noticeView: { update: (props: Parameters<typeof ChatNotice>[0]) => void } | undefined;
@@ -54,6 +55,14 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+it("commits a cached failure summary with its transcript row", () => {
+  mountStatefulSolid(nativeRows.notice, { item: failure("Cached failure details") }, container);
+  expect(container.querySelector('[data-chat-row-key="failure"]')).not.toBeNull();
+  expect(container.querySelector(".chat-run-failure__log")?.textContent).toBe(
+    "Cached failure details",
+  );
+});
+
 it("replaces the canonical failed run row with one line-icon notice and explicit actions", async () => {
   const summary = "⚠️ The AI service needs a short break. Please try again in a few minutes.";
   const message = {
@@ -70,12 +79,15 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
   }
   const onRetry = vi.fn();
   drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
-  expect(container.textContent).toContain("Unable to finish this reply");
+  expect(container.textContent).toContain("Couldn’t finish this reply");
   expect(container.textContent).not.toContain("⚠");
   expect(part("icon svg")).not.toBeNull();
   expect(query("details")).toBeNull();
   expect(container.textContent).not.toContain("Change model");
   expect(part("summary")?.textContent).toBe(
+    "Automatic recovery has stopped. Check any completed work before trying again.",
+  );
+  expect(part("log")?.textContent).toBe(
     "The AI service needs a short break. Please try again in a few minutes.",
   );
   await copy(summary);
@@ -91,13 +103,17 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
   }
 });
 
-it("updates text and callbacks without closing expanded details", async () => {
+it("updates text and callbacks without closing the open details", async () => {
   const onRetry = vi.fn();
   const item = failure("First failure\nFirst details");
   drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
   const host = query("openclaw-chat-run-failure-notice");
-  expect(part("summary")?.textContent).toBe("First failure");
-  query("summary")?.click();
+  expect(part("summary")?.textContent).toBe(
+    "First failure Automatic recovery has stopped. Check any completed work before trying again.",
+  );
+  expect(part("log")?.textContent).toBe("First failure\nFirst details");
+  part("toggle")?.click();
+  expect(part("toggle")?.getAttribute("aria-expanded")).toBe("true");
 
   const nextRetry = vi.fn();
   const detail = `${"Long failure ".repeat(30)}\nUpdated details`;
@@ -107,11 +123,11 @@ it("updates text and callbacks without closing expanded details", async () => {
     { failureActionsRunId: "run-a", onRetryRun: nextRetry },
   );
   expect(query("openclaw-chat-run-failure-notice")).toBe(host);
-  expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(true);
+  expect(part("toggle")?.getAttribute("aria-expanded")).toBe("true");
   expect(part("summary")?.textContent).toBe(
     "Automatic recovery has stopped. Check any completed work before trying again.",
   );
-  expect(query("pre")?.textContent).toBe(detail);
+  expect(part("log")?.textContent).toBe(detail);
   retry();
   expect(onRetry).not.toHaveBeenCalled();
   expect(nextRetry).toHaveBeenCalledExactlyOnceWith("run-a");

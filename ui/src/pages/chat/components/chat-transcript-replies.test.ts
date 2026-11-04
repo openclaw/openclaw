@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createTestTranscript as createTranscript,
   stubAnimationFrames,
@@ -411,7 +411,9 @@ it.each([
   toggleTranscriptSearch(props.paneId);
   rerender();
   transcript.start();
-  const input = requireElement(searchContainer, "input") as HTMLInputElement;
+  const input = await waitForSolid(
+    () => requireElement(searchContainer, "input") as HTMLInputElement,
+  );
   input.value = "Follow up";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   await vi.advanceTimersByTimeAsync(0);

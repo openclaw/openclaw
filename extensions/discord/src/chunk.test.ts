@@ -46,6 +46,18 @@ describe("chunkDiscordText", () => {
     expect(chunks.join("")).toBe(text);
   });
 
+  it("treats a CRLF line boundary like an LF boundary", () => {
+    const lf = "hello world\n".repeat(500);
+    const crlf = lf.replaceAll("\n", "\r\n");
+    const lfChunks = split(lf);
+    const crlfChunks = split(crlf);
+
+    expect(crlfChunks.length).toBe(lfChunks.length);
+    expect(crlfChunks.map((chunk) => chunk.replaceAll("\r\n", "\n"))).toEqual(lfChunks);
+    expect(crlfChunks.every((chunk) => !chunk.endsWith("\r"))).toBe(true);
+    expect(crlfChunks.every((chunk) => !/^[\r\n]/u.test(chunk))).toBe(true);
+  });
+
   it("keeps closed fenced code blocks balanced across chunks", () => {
     const body = Array.from({ length: 30 }, (_, i) => `console.log(${i});`).join("\n");
     const text = `Here is code:\n\n\`\`\`js\n${body}\n\`\`\`\n\nDone.`;

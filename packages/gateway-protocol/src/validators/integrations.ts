@@ -103,6 +103,10 @@ export const validateTalkClientTranscriptParams = createProtocolValidator(
   S.TalkClientTranscriptParamsSchema,
   Checks.isTalkClientTranscriptParams,
 );
+export const validateTalkClientSayParams = createProtocolValidator(
+  S.TalkClientSayParamsSchema,
+  Checks.isTalkClientSayParams,
+);
 export const validateTalkClientSteerParams = createProtocolValidator(
   S.TalkClientSteerParamsSchema,
   Checks.isTalkClientSteerParams,

@@ -68,6 +68,41 @@ describe("Client component handlers", () => {
 });
 
 describe("Client.deployCommands", () => {
+  // Discord's normalization must not trigger another PATCH on every startup (#76588).
+  it.each(["null localization maps", "CJK description whitespace"] as const)(
+    "does not redeploy Discord-normalized %s",
+    async (normalization) => {
+      const option = { type: 3 as const, name: "name", description: "Skill name" };
+      const desiredOption =
+        normalization === "null localization maps"
+          ? option
+          : {
+              ...option,
+              description_localizations: { "zh-CN": "技能名称。\n直接输入。" },
+            };
+      const currentFields =
+        normalization === "null localization maps"
+          ? {
+              name_localizations: null,
+              description_localizations: null,
+            }
+          : { description_localizations: { "zh-CN": "技能名称。直接输入。" } };
+      const command = createTestCommand("ping", [desiredOption], { description: "ping the bot" });
+      const current = {
+        ...existingCommand(command, "cmd-1"),
+        version: "v1",
+        dm_permission: true,
+        nsfw: false,
+        ...(normalization === "null localization maps" ? currentFields : {}),
+        options: [{ ...option, ...currentFields }],
+      };
+      const { client, ...rest } = deployFixture([command], [current]);
+      await client.deployCommands();
+      expect(rest.get).toHaveBeenCalledOnce();
+      expectNoWrites(rest.post, rest.patch, rest.put, rest.delete);
+    },
+  );
+
   it.each([false, true])("patches changed localization only: %s", async (changed) => {
     const option = {
       type: 7 as const,
@@ -206,7 +241,9 @@ describe("Client gateway event queue", () => {
     return new Client({ clientId: "app1", token: "token", eventQueue }, { listeners });
   }
 
-  it("holds a listener slot until its underlying promise resolves", async () => {
+  it.each([29_999, 30_000])("orders listeners across clock changes (%dms)", async (elapsed) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     const firstStarted = createDeferred<void>();
     const firstSettlement = createDeferred<void>();
     const started: string[] = [];
@@ -219,15 +256,15 @@ describe("Client gateway event queue", () => {
       started.push("second");
     });
     const client = createQueuedClient([first, second]);
-
     const dispatch = client.dispatchGatewayEvent("READY", {});
     await firstStarted.promise;
-
     expect(started).toEqual(["first"]);
-
+    vi.advanceTimersByTime(elapsed);
+    vi.setSystemTime(Date.now() + (elapsed < 30_000 ? 3_600_000 : -3_600_000));
     firstSettlement.resolve();
     await dispatch;
     expect(started).toEqual(["first", "second"]);
+    expect(warning).toHaveBeenCalledTimes(elapsed < 30_000 ? 0 : 1);
   });
 
   it("logs a listener failure when its underlying promise rejects", async () => {
