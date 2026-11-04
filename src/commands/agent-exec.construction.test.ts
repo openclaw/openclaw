@@ -93,6 +93,9 @@ setInterval(() => {}, 1000);`,
     await fs.writeFile(
       configPath,
       JSON.stringify({
+        // This process-only fixture has no tools or MCP policy projection.
+        // Override the coding command default so it reaches process construction.
+        tools: { fs: { workspaceOnly: false } },
         agents: {
           defaults: {
             model: { primary: "construction-cli/model-a" },
