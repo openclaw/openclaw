@@ -387,9 +387,18 @@ it.for(cases)(
           }
           await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseForTest();
-          await start();
           database = openOpenClawStateDatabase();
           placements = createWorkerSessionPlacementStore({ database });
+          const localPlacement = createDeferred();
+          cleanups.push(
+            placements.subscribeChanges((changed) => {
+              if (changed.sessionId === sessionId && placements.get(sessionId)?.state === "local") {
+                localPlacement.resolve();
+              }
+            }),
+          );
+          await start();
+          await localPlacement.promise;
         }
         if (!gateway) {
           throw new Error("Gateway fixture did not start");
@@ -450,9 +459,7 @@ it.for(cases)(
           await queuedDelivered.promise;
         }
         signal.throwIfAborted();
-        await expect
-          .poll(() => placements.get(sessionId))
-          .toMatchObject({ state: "local", turnClaim: null });
+        expect(placements.get(sessionId)).toMatchObject({ state: "local", turnClaim: null });
         expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(placements.validateTurnClaim(claim)).toBe(false);
         expect(await placements.getPlacementMoveAsync(sessionId)).toBeUndefined();
