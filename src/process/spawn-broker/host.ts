@@ -40,6 +40,7 @@ import {
   type BrokerRequest,
   type BrokerResponse,
 } from "./protocol.js";
+import { drainUntrackedPipe } from "./pipe.js";
 import { createNativeResourceAuthority } from "./resource-authority.js";
 import {
   BrokerResourceClaims,
@@ -599,7 +600,7 @@ export class SpawnBrokerHost {
           handle.destroy();
         }
         if (message.type === "pipe") {
-          void this.transmit({ type: "pipe-received", id: message.id, fd: message.fd }).catch(fail);
+          void drainUntrackedPipe(message, (value) => this.transmit(value)).catch(fail);
         } else if (message.type === "prepared") {
           void this.transmit({ type: "launch", id: message.id, allowed: false }).catch(fail);
         }
