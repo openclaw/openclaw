@@ -15,12 +15,17 @@ const { runGlobalPackageUpdateSteps, installedCopyErrors } = vi.hoisted(() => ({
 }));
 
 // The real install env builder runs; package-manager steps and probes are recorded only.
+// mock-isolation: record the npm install steps instead of running npm on the test host.
 vi.mock("../infra/package-update-steps.js", () => ({ runGlobalPackageUpdateSteps }));
+// mock-isolation: the fixture copy has no packed dist inventory to verify.
 vi.mock("../infra/package-dist-inventory.js", () => ({
   collectPackageDistContentInventoryErrors: async () => [],
 }));
+// mock-isolation: no update step may spawn a process from this test.
 vi.mock("../infra/update-runner-command.js", () => ({ runStep: vi.fn() }));
+// mock-isolation: no command may spawn from this test.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: vi.fn() }));
+// mock-isolation: keep npm prefix and installed-copy probes off the test host.
 vi.mock("../infra/update-global.js", async () => ({
   createGlobalInstallEnv: (await import("../infra/update-global-env.js")).createGlobalInstallEnv,
   // No durable copy yet, and no npm probe on the test host.

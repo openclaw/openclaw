@@ -65,27 +65,11 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
   runtimePath?: string;
   pinnedRuntimePath?: string;
   wrapperPath?: string;
-  /** Install the durable CLI copy when run from npx or dlx; otherwise only reuse one. */
-  installDurableCli?: boolean;
   warn?: DaemonInstallWarnFn;
-}): Promise<{
-  devMode: boolean;
-  runtime: GatewayDaemonRuntime;
-  runtimePath?: string;
-  /**
-   * Durable copy the service runs instead of a disposable npx or dlx CLI. Lazy so plans
-   * that retain another CLI (restore, Doctor fallback) never inspect or install it.
-   */
-  durableCli: () => Promise<string | undefined>;
-}> {
+}): Promise<{ devMode: boolean; runtime: GatewayDaemonRuntime; runtimePath?: string }> {
   const devMode = params.devMode ?? resolveGatewayDevMode();
   if (params.wrapperPath?.trim()) {
-    return {
-      devMode,
-      runtime: params.runtime,
-      runtimePath: params.runtimePath,
-      durableCli: noCli,
-    };
+    return { devMode, runtime: params.runtime, runtimePath: params.runtimePath };
   }
   if (params.runtime === "standalone") {
     const executable =
@@ -98,18 +82,12 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
       );
     }
     const runtimePath = await resolvePinnedDaemonRuntimePath(executable, "standalone", params.env);
-    return { devMode: false, runtime: "standalone", runtimePath, durableCli: noCli };
+    return { devMode: false, runtime: "standalone", runtimePath };
   }
   const pinnedRuntimePath =
     params.pinnedRuntimePath === undefined
       ? undefined
       : await resolvePinnedDaemonRuntimePath(params.pinnedRuntimePath, params.runtime, params.env);
-  const durableCli = async () =>
-    devMode
-      ? undefined
-      : await resolveDurableServiceEntrypoint(params.env, {
-          install: params.installDurableCli === true,
-        });
   const runtimePath =
     pinnedRuntimePath ??
     params.runtimePath ??
@@ -126,17 +104,42 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
     const bunPath = await resolveRunningBunFallback({ env: params.env, nodePath: null });
     if (bunPath) {
       params.warn?.("No supported Node runtime was found; using the running Bun for the service.");
-      return { devMode, runtime: "bun", runtimePath: bunPath, durableCli };
+      return { devMode, runtime: "bun", runtimePath: bunPath };
     }
   }
-  return { devMode, runtime: params.runtime, runtimePath, durableCli };
+  return { devMode, runtime: params.runtime, runtimePath };
 }
-
-const noCli = async () => undefined;
 
 /** Wrapper and standalone services run their own executable, never the CLI entrypoint. */
 function runsCliEntrypoint(params: { runtime: GatewayDaemonRuntime; wrapperPath?: string }) {
   return !params.wrapperPath?.trim() && params.runtime !== "standalone";
+}
+
+/**
+ * Runtime inputs plus the CLI entrypoint the service runs: the retained `serviceCli`, the
+ * durable copy that replaces a disposable npx, dlx, or bunx CLI, or undefined for this CLI.
+ * Only `installDurableCli` installs that copy; planning reuses a checked copy or none.
+ */
+export async function resolveDaemonInstallPlanInputs(
+  params: Parameters<typeof resolveDaemonInstallRuntimeInputs>[0] & {
+    serviceCli?: { entrypoint: string | null };
+    installDurableCli?: boolean;
+  },
+): Promise<
+  Awaited<ReturnType<typeof resolveDaemonInstallRuntimeInputs>> & { cliEntrypoint?: string }
+> {
+  const inputs = await resolveDaemonInstallRuntimeInputs({
+    ...params,
+    devMode: params.serviceCli ? false : params.devMode,
+  });
+  const cliEntrypoint =
+    params.serviceCli?.entrypoint ??
+    (inputs.devMode || !runsCliEntrypoint({ ...inputs, wrapperPath: params.wrapperPath })
+      ? undefined
+      : await resolveDurableServiceEntrypoint(params.env, {
+          install: params.installDurableCli === true,
+        }));
+  return { ...inputs, cliEntrypoint };
 }
 
 /**

@@ -1,6 +1,5 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -9,21 +8,14 @@ import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-pref
 const realpathOrResolve = (target: string) => fs.realpath(target).catch(() => path.resolve(target));
 
 /**
- * npx, pnpm dlx, and temp-dir runners (bunx) own their copies and may evict them,
- * so a service must never point into one or keep one on its PATH.
- * Takes a realpath; the temp dir is compared by its realpath too.
+ * npx (`_npx`), pnpm dlx (`dlx`), and bunx (`<tmp>/bunx-<uid>-<package>`) own their
+ * copies and may evict them, so a service must never point into one or keep one on its
+ * PATH. Other temp-dir paths are not runner caches. Takes a realpath.
  */
 export function isDisposableInstallPath(resolved: string): boolean {
-  const segments = resolved.split(path.sep);
-  let tmp = os.tmpdir();
-  try {
-    tmp = fsSync.realpathSync(tmp);
-  } catch {}
-  return (
-    segments.includes("_npx") ||
-    segments.includes("dlx") ||
-    resolved.startsWith(`${path.resolve(tmp)}${path.sep}`)
-  );
+  return resolved
+    .split(path.sep)
+    .some((segment) => segment === "_npx" || segment === "dlx" || segment.startsWith("bunx-"));
 }
 
 export async function isDisposableEntrypoint(entrypoint: string): Promise<boolean> {

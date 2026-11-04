@@ -47,7 +47,7 @@ import { hasSecretRefCandidate } from "../secrets/runtime-secret-scan.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import {
-  resolveDaemonInstallRuntimeInputs,
+  resolveDaemonInstallPlanInputs,
   resolveDaemonServicePathDirs,
   type GatewayInstallPlan,
 } from "./daemon-install-plan.shared.js";
@@ -625,15 +625,11 @@ export async function buildGatewayInstallPlan(params: {
   const wrapperPath = wrapperPointsAtGeneratedScript
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
-  const { devMode, runtime, runtimePath, durableCli } = await resolveDaemonInstallRuntimeInputs({
+  // Planning never installs: install callers create the durable copy first.
+  const { devMode, runtime, runtimePath, cliEntrypoint } = await resolveDaemonInstallPlanInputs({
+    ...params,
     env,
-    runtime: params.runtime,
-    runtimeExplicit: params.runtimeExplicit,
-    devMode: params.serviceCli ? false : params.devMode,
-    runtimePath: params.runtimePath,
-    pinnedRuntimePath: params.pinnedRuntimePath,
     wrapperPath,
-    warn: params.warn,
   });
   const serviceInputEnv = { ...env };
   if (wrapperPath) {
@@ -653,8 +649,7 @@ export async function buildGatewayInstallPlan(params: {
     runtime,
     runtimePath,
     wrapperPath,
-    // Install callers create the durable copy first; planning only reuses it.
-    cliEntrypoint: params.serviceCli?.entrypoint ?? (await durableCli()),
+    cliEntrypoint,
     ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitNodeRuntimeWarning({

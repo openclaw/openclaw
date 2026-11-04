@@ -1,0 +1,2 @@
+# npx/dlx/bunx Gateway services: durable-copy install, reuse checks, PATH filtering, and Doctor fallback.
+239

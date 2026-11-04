@@ -1,6 +1,6 @@
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import {
-  resolveDaemonInstallRuntimeInputs,
+  resolveDaemonInstallPlanInputs,
   resolveDaemonRuntimeBinDir,
 } from "../../commands/daemon-install-plan.shared.js";
 import { emitNodeRuntimeWarning } from "../../commands/daemon-install-runtime-warning.js";
@@ -251,18 +251,17 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const retainedRuntime = recordedRuntime?.status === "supported" ? recordedRuntime : undefined;
 
   const wrapperPath = installEnv.OPENCLAW_WRAPPER;
-  const { devMode, runtime, runtimePath, durableCli } = await resolveDaemonInstallRuntimeInputs({
+  const { devMode, runtime, runtimePath, cliEntrypoint } = await resolveDaemonInstallPlanInputs({
     env: installEnv,
     runtime: retainedRuntime?.runtime ?? runtimeRaw,
     runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
     runtimePath: restoredRuntimePath ?? retainedRuntime?.path,
     pinnedRuntimePath,
-    devMode: restoreServiceCli ? false : undefined,
+    serviceCli: restoreServiceCli,
     wrapperPath,
     installDurableCli: true,
     warn,
   });
-  const cliEntrypoint = restoreServiceCli?.entrypoint ?? (await durableCli());
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     cliEntrypoint,
     host,

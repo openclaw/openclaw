@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
+  resolveDaemonInstallPlanInputs,
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonServicePathDirs,
 } from "./daemon-install-plan.shared.js";
@@ -63,7 +64,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
 
 describe("durable CLI for an npx copy", () => {
   const plan = () =>
-    resolveDaemonInstallRuntimeInputs({
+    resolveDaemonInstallPlanInputs({
       env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
       runtime: "node",
       runtimePath: "/custom/node",
@@ -77,24 +78,16 @@ describe("durable CLI for an npx copy", () => {
   });
 
   it("does not install a durable copy while planning", async () => {
-    await expect((await plan()).durableCli()).resolves.toBeUndefined();
+    await expect(plan()).resolves.toMatchObject({ cliEntrypoint: undefined });
     expect(fs.existsSync(path.join(root, "state", "npm"))).toBe(false);
   });
 });
 
 describe("resolveDaemonServicePathDirs", () => {
-  // Fixtures live under the real temp dir, which the service PATH treats as disposable.
-  beforeEach(() => {
-    vi.spyOn(os, "tmpdir").mockReturnValue(path.join(root, "tmp"));
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it.each([
     ["npx", [".npm", "_npx", "abc", "node_modules", ".bin"]],
     ["pnpm dlx", [".cache", "pnpm", "dlx", "abc", "node_modules", ".bin"]],
-    ["a temporary directory", ["tmp", "bunx-501-openclaw", "bin"]],
+    ["bunx", ["tmp", "bunx-501-openclaw", "bin"]],
   ])("leaves %s off the service PATH", (_name, segments) => {
     const shim = entrypoint(path.join(...segments));
     const binDir = path.dirname(shim);
