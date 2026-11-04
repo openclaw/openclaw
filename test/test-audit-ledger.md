@@ -191,26 +191,19 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [192580](https://github.com/openclaw/openclaw/pull/192580): Return independent mocked conversation receipts. All seven vectors and assertions remain, with zero test-line growth. The actual hosted-tool channel mutation passes the original seven oracles and fails all seven repaired equalities; exact restored and published seven pass. Scoped checks and fresh review pass; exact-head CI28 success/30 intentional skips and final security pass. Native squash receipt and both checkout closeouts complete; production unchanged.
 
+- [192620](https://github.com/openclaw/openclaw/pull/192620): Remove the fabricated tool-authority fingerprint from the Copilot policy fixture. All assertions in the complete case remain; six fewer test lines. The untouched case fails before its native turn; the repaired case and three related cases pass through the deterministic native runtime. Scoped checks and fresh review pass; exact-head CI27 success/30 intentional skips and security pass. Native squash and checkout closeout complete; the separate source checkout remains retained by its lifecycle guard. Production unchanged. The historical cumulative-prompt nomination was withdrawn after actual runtime evidence contradicted it.
+
 ## Current qualification
 
-Pinned main `062d5d85481f`: remove the fabricated tool-authority fingerprint from
-`test/copilot-tool-policy-handoff.live.test.ts`. The existing runtime now prepares
-and owns each turn's actual policy snapshot. The complete single case and every
-Gateway, SDK session, model-request, prompt and terminal assertion remain;
-six fewer test lines, with no production or support-file change.
+Pinned main `79ea47fdf7cf`: investigate fixture-owned MCP App views in
+`extensions/codex/src/app-server/native-mcp-app.test.ts`. Both successful preview
+cases call the real preview owner, which retains a view, an expiry timer and a
+runtime lease. The test has no corresponding view release; the shared extension
+cleanup does not register this store for lifecycle reset.
 
-The untouched current test fails before its native turn because no authority
-snapshot backs the supplied fingerprint. Removing that fixture claim passes the
-complete case through Copilot SDK1.0.25 and its deterministic native runtime
-fixture. The related policy integration suite passes all three cases. Home
-isolation is verified; profile loading/state staging are disabled and credential
-environment values are stripped. No live Gateway, real provider account or
-external delivery is claimed.
-
-The historical cumulative-prompt nomination is withdrawn for this current
-fixture: its immediate answer permits prompt suppression, and the original zero
-expectation passes after the authority setup repair. No extra scheduling or
-prompt-baseline assertion was added to manufacture a failure.
+This draft records the diagnosis prerequisite only. The primary test and
+production remain unchanged; actual entry-point retention measurement is pending
+native dependency qualification. No measured leak or repair success is claimed.
 
 ## Completed source review
 
