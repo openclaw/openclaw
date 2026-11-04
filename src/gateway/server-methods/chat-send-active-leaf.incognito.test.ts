@@ -10,25 +10,25 @@ installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
-it("checks an Incognito send's expected leaf against its process-local transcript", async () => {
+it("checks Incognito sends and Stop against the process-local active path", async () => {
   await using fixture = await createBrowserFollowupFixture({
     active: false,
     persistDuringDispatch: true,
     storage: "memory",
   });
-  await appendTranscriptMessage(fixture.scope, {
-    eventId: "current-leaf",
-    message: { role: "assistant", content: "Existing response.", timestamp: 2 },
-  });
-  const send = async (expectedLeafEntryId: string) => {
+  for (const [eventId, timestamp] of [
+    ["earlier-leaf", 2],
+    ["current-leaf", 3],
+  ] as const) {
+    await appendTranscriptMessage(fixture.scope, {
+      eventId,
+      message: { role: "assistant", content: `Response ${timestamp}.`, timestamp },
+    });
+  }
+  const send = async (params: Record<string, unknown>) => {
     const respond = vi.fn<RespondFn>();
     await handleGatewayRequest({
-      req: {
-        type: "req",
-        id: fixture.params.idempotencyKey,
-        method: "chat.send",
-        params: { ...fixture.params, expectedLeafEntryId },
-      },
+      req: { type: "req", id: fixture.params.idempotencyKey, method: "chat.send", params },
       client: fixture.client,
       context: fixture.context,
       respond,
@@ -36,15 +36,30 @@ it("checks an Incognito send's expected leaf against its process-local transcrip
     });
     return respond;
   };
+  const expectLeafChanged = (respond: ReturnType<typeof vi.fn<RespondFn>>) =>
+    expect(respond.mock.calls[0]?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { reason: "active-leaf-changed" },
+    });
+  const stop = (expectedLeafEntryId: string) =>
+    send({
+      ...fixture.params,
+      message: "/stop",
+      idempotencyKey: `stop-${expectedLeafEntryId}`,
+      expectedLeafEntryId,
+    });
 
-  const stale = await send("obsolete-leaf");
-  expect(stale.mock.calls[0]?.[2]).toMatchObject({
-    code: "INVALID_REQUEST",
-    details: { reason: "active-leaf-changed" },
-  });
+  expectLeafChanged(await stop("obsolete-leaf"));
+  expect((await stop("current-leaf")).mock.calls[0]?.[0]).toBe(true);
+  expectLeafChanged(await send({ ...fixture.params, expectedLeafEntryId: "obsolete-leaf" }));
+  // Without a session fence, only the exact leaf is current.
+  expectLeafChanged(
+    await send({ ...fixture.params, sessionId: undefined, expectedLeafEntryId: "earlier-leaf" }),
+  );
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
-  const accepted = await send("current-leaf");
+  // A session-fenced sender may still be on the active path behind the newest reply.
+  const accepted = await send({ ...fixture.params, expectedLeafEntryId: "earlier-leaf" });
   expect(accepted.mock.calls[0]).toMatchObject({ 0: true, 1: { status: "started" } });
   await fixture.finishDispatch();
   expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
