@@ -29,7 +29,8 @@ const enApprovals = {
     reviewOnly: en.execApproval.reviewOnly,
     viewOnly: "View only",
     offline: "Disconnected",
-    decisionUnconfirmed: "Couldn’t confirm your decision. Try again.",
+    decisionUnconfirmed:
+      "Couldn’t confirm your decision. Refresh to check its status before trying again.",
     deny: "Deny",
     details: "Details",
     requestDetails: "Request details",
