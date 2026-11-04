@@ -1,6 +1,7 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
+  assertSessionRecipientAuthorityOwner,
   captureSessionRecipientAuthority,
   loadSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -61,6 +62,9 @@ export async function createContinuationRecipientAuthorityBinding(params: {
   requesterAgentId?: string;
 }): Promise<ContinuationRecipientAuthorityBinding> {
   if (params.fanoutMode) {
+    // A fanout binds its recipients at spawn and return, but the requester elects now: an
+    // incognito requester is refused here, before any record exists, as a default return is.
+    assertSessionRecipientAuthorityOwner({ sessionKey: params.requesterSessionKey });
     return { version: 1, selection: "pending", fanoutMode: params.fanoutMode };
   }
   const explicitTargets = normalizeContinuationTargetKeys([

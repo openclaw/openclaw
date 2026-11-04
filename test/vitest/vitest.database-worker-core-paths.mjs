@@ -792,6 +792,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/continuation/delegate-dispatch.chain-depth-exhaustion.test.ts",
   "src/auto-reply/continuation/delegate-dispatch.fanout-error-isolation.test.ts",
   "src/auto-reply/continuation/delegate-dispatch-post-compaction.test.ts",
+  "src/auto-reply/continuation/delegate-recipient-authority.incognito.test.ts",
   "src/auto-reply/continuation/leaf-key-orphan-empirical.test.ts",
   "src/agents/worktrees/empty-source.test.ts",
   "src/agents/worktrees/pending-slots.worker.test.ts",

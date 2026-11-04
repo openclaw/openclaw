@@ -53,6 +53,9 @@ import type {
   SessionSharingCommitReceipt,
 } from "./session-sharing-store.types.js";
 
+const MEMORY_RECIPIENT_AUTHORITY_REFUSAL =
+  "Incognito collaboration command requires its dedicated owner";
+
 function toMemoryCollaborationCommand(
   command: SqliteWorkerCommand<SessionSharingWorkerOperations>,
   scope: SessionCollaborationScope,
@@ -62,7 +65,7 @@ function toMemoryCollaborationCommand(
   }
   if (command.type === "authority.capture" || command.type === "authority.read") {
     // Memory-owned (incognito) sessions have no recipient-authority owner; refuse both.
-    throw new Error("Incognito collaboration command requires its dedicated owner");
+    throw new Error(MEMORY_RECIPIENT_AUTHORITY_REFUSAL);
   }
   const { scope: _scope, ...input } = command.input;
   const profileAliases =
@@ -583,6 +586,17 @@ export function recordSessionParticipantInWorker(
       return result.value;
     },
   );
+}
+
+/**
+ * The refusal a capture gives a memory-owned (incognito) session, decided by the same owner capture
+ * and without capturing: an election whose recipients bind later still needs a requester that has a
+ * recipient-authority owner.
+ */
+export function assertSessionRecipientAuthorityOwner(scope: SessionAccessScope): void {
+  if (captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} })) {
+    throw new Error(MEMORY_RECIPIENT_AUTHORITY_REFUSAL);
+  }
 }
 
 /** Insert-if-absent recipient authority through the canonical agent database writer. */

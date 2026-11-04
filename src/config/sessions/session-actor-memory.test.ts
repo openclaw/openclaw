@@ -1,11 +1,23 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareReplyToolAuthorityCallerRead } from "../../agents/harness/host-private-capabilities.js";
+// The Gateway registers session maintenance's continuation custody provider; so does this file.
+import "../../agents/subagents/registry/subagent-registry-maintenance.js";
+import {
+  hydrateContinuationCustodyProjection,
+  resetContinuationCustodyProjection,
+} from "../../auto-reply/continuation/custody/custody-projection.js";
+import { resolveContinuationCustodyDatabasePath } from "../../auto-reply/continuation/custody/custody-store.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSessionResetCleanupGuard } from "../../auto-reply/reply/session-reset-cleanup.js";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import { createCompletionGrantLineageAdmission } from "../../gateway/tool-resolution-completion.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import { applySessionEntryOperation } from "./session-accessor.sqlite-entry.js";
 import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
@@ -239,6 +251,7 @@ describe("memory actor effect adapters", () => {
     sessionId: "session-1",
   };
   const registryTargets: Array<{ agentId: string; path: string }> = [];
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   afterEach(() => {
     for (const target of registryTargets.splice(0)) {
@@ -440,6 +453,59 @@ describe("memory actor effect adapters", () => {
     memorySessionActorOwners.closeDatabase(target);
     expect(() => guard.assertCurrent()).toThrow("closed");
     guard.release();
+  });
+
+  it("keeps a live custody owner past the cap without opening the ambient state database", async () => {
+    // Every Gateway has an ambient state database; a memory store's maintenance never opens it.
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("memory-actor-ambient-"));
+    const sqlite = await vi.importActual<typeof import("node:sqlite")>("node:sqlite");
+    fs.mkdirSync(path.dirname(resolveOpenClawStateSqlitePath()), { recursive: true });
+    new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath()).close();
+    const { source, target } = unboundFixture("custody-cap");
+    const key = (name: string) => `agent:main:dashboard:incognito-${name}`;
+    // Live custody, installed in memory as the Gateway's custody boot installs it.
+    const custody = resolveContinuationCustodyDatabasePath({ env: source.env });
+    hydrateContinuationCustodyProjection(custody, [
+      {
+        recordId: "work",
+        kind: "work",
+        ownerSessionKey: key("holder"),
+        revision: 1,
+        status: "queued",
+        createdAt: 1,
+        updatedAt: 1,
+        stateJson: "{}",
+        spawnAttempts: [],
+      },
+    ]);
+    setRuntimeConfigSnapshot({
+      session: { maintenance: { mode: "enforce", pruneAfter: "1d", maxEntries: 2 } },
+    });
+    // Writes stamp their activity with the clock: one second apart, the holder is the oldest.
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now");
+    try {
+      for (const [index, name] of ["holder", "older", "writer"].entries()) {
+        clock.mockReturnValue(now + index * 1_000);
+        await upsertSessionEntryCore(
+          { ...source, sessionKey: key(name) },
+          { sessionId: name, updatedAt: now, incognito: true },
+        );
+      }
+      const owner = memorySessionActorOwners.read(target);
+      const archivedAt = (name: string) =>
+        owner?.readSession(key(name), authority)?.entry?.archivedAt;
+      // The cap archives the oldest it may: the custody holder stays, the next oldest goes.
+      expect(["holder", "older", "writer"].map(archivedAt)).toEqual([
+        undefined,
+        expect.any(Number),
+        undefined,
+      ]);
+    } finally {
+      clock.mockRestore();
+      resetContinuationCustodyProjection(custody);
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("checks current requester lineage after a child is reparented", async () => {
