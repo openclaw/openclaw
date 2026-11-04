@@ -1,0 +1,4 @@
+# Cancelling a queued Discord REST request when its caller aborts needs the scheduler's
+# queue-ownership cases plus the abort-forwarding path in the shared REST client; the
+# existing scheduler tests cannot cover a caller that aborts after submission.
+167
