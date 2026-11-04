@@ -291,6 +291,14 @@ it("resolves beta and stable within one registry response delay", async () => {
   }
 });
 
+const npmMissingVersionStderr = [
+  "npm error code E404",
+  "npm error 404 No match found for version 2026.11.5-beta.5",
+  "npm error 404",
+  "npm error 404  'openclaw@2026.11.5-beta.5' is not in this registry.",
+  "npm error 404 Note that you can also install from a",
+  "npm error 404 tarball, folder, http url, or git url.",
+].join("\n");
 it.each([
   [
     "malformed JSON",
@@ -301,6 +309,11 @@ it.each([
     "missing package",
     { stdout: "", stderr: "npm ERR! 404 Not Found", code: 1 },
     "npm view failed: npm ERR! 404 Not Found",
+  ],
+  [
+    "unpublished version",
+    { stdout: "", stderr: npmMissingVersionStderr, code: 1 },
+    "npm view failed: npm error 404 No match found for version 2026.11.5-beta.5",
   ],
 ] as const)("reports npm view errors for %s", async (_name, reply, error) => {
   expectPackageError(

@@ -14,6 +14,8 @@ type NpmPackageTargetStatus = {
   nodeEngine: string | null;
   schemaVersions?: OpenClawSchemaVersions;
   error?: string;
+  /** npm read the package document but has no such version; not a registry failure. */
+  versionMissing?: boolean;
 };
 
 export type NpmMetadataCommandRunner = (
@@ -163,11 +165,15 @@ export async function fetchNpmPackageTargetStatus(params: {
       },
     );
     if (res.code !== 0) {
-      const raw = (res.stderr.trim() || res.stdout.trim()).split("\n").slice(-3).join("\n");
+      const lines = (res.stderr.trim() || res.stdout.trim()).split("\n");
+      // npm prints the missing-version reason before its generic 404 advice.
+      const missing = lines.find((line) => /No match found for version/u.test(line))?.trim();
+      const raw = missing ?? lines.slice(-3).join("\n");
       return {
         version: null,
         nodeEngine: null,
         error: raw ? `npm view failed: ${raw}` : "npm view failed",
+        ...(missing ? { versionMissing: true } : {}),
       };
     }
     return parseNpmPackageTargetMetadata(

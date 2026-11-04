@@ -336,8 +336,10 @@ it.each([
 
 const privateDiagnostic = "registry.internal.example /private/operator/npmrc";
 const registryFailure = { version: null, error: privateDiagnostic };
+const unpublished = { version: null, error: "npm view failed: No match", versionMissing: true };
 it.each([
   ["registry lookup error", "target-registry-metadata", /registry/i, registryFailure],
+  ["unpublished exact version", "target-version-resolution", /version/i, unpublished],
   ["existing profile lookup error", "target-registry-metadata", /registry/i, registryFailure],
   ["missing exact version", "target-version-resolution", /version/i, { version: null }],
   ["mismatched exact version", "target-version-resolution", /version/i, { version: "2026.9.1" }],
