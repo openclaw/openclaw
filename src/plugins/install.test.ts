@@ -13,6 +13,7 @@ import {
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { npmCommandArgs } from "../test-utils/npm-command.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
@@ -1391,7 +1392,14 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
     expect(result.ok).toBe(true);
-    expect(warnings).toHaveLength(0);
+    // Replacing the copied host reports its old and new targets; other warnings still fail.
+    expect(warnings).toEqual([
+      expect.stringMatching(
+        new RegExp(
+          String.raw`^Repaired OpenClaw host link at (.+): \1 -> ${escapeRegExp(fs.realpathSync(fakeHostRoot))}$`,
+        ),
+      ),
+    ]);
     if (!result.ok) {
       return;
     }
