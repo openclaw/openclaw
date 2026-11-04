@@ -237,14 +237,16 @@ describe("chat attachment read failures", () => {
     vi.unstubAllGlobals();
   });
 
-  async function expectAttachmentToast(message = "File too large. Try a smaller file.") {
+  async function expectAttachmentToast(
+    message = "File too large.",
+    description = "Try a smaller file.",
+  ) {
     await toastHost.updateComplete;
     await vi.dynamicImportSettled();
     await waitForSolid(() => {
       expect(toastHost.querySelectorAll(".app-toast")).toHaveLength(1);
-      expect(toastHost.querySelector(".app-toast__message")).toMatchObject({
-        textContent: message,
-      });
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(message);
+      expect(toastHost.querySelector(".app-toast__description")?.textContent).toBe(description);
     });
   }
 
@@ -387,7 +389,7 @@ describe("chat attachment read failures", () => {
         );
       }
       expect(container.querySelector(".chat-attachment-failures")).toBeNull();
-      await expectAttachmentToast("Could not attach file. Try again.");
+      await expectAttachmentToast("Could not attach file.", "Try again.");
     },
   );
 
@@ -485,13 +487,14 @@ describe("chat attachment read failures", () => {
         onAttachmentsChange,
       });
       await toastHost.updateComplete;
-      await vi.waitFor(() =>
-        expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
-          name === "empty.png"
-            ? "Could not attach file. Try again."
-            : "File too large. Try a smaller file.",
-        ),
-      );
+      await vi.waitFor(() => {
+        expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
+          name === "empty.png" ? "Could not attach file." : "File too large.",
+        );
+        expect(toastHost.querySelector(".app-toast__description")?.textContent).toBe(
+          name === "empty.png" ? "Try again." : "Try a smaller file.",
+        );
+      });
       if (accepted) {
         await vi.waitFor(() => expect(onAttachmentsChange).toHaveBeenCalled());
         expect(onAttachmentsChange.mock.calls[0]?.[0].map(({ fileName }) => fileName)).toEqual(
