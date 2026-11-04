@@ -9,6 +9,7 @@ import {
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
 import { configValuesEqual, defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
+import { configLabelInContext } from "./config-form.label-context.ts";
 import {
   configChildRenderOptions,
   createCollectionFocus,
@@ -16,6 +17,8 @@ import {
   isAnySchema,
   jsonValue,
   CollectionRemoveButton,
+  ConfigFieldHelp,
+  configRowCopy,
   FieldRow,
   JsonTextareaControl,
   type CollectionRowFocus,
@@ -30,6 +33,9 @@ type MapParams = ConfigNodeRenderParams & {
   reservedKeys: Set<string>;
   validateKey: (key: string) => boolean;
 };
+
+/** A map that is all its object holds is that setting: the object's own copy heads the row. */
+type MapHeading = { label: string; help?: string };
 
 type MapProps = {
   params: MapParams;
@@ -88,13 +94,14 @@ function ConfigMapRow(
         controlIdentity: props.params.value,
         searchCriteria: props.params.searchCriteria,
         showLabel: false,
+        contextLabel: props.params.contextLabel,
         onPatch: props.params.onPatch,
       }) satisfies ConfigNodeRenderParams,
     { lazy: true },
   );
   return (
     <>
-      <div class="settings-row">
+      <div class="settings-row cfg-collection-row">
         <div class="settings-row__text">
           <input
             type="text"
@@ -172,6 +179,8 @@ function ConfigMapRow(
               disabled={props.params.disabled}
               isRequired={true}
               onToggleSensitivePath={props.params.onToggleSensitivePath}
+              hints={props.params.hints}
+              secretFields={props.params.secretFields}
               onPatch={props.params.onPatch}
             />
           }
@@ -181,7 +190,7 @@ function ConfigMapRow(
   );
 }
 
-export function ConfigMapField(props: MapProps): JSX.Element {
+export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.Element {
   let draft!: ConfigCollectionDraftHandle;
   const content = createMemo(() => resolveMapContent(props.params));
   let localEdit: { expected: unknown; retained: unknown } | undefined;
@@ -233,11 +242,44 @@ export function ConfigMapField(props: MapProps): JSX.Element {
   return (
     <Show when={content().visible}>
       <div class="cfg-block cfg-map">
-        <div class="settings-row">
-          <Show when={props.params.showLabel !== false || props.params.reservedKeys.size > 0}>
-            <div class="settings-row__text">
-              <span class="settings-row__title">{t("configForm.customEntries")}</span>
-            </div>
+        <div class="settings-row cfg-collection-row">
+          <Show
+            when={props.heading}
+            fallback={
+              <Show when={props.params.showLabel !== false || props.params.reservedKeys.size > 0}>
+                <div class="settings-row__text">
+                  <span class="settings-row__title">{t("configForm.customEntries")}</span>
+                </div>
+              </Show>
+            }
+          >
+            {(heading) => {
+              const copy = createMemo(() =>
+                configRowCopy({
+                  label: heading().label,
+                  help: heading().help,
+                  context: props.params.helpContext,
+                }),
+              );
+              return (
+                <div class="settings-row__text">
+                  <span class="settings-row__title">
+                    {configLabelInContext(heading().label, props.params.contextLabel)}
+                    <Show when={copy().hasHelp}>
+                      <ConfigFieldHelp
+                        path={props.params.path}
+                        label={heading().label}
+                        help={heading().help}
+                        context={props.params.helpContext}
+                      />
+                    </Show>
+                  </span>
+                  <Show when={copy().summary}>
+                    <span class="settings-row__desc config-field__summary">{copy().summary}</span>
+                  </Show>
+                </div>
+              );
+            }}
           </Show>
           <div class="settings-row__control">
             <button
@@ -264,7 +306,7 @@ export function ConfigMapField(props: MapProps): JSX.Element {
                 }
               }}
             >
-              {t("configForm.addEntry")}
+              {t("configForm.add")}
             </button>
           </div>
         </div>
@@ -284,7 +326,7 @@ export function ConfigMapField(props: MapProps): JSX.Element {
           }
         />
         <Show when={content().visibleEntries.length > 0}>
-          <div class="settings-subrows">
+          <div class="settings-subrows cfg-subrows">
             <For each={content().visibleEntries} keyed={(entry) => entry[0]}>
               {(entry) => (
                 <ConfigMapRow

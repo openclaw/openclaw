@@ -12,6 +12,7 @@ export const ACPX_NATIVE_AGENT_IDS = [
   "kilocode",
   "copilot",
   "grok-build",
+  "qoder",
 ] as const;
 export type AcpxNativeAgentId = (typeof ACPX_NATIVE_AGENT_IDS)[number];
 export const AcpxNativeAgentsSchema = z
@@ -22,6 +23,7 @@ export const AcpxNativeAgentsSchema = z
     kilocode: z.boolean().optional(),
     copilot: z.boolean().optional(),
     "grok-build": z.boolean().optional(),
+    qoder: z.boolean().optional(),
   })
   .optional();
 

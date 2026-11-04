@@ -62,14 +62,14 @@ const catalog = {
         toolAccess: {
           loadFailed: "Couldn’t load tools.",
         },
-        offlineBlocked: "Connect to the gateway to change session capabilities.",
+        offlineBlocked: "Reconnect to change tools for this chat.",
         adminBlocked: "Admin access is required to manage MCP servers.",
-        savingBlocked: "Wait for the current session capability change to finish.",
+        savingBlocked: "Saving… try again in a moment.",
       },
       overrides: {
         count: "{count} overrides",
         countOne: "{count} override",
-        clear: "Clear session overrides",
+        clear: "Reset this chat’s changes",
       },
       contextUsage: {
         title: "Context usage details",

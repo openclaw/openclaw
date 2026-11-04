@@ -185,6 +185,8 @@ suite.define(() => {
         await action.click({ button: "right" });
         expect(new URL(page.url()).pathname).toBe("/new");
         expect(await action.isVisible()).toBe(true);
+        // Escape on a focused toast dismisses it; close the context menu from outside.
+        await action.blur();
         await page.keyboard.press("Escape");
         for (const activation of [
           { button: "middle" as const },
