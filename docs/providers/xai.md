@@ -227,7 +227,9 @@ below or under known limits.
 OpenClaw uses xAI's REST image/video/TTS/STT APIs for media generation and
 batch transcription, xAI's streaming STT WebSocket for live voice-call
 transcription, xAI's Grok Voice Agent WebSocket for Talk realtime sessions,
-and the Responses API for chat, search, and code-execution tools.
+and the Responses API for chat, search, and code-execution tools. A GIF on a
+Responses request, including one stored earlier by `view_image`, is sent as a
+JPEG still. The session transcript keeps the original GIF.
 </Note>
 
 ### Legacy fast-mode compatibility

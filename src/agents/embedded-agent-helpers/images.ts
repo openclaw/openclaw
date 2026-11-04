@@ -52,7 +52,6 @@ export async function sanitizeSessionMessagesImages(
   const imageSanitization = {
     maxDimensionPx: options?.maxDimensionPx,
     maxBytes: options?.maxBytes,
-    transcodeGifToJpeg: options?.transcodeGifToJpeg,
     // Replay does not rewrite stored images, even after a successful reply.
     verifyDecodability: true,
   };
@@ -86,10 +85,8 @@ export async function sanitizeSessionMessagesImages(
       continue;
     }
     const content = (Array.isArray(msg.content) ? msg.content : []) as ContentBlock[];
-    // 16 keeps a JPEG-still replay from reusing a pass-through of the same GIF.
     const policy =
-      (msg.role === "assistant" ? assistantPolicy | (msg.stopReason === "error" ? 2 : 0) : 0) |
-      (options?.transcodeGifToJpeg ? 16 : 0);
+      msg.role === "assistant" ? assistantPolicy | (msg.stopReason === "error" ? 2 : 0) : 0;
     const cache = (imageFreeReplayContent[policy] ??= new WeakMap());
     let nextContent = cache.get(content);
     if (!nextContent) {

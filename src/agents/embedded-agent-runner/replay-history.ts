@@ -566,11 +566,6 @@ function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): 
   return messages;
 }
 
-function providerRejectsGif(provider: string | undefined): boolean {
-  const id = provider?.trim().toLowerCase();
-  return id === "xai" || id === "x-ai";
-}
-
 /**
  * Applies the generic replay-history cleanup pipeline before provider-owned
  * replay hooks run.
@@ -631,7 +626,6 @@ export async function sanitizeSessionHistory(
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
       ...resolveImageSanitizationLimits(params.config),
-      transcodeGifToJpeg: providerRejectsGif(params.provider),
     },
   );
   const preserveLatestAssistantThinking =

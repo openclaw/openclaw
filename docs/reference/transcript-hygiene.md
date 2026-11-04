@@ -125,10 +125,7 @@ embedded runner does not repair or reopen file-backed runtime transcripts.
 ## Global rule: image sanitization
 
 Image payloads are always sanitized to prevent provider-side rejection due to
-size limits (downscale/recompress oversized base64 images). xAI (`xai` and
-`x-ai`) also rewrites a within-limit GIF to a JPEG still before the request.
-The stored transcript keeps that GIF, and other providers still receive
-`image/gif`. When an image backend
+size limits (downscale/recompress oversized base64 images). When an image backend
 is available, replay also checks that each retained image can be decoded. A
 corrupt image becomes an `omitted image payload` note; valid images, surrounding
 text, and tool errors remain intact. A successful reply does not repair the
@@ -136,8 +133,7 @@ original stored image bytes, so failed checks are never remembered and a corrupt
 image stays omitted on every replay. Successful outcomes (verified as-is, or the
 downscaled replacement) are cached in process by content digest and limits,
 bounded to 16 MiB, so later turns reuse them instead of decoding the same bytes
-again. A GIF rewritten for xAI is cached apart from a pass-through of the same
-bytes.
+again.
 Image-free content from immutable transcript publications reuses its cleanup
 result for the same replay policy. New or mutable content is still inspected;
 image-bearing content always goes through the image sanitizer, so unavailable

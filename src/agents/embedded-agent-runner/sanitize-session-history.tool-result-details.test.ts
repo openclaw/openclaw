@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { sanitizeSessionHistory } from "./replay-history.js";
-import { xaiGifReplayMimes } from "./xai-gif-replay.fixture.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
@@ -33,10 +32,6 @@ function replay(
 }
 
 describe("sanitizeSessionHistory", () => {
-  it("rewrites a stored GIF to JPEG before an xAI replay and leaves it for Anthropic", async () => {
-    await expect(xaiGifReplayMimes(replay)).resolves.toEqual(["image/gif", "image/jpeg"]);
-  });
-
   it("preserves multiple signed Haiku 5.5 turns after an appended context update", async () => {
     const modelId = "claude-haiku-5-5";
     const messages: AgentMessage[] = [makeUserMessage("first", 0)];
