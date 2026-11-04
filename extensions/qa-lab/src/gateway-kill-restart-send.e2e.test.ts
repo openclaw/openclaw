@@ -6,13 +6,18 @@ import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
-import { QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER } from "./providers/mock-openai/mock-openai-contracts.js";
+import {
+  QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
+  QA_RESTART_RESUME_PROMPT_RE,
+  type MockOpenAiRequestSnapshot,
+} from "./providers/mock-openai/mock-openai-contracts.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
 import { fetchOkJson } from "./providers/mock-openai/server.test-harness.js";
 import { readQaMockRequestCursor } from "./providers/shared/debug-request-cursor.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
 import {
+  readQaSessionTranscriptEvents,
   readRawQaSessionStore,
   readSessionTranscriptSummary,
 } from "./suite-runtime-agent-session.js";
@@ -31,7 +36,7 @@ afterEach(async () => {
 });
 
 it.skipIf(process.platform === "win32")(
-  "leaves a killed run idle until a new user message arrives",
+  "resumes a killed run once and accepts a subsequent user message",
   async () => {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
@@ -108,9 +113,6 @@ it.skipIf(process.platform === "win32")(
         ? { entry, transcript }
         : undefined;
     });
-    const requestCursor = readQaMockRequestCursor(
-      await fetchOkJson(`${mock.baseUrl}/debug/request-cursor`),
-    );
     const sinceIndex = state
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound").length;
@@ -123,6 +125,29 @@ it.skipIf(process.platform === "win32")(
       30_000,
       25,
     );
+    // Requests accepted before process death belong to the killed run, not recovery.
+    const requestCursor = readQaMockRequestCursor(
+      await fetchOkJson(`${mock.baseUrl}/debug/request-cursor`),
+    );
+    const readFreshInputs = async () => {
+      const requests = await fetchOkJson<MockOpenAiRequestSnapshot[]>(
+        `${mock.baseUrl}/debug/requests?after=${requestCursor}`,
+      );
+      return requests.flatMap(({ body }) => {
+        const input = Array.isArray(body.input) ? body.input : [];
+        const lastResponse = input.findLastIndex(
+          (item) =>
+            isRecord(item) &&
+            (item.role === "assistant" ||
+              item.type === "function_call" ||
+              item.type === "function_call_output"),
+        );
+        return input
+          .slice(lastResponse + 1)
+          .filter((item) => isRecord(item) && item.role === "user")
+          .map((item) => JSON.stringify(item));
+      });
+    };
     await gateway.restartAfterStateMutation(async () => {
       const entry = await readEntry();
       expect(entry).toMatchObject({
@@ -131,10 +156,13 @@ it.skipIf(process.platform === "win32")(
     });
     expect(gateway.pid).not.toBe(pid);
     await transport.waitReady({ gateway });
-    // SIGKILL cannot record graceful markers; the transcript remains available,
-    // and only a fresh input may launch another turn.
-    await transport.waitForNoOutbound({ sinceIndex });
-    expect(await fetchOkJson(`${mock.baseUrl}/debug/requests?after=${requestCursor}`)).toEqual([]);
+    // The preceding boot owns this orphaned run even without a graceful marker.
+    // Count only newly admitted input, not resume text repeated as provider history.
+    await poll(async () =>
+      (await readFreshInputs()).some((input) => QA_RESTART_RESUME_PROMPT_RE.test(input))
+        ? true
+        : undefined,
+    );
     const second = await send("repeated request queued reply gateway qa check");
     const reply = await transport.waitForOutbound({
       conversation,
@@ -148,6 +176,17 @@ it.skipIf(process.platform === "win32")(
       return entry?.status === "done" ? entry : undefined;
     }, 30_000);
     expect(settled.sessionId).toBe(pending.entry.sessionId);
+    const freshInputs = await readFreshInputs();
+    expect(freshInputs.filter((input) => QA_RESTART_RESUME_PROMPT_RE.test(input))).toHaveLength(1);
+    expect(freshInputs.some((input) => input.includes("KILL-RESTART-PROMPT"))).toBe(false);
+    const { events } = await readQaSessionTranscriptEvents({ gateway }, key);
+    const userInputs = events.flatMap((event) =>
+      isRecord(event) && isRecord(event.message) && event.message.role === "user"
+        ? [JSON.stringify(event.message.content)]
+        : [],
+    );
+    expect(userInputs.filter((input) => QA_RESTART_RESUME_PROMPT_RE.test(input))).toHaveLength(1);
+    expect(userInputs.filter((input) => input.includes("KILL-RESTART-PROMPT"))).toHaveLength(1);
   },
   240_000,
 );
