@@ -31,6 +31,8 @@ During Talk, use the microphone button in the Talk activity strip to mute or
 unmute input without ending the call, canceling submitted work, or stopping
 reply audio. The crossed-out microphone uses the composer's symbol size and
 weight, with a 44-point tap target: gray while input is on, orange while muted.
+While Talk is active, the composer's dictation/voice-note microphone is hidden;
+it returns when Talk ends. The mute button stays in the Talk activity strip.
 A muted label and VoiceOver state identify when input is off. An idle muted
 realtime session shows "Connected (Realtime)" instead of "Listening (Realtime)";
 working, speaking, connection, and error statuses remain visible.
