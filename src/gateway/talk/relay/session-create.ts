@@ -544,7 +544,8 @@ export function createTalkRealtimeRelaySession(
       }
     },
     onReady: () => {
-      if (!getActiveRelay()) {
+      const active = getActiveRelay();
+      if (!active || active.closing) {
         return;
       }
       ready = true;
@@ -554,6 +555,7 @@ export function createTalkRealtimeRelaySession(
       openingGreeting.noteProviderReady();
     },
     onError: (error) => {
+      openingGreeting.close();
       const active = getActiveRelay();
       if (!active) {
         if (!relayRef.current) {
@@ -661,6 +663,7 @@ export function createTalkRealtimeRelaySession(
     runAuthority: params.runAuthority,
     failSession,
     noteClientAudioAdmitted: openingGreeting.noteClientAudioAdmitted,
+    closeOpeningGreeting: openingGreeting.close,
   };
   relayRef.current = relay;
   adoptTalkRealtimeRelaySession(relay, {

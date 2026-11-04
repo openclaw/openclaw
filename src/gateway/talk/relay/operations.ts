@@ -117,6 +117,7 @@ export function closeRelaySession(
     completion: completion.promise,
   };
   session.closing = closing;
+  session.closeOpeningGreeting?.();
   const close = async (admissionFailure?: { error: unknown }) => {
     try {
       if (admissionFailure) {

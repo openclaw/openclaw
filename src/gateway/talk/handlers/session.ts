@@ -346,9 +346,14 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           context,
           hasCurrentClientAuthority,
         }).then((runAuthority) => {
+          let releaseGreetingAuthority: (() => void) | undefined;
           try {
             assertEnsuredTargetCurrent();
             runAuthority.accept();
+            // Readiness arrives after this RPC releases its request-scoped session facts.
+            if (params.greeting !== undefined || params.recovery !== undefined) {
+              releaseGreetingAuthority = sessionMutationAuthorization?.retain?.();
+            }
             return createTalkRealtimeRelaySession({
               runAuthority,
               context,
@@ -373,8 +378,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
                           },
                         }
                       : {}),
-                    // Accepted audio outlives request snapshots and updates its own voice row.
-                    assertGreetingAllowed: () => target.assertCurrent(context.getRuntimeConfig()),
+                    releaseGreetingAuthority,
+                    assertGreetingAllowed: () => {
+                      if (hasCurrentClientAuthority?.() === false) {
+                        throw new Error("Talk greeting connection is no longer authorized");
+                      }
+                      assertEnsuredTargetCurrent();
+                    },
                   }
                 : {}),
               voiceSelectionVoices: voices,
@@ -394,6 +404,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               forceAgentConsultOnFinalTranscript,
             });
           } catch (error) {
+            releaseGreetingAuthority?.();
             runAuthority.release();
             throw error;
           }

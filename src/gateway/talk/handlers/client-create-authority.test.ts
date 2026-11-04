@@ -73,6 +73,7 @@ import {
   type BrowserRequest,
 } from "./client-fixtures.test-support.js";
 import { talkClientHandlers } from "./client.js";
+import { registerRelayOpeningAuthorityTests } from "./session-opening-authority.test-support.js";
 import { talkVoiceHandlers } from "./voice.js";
 
 const voiceMocks = vi.hoisted(() => ({ resolveConfiguredRealtimeVoiceProviderAsync: vi.fn() }));
@@ -201,6 +202,12 @@ describe("voice creation authority", () => {
       { fallbackEntry: seedEntry, replaceEntry: true, skipMaintenance: true },
     );
   });
+  registerRelayOpeningAuthorityTests({
+    tempDir: () => tempDir,
+    providerResolution: voiceMocks.resolveConfiguredRealtimeVoiceProviderAsync,
+    sessionKey,
+  });
+
   it("releases transport authority after a same-session replacement closes", async () => {
     const fixture = configureDelegatedBrowserProvider(async () => browserSession);
     const releaseSubscription = vi.fn();

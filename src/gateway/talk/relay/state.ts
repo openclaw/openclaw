@@ -321,6 +321,7 @@ export type RelaySession = {
   };
   failSession: (message: string) => void;
   noteClientAudioAdmitted?: () => void;
+  closeOpeningGreeting?: () => void;
 };
 
 export type CreateTalkRealtimeRelaySessionParams = {
@@ -342,6 +343,8 @@ export type CreateTalkRealtimeRelaySessionParams = {
   recovery?: { interruptedForMs: number; receivedAt: number };
   /** Retained request/session checks before initial or resumed speech. */
   assertGreetingAllowed?: () => void;
+  /** Transfers a canonical session-authorization hold to the opening lifetime. */
+  releaseGreetingAuthority?: () => void;
   instructions: string;
   tools: RealtimeVoiceTool[];
   model?: string;
