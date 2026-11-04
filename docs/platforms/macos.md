@@ -99,7 +99,7 @@ as the primary model, and native Claude/Codex conversation discovery stays off.
 When setup reuses Codex, the card says **Using your existing Codex login ·
 sessions shared with Codex**. Codex owns authentication and token refresh in the
 Gateway user's `CODEX_HOME` (or `~/.codex`); OpenClaw does not copy the OAuth
-tokens. Choose **Use a separate login** on the card to sign in to an isolated
+tokens. Choose **Sign in separately** on the card to sign in to an isolated
 OpenClaw agent home. You can also change providers or sign in separately through
 **Models**. See [Codex login and isolation](/start/onboarding#codex-login-and-isolation).
 

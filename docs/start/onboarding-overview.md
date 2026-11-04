@@ -111,7 +111,7 @@ is a utility option and is never chosen as the primary model.
 When automatic setup reuses Codex, it shares the Gateway user's `CODEX_HOME`
 (or `~/.codex`), including the login, threads, and `config.toml`. Codex owns
 authentication and token refresh; OpenClaw does not copy the OAuth tokens into
-its auth store. Choose **Use a separate login** on the setup card, or sign in
+its auth store. Choose **Sign in separately** on the setup card, or sign in
 with ChatGPT or an OpenAI API key through **Models**, to use an isolated
 OpenClaw agent home, even after reusing a native login.
 See [Codex login and isolation](/start/onboarding#codex-login-and-isolation)
