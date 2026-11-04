@@ -1122,16 +1122,24 @@ module Open3
     [File.read(args.last), "", Struct.new(:success?).new(true)]
   end
 end
-def run_screenshot_xcodebuild!(arguments, log_path:)
-  raise "not building test products" unless arguments.last == "build-for-testing"
+def verify_screenshot_build_inputs!(arguments)
   derived_data_path = arguments.fetch(arguments.index("-derivedDataPath") + 1)
-  package_source = File.join(derived_data_path, "SourcePackages", "checkouts", "fixture", "Package.swift")
+  packages_index = arguments.index("-clonedSourcePackagesDirPath")
+  raise "missing shared package download directory" unless packages_index
+  packages_path = arguments.fetch(packages_index + 1)
+  raise "incorrect shared package download directory" unless packages_path == File.join(ios_root, "build", "SourcePackages")
+  package_source = File.join(packages_path, "checkouts", "fixture", "Package.swift")
   if @scenario == "iphone"
     raise "unexpected cached Swift package source on cold build" if File.exist?(package_source)
   else
     raise "cached Swift package source was removed" unless File.exist?(package_source) && File.read(package_source) == "downloaded package source"
   end
-  raise "stale non-package state survived clean build" if File.exist?(File.join(derived_data_path, ".previous-state"))
+  raise "stale compilation state survived clean build" if File.directory?(derived_data_path) && !Dir.empty?(derived_data_path)
+  derived_data_path
+end
+def run_screenshot_xcodebuild!(arguments, log_path:)
+  raise "not building test products" unless arguments.last == "build-for-testing"
+  derived_data_path = verify_screenshot_build_inputs!(arguments)
   FileUtils.mkdir_p(File.dirname(log_path))
   File.write(log_path, "native build log")
   @builds << "snapshot"
@@ -1292,9 +1300,10 @@ def sh(command, *arguments, **options)
     end
     FileUtils.mkdir_p(File.join(@root, "watch-runtime")) unless @scenario == "runtime-path-missing"
   elsif args.include?("xcodebuild") && args.include?("build")
+    derived_data_path = verify_screenshot_build_inputs!(args)
     @builds << "watch"
     raise "Watch build failed" if @scenario == "standalone-build-failure"
-    make_product(args.fetch(args.index("-derivedDataPath") + 1))
+    make_product(derived_data_path)
   elsif args[0, 3] == ["xcrun", "simctl", "install"]
     @installed = args.last.sub(@root, "")
     raise "simulator rejected Watch product" if @scenario == "invalid-install"
@@ -1348,9 +1357,10 @@ results = %w[combined missing-spec ambiguous-spec watch-unrelated-runtime watch-
     end
     unless scenario == "iphone"
       snapshot_data = File.join(ios_root, "build", "SnapshotDerivedData")
-      package_checkout = File.join(snapshot_data, "SourcePackages", "checkouts", "fixture")
+      package_checkout = File.join(ios_root, "build", "SourcePackages", "checkouts", "fixture")
       FileUtils.mkdir_p(package_checkout)
       File.write(File.join(package_checkout, "Package.swift"), "downloaded package source")
+      FileUtils.mkdir_p(File.join(snapshot_data, "SourcePackages"))
       File.write(File.join(snapshot_data, ".previous-state"), "previous invocation")
     end
     if scenario.start_with?("standalone")

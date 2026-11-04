@@ -264,7 +264,7 @@ suite.define(() => {
         await outbox.getByText("Waiting for reconnect", { exact: true }).waitFor();
         expect(await outbox.count()).toBe(1);
         await pollLocatorText(pane.locator(".agent-chat__composer-status-band")).toContain(
-          "The initial message is unresolved.",
+          "The first message is unresolved.",
         );
         await pollLocatorText(failedGroup.locator(".chat-send-status")).toContain(
           "Waiting for reconnect",
