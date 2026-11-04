@@ -34,6 +34,36 @@ it("serves protocol-valid empty Custodian history without method advertisement",
   expect(history.turns).toEqual([]);
 });
 
+it("keeps catalog resolution read-only and preserves configured outcomes", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(
+    createControlUiMockGatewayInitScript({
+      sessions: [{ key: "agent:main:main", snapshotAt: 1 }],
+    }),
+  );
+  const { request, frames } = gatewayPage.connect();
+  await flushMockTimers();
+  const gateway = getGateway(gatewayPage.window);
+  const initial = await request("catalog-list-before", "sessions.list", {});
+  for (const method of ["sessions.catalog.resolve", "beam.owned.resolve"]) {
+    expect(await request(`${method}-unbound`, method, {})).toBeNull();
+    const destination = { sessionKey: "agent:main:catalog-destination" };
+    gateway.setMethodResponse(method, destination);
+    expect(await request(`${method}-bound`, method, {})).toEqual(destination);
+    gateway.setMethodResponse(method, {
+      __mockError: { code: "FORBIDDEN", message: "Destination access denied" },
+    });
+    await request(`${method}-denied`, method, {});
+    expect(frames.find((frame) => frame.id === `${method}-denied`)).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN", message: "Destination access denied" },
+    });
+  }
+  const final = await request("catalog-list-after", "sessions.list", {});
+  expect(final.sessions).toEqual(initial.sessions);
+});
+
 it("serves protocol-valid empty channel status and pairing defaults", async ({ gatewayPage }) => {
   gatewayPage.execute(createControlUiMockGatewayInitScript());
   const { request } = gatewayPage.connect();
