@@ -481,11 +481,15 @@ describe("memory actor effect adapters", () => {
     setRuntimeConfigSnapshot({
       session: { maintenance: { mode: "enforce", pruneAfter: "1d", maxEntries: 2 } },
     });
+    // Writes stamp their activity with the clock: one second apart, the holder is the oldest.
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now");
     try {
       for (const [index, name] of ["holder", "older", "writer"].entries()) {
+        clock.mockReturnValue(now + index * 1_000);
         await upsertSessionEntryCore(
           { ...source, sessionKey: key(name), sessionId: name },
-          { sessionId: name, updatedAt: Date.now() - 3_000 + index * 1_000, incognito: true },
+          { sessionId: name, updatedAt: now, incognito: true },
         );
       }
       const owner = memorySessionActorOwners.read(target);
@@ -498,6 +502,7 @@ describe("memory actor effect adapters", () => {
         undefined,
       ]);
     } finally {
+      clock.mockRestore();
       resetContinuationCustodyProjection(custody);
       clearRuntimeConfigSnapshot();
     }
