@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { assert, expect } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,7 +19,12 @@ export function expectCompleted(details: unknown, aggregated: string, exitCode =
 export function nodeCommand(source: string): string {
   const quote = (value: string) =>
     `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
-  const command = `${quote(process.execPath)} -e ${quote(source)}`;
+  // CI's Bun test lane sets NODE_BIN to the installed Node runtime. These fixtures
+  // exercise child-process behavior, so keep child commands on Node across runtimes.
+  const node = process.env.NODE_BIN
+    ? join(process.env.NODE_BIN, process.platform === "win32" ? "node.exe" : "node")
+    : process.execPath;
+  const command = `${quote(node)} -e ${quote(source)}`;
   return process.platform === "win32" ? `& ${command}` : command;
 }
 
