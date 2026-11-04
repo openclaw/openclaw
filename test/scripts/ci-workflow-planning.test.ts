@@ -469,7 +469,10 @@ function runRunnerProfileFixture(options: {
       ].join("\n"),
       "utf8",
     );
-    writeFileSync(path.join(root, "qualification-pr.json"), JSON.stringify({ author: options.author ?? "vincentkoc" }));
+    writeFileSync(
+      path.join(root, "qualification-pr.json"),
+      JSON.stringify({ author: options.author ?? "vincentkoc" }),
+    );
     const outputPath = path.join(root, "profile.out");
     writeFileSync(outputPath, "", "utf8");
     const step = requiredWorkflowStep(
@@ -1582,6 +1585,7 @@ describe("ci workflow guards", () => {
           repository: "openclaw/openclaw",
           runAttempt: 1,
           runnerProfile: "hybrid",
+          runnerBackend: "blacksmith",
           preflightOutputs: manifest.outputs,
           additionalNeeds: {
             "check-plan": { outputs: manifest.checkPlanOutputs, result: "success" },
@@ -3456,6 +3460,13 @@ describe("ci workflow guards", () => {
             runAttempt: 1,
             runnerBackend: "hybrid",
             steps: {
+              runner_profile: {
+                outputs: runRunnerProfileFixture({
+                  configuredProfile: "hybrid",
+                  eventName,
+                  targetSupportsContract: true,
+                }).outputs,
+              },
               changed_scope: {
                 outputs: {
                   run_node: "true",
@@ -5523,7 +5534,12 @@ describe("ci workflow guards", () => {
     { author: "contributor", starter: "vincentkoc", admitted: false },
     { author: "vincentkoc", starter: "contributor", admitted: false },
     { author: "vincentkoc", starter: "vincentkoc", runAttempt: 2, admitted: false },
-    { author: "vincentkoc", starter: "vincentkoc", headRepository: "fork/openclaw", admitted: false },
+    {
+      author: "vincentkoc",
+      starter: "vincentkoc",
+      headRepository: "fork/openclaw",
+      admitted: false,
+    },
     { author: "", starter: "vincentkoc", eventName: "workflow_dispatch" as const, admitted: false },
   ])("admits the Boat backend only for the trusted author and starter: %j", (scenario) => {
     const result = runRunnerProfileFixture({
@@ -5597,7 +5613,9 @@ describe("ci workflow guards", () => {
           runAttempt: 2,
         }),
       ).toBe("");
-      const cache = requiredWorkflowStep(job.steps, "Setup Node environment").with["dependency-cache"];
+      const cache = requiredWorkflowStep(job.steps, "Setup Node environment").with[
+        "dependency-cache"
+      ];
       expect(evaluateWorkflowExpression(cache, row)).toBe("false");
     }
     for (const [name, job] of Object.entries(workflow.jobs)) {
@@ -5619,9 +5637,9 @@ describe("ci workflow guards", () => {
       ["dependencies", ["linux-hosted", "macos"]],
       ["warm", ["linux-hosted"]],
     ] as const) {
-      expect(evaluateWorkflowExpression(warmer.jobs[job].strategy.matrix.platform, context)).toEqual(
-        expected,
-      );
+      expect(
+        evaluateWorkflowExpression(warmer.jobs[job].strategy.matrix.platform, context),
+      ).toEqual(expected);
     }
   });
 
@@ -5690,37 +5708,40 @@ describe("ci workflow guards", () => {
     expect(evaluateWorkflowExpression(reporter["runs-on"], context)).toBe("ubuntu-24.04");
   });
 
-  it.each([2, 4, 8])("applies the %s CPU budget through self-hosted worker scheduling", (budget) => {
-    const step = requiredWorkflowStep(
-      readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps,
-      "Configure Node test resources",
-    );
-    const root = tempDirs.make("node-resource-budget-");
-    const bin = path.join(root, "bin");
-    mkdirSync(bin);
-    writeExecutable(path.join(bin, "nproc"), ["#!/bin/sh", "echo 16"]);
-    const output = path.join(root, "env");
-    writeFileSync(output, "");
-    const result = runWorkflowShellScript(step.run, {
-      env: {
-        ...process.env,
-        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-        GITHUB_ENV: output,
-        CI: "true",
-        RUNNER_ENVIRONMENT: "self-hosted",
-        FROZEN_TARGET: "false",
-        RUNSON_JOB: "false",
-        SHARD_PLAN_CONCURRENCY: "1",
-        PREDICTED_TEST_SECONDS: "",
-        OPENCLAW_NODE_TEST_CPU_BUDGET: String(budget),
-      },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const env = readWorkflowOutputs(output);
-    expect(env.OPENCLAW_NODE_TEST_CPU_BUDGET).toBe(String(budget));
-    expect(Number(env.OPENCLAW_VITEST_MAX_WORKERS)).toBeGreaterThan(0);
-    expect(Number(env.OPENCLAW_VITEST_MAX_WORKERS)).toBeLessThanOrEqual(budget);
-  });
+  it.each([2, 4, 8])(
+    "applies the %s CPU budget through self-hosted worker scheduling",
+    (budget) => {
+      const step = requiredWorkflowStep(
+        readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps,
+        "Configure Node test resources",
+      );
+      const root = tempDirs.make("node-resource-budget-");
+      const bin = path.join(root, "bin");
+      mkdirSync(bin);
+      writeExecutable(path.join(bin, "nproc"), ["#!/bin/sh", "echo 16"]);
+      const output = path.join(root, "env");
+      writeFileSync(output, "");
+      const result = runWorkflowShellScript(step.run, {
+        env: {
+          ...process.env,
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          GITHUB_ENV: output,
+          CI: "true",
+          RUNNER_ENVIRONMENT: "self-hosted",
+          FROZEN_TARGET: "false",
+          RUNSON_JOB: "false",
+          SHARD_PLAN_CONCURRENCY: "1",
+          PREDICTED_TEST_SECONDS: "",
+          OPENCLAW_NODE_TEST_CPU_BUDGET: String(budget),
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const env = readWorkflowOutputs(output);
+      expect(env.OPENCLAW_NODE_TEST_CPU_BUDGET).toBe(String(budget));
+      expect(Number(env.OPENCLAW_VITEST_MAX_WORKERS)).toBeGreaterThan(0);
+      expect(Number(env.OPENCLAW_VITEST_MAX_WORKERS)).toBeLessThanOrEqual(budget);
+    },
+  );
 
   it.each([1, 2])("keeps Boat artifact consumers and build budget on attempt %s", (runAttempt) => {
     const admitted = runRunnerProfileFixture({
@@ -6344,9 +6365,12 @@ describe("ci workflow guards", () => {
         );
       }
     }
-    expect(evaluateWorkflow(workflow.jobs["build-artifacts"]["timeout-minutes"], {
-      runnerBackend: "hybrid", runAttempt: 2,
-    })).toBe(35);
+    expect(
+      evaluateWorkflow(workflow.jobs["build-artifacts"]["timeout-minutes"], {
+        runnerBackend: "hybrid",
+        runAttempt: 2,
+      }),
+    ).toBe(35);
 
     // PR events validate the artifact build on hosted runners (landing gate
     // stays satisfiable during Blacksmith outages); Testbox leases are

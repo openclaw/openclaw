@@ -29,13 +29,13 @@ import {
   resolveChangedTestTargetPlan,
   UI_E2E_VITEST_CONFIG,
 } from "../test-projects.test-support.mts";
-import { routeBoatNodeTestJobs } from "./ci-node-test-capacity.mts";
 import { getChangedPathFacts, isTestOnlyPath } from "./changed-path-facts.mjs";
 import {
   createChangedExtensionConfigShards,
   packChangedExtensionConfigShards,
   resolveChangedExtensionRoots,
 } from "./ci-extension-test-shards.mts";
+import { routeBoatNodeTestJobs } from "./ci-node-test-capacity.mts";
 import {
   canSplitWholeConfigGroup,
   listNodeTestConfigFiles,

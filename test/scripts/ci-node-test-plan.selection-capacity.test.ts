@@ -78,7 +78,11 @@ it("maps final Boat plans without changing hybrid groups, packing, or timings", 
         : job;
   };
   for (const compactMode of [undefined, "pull-request", "push"] as const) {
-    const options = { compactMode, includeProofTests: false, includeReleaseOnlyPluginShards: false };
+    const options = {
+      compactMode,
+      includeProofTests: false,
+      includeReleaseOnlyPluginShards: false,
+    };
     const hybrid = createNodeTestShardBundles({ ...options, runnerBackend: "hybrid" });
     const boat = createNodeTestShardBundles({ ...options, runnerBackend: "boat" });
     expect(boat).toEqual(hybrid.map(expectedJob));
