@@ -37,6 +37,18 @@ enum ScreenshotFixtureMode {
     static var progressCardEnabled: Bool {
         ProcessInfo.processInfo.arguments.contains("--openclaw-progress-card-fixture")
     }
+
+    /// Two long chats, so switching between them proves where the reader lands.
+    static var chatSwitchEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-chat-switch-fixture")
+    }
+
+    /// Holds the model catalog, the last step of a chat's load, like a slow Gateway.
+    static var slowModelCatalogEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-slow-model-catalog-fixture")
+    }
+
+    static let chatSwitchSecondSessionKey = "agent:main:launch-plan"
 }
 
 struct LocalChatFixture {
@@ -359,6 +371,9 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         sessionKey _: String,
         agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
     {
+        if ScreenshotFixtureMode.slowModelCatalogEnabled {
+            try await Task.sleep(for: .seconds(6))
+        }
         let choices = try await self.listModels(agentID: agentID)
         return OpenClawChatModelCatalogSnapshot(
             choices: choices,
@@ -581,6 +596,9 @@ private actor LocalFixtureChatStore {
                 text: "OPENCLAW_HELPER_SESSION",
                 timestamp: 1,
                 transcriptMessageID: "fixture-helper-answer")]
+        } else if ScreenshotFixtureMode.chatSwitchEnabled {
+            Self.chatSwitchTranscript(
+                secondSession: normalizedSessionKey == ScreenshotFixtureMode.chatSwitchSecondSessionKey)
         } else {
             self.messages
         }
@@ -856,10 +874,24 @@ private actor LocalFixtureChatStore {
             toolOverrides: self.toolOverrides)
         entry.visibility = .shared
         entry.sharingRole = .owner
+        var sessions = [entry]
+        if ScreenshotFixtureMode.chatSwitchEnabled {
+            sessions[0].displayName = "Release checklist"
+            sessions.append(OpenClawChatSessionEntry(
+                key: ScreenshotFixtureMode.chatSwitchSecondSessionKey,
+                kind: "chat",
+                displayName: "Launch plan",
+                surface: "ios",
+                updatedAt: Date().timeIntervalSince1970 * 1000 - 60000,
+                sessionId: "\(self.fixture.sessionIDPrefix)-launch-plan",
+                modelProvider: self.fixture.modelProvider,
+                model: self.modelID,
+                contextTokens: 128_000))
+        }
         return OpenClawChatSessionsListResponse(
             ts: Date().timeIntervalSince1970 * 1000,
             path: nil,
-            count: 1,
+            count: sessions.count,
             defaults: OpenClawChatSessionsDefaults(
                 modelProvider: self.fixture.modelProvider,
                 model: self.fixture.modelID,
@@ -869,7 +901,7 @@ private actor LocalFixtureChatStore {
                 thinkingDefault: "auto",
                 mainSessionKey: self.fixture.sessionKey,
                 modelSelectionTarget: self.fixtureModelSelectionTarget),
-            sessions: [entry])
+            sessions: sessions)
     }
 
     private var fixtureModelSelectionTarget: String {
@@ -1238,6 +1270,32 @@ private actor LocalFixtureChatStore {
                 timestamp: now + Double(index),
                 transcriptMessageID: "\(fixture.sessionIDPrefix)-seed-\(index)")
         }
+    }
+
+    /// Each chat is several screens tall; its first and latest rows carry markers.
+    private static func chatSwitchTranscript(secondSession: Bool) -> [OpenClawChatMessage] {
+        let id = secondSession ? "B" : "A"
+        let topic = secondSession ? "launch plan" : "release checklist"
+        let paragraph = String(repeating: "Notes for the \(topic), kept here for later review. ", count: 14)
+        var messages: [OpenClawChatMessage] = []
+        for turn in 0..<8 {
+            messages.append(self.message(
+                role: "user",
+                text: turn == 0 ? "OPENCLAW_SWITCH_\(id)_FIRST" : "Next step \(turn) for the \(topic)?",
+                timestamp: Double(1_800_000_000_000 + turn * 2000),
+                transcriptMessageID: "fixture-switch-\(id)-user-\(turn)"))
+            messages.append(self.message(
+                role: "assistant",
+                text: paragraph,
+                timestamp: Double(1_800_000_001_000 + turn * 2000),
+                transcriptMessageID: "fixture-switch-\(id)-answer-\(turn)"))
+        }
+        messages.append(self.message(
+            role: "assistant",
+            text: "OPENCLAW_SWITCH_\(id)_LATEST",
+            timestamp: 1_800_000_100_000,
+            transcriptMessageID: "fixture-switch-\(id)-latest"))
+        return messages
     }
 
     private static func message(
