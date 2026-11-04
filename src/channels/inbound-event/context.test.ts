@@ -255,7 +255,9 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
     const result = await finalizeQuote({
       media: [],
       contextVisibility: "all",
-      supplemental: { quote: { id: "quote-1", body: "quoted photo", media: vi.fn(async () => [attachment]) } },
+      supplemental: {
+        quote: { id: "quote-1", body: "quoted photo", media: vi.fn(async () => [attachment]) },
+      },
     });
     expect(result.context.SourceModality).toBe("text");
     expect(result.context.media).toHaveLength(1);
@@ -263,7 +265,10 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
   });
 
   it("does not override modality when message has its own attachments and quote media", async () => {
-    const documentAttachment = { path: "/tmp/report.pdf", kind: "document" } satisfies InboundMediaFacts;
+    const documentAttachment = {
+      path: "/tmp/report.pdf",
+      kind: "document",
+    } satisfies InboundMediaFacts;
     const quoteAttachment = { path: "/tmp/quote.png", contentType: "image/png" };
     const media = vi.fn(async () => [quoteAttachment]);
     const result = await finalizeQuote({

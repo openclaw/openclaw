@@ -310,6 +310,7 @@ export function finalizeChannelInboundContext<T extends Record<string, unknown>>
       ),
     );
     const initialMedia = params.media ?? [];
+    // SAFETY: originalContext may carry pre-derived SourceModality from earlier inbound pipeline stages.
     const originalSourceModality = (originalContext as { SourceModality?: string }).SourceModality;
     const sourceModality =
       originalSourceModality ??

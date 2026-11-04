@@ -1,2 +1,2 @@
 # Preserve text modality for text replies to messages with quoted media.
-27
+32
