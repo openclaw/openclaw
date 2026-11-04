@@ -171,7 +171,12 @@ export function captureAdaptiveGraphDecision(options: {
         };
         decision.comparison = { revision: context.revision, tree: context.tree, changedFiles };
         decision.graph = graph;
-        decision.ranking = captureAdaptiveModelRanking({ current, baseline, changedFiles, prior: decision.prior });
+        decision.ranking = captureAdaptiveModelRanking({
+          current,
+          baseline,
+          changedFiles,
+          prior: decision.prior,
+        });
         fallbackReasons.length = 0;
         fallbackReasons.push(...graph.fallbackReasons);
         return decision;

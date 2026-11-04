@@ -111,7 +111,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
     bundle.cutoffAt = current.created_at;
     const cutoff = Date.parse(current.created_at);
     const listing = await read(
-      "actions/workflows/ci.yml/runs?event=schedule&branch=main&status=success&per_page=5",
+      "actions/workflows/ci.yml/runs?event=schedule&branch=main&status=completed&per_page=5",
     );
     requirePrior(Array.isArray(listing.workflow_runs), "run-list-unavailable");
     let downloads = 0;
@@ -126,7 +126,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
         run.event !== "schedule" ||
         run.head_branch !== "main" ||
         run.status !== "completed" ||
-        run.conclusion !== "success" ||
+        !["success", "failure"].includes(run.conclusion) ||
         !SHA.test(run.head_sha) ||
         run.repository?.full_name !== repository ||
         run.head_repository?.full_name !== repository ||
@@ -179,7 +179,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
                 workflowPath: ".github/workflows/ci.yml",
                 workflowEvent: "schedule",
                 workflowHeadBranch: "main",
-                runStatePolicy: "completed-success",
+                runStatePolicy: "completed-success-or-failure",
               },
             });
           requirePrior(

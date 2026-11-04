@@ -9,6 +9,17 @@ import {
 } from "./ci-test-observations.mjs";
 
 type Observations = ReturnType<typeof collectTestObservations>;
+type FileIdentity = { file: string; project: string; pool: string };
+type ModelInput = FileIdentity & {
+  runtime: {
+    runtime: string;
+    runtimeVersion: string;
+    platform: string;
+    arch: string;
+    dependencyRoot: string;
+  };
+  dependencies: string[] | null;
+};
 type Tree = { score: number } | { feature: number; threshold: number; left: Tree; right: Tree };
 const featureNames = [
   "basenameMatch",
@@ -26,7 +37,11 @@ const tokens = (file: string) =>
     ),
   );
 const directory = (file: string) => file.slice(0, file.lastIndexOf("/") + 1);
-const stem = (file: string) => file.slice(file.lastIndexOf("/") + 1).replace(/\.[^.]+$/u, "").replace(/\.(?:test|spec)$/u, "");
+const stem = (file: string) =>
+  file
+    .slice(file.lastIndexOf("/") + 1)
+    .replace(/\.[^.]+$/u, "")
+    .replace(/\.(?:test|spec)$/u, "");
 
 // This model is data, never an imported module. Validate once before traversing it.
 function modelTree(value: unknown): { tree: Tree; used: Set<number> } {
@@ -41,14 +56,35 @@ function modelTree(value: unknown): { tree: Tree; used: Set<number> } {
     assert(input && typeof input === "object" && !Array.isArray(input), "Invalid tree node");
     const node = input as Record<string, unknown>;
     if (Object.hasOwn(node, "score")) {
-      assert(Object.keys(node).length === 1 && typeof node.score === "number" && Number.isFinite(node.score) && node.score >= 0 && node.score <= 1, "Invalid leaf");
+      assert(
+        Object.keys(node).length === 1 &&
+          typeof node.score === "number" &&
+          Number.isFinite(node.score) &&
+          node.score >= 0 &&
+          node.score <= 1,
+        "Invalid leaf",
+      );
       return { score: node.score };
     }
     assert(Object.keys(node).sort().join(",") === "feature,left,right,threshold", "Invalid split");
-    assert(typeof node.feature === "number" && Number.isInteger(node.feature) && node.feature >= 0 && node.feature < featureNames.length, "Invalid feature");
-    assert(typeof node.threshold === "number" && Number.isFinite(node.threshold), "Invalid threshold");
+    assert(
+      typeof node.feature === "number" &&
+        Number.isInteger(node.feature) &&
+        node.feature >= 0 &&
+        node.feature < featureNames.length,
+      "Invalid feature",
+    );
+    assert(
+      typeof node.threshold === "number" && Number.isFinite(node.threshold),
+      "Invalid threshold",
+    );
     used.add(node.feature);
-    return { feature: node.feature, threshold: node.threshold, left: visit(node.left, depth + 1), right: visit(node.right, depth + 1) };
+    return {
+      feature: node.feature,
+      threshold: node.threshold,
+      left: visit(node.left, depth + 1),
+      right: visit(node.right, depth + 1),
+    };
   };
   return { tree: visit(model.tree, 0), used };
 }
@@ -68,21 +104,44 @@ export function captureAdaptiveModelRanking(options: {
     for (const file of invocation.files) {
       const id = observationFileId(file);
       const entries = history.get(id) ?? [];
-      entries.push(invocation.complete === true && file.complete === true && Array.isArray(file.dependencies) && file.dependencies.every(isObservationPath) ? file.dependencies : null);
+      entries.push(
+        invocation.complete === true &&
+          file.complete === true &&
+          Array.isArray(file.dependencies) &&
+          file.dependencies.every(isObservationPath)
+          ? file.dependencies
+          : null,
+      );
       history.set(id, entries);
     }
   }
   // Deliberately exclude both current and prior outcomes/durations. These five
   // features describe paths and observed membership, not direct-edge distance.
-  const inputs = current.invocations.flatMap((invocation) => invocation.files.map(({ file, project, pool }) => {
-    const entries = history.get(observationFileId({ file, project, pool }));
-    return {
-      file, project, pool,
-      runtime: { runtime: invocation.runtime, runtimeVersion: invocation.runtimeVersion, platform: invocation.platform, arch: invocation.arch, dependencyRoot: invocation.dependencyRoot },
-      dependencies: entries?.length === 1 ? entries[0] : null,
-    };
+  const inputs: ModelInput[] = current.invocations.flatMap((invocation) =>
+    invocation.files.map(({ file, project, pool }: FileIdentity) => {
+      const entries = history.get(observationFileId({ file, project, pool }));
+      return {
+        file,
+        project,
+        pool,
+        runtime: {
+          runtime: invocation.runtime,
+          runtimeVersion: invocation.runtimeVersion,
+          platform: invocation.platform,
+          arch: invocation.arch,
+          dependencyRoot: invocation.dependencyRoot,
+        },
+        dependencies: entries?.length === 1 ? entries[0]! : null,
+      };
+    }),
+  );
+  const rows = inputs.map(({ file, project, pool }) => ({
+    file,
+    project,
+    pool,
+    score: null as number | null,
+    unknownReasons: [] as string[],
   }));
-  const rows = inputs.map(({ file, project, pool }) => ({ file, project, pool, score: null as number | null, unknownReasons: [] as string[] }));
   const result = {
     version: 1,
     featureSchema: schema,
@@ -94,8 +153,20 @@ export function captureAdaptiveModelRanking(options: {
   };
   try {
     assert(inputs.length * changedFiles.length <= 1_000_000, "Comparison exceeds model budget");
-    result.extractorSha256 = createHash("sha256").update(readBoundedRegularFile(new URL(import.meta.url), { label: "Adaptive CI extractor", maxBytes: 64 * 1024 })).digest("hex");
-    const bytes = options.modelBytes ?? readBoundedRegularFile(new URL("../ci-adaptive-model.json", import.meta.url), { label: "Adaptive CI model", maxBytes: 64 * 1024 });
+    result.extractorSha256 = createHash("sha256")
+      .update(
+        readBoundedRegularFile(new URL(import.meta.url), {
+          label: "Adaptive CI extractor",
+          maxBytes: 64 * 1024,
+        }),
+      )
+      .digest("hex");
+    const bytes =
+      options.modelBytes ??
+      readBoundedRegularFile(new URL("../ci-adaptive-model.json", import.meta.url), {
+        label: "Adaptive CI model",
+        maxBytes: 64 * 1024,
+      });
     assert(bytes.length <= 64 * 1024, "Model exceeds byte budget");
     result.modelSha256 = createHash("sha256").update(bytes).digest("hex");
     const { tree, used } = modelTree(JSON.parse(bytes.toString("utf8")));
@@ -107,7 +178,11 @@ export function captureAdaptiveModelRanking(options: {
         continue;
       }
       const target = tokens(input.file);
-      const overlap = changedTokens.map((parts) => [...target].filter((part) => parts.has(part)).length / Math.max(1, new Set([...target, ...parts]).size));
+      const overlap = changedTokens.map(
+        (parts) =>
+          [...target].filter((part) => parts.has(part)).length /
+          Math.max(1, new Set([...target, ...parts]).size),
+      );
       const features = [
         Number(changedFiles.some((file) => stem(file) === stem(input.file))),
         overlap.reduce((maximum, value) => Math.max(maximum, value), 0),

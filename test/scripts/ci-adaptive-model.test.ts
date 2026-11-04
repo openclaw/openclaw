@@ -11,25 +11,52 @@ const context = {
   environmentDigest: "e".repeat(64),
 };
 const files = ["first", "second"].map((project) => ({
-  file: "src/shared/string.test.ts", project, pool: "threads",
+  file: "src/shared/string.test.ts",
+  project,
+  pool: "threads",
 }));
-const current = collectTestObservations(`[vitest:inventory] ${JSON.stringify({
-  version: 1, invocation: "run", runtime: "node", runtimeVersion: "v26.13.0",
-  platform: "linux", arch: "x64", dependencyRoot: "", files,
-})}`, context);
-const featureNames = ["basenameMatch", "pathTokenOverlap", "sameDirectory", "observedDependency", "changedPathCountLog"];
-const model = (tree: unknown, names = featureNames) => Buffer.from(JSON.stringify({
-  version: 1, featureSchema: "native-graph-v1", featureNames: names, tree,
-}));
+const current = collectTestObservations(
+  `[vitest:inventory] ${JSON.stringify({
+    version: 1,
+    invocation: "run",
+    runtime: "node",
+    runtimeVersion: "v26.13.0",
+    platform: "linux",
+    arch: "x64",
+    dependencyRoot: "",
+    files,
+  })}`,
+  context,
+);
+const featureNames = [
+  "basenameMatch",
+  "pathTokenOverlap",
+  "sameDirectory",
+  "observedDependency",
+  "changedPathCountLog",
+];
+const model = (tree: unknown, names = featureNames) =>
+  Buffer.from(
+    JSON.stringify({
+      version: 1,
+      featureSchema: "native-graph-v1",
+      featureNames: names,
+      tree,
+    }),
+  );
 const options = () => ({
-  current: structuredClone(current), baseline: structuredClone(current),
-  changedFiles: ["src/shared/string.ts"], prior: { memberSha256: "f".repeat(64) },
+  current: structuredClone(current),
+  baseline: structuredClone(current),
+  changedFiles: ["src/shared/string.ts"],
+  prior: { memberSha256: "f".repeat(64) },
 });
 
 it("scores project-qualified inventory without consuming terminal outcomes or changing order", () => {
   const input = options();
   const first = captureAdaptiveModelRanking(input);
-  expect(first.rows).toEqual(files.map((file) => ({ ...file, score: 0.9565217391304348, unknownReasons: [] })));
+  expect(first.rows).toEqual(
+    files.map((file) => ({ ...file, score: 0.9565217391304348, unknownReasons: [] })),
+  );
   expect(first.modelSha256).toMatch(/^[a-f0-9]{64}$/);
   expect(first.extractorSha256).toMatch(/^[a-f0-9]{64}$/);
   for (const observation of [input.current, input.baseline]) {
@@ -45,7 +72,9 @@ it("scores project-qualified inventory without consuming terminal outcomes or ch
   const changed = captureAdaptiveModelRanking(input);
   expect(changed.rows.map((row) => row.score)).toEqual([0, 0]);
   expect(changed.inputSha256).not.toBe(first.inputSha256);
-  expect(input.current.invocations[0]!.files.map(({ file, project, pool }) => ({ file, project, pool }))).toEqual(files);
+  expect(
+    input.current.invocations[0]!.files.map(({ file, project, pool }) => ({ file, project, pool })),
+  ).toEqual(files);
 });
 
 it("keeps unknown dependency features unknown and rejects malformed model data", () => {
@@ -53,22 +82,30 @@ it("keeps unknown dependency features unknown and rejects malformed model data",
   const dependencyTree = { feature: 3, threshold: 0.5, left: { score: 0 }, right: { score: 1 } };
   const missing = captureAdaptiveModelRanking({ ...input, modelBytes: model(dependencyTree) });
   expect(missing.rows.map((row) => [row.score, row.unknownReasons])).toEqual([
-    [null, ["missing-prior-dependencies"]], [null, ["missing-prior-dependencies"]],
+    [null, ["missing-prior-dependencies"]],
+    [null, ["missing-prior-dependencies"]],
   ]);
   input.baseline.invocations[0]!.complete = true;
   for (const file of input.baseline.invocations[0]!.files) {
     file.complete = true;
     file.dependencies = ["src/shared/string.ts"];
   }
-  expect(captureAdaptiveModelRanking({ ...input, modelBytes: model(dependencyTree) }).rows.map((row) => row.score)).toEqual([1, 1]);
+  expect(
+    captureAdaptiveModelRanking({ ...input, modelBytes: model(dependencyTree) }).rows.map(
+      (row) => row.score,
+    ),
+  ).toEqual([1, 1]);
   for (const bytes of [
-    Buffer.from("not json"), model({ score: 2 }), model({ score: null }),
+    Buffer.from("not json"),
+    model({ score: 2 }),
+    model({ score: null }),
     model({ feature: 5, threshold: 0, left: { score: 0 }, right: { score: 1 } }),
     model({ score: 1 }, [...featureNames].reverse()),
   ]) {
     const invalid = captureAdaptiveModelRanking({ ...input, modelBytes: bytes });
     expect(invalid.rows.map((row) => [row.score, row.unknownReasons])).toEqual([
-      [null, ["model-unavailable-or-invalid"]], [null, ["model-unavailable-or-invalid"]],
+      [null, ["model-unavailable-or-invalid"]],
+      [null, ["model-unavailable-or-invalid"]],
     ]);
   }
 });

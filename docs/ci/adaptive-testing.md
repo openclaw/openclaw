@@ -137,7 +137,10 @@ inputs never grants permission to omit tests.
 
 For sampled same-repository PRs and scheduled runs, preflight uses its existing
 read-only Actions permission to restore at most two observation archives from
-the five most recent successful scheduled main runs. It verifies the exact
+the five most recent completed scheduled main runs. Successful and failed
+workflows can contribute observations; cancelled runs cannot. An unrelated job
+failure does not erase complete file results, while missing, incomplete or
+failing file history still requires conservative selection. Restore verifies the exact
 run/attempt, source commit/tree, archive digest and paired launch/member hashes.
 The producer must have completed and published before the current run began.
 Restore has a shared ten-second deadline and does not retry requests. Missing
