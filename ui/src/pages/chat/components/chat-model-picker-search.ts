@@ -92,6 +92,9 @@ export function createChatModelSearch() {
     summaryRef(this: void, element: HTMLElement) {
       state.summary = element;
     },
+    focusInput() {
+      state.input?.focus({ preventScroll: true });
+    },
     inputRef() {
       return elementRef<HTMLInputElement>((element) => {
         state.input = element;

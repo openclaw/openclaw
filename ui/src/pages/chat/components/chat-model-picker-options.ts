@@ -93,6 +93,8 @@ export function formatModelLabel(
 }
 
 export type ChatModelPickerOptionProps = {
+  rowKey?: string;
+  favorite?: { selected: boolean; disabled: boolean; onToggle: (event: MouseEvent) => void };
   disabled: boolean;
   entry: ChatModelPickerOption;
   index: number;

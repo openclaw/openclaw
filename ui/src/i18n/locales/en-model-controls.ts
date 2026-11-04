@@ -8,7 +8,8 @@ const enModelControls = {
       api: "API",
       default: "Default",
       favorites: "Favorites",
-      manageFavorites: "Manage favorites",
+      addFavorite: "Add {model} to favorites",
+      removeFavorite: "Remove {model} from favorites",
       favoritesUnavailable: "Favorites could not load. Retry to use your saved models.",
       favoritesChanged:
         "Favorites changed or could not be saved. Check the current choices and try again.",

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, Errored, For, Loading, Show, useContext } from "solid-js";
+import { createMemo, Errored, For, Loading, Show, useContext } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -7,7 +7,6 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { ChatContextWindowControl } from "./chat-context-window-control.tsx";
 import { ChatModelAccountSectionView } from "./chat-model-account-control.tsx";
 import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
-import { ChatModelFavoritesEditor } from "./chat-model-favorites-editor.tsx";
 import { createChatModelFavorites, createChatModelFavoritesScope } from "./chat-model-favorites.ts";
 import {
   isModelPickerOptionSelected,
@@ -31,6 +30,9 @@ import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
 import { ChatModelProviderHeading } from "./chat-model-provider-heading.tsx";
 
 const FAVORITES_GROUP = "$favorites";
+// Presentation identity differs from the persisted model/runtime identity.
+const modelRowKey = (option: ModelPickerOption, provider: string) =>
+  `${provider === FAVORITES_GROUP ? "favorite:" : ""}${modelPickerOptionKey(option)}`;
 
 // A model pinned to Claude CLI belongs to its runtime's provider group.
 const groupProvider = (option: ModelPickerOption) =>
@@ -63,7 +65,6 @@ function prepareChatModelPickerPanel(
   for (const option of params.modelOptions) {
     if (!option.isDefault && favorites.includes(modelPickerOptionKey(option))) {
       favoriteOptions.push(option);
-      continue;
     }
     const provider = groupProvider(option);
     const group = providerGroups.get(provider) ?? { lead: [], more: [] };
@@ -98,18 +99,18 @@ function prepareChatModelPickerPanel(
   }
   const orderedOptions = orderedProviderGroups.flatMap(([, { lead, more }]) => [...lead, ...more]);
   const optionIndex = new Map(
-    orderedOptions.map((option, index) => [modelPickerOptionKey(option), index]),
+    orderedProviderGroups
+      .flatMap(([provider, { lead, more }]) =>
+        [...lead, ...more].map((option) => modelRowKey(option, provider)),
+      )
+      .map((key, index) => [key, index]),
   );
   const targetGroups = params.targetGroups ?? [];
   const targetOptionCount = targetGroups.reduce((count, group) => count + group.options.length, 0);
   const hasOptions = params.modelOptions.length > 0 || targetGroups.length > 0;
   const hasSelectableModelOptions = params.modelOptions.some((option) => !option.disabled);
-  const favoriteProviders = [...new Set(favoriteOptions.map(groupProvider))].filter(
-    (provider) => !providerGroups.has(provider),
-  );
   return {
     orderedProviderGroups,
-    favoriteProviders,
     activeProvider:
       activeModelOption && favoriteOptions.includes(activeModelOption)
         ? FAVORITES_GROUP
@@ -149,7 +150,6 @@ export function ChatModelPickerPanel(panel: PanelProps) {
   const owner = createChatModelFavoritesScope(() => panel.params.sessionKey);
   const search = useContext(ChatModelSearchContext);
   const favorites = createChatModelFavorites(owner);
-  const [managingFavorites, setManagingFavorites] = createSignal(false);
   // Parent controls also publish effort and copy changes; retain unchanged model facts.
   const modelOptions = createMemo(() => panel.params.modelOptions);
   const modelTargetGroups = createMemo(() => panel.params.targetGroups);
@@ -216,6 +216,7 @@ export function ChatModelPickerPanel(panel: PanelProps) {
           group.lead
             .map((entry) =>
               Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }, defaultLabel), {
+                key: modelRowKey(entry, provider),
                 provider,
                 list: provider,
               }),
@@ -223,6 +224,7 @@ export function ChatModelPickerPanel(panel: PanelProps) {
             .concat(
               group.more.map((entry) =>
                 Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }, defaultLabel), {
+                  key: modelRowKey(entry, provider),
                   provider,
                   more: true,
                   list: `${provider}:more`,
@@ -273,13 +275,10 @@ export function ChatModelPickerPanel(panel: PanelProps) {
     for (const [provider, group] of state().orderedProviderGroups) {
       rows.push(`heading:${provider}`);
       if (searchView?.providerOpen(provider)) {
-        if (provider === FAVORITES_GROUP) {
-          rows.push(...state().favoriteProviders.map((id) => `heading:favorite-provider:${id}`));
-        }
-        rows.push(...group.lead.map(modelPickerOptionKey));
+        rows.push(...group.lead.map((entry) => modelRowKey(entry, provider)));
         rows.push(
           ...(searchView.moreOpen(provider)
-            ? group.more.map(modelPickerOptionKey)
+            ? group.more.map((entry) => modelRowKey(entry, provider))
             : group.more.length
               ? [`more:${provider}`]
               : []),
@@ -315,8 +314,8 @@ export function ChatModelPickerPanel(panel: PanelProps) {
         .map(({ row }) => row.key) ?? [],
   );
   const renderRow = window.renderRow;
-  const mounted = (entries: readonly ModelPickerOption[]) =>
-    entries.filter((entry) => window.has(modelPickerOptionKey(entry)));
+  const mounted = (entries: readonly ModelPickerOption[], provider: string) =>
+    entries.filter((entry) => window.has(modelRowKey(entry, provider)));
   const selectModel = (entry: ModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
     // Resetting a pin does not require the inherited model to be available.
@@ -405,15 +404,31 @@ export function ChatModelPickerPanel(panel: PanelProps) {
       </>
     );
   }
-  function ModelOption(props: { entry: ModelPickerOption }) {
-    const key = createMemo(() => modelPickerOptionKey(props.entry));
+  function ModelOption(props: { entry: ModelPickerOption; provider: string }) {
+    const key = createMemo(() => modelRowKey(props.entry, props.provider));
     return (
       <>
         {renderRow(key(), () => (
           <ChatModelPickerOption
             disabled={disabled()}
             entry={props.entry}
-            index={state().optionIndex.get(modelPickerOptionKey(props.entry)) ?? 0}
+            rowKey={key()}
+            index={state().optionIndex.get(key()) ?? 0}
+            favorite={
+              !props.entry.isDefault && favorites.available()
+                ? {
+                    selected: favorites.keys().includes(modelPickerOptionKey(props.entry)),
+                    disabled: disabled() || favorites.disabled(),
+                    onToggle: (event) => {
+                      // Saving disables every heart; move focus before the browser drops it.
+                      if (event.currentTarget === document.activeElement) {
+                        search?.focusInput();
+                      }
+                      favorites.toggle(modelPickerOptionKey(props.entry));
+                    },
+                  }
+                : undefined
+            }
             selectedModelValue={selectedModelValue()}
             selectedAgentRuntime={selectedAgentRuntime()}
             sessionModelPinned={sessionModelPinned()}
@@ -436,10 +451,6 @@ export function ChatModelPickerPanel(panel: PanelProps) {
         : t("chat.modelControls.providerModels", {
             provider: providerDisplayLabel(props.provider),
           });
-    // When every model moves to Favorites, retain its provider's auth/settings owner.
-    const favoriteProviders = createMemo(() =>
-      props.provider === FAVORITES_GROUP ? state().favoriteProviders : [],
-    );
     return (
       <section
         class="chat-controls__provider-model-group"
@@ -457,24 +468,9 @@ export function ChatModelPickerPanel(panel: PanelProps) {
             more={props.more.length > 0}
           />
         ))}
-        <For each={favoriteProviders()}>
-          {(favoriteProvider) => (
-            <>
-              {renderRow(`heading:favorite-provider:${favoriteProvider}`, () => (
-                <ChatModelProviderHeading
-                  params={panel.params}
-                  provider={favoriteProvider}
-                  options={props.lead.filter(
-                    (option) => groupProvider(option) === favoriteProvider,
-                  )}
-                />
-              ))}
-            </>
-          )}
-        </For>
         <ModelList label={groupLabel()} id={props.provider}>
-          <For each={mounted(props.lead)} keyed={modelPickerOptionKey}>
-            {(entry) => <ModelOption entry={entry()} />}
+          <For each={mounted(props.lead, props.provider)} keyed={modelPickerOptionKey}>
+            {(entry) => <ModelOption entry={entry()} provider={props.provider} />}
           </For>
         </ModelList>
         {props.more.length > 0 ? (
@@ -504,8 +500,8 @@ export function ChatModelPickerPanel(panel: PanelProps) {
               </button>
             ))}
             <ModelList label={groupLabel()} id={`${props.provider}:more`} more>
-              <For each={mounted(props.more)} keyed={modelPickerOptionKey}>
-                {(entry) => <ModelOption entry={entry()} />}
+              <For each={mounted(props.more, props.provider)} keyed={modelPickerOptionKey}>
+                {(entry) => <ModelOption entry={entry()} provider={props.provider} />}
               </For>
             </ModelList>
           </>
@@ -561,12 +557,19 @@ export function ChatModelPickerPanel(panel: PanelProps) {
               ) : undefined}
             </div>
           ) : undefined}
-          <ChatModelFavoritesEditor
-            favorites={favorites}
-            managing={managingFavorites()}
-            onManagingChange={setManagingFavorites}
-            options={mounted(modelOptions().filter((option) => !option.isDefault))}
-          />
+          <Show when={favorites.snapshot().error}>
+            <div role="alert">
+              {favorites.snapshot().error}
+              <button type="button" onClick={() => favorites.retry()}>
+                {t("common.retry")}
+              </button>
+            </div>
+          </Show>
+          <Show when={!favorites.saving()}>
+            <Errored fallback={(error) => <div role="alert">{String(error())}</div>}>
+              {favorites.outcome()}
+            </Errored>
+          </Show>
           {renderCatalogStatus()(() => (
             <ChatModelCatalogState
               state={panel.params.modelCatalogState}

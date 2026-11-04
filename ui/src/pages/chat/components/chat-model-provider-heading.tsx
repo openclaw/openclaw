@@ -86,7 +86,7 @@ export function ChatModelProviderHeading(props: {
             when={props.favorites}
             fallback={<ChatModelProviderIcon provider={props.provider} />}
           >
-            <Icon name="star" class="chat-controls__provider-icon" />
+            <Icon name="heart" class="chat-controls__provider-icon" />
           </Show>
           <span class="chat-controls__provider-label">{providerLabel()}</span>
           <span>{props.options.length}</span>
