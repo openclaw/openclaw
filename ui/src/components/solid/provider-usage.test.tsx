@@ -6,7 +6,7 @@ import type { ProviderUsageCostDaily } from "../../../../src/infra/provider-usag
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
-  ProviderUsageChips,
+  providerUsageAttention,
   type ProviderUsageDetails,
   ProviderUsagePanel,
 } from "./provider-usage.tsx";
@@ -55,19 +55,14 @@ describe("ProviderUsagePanel", () => {
       },
     };
     const [usage, setUsage] = createSignal(initial);
-    const view = mountSolid(() => (
-      <>
-        <ProviderUsagePanel usage={usage()} />
-        <ProviderUsageChips usage={usage()} />
-      </>
-    ));
+    const view = mountSolid(() => <ProviderUsagePanel usage={usage()} />);
     const rows = () => [
       ...view.container.querySelectorAll(
-        ".provider-usage__group, .provider-usage__window, .provider-usage__row, .provider-usage__chip",
+        ".provider-usage__group, .provider-usage__window, .provider-usage__row",
       ),
     ];
     const before = rows();
-    expect(before).toHaveLength(12);
+    expect(before).toHaveLength(10);
 
     setUsage(structuredClone(initial));
     flush();
@@ -86,9 +81,7 @@ describe("ProviderUsagePanel", () => {
     expect(view.container.querySelector(".provider-usage__window")?.getAttribute("data-tone")).toBe(
       "error",
     );
-    expect(view.container.querySelector(".provider-usage__chip-value")?.textContent).toBe(
-      "10% left",
-    );
+    expect(providerUsageAttention(changed)).toEqual({ kind: "danger", label: "5h 10% left" });
     expect(rowValues(view.container)).toEqual([
       ["Balance", "14 credits"],
       ["Balance", "8 credits"],
@@ -144,12 +137,62 @@ describe("ProviderUsagePanel", () => {
         }}
       />
     ));
-    const alert = view.container.querySelector('.provider-usage__alert[role="status"]');
-    expect(alert?.textContent).toMatch(/^Premium is used up until .+\.$/u);
+    const premium = view.container.querySelector(".provider-usage__window");
+    expect(premium?.getAttribute("data-tone")).toBe("error");
+    expect(premium?.querySelector(".provider-usage__window-value")?.textContent).toBe("0% left");
     const reset = view.container.querySelector(".provider-usage__window .provider-usage__reset");
     expect(reset?.textContent).toMatch(/^Resets .+ · in 3h$/u);
     // A window with no reported reset says nothing rather than guessing.
     expect(view.container.querySelectorAll(".provider-usage__reset")).toHaveLength(1);
+  });
+
+  it("reports only the tightest limit running out, then a failed check", () => {
+    const window = (label: string, usedPercent: number) => ({ label, usedPercent });
+    expect(providerUsageAttention({ windows: [window("5h", 40)] })).toBeUndefined();
+    expect(
+      providerUsageAttention({
+        windows: [window("5h", 80), window("Week", 95), window("Day", 10)],
+      }),
+    ).toEqual({ kind: "danger", label: "Week 5% left" });
+    expect(providerUsageAttention({ windows: [window("Week", 80)] })).toEqual({
+      kind: "warn",
+      label: "Week 20% left",
+    });
+    expect(providerUsageAttention({ windows: [], error: "Rate limited" })).toEqual({
+      kind: "warn",
+      label: "Check failed",
+    });
+  });
+
+  it("keeps billed cost to its total and trend when compact", () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const view = mountSolid(() => (
+      <ProviderUsagePanel
+        compact
+        usage={{
+          windows: [],
+          billing: [{ type: "balance", label: "Credits", amount: 4, unit: "USD" }],
+          costHistory: {
+            unit: "USD",
+            periodDays: 30,
+            daily: [dailyUsage(today, 2)],
+            models: [{ ...dailyUsage(today, 2), name: "gpt-5.5" }],
+            categories: [{ name: "Responses", amount: 2 }],
+          },
+        }}
+      />
+    ));
+    expect(view.container.querySelector(".provider-usage__rows")).toBeNull();
+    const facts = [...view.container.querySelectorAll(".provider-usage__fact")];
+    expect(
+      facts.map((fact) => fact.querySelector(".provider-usage__window-label")?.textContent),
+    ).toEqual(["Credits", "30 days"]);
+    expect(facts[1]?.querySelector(".provider-usage__window-value")?.textContent).toBe("$2.00");
+    expect(facts[1]?.querySelector(".provider-usage__reset")?.textContent).toBe(
+      "Today $2.00 · 7 days $2.00",
+    );
+    expect(facts[1]?.querySelector(".oc-sparkline-line")).not.toBeNull();
+    expect(view.container.textContent).not.toContain("gpt-5.5");
   });
 
   it.each([

@@ -29,7 +29,6 @@ function fixture() {
       profileId: id,
       label: id,
       avatarUrl: "/synthetic/avatar",
-      hasUploadedAvatar: false,
     });
   }
   const create = () =>
