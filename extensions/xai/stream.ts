@@ -142,9 +142,10 @@ async function normalizeXaiImagePart(
   }
   let base64 = "";
   let isDataUrl = false;
-  if (typeof part.image_url === "string") {
-    const comma = (part.image_url as string).indexOf(",");
-    base64 = comma !== -1 ? (part.image_url as string).slice(comma + 1) : "";
+  const rawImageUrl = part.image_url;
+  if (typeof rawImageUrl === "string") {
+    const comma = rawImageUrl.indexOf(",");
+    base64 = comma !== -1 ? rawImageUrl.slice(comma + 1) : "";
     isDataUrl = true;
   } else {
     const source = asOptionalRecord(part.source);
@@ -193,13 +194,15 @@ function hasGifImageParts(input: unknown[]): boolean {
     const itemObj = asOptionalRecord(item);
     if (itemObj?.type === "message" && Array.isArray(itemObj.content)) {
       for (const part of itemObj.content) {
-        if (asOptionalRecord(part) && isGifImagePart(part as Record<string, unknown>)) {
+        const partObj = asOptionalRecord(part);
+        if (partObj && isGifImagePart(partObj)) {
           return true;
         }
       }
     } else if (itemObj?.type === "function_call_output" && Array.isArray(itemObj.output)) {
       for (const part of itemObj.output) {
-        if (asOptionalRecord(part) && isGifImagePart(part as Record<string, unknown>)) {
+        const partObj = asOptionalRecord(part);
+        if (partObj && isGifImagePart(partObj)) {
           return true;
         }
       }
@@ -218,7 +221,10 @@ async function transformPayloadInput(
   let imageContentParts: Array<Record<string, unknown>> = [];
   let toolResultIndex = 0;
 
-  const inputList = payloadObj.input as unknown[];
+  if (!Array.isArray(payloadObj.input)) {
+    return;
+  }
+  const inputList = payloadObj.input;
   const normalizedInput: unknown[] = [];
 
   for (let index = 0; index < inputList.length; index += 1) {
@@ -226,13 +232,13 @@ async function transformPayloadInput(
     const itemObj = asOptionalRecord(item);
 
     if (itemObj?.type === "message" && Array.isArray(itemObj.content)) {
-      const parts = itemObj.content as Array<Record<string, unknown>>;
-      const normalizedParts: Array<Record<string, unknown>> = [];
-      for (const part of parts) {
-        if (isAsync && isGifImagePart(part)) {
+      const normalizedParts: unknown[] = [];
+      for (const rawPart of itemObj.content) {
+        const part = asOptionalRecord(rawPart);
+        if (part && isAsync && isGifImagePart(part)) {
           normalizedParts.push(await normalizeXaiImagePart(part));
         } else {
-          normalizedParts.push(part);
+          normalizedParts.push(rawPart);
         }
       }
       normalizedInput.push({ ...itemObj, content: normalizedParts });

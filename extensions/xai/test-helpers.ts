@@ -31,11 +31,7 @@ export function captureXaiRequest(
       tools: [
         {
           type: "function",
-          function: {
-            name: "write",
-            parameters: { type: "object", properties: {} },
-            strict: true,
-          },
+          function: { name: "write", parameters: { type: "object", properties: {} }, strict: true },
         },
       ],
     },

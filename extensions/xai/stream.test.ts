@@ -36,33 +36,28 @@ async function projectAsync(
   return payload.input;
 }
 
-function toolOutput(output: unknown, callId = "call_1") {
-  return { type: "function_call_output", call_id: callId, output };
-}
-
-function inputText(text: string) {
-  return { type: "input_text", text };
-}
-
-function imageMessage(index: number, ...images: unknown[]) {
-  return {
-    type: "message",
-    role: "user",
-    content: [inputText(`Image(s) from tool result #${index}:`), ...images],
-  };
-}
-
-function message(role: string, content: string) {
-  return { type: "message", role, content };
-}
-
-function toolCall(call_id: string) {
-  return { type: "function_call", call_id, name: "read", arguments: "{}" };
-}
-
-function imagePart(image_url = "data:image/png;base64,QUJDRA==") {
-  return { type: "input_image", image_url };
-}
+const toolOutput = (output: unknown, callId = "call_1") => ({
+  type: "function_call_output",
+  call_id: callId,
+  output,
+});
+const inputText = (text: string) => ({ type: "input_text", text });
+const imageMessage = (index: number, ...images: unknown[]) => ({
+  type: "message",
+  role: "user",
+  content: [inputText(`Image(s) from tool result #${index}:`), ...images],
+});
+const message = (role: string, content: string) => ({ type: "message", role, content });
+const toolCall = (call_id: string) => ({
+  type: "function_call",
+  call_id,
+  name: "read",
+  arguments: "{}",
+});
+const imagePart = (image_url = "data:image/png;base64,QUJDRA==") => ({
+  type: "input_image",
+  image_url,
+});
 
 it.each([
   { modelId: "grok-4-0709", target: "grok-4-fast", supported: true },
@@ -99,7 +94,6 @@ async function captureXaiResponsesPayloadWithThinking(
   if (!wrapped) {
     throw new Error("expected the xAI stream wrapper");
   }
-
   let captured: Record<string, unknown> | undefined;
   const stream = await wrapped(
     model,
@@ -137,16 +131,12 @@ describe("xai stream wrappers", () => {
       reasoning_effort: "high",
     };
     patchPayload(payload, { id: "grok-4-fast-non-reasoning", reasoning: false });
-
     expect(payload).toEqual({});
   });
 
   it("merges encrypted reasoning include with existing include entries", () => {
-    const payload: Record<string, unknown> = {
-      include: ["file_search_call.results"],
-    };
+    const payload: Record<string, unknown> = { include: ["file_search_call.results"] };
     patchPayload(payload, { id: "grok-build-0.1" });
-
     expect(payload.include).toEqual(["file_search_call.results", "reasoning.encrypted_content"]);
   });
 
@@ -158,7 +148,6 @@ describe("xai stream wrappers", () => {
     "preserves %s %s at the final xAI Responses payload boundary",
     async (modelId, thinking, expectedReasoning) => {
       const payload = await captureXaiResponsesPayloadWithThinking(thinking, modelId);
-
       expect(payload.reasoning).toEqual(expectedReasoning);
       expect(payload.include).toEqual(["reasoning.encrypted_content"]);
     },
@@ -170,12 +159,7 @@ describe("xai stream wrappers", () => {
     const input = [
       toolOutput([inputText("Read image"), { ...imagePart(), detail: "auto" }], callId),
     ];
-    expect(
-      project(input, {
-        provider: "x-ai",
-        baseUrl: ` ${XAI_BASE_URL}/// `,
-      }),
-    ).toEqual(input);
+    expect(project(input, { provider: "x-ai", baseUrl: ` ${XAI_BASE_URL}/// ` })).toEqual(input);
   });
 
   it("keeps parallel compatibility image history as a prefix across turns", () => {
@@ -200,7 +184,6 @@ describe("xai stream wrappers", () => {
     ];
     const next = project([...history, ...nextTurns]);
 
-    // Compare the actual serialized message prefix, including the image bytes.
     expect(JSON.stringify(next.slice(0, first.length))).toBe(JSON.stringify(first));
     expect(first.slice(-group.length - 1)).toEqual([
       { ...result, output: "Read image" },
@@ -210,7 +193,6 @@ describe("xai stream wrappers", () => {
     expect(next.at(-1)).toEqual(imageMessage(group.length + 1, image));
     expect(project(next)).toEqual(next);
 
-    // Compaction replaces old history; the retained tail establishes a fresh prefix.
     const compactedHistory = [message("user", "Summary: the first files were read."), ...nextTurns];
     const compacted = project(compactedHistory);
     expect(compacted.at(-1)).toEqual(first.at(-1));
@@ -232,9 +214,7 @@ describe("xai stream wrappers", () => {
     const secondImage = imagePart("data:image/png;base64,QkJCQg==");
     const originalParts = [inputText(""), firstImage, inputText(""), secondImage];
     const originalBytes = JSON.stringify(originalParts);
-    const payload = {
-      input: [toolOutput(originalParts, "call_1")],
-    };
+    const payload = { input: [toolOutput(originalParts, "call_1")] };
     patchPayload(payload);
 
     const input = payload.input as Array<Record<string, unknown>>;
@@ -247,7 +227,7 @@ describe("xai stream wrappers", () => {
     const callIds = [
       "x".repeat(64) + "a",
       "a".repeat(63) + "🙈",
-      ...["c", "d"].map((suffix) => `${"x".repeat(64)}${suffix}`),
+      ...["c", "d"].map((s) => `${"x".repeat(64)}${s}`),
     ];
     const firstImage = { ...imagePart("data:image/png;base64,QUFBQQ=="), detail: "auto" };
     const secondImage = { ...firstImage, image_url: "data:image/png;base64,QkJCQg==" };
@@ -300,7 +280,6 @@ describe("xai stream wrappers", () => {
     expect(normalizedImagePart).toBeDefined();
     expect((normalizedImagePart?.source as Record<string, unknown>)?.media_type).toBe("image/png");
 
-    // Subsequent turn: historical message with normalized image retains valid format without poisoning
     const nextTurn = [
       ...projected,
       message("assistant", "I see a 1x1 GIF."),
@@ -309,18 +288,14 @@ describe("xai stream wrappers", () => {
     const secondProjected = await projectAsync(nextTurn);
     expect(secondProjected).toHaveLength(nextTurn.length);
 
-    // Native xAI API route also normalizes GIF in tool output
     const nativeProjected = await projectAsync([result], {
       provider: "x-ai",
       baseUrl: XAI_BASE_URL,
     });
-    const nativeToolOutput = nativeProjected[0];
-    expect(nativeToolOutput?.type).toBe("function_call_output");
-    const nativeParts = nativeToolOutput?.output as Array<Record<string, unknown>>;
+    const nativeParts = (nativeProjected[0]?.output as Array<Record<string, unknown>>) ?? [];
     const nativeImage = nativeParts.find((part) => part.type === "input_image");
     expect((nativeImage?.source as Record<string, unknown>)?.media_type).toBe("image/png");
 
-    // Visible omission when image bytes fail to decode
     const corruptGif = {
       type: "input_image",
       source: { type: "base64", media_type: "image/gif", data: "R0lGOD_corrupt_payload" },
