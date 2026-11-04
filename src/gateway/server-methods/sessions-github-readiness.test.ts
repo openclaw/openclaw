@@ -961,7 +961,14 @@ it.each(["requested", "publishing", "published", "failed"] as const)(
         const claim = claimGitHubPublicationExecutionFixture(row.request_id, "projection-fixture");
         const store = createGitHubPublicationExecutionStoreFixture("projection-fixture");
         if (status === "published") {
-          store.complete(claim, {
+          const tree = "b".repeat(40);
+          const captured = store.bindWorkspaceSnapshot({
+            row: claim,
+            sourceHeadCommit: "a".repeat(40),
+            sourceIndexTree: tree,
+            workspaceTree: tree,
+          });
+          store.complete(captured, {
             requestId: row.request_id,
             status,
             url: "https://github.com/example/project/pull/1",
@@ -979,11 +986,22 @@ it.each(["requested", "publishing", "published", "failed"] as const)(
           });
         }
       }
-      expect((await observe(f, { requestId: row.request_id })).request).toEqual({
+      const params = { requestId: row.request_id };
+      const legacyReceipt = { requestId: row.request_id, status, ...details };
+      expect((await observe(f, params)).request).toEqual({
         kind: "observed",
         selection: "exact",
-        receipt: { requestId: row.request_id, status, ...details },
+        receipt: legacyReceipt,
       });
+      if (status === "published") {
+        const current = { ...legacyReceipt, unchanged: true };
+        expect((await tool(f, { action: "readiness", ...params })).details).toMatchObject({
+          request: { receipt: current },
+        });
+        assert(f.client.connect);
+        f.client.connect.caps = ["github-publication-unchanged"];
+        expect((await observe(f, params)).request).toMatchObject({ receipt: current });
+      }
     });
   },
 );

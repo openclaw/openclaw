@@ -309,6 +309,11 @@ describe("GitHub publication transcript reporting", () => {
   });
   it.each([
     {
+      label: "unchanged",
+      result: { ...publishedResult, unchanged: true as const },
+      visibleText: "No new commit was pushed or CI run triggered by this request.",
+    },
+    {
       label: "published",
       result: publishedResult,
       visibleText: "https://github.com/example/repository/pull/1",
