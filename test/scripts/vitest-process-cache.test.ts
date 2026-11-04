@@ -104,3 +104,44 @@ it.skipIf(process.platform !== "win32")(
     expect([tmp, temp]).toEqual([tmpdir, tmpdir]);
   },
 );
+
+it("isolates fixture module detection from an enclosing ESM package", async () => {
+  const root = tempDirs.make("oc-vt-package-scope-");
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+  const script = `
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+const fixtures = path.join(os.tmpdir(), "fixtures");
+fs.mkdirSync(fixtures);
+fs.writeFileSync(path.join(fixtures, "commonjs"), 'console.log(require("node:path").basename("/cjs"));');
+fs.writeFileSync(path.join(fixtures, "value.js"), 'export const value = "esm";');
+fs.writeFileSync(path.join(fixtures, "module.js"), 'import { value } from "./value.js"; console.log(value);');
+for (const name of ["commonjs", "module.js"]) {
+  const result = spawnSync(process.execPath, [path.join(fixtures, name)], { encoding: "utf8" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr);
+  process.stdout.write(result.stdout);
+}
+`;
+  const { child, completion } = spawnOwnedVitestProcess({
+    command: testNodeExecPath,
+    args: ["--input-type=module", "-e", script],
+    homeMode: "tooling",
+    options: {
+      env: { ...process.env, TMPDIR: root, TMP: root, TEMP: root },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  });
+  let output = "";
+  let errorOutput = "";
+  child.stdout?.on("data", (chunk: Buffer) => {
+    output += chunk.toString();
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    errorOutput += chunk.toString();
+  });
+  expect((await completion).code, errorOutput).toBe(0);
+  expect(output).toBe("cjs\nesm\n");
+});

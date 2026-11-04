@@ -64,6 +64,9 @@ export function spawnOwnedVitestProcess(spec: {
       parent = { root: containingOwner.root, release: containingOwner.claim() };
     }
     tempRoot = tempDirs.make("oc-vt-", containingRoot);
+    // Stop ancestor package scopes without forcing CommonJS: fixtures may use
+    // either extensionless CommonJS or Node's syntax-detected JavaScript modules.
+    fs.writeFileSync(path.join(tempRoot, "package.json"), "{}\n");
     owner = createVitestResourceOwner(tempRoot);
     const childEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot };
     if (mode !== "tooling") {
