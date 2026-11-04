@@ -148,11 +148,30 @@ describe("worktrees cli", () => {
     },
   );
 
-  it("rejects an empty cleanup job selector before cleanup", async () => {
+  it.each([
+    [["gc", "--job", ""], "--job must not be empty."],
+    [
+      ["gc", "--job", "job-1"],
+      "Cleanup progress belongs to the running Gateway; start it before querying this job.",
+    ],
+    [
+      ["remove", "wt", "--exact-state", "/missing/exact-state.json"],
+      "Cannot read exact-state request /missing/exact-state.json. Choose a readable regular JSON file and retry.",
+    ],
+  ])("shows the guard message for %j instead of failing generically", async (args, message) => {
     setRuntimeConfigSnapshot({}, {});
     const gc = vi.spyOn(owner, "gc").mockRejectedValue(new Error("Unexpected cleanup execution"));
-    await expect(run(["gc", "--job", "", "--json"])).rejects.toThrow("--job must not be empty");
-    expect(gc).not.toHaveBeenCalled();
+    const remove = vi.spyOn(owner, "remove");
+    const error = await run(args).catch((cause: unknown) => cause);
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error,
+        argv: ["node", "openclaw", "worktrees", ...args],
+        env: {},
+      }),
+    ).toEqual([message]);
+    expect([gc, remove].map((spy) => spy.mock.calls.length)).toEqual([0, 0]);
   });
 
   it.each([false, true])("reports cleanup and signals partial failure: %s", async (partial) => {
