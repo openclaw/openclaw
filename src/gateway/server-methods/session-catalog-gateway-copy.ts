@@ -59,16 +59,17 @@ export async function resolveSessionCatalogGatewayConversation(params: {
   assertCurrent: () => void;
 }): Promise<{ ok: true; sessionKey?: string } | { ok: false; error: ErrorShape }> {
   params.assertCurrent();
-  const binding = await params.provider.resolveGatewayConversation?.({
-    ...params.request,
-    allowProcessHomeFallback: false,
-    assertCurrent: params.assertCurrent,
-  });
   using sourceLease = {
+    binding: await params.provider.resolveGatewayConversation?.({
+      ...params.request,
+      allowProcessHomeFallback: false,
+      assertCurrent: params.assertCurrent,
+    }),
     [Symbol.dispose]() {
-      binding?.release();
+      this.binding?.release();
     },
   };
+  const binding = sourceLease.binding;
   if (!binding) {
     params.assertCurrent();
     return { ok: true };
@@ -80,8 +81,9 @@ export async function resolveSessionCatalogGatewayConversation(params: {
     requestParams: { sessionKey: binding.sessionKey, agentId: binding.agentId },
   });
   using destinationLease = {
+    authorization: admitted.authorization,
     [Symbol.dispose]() {
-      admitted.authorization?.release?.();
+      this.authorization?.release?.();
     },
   };
   if (admitted.error) {
@@ -90,7 +92,7 @@ export async function resolveSessionCatalogGatewayConversation(params: {
   const assertCurrent = () => {
     params.assertCurrent();
     binding.assertCurrent();
-    admitted.authorization?.assertCurrent();
+    destinationLease.authorization?.assertCurrent();
   };
   const prepared = await prepareSessionSharingRead({
     cfg: params.context.getRuntimeConfig(),
@@ -320,12 +322,13 @@ export async function copySessionCatalogToGateway(params: {
     ...params.providerContinueParams,
     assertCurrent: assertSourceCurrent,
   });
-  const continuation = gatewayCopy.continuation;
   using continuationLease = {
+    continuation: gatewayCopy.continuation,
     [Symbol.dispose]() {
-      continuation?.release();
+      this.continuation?.release();
     },
   };
+  const continuation = continuationLease.continuation;
   // Creation claims persist before dispatch. Only an unclaimed reservation or the
   // lifecycle owner's proven rollback can retry; an absent row alone proves nothing.
   const commitGuard = () => {
