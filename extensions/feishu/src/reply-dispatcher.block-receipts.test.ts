@@ -367,8 +367,8 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
         ...(fail === "throw" ? [[openingProse, undefined]] : []),
         [tailProse, readerMentions],
       ]);
-      // A plain throw leaves the card's own message unnamed; the recovered prose leads the receipt.
-      const ids = fail === "throw" ? ["oc-1", "om-1", "om-2"] : visible().map((entry) => entry.id);
+      // A plain throw leaves the card's own message unnamed; the recovered prose follows the post.
+      const ids = fail === "throw" ? ["om-1", "oc-1", "om-2"] : visible().map((entry) => entry.id);
       for (const outcome of fail ? [idle, final, opening, closing] : [opening, closing]) {
         if (fail) {
           expect(isChannelPartialDeliveryError(outcome)).toBe(true);

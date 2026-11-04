@@ -12,6 +12,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, beforeEach, type Mock, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import type { FeishuStreamingSession } from "./streaming-card.js";
@@ -140,7 +141,10 @@ vi.mock("./streaming-card.js", async (importOriginal) => ({
   },
 }));
 
-import { createFeishuReplyDeliveryResult } from "./reply-delivery-result.js";
+import {
+  createFeishuPartialReplyDeliveryError,
+  createFeishuReplyDeliveryResult,
+} from "./reply-delivery-result.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 
@@ -477,4 +481,141 @@ export async function useRealMarkdownChunker(limit?: number) {
   if (limit !== undefined) {
     text.resolveTextChunkLimit.mockReturnValue(limit);
   }
+}
+
+export type DriveOptions = {
+  fault?: "write" | "throw";
+  rejectPost?: number;
+  blockStreaming?: boolean;
+  names?: Record<string, string>;
+};
+
+/**
+ * A reply driven through the real core queue, as a run drives it. `script` is `;`-separated steps:
+ * `preview|queue|block|final TEXT` (TEXT joins keys of `names` with `+`; `@img` adds an image),
+ * `drain`, `idle`, `message` and `end`. Returns the chat in creation order, each message as
+ * id:parts with "@" for the reader mention, and each queued call's receipt ids, "/" splitting a
+ * post from its finalization and "!" marking a partial-delivery error. A fault rejects the first
+ * card's rewrite, partly accepted or thrown.
+ */
+export async function driveThroughCore(
+  tables: MarkdownTableMode,
+  base: Record<string, string>,
+  script: string,
+  options: DriveOptions = {},
+) {
+  const names = { ...base, ...options.names };
+  const account = createReplyAccount("auto", "partial");
+  mocks.resolveFeishuAccount.mockReturnValue({
+    ...account,
+    config: {
+      renderMode: "auto",
+      streaming: { mode: "partial", block: { enabled: options.blockStreaming !== false } },
+    },
+  });
+  mocks.streamingInstances.length = 0;
+  const { cardEntry, visible, watch } = trackChat();
+  const post = mocks.sendMessageFeishu.getMockImplementation()!;
+  let posts = 0;
+  mocks.sendMessageFeishu.mockImplementation(async (sent: { text?: string }) => {
+    if (++posts === options.rejectPost) {
+      throw new Error("post rejected");
+    }
+    return post(sent);
+  });
+  const mentionTargets = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
+  const { result, options: plan } = createDispatcherHarness({
+    accountId: "main",
+    cfg: tableCfg(tables),
+    mentionTargets,
+  });
+  const [idles, calls]: [Promise<unknown>[], Promise<string>[]] = [[], []];
+  const ids = (delivered?: { messageIds?: string[] }) => String(delivered?.messageIds ?? "-");
+  const failed = (error: unknown) =>
+    isChannelPartialDeliveryError(error) ? `${ids(error.deliveryResult)}!` : "x";
+  const core = createReplyDispatcher({
+    ...plan,
+    onIdle: () => {
+      const idle = Promise.resolve(plan.onIdle?.());
+      idles.push(idle.catch(() => undefined));
+      return idle;
+    },
+    deliver: (payload, info) => {
+      const delivery = plan.deliver(payload, info);
+      calls.push(
+        delivery.then(
+          async (first) =>
+            first?.finalization
+              ? `${ids(first)}/${await first.finalization.then(ids, failed)}`
+              : ids(first),
+          failed,
+        ),
+      );
+      return delivery;
+    },
+  });
+  const drain = async () => {
+    await core.waitForIdle();
+    await new Promise<void>((resolve) => setImmediate(resolve)); // the core hands its idle on later
+    await Promise.all(idles);
+  };
+  const lastIdle = () => Promise.resolve(plan.onIdle?.()).catch(() => undefined);
+  let armed = false;
+  for (const step of script.split(";")) {
+    const [op, arg = ""] = step.trim().split(" ");
+    const [keys = "", image] = arg.split("@");
+    const text = keys
+      .split("+")
+      .map((key) => names[key])
+      .join("\n\n");
+    if (op === "preview") {
+      result.replyOptions.onPartialReply?.({ text });
+      if (!armed && streamingInstances.length > 0) {
+        armed = true;
+        watch();
+      }
+      if (armed && options.fault) {
+        const fault = options.fault;
+        options.fault = undefined;
+        requireStreamingInstance().closeWithResult.mockImplementationOnce(async () => {
+          cardEntry.text = streamingUpdateTexts().at(-1) ?? "";
+          const accepted = createFeishuReplyDeliveryResult({
+            results: [{ messageId: "om_stream" }],
+            visibleReplySent: true,
+            content: cardEntry.text,
+            kind: "card",
+          });
+          throw fault === "throw"
+            ? new Error("note token rejected")
+            : createFeishuPartialReplyDeliveryError(new Error("final write rejected"), {
+                ...accepted,
+                finalTextAccepted: false,
+              });
+        });
+      }
+    } else if (op === "message") {
+      await result.replyOptions.onAssistantMessageStart?.();
+    } else if (op === "drain" || op === "idle" || op === "end") {
+      if (op === "end") {
+        core.markComplete();
+      }
+      await (op === "idle" ? lastIdle() : drain());
+      if (op === "end") {
+        await lastIdle();
+      }
+    } else {
+      const reply = { text, ...(image ? { mediaUrl: "https://example.com/roster.png" } : {}) };
+      (op === "final" ? core.sendFinalReply : core.sendBlockReply)(reply);
+      if (op !== "queue") {
+        await drain();
+      }
+    }
+  }
+  const labeled = Object.entries(names).sort(([, a], [, b]) => b.length - a.length);
+  const name = (text: string) =>
+    labeled.reduce((out, [key, value]) => out.split(value).join(key), text).replaceAll("\n\n", "+");
+  const chat = [...new Set(visible())].map(
+    (entry) => `${entry.id}:${name(entry.text)}${entry.mentions === undefined ? "" : "@"}`,
+  );
+  return { chat: chat.join(" "), calls: (await Promise.all(calls)).join(" ") };
 }

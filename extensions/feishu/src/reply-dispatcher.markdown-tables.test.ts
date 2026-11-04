@@ -18,6 +18,7 @@ import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
 } from "./reply-delivery-result.js";
+import type { DriveOptions } from "./reply-dispatcher.tables.test-support.js";
 
 const {
   bulletsCard,
@@ -26,6 +27,7 @@ const {
   createDispatcherHarness,
   createReplyAccount,
   deliverFinal,
+  driveThroughCore,
   getFeishuRuntimeMock,
   installTableDispatcherHarness,
   outgrowingTable,
@@ -269,143 +271,122 @@ describe("createFeishuReplyDispatcher markdown table modes", () => {
     },
   );
 
-  // With the opening prose and the tail only previewed, the table post is the only caller, so its
-  // receipt settles with the close that keeps the prose card and posts the tail. An image the block
-  // sends after its post comes before that tail, in the chat and in every receipt.
-  it.each(
-    undrawableTableShapes.flatMap(({ shape, text, posted }) =>
-      (["idle", "final"] as const).flatMap((settle) =>
-        (["", " with its image"] as const).map(
-          (image) => [shape, settle, image, text, posted] as const,
-        ),
-      ),
-    ),
-  )(
-    "settles a previewed reply around a %s block table through its post, %s%s",
-    async (_, settle, image, table, posted) => {
-      createBlockTableHarness(tableCfg("block"));
-      const { visible, watch } = trackChat();
-      const reader = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
-      const harness = { accountId: "main", cfg: tableCfg("block"), mentionTargets: reader };
-      const { result, options } = createDispatcherHarness(harness);
-      const parts = ["Here is the roster for the team.", table, "Roster complete."];
-      const roster = "https://example.com/roster.png";
-      result.replyOptions.onPartialReply?.({ text: parts[0] });
-      watch();
-      result.replyOptions.onPartialReply?.({ text: parts.slice(0, 2).join("\n\n") });
-      const media = image ? { mediaUrl: roster } : {};
-      const post = await options.deliver({ text: table, ...media }, { kind: "block" });
-      result.replyOptions.onPartialReply?.({ text: parts.join("\n\n") });
-      const final =
-        settle === "final"
-          ? await options.deliver({ text: parts.join("\n\n") }, { kind: "final" })
-          : undefined;
-      await options.onIdle?.();
-      const ids = ["om_stream", "om-1", ...(image ? ["media-1"] : []), "om-2"];
-      expect(visible().map(({ id, text, mentions }) => [id, text, mentions])).toEqual([
-        [ids[0], parts[0], undefined],
-        [ids[1], posted, reader],
-        ...(image ? [["media-1", roster, undefined]] : []),
-        ["om-2", parts[2], reader],
-      ]);
-      expect(post?.messageIds).toEqual(ids.slice(1, -1));
-      expect((await post?.finalization)?.messageIds).toEqual(ids);
-      if (settle === "final") {
-        expect(final?.messageIds).toEqual(ids);
-      }
-    },
-  );
+  // What the card closed before the run ended leaves previewed is posted once, whether the preview
+  // grows, a later final repeats it, or a new assistant message opens with the same prefix.
+  describe.each(undrawableTableShapes)("a late tail after a $shape block table", (shape) => {
+    const grace = shape.text.replace("Ada", "Grace");
+    const names = {
+      P2: "Here is the roster for the team. More prose.",
+      P: "Here is the roster for the team.",
+      T: shape.text,
+      "T#": shape.posted,
+      G: grace,
+      "G#": shape.postedGrace,
+      S: "Roster complete.",
+      U: "Attendance confirmed.",
+      Q: "And here is the second team.",
+    };
+    const drive = (tables: "block" | "off", script: string, options?: DriveOptions) =>
+      driveThroughCore(tables, names, script, options);
+    const early = "preview P; preview P+T; block T";
+    const late = `${early}; preview P+T+S; idle`;
 
-  // The card the close recovers for rejected opening prose is created after the table post, so
-  // the settled receipts name the post before it.
-  it.each(undrawableTableShapes.map(({ shape, text, posted }) => [shape, text, posted] as const))(
-    "orders a recovered prose card after the %s block table post",
-    async (_, table, posted) => {
-      createBlockTableHarness(tableCfg("block"));
-      const { cardEntry, visible, watch } = trackChat();
-      const reader = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
-      const harness = { accountId: "main", cfg: tableCfg("block"), mentionTargets: reader };
-      const { result, options } = createDispatcherHarness(harness);
-      const parts = ["Here is the roster for the team.", table, "Roster complete."];
-      const settled: Promise<unknown>[] = [];
-      for (const [index, text] of parts.entries()) {
-        result.replyOptions.onPartialReply?.({ text: parts.slice(0, index + 1).join("\n\n") });
-        if (index === 0) {
-          watch();
-        }
-        const delivery = await options.deliver({ text }, { kind: "block" });
-        settled.push(
-          (delivery?.finalization ?? Promise.resolve(delivery)).then(
-            (delivered) => delivered?.messageIds,
-            (error: unknown) => ({
-              rejected: isChannelPartialDeliveryError(error) && error.deliveryResult.messageIds,
-            }),
-          ),
-        );
-      }
-      requireStreamingInstance().closeWithResult.mockImplementationOnce(async () => {
-        cardEntry.text = streamingUpdateTexts().at(-1) ?? "";
-        throw new Error("note token rejected");
+    it.each([
+      ["a preview that grows", "end"],
+      ["a final", "final P+T+S+U; end"],
+    ])("posts only what follows the tail for %s", async (_, ending) => {
+      expect(await drive("block", `${late}; preview P+T+S+U; ${ending}`)).toMatchObject({
+        chat: "om_stream:P om-1:T#@ om-2:S@ om-3:U@",
       });
-      const ids = ["om-1", "oc-1", "om-2"];
-      await expect(options.onIdle?.()).rejects.toMatchObject({
-        deliveryResult: { messageIds: ids },
-      });
-      expect(visible().map(({ id, text }) => [id, text])).toEqual([
-        ["om_stream", parts[0]],
-        ["om-1", posted],
-        ["oc-1", parts[0]],
-        ["om-2", parts[2]],
-      ]);
-      expect(await Promise.all(settled)).toEqual([{ rejected: ids }, ["om-1"], { rejected: ids }]);
-    },
-  );
+    });
 
-  // Core asks for idle as soon as its send queue drains with the table post's close pending, so the
-  // card closes before the model run ends. The tail the answer previews after that still posts once,
-  // at the idle that follows the run, as the reply's final markDispatchIdle calls it.
-  it.each(undrawableTableShapes.map(({ shape, text, posted }) => [shape, text, posted] as const))(
-    "posts the tail a %s block table reply previews after the core queue drains",
-    async (_, table, posted) => {
-      createBlockTableHarness(tableCfg("block"));
-      const { visible, watch } = trackChat();
-      const reader = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
-      const harness = { accountId: "main", cfg: tableCfg("block"), mentionTargets: reader };
-      const { result, options } = createDispatcherHarness(harness);
-      const deliveries: ReturnType<typeof options.deliver>[] = [];
-      const dispatcher = createReplyDispatcher({
-        ...options,
-        deliver: (payload, info) => {
-          const delivery = options.deliver(payload, info);
-          deliveries.push(delivery);
-          return delivery;
-        },
+    it("posts only what follows an off tail an idle closed", async () => {
+      expect(await drive("off", `${late}; preview P+T+S+U; end`)).toMatchObject({
+        chat: "om_stream:P om-1:T@ om-2:S@ om-3:U@",
       });
-      const parts = ["Here is the roster for the team.", table, "Roster complete."];
-      result.replyOptions.onPartialReply?.({ text: parts[0] });
-      watch();
-      result.replyOptions.onPartialReply?.({ text: parts.slice(0, 2).join("\n\n") });
-      dispatcher.sendBlockReply({ text: table });
-      await dispatcher.waitForIdle();
-      expect(requireStreamingInstance().closeWithResult).toHaveBeenCalledTimes(1);
-      result.replyOptions.onPartialReply?.({ text: parts.join("\n\n") });
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
-      await options.onIdle?.();
-      expect(visible().map(({ id, text, mentions }) => [id, text, mentions])).toEqual([
-        ["om_stream", parts[0], undefined],
-        ["om-1", posted, reader],
-        ["om-2", parts[2], reader],
+    });
+
+    it("names the tail to a final or a block that repeats it", async () => {
+      const [final, block] = [
+        await drive("block", `${late}; final P+T+S; end`),
+        await drive("block", `${late}; block S; end`),
+      ];
+      expect([final.calls, block.calls]).toEqual([
+        "om-1/om_stream,om-1 om_stream,om-1,om-2",
+        "om-1/om_stream,om-1 -/om_stream,om-1,om-2",
       ]);
-      const post = await deliveries[0];
-      expect(post?.messageIds).toEqual(["om-1"]);
-      expect((await post?.finalization)?.messageIds).toEqual(["om_stream", "om-1"]);
-    },
-  );
+      expect([final.chat, block.chat]).toEqual(Array(2).fill("om_stream:P om-1:T#@ om-2:S@"));
+    });
+
+    it("keeps the first chunk a rejected tail accepted when its idle is retried", async () => {
+      await useRealMarkdownChunker(120);
+      const words = Array.from({ length: 24 }, (_, index) => `word${index}`);
+      const [first, rest] = [words.slice(0, 18).join(" "), words.slice(18).join(" ")];
+      const run = await drive("block", `${early}; preview P+T+W; idle; end`, {
+        rejectPost: 3,
+        names: { W: `${first} ${rest}` },
+      });
+      expect(run.chat).toBe(`om_stream:P om-1:T#@ om-2:${first}@ om-3:${rest}@`);
+    });
+
+    it("posts a new assistant message with the prefix the settled one had", async () => {
+      expect(await drive("block", `${early}; message; preview P+T+S; end`)).toMatchObject({
+        chat: "om_stream:P om-1:T#@ om-2:P+T#+S@",
+      });
+    });
+
+    // Rows: "<tables> <fault> <opening> | <chat order> | <call receipts>".
+    it.each([
+      "block write P2 | om_stream om-1 oc-1 om-2 om-3 | om-1/om_stream,om-1,oc-1! om-2 -/om_stream,om-1,oc-1,om-2,om-3",
+      "block throw P | om_stream om-1 oc-1 om-2 om-3 | om-1/om-1,oc-1! om-2 -/om-1,oc-1,om-2,om-3",
+      "off throw P | om_stream om-1 om-2 oc-1 om-3 | om-1 om-2 -/om-1,om-2,oc-1,om-3!",
+    ])("lists a recovery card in creation order, %s", async (row) => {
+      const [setup = "", order, calls] = row.split(" | ");
+      const [tables, fault, open] = setup.split(" ") as [
+        "block" | "off",
+        "write" | "throw",
+        string,
+      ];
+      const script = `preview P; preview ${open}+T; block T; preview ${open}+T+Q+G; block G; preview ${open}+T+Q+G+S; block S; end`;
+      const run = await drive(tables, script, { fault });
+      expect([run.chat.match(/(?:om|oc)[-\w]*(?=:)/g)?.join(" "), run.calls]).toEqual([
+        order,
+        calls,
+      ]);
+    });
+
+    // Rows: "<tables> <block streaming> <image> <ending> | <call receipts>".
+    it.each([
+      "block on - idle | om-1/om_stream,om-1,om-2",
+      "block on - final | om-1/om_stream,om-1 om_stream,om-1,om-2",
+      "block on img idle | om-1,media-1/om_stream,om-1,media-1,om-2",
+      "block on img final | om-1,media-1/om_stream,om-1,media-1 om_stream,om-1,media-1,om-2",
+      "block off img idle | om-1,media-1/om_stream,om-1,media-1,om-2",
+      "block off img final | om-1,media-1/om_stream,om-1,media-1 om_stream,om-1,media-1,om-2",
+      "off off img final | om-1,media-1 om_stream,om-1,media-1,om-2",
+    ])("settles a captioned table once, %s", async (row) => {
+      const [setup = "", calls] = row.split(" | ");
+      const [tables, blocks, image, ending] = setup.split(" ") as [
+        "block" | "off",
+        string,
+        string,
+        string,
+      ];
+      const previews = ending === "idle" ? "preview P; preview P+T+S" : "preview P; preview P+T";
+      const settle = ending === "idle" ? "" : "preview P+T+S; final P+T+S; ";
+      const script = `${previews}; block T${image === "img" ? "@img" : ""}; ${settle}end`;
+      const run = await drive(tables, script, { blockStreaming: blocks === "on" });
+      const media = image === "img" ? " media-1:https://example.com/roster.png" : "";
+      expect(run).toMatchObject({
+        chat: `om_stream:P om-1:${tables === "off" ? "T" : "T#"}@${media} om-2:S@`,
+        calls,
+      });
+    });
+  });
 
   // A rejected rewrite of the opening prose leaves the prose the card accepted visible, as the
   // streaming card reports it. That card keeps its place ahead of the table post, and only the
-  // card the close recovers for the rewritten prose follows the post.
+  // card the close recovers for the rewritten prose follows the post, with just the added prose.
   it.each(
     undrawableTableShapes.flatMap(({ shape, text, posted }) =>
       (["idle", "final"] as const).map((settle) => [shape, settle, text, posted] as const),
@@ -447,7 +428,7 @@ describe("createFeishuReplyDispatcher markdown table modes", () => {
       expect(visible().map(({ id, text, mentions }) => [id, text, mentions])).toEqual([
         ["om_stream", opening, undefined],
         ["om-1", posted, reader],
-        ["oc-1", parts[0], undefined],
+        ["oc-1", "More prose.", undefined],
         ["om-2", parts[2], reader],
       ]);
       const ids = ["om_stream", "om-1", "oc-1", "om-2"];

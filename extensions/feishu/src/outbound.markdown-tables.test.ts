@@ -263,68 +263,6 @@ describe("feishuOutbound.sendText markdown table modes in auto mode", () => {
     expect(delivered.join("")).toContain("row39");
   });
 
-  it.each(
-    (["action", "raw", "core-rendered"] as const).flatMap((entry) =>
-      (["default", "off"] as const).map((tables) => ({ entry, tables })),
-    ),
-  )("keeps every row of a long $entry presentation table readable ($tables)", async (params) => {
-    const cfg: ClawdbotConfig =
-      params.tables === "off" ? { channels: { feishu: { markdown: { tables: "off" } } } } : {};
-    const names = Array.from({ length: 200 }, (_entry, index) => `person-number-${index}`);
-    const rows = names.map((name) => `| ${name} | Regional Operations Lead |`);
-    const text = ["Roster.", "", "| Name | Role |", "| --- | --- |", ...rows, "", "End."].join(
-      "\n",
-    );
-    expect(presentationTableMode({ cfg: emptyConfig })).toBe("block");
-    expect(text.length).toBeGreaterThan(8000);
-    const presentation: MessagePresentation = {
-      blocks: [
-        { type: "text", text },
-        {
-          type: "buttons",
-          buttons: [{ label: "Ok", action: { type: "command", command: "/ok" } }],
-        },
-      ],
-    };
-    let card =
-      params.entry === "action"
-        ? deliverableFeishuActionCard(buildFeishuActionPresentationCard({ presentation, cfg }))
-        : undefined;
-    if (params.entry !== "action") {
-      let payload: ReplyPayload = { text: "", presentation };
-      const ctx = { cfg, to: "chat_1", text: "", accountId: undefined, payload };
-      if (params.entry === "core-rendered") {
-        const rendered = await feishuOutbound.renderPresentation?.({
-          payload,
-          presentation,
-          sourcePresentation: presentation,
-          ctx,
-        });
-        const { presentation: _presentation, ...consumed } = rendered ?? payload;
-        payload = consumed;
-      }
-      await feishuOutbound.sendPayload?.({ ...ctx, text: payload.text ?? "", payload });
-      card = sendCardCall()?.card;
-    }
-    const elements = (card?.body.elements ?? []) as { tag: string; content?: string }[];
-    expect(elements.some((element) => element.tag === "button")).toBe(true);
-    const contents = elements.flatMap((element) =>
-      element.tag === "markdown" ? [element.content ?? ""] : [],
-    );
-    expect(contents.length).toBeGreaterThan(1);
-    for (const content of contents) {
-      const outsideFences = content.replace(/^```[^\n]*\n[\s\S]*?^```$/gmu, "");
-      expect(
-        params.tables === "off"
-          ? !content.includes("•")
-          : !/^\|/mu.test(outsideFences) || hasCardMarkdownTable(outsideFences),
-        `element starting ${JSON.stringify(content.slice(0, 40))}`,
-      ).toBe(true);
-    }
-    const joined = contents.join("\n");
-    expect(names.filter((name) => !new RegExp(`${name}\\b`, "u").test(joined))).toEqual([]);
-  });
-
   async function presentationCardFor(
     entry: "action" | "raw" | "core",
     presentation: MessagePresentation,
@@ -476,35 +414,39 @@ describe("feishuOutbound.sendText markdown table modes in auto mode", () => {
     },
   );
 
-  it.each(["default", "off"] as const)(
-    "keeps every row of a long presentation table readable after core adapts it (%s)",
-    async (tables) => {
-      const names = Array.from({ length: 200 }, (_entry, index) => `person-number-${index}`);
-      const rows = names.map((name) => `| ${name} | Regional Operations Lead |`);
-      const text = ["Roster.", "", "| Name | Role |", "| --- | --- |", ...rows, "", "End."].join(
-        "\n",
-      );
-      const card = await presentationCardFor(
-        "core",
-        { blocks: [{ type: "text", text }, okButtons] },
-        tables === "off" ? offTablesConfig : emptyConfig,
-      );
-
-      const contents = markdownContents(card);
-      expect(contents.length).toBeGreaterThan(1);
-      for (const content of contents) {
-        const [first = "", second = ""] = content.split("\n");
-        expect(
-          tables === "off"
-            ? !content.includes("•")
-            : !first.startsWith("|") || /^\|[ :|-]*-[ :|-]*\|$/u.test(second),
-          `element starting ${JSON.stringify(content.slice(0, 40))}`,
-        ).toBe(true);
-      }
-      const joined = contents.join("\n");
-      expect(names.filter((name) => !new RegExp(`${name}\\b`, "u").test(joined))).toEqual([]);
-    },
-  );
+  it.each(
+    presentationEntries.flatMap((entry) =>
+      (["default", "off"] as const).map((tables) => ({ entry, tables })),
+    ),
+  )("keeps every row of a long $entry presentation table readable ($tables)", async (params) => {
+    const names = Array.from({ length: 200 }, (_entry, index) => `person-number-${index}`);
+    const rows = names.map((name) => `| ${name} | Regional Operations Lead |`);
+    const text = ["Roster.", "", "| Name | Role |", "| --- | --- |", ...rows, "", "End."].join(
+      "\n",
+    );
+    expect(presentationTableMode({ cfg: emptyConfig })).toBe("block");
+    const card = await presentationCardFor(
+      params.entry,
+      { blocks: [{ type: "text", text }, okButtons] },
+      params.tables === "off" ? offTablesConfig : emptyConfig,
+    );
+    expect(card?.body.elements.some((element: { tag: string }) => element.tag === "button")).toBe(
+      true,
+    );
+    const contents = markdownContents(card);
+    expect(contents.length).toBeGreaterThan(1);
+    for (const content of contents) {
+      const outsideFences = content.replace(/^```[^\n]*\n[\s\S]*?^```$/gmu, "");
+      expect(
+        params.tables === "off"
+          ? !content.includes("•")
+          : !/^\|/mu.test(outsideFences) || hasCardMarkdownTable(outsideFences),
+        `element starting ${JSON.stringify(content.slice(0, 40))}`,
+      ).toBe(true);
+    }
+    const joined = contents.join("\n");
+    expect(names.filter((name) => !new RegExp(`${name}\\b`, "u").test(joined))).toEqual([]);
+  });
 
   const tableModeConfig: ClawdbotConfig = {
     channels: {

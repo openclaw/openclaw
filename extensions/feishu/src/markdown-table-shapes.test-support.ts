@@ -14,11 +14,13 @@ export const undrawableTableShapes = [
     shape: "blockquote",
     text: "> Name | Role\n> --- | ---\n> Ada | Lead",
     posted: "> ```\n> | Name | Role |\n> | ---- | ---- |\n> | Ada  | Lead |\n> ```",
+    postedGrace: "> ```\n> | Name  | Role |\n> | ----- | ---- |\n> | Grace | Lead |\n> ```",
   },
   {
     shape: "list-item",
     text: "- Name | Role\n  --- | ---\n  Ada | Lead",
     posted: "```\n| - Name | Role |\n| ------ | ---- |\n| Ada    | Lead |\n```",
+    postedGrace: "```\n| - Name | Role |\n| ------ | ---- |\n| Grace  | Lead |\n```",
   },
 ] as const;
 export const nonTableShapes = [
