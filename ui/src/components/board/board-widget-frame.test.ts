@@ -477,7 +477,7 @@ describe("board widget frame", () => {
       const dialog = root.querySelector<HTMLElement>('[role="alertdialog"]');
       expect(dialog).not.toBeNull();
       expect(dialog!.textContent).toContain("Parts dashboard");
-      expect(dialog!.textContent).toContain("Send this message to the assistant?");
+      expect(dialog!.textContent).toContain("Send this message to the agent?");
       expect(dialog!.textContent).toContain("Compare these parts");
       expect(received).toHaveLength(0);
       dialogButton("Cancel").click();

@@ -13,6 +13,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import * as nativeWorkerRecovery from "../../infra/gateway-native-worker-recovery.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -34,7 +35,6 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -163,7 +163,7 @@ describe("SQLite transcript archive sessions", () => {
   function expectArchivedEvent(archivePath: string | undefined, event: unknown) {
     expect(archivePath).toBeTruthy();
     expect(
-      readSessionArchiveContentSync(archivePath ?? "")
+      readSessionArchiveText(archivePath ?? "")
         .trim()
         .split("\n"),
     ).toEqual([JSON.stringify(event)]);

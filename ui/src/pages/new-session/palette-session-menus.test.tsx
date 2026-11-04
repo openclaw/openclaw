@@ -196,6 +196,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
     "settings search",
   );
   const connect = get(content, ":scope > .palette-session-settings__row");
+  expect(connect.textContent).toContain("Connect a device");
   const unavailable = expectDefined(
     content.querySelector<HTMLButtonElement>('[data-machine="runtime:hosted"]'),
     "unavailable machine",
