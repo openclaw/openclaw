@@ -16,8 +16,8 @@ import { collectCiOwnedFootprint } from "../../scripts/lib/ci-owned-footprint.mt
 const roots: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const root of roots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
+  for (const directory of roots.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 function root() {
