@@ -82,7 +82,7 @@ suite.define(() => {
         await expect.poll(() => trigger.isEnabled()).toBe(true);
         await pane
           .locator(".chat-error")
-          .getByText("Permissions saved, but this session didn't refresh.", { exact: false })
+          .getByText("Couldn’t refresh this session. Permissions were saved.", { exact: false })
           .waitFor();
       },
       async ({ page }) => {
@@ -299,7 +299,7 @@ suite.define(() => {
       });
       await pane
         .locator(".chat-error")
-        .getByText("Couldn't change permissions", { exact: false })
+        .getByText("Couldn’t change permissions", { exact: false })
         .waitFor();
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
       await expect.poll(() => trigger.isEnabled()).toBe(true);

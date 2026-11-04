@@ -133,7 +133,7 @@ it.each([
   ],
   [
     "chat.sessionSharing.noPeople",
-    "No paired people found.",
+    "No paired people yet.",
     () => import("../pages/chat/components/chat-session-sharing-mobile.tsx"),
   ],
   [
@@ -304,9 +304,9 @@ it.each([false, true])(
     registerEnglishCatalog(ordered[1]!);
     registerAgentsHomeEnglish();
     registerTemplateCreatorEnglish();
-    expect(manager.t("templatesDraft.title")).toBe("Create Template");
+    expect(manager.t("templatesDraft.title")).toBe("Create template");
     expect(manager.t("templatesDraft.sendFailed")).toBe(
-      "The main chat did not accept the Create Template message.",
+      "Couldn’t start template creation. Try again.",
     );
     expect(manager.t("templatesDraft.reviewTitle")).toBe("Vorlage prüfen");
     expect(manager.t("agentsHome.pinnedAgents")).toBe("Angeheftete Agenten");
@@ -345,7 +345,7 @@ it("keeps sidebar and chat actions readable until the session management dialog 
   expect(en.sessionsView).toBe(sessionsView);
   expect(manager.t("profilePage.modelAccounts.loadMore")).toBe("Load more saved accounts");
   expect(manager.t("profilePage.modelAccounts.inventoryFailed")).toBe(
-    "Could not load saved accounts. Refresh to retry.",
+    "Couldn’t load saved accounts. Refresh to try again.",
   );
   expect(manager.t("profilePage.modelAccounts.connectAction")).toBe(
     "profilePage.modelAccounts.connectAction",
@@ -377,7 +377,7 @@ it("loads people-picker copy with session menu details before any sharing menu",
   await import("../components/session-menu-details-solid.tsx");
 
   expect(manager.t("sessionsView.searchPeople")).toBe("Personen suchen");
-  expect(manager.t("sessionsView.noPeopleMatch")).toBe("No matching people or agents");
+  expect(manager.t("sessionsView.noPeopleMatch")).toBe("No people or agents match your search.");
   expect(manager.t("chat.sessionSharing.copyPublicLink")).toBe(
     "chat.sessionSharing.copyPublicLink",
   );
@@ -454,13 +454,13 @@ it("keeps a cold roster metadata failure readable before its view catalog loads"
   const stop = store.subscribe(() => {});
   try {
     await store.refresh();
-    expect(store.snapshot.error).toBe("Could not load agents. Try again.");
+    expect(store.snapshot.error).toBe("Couldn’t load agents. Retry.");
     const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
     const { registerAgentsHomeEnglish } = await import("./locales/en-agents-home.ts");
     registerEnglishCatalog(registerAgentsHomeEnglish);
     expect(en.agentsHome).toBe(agentsHome);
     await store.refresh();
-    expect(store.snapshot.error).toBe("Could not load agents. Try again.");
+    expect(store.snapshot.error).toBe("Couldn’t load agents. Retry.");
   } finally {
     stop();
     sessions.dispose();

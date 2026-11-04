@@ -47,8 +47,9 @@ const enSessionOrganizationShared = {
     stopWorkerConfirmAction: "Stop",
     stopCloudWorker: "Stop cloud device…",
     stopCloudWorkerConfirm: "Stop this cloud device?",
+    stopCloudWorkerTarget: "Session: {session}",
     stopCloudWorkerDescription:
-      "The session stops working on it and the machine is released. Your conversation and accepted changes stay.",
+      "The session stops working on it and the cloud device is released. Your conversation and accepted changes stay.",
     lifecycleIdentityRequired: "This action needs a saved session.",
     stopCloudWorkerConfirmAction: "Stop",
     deleteSessionStale: "The connection changed before “{session}” was deleted. Try again.",

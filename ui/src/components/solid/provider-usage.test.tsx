@@ -161,7 +161,7 @@ describe("ProviderUsagePanel", () => {
     });
     expect(providerUsageAttention({ windows: [], error: "Rate limited" })).toEqual({
       kind: "warn",
-      label: "Check failed",
+      label: "Couldn’t check usage",
     });
   });
 

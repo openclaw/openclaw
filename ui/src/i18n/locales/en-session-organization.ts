@@ -252,6 +252,7 @@ const enSessionOrganization = {
       "Group created, but the move was skipped because the list changed. Move from the row menu.",
     stopCloudWorkerConfirm: sharedSessions.stopCloudWorkerConfirm,
     stopCloudWorkerDescription: sharedSessions.stopCloudWorkerDescription,
+    stopCloudWorkerTarget: sharedSessions.stopCloudWorkerTarget,
     lifecycleIdentityRequired: sharedSessions.lifecycleIdentityRequired,
     stopCloudWorkerConfirmAction: sharedSessions.stopCloudWorkerConfirmAction,
     stopCloudWorkerStale:

@@ -157,8 +157,12 @@ additional token permissions. Each bundle binds the current workflow run,
 attempt and actual checkout commit/tree; the reporter also freezes the bundle
 hash. Preflight obtains the exact prior-to-current comparison from GitHub once
 per prior revision, including removed paths and both ends of renames. It verifies
-the prior is an ancestor and rejects comparisons with 300 or more files because
-GitHub caps the returned file list. The native inventory callback consumes this
+the prior is an ancestor. When GitHub's comparison reaches its 300-file cap,
+preflight compares one recursive prior tree with the checked-out current tree.
+The tree response must be complete and fit within 32 MiB; comparisons with 600 or
+more changed paths remain ineligible. This uses the same ten-second restore
+deadline and includes removed paths, rename endpoints, and file-mode changes.
+The native inventory callback consumes this
 bound comparison; it does not substitute the launch record's comparison base.
 
 Exact configuration, lock, environment and runtime identities must match. The

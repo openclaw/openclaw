@@ -105,6 +105,7 @@ const RERUN_GROUPS = new Set([
   "windows-node",
   "live-e2e",
   "package",
+  "qualified-package",
   "qa-parity",
   "qa-live",
   "npm-telegram",
