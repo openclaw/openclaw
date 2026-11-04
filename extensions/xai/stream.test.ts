@@ -95,7 +95,9 @@ async function captureXaiResponsesPayloadWithThinking(
     model,
     streamFn: streamSimple,
   });
-  if (!wrapped) throw new Error("expected the xAI stream wrapper");
+  if (!wrapped) {
+    throw new Error("expected the xAI stream wrapper");
+  }
   let captured: Record<string, unknown> | undefined;
   const opts = {
     apiKey: "test-api-key",
@@ -112,7 +114,9 @@ async function captureXaiResponsesPayloadWithThinking(
     opts,
   );
   await stream.result();
-  if (!captured) throw new Error("provider payload callback was not invoked");
+  if (!captured) {
+    throw new Error("provider payload callback was not invoked");
+  }
   return captured;
 }
 
@@ -278,9 +282,8 @@ describe("xai stream wrappers", () => {
       (item) => item.type === "message" && item.role === "user" && Array.isArray(item.content),
     );
     expect(carrier).toBeDefined();
-    const normalizedImagePart = (carrier?.content as Array<Record<string, unknown>>).find(
-      (part) => part.type === "input_image",
-    );
+    const carrierContent = (carrier?.content as Array<Record<string, unknown>> | undefined) ?? [];
+    const normalizedImagePart = carrierContent.find((part) => part.type === "input_image");
     expect(normalizedImagePart).toBeDefined();
     expect((normalizedImagePart?.source as Record<string, unknown>)?.media_type).toBe("image/png");
 
