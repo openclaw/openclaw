@@ -201,7 +201,11 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await openPlacement(page);
       await page.getByRole("button", { name: /Device disconnected/ }).waitFor();
-      await page.getByText("Reconnect the device to try again.", { exact: false }).waitFor();
+      await page
+        .getByText("Waiting for the device to reconnect. Retry when it’s connected.", {
+          exact: false,
+        })
+        .waitFor();
       session.placement.runner.status = "available";
       await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
@@ -243,7 +247,7 @@ suite.define(() => {
       await page.locator(".chat-environment__machine-trigger").waitFor({ state: "detached" });
 
       expect(
-        await page.getByRole("button", { name: "Couldn’t move the session. Try again." }).count(),
+        await page.getByRole("button", { name: "Couldn’t move this session. Try again." }).count(),
       ).toBe(0);
       expect(await page.getByText("Continue on Gateway…", { exact: true }).count()).toBe(0);
     }));
@@ -606,7 +610,9 @@ suite.define(() => {
       await openPlacement(panes.last());
       await panes
         .last()
-        .getByText("Reconnect the device to try again.", { exact: false })
+        .getByText("Waiting for the device to reconnect. Retry when it’s connected.", {
+          exact: false,
+        })
         .waitFor();
     }));
 

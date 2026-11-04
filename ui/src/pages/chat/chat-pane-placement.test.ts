@@ -300,7 +300,7 @@ describe("chat pane placement", () => {
     const moving = dialogs.track(startMove(pane, offlineDeviceSession()));
     const actions = await waitForConfirmDialogActions();
     expect(document.body.textContent).toContain(
-      "Unsynced device files and active work may be lost",
+      "Unsynced device files and work in progress may be lost",
     );
     expect(document.body.textContent).toContain("last Gateway-synced state");
     answerConfirmDialog(actions, "cancel");

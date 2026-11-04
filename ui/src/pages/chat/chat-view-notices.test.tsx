@@ -97,11 +97,11 @@ afterEach(() => document.body.replaceChildren());
 it.each(["transferring", "installing"] as const)("shows %s worker progress", async (phase) => {
   const installing = phase === "installing";
   const title = installing
-    ? "Installing worker runtime"
-    : "Updating worker runtime · 25 MB of 100 MB (25%)";
+    ? "Preparing this device…"
+    : "Preparing this device · 25 MB of 100 MB (25%)";
   const body = installing
-    ? "Installing the new worker runtime on this device."
-    : "Transferring the new worker runtime to this device: 25 MB of 100 MB (25%). The next turn starts when it finishes.";
+    ? "Installing the update on this device."
+    : "Transferring the update to this device: 25 MB of 100 MB (25%). The next reply starts when it finishes.";
   const { container, publish } = publishedNotices<TopbarProps>(renderChatTopbarNotices, {
     workerRuntimeInstall: {
       phase,
@@ -409,7 +409,7 @@ describe("chat view notice integration", () => {
       });
       const alert = await waitForElement(container, ".chat-error", "startup error");
       expect(requireElement(alert, "pre", "startup diagnostic").textContent).toBe(
-        "The session was created, but startup needs attention:  Provisioning failed\n  Final diagnostic line  ",
+        "Couldn’t start this session. Retry setup.  Provisioning failed\n  Final diagnostic line  ",
       );
       expect(alert.textContent).not.toContain("⚠");
       const details = requireElement(alert, "details", "startup disclosure");
@@ -424,7 +424,7 @@ describe("chat view notice integration", () => {
       copy?.click();
       await waitForFast(() =>
         expect(writeText).toHaveBeenCalledWith(
-          "The session was created, but startup needs attention: ⚠️ Provisioning failed\n  Final diagnostic line  ",
+          "Couldn’t start this session. Retry setup. ⚠️ Provisioning failed\n  Final diagnostic line  ",
         ),
       );
       expect(details.hasAttribute("open")).toBe(false);

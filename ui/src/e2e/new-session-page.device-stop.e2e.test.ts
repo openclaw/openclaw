@@ -94,14 +94,16 @@ suite.define(() => {
         has: page.locator(".session-worker-stop"),
       });
       const dialog = await waitForConfirmModal(page, workerStopConfirmation);
-      expect(menuText).toBe("Stop work on device…");
+      expect(menuText).toBe("Stop session on device…");
       expect(
-        await dialog.getByRole("heading", { name: "Stop worker?", exact: true }).textContent(),
-      ).toBe("Stop worker?");
+        await dialog
+          .getByRole("heading", { name: "Stop this session on the device?", exact: true })
+          .textContent(),
+      ).toBe("Stop this session on the device?");
       expect(await dialog.textContent()).toContain(
-        "This will save workspace changes and stop this session’s worker.",
+        "This session stops working on this device after saving workspace changes.",
       );
-      expect(await dialog.textContent()).toContain("Send a new message to continue.");
+      expect(await dialog.textContent()).toContain("Other sessions on the device keep running.");
       await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
       await dialog.waitFor({ state: "detached" });
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
