@@ -455,7 +455,7 @@ struct ChatProTab: View {
                 Text("Artifacts").font(OpenClawType.body)
             } icon: {
                 Image(systemName: "tray.full")
-                    .font(.system(size: 22))
+                    .font(.system(size: 18))
             }
             .labelStyle(.iconOnly)
             .foregroundStyle(OpenClawBrand.accent)
