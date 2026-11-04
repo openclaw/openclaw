@@ -18,7 +18,7 @@ const enChatToolContent = {
       diff: "Diff",
       raw: "Raw",
       openDetails: "Open tool details in side panel",
-      noOutputFailed: "No output — tool failed.",
+      noOutputFailed: "The tool failed without output.",
     },
   },
 } satisfies TranslationMap;

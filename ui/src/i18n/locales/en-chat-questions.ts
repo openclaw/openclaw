@@ -37,8 +37,8 @@ const enChatQuestions = {
       answeredElsewhere: "Answered elsewhere",
       unavailable: "Unavailable",
       expired: "Expired",
-      disconnected: "Not connected. Try again after reconnecting.",
-      loadFailed: "Could not load this question. Try again.",
+      disconnected: "Reconnect to answer this question.",
+      loadFailed: "Couldn’t load this question. Try again.",
     },
   },
 } satisfies TranslationMap;

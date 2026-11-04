@@ -152,7 +152,8 @@ suite.define(() => {
           exact: true,
         });
         await error.waitFor({ state: "visible" });
-        await page.clock.runFor(6_000);
+        // Errors stay 10 s, then fade out.
+        await page.clock.runFor(10_200);
         await error.waitFor({ state: "hidden" });
         expect(requestedVariants.filter((variant) => variant === "full")).toHaveLength(attempt + 1);
       }

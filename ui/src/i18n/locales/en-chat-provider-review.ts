@@ -7,11 +7,11 @@ const enChatProviderReview = {
       pausedTitle: "Session paused as a precaution",
       stoppedTitle: "Session stopped as a precaution",
       pausedBody:
-        "The provider couldn’t confirm the agent was interpreting your instructions correctly. Review its findings before deciding to continue.",
+        "The provider couldn’t confirm the agent understood your instructions. Review its findings before continuing.",
       stoppedBody:
-        "The provider stopped this session without reviewable findings. This session remains stopped; no continuation is available.",
+        "The provider stopped this session without reviewable findings. It can’t continue.",
       stoppedWithFindingsBody:
-        "The provider stopped this session. Review its findings before starting further work.",
+        "The provider stopped this session. Review its findings before starting more work.",
       review: "Review findings",
       findings: "Provider findings",
       continuationTitle: "Continuation message",
@@ -21,17 +21,16 @@ const enChatProviderReview = {
       waiting: "Continuation requested. Waiting for the provider to accept it.",
       checkStatus: "Check continuation status",
       checkingStatus: "Checking continuation status…",
-      refreshFailed:
-        "Couldn’t refresh the continuation status. Check again to see whether it was accepted.",
-      noContinuation: "Continuation is not available for this session. It remains stopped.",
-      continuationFailed: "Couldn’t continue the session. It remains paused. Try again.",
+      refreshFailed: "Couldn’t check whether continuation was accepted. Check again.",
+      noContinuation: "This session can’t continue. It remains stopped.",
+      continuationFailed: "Couldn’t continue this session. Try again.",
       queueHelp:
         "Queued messages stay held. Review and retry each message separately after continuation is accepted.",
       queueStopped: "Queued messages remain held.",
       queueHoldFailed:
-        "Couldn’t save the queued-message review hold. Free browser storage and try again. No continuation was sent.",
+        "Couldn’t pause queued messages. Free browser storage and retry. No continuation was sent.",
       queuedInputHeld:
-        "Held when the provider paused this session. Review the findings, then retry this message separately if it is still needed.",
+        "Held when the provider paused this session. Review the findings before retrying this message.",
     },
   },
 } satisfies TranslationMap;

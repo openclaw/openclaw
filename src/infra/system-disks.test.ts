@@ -134,22 +134,26 @@ describe("system disk snapshots", () => {
     expect((await readSystemDisks())?.map((disk) => disk.path)).toEqual(paths);
   });
 
-  it("shares in-flight probes and refreshes mount membership after the sample expires", async () => {
-    vi.useFakeTimers();
-    mocks.readFile.mockResolvedValue("1 0 8:1 / / rw - ext4 /dev/sda1 rw");
-    const pending = readSystemDisks();
-    expect(readSystemDisks()).toBe(pending);
-    await pending;
-    mocks.readFile.mockResolvedValue(rootAndData);
-    expect(await readSystemDisks()).toHaveLength(1);
-    vi.advanceTimersByTime(29_999);
-    expect(await readSystemDisks()).toHaveLength(1);
-    vi.advanceTimersByTime(1);
-    expect(await readSystemDisks()).toHaveLength(2);
-  });
+  it.each([-3_600_000, 0, 3_600_000])(
+    "shares probes and expires mount membership despite a wall-clock step of %i ms",
+    async (wallClockStep) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      mocks.readFile.mockResolvedValue("1 0 8:1 / / rw - ext4 /dev/sda1 rw");
+      const pending = readSystemDisks();
+      expect(readSystemDisks()).toBe(pending);
+      await pending;
+      vi.setSystemTime(Date.now() + wallClockStep);
+      mocks.readFile.mockResolvedValue(rootAndData);
+      expect(await readSystemDisks()).toHaveLength(1);
+      vi.advanceTimersByTime(29_999);
+      expect(await readSystemDisks()).toHaveLength(1);
+      vi.advanceTimersByTime(1);
+      expect(await readSystemDisks()).toHaveLength(2);
+    },
+  );
 
   it("keeps completed disks when another filesystem probe hangs", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     mocks.readFile.mockResolvedValue(rootAndData);
     mocks.statfs.mockImplementation(async (path: string) =>
       path === "/data" ? new Promise(() => {}) : sample,
@@ -163,7 +167,7 @@ describe("system disk snapshots", () => {
   });
 
   it("bounds native work across cache refreshes while a filesystem remains blocked", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     mountInfo(
       "1 0 8:1 / / rw - ext4 /dev/sda1 rw",
       "2 1 8:2 / /a rw - ext4 /dev/sdb rw",

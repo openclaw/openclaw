@@ -6,7 +6,7 @@ import { en } from "./en.ts";
 // This copy follows its lazy rendering consumers; shared labels stay in en.ts.
 const enChatSession = {
   chat: {
-    savedConversation: "Saved conversation · {status}",
+    savedConversation: "{status} · Saved conversation",
     sessionAutomation: {
       everyDuration: "Every {duration}",
       onceAt: "{day} at {time}",
@@ -64,7 +64,7 @@ const enChatSession = {
       linkSharing: "Link sharing",
       anyoneWithLink: "Anyone with the link",
       publicLinkDescription: "Anyone can read without signing in.",
-      publicDraftDescription: "The public link stays readable in Draft.",
+      publicDraftDescription: "The public link stays readable in draft.",
       linkUnavailable: "Link unavailable",
       permissions: "Permissions",
       creator: "Creator",
@@ -83,9 +83,9 @@ const enChatSession = {
       draft: en.chat.sessionSharing.draft,
       owner: "Owner",
       readOnlyNotice: "Only the session owner and members can act in this session.",
-      scopeReadOnlyNotice: "Sending messages is unavailable with your current access.",
+      scopeReadOnlyNotice: "You need permission to send messages in this session.",
       guestWelcomePending: "Setting up your welcome session…",
-      guestWelcomeFailed: "We couldn't set up your welcome session.",
+      guestWelcomeFailed: "Couldn’t set up your welcome session. Try again.",
       guestWelcomeRetry: "Try again",
       publicIndicator: "Public",
       worldReadable: "Public — anyone can read without signing in.",
@@ -166,6 +166,9 @@ const enChatSession = {
       resetDescription: "The conversation context resets. Your dashboard stays.",
     },
     taskSuggestions: {
+      adminRequired: "You need admin access to start suggested tasks.",
+      reconnectRequired: "Reconnect to start suggested tasks.",
+      unavailable: "Starting suggested tasks isn’t available here.",
       copyPromptFailed: "Couldn't copy the prompt to the clipboard",
       startUnconfirmed: "Couldn't confirm the task started. Retry checks the same task.",
     },
@@ -199,7 +202,7 @@ const enChatSession = {
       inComposer: "Answer above the message box.",
       archived: "No longer pending",
       archivedReason: "The conversation moved on. You can still answer this question.",
-      sendFailed: "Could not send your answer. Your draft is preserved.",
+      sendFailed: "Couldn’t send your answer. Your draft is still here. Try again.",
       queued: "Answer queued",
       sending: "Sending answer…",
       sent: "Answer sent",
@@ -265,7 +268,7 @@ const enChatSession = {
         cancelled: "This agent update was cancelled before delivery.",
       },
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
-      waitingForWorkerSetup: "Received · waiting for worker setup",
+      waitingForWorkerSetup: "Received · setting up device",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       earlier: "Show earlier unsent messages",

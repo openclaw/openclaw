@@ -157,7 +157,8 @@ export class WorktreesModel {
     }
     if (
       !(await showConfirmDialog({
-        message: t("worktrees.confirmDelete", { name: record.name }),
+        title: t("worktrees.confirmDelete", { name: record.name }),
+        message: t("worktrees.confirmDeleteBody"),
         confirmLabel: t("common.delete"),
         danger: true,
       })) ||
@@ -178,8 +179,8 @@ export class WorktreesModel {
       }
       const reason = result.snapshotError ?? "";
       const force = await showConfirmDialog({
-        title: t("worktrees.confirmForceDelete"),
-        message: t("worktrees.confirmForceDeleteDetails", { error: reason }),
+        title: t("worktrees.confirmForceDeleteTitle"),
+        message: t("worktrees.confirmForceDelete", { error: reason }),
         confirmLabel: t("common.delete"),
         danger: true,
       });

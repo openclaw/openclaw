@@ -41,7 +41,9 @@ describe("sessions page cloud stop", () => {
         placement: state === "active" ? placement : { ...placement, state },
       });
       const page = await createRenderedPage(context, sessionsResult([target], 1));
-      expect((await openRowMenu(page, target)).textContent).toContain("Stop cloud device…");
+      expect((await openRowMenu(page, target)).textContent).toContain(
+        state === "active" ? "Stop cloud device…" : "Stop session on device…",
+      );
       const [query] = managed.subscribeList.mock.calls[0]!;
       managed.refreshList.mockClear();
       vi.mocked(showConfirmDialog).mockResolvedValue(true);
@@ -49,9 +51,12 @@ describe("sessions page cloud stop", () => {
       await waitForFast(() => expect(request).toHaveBeenCalledOnce());
       expect(showConfirmDialog).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Stop this cloud device?",
+          title:
+            state === "active" ? "Stop this cloud device?" : "Stop “Cloud task” on its device?",
           message:
-            "The session stops working on it and the cloud device is released. Your conversation and accepted changes stay.",
+            state === "active"
+              ? "The session stops working on it and the cloud device is released. Your conversation and accepted changes stay."
+              : "This session stops working on its device after saving workspace changes. Your conversation and saved changes stay.",
           details: `Session: ${target.label ?? target.key}`,
           confirmLabel: "Stop",
         }),

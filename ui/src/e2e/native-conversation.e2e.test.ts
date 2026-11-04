@@ -552,7 +552,7 @@ suite.define(() => {
       await command(page, "open-session-actions", sessionB, "open-stop-confirm");
       await gateway.deferNext("sessions.reclaim");
       await menu.getByRole("menuitem", { name: "Stop cloud device…", exact: true }).click();
-      await dialog.getByRole("button", { name: "Stop worker", exact: true }).click();
+      await dialog.getByRole("button", { name: "Stop", exact: true }).click();
       expect(requireRecord((await gateway.waitForRequest("sessions.reclaim")).params)).toEqual({
         key: sessionB.sessionKey,
         agentId: sessionB.agentId,

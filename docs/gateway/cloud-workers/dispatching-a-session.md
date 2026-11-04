@@ -8,13 +8,15 @@ How an authorized session reaches a cloud destination, what the Control UI requi
 
 ## Dispatching a session
 
+In **New session**, choose a device under **Cloud**. The picker uses **This computer** for the Gateway’s device and **Device size** for a cloud device’s size.
+
 Administrators can run an authorized session on a configured cloud profile, including a fresh workspace without a repository. An operator with `operator.write` can also dispatch a session they created to a profile listed in their current role’s `workerProfiles`. An omitted or empty list grants no additional cloud dispatch access. Session ownership and current role grants are revalidated before placement lifecycle changes commit. Setup scripts and moves to cloud profiles remain administrator-only.
 
 Fresh workspaces can be created and dispatched concurrently. Creating another session's workspace does not invalidate a dispatch already in preparation; changes to the selected session's own workspace binding or archive status still prevent stale dispatch.
 
 If the session already has an active turn, `sessions.dispatch` returns a busy error without interrupting the turn or starting worker provisioning. Wait for the turn to finish and retry dispatch.
 
-In the Control UI, open **New Session** and choose a **Cloud** destination. A cloud destination is available when these eligibility gates pass:
+In the Control UI, open **New session** and choose a **Cloud** destination. A cloud destination is available when these eligibility gates pass:
 
 1. The connected operator has `operator.write` scope and either administrator access or an explicit role grant.
 2. `environments.list` advertises at least one configured profile in `dispatchableProfileIds`.

@@ -5,7 +5,7 @@ const enChatMedia = {
   chat: {
     imageLightbox: {
       loadingDetail: "Loading sharper image…",
-      detailFailed: "Couldn’t load the sharper image. Preview shown.",
+      detailFailed: "Couldn’t load a sharper image. Try again.",
       actions: "Image actions",
       previous: "Previous image",
       next: "Next image",
