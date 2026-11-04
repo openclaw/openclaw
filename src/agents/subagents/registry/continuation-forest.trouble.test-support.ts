@@ -135,17 +135,20 @@ export async function restartGateway(forest: ContinuationForest): Promise<void> 
       await schedulePendingSessionDeliveries();
     }
   });
+  let bootedAt = startedAt;
   const custody = forest.run(async () => {
     await forest.sleep(1_400);
     await runContinuationCustodyBoot({
       armedAt: startedAt,
       whenSubagentRegistryActivated: async () => {},
     });
+    bootedAt = Date.now();
     await resolveContinuationResetRetentions({ cfg: getRuntimeConfig(), markedBefore: startedAt });
   });
   const started = Date.now();
   await forest.whileTimePasses(Promise.all([delivery, custody]), "the Gateway's boot");
-  forest.downtimes.push({ from: startedAt, to: Date.now() });
+  // Elections fall due again once custody has booted; delivery replay pacing is not downtime.
+  forest.downtimes.push({ from: startedAt, to: bootedAt });
   forest.timings.lastBootMs = Date.now() - started;
 }
 

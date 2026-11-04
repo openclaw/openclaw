@@ -37,7 +37,9 @@ export function foldCrane(forest: ContinuationForest, election: AnnexElection): 
     forest.logAttempt(election.id, "effect");
     // The replay barrier: the effect is committed, its completion is not recorded yet.
     await forest.gate(`after-flip:${election.id}`);
-    await forest.run(() => reportElection(forest, election));
+    if (!forest.disposed) {
+      await forest.run(() => reportElection(forest, election));
+    }
   })().catch((error: unknown) => forest.failures.push(`${election.name}: ${String(error)}`));
 }
 
@@ -59,7 +61,7 @@ export async function reportElection(
     runId,
     name: election.name,
     at: Date.now(),
-    intended: intendedRecipients(forest, entry),
+    intended: intendedRecipients(forest, election),
     boundSeq: entry.continuationFanoutMode === "all" ? ++forest.seq : 0,
   });
   const started = realNowMs();
@@ -108,15 +110,21 @@ async function persistBinding(
   });
 }
 
-/** The rooms a report is meant for: its requester, its explicit targets, or every room (`all`). */
-function intendedRecipients(forest: ContinuationForest, entry: SubagentRunRecord): string[] {
-  if (entry.continuationFanoutMode === "all") {
-    return [...forest.rooms].filter((key) => key !== entry.childSessionKey).toSorted();
+/**
+ * The rooms a report is meant for, from the world's own model, never from the product's rows: a
+ * runner reports to the room that elected it; a node to its parent, plus its target across, or to
+ * every room but its own (`all`).
+ */
+function intendedRecipients(forest: ContinuationForest, election: AnnexElection): string[] {
+  if (election.owner) {
+    return [election.owner.sessionKey];
   }
-  if (entry.continuationTargetSessionKeys?.length) {
-    return [...new Set(entry.continuationTargetSessionKeys)];
+  const node = election.node!;
+  const parent = node.parent!.sessionKey;
+  if (node.routing.kind === "all") {
+    return [...forest.rooms].filter((key) => key !== node.sessionKey).toSorted();
   }
-  return [entry.requesterSessionKey];
+  return node.routing.kind === "out-of-tree" ? [parent, node.routing.target.sessionKey] : [parent];
 }
 
 /**
@@ -194,10 +202,8 @@ export async function checkAttic(
     transcriptStart: null,
   });
   forest.logAttempt(election.id, "attempt");
-  await forest.gate(`wake:${election.id}`);
   forest.bits.set(election.id, 1);
   forest.logAttempt(election.id, "effect");
-  await forest.gate(`after-flip:${election.id}`);
   opts?.onAgentRunTerminalOutcome?.("completed");
   return { text: `${election.name} checked the attic` };
 }

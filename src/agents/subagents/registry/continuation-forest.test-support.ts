@@ -13,7 +13,8 @@
 // chat /new, prompt adoption and acknowledgement, restart recovery. Doubled, and only at the edge
 // of the Gateway: the spawn owner (it admits the child through the real registry, then the world
 // folds that child's crane), the reply owner (a continue_work wake turn checks the attic), and
-// continuation wake requests (recorded; the world runs each woken head's turn itself). Faked: the
+// continuation wake requests (recorded: every head with queued events takes its turn, and the
+// oracle requires a wake for every return a head adopted). Faked: the
 // clock (Date, setTimeout, performance), and the world outside the Gateway: the crane bits and the
 // append-only attempt log, which survive a Gateway restart as the outside world would. Relays and
 // cranes are written through the registry writer as clones of one real registration.
@@ -154,6 +155,10 @@ export class ContinuationForest {
   /** Every block a head adopted, with its room and time. */
   readonly adoptedBlocks: Array<{ sessionKey: string; text: string; at: number }> = [];
   readonly wakes: Array<{ sessionKey: string; deliveryIds: readonly string[] }> = [];
+  /** Durable rows a head's turn adopted and acknowledged. */
+  readonly adoptedDeliveryIds = new Set<string>();
+  /** Once disposed, work a released barrier lets go of stops before it reaches the Gateway. */
+  disposed = false;
   readonly spawns: Array<{ electionId: string; childRunId: string; at: number }> = [];
   /** `Delivered to` lines: the rooms named, and the child whose return it was. */
   readonly deliveredLines: Array<{ keys: string[]; from: string; at: number }> = [];
@@ -388,6 +393,7 @@ export class ContinuationForest {
       }
     };
     continuationForestSeams.clockWait = () => this.clockWait();
+    continuationForestSeams.beforeResetKill = (sessionKey) => this.gate(`reset-kill:${sessionKey}`);
     continuationForestSeams.logLine = (subsystem, message) => {
       if (message.startsWith("[continuation:")) {
         this.logLines.push({ subsystem, message, at: Date.now() });
@@ -425,6 +431,7 @@ export class ContinuationForest {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     for (const gate of this.gates) {
       gate.released.resolve();
     }
@@ -444,8 +451,9 @@ export class ContinuationForest {
 
   /**
    * Holds the next actor that reaches `point` until released: `before-flip:<election>` and
-   * `after-flip:<election>` (a fold; the latter is the replay barrier), `report:<election>` (a
-   * relay about to report), `wake:<election>` (an attic turn) or the row barrier from rowPoint().
+   * `after-flip:<election>` (a crane's or runner's fold; the latter is the replay barrier),
+   * `report:<election>` (a relay about to report), the row barrier from rowPoint(), or
+   * `reset-kill:<room>` (a reset of the room between its retention marks and its kill).
    */
   hold(point: string) {
     const gate: Gate = {
@@ -519,6 +527,9 @@ export class ContinuationForest {
 
   /** Runs `work` as a world operation: settle() waits for it unless it waits on the clock. */
   run<T>(work: () => Promise<T>): Promise<T> {
+    if (this.disposed) {
+      return new Promise<T>(() => {});
+    }
     const state = { parked: false };
     const promise = opContext.run(state, work);
     this.parked.set(promise, state);
@@ -663,6 +674,9 @@ export class ContinuationForest {
       adoption = await resolveFinalSystemEventAdoption({ prepared: [prepared] });
     }
     const ackIds = [...adoption.managedDeliveries.keys()];
+    for (const id of ackIds) {
+      this.adoptedDeliveryIds.add(id);
+    }
     await settleManagedSystemEventsAfterTurnAdoption({
       deliveries: adoption.managedDeliveries.values(),
       persistedMessage: { __openclaw: { sessionDeliveryAckIds: ackIds } },

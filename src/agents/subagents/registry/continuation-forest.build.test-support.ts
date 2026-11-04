@@ -320,14 +320,18 @@ async function electAttic(forest: ContinuationForest, prince: AnnexNode): Promis
       statuses: ["queued"],
     })
   ).find((candidate) => candidate.stateJson.includes(reason));
-  expect(record?.dueAt, `the attic wake of tree ${prince.tree} has no due time`).toBeDefined();
+  // The due time is the world's: elected at the fire's first instant, due after its delay.
+  const dueAt = forest.t0 + ATTIC_DELAY_MS;
+  expect(record?.dueAt, `the attic wake of tree ${prince.tree} is not due at its delay`).toBe(
+    dueAt,
+  );
   forest.elections.set(record!.recordId, {
     id: record!.recordId,
     kind: "attic",
     name: `the attic inspector of tree ${prince.tree}`,
     tree: prince.tree,
     ownerSessionKey: prince.sessionKey,
-    dueAt: record!.dueAt,
+    dueAt,
     expected: { outcome: "executed" },
   });
 }

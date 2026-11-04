@@ -4,7 +4,6 @@
 // story: "the attic inspector of tree 2 ran 2 times (at 5000ms (gen 0), 66500ms (gen 1))".
 import { listContinuationRecords } from "../../../auto-reply/continuation/custody/custody-store.js";
 import type { ContinuationRecord } from "../../../auto-reply/continuation/custody/custody-store.types.js";
-import { custodyStateForTest } from "../../../auto-reply/continuation/custody/custody.test-support.js";
 import { inspectDeliveryQueueReceipt } from "../../../infra/delivery-queue-sqlite.js";
 import { captureDeliveryQueueStateContext } from "../../../infra/delivery-queue-state-context.js";
 import {
@@ -38,8 +37,10 @@ export async function tellStories(forest: ContinuationForest): Promise<string[]>
     adoptedRooms.set(adoption.reportId, rooms);
   }
   deriveRefusalsFromHandovers(forest);
+  const claimedLines = new Set<object>();
   for (const report of forest.reports.values()) {
-    stories.push(...(await reportStories(forest, report, adoptedRooms.get(report.electionId))));
+    const rooms = adoptedRooms.get(report.electionId) ?? new Set<string>();
+    stories.push(...(await reportStories(forest, report, rooms, claimedLines)));
   }
   stories.push(...wakeStories(forest));
   return stories;
@@ -142,13 +143,14 @@ function electionStories(
     }
   }
   if (election.kind === "attic" && outcome === "executed" && record) {
-    const releasedAt = custodyStateForTest(record).releasedAt as number | undefined;
+    // When the inspector's turn ran, from the attempt log.
+    const wokeAt = attempts[0]?.at;
     if (
       election.dueAt !== undefined &&
-      (releasedAt === undefined || !firesOnTime(forest, election.dueAt, releasedAt))
+      (wokeAt === undefined || !firesOnTime(forest, election.dueAt, wokeAt))
     ) {
       stories.push(
-        `${election.name} woke at ${releasedAt === undefined ? "no time" : at(releasedAt)}, not at its due time ${at(election.dueAt)}`,
+        `${election.name} woke at ${wokeAt === undefined ? "no time" : at(wokeAt)}, not at its due time ${at(election.dueAt)}`,
       );
     }
     if (record.status !== "succeeded") {
@@ -173,7 +175,8 @@ function firesOnTime(forest: ContinuationForest, dueAt: number, firedAt: number)
 async function reportStories(
   forest: ContinuationForest,
   report: Report,
-  adoptedRooms: ReadonlySet<string> = new Set(),
+  adoptedRooms: ReadonlySet<string>,
+  claimedLines: Set<object>,
 ): Promise<string[]> {
   const stories: string[] = [];
   const intended = new Set(report.intended);
@@ -194,15 +197,21 @@ async function reportStories(
     if (adopted > 0) {
       stories.push(`${sessionKey} adopted ${report.name}'s report although it was handed over`);
     }
-    const refused = forest.logLines.some(
-      (line) =>
-        line.message.startsWith("[continuation:return-refused]") &&
-        line.message.includes(`reason=${refusal} session=${sessionKey}`),
-    );
-    if (!refused) {
-      stories.push(`${report.name}'s report to ${sessionKey} was never refused with ${refusal}`);
-    }
     const rowId = forest.rows.get(`${report.runId}\u0000${sessionKey}`);
+    // A written row is refused by its own line; one refused before its write takes a line of its own.
+    const lines = forest.logLines.filter(
+      (line) =>
+        line.message.startsWith("[continuation:return-refused] stage=") &&
+        line.message.includes(` reason=${refusal} session=${sessionKey}`) &&
+        (rowId
+          ? line.message.endsWith(` deliveryId=${rowId}`)
+          : !line.message.includes(" deliveryId=") && !claimedLines.has(line)),
+    );
+    if (lines.length === 0) {
+      stories.push(`${report.name}'s report to ${sessionKey} was never refused with ${refusal}`);
+    } else if (!rowId) {
+      claimedLines.add(lines[0]!);
+    }
     if (rowId && (await receiptStatus(forest, rowId)) !== "failed") {
       stories.push(`${report.name}'s refused row for ${sessionKey} is not a failed receipt`);
     }
@@ -227,7 +236,10 @@ async function receiptStatus(forest: ContinuationForest, id: string): Promise<st
   return (await inspectDeliveryQueueReceipt("session", id, false, context)).status;
 }
 
-/** A row is woken once per queued copy: again only after a reset or restart dropped its copy. */
+/**
+ * A row is woken once per queued copy (again only after a reset or restart dropped its copy), and
+ * never adopted without a wake.
+ */
 function wakeStories(forest: ContinuationForest): string[] {
   const counts = new Map<string, number>();
   for (const wake of forest.wakes) {
@@ -242,6 +254,13 @@ function wakeStories(forest: ContinuationForest): string[] {
       stories.push(
         `delivery ${id} woke its recipient ${count} times (its queued copy was dropped ${dropped} times)`,
       );
+    }
+  }
+  // Every return a head adopted was woken for: a lost wake strands it until an unrelated turn.
+  for (const [key, id] of forest.rows) {
+    if (forest.adoptedDeliveryIds.has(id) && !counts.has(id)) {
+      const [runId, sessionKey] = key.split("\u0000");
+      stories.push(`${describeRoom(forest, sessionKey!)} adopted ${runId}'s return without a wake`);
     }
   }
   return stories;

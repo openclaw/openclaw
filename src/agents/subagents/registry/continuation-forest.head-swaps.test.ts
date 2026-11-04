@@ -38,6 +38,11 @@ vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../logging/subsystem.js")>();
   return { ...actual, ...(await forestSeams()).logLines(actual) };
 });
+vi.mock("../../../auto-reply/reply/session-reset-cleanup.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../auto-reply/reply/session-reset-cleanup.js")>();
+  return { ...actual, ...(await forestSeams()).resetKill(actual) };
+});
 vi.mock("../../../utils/sleep.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/sleep.js")>();
   return { ...actual, ...(await forestSeams()).clock(actual) };
@@ -73,10 +78,35 @@ describe("the burning annex: head swaps", () => {
     }
     await forest.advanceTo(NIGHTFALL_MS);
     await forest.expectForestHolds();
-    // Every report to the prince arrived after the swap, so the successor adopted all of them.
-    const adopted = forest.adoptions.filter((a) => a.sessionKey === prince.sessionKey);
-    expect(adopted.length).toBeGreaterThan(0);
-    expect(new Set(adopted.map((a) => a.head))).toEqual(new Set([forest.head(prince.sessionKey)]));
+  });
+
+  it("the prince changes 🎽🩲 while a report is on its way: the return is held through the swap and his successor adopts it once", async () => {
+    const forest = await annex.build();
+    const prince = forest.princes[1]!;
+    await forest.light();
+    const across = forest.electionOf(prince.children[1]!);
+    const reporting = forest.hold(`report:${across.id}`);
+    const killing = forest.hold(`reset-kill:${prince.sessionKey}`);
+    await forest.until(reporting, 2_000);
+
+    // The swap marks the prince's children, then parks before upstream's reset kill.
+    const swap = forest.changesClothes(prince);
+    await killing.reached;
+    // The child reports now: its row to the prince is written and held, never queued.
+    await reporting.release();
+    expect(forest.queuedEvents(prince.sessionKey)).toEqual([]);
+    await killing.release();
+    await swap;
+
+    await forest.advanceTo(NIGHTFALL_MS);
+    await forest.expectForestHolds();
+    expect(
+      forest.logLines.filter(
+        (line) =>
+          line.message.startsWith("[continuation:return-held] session reset pending") &&
+          line.message.includes(`session=${prince.sessionKey} `),
+      ),
+    ).toHaveLength(1);
   });
 
   it("a reset of an intermediate hall keeps its grandchildren and its pending cellar runner", async () => {

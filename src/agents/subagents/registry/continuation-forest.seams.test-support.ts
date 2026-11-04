@@ -12,6 +12,7 @@
 // still being linked. With no world installed every override passes through to the real export.
 import type { requestContinuationWake } from "../../../auto-reply/continuation/continuation-wake.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply/get-reply.js";
+import type { stopSessionResetSubagents } from "../../../auto-reply/reply/session-reset-cleanup.js";
 import type {
   enqueueSessionDelivery,
   QueuedSessionDeliveryPayload,
@@ -35,6 +36,8 @@ export type ContinuationForestSeams = {
   logLine?: (subsystem: string, message: string) => void;
   /** A product sleep begins; the returned callback runs when it ends. */
   clockWait?: () => () => void;
+  /** Runs inside a reset of `sessionKey`, after its retention marks and before upstream's kill. */
+  beforeResetKill?: (sessionKey: string) => Promise<void>;
   /** Runs a reset's retention mark pass; the load test measures it. */
   measureMarks?: (pass: () => Promise<string[]>) => Promise<string[]>;
 };
@@ -82,6 +85,15 @@ export function logLines(actual: { createSubsystemLogger: typeof createSubsystem
           logger[level](message, meta);
         };
       return { ...logger, info: record("info"), warn: record("warn"), error: record("error") };
+    },
+  };
+}
+
+export function resetKill(actual: { stopSessionResetSubagents: typeof stopSessionResetSubagents }) {
+  return {
+    stopSessionResetSubagents: async (...args: Parameters<typeof stopSessionResetSubagents>) => {
+      await continuationForestSeams.beforeResetKill?.(args[0].sessionKey);
+      return await actual.stopSessionResetSubagents(...args);
     },
   };
 }

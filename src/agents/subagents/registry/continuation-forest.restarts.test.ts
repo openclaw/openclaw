@@ -68,14 +68,15 @@ describe("the burning annex: restarts and replay", () => {
     expect(forest.generation).toBe(1);
   });
 
-  it("the replay barrier: a crane folded when the Gateway died reports into the new process once, never folded again", async () => {
+  it("the replay barrier: a runner that folded when the Gateway died reports into the new process once, never spawned or folded again", async () => {
     const forest = await annex.build();
     await forest.light();
-    const crane = forest.electionOf(forest.node("t2.1.1.1"));
-    const folded = forest.hold(`after-flip:${crane.id}`);
+    // Spawned at 1.5 s; its crane is folded at 2.5 s, and its completion is not recorded yet.
+    const runner = forest.cellarRunner(0);
+    const folded = forest.hold(`after-flip:${runner.id}`);
 
-    await forest.until(folded, 2_000);
-    expect(forest.bits.get(crane.id)).toBe(1);
+    await forest.until(folded, 3_000);
+    expect(forest.bits.get(runner.id)).toBe(1);
     await forest.restart();
     await folded.release();
 
