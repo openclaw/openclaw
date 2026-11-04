@@ -456,7 +456,7 @@ describe("usage archive identity", () => {
 
   it("discovers and reads compressed deleted archives for a non-main agent", async ({ signal }) => {
     const agentId = "worker";
-    const { manager, sessionId, sessionFile } = await archiveFixture({
+    const { sessionId, sessionFile } = await archiveFixture({
       reason: "deleted",
       agentId,
       generated: true,

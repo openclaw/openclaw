@@ -45,7 +45,7 @@ const MATERIALIZED_ARCHIVE_MAX_BYTES = 4 * 1024 * 1024 * 1024;
 
 /** True when an archive's own bytes cannot be decoded; retrying the same file cannot succeed. */
 export function isSessionArchiveDecodeError(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code;
+  const code = error instanceof Error && "code" in error ? error.code : undefined;
   return (
     typeof code === "string" &&
     (code === "ERR_BUFFER_TOO_LARGE" || code === "Z_BUF_ERROR" || code.startsWith("ZSTD_error_"))
