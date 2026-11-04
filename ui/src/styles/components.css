@@ -3468,22 +3468,8 @@ select.data-table-pagination__size {
   corner-shape: superellipse(1.5);
 }
 
-/* A short eased ramp keeps clipped titles soft without a wide gray band. */
 .sidebar-recent-session .hover-marquee {
-  --hover-marquee-fade-width: 16px;
-  --sidebar-session-title-fade: linear-gradient(
-    var(--hover-marquee-fade-direction),
-    black calc(100% - var(--hover-marquee-fade-width)),
-    rgb(0 0 0 / 0.84) calc(100% - var(--hover-marquee-fade-width) * 0.75),
-    rgb(0 0 0 / 0.5) calc(100% - var(--hover-marquee-fade-width) * 0.5),
-    rgb(0 0 0 / 0.16) calc(100% - var(--hover-marquee-fade-width) * 0.25),
-    transparent
-  );
-}
-
-/* Base-marquee specificity, so row variants that drop the mask still win. */
-.sidebar-recent-session :where(.hover-marquee--overflowing:not(.hover-marquee--scrolling)) {
-  mask-image: var(--sidebar-session-title-fade);
+  --hover-marquee-fade-width: 6px;
 }
 
 /* Text on a tag fill keeps its readable tone; only icons take the quieter one. */

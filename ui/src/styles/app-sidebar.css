@@ -85,7 +85,11 @@
      the title box always fades; text that stops before that zone is untouched. */
   .sidebar-recent-session__name {
     text-overflow: clip;
-    mask-image: var(--sidebar-session-title-fade);
+    mask-image: linear-gradient(
+      var(--hover-marquee-fade-direction, to right),
+      black calc(100% - var(--hover-marquee-fade-width, 6px)),
+      transparent
+    );
   }
 
   .sidebar-recent-session__name > .hover-marquee__text {

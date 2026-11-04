@@ -254,7 +254,11 @@ suite.define(() => {
           return x === 0 ? 0 : readingDirection === "rtl" ? -x : x;
         }, direction);
       await label.waitFor({ state: "visible", timeout: 10_000 });
-      await expect.poll(() => mask(label)).toContain(direction === "rtl" ? "to left" : "to right");
+      await expect
+        .poll(() => mask(label))
+        .toBe(
+          `linear-gradient(to ${direction === "rtl" ? "left" : "right"}, rgb(0, 0, 0) calc(100% - 6px), rgba(0, 0, 0, 0))`,
+        );
       expect(await mask(shortLabel)).toBe("none");
       const rowWidth = await row.evaluate((element) => element.getBoundingClientRect().width);
 
