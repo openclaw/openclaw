@@ -1,2 +1,0 @@
-# Cover OpenRouter reasoning.summary progress details that the compaction silence watchdog needs.
-47

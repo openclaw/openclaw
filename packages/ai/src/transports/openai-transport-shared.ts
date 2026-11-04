@@ -243,18 +243,8 @@ export function readOpenAICompletionsReasoningBatch(
       if (!isRecord(detail)) {
         continue;
       }
-      // `reasoning.summary` carries its progress in `summary`, not `text`; OpenRouter sends
-      // that shape for hidden thinking, and the compaction silence watchdog needs it to
-      // count as progress. Empty or structural traffic still produces no delta.
-      const detailText =
-        typeof detail.text === "string" && detail.text
-          ? detail.text
-          : detail.type === "reasoning.summary" &&
-              typeof detail.summary === "string" &&
-              detail.summary
-            ? detail.summary
-            : undefined;
-      if (!detailText) {
+      const detailText = detail.type === "reasoning.summary" ? detail.summary : detail.text;
+      if (typeof detailText !== "string" || !detailText) {
         continue;
       }
       if (detail.type === "reasoning.text" || detail.type === "reasoning.summary") {
