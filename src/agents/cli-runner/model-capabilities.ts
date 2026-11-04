@@ -12,7 +12,7 @@ import { resolveModelContextWindowProfile } from "../model-context-window.js";
 import type { RunCliAgentParams } from "./types.js";
 
 /** Selects both CLI capabilities from the same logical/native catalog identity. */
-export function resolveCliCatalogCapabilities(params: {
+function resolveCliCatalogCapabilities(params: {
   catalog: ModelCatalogEntry[];
   provider: string;
   modelProvider?: string;
