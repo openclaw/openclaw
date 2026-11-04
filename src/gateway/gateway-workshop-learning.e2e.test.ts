@@ -10,6 +10,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveAgentSkillsRoot } from "../skills/loading/skill-paths.js";
 import { shareCoreWithWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
@@ -68,7 +69,14 @@ async function runLoadedWorkshopReview(candidate: {
   if (!registry || !instance) {
     throw new Error("The Gateway did not load the skill-workshop plugin.");
   }
-  const { runSkillExperienceReview } = await import("../../extensions/skill-workshop/api.js");
+  // The plugin's public `api` artifact, loaded like core loads bundled public surfaces.
+  const { runSkillExperienceReview } = loadBundledPluginPublicArtifactModuleSync<{
+    runSkillExperienceReview: (params: {
+      ctx: { runId: string };
+      config: OpenClawConfig;
+      source: { agentId: string; sessionKey: string; sessionId: string; entryId: string };
+    }) => Promise<void>;
+  }>({ dirName: "skill-workshop", artifactBasename: "api.js" });
   const { agentId, sessionKey, sessionId, entryId } = candidate.source;
   await instance.runInRegistry(registry, () =>
     runSkillExperienceReview({

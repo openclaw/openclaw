@@ -17,9 +17,12 @@ export function withWorkshopPlugin(config: OpenClawConfig = {}): OpenClawConfig 
   };
 }
 
-/** Gives the skill-workshop plugin the real loader loads this test's core module graph. */
-export async function shareCoreWithWorkshopPluginForTest(): Promise<void> {
-  await shareVitestModuleGraphWithBundledPlugin("skill-workshop");
+/**
+ * Gives the skill-workshop plugin the real loader or an in-process Gateway loads this test's
+ * core module graph and its checkout source. Returns the restore, so `beforeAll` can take it.
+ */
+export async function shareCoreWithWorkshopPluginForTest(): Promise<() => void> {
+  return await shareVitestModuleGraphWithBundledPlugin("skill-workshop");
 }
 
 /**
@@ -31,7 +34,7 @@ export async function activateWorkshopPluginForTest(config: OpenClawConfig = {})
   registry: PluginRegistry;
   reset: () => void;
 }> {
-  await shareCoreWithWorkshopPluginForTest();
+  const restoreBundledDir = await shareCoreWithWorkshopPluginForTest();
   const registry = loadOpenClawPlugins({
     config: withWorkshopPlugin(config),
     onlyPluginIds: ["skill-workshop"],
@@ -44,5 +47,11 @@ export async function activateWorkshopPluginForTest(config: OpenClawConfig = {})
       `skill-workshop did not load: ${record?.status ?? "missing"} ${record?.error ?? ""}`,
     );
   }
-  return { registry, reset: resetPluginRuntimeStateForTest };
+  return {
+    registry,
+    reset: () => {
+      resetPluginRuntimeStateForTest();
+      restoreBundledDir();
+    },
+  };
 }

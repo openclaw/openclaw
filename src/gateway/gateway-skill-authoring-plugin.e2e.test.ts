@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   assertStableProviderPrefix,
   snapshotProviderPrefix,
@@ -227,9 +227,6 @@ function skillRefreshShape(
   };
 }
 
-// The Gateway loads the bundled skill-workshop plugin; it must share this test's core.
-beforeAll(shareCoreWithWorkshopPluginForTest);
-
 it(
   "lets a loaded plugin author a skill that the next turn discovers, refusing an escape and a revoked write",
   { timeout: 120_000 },
@@ -267,9 +264,9 @@ it(
       `export default { id: ${JSON.stringify(OTHER_PLUGIN_ID)}, register() {} };\n`,
     );
     // The bundled skill-workshop plugin owns skill_workshop and its `workshop-skills` folder;
-    // this harness turns bundled plugins off, so enable just the checkout's bundled tree.
+    // this harness turns bundled plugins off, so enable a bundled root holding its source.
     deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
-    setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+    await shareCoreWithWorkshopPluginForTest();
     await writePlugin(
       NOROOT_PLUGIN_ID,
       { contracts: { tools: [NOROOT_TOOL] } },

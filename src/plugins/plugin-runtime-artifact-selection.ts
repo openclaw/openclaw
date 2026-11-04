@@ -2,7 +2,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../infra/path-guards.js";
-import { isVitestSourcePreferredBundledPlugin } from "./bundled-source-overlays.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import {
   isTypeScriptPackageEntry,
@@ -78,7 +77,6 @@ export function resolvePluginRuntimeArtifactSelection(
     params.preferBuiltPluginArtifacts,
     params.sourcePreferred,
     params.packageManifest?.build?.bundledDist,
-    isVitestSourcePreferredBundledPlugin(rootDir),
   ]);
   let resolved = artifacts.get(key);
   if (!resolved) {
@@ -245,11 +243,7 @@ function resolvePreferredBuiltRuntimeArtifact(
 ): PluginRuntimeArtifact {
   // The stateful resolver canonicalizes both paths before memo-key construction.
   const { rootDir, source } = params;
-  if (
-    !params.preferBuiltPluginArtifacts ||
-    params.sourcePreferred ||
-    (params.origin === "bundled" && isVitestSourcePreferredBundledPlugin(rootDir))
-  ) {
+  if (!params.preferBuiltPluginArtifacts || params.sourcePreferred) {
     return { source, rootDir };
   }
   if (params.origin !== "bundled") {
