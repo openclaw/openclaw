@@ -1,2 +1,2 @@
-# Provider presentation: schema/wire visibility, secure assets, UI precedence and lifecycle regression proof.
-644
+# Provider presentation: schema/wire, secure assets, and UI metadata/lifecycle regression coverage.
+919

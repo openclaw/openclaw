@@ -1,6 +1,23 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context-types.ts";
+import {
+  beginModelCatalogRead,
+  clearModelCatalogCache,
+  publishModelCatalogResult,
+  type ModelCatalogClient,
+} from "../../lib/model-catalog-cache.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import type { CloudProfileIdentity } from "../provider-icon-data.ts";
 import { Icon } from "./icon.tsx";
 import { CloudProfileIcon, ProviderBrandIcon, ProviderFallbackIcon } from "./provider-icon.tsx";
@@ -85,7 +102,7 @@ it.each([
   expect(actual.container.querySelector("[data-provider-icon]")).toBeNull();
 });
 
-it("lets a bundled symbol override the provider brand and keeps invalid symbols usable", () => {
+it("lets a bundled symbol override the provider brand and keeps invalid symbols usable", async () => {
   const [presentation, setPresentation] = createSignal<
     import("../provider-icon-data.ts").ProviderPresentation
   >({
@@ -95,7 +112,7 @@ it("lets a bundled symbol override the provider brand and keeps invalid symbols 
   const { container } = render(() => (
     <ProviderBrandIcon provider="openai" presentation={presentation()} />
   ));
-  expect(container.querySelector("svg")).not.toBeNull();
+  await vi.waitFor(() => expect(container.querySelector("svg")).not.toBeNull());
   expect(container.querySelector("[data-provider-icon]")).toBeNull();
   setPresentation({
     providerName: "Workstation",
@@ -157,4 +174,43 @@ it("keeps the built-in brand if configured artwork cannot be loaded", async () =
     .poll(() => container.querySelector("[data-provider-icon]")?.getAttribute("data-provider-icon"))
     .toBe("codex");
   expect(container.querySelector("img")).toBeNull();
+});
+
+it("projects catalog updates and retires the old connection without an effect mirror", () => {
+  const first = createTestGatewayClient(createGatewayRequestMock());
+  const second = createTestGatewayClient(createGatewayRequestMock());
+  const source = createApplicationGateway(createApplicationGatewaySnapshot({ client: first }));
+  // This standalone leaf exercises Gateway observation only, as in the canonical context harness.
+  const context = { gateway: source.gateway } as ApplicationContext;
+  const view = render(() => (
+    <ApplicationProvider value={context}>
+      <ModelProviderIcon provider="workstation" />
+    </ApplicationProvider>
+  ));
+  const initial = () => view.container.querySelector(".provider-brand-icon--fallback")?.textContent;
+  const publish = (target: ModelCatalogClient, providerName: string) =>
+    publishModelCatalogResult(
+      beginModelCatalogRead(target, {}),
+      {},
+      {
+        models: [{ provider: "workstation", id: "stable", name: "Local model" }],
+        providerPresentations: { workstation: { providerName } },
+      },
+    );
+  expect(initial()).toBe("W");
+  publish(first, "Alpha workstation");
+  flush();
+  expect(initial()).toBe("A");
+  source.publish(createApplicationGatewaySnapshot({ client: second }));
+  flush();
+  expect(initial()).toBe("W");
+  publish(first, "Stale workstation");
+  flush();
+  expect(initial()).toBe("W");
+  publish(second, "Bravo workstation");
+  flush();
+  expect(initial()).toBe("B");
+  clearModelCatalogCache(second);
+  flush();
+  expect(initial()).toBe("W");
 });

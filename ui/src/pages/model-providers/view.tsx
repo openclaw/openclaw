@@ -1,7 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   LearnMoreLink,
@@ -18,6 +17,7 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import type { JSX } from "../../types/solid-elements.js";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
@@ -60,7 +60,7 @@ function AddProvider(props: ModelProvidersViewProps) {
         <div class="oc-dialog model-setup-wizard" data-models-key-dialog>
           <div class="oc-dialog__header">
             <h2 class="oc-dialog__title">
-              <ProviderBrandIcon provider={props.addProviderId} class="model-providers__icon" />{" "}
+              <ModelProviderIcon provider={props.addProviderId} class="model-providers__icon" />{" "}
               {provider()?.displayName ?? props.addProviderId}
             </h2>
             <button

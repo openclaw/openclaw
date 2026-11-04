@@ -171,7 +171,8 @@ export async function handleProviderIconHttpRequest(
     return true;
   }
   const image = await loadProviderIcon(providerId, icon);
-  auth.assertCurrent();
+  // Paired device tokens can be revoked while artwork loading is pending.
+  await auth.revalidate();
   if (!image) {
     respondNotFound(res);
     return true;

@@ -10,7 +10,9 @@ import type { ModelRuntimeEntry } from "../../../lib/model-runtime-choice.ts";
 
 registerModelControlsEnglish();
 
-export type ChatModelPickerOption = ProviderPresentation & {
+export type ChatModelPickerOption = {
+  /** Configured provider branding from the admitted catalog row. */
+  presentation?: ProviderPresentation;
   agentRuntimeId?: string;
   /** Null is an unknown configured base; undefined is an ordinary model-only row. Both clear a prior pin. */
   agentRuntime?: string | null;
@@ -73,11 +75,11 @@ export type ChatModelPickerTargetGroup = {
 };
 
 export function formatModelLabel(
-  option: Pick<ChatModelPickerOption, "label" | "provider" | "providerName">,
+  option: Pick<ChatModelPickerOption, "label" | "provider" | "presentation">,
 ): string {
   const prefixes = [
     formatRawProviderLabel(option.provider),
-    providerDisplayLabel(option.provider, option),
+    providerDisplayLabel(option.provider, option.presentation),
   ].toSorted((left, right) => right.length - left.length);
   for (const prefix of prefixes) {
     if (option.label.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) {

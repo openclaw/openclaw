@@ -4,10 +4,10 @@ import { For, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import type { ProviderQuotaGroup } from "../../../lib/provider-quota-summary.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { ModelProviderIcon } from "../../../lib/reactive/provider-presentation.tsx";
 import type {
   ContextNoticeProps,
   getContextNoticeViewModel,
@@ -175,7 +175,7 @@ function QuotaGroup(props: { group: ProviderQuotaGroup; usageHref: string }) {
   return (
     <div class="context-usage__tray">
       <div class="context-usage__identity">
-        <ProviderBrandIcon provider={props.group.providers[0] ?? props.group.displayName} />
+        <ModelProviderIcon provider={props.group.providers[0] ?? props.group.displayName} />
         <span
           class="context-usage__account"
           data-chat-usage-account="true"

@@ -3,11 +3,11 @@ import {
   hasProviderBrandIcon,
   providerIdFromModelRef,
 } from "../../components/provider-icon-data.ts";
-import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import "../../components/modal-dialog.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import type { ModelSetupActivationState } from "./state.ts";
 import type { ModelSetupViewProps } from "./view-types.ts";
 
@@ -51,7 +51,7 @@ export function ModelSetupSuccessDialog(
           <div class="oc-dialog__header">
             <h2 class="oc-dialog__title">
               <Show when={providerIconId()}>
-                {(provider) => <ProviderBrandIcon provider={provider()} />}
+                {(provider) => <ModelProviderIcon provider={provider()} />}
               </Show>
               {title()}
             </h2>

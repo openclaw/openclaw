@@ -1,12 +1,12 @@
 import { createMemo, Show, useContext } from "solid-js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
+import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
-import "../../../components/tooltip.ts";
-import { useProviderDisplayLabel } from "../../../lib/reactive/provider-presentation.tsx";
 import {
   formatModelContextMeta,
   formatModelLabel,
@@ -33,8 +33,17 @@ function ModelShortcut(props: { rowKey: string }) {
   );
 }
 
-export function ChatModelProviderIcon(props: { provider: string }) {
-  return <ProviderBrandIcon provider={props.provider} class="chat-controls__provider-icon" />;
+export function ChatModelProviderIcon(props: {
+  provider: string;
+  presentation?: ProviderPresentation;
+}) {
+  return (
+    <ProviderBrandIcon
+      provider={props.provider}
+      presentation={props.presentation}
+      class="chat-controls__provider-icon"
+    />
+  );
 }
 
 type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "onSelect" | "index">;
@@ -110,7 +119,10 @@ export function modelOptionSearchRow(
     keywords: [options.entry.isDefault ? defaultLabel : "", runtimeLabel]
       .join(" ")
       .toLocaleLowerCase(),
-    providerLabel: defaultProviderLabel(options.entry.provider, options.entry).toLocaleLowerCase(),
+    providerLabel: defaultProviderLabel(
+      options.entry.provider,
+      options.entry.presentation,
+    ).toLocaleLowerCase(),
     reference: options.entry.value,
     selected,
     hasShortcut: !selected,
@@ -123,7 +135,8 @@ type OptionPresentation = ReturnType<ReturnType<typeof createOptionPresentation>
 function ModelOptionButton(
   props: ChatModelPickerOptionProps & { presentation: OptionPresentation },
 ) {
-  const providerDisplayLabel = useProviderDisplayLabel();
+  const providerDisplayLabel = (provider: string) =>
+    defaultProviderLabel(provider, props.entry.presentation);
   const search = useContext(ChatModelSearchContext);
   const defaultLabel = createMemo(() =>
     props.entry.isDefault ? t("chat.modelControls.default") : "",
@@ -193,7 +206,10 @@ function ModelOptionButton(
       }}
     >
       <span class="chat-controls__model-option-provider">
-        <ChatModelProviderIcon provider={props.entry.provider} />
+        <ChatModelProviderIcon
+          provider={props.entry.provider}
+          presentation={props.entry.presentation}
+        />
       </span>
       <span class="chat-controls__model-option-copy">
         <span class="chat-controls__model-option-title">

@@ -7,8 +7,8 @@ import {
   beginModelCatalogRead,
   clearModelCatalogCache,
   publishModelCatalogResult,
-  readCachedProviderPresentation,
 } from "./model-catalog-cache.ts";
+import { readCachedProviderPresentation } from "./provider-presentation-cache.ts";
 
 it("derives presentation from the connected catalog and retires it with the catalog", () => {
   const first = createTestGatewayClient(createGatewayRequestMock());

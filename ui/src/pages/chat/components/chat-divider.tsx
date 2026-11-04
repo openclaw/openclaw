@@ -4,7 +4,6 @@ import { createMemo, For, lazy, Match, Show, Switch } from "solid-js";
 import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
-import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import {
   buildQualifiedChatModelValue,
@@ -13,6 +12,7 @@ import {
 import { formatTimeMs } from "../../../lib/format.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { ModelProviderIcon } from "../../../lib/reactive/provider-presentation.tsx";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { formatModelLabel } from "./chat-model-picker-options.ts";
@@ -186,7 +186,7 @@ function NoticeModel(props: {
         <span class="chat-divider__model-affix">{props.prefix}</span>
       </Show>
       <Show when={provider()}>
-        <ProviderBrandIcon provider={provider()} class="chat-divider__icon" />
+        <ModelProviderIcon provider={provider()} class="chat-divider__icon" />
       </Show>
       <bdi>{name()}</bdi>
       <Show when={props.suffix}>
