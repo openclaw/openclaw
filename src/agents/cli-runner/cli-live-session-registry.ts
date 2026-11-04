@@ -6,6 +6,7 @@ import type {
   CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
 } from "../../plugins/cli-backend.types.js";
+import { CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE } from "../failover/error.js";
 import { runCliCleanup } from "./cleanup.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError } from "./exit-error.js";
@@ -161,13 +162,18 @@ function retainCleanup(context: PreparedCliRunContext, record: CliLiveSessionRec
   };
 }
 
-function createCapacityError(context: PreparedCliRunContext, message: string) {
-  return createCliFailoverError(message, "rate_limit", {
-    provider: context.params.provider,
-    model: context.modelId,
-    sessionId: context.params.sessionId,
-    lane: context.params.lane,
-  });
+function createCapacityError(context: PreparedCliRunContext, message: string, code?: string) {
+  return createCliFailoverError(
+    message,
+    "rate_limit",
+    {
+      provider: context.params.provider,
+      model: context.modelId,
+      sessionId: context.params.sessionId,
+      lane: context.params.lane,
+    },
+    code ? { code } : undefined,
+  );
 }
 
 function ensureCliLiveSessionCapacity(context: PreparedCliRunContext): void {
@@ -195,15 +201,25 @@ export async function ensureCliLiveSessionMemory(
     // Reuse or same-owner replacement adds no process.
     return;
   }
-  while (readHostFreeMemoryBytes() < MIN_FREE_MEMORY_BYTES) {
-    const idle = Array.from(liveSessions.values()).find((record) => record.handle.isIdle());
-    if (!idle) {
-      throw createCapacityError(context, "Host memory is too low for another CLI live session.");
+  // One pass in least recently used order; each close waits for that process to exit.
+  for (const record of Array.from(liveSessions.values())) {
+    if (!record.handle.isIdle()) {
+      continue;
+    }
+    if (readHostFreeMemoryBytes() >= MIN_FREE_MEMORY_BYTES) {
+      return;
     }
     cliBackendLog.warn(
       `cli live session memory pressure: closing idle session activeSessions=${liveSessions.size}`,
     );
-    await racePromiseWithAbortSignal(closeRecord(idle, "idle"), signal);
+    await racePromiseWithAbortSignal(closeRecord(record, "idle"), signal);
+  }
+  if (readHostFreeMemoryBytes() < MIN_FREE_MEMORY_BYTES) {
+    throw createCapacityError(
+      context,
+      "Host memory is too low for another CLI live session.",
+      CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE,
+    );
   }
 }
 

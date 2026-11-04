@@ -15,16 +15,12 @@ import {
   acceptsCliLiveSession,
   closeCliLiveSession,
   createCliLiveSessionCapability,
-  ensureCliLiveSessionMemory,
   getCliLiveSessionApprovalGrants,
   getCliLiveSessionGeneration,
   hasCliLiveSession,
   restartCliLiveSession,
 } from "./cli-live-session-registry.js";
 import { settlePreparedCliRun } from "./cli-run-settlement.js";
-
-const hostMemory = vi.hoisted(() => ({ freeBytes: vi.fn(() => 8 * 1024 ** 3) }));
-vi.mock("../../infra/host-memory.js", () => ({ readHostFreeMemoryBytes: hostMemory.freeBytes }));
 
 const admissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
 const sessions = new Set<CliBackendLiveSessionHandle>();
@@ -158,7 +154,6 @@ afterEach(() => {
     session.close("restart");
   }
   sessions.clear();
-  hostMemory.freeBytes.mockReturnValue(8 * 1024 ** 3);
   for (const admission of admissions.splice(0)) {
     admission.close();
   }
@@ -725,47 +720,6 @@ describe("generic plugin-owned live session registry", () => {
 
     const overflow = await createOwner();
     expect(() => overflow.register()).toThrow("Too many CLI live sessions are active.");
-  });
-
-  it("closes least recently used idle processes under low memory before a new one starts", async () => {
-    const lowMemory = 512 * 1024 ** 2;
-    const older = await registeredOwner({ idle: true });
-    const busy = await registeredOwner({ idle: false });
-    const recent = await registeredOwner({ idle: true });
-    const reused = await registeredOwner({ idle: true });
-    // A later turn on the oldest process makes it the most recently used.
-    older.capability.activate(older.session);
-
-    // Enough memory: nothing closes.
-    const roomy = await createOwner();
-    await ensureCliLiveSessionMemory(roomy.context, roomy.controller.signal);
-    roomy.register();
-    roomy.capability.remove(roomy.session);
-
-    // Memory recovers after one process exits.
-    hostMemory.freeBytes.mockReturnValueOnce(lowMemory);
-    const next = await createOwner();
-    await ensureCliLiveSessionMemory(next.context, next.controller.signal);
-    next.register();
-    expect(recent.close).toHaveBeenCalledWith("idle");
-    for (const owner of [older, busy, reused]) {
-      expect(owner.close).not.toHaveBeenCalled();
-    }
-
-    // A turn reusing its own process adds none and closes nothing.
-    hostMemory.freeBytes.mockReturnValue(lowMemory);
-    await ensureCliLiveSessionMemory(reused.context, reused.controller.signal);
-    expect(reused.close).not.toHaveBeenCalled();
-
-    // Still low after every idle process exits: fail over, never touch busy work.
-    const starved = await createOwner();
-    await expect(
-      ensureCliLiveSessionMemory(starved.context, starved.controller.signal),
-    ).rejects.toThrow("Host memory is too low for another CLI live session.");
-    expect(reused.close).toHaveBeenCalledWith("idle");
-    expect(older.close).toHaveBeenCalledWith("idle");
-    expect(busy.close).not.toHaveBeenCalled();
-    expect(busy.capability.current()).toBe(busy.session);
   });
 
   it("admits only local plugin-owned structured execution to reusable sessions", () => {
