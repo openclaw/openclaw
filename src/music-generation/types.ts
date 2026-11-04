@@ -44,6 +44,7 @@ export type MusicGenerationModeCapabilities = {
   supportsInstrumental?: boolean;
   supportsInstrumentalByModel?: Readonly<Record<string, boolean>>;
   supportsDuration?: boolean;
+  supportsDurationByModel?: Readonly<Record<string, boolean>>;
   supportsFormat?: boolean;
   supportedFormats?: readonly MusicGenerationOutputFormat[];
   supportedFormatsByModel?: Readonly<Record<string, readonly MusicGenerationOutputFormat[]>>;
@@ -53,6 +54,8 @@ export type MusicGenerationModeCapabilities = {
 export type MusicGenerationEditCapabilities = MusicGenerationModeCapabilities & {
   enabled: boolean;
   maxInputImages?: number;
+  /** Zero denies reference loading for the selected model. */
+  maxInputImagesByModel?: Readonly<Record<string, number>>;
 };
 
 /** Provider capability declaration, including optional mode-specific overrides. */

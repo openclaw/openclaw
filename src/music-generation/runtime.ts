@@ -65,10 +65,15 @@ async function runMusicGeneration(
     },
     prepareCandidate(candidate, provider) {
       params.signal?.throwIfAborted();
+      const caps = resolveMusicGenerationModeCapabilities({
+        provider,
+        model: candidate.model,
+        inputImageCount: params.inputImages?.length ?? 0,
+      });
       const referenceImageError = resolveReferenceImageCapabilityError({
         candidateRef: `${candidate.provider}/${candidate.model}`,
         inputImageCount: params.inputImages?.length ?? 0,
-        edit: provider.capabilities.edit,
+        edit: caps && "enabled" in caps ? caps : undefined,
       });
       if (referenceImageError) {
         log.debug(`music-generation candidate skipped: ${referenceImageError}`);
@@ -76,10 +81,6 @@ async function runMusicGeneration(
       }
 
       return async (attempts): Promise<GenerateMusicRuntimeResult> => {
-        const caps = resolveMusicGenerationModeCapabilities({
-          provider,
-          inputImageCount: params.inputImages?.length ?? 0,
-        });
         const ignoredOverrides: MusicGenerationIgnoredOverride[] = [];
         const normalization: MusicGenerationNormalization = {};
         let { lyrics, instrumental, durationSeconds, format } = params;

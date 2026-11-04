@@ -484,6 +484,23 @@ does not decide billing: a completed upstream operation can remain spent when
 delivery is cancelled later. Unknown native dollar charges remain unknown;
 separately authorized `policy_fixed` accounting stays a Worker policy.
 
+Qualified OpenRouter music uses the same registered tool for exactly
+`openrouter/google/lyria-3-pro-preview` and `openrouter/google/lyria-3-clip-preview`.
+A fresh proxy-key offer must declare provider `openrouter`, operation
+`music_generate`, capability `music.generate`, and paired `openai.chat_completions`
+formats. Native requests use `/v1/native/openrouter/v1/chat/completions`; manifest
+requests use `/v1/proxy/openrouter/music_generate` with `{ body }`. Neither route
+looks up an OpenRouter key or implies that a deployment has activated these offers.
+
+These offers accept text only: reference images are rejected before loading.
+Lyrics, instrumental instructions and requested duration use the native prompt
+format. The maximum requested duration is 180 seconds; it does not guarantee that
+the result fits the byte or time limits. WAV is the default; MP3 is selectable.
+The complete SSE response must include `[DONE]` and EOF within 32 MiB of wire data,
+16 MiB of decoded audio and 1 MiB of transcript text. The same caller cancellation,
+original deadline and no-paid-replay rules apply, including local persistence
+failure after generation. Unknown charges remain unknown.
+
 ## Image generation
 
 The bundled plugin also registers ClawRouter with the native image runtime,

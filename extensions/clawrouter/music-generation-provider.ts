@@ -1,3 +1,4 @@
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildGoogleMusicGenerationBody,
   parseGoogleMusicGenerationResponse,
@@ -25,6 +26,13 @@ import {
   resolveClawRouterCapabilityHttpContext,
   type ClawRouterCapabilityOffer,
 } from "./capability-offers.js";
+import {
+  isClawRouterOpenRouterMusicOffer,
+  openRouterMusicModels,
+  openRouterMusicMode,
+  prepareClawRouterOpenRouterMusic,
+  readClawRouterOpenRouterMusic,
+} from "./music-openrouter.js";
 
 // Finite wire support from ClawRouter's google.music contract, not credential grants.
 const MODELS = new Map([
@@ -35,7 +43,7 @@ const PATH = "/v1beta/models/${model}:generateContent";
 const JSON_LIMIT = 8 * 1024 * 1024;
 const AUDIO_LIMIT = 4 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 180_000;
-const mode = {
+const googleMode = {
   maxTracks: 1,
   supportsLyrics: true,
   supportsInstrumental: true,
@@ -46,12 +54,38 @@ const mode = {
     "google/lyria-3-pro-preview": ["mp3", "wav"],
   },
 } satisfies NonNullable<MusicGenerationProvider["capabilities"]["generate"]>;
+const googleCapabilities: MusicGenerationProvider["capabilities"] = {
+  generate: googleMode,
+  edit: { ...googleMode, enabled: true, maxInputImages: 10 },
+};
+const mode = {
+  ...googleMode,
+  supportsDurationByModel: Object.fromEntries(
+    [...openRouterMusicModels.keys()].map((model) => [model, true]),
+  ),
+  maxDurationSeconds: 180,
+  supportedFormatsByModel: {
+    ...googleMode.supportedFormatsByModel,
+    "openrouter/google/lyria-3-pro-preview": ["mp3", "wav"],
+    "openrouter/google/lyria-3-clip-preview": ["mp3", "wav"],
+  },
+} satisfies NonNullable<MusicGenerationProvider["capabilities"]["generate"]>;
 const capabilities: MusicGenerationProvider["capabilities"] = {
   generate: mode,
-  edit: { ...mode, enabled: true, maxInputImages: 10 },
+  edit: {
+    ...mode,
+    enabled: true,
+    maxInputImages: 10,
+    maxInputImagesByModel: Object.fromEntries(
+      [...openRouterMusicModels.keys()].map((model) => [model, 0]),
+    ),
+  },
 };
 
 function eligible(offer: ClawRouterCapabilityOffer): boolean {
+  if (isClawRouterOpenRouterMusicOffer(offer)) {
+    return true;
+  }
   const id = normalizeOptionalString(offer.model?.id);
   return (
     id !== undefined &&
@@ -76,8 +110,9 @@ function contextFor(req: Pick<MusicGenerationRequest, "cfg">, apiKey: string) {
     throw new Error("ClawRouter music requires the selected proxy key without an auth override.");
   }
   const context = resolveClawRouterCapabilityHttpContext(req.cfg, apiKey);
-  context.headers.delete("x-api-key");
-  context.headers.delete("x-goog-api-key");
+  for (const header of ["x-api-key", "x-goog-api-key", "api-key", "cookie"]) {
+    context.headers.delete(header);
+  }
   return context;
 }
 
@@ -119,8 +154,10 @@ export async function listClawRouterMusicModelCatalog(
         model,
         label: normalizeOptionalString(offer.model?.displayName) ?? model,
         source: "live" as const,
-        modes: ["generate", "edit"],
-        capabilities,
+        modes: openRouterMusicModels.has(model) ? ["generate"] : ["generate", "edit"],
+        capabilities: openRouterMusicModels.has(model)
+          ? { generate: openRouterMusicMode }
+          : googleCapabilities,
       },
     ];
   });
@@ -235,7 +272,8 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
     capabilities,
     async generateMusic(req) {
       req.signal?.throwIfAborted();
-      const body = prepareBody(req);
+      const openRouter = openRouterMusicModels.has(req.model);
+      const body = openRouter ? prepareClawRouterOpenRouterMusic(req) : prepareBody(req);
       const timeoutMs = createProviderOperationTimeoutResolver({
         deadline: createProviderOperationDeadline({
           timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -252,7 +290,7 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
         signal: req.signal,
       });
       if (!auth.apiKey) {
-        throw new Error("ClawRouter proxy key missing; native Google credentials are not used.");
+        throw new Error("ClawRouter proxy key missing; upstream credentials are not used.");
       }
       const context = contextFor(req, auth.apiKey);
       const offers = await fetchClawRouterCapabilityOffers({
@@ -268,25 +306,42 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
       }
       const wire = JSON.stringify(
         selected.routeKind === "manifest"
-          ? { body, pathParams: { model: selected.model!.upstream } }
+          ? { body, ...(openRouter ? {} : { pathParams: { model: selected.model!.upstream } }) }
           : body,
       );
-      if (Buffer.byteLength(wire) > JSON_LIMIT) {
-        throw new Error("ClawRouter music request exceeds 8 MiB.");
+      if (Buffer.byteLength(wire) > (openRouter ? 256 * 1024 : JSON_LIMIT)) {
+        throw new Error("ClawRouter music request exceeds its qualified byte limit.");
       }
       const headers = new Headers(context.headers);
       headers.set("Content-Type", "application/json");
+      if (openRouter) {
+        headers.set("Accept", "text/event-stream");
+      }
       req.signal?.throwIfAborted();
+      const openRouterTimeoutMs = openRouter ? timeoutMs() : undefined;
+      const operation = openRouter
+        ? buildTimeoutAbortSignal({
+            timeoutMs: openRouterTimeoutMs,
+            signal: req.signal,
+            operation: "clawrouter.music",
+          })
+        : undefined;
+      const signal = operation?.signal ?? req.signal;
       let attempted = false;
       try {
         const { response, release } = await fetchWithSsrFGuard({
           url: selected.url,
-          init: { method: "POST", headers, body: wire, signal: req.signal },
+          init: { method: "POST", headers, body: wire, signal },
           beforeRequest: () => {
-            req.signal?.throwIfAborted();
+            signal?.throwIfAborted();
+            if (openRouter) {
+              timeoutMs();
+            }
             attempted = true;
           },
-          timeoutMs: timeoutMs(),
+          // The retained signal owns the OpenRouter deadline, including the response body.
+          timeoutMs: openRouter ? undefined : timeoutMs(),
+          streamTimeoutMs: openRouterTimeoutMs,
           maxRedirects: 0,
           policy: mergeSsrFPolicies(
             context.ssrfPolicy,
@@ -303,11 +358,20 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
             response.headers.has("content-range") ||
             (encoding !== null && encoding.trim().toLowerCase() !== "identity") ||
             response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !==
-              "application/json"
+              (openRouter ? "text/event-stream" : "application/json")
           ) {
             throw new Error(
               `ClawRouter music returned an invalid HTTP response (${response.status}); do not replay it.`,
             );
+          }
+          if (openRouter) {
+            const result = await readClawRouterOpenRouterMusic(
+              response,
+              { ...req, signal },
+              timeoutMs,
+            );
+            signal?.throwIfAborted();
+            return { ...result, model: req.model };
           }
           const bytes = await readResponseWithLimit(response, JSON_LIMIT, {
             timeoutMs,
@@ -332,15 +396,19 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
           await release();
         }
       } catch (cause) {
+        // Undici can lose the abort cause after headers; retain the owned signal's actual reason.
+        const failure: unknown = operation?.signal?.aborted ? operation.signal.reason : cause;
         // This says only that replay is unsafe, not whether the operation was billed/refunded.
         const error =
-          cause instanceof Error
-            ? cause
-            : new Error("ClawRouter music operation failed", { cause });
+          failure instanceof Error
+            ? failure
+            : new Error("ClawRouter music operation failed", { cause: failure });
         if (attempted) {
           recordModelFallbackStop(error);
         }
         throw error;
+      } finally {
+        operation?.cleanup();
       }
     },
   };

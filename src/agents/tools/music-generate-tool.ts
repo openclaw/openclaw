@@ -3,8 +3,10 @@ import { Type } from "typebox";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseMusicGenerationModelRef } from "../../media-generation/model-ref.js";
 import { listMusicGenerationProviders } from "../../media-generation/registry.js";
+import { resolveReferenceImageCapabilityError } from "../../media-generation/runtime-shared.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
+import { resolveMusicGenerationModeCapabilities } from "../../music-generation/capabilities.js";
 import { generateMusic } from "../../music-generation/runtime.js";
 import type { MusicGenerationOutputFormat } from "../../music-generation/types.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
@@ -214,6 +216,26 @@ export function createMusicGenerateTool(
                 })
               : undefined;
             const selectedProviderId = selectedProvider?.id ?? selectedModelRef?.provider;
+            if (imageInputs.length > 0 && selectedProvider) {
+              const selectedModel =
+                selectedModelRef?.model ?? model ?? selectedProvider.defaultModel;
+              const modelImageLimit = selectedModel
+                ? selectedProvider.capabilities.edit?.maxInputImagesByModel?.[selectedModel]
+                : undefined;
+              const caps = resolveMusicGenerationModeCapabilities({
+                provider: selectedProvider,
+                model: selectedModel,
+                inputImageCount: imageInputs.length,
+              });
+              const referenceError = resolveReferenceImageCapabilityError({
+                candidateRef: `${selectedProvider.id}/${selectedModel ?? ""}`,
+                inputImageCount: imageInputs.length,
+                edit: caps && "enabled" in caps ? caps : undefined,
+              });
+              if (modelImageLimit !== undefined && referenceError) {
+                throw new ToolInputError(referenceError);
+              }
+            }
             const requestKey = buildMediaGenerationRequestKey({
               tool: "music_generate",
               prompt,
