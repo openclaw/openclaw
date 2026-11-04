@@ -30,13 +30,23 @@ describe("update run ledger compaction", () => {
     const write = (step: Parameters<typeof ledger.recordUpdateRunStep>[1]) =>
       ledger.recordUpdateRunStep(run.runId, step, options);
     // CLI tests own warning generation; this boundary owns its durable, redacted report.
-    for (const entry of updateRunStepsFromResultStep({
-      name: "database migration writes",
-      exitCode: 0,
-      warnings: [
-        `Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown. Snapshots retained at ${options.env.OPENCLAW_STATE_DIR}/backup.`,
-      ],
-    })) {
+    for (const entry of [
+      {
+        name: "database migration writes",
+        exitCode: 0,
+        warnings: [
+          `Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown. Snapshots retained at ${options.env.OPENCLAW_STATE_DIR}/backup.`,
+        ],
+      },
+      {
+        name: "post-plugin doctor",
+        exitCode: 1,
+        advisory: {
+          kind: "recoverable-maintenance" as const,
+          message: "Post-update plugin Doctor did not complete (exit 1).",
+        },
+      },
+    ].flatMap(updateRunStepsFromResultStep)) {
       write(entry);
     }
     const evidence = [
@@ -89,6 +99,7 @@ describe("update run ledger compaction", () => {
       "Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown.",
     );
     expect(report.markdown).toContain("Snapshots retained at $OPENCLAW_STATE_DIR/backup.");
+    expect(report.markdown).toContain("Post-update plugin Doctor did not complete (exit 1).");
     expect(report.markdown).not.toContain(options.env.OPENCLAW_STATE_DIR);
     expect(
       published.steps.filter((step) => step.step === "warning:database migration writes"),
