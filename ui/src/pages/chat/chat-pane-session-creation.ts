@@ -71,7 +71,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     };
     try {
       const { continueCapturedCatalogSession } =
-        await import("./chat-pane-session-operations.runtime.ts");
+        await import("./chat-pane-catalog-continuation.runtime.ts");
       await continueCapturedCatalogSession({
         state,
         client,

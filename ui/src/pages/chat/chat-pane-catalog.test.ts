@@ -87,7 +87,7 @@ describe("chat pane catalog", () => {
   it("does not dispatch a continuation after its owner changes during action loading", async () => {
     const held = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
-    vi.doMock("./chat-pane-session-operations.runtime.ts", async (importOriginal) => {
+    vi.doMock("./chat-pane-catalog-continuation.runtime.ts", async (importOriginal) => {
       started.resolve();
       await held.promise;
       return importOriginal();
@@ -98,7 +98,7 @@ describe("chat pane catalog", () => {
     onTestFinished(async () => {
       fixture.pane.connectionGeneration += 1;
       held.resolve();
-      vi.doUnmock("./chat-pane-session-operations.runtime.ts");
+      vi.doUnmock("./chat-pane-catalog-continuation.runtime.ts");
       await pending;
     });
     await started.promise;

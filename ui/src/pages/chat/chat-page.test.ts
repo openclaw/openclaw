@@ -464,16 +464,18 @@ describe("chat page split layout host", () => {
     Object.assign(navigation.context.gateway.snapshot, {
       phase: "connected",
       client: {
-        request: vi.fn(async () =>
-          catalogList(CATALOG_KEY, [
-            {
-              threadId: CATALOG_KEY.threadId,
-              status: "idle",
-              archived: false,
-              canContinue: true,
-              canArchive: false,
-            },
-          ]),
+        request: vi.fn(async (method: string) =>
+          method === "sessions.catalog.resolve"
+            ? null
+            : catalogList(CATALOG_KEY, [
+                {
+                  threadId: CATALOG_KEY.threadId,
+                  status: "idle",
+                  archived: false,
+                  canContinue: true,
+                  canArchive: false,
+                },
+              ]),
         ),
       },
     });

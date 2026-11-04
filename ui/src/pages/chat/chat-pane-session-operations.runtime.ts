@@ -1,11 +1,5 @@
-import type { SessionsCatalogContinueResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
-import {
-  announceCatalogSessionContinued,
-  type CatalogSessionKey,
-} from "../../lib/sessions/catalog-key.ts";
-import { catalogMethod } from "../../lib/sessions/catalog-read-method.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
@@ -14,7 +8,6 @@ import {
   NEW_SESSION_ACTIVE_RUN_MESSAGE,
   NEW_SESSION_CREATE_FAILED_MESSAGE,
   NEW_SESSION_LIST_LOADING_MESSAGE,
-  clearPaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -108,46 +101,4 @@ export async function createCapturedChatSession({
     ...(state.chatReplyTarget ? { replyTarget: state.chatReplyTarget } : {}),
   });
   return true;
-}
-
-export async function continueCapturedCatalogSession({
-  state,
-  client,
-  context,
-  paneId,
-  key,
-  agentId,
-  attachments,
-  draft,
-  isCurrent,
-  onSessionChange,
-}: Omit<SessionOperation, "sessions"> & {
-  client: NonNullable<ChatPageHost["client"]>;
-  key: CatalogSessionKey;
-  agentId: string;
-  attachments: ReturnType<typeof cloneChatAttachmentsForIndependentOwner>;
-  draft: string;
-}): Promise<void> {
-  // The action module may finish loading after the pane changes; neither that
-  // stale capture nor a later RPC result may create a handoff for its successor.
-  if (!isCurrent()) {
-    return;
-  }
-  const result = await client.request<SessionsCatalogContinueResult>(
-    catalogMethod(state, key.catalogId, "continue"),
-    { ...key, agentId },
-  );
-  if (!isCurrent()) {
-    return;
-  }
-  preparePaneSessionHandoff(context, paneId, result.sessionKey, {
-    attachments,
-    draft,
-    send: true,
-  });
-  if (onSessionChange(result.sessionKey) === false) {
-    clearPaneSessionHandoff(context, paneId, result.sessionKey);
-    return;
-  }
-  announceCatalogSessionContinued({ ...key, agentId, sessionKey: result.sessionKey });
 }
