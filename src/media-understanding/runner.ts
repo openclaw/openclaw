@@ -117,11 +117,11 @@ function resolveConfiguredKeyProviderOrder(params: {
   fallbackProviders: readonly string[];
 }): string[] {
   const configuredProviders = Object.keys(params.cfg.models?.providers ?? {})
-    .map((providerId) => normalizeMediaExecutionProviderId(providerId))
+    .map((providerId) => normalizeMediaExecutionProviderId(providerId, params.providerRegistry))
     .filter(Boolean);
   const supportedProviders = uniqueStrings(configuredProviders).filter((providerId) =>
     providerSupportsCapability(
-      params.providerRegistry.get(normalizeMediaProviderId(providerId)),
+      params.providerRegistry.get(normalizeMediaProviderId(providerId, params.providerRegistry)),
       params.capability,
     ),
   );
@@ -225,8 +225,8 @@ async function resolveAutoImageModelId(
   const providerId = params.providerId;
   const matches = catalog.filter(
     (entry) =>
-      normalizeMediaProviderId(entry.provider) === normalizeMediaProviderId(providerId) &&
-      modelSupportsVision(entry),
+      normalizeMediaProviderId(entry.provider, params.providerRegistry) ===
+        normalizeMediaProviderId(providerId, params.providerRegistry) && modelSupportsVision(entry),
   );
   const autoEntry = matches.find((entry) => normalizeLowercaseStringOrEmpty(entry.id) === "auto");
   return normalizeOptionalString((autoEntry ?? matches[0])?.id);
@@ -329,6 +329,7 @@ async function* resolveAutoAudioEntries(
 ): AsyncGenerator<ResolvedMediaModelEntry> {
   const activeProvider = normalizeMediaExecutionProviderId(
     params.activeModel?.provider?.trim() ?? "",
+    params.providerRegistry,
   );
   const providers = uniqueStrings([
     ...(activeProvider ? [activeProvider] : []),
@@ -368,7 +369,10 @@ async function resolveAutoEntries(
     providerRegistry:
       params.providerRegistry ?? buildMediaUnderstandingRegistry(undefined, params.cfg),
   };
-  const activeProvider = normalizeMediaExecutionProviderId(prepared.activeModel?.provider ?? "");
+  const activeProvider = normalizeMediaExecutionProviderId(
+    prepared.activeModel?.provider ?? "",
+    prepared.providerRegistry,
+  );
   if (activeProvider) {
     const activeEntry = await resolveAutoProviderModelEntry(
       prepared,
@@ -505,6 +509,7 @@ async function runAttachmentEntries(
         ) {
           attempts.push(
             buildModelDecision({
+              providerRegistry: params.providerRegistry,
               entry,
               entryType,
               outcome: "failed",
@@ -518,7 +523,12 @@ async function runAttachmentEntries(
       // Successful empty CLI/API output was processed; unavailable auth was not.
       processing = "completed";
       if (result?.text) {
-        const decision = buildModelDecision({ entry, entryType, outcome: "success" });
+        const decision = buildModelDecision({
+          providerRegistry: params.providerRegistry,
+          entry,
+          entryType,
+          outcome: "success",
+        });
         if (result.provider) {
           decision.provider = result.provider;
         }
@@ -533,13 +543,20 @@ async function runAttachmentEntries(
         return { output: result, attempts, processing };
       }
       attempts.push(
-        buildModelDecision({ entry, entryType, outcome: "skipped", reason: "empty output" }),
+        buildModelDecision({
+          providerRegistry: params.providerRegistry,
+          entry,
+          entryType,
+          outcome: "skipped",
+          reason: "empty output",
+        }),
       );
     } catch (err) {
       assertMediaExecutionCurrent(params.execution);
       if (isMediaUnderstandingSkipError(err)) {
         attempts.push(
           buildModelDecision({
+            providerRegistry: params.providerRegistry,
             entry,
             entryType,
             outcome: "skipped",
@@ -552,6 +569,7 @@ async function runAttachmentEntries(
       } else {
         attempts.push(
           buildModelDecision({
+            providerRegistry: params.providerRegistry,
             entry,
             entryType,
             outcome: "failed",

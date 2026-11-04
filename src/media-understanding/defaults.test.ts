@@ -13,6 +13,9 @@ const mediaMetadataPlugins = vi.hoisted(() => {
   };
   return [
     {
+      id: "synthetic-media",
+      origin: "bundled",
+      providers: [],
       contracts: { mediaUnderstandingProviders: Object.keys(mediaUnderstandingProviderMetadata) },
       mediaUnderstandingProviderMetadata,
     },
@@ -22,6 +25,7 @@ const mediaMetadataPlugins = vi.hoisted(() => {
 vi.mock("../plugins/manifest-contract-eligibility.js", () => {
   const manifestRegistry = { plugins: mediaMetadataPlugins, diagnostics: [] };
   return {
+    isManifestPluginAvailableForControlPlane: () => true,
     loadManifestMetadataSnapshot: () => ({
       index: { plugins: [] },
       plugins: mediaMetadataPlugins,
@@ -76,7 +80,7 @@ describe("media defaults", () => {
       "hook-only",
       "a-tie",
       "z-tie",
-      "google",
+      "gemini",
       "google",
     ]);
   });

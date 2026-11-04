@@ -33,7 +33,7 @@ export function resolveEffectiveMediaEntryCapabilities(params: {
   if ((params.entry.type ?? (params.entry.command ? "cli" : "provider")) === "cli") {
     return undefined;
   }
-  const providerId = normalizeMediaProviderId(params.entry.provider ?? "");
+  const providerId = normalizeMediaProviderId(params.entry.provider ?? "", params.providerRegistry);
   if (!providerId) {
     return undefined;
   }
