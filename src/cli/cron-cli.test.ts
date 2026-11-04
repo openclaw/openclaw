@@ -635,7 +635,7 @@ it("creates stream schedules from exact argv flags", async () => {
       "--stream-command": '["node","events.mjs"]',
       "--stream-cwd": "/srv/app",
       "--stream-mode": "match",
-      "--stream-match": "^ready:",
+      "--stream-match": "^ready: ",
       "--stream-batch-ms": "100",
       "--stream-max-batch-bytes": "2048",
       "--message": "handle events",
@@ -646,7 +646,7 @@ it("creates stream schedules from exact argv flags", async () => {
     command: ["node", "events.mjs"],
     cwd: "/srv/app",
     mode: "match",
-    match: "^ready:",
+    match: "^ready: ",
     batchMs: 100,
     maxBatchBytes: 2_048,
   });
@@ -760,7 +760,7 @@ it("replaces a cron expression and stagger while retaining its timezone", async 
 });
 
 it.each([
-  { args: ["--stream-match", "^updated:"], match: "^updated:" },
+  { args: ["--stream-match", "^updated: "], match: "^updated: " },
   { args: ["--stream-mode", "match"], match: "^ready:" },
 ])("merges stream replacement metadata $args", async ({ args, match }) => {
   expect(
