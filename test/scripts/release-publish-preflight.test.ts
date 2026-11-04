@@ -20,18 +20,22 @@ vi.mock("../../scripts/lib/release-publish-preflight-evidence.mts", async (impor
   validatePublishPreflightNpm: async () => ({ manifest: { tarballSha256: "c".repeat(64) } }),
   verifyPublishedPreflightTarball: async () => "d".repeat(128),
 }));
+// mock-isolation: protected tooling identity reads live GitHub refs.
 vi.mock("../../scripts/npm-preflight-tooling-identity.mjs", () => ({
   verifyReleasePreflightToolingIdentity: () => undefined,
 }));
+// mock-isolation: release-page admission reads the live GitHub release.
 vi.mock("../../scripts/lib/release-publish-closeout-preflight.mts", () => ({
   inspectPublishReleasePage: () => undefined,
 }));
+// mock-isolation: package inventory and GitHub run observation read live state.
 vi.mock("../../scripts/lib/release-publish-state.mts", () => ({
   readReleasePublicationPackages: () => ({ version, corePackages: [], npmPlugins: [] }),
   // FRV sealed this decision before publication, so it still reports "plan".
   observeReleaseNpmState: async () => ({ gates: [], bootstrapCandidates: [] }),
   observeReleaseGitHubState: () => ({ gates: [] }),
 }));
+// mock-isolation: publisher discovery verifies live Sigstore provenance.
 vi.mock("../../scripts/openclaw-npm-resume-run.mts", () => ({
   verifyOpenClawNpmResumeRun: resumeRun,
 }));
