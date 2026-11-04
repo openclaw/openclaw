@@ -81,3 +81,71 @@ it.each(["sync", "async"] as const)("projects only public %s controls", async (m
   expect(compact).toHaveBeenCalledExactlyOnceWith([], publicOptions);
   expect(Object.keys(result)).toEqual(["tools", "promptToolPolicy"]);
 });
+
+it.each(["ok", "host failure", "both failures"] as const)(
+  "keeps private test host close synchronous, memoized, and catchable (%s)",
+  async (mode) => {
+    const hostOwner = await import("../agents/harness/host-capability.js");
+    const { createAgentHarnessHostCapabilitiesForTest: createHost } =
+      await import("./plugin-test-runtime.js");
+    const { harnessHostAdmissionsForTest } =
+      await import("../agents/harness/host-capability.test-support.js");
+    const { getAdmittedRunDelegatedAuthority } = await import("../agents/admitted-run-context.js");
+    const create = hostOwner.createAgentHarnessHostCapabilities;
+    const hostFailure = new Error("Controlled host close failure");
+    const admissionFailure = new Error("Controlled admission close failure");
+    let closeCalls = 0;
+    let reentered: Promise<void> | undefined;
+    using factory = vi
+      .spyOn(hostOwner, "createAgentHarnessHostCapabilities")
+      .mockImplementationOnce((params) => {
+        const host = create(params);
+        return {
+          ...host,
+          close: () => {
+            closeCalls += 1;
+            host.close();
+            if (closeCalls === 1) {
+              reentered = closeAgain?.();
+            }
+            if (mode !== "ok") {
+              throw hostFailure;
+            }
+          },
+        };
+      });
+    const host = await createHost({
+      attempt: { runId: "private-close-contract" },
+      pluginId: "fixture",
+    });
+    expect(factory).toHaveBeenCalledOnce();
+    const admission = harnessHostAdmissionsForTest.get(host.capabilities)!;
+    onTestFinished(admission.close);
+    if (mode === "both failures") {
+      const closeAdmission = admission.close;
+      admission.close = () => {
+        closeAdmission();
+        throw admissionFailure;
+      };
+    }
+    const closeAgain = host.close;
+    let closing: Promise<void> | undefined;
+    expect(() => {
+      closing = host.close();
+    }).not.toThrow();
+    expect(closing).toBeInstanceOf(Promise);
+    expect(host.close()).toBe(closing);
+    expect(reentered).toBe(closing);
+    expect(closeCalls).toBe(1);
+    expect(() => host.capabilities.assertActive()).toThrow("no longer active");
+    expect(harnessHostAdmissionsForTest.has(host.capabilities)).toBe(false);
+    expect(getAdmittedRunDelegatedAuthority(admission.admittedRunContext)).toBeUndefined();
+    if (mode === "both failures") {
+      await expect(closing).rejects.toMatchObject({ errors: [hostFailure, admissionFailure] });
+    } else if (mode === "host failure") {
+      await expect(closing).rejects.toBe(hostFailure);
+    } else {
+      await expect(closing).resolves.toBeUndefined();
+    }
+  },
+);

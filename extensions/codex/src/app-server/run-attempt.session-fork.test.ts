@@ -174,7 +174,7 @@ it.each(cases)("forks %j", async ({ completeParent, rebuilt }) => {
   if (completeParent) {
     await harness.completeTurn({ threadId: binding?.threadId ?? "thread-1", turnId: "turn-1" });
     await parent;
-    closeParentHost();
+    await closeParentHost();
     expect(() => params.hostCapabilities.assertActive()).toThrow(
       "agent harness host capability is no longer active",
     );
@@ -243,8 +243,11 @@ it.each(cases)("forks %j", async ({ completeParent, rebuilt }) => {
   } finally {
     await harness.completeTurn({ threadId: binding?.threadId ?? "thread-1", turnId: "turn-1" });
     await parent;
-    closeParentHost();
-    host.closeHost();
-    host.closeAdmission();
+    try {
+      await closeParentHost();
+    } finally {
+      host.closeHost();
+      host.closeAdmission();
+    }
   }
 });

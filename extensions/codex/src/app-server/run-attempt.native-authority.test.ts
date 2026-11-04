@@ -240,7 +240,7 @@ it.each([
         expect(turns).toEqual([]);
       }
     } finally {
-      close();
+      await close();
     }
   },
 );

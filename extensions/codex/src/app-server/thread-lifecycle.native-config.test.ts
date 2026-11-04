@@ -358,8 +358,11 @@ describe("Codex native configuration lifecycle", () => {
           expect(qualification?.hasProvider("restored")).toBe(true);
         }
       } finally {
-        closeHost();
-        fixture.client.close();
+        try {
+          await closeHost();
+        } finally {
+          fixture.client.close();
+        }
       }
     },
   );
@@ -475,7 +478,7 @@ describe("Codex native configuration lifecycle", () => {
           ),
         ).toBe(false);
       } finally {
-        closeHost?.();
+        await closeHost?.();
       }
     },
   );
@@ -640,7 +643,7 @@ describe("Codex native configuration lifecycle", () => {
               .mockImplementation(async (identity) => {
                 const binding = await readBinding(identity);
                 if (nativeReadCompleted) {
-                  closeHost?.();
+                  await closeHost?.();
                 }
                 return binding;
               })
@@ -669,7 +672,7 @@ describe("Codex native configuration lifecycle", () => {
           );
         } finally {
           bindingRead?.mockRestore();
-          closeHost?.();
+          await closeHost?.();
         }
         expect(request.mock.calls.filter(([method]) => method === "thread/resume")).toHaveLength(
           resumeCount,

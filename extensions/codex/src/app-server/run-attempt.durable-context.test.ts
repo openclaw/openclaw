@@ -80,7 +80,7 @@ it.each([false, true])(
     const { harness, threads } = createDurableHarness(ownerThread, false, (count) =>
       count === 1 ? ownerThread : completionThread,
     );
-    let closeHost = () => {};
+    let closeHost: () => Promise<void> = async () => {};
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const finish = async (threadId: string, turn: number, text: string) => {
       const turnId = `turn-${turn}`;
@@ -151,7 +151,7 @@ it.each([false, true])(
           }),
         ]),
       );
-      closeHost();
+      await closeHost();
 
       for (const turn of [3, 4]) {
         vi.setSystemTime(Date.now() + 1_000);
@@ -182,9 +182,12 @@ it.each([false, true])(
       }
       expect(threads()).toBe(2);
     } finally {
-      closeHost();
-      harness.close();
-      vi.useRealTimers();
+      try {
+        await closeHost();
+      } finally {
+        harness.close();
+        vi.useRealTimers();
+      }
     }
   },
 );
@@ -305,7 +308,7 @@ it("does not replay covered history on the same thread after local message-tool 
     expect(originalBinding).toMatchObject({ threadId });
     const originalCutoff = Date.parse(originalBinding!.historyCoveredThrough!);
     expect(Number.isFinite(originalCutoff)).toBe(true);
-    closeHostCapabilities();
+    await closeHostCapabilities();
 
     vi.setSystemTime(Date.now() + 1_000);
     await append({ role: "user", content: "old user: cobalt", timestamp: Date.now() });
@@ -355,7 +358,7 @@ it("does not replay covered history on the same thread after local message-tool 
     expect(binding).toMatchObject({ threadId });
     expect(Number.isFinite(coveredThrough)).toBe(true);
     expect(coveredThrough).toBeGreaterThan(originalCutoff);
-    closeHostCapabilities();
+    await closeHostCapabilities();
 
     vi.setSystemTime(Date.now() + 1_000);
     await append({ role: "user", content: "new user: amber", timestamp: Date.now() });
@@ -378,8 +381,11 @@ it("does not replay covered history on the same thread after local message-tool 
     expect(nextInput).not.toContain("old assistant: cobalt");
     expect(threads()).toBe(1);
   } finally {
-    closeHostCapabilities();
-    harness.close();
-    vi.useRealTimers();
+    try {
+      await closeHostCapabilities();
+    } finally {
+      harness.close();
+      vi.useRealTimers();
+    }
   }
 });

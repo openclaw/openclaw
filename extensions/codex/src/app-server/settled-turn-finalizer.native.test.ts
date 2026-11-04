@@ -536,7 +536,7 @@ async function runSummary(
   const closeInitialHost = await bindProductionHarnessHostCapabilitiesForTest(initialParams);
   cleanups.push(async () => closeInitialHost());
   const initialized = await run(initialParams);
-  closeInitialHost();
+  await closeInitialHost();
   expect(initialized.terminal).toEqual({ kind: "ok" });
   const initialBinding = await readCodexAppServerBinding(params.sessionFile);
   if (!initialBinding) {
@@ -625,7 +625,7 @@ async function runSummary(
     const closeFirstHost = await bindProductionHarnessHostCapabilitiesForTest(params);
     cleanups.push(async () => closeFirstHost());
     const overloaded = await run();
-    closeFirstHost();
+    await closeFirstHost();
     expect(overloaded.terminal).toMatchObject({
       kind: "failed",
       error: { status: 503, code: "OVERLOADED" },
@@ -687,7 +687,7 @@ async function runSummary(
     expect(JSON.stringify(context.data)).not.toContain("Background task completed.");
   }
   expect(() => params.hostCapabilities.assertActive()).not.toThrow();
-  closeHost();
+  await closeHost();
   expect(() => params.hostCapabilities.assertActive()).toThrow();
   const sourceKey = homeScope === "user" ? NATIVE_KEY : HOST_KEY;
   expect(fixture.requests.length).toBeGreaterThan(0);

@@ -545,7 +545,7 @@ it("settles a client-close route after the host trajectory capability closes (fi
   const run = runCodexAppServerAttempt(params);
 
   await run.waitForTurnAccepted();
-  closeHost();
+  await closeHost();
   harness.close();
 
   await expect(run).resolves.toMatchObject({

@@ -32,6 +32,7 @@ import { expect, it, vi } from "vitest";
 const {
   bindProductionCodexHostCapabilities,
   buildDynamicToolsForTest,
+  closeProductionCodexHosts,
   createCodexRuntimePlanFixture,
   createParams,
 } = await import("./dynamic-tool-build.test-support.js");
@@ -81,7 +82,7 @@ export function registerCodexCompletionCommandTest() {
                 continuationTurns: 5,
                 lastStatusNote: "Keep the existing progress",
               };
-        const closers: Array<() => void> = [];
+        const closers: Array<() => Promise<void>> = [];
         const previousConfig = getRuntimeConfigSnapshot();
         const previousSource = getRuntimeConfigSourceSnapshot();
         setRuntimeConfigSnapshot(params.config);
@@ -190,13 +191,14 @@ export function registerCodexCompletionCommandTest() {
             status: "complete",
           });
         } finally {
-          for (const close of closers) {
-            close();
-          }
-          if (previousConfig) {
-            setRuntimeConfigSnapshot(previousConfig, previousSource ?? undefined);
-          } else {
-            clearRuntimeConfigSnapshot();
+          try {
+            await closeProductionCodexHosts(closers);
+          } finally {
+            if (previousConfig) {
+              setRuntimeConfigSnapshot(previousConfig, previousSource ?? undefined);
+            } else {
+              clearRuntimeConfigSnapshot();
+            }
           }
         }
       });
@@ -231,7 +233,7 @@ export function registerCodexCompletionCommandTest() {
           plugins: { enabled: false },
         };
         params.config = config;
-        const localHostClosers: Array<() => void> = [];
+        const localHostClosers: Array<() => Promise<void>> = [];
         const factory = vi.fn((options: ToolOptions) =>
           createOpenClawCodingTools(options).filter((tool) =>
             ["exec", "process"].includes(tool.name),
@@ -340,9 +342,7 @@ export function registerCodexCompletionCommandTest() {
           try {
             await abortAndDrainAgentHarnessRun({ sessionId: params.sessionId, sessionKey });
           } finally {
-            for (const close of localHostClosers) {
-              close();
-            }
+            await closeProductionCodexHosts(localHostClosers);
           }
         }
       },

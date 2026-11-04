@@ -6,6 +6,7 @@ import type {
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { runQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { Type } from "typebox";
 import { afterEach, assert, describe, expect, it, vi, type Mock } from "vitest";
@@ -193,28 +194,43 @@ async function withSurface(
   assert(create);
   const construction = vi.fn(tool ? async () => host.capabilities.bindToolSurface([tool]) : create);
   const cleanups: Array<(reason: string) => Promise<void>> = [];
-  try {
-    await run(
-      await buildAgentsApiToolSurface(
-        {
-          ...attempt,
-          hostCapabilities: { ...host.capabilities, createToolSurfaceAsync: construction },
-        },
-        controller.signal,
-        host.capabilities.assertActive,
-        (cleanup) => cleanups.push(cleanup),
-      ),
-      construction,
-    );
-  } finally {
-    if (!tool) {
-      controller.abort();
-    }
-    for (const cleanup of cleanups.toReversed()) {
-      await cleanup(tool ? "Tool result test complete" : "Permission test complete");
-    }
-    host.close();
-  }
+  await runQaGatewayFixture(
+    async () => {
+      await run(
+        await buildAgentsApiToolSurface(
+          {
+            ...attempt,
+            hostCapabilities: { ...host.capabilities, createToolSurfaceAsync: construction },
+          },
+          controller.signal,
+          host.capabilities.assertActive,
+          (cleanup) => cleanups.push(cleanup),
+        ),
+        construction,
+      );
+    },
+    async () => {
+      if (!tool) {
+        controller.abort();
+      }
+      const failures: unknown[] = [];
+      for (const cleanup of cleanups.toReversed()) {
+        try {
+          await cleanup(tool ? "Tool result test complete" : "Permission test complete");
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      try {
+        await host.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Agents API tool fixture cleanup failed");
+      }
+    },
+  );
 }
 
 it.each([

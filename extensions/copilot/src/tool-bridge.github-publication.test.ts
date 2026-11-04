@@ -48,8 +48,11 @@ describe("Copilot GitHub publication tools", () => {
           const tools = bridge.promptToolPolicy.apply().callableToolNames;
           expect(tools.filter((name) => name.startsWith("github_"))).toEqual(expected);
         } finally {
-          bridge?.cleanup?.();
-          host.close();
+          const closed: PromiseSettledResult<unknown>[] = await Promise.allSettled([
+            Promise.resolve().then(() => bridge?.cleanup?.()),
+          ]);
+          closed.push(...(await Promise.allSettled([host.close()])));
+          expect(closed.filter((result) => result.status === "rejected")).toEqual([]);
         }
       });
     },

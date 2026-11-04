@@ -20,7 +20,7 @@ import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test
 import { buildCodexRuntimeThreadConfig } from "./thread-requests.js";
 
 let root: string;
-const closers: Array<() => void> = [];
+const closers: Array<() => Promise<void>> = [];
 beforeEach(async () => {
   root = await setupDynamicToolBuildFixture();
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
@@ -148,7 +148,7 @@ describe.skipIf(process.platform === "win32")("Codex host-owned credential execu
       const script = path.join(root, "forbidden.cjs");
       await fs.writeFile(script, 'require("node:fs").writeFileSync(process.argv[2], "unexpected")');
       if (state === "closed") {
-        f.host.close();
+        await f.host.close();
       }
       if (state === "revoked") {
         caller = "revoked";
@@ -200,7 +200,7 @@ describe.skipIf(process.platform === "win32")("Codex host-owned credential execu
       );
       await entered.promise;
       if (state === "closed") {
-        f.host.close();
+        await f.host.close();
       } else {
         current = false;
       }
@@ -233,4 +233,45 @@ describe.skipIf(process.platform === "win32")("Codex host-owned credential execu
       "features.unified_exec": false,
     });
   });
+});
+
+it("retains fixture storage until every private host close promise settles", async () => {
+  const first = createDeferred<void>();
+  const second = createDeferred<void>();
+  const secondStarted = createDeferred<void>();
+  const failure = new Error("Controlled private close failure");
+  const failedClose = first.promise.then(() => {
+    throw failure;
+  });
+  void failedClose.catch(() => {});
+  const cleaning = cleanupDynamicToolBuildFixture(root, [
+    () => failedClose,
+    async () => {
+      secondStarted.resolve();
+      await second.promise;
+    },
+  ]);
+  let settled = false;
+  void cleaning.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  const result = expect(cleaning).rejects.toMatchObject({ errors: [failure] });
+  void result.catch(() => {});
+  try {
+    await secondStarted.promise;
+    first.resolve();
+    await failedClose.catch(() => {});
+    expect(settled).toBe(false);
+    expect((await fs.stat(root)).isDirectory()).toBe(true);
+  } finally {
+    first.resolve();
+    second.resolve();
+    await result;
+  }
+  await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
 });

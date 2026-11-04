@@ -59,7 +59,7 @@ const {
 let tempDir: string;
 let workspaceDir: string;
 let params: EmbeddedRunAttemptParams;
-const hostCapabilityClosers: Array<() => void> = [];
+const hostCapabilityClosers: Array<() => Promise<void>> = [];
 
 type ToolOptions = Parameters<typeof createOpenClawCodingTools>[0];
 const retainedOwnerConfig = {

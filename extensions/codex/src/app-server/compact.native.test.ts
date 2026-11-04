@@ -127,7 +127,7 @@ it(
     transport.phase = "turn";
     transport.requests = [];
     let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
-    let closeHost: (() => void) | undefined;
+    let closeHost: (() => Promise<void>) | undefined;
     try {
       await fs.writeFile(
         path.join(native.codexHome, "config.toml"),
@@ -248,7 +248,7 @@ it(
       assert(client);
       expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
       const setupHost = params.hostCapabilities;
-      closeHost();
+      await closeHost();
       closeHost = undefined;
       expect(() => setupHost.assertActive()).toThrow("no longer active");
 
@@ -334,7 +334,7 @@ it(
           expect(closed).toMatchObject({ exited: true });
         }
       } finally {
-        closeHost?.();
+        await closeHost?.();
         clearRuntimeConfigSnapshot();
       }
     }

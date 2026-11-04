@@ -111,7 +111,7 @@ describe("Codex trajectory recorder", () => {
       }
       await recorder.flush();
     } finally {
-      host.close();
+      await host.close();
     }
 
     expect(fs.readdirSync(path.dirname(target.storePath))).not.toEqual(

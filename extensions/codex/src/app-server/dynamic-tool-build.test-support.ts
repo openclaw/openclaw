@@ -86,7 +86,7 @@ export async function buildDynamicToolsForTest(
 
 export async function bindProductionCodexHostCapabilities(
   params: EmbeddedRunAttemptParams,
-  hostCapabilityClosers: Array<() => void>,
+  hostCapabilityClosers: Array<() => Promise<void>>,
 ): Promise<void> {
   const { createAgentHarnessHostCapabilitiesForTest } =
     await import("openclaw/plugin-sdk/plugin-test-runtime");
@@ -119,17 +119,34 @@ export function setupDynamicToolBuildFixture(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-tools-"));
 }
 
+export async function closeProductionCodexHosts(
+  hostCapabilityClosers: Array<() => Promise<void>>,
+): Promise<void> {
+  const hostCleanup = await Promise.allSettled(
+    hostCapabilityClosers.splice(0).map((close) => close()),
+  );
+  const hostFailures = hostCleanup.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (hostFailures.length > 0) {
+    throw new AggregateError(hostFailures, "Codex test host cleanup failed");
+  }
+}
+
 export async function cleanupDynamicToolBuildFixture(
   tempDir: string,
-  hostCapabilityClosers: Array<() => void>,
+  hostCapabilityClosers: Array<() => Promise<void>>,
 ): Promise<void> {
   try {
-    hostCapabilityClosers.splice(0).forEach((close) => close());
-    vi.restoreAllMocks();
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
-    vi.unstubAllEnvs();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    try {
+      await closeProductionCodexHosts(hostCapabilityClosers);
+    } finally {
+      vi.restoreAllMocks();
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      vi.unstubAllEnvs();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   } finally {
     clearRuntimeConfigSnapshot();
   }
