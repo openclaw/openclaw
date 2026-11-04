@@ -363,7 +363,7 @@ beforeEach(() => {
   execFileMock.mockReset();
   // Host-installed system units must not override the fixture's absent-service default.
   vi.spyOn(fs, "access").mockImplementation(async (pathname, mode) => {
-    if (/^\/(?:etc|usr\/lib|lib)\/systemd\/system\//.test(pathLikeToString(pathname))) {
+    if (/^\/(?:run|etc|usr\/lib|lib)\/systemd\/system\//.test(pathLikeToString(pathname))) {
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     }
     return access(pathname, mode);

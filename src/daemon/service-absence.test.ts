@@ -326,3 +326,48 @@ it("keeps the strict read inconclusive when the system unit inventory is unreada
     }),
   ).rejects.toMatchObject({ reason: unavailable });
 });
+
+it("keeps refusing a unit installed only in the runtime system load path", async () => {
+  const unitPath = "/run/systemd/system/openclaw-gateway.service";
+  missingFiles(unitPath, unitPath);
+  const native = await execSpy();
+  native.mockImplementation(async () => ({
+    ...nativeResult(
+      "",
+      "System has not been booted with systemd as init system (PID 1). Can't operate.",
+    ),
+    termination: "exit",
+  }));
+  await expect(
+    readGatewayServiceState(resolveGatewayService(), {
+      env: { ...serviceEnv("runtime-system"), DBUS_SESSION_BUS_ADDRESS: undefined },
+      ...strictRead,
+    }),
+  ).rejects.toMatchObject({ reason: unavailable });
+});
+
+it("keeps the strict read inconclusive when an unrelated unit file is unreadable", async () => {
+  mockProcessPlatform("linux");
+  const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
+  vi.spyOn(fs, "readFile").mockRejectedValue(denied());
+  vi.spyOn(fs, "access").mockRejectedValue(missing());
+  // A marker unit's ownership lives in its contents; an unreadable entry whose
+  // name is not a candidate name still cannot be ruled out.
+  vi.spyOn(fs, "readdir").mockImplementation(async (dir) =>
+    dir === "/etc/systemd/system" ? ["company-chat.service"] : [],
+  );
+  const native = await execSpy();
+  native.mockImplementation(async () => ({
+    ...nativeResult(
+      "",
+      "System has not been booted with systemd as init system (PID 1). Can't operate.",
+    ),
+    termination: "exit",
+  }));
+  await expect(
+    readGatewayServiceState(resolveGatewayService(), {
+      env: { ...serviceEnv("unreadable-custom-name"), DBUS_SESSION_BUS_ADDRESS: undefined },
+      ...strictRead,
+    }),
+  ).rejects.toMatchObject({ reason: unavailable });
+});

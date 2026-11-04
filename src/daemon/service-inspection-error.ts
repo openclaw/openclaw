@@ -106,6 +106,24 @@ export class SystemdInspectionTimeout extends ServiceInspectionError {
   }
 }
 
+/**
+ * The unit-file inventory could not be fully read, so absence is not provable.
+ * Callers must refuse publication (no caller defaults); guided Doctor surfaces
+ * the wrapped scan diagnostic instead of treating this as a dead manager.
+ */
+export class ServiceInventoryUnavailableError extends ServiceInspectionError {
+  readonly scanError: unknown;
+
+  constructor(scanError: unknown) {
+    super("service-manager-unavailable", { kind: "invalid-response" });
+    this.name = "ServiceInventoryUnavailableError";
+    this.message = `Systemd unit inventory is incomplete; service state is unknown. ${String(
+      scanError instanceof Error ? scanError.message : scanError,
+    )}`;
+    this.scanError = scanError;
+  }
+}
+
 const SERVICE_OWNERSHIP_REFUSALS = {
   "systemd-account-refused":
     "System systemd Gateway runs as another account; run Doctor as the service's User= account.",

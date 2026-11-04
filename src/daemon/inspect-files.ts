@@ -72,9 +72,11 @@ export async function collectServiceFiles(params: {
     try {
       contents = await fs.readFile(fullPath);
     } catch {
-      if (params.isPotentialName(name)) {
-        params.errors?.push({ source: fullPath, message: "Service path could not be inspected." });
-      }
+      // Marker ownership lives in the file contents, so an unreadable entry is
+      // not proven unrelated by its name alone. Record every unreadable unit
+      // file: a silently empty scan would certify absence for an inventory
+      // that may hold a marker-owned unit.
+      params.errors?.push({ source: fullPath, message: "Service path could not be inspected." });
       continue;
     }
     out.push({ entry, name, fullPath, contents });

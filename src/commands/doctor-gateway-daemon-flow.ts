@@ -15,6 +15,7 @@ import {
   repairLaunchAgentBootstrap,
 } from "../daemon/launchd.js";
 import { formatRuntimeStatus } from "../daemon/runtime-format.js";
+import { ServiceInventoryUnavailableError } from "../daemon/service-inspection-error.js";
 import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import type { GatewayServiceLoadState } from "../daemon/service-types.js";
@@ -237,7 +238,22 @@ export async function maybeRepairGatewayDaemon(params: {
   }
   if (params.healthOk) {
     if (process.platform === "linux" && (await shouldManageGatewayService())) {
-      const state = await readGatewayServiceState(resolveGatewayService(), { env: process.env });
+      let state: Awaited<ReturnType<typeof readGatewayServiceState>>;
+      try {
+        state = await readGatewayServiceState(resolveGatewayService(), { env: process.env });
+      } catch (error) {
+        if (!(error instanceof ServiceInventoryUnavailableError)) {
+          throw error;
+        }
+        note(
+          `Gateway service state is unknown; skip service installation until reviewed. ${String(
+            error.scanError instanceof Error ? error.scanError.message : error.scanError,
+          )}`,
+          "Gateway",
+        );
+        await maybeReportEstablishedGatewayClients(params.cfg, params.options.deep ?? false);
+        return;
+      }
       const refusal = state.runtime?.systemd?.startRefusal;
       if (refusal) {
         note(refusal.message, "Gateway");
@@ -277,7 +293,24 @@ export async function maybeRepairGatewayDaemon(params: {
     }
   };
   const isLocalDarwinGateway = process.platform === "darwin";
-  const serviceState = await readGatewayServiceState(service, { env: process.env });
+  let serviceState: Awaited<ReturnType<typeof readGatewayServiceState>>;
+  try {
+    serviceState = await readGatewayServiceState(service, { env: process.env });
+  } catch (error) {
+    if (!(error instanceof ServiceInventoryUnavailableError)) {
+      throw error;
+    }
+    // The unit inventory could not be fully read, so "not installed" is not
+    // provable. Surface the original scan diagnostic and skip the install
+    // flow instead of acting on caller defaults.
+    note(
+      `Gateway service state is unknown; skip service installation until reviewed. ${String(
+        error.scanError instanceof Error ? error.scanError.message : error.scanError,
+      )}`,
+      "Gateway",
+    );
+    return;
+  }
   const serviceLayout = await summarizeGatewayServiceLayout(serviceState.command);
   const serviceOwner = await readInstallOwner(
     serviceLayout?.packageRootReal ?? serviceLayout?.packageRoot ?? null,

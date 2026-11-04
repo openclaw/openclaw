@@ -12,6 +12,7 @@ import {
 import {
   assertServiceInspectionFallbackAllowed,
   ServiceInspectionError,
+  ServiceInventoryUnavailableError,
   ServiceOwnershipRefusalError,
   findServiceOwnershipRefusal,
   SystemdInspectionTimeout,
@@ -101,15 +102,27 @@ export async function readGatewayServiceState(
                 inspectionDeadline === undefined ? undefined : inspectionDeadline - budget.now(),
             }));
         } catch (error) {
+          // Terminal inspection errors keep their identity: cleanup failures,
+          // ownership refusals, and inspection timeouts have dedicated
+          // consumers that must see the original error, not a generic
+          // "manager unavailable" label.
           if (error instanceof ServiceInspectionDeadlineError) {
             throw error;
           }
-          // An unreadable unit inventory is inconclusive, not absent: refuse the
-          // read (publication must not fall back to caller defaults) while the
-          // underlying diagnostic stays attached.
-          throw new ServiceInspectionError("service-manager-unavailable", {
-            kind: "invalid-response",
-          });
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          const refusal = findServiceOwnershipRefusal(error);
+          if (refusal) {
+            throw refusal;
+          }
+          if (error instanceof SystemdInspectionTimeout) {
+            throw error;
+          }
+          // An unreadable unit inventory is inconclusive, not absent: refuse
+          // the read (publication must not fall back to caller defaults) while
+          // the scan diagnostic stays attached for guided Doctor.
+          throw new ServiceInventoryUnavailableError(error);
         }
         if (installation.kind === "dueling" && args.requireEffective && args.requireLoadedCommand) {
           throw new ServiceOwnershipRefusalError("systemd-competing-managers");

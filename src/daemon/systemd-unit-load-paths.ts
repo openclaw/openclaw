@@ -1,6 +1,9 @@
 import path from "node:path";
 
 export const DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS = [
+  // Runtime units load first and are systemd-supported installation targets;
+  // omitting them lets a runtime-only install read as absent.
+  "/run/systemd/system",
   "/etc/systemd/system",
   "/usr/lib/systemd/system",
   "/lib/systemd/system",
