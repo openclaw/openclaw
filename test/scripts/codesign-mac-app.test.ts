@@ -44,7 +44,6 @@ function runCodesign(
     },
   });
 }
-
 async function appFixture(
   mac: MacScriptFixture,
   label: string,
@@ -65,18 +64,15 @@ async function appFixture(
   await install(binDir);
   return { tempRoot, app, binDir, captureDir };
 }
-
 function signingFixture(mac: MacScriptFixture, label: string, name?: string) {
   return makeSigningFixture(mac, mac.createTempDir(`openclaw-${label}-`), name);
 }
-
 function signedPaths(fixture: Awaited<ReturnType<typeof makeSigningFixture>>) {
   return fixture
     .events()
     .filter(({ args }) => args.includes("--sign"))
     .map(({ args }) => args.at(-1));
 }
-
 async function runCodesignWithoutAllocation(
   mac: MacScriptFixture,
   expect: TestContext["expect"],
@@ -97,7 +93,6 @@ async function runCodesignWithoutAllocation(
   expect(existsSync(allocation), result.stderr).toBe(false);
   return result;
 }
-
 async function runElevationMetadataFixture(mac: MacScriptFixture, env: NodeJS.ProcessEnv) {
   const { tempRoot, app } = await appFixture(
     mac,
@@ -446,11 +441,16 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
         const fixture = await signingFixture(mac, "inventory-jit");
         const modules = "lib/node_modules/openclaw/node_modules";
         const sdkRuntime = `node_modules/@anthropic-ai/claude-agent-sdk-darwin-${sdkArch}/claude`;
+        const codexVendor = sdkArch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
+        const codexHost = `node_modules/@openai/codex-darwin-${sdkArch}/vendor/${codexVendor}/bin/codex-code-mode-host`;
         const expected = new Map<string, "plugins" | "jit" | "plain">();
         for (const [relative, fileType, policy] of [
           ["bin/bun", 2, "plugins"],
           [`lib/node_modules/openclaw/${sdkRuntime}`, 2, "jit"],
           [`${modules}/nested/${sdkRuntime}`, 2, "jit"],
+          [`lib/node_modules/openclaw/${codexHost}`, 2, "jit"],
+          [`${modules}/nested/${codexHost}`, 2, "jit"],
+          [`${modules}/other/bin/codex-code-mode-host`, 2, "plain"],
           [
             `${modules}/@lydell/node-pty-darwin-${sdkArch}/prebuilds/darwin-${sdkArch}/spawn-helper`,
             2,
