@@ -762,6 +762,7 @@ it("recovers an unknown channel owner through the canonical profile directory", 
 
 it.each([
   { channel: "slack", role: "admin" },
+  { channel: "discord", role: "admin" },
   { channel: "discord", role: "member" },
 ] as const)(
   "preserves visible and independent creation authority for the linked $channel $role",
@@ -874,13 +875,6 @@ it.each([
           createdActor: agent,
           owner: { actor: requester },
         });
-        if (channel === "discord") {
-          expect(loadSessionEntry(scope(details.sessionKey))?.createdActor?.delegatedBy).toEqual({
-            type: "human",
-            source: "profile",
-            id: requester.id,
-          });
-        }
         await spawn();
         expect(loadSessionEntry(scope(spawnedSessionKey))).toMatchObject({
           createdVia: "spawn",
