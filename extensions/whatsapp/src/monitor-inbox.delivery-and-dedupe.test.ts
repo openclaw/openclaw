@@ -167,7 +167,10 @@ describe("web monitor inbox delivery and dedupe", () => {
         mapping.mockResolvedValue(null);
         sock.ev.emit("messages.upsert", {
           type: "notify",
-          messages: [...upsert.messages, ...dmUpsert(nextMessageId("lid-sibling"), "sibling").messages],
+          messages: [
+            ...upsert.messages,
+            ...dmUpsert(nextMessageId("lid-sibling"), "sibling").messages,
+          ],
         });
         await waitForInboundWorkDrained();
         expect(onMessage.mock.calls.map(([msg]) => msg.payload.body)).toEqual(
