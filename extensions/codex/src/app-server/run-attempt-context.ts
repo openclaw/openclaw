@@ -23,7 +23,7 @@ import {
 } from "./context-engine-projection.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
-import type { JsonValue } from "./protocol.js";
+import type { JsonObject, JsonValue } from "./protocol.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
@@ -195,17 +195,26 @@ export async function prepareCodexAttemptContext(
       workspaceBootstrapContext.sharedPersonaInstructions,
       workspaceBootstrapContext.memoryInstructions,
     ) || undefined;
-  const baseDeveloperInstructions = joinPresentSections(
-    buildDeveloperInstructions(runtimeParams, {
-      // The lifecycle restores this section to creation policy if no relay is selected.
-      omitConversationTurnContext: true,
-      dynamicTools: toolBridge.specs,
-      nativeCodeModeEnabled: runtime.nativeToolSurfaceEnabled,
-      nativeCodeModeOnlyEnabled:
-        runtime.nativeToolSurfaceEnabled && connection.appServer.codeModeOnly,
-    }),
-    agentWorkspaceDeveloperInstructions,
-  );
+  const buildNativeDeveloperInstructions = (nativeConfig: JsonObject) =>
+    joinPresentSections(
+      buildDeveloperInstructions(runtimeParams, {
+        // The lifecycle restores this section to creation policy if no relay is selected.
+        omitConversationTurnContext: true,
+        dynamicTools: toolBridge.specs,
+        nativeCodeModeEnabled: runtime.nativeToolSurfaceEnabled,
+        nativeCodeModeOnlyEnabled:
+          runtime.nativeToolSurfaceEnabled && connection.appServer.codeModeOnly,
+        nativeCollaborationConfig: nativeConfig,
+      }),
+      agentWorkspaceDeveloperInstructions,
+    );
+  // Hooks and history projection run before native preflight. Do not advertise
+  // unverified native helpers in this seed; the lifecycle replaces the exact
+  // generated section after reading Codex's effective configuration.
+  const baseDeveloperInstructions = buildNativeDeveloperInstructions({
+    "agents.enabled": false,
+    "features.multi_agent_v2": false,
+  });
   const watchedSessionsContext = await prepareCodexWatchedSessionsContext({
     attempt: runtimeParams,
     dynamicTools: toolBridge.availableSpecs,
@@ -266,6 +275,7 @@ export async function prepareCodexAttemptContext(
     workspaceBootstrapContext,
     agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
+    buildNativeDeveloperInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
     refreshableInstructions,

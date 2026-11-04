@@ -82,6 +82,8 @@ export type CodexStartOrResumeThreadParams = Omit<
   dynamicTools: CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
   agentWorkspaceDeveloperInstructions?: string;
+  /** Refresh the generated developer carrier after native-home configuration is read. */
+  buildDeveloperInstructionsForNativeConfig?: (config: JsonObject) => string | undefined;
   buildFinalConfigPatch?: (
     decision: CodexThreadFinalConfigPatchDecision,
     client: CodexAppServerClient,

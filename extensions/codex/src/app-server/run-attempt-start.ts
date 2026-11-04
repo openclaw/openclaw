@@ -6,7 +6,7 @@ import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
-import { flattenCodexDynamicToolFunctions } from "./protocol.js";
+import { flattenCodexDynamicToolFunctions, type JsonObject } from "./protocol.js";
 import { createCodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import {
   emitCodexAppServerEvent,
@@ -48,6 +48,48 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       turnState.promptBuild.developerInstructions,
     attemptTools.configuredMcp?.diagnosticNotice,
   );
+  let reportedGeneratedInstructions = context.baseDeveloperInstructions;
+  const buildDeveloperInstructionsForNativeConfig = (nativeConfig: JsonObject) => {
+    const generated = context.baseDeveloperInstructions;
+    const offset = developerInstructions.indexOf(generated);
+    if (offset < 0) {
+      // A prompt hook replaced the generated policy; preserve that hook's output.
+      return developerInstructions;
+    }
+    const resolved = context.buildNativeDeveloperInstructions(nativeConfig);
+    const effective =
+      developerInstructions.slice(0, offset) +
+      resolved +
+      developerInstructions.slice(offset + generated.length);
+    // Update the authoritative prompt carriers as well as thread/start.
+    // Replacement clients can preflight again with a different native policy.
+    const replaceReportedPolicy = (value: string) => {
+      const index = value.indexOf(reportedGeneratedInstructions);
+      return index < 0
+        ? value
+        : value.slice(0, index) +
+            resolved +
+            value.slice(index + reportedGeneratedInstructions.length);
+    };
+    const build = turnState.promptBuild;
+    const updatedDeveloper = replaceReportedPolicy(build.developerInstructions);
+    const updatedThread =
+      build.threadDeveloperInstructions === undefined
+        ? undefined
+        : replaceReportedPolicy(build.threadDeveloperInstructions);
+    if (
+      updatedDeveloper !== build.developerInstructions ||
+      updatedThread !== build.threadDeveloperInstructions
+    ) {
+      build.developerInstructions = updatedDeveloper;
+      if (updatedThread !== undefined) {
+        build.threadDeveloperInstructions = updatedThread;
+      }
+      prompt.refreshSystemPromptReport();
+    }
+    reportedGeneratedInstructions = resolved;
+    return effective;
+  };
   const {
     params,
     attemptClientFactory,
@@ -116,6 +158,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
+      buildDeveloperInstructionsForNativeConfig,
       refreshableInstructions:
         joinPresentSections(
           context.refreshableInstructions,

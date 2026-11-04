@@ -179,6 +179,8 @@ export function buildCodexThreadConfiguration(
           dynamicTools: options.dynamicTools,
           nativeCodeModeEnabled: options.nativeCodeModeEnabled !== false,
           nativeCodeModeOnlyEnabled: config["features.code_mode_only"] === true,
+          nativeCollaborationConfig:
+            mergeCodexThreadConfigs(options.nativeQuestionConfig?.config, config) ?? config,
         }),
       options.refreshableInstructions,
     ),

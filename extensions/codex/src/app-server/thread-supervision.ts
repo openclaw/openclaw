@@ -469,6 +469,7 @@ function buildPendingSupervisionProbeForkParams(
         dynamicTools: params.dynamicTools,
         nativeCodeModeEnabled: params.nativeCodeModeEnabled !== false,
         nativeCodeModeOnlyEnabled: runtimeConfig["features.code_mode_only"] === true,
+        nativeCollaborationConfig: runtimeConfig,
       }),
     ephemeral: true,
     threadSource: "appServer",
