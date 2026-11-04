@@ -1086,11 +1086,6 @@ extension GatewayConnection {
             let id = UUID()
             let task = Task { [weak self] () throws -> GatewayChannelActor in
                 guard let self else { throw CancellationError() }
-                defer {
-                    if self.pendingPersonalConfiguration?.id == id {
-                        self.pendingPersonalConfiguration = nil
-                    }
-                }
                 return try await self.configureUnretired(
                     endpoint: endpoint,
                     shutdownGeneration: shutdownGeneration,
@@ -1103,6 +1098,11 @@ extension GatewayConnection {
                 shutdownGeneration: shutdownGeneration,
                 routeGeneration: configuredRouteGeneration,
                 task: task)
+            defer {
+                if self.pendingPersonalConfiguration?.id == id {
+                    self.pendingPersonalConfiguration = nil
+                }
+            }
             let client = try await task.value
             try Task.checkCancellation()
             try self.requireCurrentShutdownGeneration(shutdownGeneration)
