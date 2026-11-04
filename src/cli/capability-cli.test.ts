@@ -9,7 +9,6 @@ import type { inspectLocalAudioSelection } from "../media-understanding/local-au
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerEmbeddingCapabilityCliTests } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
-import { registerMediaInputCapabilityCliTests } from "./capability-cli.media-input.test-support.js";
 import {
   invalidModelRunOptionCases,
   preparedModel,
@@ -1093,39 +1092,16 @@ describe("capability cli", () => {
   });
 
   it.each([
-    {
-      domain: "image",
-      action: "describe",
-      file: "photo.jpg",
-      missing: false,
-      error: `No description returned for image: ${path.resolve("photo.jpg")}`,
-    },
-    {
-      domain: "image",
-      action: "describe",
-      file: "photo.jpg",
-      missing: true,
-      error: "No image understanding provider is configured or ready",
-      hint: "agents.defaults.imageModel.primary",
-    },
-    {
-      domain: "audio",
-      action: "transcribe",
-      file: "memo.m4a",
-      missing: false,
-      error: `No transcript returned for audio: ${path.resolve("memo.m4a")}`,
-    },
-    {
-      domain: "audio",
-      action: "transcribe",
-      file: "memo.m4a",
-      missing: true,
-      error: "No audio transcription provider is configured or ready",
-      hint: "tools.media.models",
-    },
-  ])(
-    "reports empty $domain results (missing provider: $missing)",
-    async ({ domain, action, file, missing, error, hint }) => {
+    ["image", "describe", "photo.jpg", false, "description", undefined],
+    ["image", "describe", "photo.jpg", true, "image", "agents.defaults.imageModel.primary"],
+    ["audio", "transcribe", "memo.m4a", false, "transcript", undefined],
+    ["audio", "transcribe", "memo.m4a", true, "audio transcription", "tools.media.models"],
+  ] as const)(
+    "reports empty %s results (action %s, file %s, missing provider %s)",
+    async (domain, action, file, missing, label, hint) => {
+      const error = missing
+        ? `No ${label}${domain === "image" ? " understanding" : ""} provider is configured or ready`
+        : `No ${label} returned for ${domain}: ${path.resolve(file)}`;
       const runtime = domain === "image" ? mocks.describeImageFile : mocks.transcribeAudioFile;
       runtime.mockResolvedValueOnce({
         text: undefined,
@@ -1529,11 +1505,53 @@ describe("capability cli", () => {
     },
   );
 
-  registerMediaInputCapabilityCliTests({
-    mocks,
-    tempDirs,
-    firstJsonOutput,
-    expectRuntimeErrorContains,
+  it.skipIf(process.platform === "win32").each([
+    ["audio", "transcribe", "memo.wav"],
+    ["video", "describe", "clip.mp4"],
+  ] as const)("reads the selected %s through a symlink parent", async (kind, action, name) => {
+    const root = await fs.realpath(tempDirs.make("infer-media-parent-"));
+    const physical = path.join(root, "physical");
+    const selected = path.join(physical, name);
+    await fs.mkdir(path.join(physical, "nested"), { recursive: true });
+    await fs.symlink(path.join(physical, "nested"), path.join(root, "link"), "dir");
+    await fs.writeFile(path.join(physical, "payload.bin"), "selected input bytes");
+    await fs.symlink("payload.bin", selected);
+    await fs.writeFile(path.join(root, name), "lexical decoy bytes");
+    const runtime = kind === "audio" ? mocks.transcribeAudioFile : mocks.describeVideoFile;
+    runtime.mockImplementationOnce(async ({ filePath }) => ({
+      text: await fs.readFile(filePath, "utf8"),
+    }));
+    await runCap("infer", kind, action, "--file", `${root}/link/../${name}`, "--json");
+    expect(firstJsonOutput()).toMatchObject({
+      outputs: [{ path: selected, text: "selected input bytes" }],
+    });
+  });
+  it("reports actual audio attribution and forwards request hints", async () => {
+    mocks.transcribeAudioFile.mockResolvedValueOnce({
+      text: "meeting notes",
+      provider: "fixture-asr",
+      model: "fixture-actual-model",
+    });
+    await runCap(
+      "infer",
+      "audio",
+      "transcribe",
+      ...cliOptions({
+        file: "memo.m4a",
+        model: "openai/whisper-1",
+        language: "en",
+        prompt: "Focus on names",
+      }),
+    );
+    expect(mocks.transcribeAudioFile).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ language: "en", prompt: "Focus on names" }),
+    );
+    const output = mocks.runtime.log.mock.calls.at(-1)?.[0];
+    expect(output).toContain("provider: fixture-asr");
+    expect(output).toContain("model: fixture-actual-model");
+    expect(output).toContain(path.resolve("memo.m4a"));
+    expect(output).toContain("meeting notes");
   });
 
   it.each([
