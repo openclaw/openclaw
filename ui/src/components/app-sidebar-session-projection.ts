@@ -7,10 +7,7 @@ import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { groupSidebarSessionRows, type SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import {
-  SidebarChildExpansion,
-  type SidebarExpansionScope,
-} from "./app-sidebar-child-expansion.ts";
+import { SidebarChildExpansion } from "./app-sidebar-child-expansion.ts";
 import { sidebarPresencePresentation, type SidebarPresenceScope } from "./app-sidebar-presence.ts";
 import {
   catalogErrorMessages,
@@ -400,10 +397,10 @@ export class SidebarSessionProjection {
     string,
     { value: SidebarSubtitleValue; catalogValue?: SidebarSubtitleValue; shownAt: number }
   >();
-  private previousInput:
-    | (SidebarExpansionScope &
-        Pick<SidebarProjectionInput, "grouping" | "sortMode" | "statusFilter" | "listSource">)
-    | null = null;
+  private previousInput: Pick<
+    SidebarProjectionInput,
+    "grouping" | "sortMode" | "statusFilter" | "agentId" | "connectionIdentity" | "listSource"
+  > | null = null;
   private previousCollapsedSections = new Set<string>();
 
   get createdOrder(): ReadonlyMap<string, number> {
@@ -503,7 +500,6 @@ export class SidebarSessionProjection {
       agentId: input.agentId,
       connectionIdentity: input.connectionIdentity,
       listSource: input.listSource,
-      selectedSessionKey: input.selectedSessionKey,
     };
     this.previousCollapsedSections = new Set(input.collapsedSections);
 
@@ -516,7 +512,7 @@ export class SidebarSessionProjection {
       }
       observed.add(session.key);
       staleKeys.delete(session.key);
-      this.children.observe(session, input.listLoaded, input.selectedSessionKey);
+      this.children.observe(session, input.listLoaded);
       this.observeSubtitle(session, input.subtitle);
       pending.push(...session.children);
     }

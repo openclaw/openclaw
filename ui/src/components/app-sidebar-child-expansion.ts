@@ -2,28 +2,29 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 export type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
 
-export type SidebarExpansionScope = {
-  agentId: string;
-  connectionIdentity: unknown;
-  selectedSessionKey: string | null;
-};
+type SidebarExpansionScope = { agentId: string; connectionIdentity: unknown };
 
 /** Parent disclosure state: explicit choices plus the child identities each parent last showed. */
 export class SidebarChildExpansion {
   private readonly modes = new Map<string, SidebarExpansionMode>();
   private readonly observedChildKeys = new Map<string, readonly string[]>();
   private restoredPending = false;
+  private activeSessionKey: string | null = null;
   private readonly revealedAncestors = new Set<string>();
 
   constructor(private readonly onChange: () => void) {}
 
   /** Opens a projection pass; a scope change drops state unless a snapshot handoff is pending. */
-  beginPass(input: SidebarExpansionScope, previous: SidebarExpansionScope | null): void {
+  beginPass(
+    input: SidebarExpansionScope & { selectedSessionKey: string | null },
+    previous: SidebarExpansionScope | null,
+  ): void {
     const scopeChanged =
       previous !== null &&
       (previous.agentId !== input.agentId ||
         previous.connectionIdentity !== input.connectionIdentity);
-    if (scopeChanged || previous?.selectedSessionKey !== input.selectedSessionKey) {
+    if (scopeChanged || this.activeSessionKey !== input.selectedSessionKey) {
+      this.activeSessionKey = input.selectedSessionKey;
       this.revealedAncestors.clear();
     }
     if (scopeChanged && !this.restoredPending) {
@@ -37,15 +38,11 @@ export class SidebarChildExpansion {
     return [...this.modes.keys(), ...this.observedChildKeys.keys()];
   }
 
-  observe(
-    session: SidebarRecentSession,
-    listLoaded: boolean,
-    selectedSessionKey: string | null,
-  ): void {
+  observe(session: SidebarRecentSession, listLoaded: boolean): void {
     const previousChildren = this.observedChildKeys.get(session.key);
     let mode = this.modes.get(session.key);
     if (
-      selectedSessionKey !== null &&
+      this.activeSessionKey !== null &&
       session.containsActiveDescendant &&
       !this.revealedAncestors.has(session.key)
     ) {
