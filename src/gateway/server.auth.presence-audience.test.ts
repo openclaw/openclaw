@@ -72,7 +72,7 @@ const GUEST_PRESENCE_FIELDS = new Set([
   "watchedSessions",
 ]);
 
-function personOnlyViolations(row: SystemPresence): string[] {
+function personOnlyViolations(row: Partial<SystemPresence>): string[] {
   return [
     ...Object.keys(row).filter((field) => !GUEST_PRESENCE_FIELDS.has(field)),
     ...(row.user?.email ? ["user.email"] : []),
@@ -259,9 +259,12 @@ describe("gateway presence audience", () => {
           });
         }
         // Online status stays visible to session readers, without device or activity detail.
-        const guestPresence = await rpcReq<SystemPresence[]>(guest.ws, "system-presence", {});
+        const guestPresence = await rpcReq(guest.ws, "system-presence", {});
         expect(guestPresence.ok).toBe(true);
-        for (const rows of [guest.hello.snapshot.presence, guestPresence.payload ?? []]) {
+        if (!Value.Check(Type.Array(PresenceEntrySchema), guestPresence.payload)) {
+          throw new Error("demoted guest system-presence returned invalid presence rows");
+        }
+        for (const rows of [guest.hello.snapshot.presence, guestPresence.payload]) {
           expect(rows.flatMap((row) => personOnlyViolations(row))).toEqual([]);
         }
         expect(await rpcReq(guest.ws, "sessions.describe", { key: sharedKey })).toMatchObject({
