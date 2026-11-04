@@ -44,6 +44,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-quota-account-identity.e2e.test.ts",
   "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-session-companion-private.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
@@ -123,6 +124,8 @@ export const uiE2eSerialTestFiles = [
   ...new Set([
     ...uiE2ePrivateServerTestFiles.filter((file) => !uiE2eStandaloneTestFiles.includes(file)),
     ...uiE2eRealGatewayTestFiles,
+    // Native paste spans multiple gestures; sibling contexts share Chromium's clipboard.
+    resolveUiTypeScriptPath("ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts"),
     uiE2eRuntimeBudgetTestFile,
   ]),
 ].toSorted();
