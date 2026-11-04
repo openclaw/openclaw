@@ -36,10 +36,15 @@ const enSessionOrganizationShared = {
     splitUnavailable: "Open a session on a wide screen to use split view.",
     moveSession: "Move session…",
     moveSessionTitle: "Move session",
-    moveSessionFailed: "Couldn’t move the session. Try again.",
+    moveSessionFailed: "Couldn’t move this session. Try again.",
     moveSessionGatewayTarget: "Gateway",
     movingSession: "Moving to {target}…",
     movingSessionGeneric: "Moving session…",
+    stopWorker: "Stop session on device…",
+    stopWorkerConfirm: "Stop “{session}” on its device?",
+    stopWorkerDescription:
+      "This session stops working on its device after saving workspace changes. Your conversation and saved changes stay.",
+    stopWorkerConfirmAction: "Stop",
     stopCloudWorker: "Stop cloud device…",
     stopCloudWorkerConfirm: "Stop this cloud device?",
     stopCloudWorkerDescription:

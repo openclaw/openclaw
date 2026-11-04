@@ -93,8 +93,8 @@ it.each([
 });
 
 it.each([
-  ["local", "Repository device required", "Choose device…"],
-  ["failed", "Device failed", "Stop cloud device…"],
+  ["local", "This repository needs a device", "Choose device…"],
+  ["failed", "Couldn’t continue this session", "Stop cloud device…"],
 ] as const)("offers the matching composer action for %s placement", (state, title, actionLabel) => {
   const onRecover = vi.fn();
   const onReclaim = vi.fn();
@@ -178,7 +178,7 @@ it.each(["retry", "missing-receipt", "reconciling", "read-only"] as const)(
       blocksSend: true,
       busyMessage: null,
       disabledBanner: {
-        title: "Couldn’t move the session. Try again.",
+        title: "Couldn’t move this session. Try again.",
         text: "Workspace reconciliation failed.",
       },
     });

@@ -21,7 +21,7 @@ const catalog = {
       stop: "Stop {name}",
       stopProcess: "Stop process",
       stopping: "Stopping…",
-      stopNotRequested: "The process could not be stopped. Refresh to check its current state.",
+      stopNotRequested: "Couldn’t stop this process. Refresh to check its current state.",
       expired: "This process is no longer retained. Return to the process list.",
       omitted:
         "This process is not included in the current limited list. Return to Processes or refresh.",

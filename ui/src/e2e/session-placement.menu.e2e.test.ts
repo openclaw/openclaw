@@ -207,7 +207,7 @@ suite.define(() => {
         const action = menuItem(menu, "Move session…");
         await action.waitFor();
         expect(await action.isDisabled()).toBe(true);
-        expect(await action.getAttribute("title")).toBe("Finalizing device workspace");
+        expect(await action.getAttribute("title")).toBe("Saving workspace changes");
         expect(await gateway.getRequests("sessions.move")).toHaveLength(0);
         await page.keyboard.press("Escape");
         await gateway.setSessionsListResponse(chatSessionListResponse([session]));
@@ -292,9 +292,7 @@ suite.define(() => {
           .waitFor();
         await page.reload();
         const details = await openChatDetails(page);
-        await details
-          .getByRole("button", { name: /Couldn’t move the session. Try again./ })
-          .click();
+        await details.getByRole("button", { name: /Couldn’t move this session/ }).click();
         await gateway.deferNext("sessions.move");
         const retryAction = menuItem(page, "Retry move");
         await details.getByText("Workspace reconciliation failed.", { exact: true }).waitFor();

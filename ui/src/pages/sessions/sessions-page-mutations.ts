@@ -370,8 +370,10 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     if (
       !scope ||
       !(await confirmMutation({
-        title: t("sessionsView.stopCloudWorkerConfirm"),
-        message: t("sessionsView.stopCloudWorkerDescription"),
+        title: t(`${stopAction.copyKey}Confirm`, {
+          session: normalizeOptionalString(row.label) ?? row.key,
+        }),
+        message: t(`${stopAction.copyKey}Description`),
         confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
         signal: scope.signal,
       })) ||

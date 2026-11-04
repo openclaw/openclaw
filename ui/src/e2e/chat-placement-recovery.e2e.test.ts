@@ -36,7 +36,9 @@ async function openFailure(page: Page, message: string) {
   await failure.locator("summary").click();
   const details = failure.getByLabel("Error details", { exact: true });
   await details.waitFor();
-  expect(await details.textContent()).toBe(`Couldn’t continue this session. ${message}`);
+  expect(await details.textContent()).toBe(
+    `Couldn’t continue this session. Check its device and try again. ${message}`,
+  );
   return failure;
 }
 function expectSameSession(page: Page, key: string) {
@@ -177,7 +179,7 @@ suite.define(() => {
         },
       },
     });
-    await page.getByText("Repository device required", { exact: true }).waitFor();
+    await page.getByText("This repository needs a device", { exact: true }).waitFor();
     expect(await composer.isEnabled()).toBe(false);
     expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
@@ -195,7 +197,7 @@ suite.define(() => {
       agentId: "main",
       deviceId: "runner",
     });
-    await page.getByText("Starting device…", { exact: true }).first().waitFor();
+    await page.getByText("Preparing device…", { exact: true }).first().waitFor();
 
     const recovered = {
       ...session,

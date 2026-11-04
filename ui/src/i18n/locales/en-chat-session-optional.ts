@@ -157,11 +157,11 @@ const catalog = {
         "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
     },
     workerRuntimeInstall: {
-      transferringTitle: "Updating worker runtime · {transferred} of {total} ({percent}%)",
-      installingTitle: "Installing worker runtime",
+      transferringTitle: "Preparing this device · {transferred} of {total} ({percent}%)",
+      installingTitle: "Preparing this device…",
       transferringBody:
-        "Transferring the new worker runtime to this device: {transferred} of {total} ({percent}%). The next turn starts when it finishes.",
-      installingBody: "Installing the new worker runtime on this device.",
+        "Transferring the update to this device: {transferred} of {total} ({percent}%). The next reply starts when it finishes.",
+      installingBody: "Installing the update on this device.",
     },
     taskSuggestions: {
       eyebrow: "Suggested task · in {repo}",
