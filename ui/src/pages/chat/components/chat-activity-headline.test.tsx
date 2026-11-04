@@ -113,6 +113,58 @@ function update(activity: ActivityHeadline | undefined, scope = "session:run") {
   return drawHeadline({ scope, activity, summary: "2 reads" });
 }
 
+it("keeps the shimmer label mounted when narration changes", () => {
+  update(operation("first"));
+  const original = query("label");
+  expect(original?.classList.contains("text-shimmer")).toBe(true);
+
+  update(operation("second"));
+  expectAfter(3_000, "Read second…");
+  expect(query("label")).toBe(original);
+
+  update({ ...operation("second"), title: "Reviewing results" });
+  expect(label()).toBe("Reviewing results…");
+  expect(query("label")).toBe(original);
+  expect(original?.classList.contains("text-shimmer")).toBe(true);
+
+  update({ ...operation("second", "completed"), title: "Reviewing results" });
+  expect(query("label")).toBe(original);
+  expect(original?.classList.contains("text-shimmer")).toBe(false);
+});
+
+it("keeps shimmering held copy while the next operation is running", () => {
+  update(operation("first"));
+  const original = query("label");
+  drawHeadline({
+    scope: "session:run",
+    activity: operation("second"),
+    summary: "2 reads",
+    currentActivity: [
+      {
+        itemId: "first",
+        toolCallId: "first",
+        phase: "end",
+        kind: "tool",
+        title: "Read first",
+        status: "completed",
+      },
+      {
+        itemId: "second",
+        toolCallId: "second",
+        phase: "start",
+        kind: "tool",
+        title: "Read second",
+        status: "running",
+      },
+    ],
+  });
+  expect(label()).toBe("Read first");
+  expect(original?.classList.contains("text-shimmer")).toBe(true);
+  expectAfter(3_000, "Read second…");
+  expect(query("label")).toBe(original);
+  expect(original?.classList.contains("text-shimmer")).toBe(true);
+});
+
 function label() {
   return query("label")?.textContent;
 }
