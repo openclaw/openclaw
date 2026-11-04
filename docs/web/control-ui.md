@@ -192,6 +192,8 @@ The saved sidebar also retains unread marks, activity and attention glyphs, pull
 
 Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
+The desktop **Subagents** tab places nested subagents beneath the subagent that started them. Each row keeps its own activity and controls. Floating **Details** and the mobile list remain compact, direct-child views.
+
 When a conversation has a saved Details snapshot, desktop task progress keeps its saved runtime presentation while reconnecting. Live reads refresh those values in place after the progress and child reads settle; the saved presentation does not authorize actions.
 
 Saved desktop Details also restores session attribution, participant counts, and the branch/worktree row before live session facts arrive. Automations keeps its position while those facts refresh.
