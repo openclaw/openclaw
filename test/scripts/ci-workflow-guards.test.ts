@@ -536,15 +536,20 @@ describe("ci workflow guards", () => {
         repository,
         runId,
         runAttempt: 1,
-        preflightOutputs: { frozen_target: frozen },
+        preflightOutputs: { frozen_target: frozen, diff_base_revision: "a".repeat(40) },
       };
       expect(evaluateWorkflowCondition(upload.if, context)).toBe(expected);
       expect(
         Boolean(evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_OBSERVATIONS_DIR, context)),
       ).toBe(expected);
+      expect(evaluateWorkflowExpression(run.env.CHECKOUT_BASE_SHA, context)).toBe("a".repeat(40));
     }
     expect(upload["continue-on-error"]).toBe(true);
-    expect(upload.with.path).toBe("${{ runner.temp }}/ci-test-observations/*/observations.json");
+    expect(job.env.CHECKOUT_BASE_SHA).toBeUndefined();
+    expect(upload.with.path.trim().split("\n")).toEqual([
+      "${{ runner.temp }}/ci-test-observations/*/observations.json",
+      "${{ runner.temp }}/ci-test-observations/*/launch.json",
+    ]);
     expect(upload.with["retention-days"]).toBe(7);
   });
 
@@ -2568,7 +2573,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     for (const [group, expected] of [
       ["extension-package-boundary", 40],
       ["runtime-topology-architecture", 20],
-      ["plugin-sdk-api-diff", 30],
+      ["plugin-sdk-api-diff", 60],
       ["boundaries", 20],
       [undefined, 20],
     ] as const) {

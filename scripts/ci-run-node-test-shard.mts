@@ -940,6 +940,18 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
                 "--experimental.recordDependencies",
               ];
               observedRuntimes.add(runtime);
+              try {
+                const { writeCiTestLaunchInputs } = await import("./lib/ci-test-launch-inputs.mts");
+                writeCiTestLaunchInputs({
+                  directory: childEnv.OPENCLAW_VITEST_OBSERVATION_DIR,
+                  repositoryRoot: process.cwd(),
+                  runtime,
+                  args,
+                  env: childEnv,
+                });
+              } catch {
+                console.warn("[adaptive-ci] launch inputs unavailable; tests unchanged");
+              }
             } catch {
               console.warn("[adaptive-ci] observation setup unavailable; tests unchanged");
             }
