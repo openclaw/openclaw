@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { waitForAbortSignal as waitForAbort } from "../../infra/abort-signal.js";
 import {
   GatewayDrainingError,
+  getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -33,6 +34,24 @@ import {
 const withQueue = useIngressMonitorQueueFixture();
 
 describe("channel ingress monitor", () => {
+  it("reports a direct delivery as active before a synchronous transport failure", async () => {
+    await withQueue(async (queue) => {
+      const activity: boolean[] = [];
+      const monitor = createMonitor(queue, vi.fn(), (active) => activity.push(active));
+      const failure = new Error("direct dispatch failed");
+      let activeAtDispatch: boolean | undefined;
+      await expect(
+        monitor.dispatchDirect(() => {
+          activeAtDispatch = activity.at(-1);
+          throw failure;
+        }),
+      ).rejects.toBe(failure);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(activeAtDispatch).toBe(true);
+      expect(activity.at(-1)).toBe(false);
+    });
+  });
+
   it("creates named plain and reasoned ingress errors", () => {
     const PayloadError = createChannelIngressError("TestIngressPayloadError");
     const PermanentError = createChannelIngressError<"invalid-event">("TestIngressPermanentError", {

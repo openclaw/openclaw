@@ -1,10 +1,12 @@
 /** Shared durable channel-ingress admission, pump, retention, and shutdown lifecycle. */
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  GatewayDrainingError,
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
   onGatewaySuspendAdmissionChange,
+  tryBeginGatewayIndependentRootWorkAdmission,
   waitForGatewayRestartFenceSettlement,
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -69,6 +71,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     ? AbortSignal.any([shutdown.signal, options.abortSignal])
     : shutdown.signal;
   const activeDeliveries = new Set<Promise<unknown>>();
+  const directDeliveries = new Set<Promise<void>>();
   const activeInspections = new Set<Promise<unknown>>();
   const startLimit = options.drain?.startLimit ?? DEFAULT_INGRESS_START_LIMIT;
   // Released deferrals lend start slots while stop still joins their callbacks.
@@ -118,7 +121,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 
   const publishActivity = (): void => {
     const active =
-      activeInspections.size + activeDeliveries.size > 0 ||
+      activeInspections.size + activeDeliveries.size + directDeliveries.size > 0 ||
       (running && (requested || pumping !== undefined));
     if (active === lastReportedActive) {
       return;
@@ -550,11 +553,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     await waitForPumpIdle();
   };
 
-  const assertAdmissionOpen = (): void => {
+  const assertAdmissionOpen = (kind: "durable" | "direct"): void => {
     if (
-      (stopped && options.admissionMode !== "durable-after-stop") ||
-      (options.admissionMode === "while-running" && !running) ||
-      (options.abortSignal?.aborted && options.admissionMode !== "durable-after-stop")
+      ((stopped || options.abortSignal?.aborted) &&
+        (kind === "direct" || options.admissionMode !== "durable-after-stop")) ||
+      (options.admissionMode === "while-running" && !running)
     ) {
       throw createStoppedError();
     }
@@ -607,7 +610,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     work: (admitOptions: ChannelIngressAdmissionContext) => Promise<T>,
     admitOptions?: { receivedAt?: number },
   ): Promise<T> => {
-    assertAdmissionOpen();
+    assertAdmissionOpen("durable");
     const receivedAt = admitOptions?.receivedAt ?? now();
     let needsDrain = false;
     // Append retries stay serialized so backoff cannot invert one lane's arrival order.
@@ -636,6 +639,25 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   };
 
   return {
+    /** Admit a fresh transport delivery without persisting it or waiting for the durable lane. */
+    dispatchDirect: async (dispatch: () => Promise<void>): Promise<void> => {
+      assertAdmissionOpen("direct");
+      const root = tryBeginGatewayIndependentRootWorkAdmission("channel:ingress");
+      if (!root) {
+        throw new GatewayDrainingError();
+      }
+      // Publish account activity before transport code can acknowledge or stop the monitor.
+      const delivery = root.run(() => Promise.resolve().then(dispatch));
+      directDeliveries.add(delivery);
+      publishActivity();
+      try {
+        await delivery;
+      } finally {
+        directDeliveries.delete(delivery);
+        root.release();
+        publishActivity();
+      }
+    },
     admit: (
       raw: TRaw,
       admitOptions?: { receivedAt?: number; facts?: ChannelIngressMonitorFacts },
@@ -709,6 +731,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         if (options.deferredClaims && options.deferredClaims !== "manual") {
           await waitForDeferredClaims();
         }
+        await waitForPending(() => directDeliveries);
         // Callback grace may expire, but already accepted writes still own their claims.
         await drain?.dispose({ waitForSettlements: true });
       })();
@@ -717,6 +740,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     waitForIdle: async () => {
       for (;;) {
         await admissionTail;
+        await waitForPending(() => directDeliveries);
         await waitForPumpIdle();
         await waitForPending(() => activeInspections);
         await waitForActiveDeliveries();
@@ -729,6 +753,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           !pumping &&
           activeInspections.size === 0 &&
           activeDeliveries.size === 0 &&
+          directDeliveries.size === 0 &&
           !requested
         ) {
           return;
