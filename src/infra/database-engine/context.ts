@@ -61,6 +61,7 @@ function assertSameDatabaseEngineSelection(
   if (
     previous.postgres?.connection !== next.postgres?.connection ||
     previous.postgres?.schemaPrefix !== next.postgres?.schemaPrefix ||
+    previous.postgres?.connectionEnvKey !== next.postgres?.connectionEnvKey ||
     listDatabaseEngineStores().some(
       ({ id }) => previous.effectiveEngines[id] !== next.effectiveEngines[id],
     )

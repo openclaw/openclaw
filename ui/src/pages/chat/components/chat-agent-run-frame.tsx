@@ -233,7 +233,8 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
   );
   const sourcePreviews = actionOwner
     ? extractChatSourcePreviews({
-        groups,
+        // Cited results can sit in an earlier rollup that no visible reply owns.
+        groups: frame.detachedGroups ? [...frame.detachedGroups, ...groups] : groups,
         answer: actionOwner.message,
         runId: frame.runId,
         basePath: opts.basePath,
@@ -268,7 +269,7 @@ function RunFrame(props: FrameProps) {
       (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
     );
     // The recap retains this run's terminal timing after the session moves on.
-    // Handoffs have no work summary: their request-wide timing stays in the recap.
+    // Run duration appears only on the Worked summary; turns without one show no timing.
     if (!recap || work?.kind !== "work-group") {
       return undefined;
     }
@@ -397,7 +398,6 @@ function RunFrame(props: FrameProps) {
         frameReplyLine: state().frameReplyLine,
         frameActionOwner: state().actionOwner,
         turnRecap: props.options.turnRecap,
-        hideTurnRecapDuration: timedWork() !== undefined,
       }}
     />
   );

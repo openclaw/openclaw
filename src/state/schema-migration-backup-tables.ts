@@ -37,6 +37,12 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     // PostgreSQL-only exact-path index; SQLite advances metadata only.
     36: [],
     37: ["session_transcript_cold_archive_chunks"],
+    // PostgreSQL-only full-text token split; SQLite advances metadata only.
+    38: [],
+    // The table definition changes; rollback retains it without rebuilding indexes/statistics.
+    39: ["transcript_events"],
+    // New receipt table only; existing session data is not rewritten.
+    40: ["session_creation_operations"],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
@@ -44,7 +50,10 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
       "sqlite_stat1",
       "sqlite_stat4",
     ],
-    [MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION]: ["meeting_transcript_sessions"],
+    [MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION]: [
+      "meeting_transcript_sessions",
+      "worker_environments",
+    ],
     26: ["session_state_heads", "sqlite_stat1", "sqlite_stat4"],
     27: ["acp_replay_events", "skill_usage", "state_leases", "sqlite_stat1", "sqlite_stat4"],
     28: [
@@ -73,5 +82,23 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
       "local_workspace_tree_packs",
       "local_workspace_source_path_sets",
     ],
+    36: [
+      "claw_installs",
+      "template_installs",
+      "claw_workspace_files",
+      "template_workspace_files",
+      "claw_package_refs",
+      "template_package_refs",
+      "claw_cron_refs",
+      "template_cron_refs",
+      "claw_mcp_server_refs",
+      "template_mcp_server_refs",
+      "agent_provenance",
+      "sqlite_stat1",
+      "sqlite_stat4",
+    ],
+    37: ["worker_environments"],
+    38: ["session_repository_workspaces", "worker_workspace_pending_results"],
+    39: ["worker_environments"],
   },
 };

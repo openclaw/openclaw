@@ -5,6 +5,7 @@ import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/s
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
+import type { NodeSession } from "./node-session.types.js";
 
 type ConnectedNodePluginTool = {
   nodeId: string;
@@ -203,4 +204,25 @@ export function listConnectedNodePluginTools(): ConnectedNodePluginTool[] {
 
 export function getConnectedNodePluginToolsVersion(): number {
   return snapshotVersion;
+}
+
+/** Publish the session and the agent-facing catalog from the same normalized descriptors. */
+export function publishNodeSessionPluginTools(
+  node: NodeSession,
+  enabled: boolean | undefined,
+  registrations: readonly RegisteredNodePluginToolCommand[] | undefined,
+): void {
+  const normalized = normalizeNodePluginToolDescriptors({
+    nodeId: node.nodeId,
+    tools: node.declaredNodePluginTools,
+    allowedCommands: node.commands,
+    enabled,
+    registeredDescriptors: createRegisteredNodePluginToolDescriptorMap(registrations),
+  });
+  node.nodePluginTools = normalized.map((entry) => entry.descriptor);
+  replaceConnectedNodePluginTools({
+    nodeId: node.nodeId,
+    displayName: node.displayName,
+    tools: normalized,
+  });
 }

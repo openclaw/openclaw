@@ -27,6 +27,7 @@ const commandResult = (name: string) => ({ commands: [remoteCommand(name, name)]
 
 function catalogFixture() {
   const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
+  vi.spyOn(client, "hello", "get").mockReturnValue(gatewayHelloForMethods(["commands.list"]));
   const request = vi.spyOn(client, "request");
   onTestFinished(async () => {
     request.mockRestore();
@@ -102,6 +103,67 @@ describe("refreshSlashCommands", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(commandByName("new_pin")).toBeDefined();
     expect(commandByName("old_pin")).toBeUndefined();
+  });
+
+  it("keeps New session catalogs separate per selected project", async () => {
+    const { client, request } = catalogFixture();
+    request
+      .mockResolvedValueOnce(commandResult("alpha_skill"))
+      .mockResolvedValueOnce(commandResult("beta_skill"));
+    // Agent-scoped startup metadata must not stand in for a project's catalog.
+    beginChatMetadataPublication(client, { agentId: "main" }).publish(commandResult("agent_only"));
+    const refreshProject = (projectId?: string) =>
+      refreshSlashCommands({ client, agentId: "main", projectId });
+    await refreshProject("project-alpha");
+    expect(commandByName("alpha_skill")).toBeDefined();
+    await refreshProject("project-beta");
+    expect(commandByName("beta_skill")).toBeDefined();
+    expect(commandByName("alpha_skill")).toBeUndefined();
+    await refreshProject();
+    expect(commandByName("agent_only")).toBeDefined();
+    expect(commandByName("beta_skill")).toBeUndefined();
+    await refreshProject("project-alpha");
+    expect(commandByName("alpha_skill")).toBeDefined();
+    const projectRequest = (projectId: string) => [
+      "commands.list",
+      { agentId: "main", projectId, includeArgs: true, scope: "text" },
+    ];
+    expect(request.mock.calls).toEqual([
+      projectRequest("project-alpha"),
+      projectRequest("project-beta"),
+    ]);
+  });
+
+  it("reads a project session's own catalog instead of agent-scoped metadata", async () => {
+    const { client, request } = catalogFixture();
+    request
+      .mockResolvedValueOnce(commandResult("alpha_session_skill"))
+      .mockResolvedValueOnce(commandResult("rebound_session_skill"));
+    const sessionKey = "agent:main:project-session";
+    beginChatMetadataPublication(client, { agentId: "main", sessionKey }).publish(
+      commandResult("agent_only"),
+    );
+    // An existing session owns its project, so a stray projectId never selects a catalog.
+    const projectId = "project-alpha";
+    // Sessions without an execution root keep the startup metadata catalog.
+    await refreshSlashCommands({ client, agentId: "main", sessionKey, projectId });
+    expect(commandByName("agent_only")).toBeDefined();
+    expect(request).not.toHaveBeenCalled();
+    const refreshScoped = (sessionSkillScope: string) =>
+      refreshSlashCommands({ client, agentId: "main", sessionKey, projectId, sessionSkillScope });
+    await refreshScoped('[null,"/alpha"]');
+    expect(commandByName("alpha_session_skill")).toBeDefined();
+    expect(commandByName("agent_only")).toBeUndefined();
+    expect(request).toHaveBeenLastCalledWith("commands.list", {
+      agentId: "main",
+      sessionKey,
+      includeArgs: true,
+      scope: "text",
+    });
+    // A changed execution root is a different catalog, never the cached one.
+    await refreshScoped('["wt",null]');
+    expect(commandByName("rebound_session_skill")).toBeDefined();
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("resolves localized UI command metadata", () => {

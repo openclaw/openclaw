@@ -111,7 +111,10 @@ suite.define(() => {
         await subtitle.waitFor();
         const detail = (await subtitle.textContent())?.trim();
         const text = cases[index]?.text;
-        expect({ row: rowText, detail }).toEqual({ row: text, detail: text });
+        expect({ row: rowText, detail }).toEqual({
+          row: text,
+          detail: `${text} · Paused`,
+        });
         await page.locator('[data-test-id="cron-back"]').click();
         await row.waitFor();
       }

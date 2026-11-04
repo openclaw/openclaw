@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
+import { mockDocumentVisibility } from "../../test-helpers/mock-cleanup.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sessionStorageStatus } from "./session-storage.test-support.ts";
 import { SessionStorageSettings } from "./session-storage.tsx";
@@ -75,9 +76,9 @@ it("retains expanded agent inventory rows across refreshes and updates reordered
   const initial = inventory(7);
   initial.agents.push({ ...initial.agents[0]!, agentId: "research", hotTranscripts: 3 });
   const { page, request, reply } = await mount(initial);
-  const disclosure = page.querySelector<HTMLDetailsElement>("details.settings-row--stacked")!;
+  const disclosure = page.querySelector<HTMLDetailsElement>("details.settings-disclosure")!;
   disclosure.open = true;
-  const rows = [...disclosure.querySelectorAll(".settings-row")];
+  const rows = [...disclosure.querySelectorAll(".settings-subrows .settings-row")];
 
   const updated = structuredClone(initial);
   updated.agents[0]!.hotTranscripts = 11;
@@ -85,7 +86,10 @@ it("retains expanded agent inventory rows across refreshes and updates reordered
   request.mockImplementation(reply("sessions.storage.status", async () => updated));
   click(page, "Refresh");
   await waitText(page, "14 uncompressed");
-  expect([...disclosure.querySelectorAll(".settings-row")]).toEqual([rows[1], rows[0]]);
+  expect([...disclosure.querySelectorAll(".settings-subrows .settings-row")]).toEqual([
+    rows[1],
+    rows[0],
+  ]);
   expect(rows[0]?.textContent).toContain("11 uncompressed");
   expect(disclosure.open).toBe(true);
 });
@@ -232,6 +236,25 @@ async function startBackgroundRun() {
   await waitText(mounted.page, "Background batch started.");
   return { ...mounted, running, nextStatus };
 }
+
+it.each(["visible", "hidden"] as const)(
+  "pauses maintenance progress reads when hidden after starting %s",
+  async (initial) => {
+    const show = mockDocumentVisibility(initial);
+    const { page, request, nextStatus } = await startBackgroundRun();
+    show("hidden");
+    await expectIdle(request);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.storage.run")).toHaveLength(
+      1,
+    );
+    nextStatus.mockResolvedValue(inventory(5, { lastCompletedAt: 200, archivedTranscripts: 2 }));
+    const reads = nextStatus.mock.calls.length;
+    show("visible");
+    await waitText(page, "Batch completed. 2 transcripts archived.");
+    expect(nextStatus).toHaveBeenCalledTimes(reads + 1);
+    await expectIdle(request);
+  },
+);
 
 it("follows run completion after reconnect", async () => {
   const { page, request, nextStatus, client, publish } = await startBackgroundRun();

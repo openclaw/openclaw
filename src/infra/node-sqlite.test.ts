@@ -42,17 +42,6 @@ async function loadNodeSqliteWithVersion(
         executions.push("get");
         return row;
       });
-      const iterate = statement.iterate.bind(statement);
-      vi.spyOn(statement, "iterate").mockImplementation(() => {
-        executions.push("iterate");
-        const rows = iterate();
-        const next = rows.next.bind(rows);
-        vi.spyOn(rows, "next").mockImplementation(() => {
-          const result = next();
-          return result.done ? result : { ...result, value: row };
-        });
-        return rows;
-      });
       return statement;
     }
     return originalPrepare.call(this, sql);
@@ -249,7 +238,7 @@ describe("node SQLite safety", () => {
   });
 
   it.each([0, 1])(
-    "detects and reuses the loaded library's extension capability with two executions (omitted=%s)",
+    "detects and reuses the loaded library's extension capability with one execution (omitted=%s)",
     async (omitted) => {
       const {
         captureSqliteNativeRuntimeAdmission,
@@ -263,14 +252,10 @@ describe("node SQLite safety", () => {
       expect(captureSqliteNativeRuntimeAdmission()).toMatchObject({
         version: "3.51.3",
         extensionLoadingSupported: omitted === 0,
-        iteratorBehavior: {
-          nextAfterDoneIsTerminal: expect.any(Boolean),
-          returnAfterDoneIsInert: expect.any(Boolean),
-        },
       });
       expect(supportsNodeSqliteExtensionLoading()).toBe(omitted === 0);
       expect(prepare).toHaveBeenCalledOnce();
-      expect(executions).toEqual(["iterate", "iterate"]);
+      expect(executions).toEqual(["get"]);
     },
   );
 
@@ -350,7 +335,7 @@ describe("node SQLite safety", () => {
       const native = mockBunSqliteNativeBoundary({ isBun: false });
       const parent = await loadNodeSqliteWithVersion("3.44.6", 1);
       parent.requireNodeSqlite();
-      const iteratorBehavior = parent.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior;
+      const admission = parent.captureSqliteNativeRuntimeAdmission();
       parent.prepare.mockRestore();
       const receiptKey = "openclaw.sqliteNativeRuntimeAdmission";
       const receipt = native.environment.get(receiptKey);
@@ -404,9 +389,7 @@ describe("node SQLite safety", () => {
       expect(worker.supportsNodeSqliteExtensionLoading()).toBe(changed !== "unchanged");
       if (changed === "unchanged") {
         expect(worker.prepare).not.toHaveBeenCalled();
-        expect(worker.captureSqliteNativeRuntimeAdmission()?.iteratorBehavior).toEqual(
-          iteratorBehavior,
-        );
+        expect(worker.captureSqliteNativeRuntimeAdmission()).toEqual(admission);
       } else {
         expect(worker.prepare).toHaveBeenCalled();
       }

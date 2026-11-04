@@ -4,7 +4,8 @@ import path from "node:path";
 import { expect, onTestFinished, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { DecisionEvaluateOptionsV2, DecisionRuntimeV2 } from "../decisions/types-v2.js";
+import type { DecisionEvaluateOptionsV2 } from "../decisions/execution-types.js";
+import type { DecisionRuntimeV2 } from "../decisions/runtime-types.js";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -112,6 +113,7 @@ export function prepareDecisionRuntime(config: OpenClawConfig, provider: string,
       agentDir: resolveAgentDir(config, agentId),
       workspaceDir: config.agents?.defaults?.workspace,
       loadRuntimePlugins: true,
+      runtimePluginPurpose: "isolated-completion",
       runtimePluginSelections: [{ provider, modelId, agentId }],
     },
     { catalogMode: "static" },

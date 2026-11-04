@@ -59,28 +59,29 @@ suite.define(() => {
       const header = group.locator(":scope > .sidebar-recent-sessions__head");
       const label = header.locator(".sidebar-recent-sessions__label-text");
       await group.waitFor({ state: "visible", timeout: 10_000 });
+      const text = label.locator(".hover-marquee__text");
       await expect
-        .poll(() => label.evaluate((element) => getComputedStyle(element).maskImage))
-        .toContain("linear-gradient");
+        .poll(() =>
+          label.evaluate((element) => element.classList.contains("hover-marquee--overflowing")),
+        )
+        .toBe(true);
       await captureUiProof(suite, page, "sidebar-group-title-resting.png");
 
       const resting = await label.evaluate((element) => {
         const style = getComputedStyle(element);
+        const titleText = element.querySelector(".hover-marquee__text")!;
         return {
           clientWidth: element.clientWidth,
           height: element.getBoundingClientRect().height,
           lineHeight: Number.parseFloat(style.lineHeight),
-          scrollWidth: element.scrollWidth,
-          maskImage: style.maskImage,
+          scrollWidth: titleText.scrollWidth,
           whiteSpace: style.whiteSpace,
         };
       });
       expect(resting.whiteSpace).toBe("nowrap");
-      expect(resting.maskImage).toContain("linear-gradient");
       expect(resting.height).toBeLessThanOrEqual(resting.lineHeight + 1);
       expect(resting.scrollWidth).toBeGreaterThan(resting.clientWidth);
 
-      const text = label.locator(".hover-marquee__text");
       const offset = () =>
         text.evaluate((element) => {
           const transform = getComputedStyle(element).transform;
@@ -739,7 +740,7 @@ suite.define(() => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
-    const sessions = Array.from({ length: 13 }, (_, index) =>
+    const sessions = Array.from({ length: 18 }, (_, index) =>
       sessionRow(`agent:main:session-${index}`, `Session ${index}`, baseTime - index * 60_000, {
         ...(index === 0 ? { category: "Alpha" } : {}),
         ...(index === 1 ? { category: "Beta" } : {}),
@@ -767,10 +768,10 @@ suite.define(() => {
       await closeSidebarMenu(page);
       const sidebarRows = page.locator(".sidebar-recent-session");
       // Category sections page independently: Alpha and Beta stay visible
-      // alongside the first ten rows in the ungrouped section.
-      await expect.poll(() => sidebarRows.count()).toBe(12);
+      // alongside the first fifteen rows in the ungrouped section.
+      await expect.poll(() => sidebarRows.count()).toBe(17);
       await page.getByRole("button", { name: "Show more" }).click();
-      await expect.poll(() => sidebarRows.count()).toBe(13);
+      await expect.poll(() => sidebarRows.count()).toBe(18);
       await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
       await captureUiProof(suite, page, "sidebar-all-sessions.png");
 
@@ -827,7 +828,7 @@ suite.define(() => {
       });
       await expect
         .poll(() => ungrouped.locator(".sidebar-recent-session").count(), { timeout: 10_000 })
-        .toBe(10);
+        .toBe(15);
 
       const alpha = page.locator('[data-session-section="category:Alpha"]');
       const alphaToggle = alpha
@@ -867,7 +868,7 @@ suite.define(() => {
             .getAttribute("aria-expanded"),
         )
         .toBe("false");
-      await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
+      await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(16);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
       const filterAndSortButton = page.getByRole("button", {

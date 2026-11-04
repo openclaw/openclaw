@@ -15,7 +15,11 @@ import {
 } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-marker.js";
-import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  recordUpdateRunVerification,
+} from "../infra/update-run-ledger.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { collectRecoveryDiskUsage, formatRecoveryDiskUsage } from "./recovery-disk-usage.js";
@@ -34,6 +38,17 @@ it("reports logical bytes and distinct eligibility counts by kind through status
         clock.mockReturnValue(now);
         const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
         clock.mockReturnValue(now + 1_000);
+        recordUpdateRunVerification(
+          runId,
+          {
+            serviceRunning: true,
+            versionMatch: true,
+            settled: true,
+            coreReady: true,
+            pluginErrors: [],
+          },
+          { env: state.env },
+        );
         finishUpdateRun(runId, { status: "succeeded" }, { env: state.env });
         captures.push({ runId, bytes: now === 1_000 ? 11 : 13 });
       }
@@ -45,12 +60,17 @@ it("reports logical bytes and distinct eligibility counts by kind through status
     }
     const doctor = `doctor-${randomUUID()}`;
     fs.mkdirSync(path.join(root, doctor));
+    fs.writeFileSync(path.join(root, doctor, UPDATE_CAPTURE_PRIVACY_MARKER), "");
     fs.writeFileSync(path.join(root, doctor, "original"), Buffer.alloc(17));
     fs.mkdirSync(state.statePath("state"), { recursive: true });
     const original = state.statePath("state", "openclaw.sqlite.pre-startup-migration-old.bak");
     fs.writeFileSync(original, Buffer.alloc(19));
-    const usage = collectRecoveryDiskUsage({ cfg: {}, env: state.env });
-    expect(usage.incomplete).toBe(false);
+    // Counts and eligibility do not depend on cold worker startup or CI load.
+    // The time-limit case below owns the elapsed-time cutoff.
+    using scanClock = vi.spyOn(performance, "now");
+    scanClock.mockReturnValue(0);
+    const usage = await collectRecoveryDiskUsage({ cfg: {}, env: state.env });
+    expect(usage.incomplete, usage.incompleteReasons.join(", ")).toBe(false);
     expect(usage.total).toEqual({
       count: 4,
       logicalBytes: 60,
@@ -101,7 +121,7 @@ it.each(["entry-limit", "metadata-byte-limit", "time-limit"] as const)(
       if (reason === "time-limit") {
         clock.mockReturnValueOnce(0);
       }
-      const usage = collectRecoveryDiskUsage({ cfg: {}, env: state.env });
+      const usage = await collectRecoveryDiskUsage({ cfg: {}, env: state.env });
       expect(usage.incomplete).toBe(true);
       expect(usage.incompleteReasons).toContain(reason);
       expect(formatRecoveryDiskUsage(usage)).toContain("Incomplete estimate");
@@ -176,11 +196,13 @@ it("keeps originals protected after incomplete dependency discovery skips anothe
       writeSessionSqliteMigrationManifest(completed);
       using clock = vi.spyOn(performance, "now");
       clock.mockReturnValue(0);
-      expect(collectRecoveryDiskUsage({ cfg: {}, env: state.env }).total.retirable.count).toBe(1);
+      expect(
+        (await collectRecoveryDiskUsage({ cfg: {}, env: state.env })).total.retirable.count,
+      ).toBe(1);
       const unfinished = createSessionSqliteMigrationRun(state.env, [target]);
       recordPlannedMigrationMoves(unfinished, target, [move]);
       fs.appendFileSync(unfinished.manifestPath, " ".repeat(3 * 1024 * 1024));
-      const usage = collectRecoveryDiskUsage({ cfg: {}, env: state.env });
+      const usage = await collectRecoveryDiskUsage({ cfg: {}, env: state.env });
       expect(usage).toMatchObject({
         incomplete: true,
         incompleteReasons: expect.arrayContaining(["metadata-byte-limit"]),

@@ -487,7 +487,11 @@ describe("model selection policy", () => {
   });
 
   it.each([
-    { event: "config.changed" as const, payload: {}, clearsChoices: false },
+    {
+      event: "chat.metadata.changed" as const,
+      payload: { modelCatalogChanged: true },
+      clearsChoices: false,
+    },
     {
       event: "chat.metadata.changed" as const,
       payload: { modelSelectionChanged: true },

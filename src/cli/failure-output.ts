@@ -7,6 +7,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
+import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import {
   isBenignUncaughtExceptionError,
   isUncaughtExceptionHandled,
@@ -18,8 +19,11 @@ import {
 } from "../state/openclaw-update-schema-refusal.js";
 import { formatCliCommand } from "./command-format.js";
 import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
+
+export { ExpectedCliError } from "./expected-cli-error.js";
 
 export function handleCliUncaughtException(error: unknown, argv?: string[]): void {
   if (isUncaughtExceptionHandled(error)) {
@@ -90,33 +94,6 @@ export function readCliGatewayRunFailure(error: unknown): CliGatewayRunFailure |
   return error instanceof Error ? gatewayRunFailures.get(error) : undefined;
 }
 
-export class ExpectedCliError extends Error {
-  readonly humanOutput: string;
-  readonly humanOutputWritten: boolean;
-  readonly machineOutput: string;
-  readonly matches?: readonly CronCliJobMatch[];
-
-  constructor(params: {
-    message: string;
-    humanOutput: string;
-    humanOutputWritten?: boolean;
-    machineOutput: string;
-    matches?: readonly CronCliJobMatch[];
-    cause?: unknown;
-  }) {
-    super(params.message, params.cause === undefined ? undefined : { cause: params.cause });
-    this.name = "ExpectedCliError";
-    this.humanOutput = params.humanOutput;
-    this.humanOutputWritten = params.humanOutputWritten ?? false;
-    this.machineOutput = params.machineOutput;
-    this.matches = params.matches;
-  }
-}
-
-export function throwExpectedCliError(message: string): never {
-  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-}
-
 export function isGatewayCredentialsCliError(
   error: unknown,
 ): error is Error & { method: string; configPath: string } {
@@ -143,6 +120,7 @@ const EXPECTED_CLI_ERROR_NAMES = new Set([
   "NixModeConfigMutationError",
   "LocalStateOwnerError",
   "CompletionCacheMissingError",
+  "CompletionProfileEncodingError",
 ]);
 
 export function isExpectedCliError(error: unknown): error is Error {
@@ -293,12 +271,14 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
   );
   // Names survive worker transport without loading the state owner's runtime here.
-  const stateRefusal = errors.find(
-    (error): error is Error =>
-      error instanceof Error &&
-      (error.name === "StateDatabaseAccessError" ||
-        error.name === "StateDatabaseMaintenanceScopeError"),
-  );
+  const stateRefusal =
+    findStartupMaintenanceRequiredError(options.error) ??
+    errors.find(
+      (error): error is Error =>
+        error instanceof Error &&
+        (error.name === "StateDatabaseAccessError" ||
+          error.name === "StateDatabaseMaintenanceScopeError"),
+    );
   const reason = (error: unknown) =>
     `[openclaw] Reason: ${formatCliOperatorError(error, { argv, env })}`;
   if (!showDebugDetails && !showUpdateDiagnostics) {

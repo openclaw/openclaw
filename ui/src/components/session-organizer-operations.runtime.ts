@@ -208,33 +208,13 @@ async function acknowledgeUnreadHiddenRuns(
       runs.set(run.key, run);
     }
   }
-  await Promise.all(
-    [...runs.values()].map(async (run) => {
-      if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-        return;
-      }
-      const agentId = resolveUiSessionRowAgentId(run, scope.selectedAgentId);
-      const expectedSessionId = run.sessionId ? { expectedSessionId: run.sessionId } : {};
-      const access = readSessionMethodAccess(scope.gateway.snapshot, {
-        method: "sessions.patch",
-        params: { key: run.key, unread: false, agentId, ...expectedSessionId },
-        sessionScope: true,
-        session: run,
-      });
-      // Runs the caller cannot patch keep their state without a second error.
-      if (!access.allowed) {
-        return;
-      }
-      // The capability publishes request failures once.
-      await scope.sessions
-        .patch(
-          run.key,
-          { unread: false },
-          { agentId, expectedMarkedUnreadAt: null, ...expectedSessionId },
-        )
-        .catch(() => undefined);
-    }),
-  );
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return;
+  }
+  await scope.sessions.acknowledgeHiddenRuns([...runs.values()], {
+    agentId: scope.selectedAgentId ?? undefined,
+    publishErrors: true,
+  });
 }
 
 // A child may temporarily render as a root while its parent is archived.
@@ -482,13 +462,15 @@ export async function forkSession(
   deps: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
-) {
+  options: { title?: string } = {},
+): Promise<SidebarSessionMutationResult> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return;
+    return "stale";
   }
   const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
   const createParams = {
     parentSessionKey: session.key,
+    ...(options.title?.trim() ? { label: options.title.trim() } : {}),
     fork: true,
     ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
       ? { forkFrom: "last-completed" as const }
@@ -496,26 +478,32 @@ export async function forkSession(
     agentId,
   };
   if (
-    !requireSessionMutationAccess(deps, scope, { method: "sessions.create", params: createParams })
+    !requireSessionMutationAccess(deps, scope, {
+      method: "sessions.create",
+      params: createParams,
+      sessionScope: true,
+      session,
+    })
   ) {
-    return;
+    return "failed";
   }
   try {
     const key = await scope.sessions.create(createParams, { signal: scope.signal });
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
+      return "stale";
     }
     if (key) {
       deps.selectSession(key);
-    } else {
-      deps.sessionData.publishSessionMutationError(
-        scope,
-        scope.sessions.state.error ?? t("newSession.createFailed"),
-      );
+      return "completed";
     }
+    deps.sessionData.publishSessionMutationError(
+      scope,
+      scope.sessions.state.error ?? t("newSession.createFailed"),
+    );
   } catch (error) {
     deps.sessionData.publishSessionMutationError(scope, error);
   }
+  return "failed";
 }
 
 export async function stopCloudWorker(
