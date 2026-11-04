@@ -118,9 +118,9 @@ const enModelControls = {
         "{runtime} will run on the Gateway device under its own permissions. OpenClaw’s optional native tool and sandbox restrictions, including workspace-only restrictions, won’t be enforced for this harness. Only this session is changed; other sessions and global configuration stay unchanged. OpenClaw-managed tools keep their own policy checks.",
       retryMessage: "Continue will retry the message you just sent.",
       chooseAnother: "Choose another model to keep this session’s current execution restrictions.",
-      failed: "Couldn’t change this session’s execution permissions. Try again. {error}",
+      failed: "Couldn’t change this session’s execution permissions. Try again.\n{error}",
       refreshFailed:
-        "Couldn’t refresh this session. Reload to see the saved model and permissions. {error}",
+        "Couldn’t refresh this session. Reload to see the saved model and permissions.\n{error}",
       reasons: {
         "sandbox-required": "{runtime} can’t run because this session requires a sandbox.",
         sandbox: "{runtime} uses native tools that can’t run inside the OpenClaw sandbox.",
@@ -141,7 +141,7 @@ const enModelControls = {
       defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Only admins can turn on Full access.",
       requiresAdmin: "Requires admin access.",
-      updateFailed: "Couldn’t change permissions. Try again. {error}",
+      updateFailed: "Couldn’t change permissions. Try again.",
       refreshFailed: "Couldn’t refresh this session. Reload to see the saved permissions.",
       modes: {
         "read-only": {
