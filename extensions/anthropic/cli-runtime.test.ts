@@ -22,6 +22,7 @@ import {
   prepareClaudeCli,
   resultDetail,
   waitForProcessExit,
+  withClaudeCliTestDeadline,
 } from "./cli-runtime.test-support.js";
 import { executeClaudeCli, type ClaudeCliExecuteContext } from "./cli.runtime.js";
 
@@ -173,7 +174,7 @@ describe("Claude native stdio boundary", () => {
     { scenario: "shutdown-eof", name: "native parent exits immediately on EOF" },
   ])("reaps the native process tree when $name", async ({ scenario }, { signal }) => {
     const context = await createContext(scenario);
-    const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
+    const iterator = executeClaudeCli(withClaudeCliTestDeadline(context))[Symbol.asyncIterator]();
     const first = await iterator.next();
     expect(first.value).toMatchObject({
       subtype: "fixture_shutdown",
@@ -282,7 +283,7 @@ describe("Claude native stdio boundary", () => {
     });
     const results: Record<string, unknown>[] = [];
     try {
-      for await (const record of executeClaudeCli(context)) {
+      for await (const record of executeClaudeCli(withClaudeCliTestDeadline(context))) {
         if (record.type !== "result") {
           continue;
         }
@@ -514,7 +515,7 @@ describe("Claude native stdio boundary", () => {
         type === "token" ? { type, token: credential } : { type, key: credential },
       );
       Object.assign(context.env, prepared.env);
-      const iterator = prepared.execute(context)[Symbol.asyncIterator]();
+      const iterator = prepared.execute(withClaudeCliTestDeadline(context))[Symbol.asyncIterator]();
       let descendantPid: number | undefined;
       try {
         const first = await iterator.next();
@@ -759,7 +760,7 @@ describe("Claude native stdio boundary", () => {
         injection = value;
       },
     });
-    const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
+    const iterator = executeClaudeCli(withClaudeCliTestDeadline(context))[Symbol.asyncIterator]();
     try {
       expect((await iterator.next()).value).toMatchObject({ type: "system", subtype: "init" });
       expect(injection?.isAvailable()).toBe(false);
@@ -891,11 +892,13 @@ describe("Claude native stdio boundary", () => {
     await releaseFixture(context, "background");
     await collect(context);
     const records: Record<string, unknown>[] = [];
-    for await (const record of executeClaudeCli({
-      ...context,
-      prompt: "next admitted turn",
-      useResume: true,
-    })) {
+    for await (const record of executeClaudeCli(
+      withClaudeCliTestDeadline({
+        ...context,
+        prompt: "next admitted turn",
+        useResume: true,
+      }),
+    )) {
       records.push(record);
       if (record.subtype === "fixture_second_turn") {
         approval.resolve({ behavior: "allow", updatedInput: { command: "echo late" } });
