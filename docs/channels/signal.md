@@ -328,10 +328,11 @@ Groups:
 
 - `channels.signal.groupPolicy = open | allowlist | disabled`.
 - `channels.signal.groupAllowFrom` controls which groups or senders can trigger group replies when `allowlist` is set; entries can be Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`), sender phone numbers, `uuid:<id>` values, or `*`.
-- `channels.signal.groups["<group-id>" | "*"]` can override group behavior with `requireMention`, `tools`, and `toolsBySender`.
+- `channels.signal.groups["<group-id>" | "*"]` can override group behavior with `requireMention`, `tools`, `toolsBySender`, and `ingest`.
 - Use `channels.signal.accounts.<id>.groups` for per-account overrides in multi-account setups.
 - Allowlisting a Signal group through `groupAllowFrom` does not disable mention gating by itself. A specifically configured `channels.signal.groups["<group-id>"]` entry processes every group message unless `requireMention=true` is set.
 - With `requireMention=true`, Signal native @mentions are matched from structured mention metadata against the bot account phone or `accountUuid`. Plain-text matching uses `agents.entries.*.groupChat.mentionPatterns`, then `messages.groupChat.mentionPatterns`; when neither is set, it derives patterns from the routed agent's `identity.name` and `identity.emoji`. An explicit `mentionPatterns: []` at the selected level disables this text fallback without disabling native @mentions.
+- A group message skipped by mention gating stays in the group history window but never starts an agent turn. Set `ingest: true` on that group entry (or on `"*"`, which entries without `ingest` fall back to) to also publish those skipped messages to the internal `message:received` hook; they still do not start a turn. Omitted or `false` keeps the hook silent.
 - Runtime note: if `channels.signal` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 Mention-gated group with bounded context:
@@ -559,7 +560,7 @@ Provider options:
 - `channels.signal.aliases`: OpenClaw-side aliases for DM or group delivery targets.
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.signal.groupAllowFrom`: group allowlist; accepts Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`), sender E.164 numbers, or `uuid:<id>` values.
-- `channels.signal.groups`: per-group overrides keyed by Signal group ID (or `"*"`). Supported fields: `requireMention`, `tools`, `toolsBySender`.
+- `channels.signal.groups`: per-group overrides keyed by Signal group ID (or `"*"`). Supported fields: `requireMention`, `tools`, `toolsBySender`, `ingest`.
 - `channels.signal.accounts.<id>.groups`: per-account version of `channels.signal.groups` for multi-account setups.
 - `channels.signal.accounts.<id>.aliases`: per-account aliases, merged with top-level aliases.
 - `channels.signal.replyToMode`: native reply quote mode, `off | first | all | batched` (default: `all`).
