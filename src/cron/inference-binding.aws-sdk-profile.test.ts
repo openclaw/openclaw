@@ -1,7 +1,10 @@
 import { expect, it } from "vitest";
 import { createTestModelDefinition } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   acquireCronInferenceAuthorization,
   captureCronInferenceBinding,
@@ -9,8 +12,9 @@ import {
 
 const PROFILE_ID = "amazon-bedrock:aws-sdk";
 const MODEL_ID = "anthropic.claude-sonnet-4-20250514-v1:0";
+const MARKER = { type: "api_key", provider: "amazon-bedrock", key: "aws-sdk-credentials" } as const;
 
-function config(agentDir: string, declared: boolean): OpenClawConfig {
+function config(agentDir: string): OpenClawConfig {
   return {
     agents: {
       entries: { main: { agentDir } },
@@ -26,30 +30,24 @@ function config(agentDir: string, declared: boolean): OpenClawConfig {
         },
       },
     },
-    ...(declared
-      ? {
-          auth: {
-            profiles: { [PROFILE_ID]: { provider: "amazon-bedrock", mode: "aws-sdk" } },
-          },
-        }
-      : {}),
   };
 }
 
 function withBedrockState(
-  run: (state: { agentDir: string; cfg: OpenClawConfig }) => Promise<void>,
+  run: (state: {
+    agentDir: string;
+    cfg: OpenClawConfig;
+    writeAccount: OpenClawTestState["writeAuthProfiles"];
+  }) => Promise<void>,
 ) {
   return withOpenClawTestState({ label: "bedrock-aws-sdk-binding" }, async (state) => {
-    await state.writeAuthProfiles({ version: 1, profiles: {} });
     const agentDir = state.agentDir("main");
-    await run({
-      agentDir,
-      cfg: config(agentDir, true),
-    });
+    await state.writeAuthProfiles({ version: 1, profiles: { [PROFILE_ID]: MARKER } });
+    await run({ agentDir, cfg: config(agentDir), writeAccount: state.writeAuthProfiles });
   });
 }
 
-it("records the declared AWS SDK account for a scheduled Bedrock run", async () => {
+it("records the stored AWS SDK account for a scheduled Bedrock run", async () => {
   await withBedrockState(async ({ agentDir, cfg }) => {
     const binding = await captureCronInferenceBinding({ cfg, agentId: "main" });
     expect(binding).toMatchObject({
@@ -60,10 +58,10 @@ it("records the declared AWS SDK account for a scheduled Bedrock run", async () 
       source: "auto",
     });
     expect(binding?.authorizationId).toMatch(/^[a-f0-9]{64}$/u);
-    // The declaration is the account: no AWS material reaches the recorded binding.
+    // The record is the account: no AWS material reaches the recorded binding.
     expect(JSON.stringify(binding)).not.toMatch(/AKIA|ASIA|SecretAccessKey|SessionToken/u);
 
-    // Every later run reacquires the same authorization from config alone.
+    // The account is unchanged, so every later run reacquires the same authorization.
     const authority = await acquireCronInferenceAuthorization({ binding: binding!, cfg, agentDir });
     try {
       expect(authority.authorizationId).toBe(binding?.authorizationId);
@@ -73,23 +71,29 @@ it("records the declared AWS SDK account for a scheduled Bedrock run", async () 
   });
 });
 
-it("refuses the account once config stops declaring it", async () => {
-  await withBedrockState(async ({ agentDir, cfg }) => {
+it.each([
+  ["removed", "was removed or signed out"],
+  ["recreated under the same id", "was replaced"],
+] as const)("refuses a binding after its account is %s", async (outcome, refusal) => {
+  await withBedrockState(async ({ agentDir, cfg, writeAccount }) => {
     const binding = await captureCronInferenceBinding({ cfg, agentId: "main" });
+    // Signing out retires the record; recreating the same id issues a new
+    // incarnation, so the old binding is refused either way.
+    await writeAccount({ version: 1, profiles: {} });
+    if (outcome === "recreated under the same id") {
+      await writeAccount({ version: 1, profiles: { [PROFILE_ID]: MARKER } });
+    }
     await expect(
-      acquireCronInferenceAuthorization({
-        binding: binding!,
-        cfg: config(agentDir, false),
-        agentDir,
-      }),
-    ).rejects.toThrow("was removed or signed out");
+      acquireCronInferenceAuthorization({ binding: binding!, cfg, agentDir }),
+    ).rejects.toThrow(refusal);
   });
 });
 
-it("keeps an undeclared AWS SDK route unbound", async () => {
-  await withBedrockState(async ({ agentDir }) => {
-    await expect(
-      captureCronInferenceBinding({ cfg: config(agentDir, false), agentId: "main" }),
-    ).rejects.toThrow("Automation requires a stored inference account");
+it("keeps an AWS SDK route with no stored account unbound", async () => {
+  await withBedrockState(async ({ cfg, writeAccount }) => {
+    await writeAccount({ version: 1, profiles: {} });
+    await expect(captureCronInferenceBinding({ cfg, agentId: "main" })).rejects.toThrow(
+      "Automation requires a stored inference account",
+    );
   });
 });

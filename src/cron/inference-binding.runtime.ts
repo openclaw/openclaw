@@ -4,10 +4,7 @@ import {
   type AuthProfileAuthorization,
 } from "../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
-import {
-  isConfiguredAwsSdkAuthProfileForProvider,
-  resolveConfiguredAwsSdkAuthProfileId,
-} from "../agents/auth-profiles/order.js";
+import { resolveStoredAwsSdkAuthProfileId } from "../agents/auth-profiles/order.js";
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import {
@@ -216,13 +213,14 @@ export async function captureCronInferenceBinding(params: {
     }).attempts;
     if (attempt?.kind !== "profile") {
       const source = attempt?.plan.credentialSource;
-      // An AWS SDK route keeps its credentials in the host's chain, so config declares
-      // the account the job records instead of the auth store.
-      const declaredProfileId =
+      // An AWS SDK route keeps its credentials in the host's chain, so the planner
+      // resolves it directly. Its stored account still owns which account a run used,
+      // so record that account rather than the anonymous route.
+      const awsSdkProfileId =
         source?.kind === "direct" && source.evidence === "aws-sdk"
-          ? resolveConfiguredAwsSdkAuthProfileId({ cfg, provider: model.provider })
+          ? resolveStoredAwsSdkAuthProfileId({ cfg, provider: model.provider, store })
           : undefined;
-      if (!declaredProfileId) {
+      if (!awsSdkProfileId) {
         // A configured key keeps the job unbound, the same rule its runs follow.
         if (source?.kind === "direct" && !isConfiguredKeyAuthSource(source)) {
           throw new Error(
@@ -231,7 +229,7 @@ export async function captureCronInferenceBinding(params: {
         }
         return undefined;
       }
-      selection = { profileId: declaredProfileId, source: "auto", routeRequirement: undefined };
+      selection = { profileId: awsSdkProfileId, source: "auto", routeRequirement: undefined };
     } else {
       selection = {
         profileId: attempt.profileId,
@@ -245,22 +243,15 @@ export async function captureCronInferenceBinding(params: {
     !model.configuredProfileId && selection.profileId === creatorSession?.authProfileOverride,
   );
   const credential = store.profiles[selection.profileId];
-  const declaredAwsSdkAccount =
-    !credential &&
-    isConfiguredAwsSdkAuthProfileForProvider({
-      cfg,
-      provider: model.provider,
-      profileId: selection.profileId,
-    });
-  if (!credential && !declaredAwsSdkAccount) {
+  if (!credential) {
     throw new Error("Automation requires an available stored inference account.");
   }
   const authRequirement =
     selection.routeRequirement ??
     resolveProviderModelAuthPolicy({
       provider: model.provider,
-      mode: credential?.type ?? "aws-sdk",
-      authFlow: credential?.type === "oauth" ? credential.authFlow : undefined,
+      mode: credential.type,
+      authFlow: credential.type === "oauth" ? credential.authFlow : undefined,
     }).authRequirement;
   if (!authRequirement) {
     throw new Error("Automation requires a supported stored inference authentication route.");
