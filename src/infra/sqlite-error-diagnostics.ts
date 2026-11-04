@@ -278,6 +278,12 @@ export function formatSqliteErrorCodeSuffix(error: unknown): string {
   return readSqliteErrorDetails(error).suffix;
 }
 
+export function readSqliteInspectionOperation(
+  error: unknown,
+): SqliteInspectionOperation | undefined {
+  return readSqliteErrorDetails(error).operation;
+}
+
 function readSqliteErrorDetails(error: unknown) {
   const details = new Set<string>();
   let operation: SqliteInspectionOperation | undefined;
