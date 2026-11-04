@@ -4,11 +4,16 @@ import { captureCronCreatedInference } from "./cron-inference-capture.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
-vi.mock("../cron/inference-binding.runtime.js", () => ({ captureCronInferenceBinding: vi.fn() }));
-vi.mock("./session-utils-store-worker.js", () => ({
+vi.mock("../cron/inference-binding.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cron/inference-binding.runtime.js")>()),
+  captureCronInferenceBinding: vi.fn(),
+}));
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
   loadGatewaySessionEntryReadOnlyInWorker: vi.fn(),
 }));
-vi.mock("./server-methods/users-model-account-access.js", () => ({
+vi.mock("./server-methods/users-model-account-access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-methods/users-model-account-access.js")>()),
   preparePersonalModelAccountSelection: vi.fn(),
 }));
 
