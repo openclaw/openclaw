@@ -104,13 +104,21 @@ export function createOpenClawIdRemovalEffects(params: {
     },
 
     async revokeDeviceTokens(tokens) {
+      const revoked: Array<(typeof tokens)[number]> = [];
       for (const token of tokens) {
         try {
-          await revokeDeviceToken({ deviceId: token.deviceId, role: token.role });
+          const result = await revokeDeviceToken({ deviceId: token.deviceId, role: token.role });
+          // An already absent token is revoked for this purpose.
+          if (result.ok || result.reason === "unknown-device-or-role") {
+            revoked.push(token);
+          } else {
+            params.log.warn(`openclaw-id: could not revoke a device token (${result.reason})`);
+          }
         } catch (error) {
           params.log.warn(`openclaw-id: could not revoke a device token: ${String(error)}`);
         }
       }
+      return revoked;
     },
   };
 }

@@ -119,7 +119,7 @@ export function serviceFor(
     ),
     cancelRuns: vi.fn(async (connections: readonly string[]) => connections.length),
     closeConnections: vi.fn(),
-    revokeDeviceTokens: vi.fn(async () => {}),
+    revokeDeviceTokens: vi.fn(async (tokens) => [...tokens]),
     describeActivity: vi.fn((keys: readonly string[]) =>
       Object.fromEntries(
         keys.map((key) => [

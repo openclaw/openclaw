@@ -28,11 +28,18 @@ export class DiscoveryRequestError extends Error {
   }
 }
 
-/** Creates a client for one Discovery base URL, signing as K_gw. */
+/** How long one Discovery request, including its response body, may take. */
+const REQUEST_DEADLINE_MS = 30_000;
+
+/**
+ * Creates a client for one Discovery base URL, signing as K_gw. `signal` belongs to
+ * the caller's lifecycle: aborting it cancels every request in flight.
+ */
 export function createDiscoveryClient(params: {
   baseUrl: string;
   signer: StatementSigner;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }) {
   const fetchImpl = params.fetchImpl ?? fetch;
 
@@ -43,6 +50,7 @@ export function createDiscoveryClient(params: {
     body?: unknown,
     query = "",
     signal?: AbortSignal,
+    deadlineMs = REQUEST_DEADLINE_MS,
   ): Promise<T> => {
     const spec = DISCOVERY_ENDPOINTS[endpoint];
     const path =
@@ -61,7 +69,12 @@ export function createDiscoveryClient(params: {
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: bytes }),
-      ...(signal ? { signal } : {}),
+      // The fetch signal also bounds reading the body below.
+      signal: AbortSignal.any([
+        AbortSignal.timeout(deadlineMs),
+        ...(params.signal ? [params.signal] : []),
+        ...(signal ? [signal] : []),
+      ]),
     });
     const text = await response.text();
     if (!response.ok) {
@@ -108,6 +121,7 @@ export function createDiscoveryClient(params: {
         undefined,
         `?${new URLSearchParams({ ...(cursor ? { after: cursor } : {}), wait: String(waitSeconds) })}`,
         signal,
+        waitSeconds * 1000 + REQUEST_DEADLINE_MS,
       ),
     ackMail: (clawId: string, cursor: string) =>
       call<void>("ackMail", { claw_id: clawId }, { cursor }),

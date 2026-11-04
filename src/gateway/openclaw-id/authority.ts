@@ -167,6 +167,9 @@ export type OwnerDeviceView = {
   approved_by: "root" | KeyFingerprint;
 };
 
+/** A tunnel-issued device token and the device key it is bound to. */
+export type DeviceTokenRef = { deviceId: string; role: string; peerKey: string };
+
 /** Creates the authority owner over the persisted claw record. */
 export function createOpenClawIdAuthority(
   store: {
@@ -496,6 +499,54 @@ export function createOpenClawIdAuthority(
       });
     },
 
+    /** The tunnel-issued tokens bound to these device keys (from memory; load first). */
+    tokensBoundTo(peerKeys: readonly string[]): DeviceTokenRef[] {
+      return (record?.token_bindings ?? [])
+        .filter((binding) => peerKeys.includes(binding.peer_key))
+        .map((binding) => ({
+          deviceId: binding.device_id,
+          role: binding.role,
+          peerKey: binding.peer_key,
+        }));
+    },
+
+    /**
+     * Tokens still bound to a device key that is no longer in the membership:
+     * removals whose revocation did not finish. The binding keeps refusing them
+     * meanwhile.
+     */
+    async orphanedTokens(): Promise<DeviceTokenRef[]> {
+      const current = await load();
+      const members = new Set<string>(current?.authority ? memberKeys(current.authority) : []);
+      return (current?.token_bindings ?? [])
+        .filter((binding) => !members.has(binding.peer_key))
+        .map((binding) => ({
+          deviceId: binding.device_id,
+          role: binding.role,
+          peerKey: binding.peer_key,
+        }));
+    },
+
+    /** Drops the bindings of tokens whose revocation was confirmed. */
+    unbindTokens(tokens: readonly DeviceTokenRef[]): Promise<void> {
+      return serialize(async () => {
+        const current = await load();
+        const confirmed = (binding: { device_id: string; role: string; peer_key: string }) =>
+          tokens.some(
+            (token) =>
+              token.deviceId === binding.device_id &&
+              token.role === binding.role &&
+              token.peerKey === binding.peer_key,
+          );
+        if (current && (current.token_bindings ?? []).some(confirmed)) {
+          await commit({
+            ...current,
+            token_bindings: (current.token_bindings ?? []).filter((binding) => !confirmed(binding)),
+          });
+        }
+      });
+    },
+
     /** Drops the bindings of removed device keys; returns the (device, role) tokens to revoke. */
     unbindPeers(peerKeys: readonly string[]): Promise<Array<{ deviceId: string; role: string }>> {
       return serialize(async () => {
@@ -705,11 +756,15 @@ function roleChangeDisconnects(before: AuthorityState, after: AuthorityState): A
   return peerKeys.length > 0 ? [{ type: "disconnect", peer_keys: peerKeys }] : [];
 }
 
-// Every candidate key that passes the protocol's admission rule at `now`.
-function listAdmitted(state: AuthorityState, now: number): IrohEndpointKey[] {
-  const candidates = new Set<IrohEndpointKey>([
+// Every device key of a member or owner device, admitted now or not.
+function memberKeys(state: AuthorityState): Set<IrohEndpointKey> {
+  return new Set<IrohEndpointKey>([
     ...Object.values(state.members).flatMap((member) => member.peer_keys),
     ...Object.values(state.owner_devices).flatMap((record) => record.cert.body.peer_keys),
   ]);
-  return [...candidates].filter((key) => isAdmitted(state, key, now)).toSorted();
+}
+
+// Every candidate key that passes the protocol's admission rule at `now`.
+function listAdmitted(state: AuthorityState, now: number): IrohEndpointKey[] {
+  return [...memberKeys(state)].filter((key) => isAdmitted(state, key, now)).toSorted();
 }

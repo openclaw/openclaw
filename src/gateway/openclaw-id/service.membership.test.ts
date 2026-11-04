@@ -89,7 +89,7 @@ function serviceFor(authority: Awaited<ReturnType<typeof linkedClaw>>["authority
     ),
     cancelRuns: vi.fn(async (connections: readonly string[]) => connections.length),
     closeConnections: vi.fn(),
-    revokeDeviceTokens: vi.fn(async () => {}),
+    revokeDeviceTokens: vi.fn(async (tokens) => [...tokens]),
     describeActivity: vi.fn((keys: readonly string[]) =>
       Object.fromEntries(
         keys.map((key) => [
@@ -174,9 +174,36 @@ describe("Gateway membership authority and enforcement", () => {
     expect(effects.cancelRuns).toHaveBeenCalledWith([connection]);
     expect(effects.closeConnections).toHaveBeenCalledWith([connection]);
     expect(effects.revokeDeviceTokens).toHaveBeenCalledWith([
-      { deviceId: "bob-device", role: "operator" },
+      { deviceId: "bob-device", role: "operator", peerKey: bob },
     ]);
     expect(claw.authority.tokenBinding("bob-device", "operator")).toBeUndefined();
+  });
+
+  it("keeps a removed key's token bound until its revocation is confirmed", async () => {
+    const claw = await linkedClaw();
+    const { service, effects } = serviceFor(claw.authority);
+    const bob = formatIrohEndpointKey(randomBytes(32));
+    await service.submitStatement(
+      "tunnel",
+      await claw.sign(2, {
+        op: "add",
+        account_id: "acct-bob",
+        role: "operator",
+        peer_keys: [bob],
+        invite_id: null,
+      }),
+    );
+    await claw.authority.bindToken("bob-device", "operator", bob);
+    vi.mocked(effects.revokeDeviceTokens).mockImplementationOnce(async () => []);
+    await service.submitStatement(
+      "local_operator",
+      await claw.sign(3, { op: "remove", account_id: "acct-bob" }),
+    );
+    // Still bound to the removed key, so ordinary ingress keeps refusing it.
+    expect(claw.authority.tokenBinding("bob-device", "operator")).toBe(bob);
+    expect(await claw.authority.orphanedTokens()).toEqual([
+      { deviceId: "bob-device", role: "operator", peerKey: bob },
+    ]);
   });
 
   it("refuses membership changes from a client that is neither relayed nor direct loopback", async () => {

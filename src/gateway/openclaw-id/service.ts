@@ -17,6 +17,7 @@ import type {
   AuthorityRefusal,
   LinkCommit,
   LinkPreparation,
+  DeviceTokenRef,
   OpenClawIdAuthority,
 } from "./authority.js";
 import type { OpenClawIdAccount, StoredClaw } from "./claw-store.js";
@@ -51,7 +52,10 @@ export type OpenClawIdEffects = {
   /** Closes these Gateway connections. */
   closeConnections: (connectionIds: readonly string[]) => void;
   /** Revokes device tokens (device id and role) that were bound to removed keys. */
-  revokeDeviceTokens: (tokens: ReadonlyArray<{ deviceId: string; role: string }>) => Promise<void>;
+  /** Revokes tunnel-issued tokens; returns those confirmed revoked (or already absent). */
+  revokeDeviceTokens: <T extends { deviceId: string; role: string }>(
+    tokens: readonly T[],
+  ) => Promise<T[]>;
   /** Live activity of these device keys (connections, last seen, active runs). */
   describeActivity?: (peerKeys: readonly string[]) => Record<string, OpenClawIdPeerActivity>;
 };
@@ -110,6 +114,8 @@ export function createOpenClawIdService(params: {
   let loadEffects: (() => Promise<OpenClawIdEffects>) | undefined;
   let effectsPromise: Promise<OpenClawIdEffects> | undefined;
   let mailbox: { stop(): void } | undefined;
+  // Aborted when remote access stops: cancels Discovery requests in flight.
+  let lifecycle = new AbortController();
   let stopAuthorityChanges: (() => void) | undefined;
   const peopleListeners = new Set<() => void>();
   const peopleChanged = () => notifyListeners(peopleListeners, undefined);
@@ -172,6 +178,8 @@ export function createOpenClawIdService(params: {
 
   const stopRuntime = async () => {
     appliedKey = undefined;
+    lifecycle.abort();
+    lifecycle = new AbortController();
     ownerExpiry.stop();
     peopleExpiry.stop();
     stopAuthorityChanges?.();
@@ -233,7 +241,13 @@ export function createOpenClawIdService(params: {
       await getEffects();
       await publishTokenBindings();
       await startMailbox();
-      await publicationRetry.start();
+      await revokeBoundTokens(await (await getAuthority()).orphanedTokens());
+      // Publication runs beside the lifecycle, so a stalled Discovery cannot hold stop.
+      void publicationRetry
+        .start()
+        .catch((error: unknown) =>
+          params.log.warn(`openclaw-id: publication failed: ${String(error)}`),
+        );
     } catch (error) {
       status = { state: "failed", reason: error instanceof Error ? error.message : String(error) };
       params.log.warn(`openclaw-id: could not start remote access: ${status.reason}`);
@@ -260,7 +274,11 @@ export function createOpenClawIdService(params: {
     if (!isOpenClawIdEnabled(params.getConfig())) {
       return undefined;
     }
-    const client = createDiscoveryClient({ baseUrl: config.discoveryUrl, signer });
+    const client = createDiscoveryClient({
+      baseUrl: config.discoveryUrl,
+      signer,
+      signal: lifecycle.signal,
+    });
     const { reconcileRegistration } = await import("./registration-recovery.js");
     const recoveryFailure = await reconcileRegistration(owner, client);
     // Recovery persisted the account before publication; consume the authority's current record.
@@ -301,6 +319,17 @@ export function createOpenClawIdService(params: {
     return outcome;
   };
 
+  // Revokes tokens, then drops only the confirmed bindings: a token whose revocation
+  // failed stays bound to its removed key, so no ingress accepts it, and is retried
+  // at the next start.
+  const revokeBoundTokens = async (tokens: DeviceTokenRef[]) => {
+    const effects = await getEffects();
+    if (!effects || tokens.length === 0) {
+      return;
+    }
+    await (await getAuthority()).unbindTokens(await effects.revokeDeviceTokens(tokens));
+  };
+
   // Performs the side effects of an accepted write in a fixed order: find the
   // removed keys' connections, withdraw tunnel access, cancel their runs, close
   // their sessions, revoke their tokens, then publish a new snapshot. Returns
@@ -324,8 +353,7 @@ export function createOpenClawIdService(params: {
         ? ((await effects?.cancelRuns?.(connections)) ?? 0)
         : 0;
       effects?.closeConnections(connections);
-      const tokens = await (await getAuthority()).unbindPeers(removed);
-      await effects?.revokeDeviceTokens(tokens);
+      await revokeBoundTokens((await getAuthority()).tokensBoundTo(removed));
       summary = {
         devices: removed.length,
         connectionsClosed: connections.length,
@@ -393,7 +421,11 @@ export function createOpenClawIdService(params: {
         const { signer } = await loadGatewaySigner(params.getStateDir());
         return {
           clawId: record.claw_id,
-          client: createDiscoveryClient({ baseUrl: config.discoveryUrl, signer }),
+          client: createDiscoveryClient({
+            baseUrl: config.discoveryUrl,
+            signer,
+            signal: lifecycle.signal,
+          }),
         };
       },
     });
@@ -434,7 +466,11 @@ export function createOpenClawIdService(params: {
       ]);
     const owner = await getAuthority();
     const { signer } = await loadGatewaySigner(params.getStateDir());
-    const client = createDiscoveryClient({ baseUrl: config.discoveryUrl, signer });
+    const client = createDiscoveryClient({
+      baseUrl: config.discoveryUrl,
+      signer,
+      signal: lifecycle.signal,
+    });
     mailbox = startMailboxReader({
       clawId: record.claw_id,
       client,
@@ -498,7 +534,11 @@ export function createOpenClawIdService(params: {
       import("./gateway-key.js"),
     ]);
     const { signer } = await loadGatewaySigner(params.getStateDir());
-    const client = createDiscoveryClient({ baseUrl: config.discoveryUrl, signer });
+    const client = createDiscoveryClient({
+      baseUrl: config.discoveryUrl,
+      signer,
+      signal: lifecycle.signal,
+    });
     try {
       const checked = await client.checkClawName(request.enrollmentCode, request.name);
       // The binding is only usable on a single label under the loader domain.

@@ -26,43 +26,46 @@ export type MailboxSink = {
 
 type ReaderLogger = { info: (message: string) => void; warn: (message: string) => void };
 
-/** Applies one message; returns the authority results for its statements. */
+/**
+ * Applies one message; returns the authority results for its statements. `settle`
+ * runs for each result before the next statement is applied, so a committed change
+ * gets its effects even when a later statement in the same message fails.
+ */
 export async function applyMailboxMessage(
   message: MailboxMessage,
   sink: Pick<MailboxSink, "submit" | "redeem">,
+  settle: (result: AuthorityAccepted | AuthorityRefusal) => Promise<void> = async () => {},
 ): Promise<Array<AuthorityAccepted | AuthorityRefusal>> {
   const payload = message.payload;
   // SAFETY: widening a readonly tuple of string literals to readonly string[] for includes() is lossless.
+  const results: Array<AuthorityAccepted | AuthorityRefusal> = [];
+  const record = async (result: AuthorityAccepted | AuthorityRefusal) => {
+    results.push(result);
+    await settle(result);
+  };
   if (!(GATEWAY_MAILBOX_KINDS as readonly string[]).includes(payload.kind)) {
-    return [
-      {
-        ok: false,
-        code: "unsupported",
-        detail: `mailbox kind ${payload.kind} is not for the Gateway`,
-      },
-    ];
-  }
-  if (payload.kind === "invite_redemption") {
-    return [
+    await record({
+      ok: false,
+      code: "unsupported",
+      detail: `mailbox kind ${payload.kind} is not for the Gateway`,
+    });
+  } else if (payload.kind === "invite_redemption") {
+    await record(
       await sink.redeem(payload.redemption, {
         account_id: message.from.account_id,
         email: message.from.email,
         display_name: message.from.display_name,
         location_hint: message.location_hint,
       }),
-    ];
-  }
-  if (payload.kind === "revocation") {
-    return [await sink.submit(payload.revocation)];
-  }
-  if (payload.kind === "root_statement") {
-    const results: Array<AuthorityAccepted | AuthorityRefusal> = [];
+    );
+  } else if (payload.kind === "revocation") {
+    await record(await sink.submit(payload.revocation));
+  } else if (payload.kind === "root_statement") {
     for (const statement of payload.statements) {
-      results.push(await sink.submit(statement));
+      await record(await sink.submit(statement));
     }
-    return results;
   }
-  return [];
+  return results;
 }
 
 /**
@@ -107,7 +110,7 @@ export function startMailboxReader(params: {
           if (controller.signal.aborted) {
             return;
           }
-          for (const result of await applyMailboxMessage(message, params.sink)) {
+          await applyMailboxMessage(message, params.sink, async (result) => {
             if (!result.ok) {
               params.log.warn(
                 `openclaw-id: mailbox ${message.payload.kind} refused (${result.code})`,
@@ -122,7 +125,7 @@ export function startMailboxReader(params: {
             if (result.ok) {
               await params.onEffects(result.events);
             }
-          }
+          });
         }
         if (batch.messages.length > 0 && !controller.signal.aborted) {
           await params.client.ackMail(params.clawId, batch.cursor);

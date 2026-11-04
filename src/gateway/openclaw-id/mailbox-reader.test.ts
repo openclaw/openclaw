@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MailboxMessage } from "../../../packages/openclaw-id-protocol/src/index.js";
-import { startMailboxReader } from "./mailbox-reader.js";
+import { applyMailboxMessage, startMailboxReader } from "./mailbox-reader.js";
 
 const rootMail: MailboxMessage = {
   message_id: "m1",
@@ -95,5 +95,24 @@ describe("mailbox reader callbacks", () => {
     });
     expect(submit).not.toHaveBeenCalled();
     expect(client.ackMail).not.toHaveBeenCalled();
+  });
+
+  it("settles a committed statement's effects before a later statement fails", async () => {
+    const message = {
+      ...rootMail,
+      payload: { kind: "root_statement" as const, statements: [{} as never, {} as never] },
+    };
+    const removal = [{ type: "disconnect" as const, peer_keys: ["iroh:bob"] }];
+    const submit = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: "accepted", events: removal })
+      .mockRejectedValueOnce(new Error("disk full"));
+    const settled: unknown[] = [];
+    await expect(
+      applyMailboxMessage(message, { submit, redeem: vi.fn() }, async (result) => {
+        settled.push(result);
+      }),
+    ).rejects.toThrow("disk full");
+    expect(settled).toEqual([{ ok: true, status: "accepted", events: removal }]);
   });
 });
