@@ -1,0 +1,2 @@
+# Stop completes while a pre-adoption delivery callback stays unresolved.
+13

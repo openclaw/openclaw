@@ -251,4 +251,17 @@ describe("Signal durable ingress", () => {
     await expect(queue.listClaims()).resolves.toHaveLength(0);
     expect(dispatch).not.toHaveBeenCalled();
   });
+
+  it("stops while a pre-adoption delivery callback stays unresolved", async () => {
+    const deliveryStarted = Promise.withResolvers<void>();
+    const started = await start(async () => {
+      deliveryStarted.resolve();
+      await new Promise(() => {});
+    });
+    const receiving = started.receive(signalEvent());
+    await deliveryStarted.promise;
+    await expect(started.stop()).resolves.toBeUndefined();
+    monitors.delete(started);
+    receiving.catch(() => undefined);
+  });
 });
