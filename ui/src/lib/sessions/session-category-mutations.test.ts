@@ -93,7 +93,7 @@ describe("session category mutations", () => {
         await h.list.promise.catch(() => undefined);
         await flushRead();
         expect(h.category()).toBeUndefined();
-        expect(h.sessions.state.error).toContain("Session moved.");
+        expect(h.sessions.state.error).toContain("The move was saved");
         expect(h.sessions.state.error).toContain("injected list failure");
       }
     },

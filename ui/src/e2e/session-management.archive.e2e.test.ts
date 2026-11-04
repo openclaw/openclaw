@@ -346,9 +346,7 @@ suite.define(() => {
         await page.keyboard.press("ArrowLeft");
         await activateSelfRemovingControl(archiveItem);
         const dialog = await waitForConfirmModal(page);
-        await dialog
-          .getByText("Active work in this session will be stopped.", { exact: false })
-          .waitFor();
+        await dialog.getByText("Active work in this session stops.", { exact: false }).waitFor();
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         await dialog.getByRole("button", { name: "Archive session", exact: true }).click();
         const patch = await waitArchive(gateway, "agent:main:research", true);
@@ -426,9 +424,10 @@ suite.define(() => {
         message: "Session work did not finish stopping. Retry archive after the run stops.",
       });
       await expectText(
-        page.locator("[data-sidebar-session-error]"),
+        page.locator(".app-toast-lane--top-right .app-toast"),
         "Session work did not finish stopping",
       );
+      await expectCount(page.locator("[data-sidebar-session-error]"), 0);
       await row.waitFor({ state: "visible" });
       await captureUiProof(suite, page, "archive-current-thread-failed.png");
 
@@ -439,7 +438,10 @@ suite.define(() => {
       await row.waitFor({ state: "detached" });
 
       await gateway.resolveDeferred("sessions.patch");
-      await expectText(page.locator(".app-toast"), "Session archived");
+      await expectText(
+        page.locator(".app-toast", { hasText: "Session archived" }),
+        "Session archived",
+      );
       await expectCount(row, 0);
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await page.getByText("Research thread content").waitFor({ state: "visible" });

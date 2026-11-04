@@ -9,7 +9,8 @@ export type CronScheduleMaintenanceOptions = {
   recomputeExpired?: boolean;
   nowMs?: number;
   repairFutureCronNextRunAtMs?: boolean;
-  preserveExpiredPacedNextRunJobId?: string;
+  /** Manual force runs retain the disabled job's pending schedule. */
+  preserveDisabledJobId?: string;
   skipScheduleErrorHandling?: boolean;
 };
 
