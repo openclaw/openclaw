@@ -196,6 +196,23 @@ it("separates retained owner authority across interleaved list and presence audi
         expect(audience(broad)).toBe(allowedKey);
         expect(await list(broad)).toBe(rows);
         expect(project(broad)).toBe(watches);
+        const preparing = vi.spyOn(projection, "prepareSelection");
+        const delivered = vi.fn();
+        const pending = listProjectedSessions({
+          projection,
+          client: broad,
+          opts: { agentId: "main" },
+          acceptsSerializedJson: true,
+          onResult: delivered,
+        });
+        // Real selection preparation yields before consulting the populated page cache.
+        expect(preparing).toHaveBeenCalledOnce();
+        source.lifetime.abort(new Error("owner authority revoked"));
+        await expect(pending).rejects.toThrow("owner authority revoked");
+        expect(delivered).not.toHaveBeenCalled();
+        await expect(list(equivalent)).rejects.toThrow("owner authority revoked");
+        expect(() => project(broad)).toThrow("owner authority revoked");
+        expect(() => project(equivalent)).toThrow("owner authority revoked");
       } finally {
         source.release();
       }
