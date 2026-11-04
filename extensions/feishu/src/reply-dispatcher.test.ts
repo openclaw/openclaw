@@ -1073,33 +1073,33 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     },
   );
 
+  // Strings are previews, [text] is a completed block and null is an idle close.
   it.each([
-    ["delta blocks", ["hello"], ["lo world"], "hellolo world"],
-    ["covered tail", ["First.\n\nLast."], ["First.", "\n\nLast."], "First.\n\nLast."],
-    ["sentence gap", ["First. Last."], ["First.", "Last."], "First. Last."],
-    ["repeated blocks", ["ha ha"], ["ha", " ha", "ha"], "ha haha"],
-    ["block-only repeats", [], ["ha", "ha"], "haha"],
-    [
-      "corrected snapshots",
-      ["Old draft answer.", "Corrected answer.", "Old draft"],
-      [],
-      "Old draft",
-    ],
-    ["private reasoning", ["<thinking>private</thinking>\nvisible answer"], [], "visible answer"],
-  ] as const)("streams %s", async (_name, partials, blocks, expected) => {
+    ["delta blocks", ["hello", ["lo world"]], ["hellolo world"]],
+    ["covered tail", ["First.\n\nLast.", ["First."], ["\n\nLast."]], ["First.\n\nLast."]],
+    ["sentence gap", ["First. Last.", ["First."], ["Last."]], ["First. Last."]],
+    ["repeated blocks", ["ha ha", ["ha"], [" ha"], ["ha"]], ["ha haha"]],
+    ["block-only repeats", [["ha"], ["ha"]], ["haha"]],
+    ["corrected snapshots", ["Old draft answer.", "Corrected answer.", "Old draft"], ["Old draft"]],
+    ["private reasoning", ["<thinking>private</thinking>\nvisible answer"], ["visible answer"]],
+    ["idle-closed cards", ["One.", ["One."], null, "One.\n\nTwo.", ["\n\nTwo."]], ["One.", "Two."]],
+  ] as const)("streams %s", async (_name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
     await options.onReplyStart?.();
-    for (const text of partials) {
-      result.replyOptions.onPartialReply?.({ text });
-    }
-    for (const text of blocks) {
-      await options.block({ text });
+    for (const event of events) {
+      if (event === null) {
+        await options.onIdle?.();
+      } else if (typeof event === "string") {
+        result.replyOptions.onPartialReply?.({ text: event });
+      } else {
+        await options.block({ text: event[0] });
+      }
     }
     await options.onIdle?.();
-    expect(streamingInstances).toHaveLength(1);
-    expect(stream(0).closeWithResult).toHaveBeenCalledTimes(1);
-    expectClosed(expected);
+    expect(streamingInstances.map((stub) => stub.closeWithResult.mock.calls)).toEqual(
+      cards.map((text) => [[text, { note: "Agent: agent" }]]),
+    );
   });
 
   it("keeps an over-limit block in its active streaming card", async () => {

@@ -260,6 +260,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let lastPartial = "";
   let previewText = "";
   let previewBlockOffset = 0;
+  let closedPreviewText = "";
   let reasoningText = "";
   let statusLine = "";
   let modelWaitLine = "";
@@ -348,7 +349,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       streamText = `${streamText}${nextText}`;
     } else {
       previewText = nextText;
-      streamText = `${snapshotBaseText}${nextText}`;
+      // A closed card keeps its preview; the next card continues the same message.
+      const shown = nextText.startsWith(closedPreviewText) ? closedPreviewText.length : 0;
+      streamText = `${snapshotBaseText}${nextText.slice(shown).trimStart()}`;
     }
     lastPartial = nextText;
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
@@ -442,6 +445,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       disposition,
       content: finalizedAnswerText,
     };
+    if (disposition === "closed" && streamingToClose.isActive()) {
+      closedPreviewText = previewText;
+    }
     resetStreamingState();
     try {
       if (startPromiseToClose) {
@@ -1397,6 +1403,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             lastPartial = "";
             previewText = "";
             previewBlockOffset = 0;
+            closedPreviewText = "";
             modelWaitLine = "";
             return updateStreamingStatusLine("", false);
           }
