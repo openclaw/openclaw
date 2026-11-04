@@ -38,6 +38,6 @@ it("loads bundle fallback copy with the file preview without replacing the activ
   expect(manager.t("filePreview.label")).toBe("Support files");
   await manager.setLocale("en");
   expect(manager.t("filePreview.bundle.binary")).toBe(
-    "This binary file is included in the bundle but cannot be displayed as text.",
+    "This binary file is included in the bundle but can’t be displayed as text.",
   );
 });

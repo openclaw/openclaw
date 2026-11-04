@@ -1874,8 +1874,7 @@ const startupEnglish = {
         "Used when anyone opens this dashboard. Personal layout choices still apply.",
       savingDefault: "Saving default…",
       defaultSaved: "Dashboard default saved for future opens.",
-      defaultSaveFailed:
-        "Could not save the dashboard default. Check the connection and try again.",
+      defaultSaveFailed: "Couldn’t save the dashboard default. Check the connection and try again.",
       defaultSaveError: "Couldn’t save the dashboard default. Try again.",
       swap: "Swap {main} and {side}",
       layout: "Layout",

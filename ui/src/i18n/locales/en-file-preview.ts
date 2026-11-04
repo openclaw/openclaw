@@ -89,7 +89,7 @@ const catalog = {
       lines: "L1–{count} / {total}",
     },
     bundle: {
-      binary: "This binary file is included in the bundle but cannot be displayed as text.",
+      binary: "This binary file is included in the bundle but can’t be displayed as text.",
       "too-large":
         "This file exceeds the preview limit. Its contents have not been truncated or loaded.",
       unavailable: "Couldn’t read this file. Close and reopen the skill to try again.",
