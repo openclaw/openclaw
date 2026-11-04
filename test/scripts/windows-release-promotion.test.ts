@@ -10,8 +10,8 @@ describe("Windows release promotion", () => {
   // The executable GitHub fixture uses a POSIX shebang; native Windows proof is separate.
   it.skipIf(process.platform === "win32").each(windowsPromotionCases)(
     "%s",
-    (label, scenario, uploads) => {
-      runWindowsPromotionCase([label, scenario, uploads]);
+    (label, scenario, uploads, refusal) => {
+      runWindowsPromotionCase([label, scenario, uploads, refusal]);
     },
   );
 });

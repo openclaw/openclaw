@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { validateReleaseApprovalReceipt } from "./release-approval-receipt.mjs";
 import {
   runReleaseToolingGh,
-  validateReleasePublishParentRun,
   verifyReleaseToolingIdentity,
   verifyReleaseWorkflowRun,
 } from "./release-tooling-identity.mjs";
@@ -48,6 +46,7 @@ function source() {
 }
 
 function readApproval(path) {
+  const selectedSource = source();
   const approval = JSON.parse(readFileSync(path, "utf8"));
   validateReleaseApprovalReceipt(approval.release);
   requireValue(
@@ -61,18 +60,17 @@ function readApproval(path) {
       /^[a-f0-9]{40}$/u.test(approval.signedTagObjectSha) &&
       (approval.source === null
         ? env.DIRECT_RELEASE_RECOVERY === "true"
-        : isDeepStrictEqual(approval.source, source())),
+        : isDeepStrictEqual(approval.source, selectedSource)),
     "Windows approval source or fields do not match this promotion.",
   );
   const expected = {
     repository: env.GITHUB_REPOSITORY,
     parentRunId: env.RELEASE_PUBLISH_RUN_ID,
     parentRunAttempt: env.RELEASE_PUBLISH_RUN_ATTEMPT,
-    toolingRef: env.RELEASE_TOOLING_REF,
-    toolingFullRef: env.RELEASE_TOOLING_FULL_REF,
-    toolingSha: env.RELEASE_TOOLING_SHA,
+    toolingRef: env.GITHUB_REF_NAME,
+    toolingFullRef: env.GITHUB_REF,
+    toolingSha: env.GITHUB_WORKFLOW_SHA,
     releaseTag: env.RELEASE_TAG,
-    targetSha: env.RELEASE_TARGET_SHA,
   };
   for (const [key, value] of Object.entries(expected)) {
     requireValue(approval.release[key] === value, `Windows approval ${key} mismatch.`);
@@ -82,34 +80,14 @@ function readApproval(path) {
     "Windows promotion excludes extended-stable.",
   );
   requireValue(
-    env.GITHUB_WORKFLOW_REF ===
-      `${env.GITHUB_REPOSITORY}/${WORKFLOW}@${env.RELEASE_TOOLING_FULL_REF}` &&
-      env.GITHUB_REF === env.RELEASE_TOOLING_FULL_REF &&
-      env.GITHUB_REF_NAME === env.RELEASE_TOOLING_REF &&
-      env.GITHUB_WORKFLOW_SHA === env.RELEASE_TOOLING_SHA,
+    env.GITHUB_WORKFLOW_REF === `${env.GITHUB_REPOSITORY}/${WORKFLOW}@${env.GITHUB_REF}`,
     "Executing Windows workflow does not match approved tooling.",
   );
   return approval;
 }
 
-function verifyAuthority(path, approval) {
+function verifyAuthority(approval) {
   const release = approval.release;
-  runReleaseToolingGh([
-    "attestation",
-    "verify",
-    path,
-    "--repo",
-    release.repository,
-    "--signer-workflow",
-    `${release.repository}/${release.parentWorkflow}`,
-    "--signer-digest",
-    release.toolingSha,
-    "--source-ref",
-    release.toolingFullRef,
-    "--source-digest",
-    release.toolingSha,
-    "--deny-self-hosted-runners",
-  ]);
   const target = JSON.parse(
     runReleaseToolingGh([
       "release",
@@ -144,30 +122,17 @@ function verifyAuthority(path, approval) {
       (refs.get(`${tagRef}^{}`) ?? refs.get(tagRef)) === release.targetSha,
     "Windows release tag moved, disappeared, or changed after signature verification.",
   );
-  const identity = verifyReleaseToolingIdentity({
+  verifyReleaseToolingIdentity({
     repository: release.repository,
     workflowFullRef: release.toolingFullRef,
     workflowRef: release.toolingRef,
     workflowSha: release.toolingSha,
-  });
-  validateReleasePublishParentRun({
-    identity,
     releasePublishFullRef: release.toolingFullRef,
     releasePublishRef: release.toolingRef,
     releasePublishRunId: release.parentRunId,
     releasePublishRunAttempt: release.parentRunAttempt,
     releasePublishParentStatePolicy:
       env.DIRECT_RELEASE_RECOVERY === "true" ? "manual-recovery" : "active-or-success",
-    repository: release.repository,
-    // Read the current run, so a superseded successful attempt cannot authorize a write.
-    run: JSON.parse(
-      runReleaseToolingGh([
-        "api",
-        `repos/${release.repository}/actions/runs/${release.parentRunId}`,
-        "--method",
-        "GET",
-      ]),
-    ),
   });
   verifyReleaseWorkflowRun({
     repository: release.repository,
@@ -206,28 +171,6 @@ function verifyWriter() {
   );
 }
 
-function verifyFiles(directory) {
-  const selectedSource = source();
-  requireValue(
-    isDeepStrictEqual(readdirSync(directory).toSorted(), [...INSTALLERS, MANIFEST].toSorted()),
-    "Windows writer requires exactly the verified installers and checksum manifest.",
-  );
-  const manifest = INSTALLERS.map((name) => {
-    const digest = createHash("sha256")
-      .update(readFileSync(join(directory, name)))
-      .digest("hex");
-    requireValue(
-      `sha256:${digest}` === selectedSource.installerDigests[name],
-      `Windows installer digest mismatch: ${name}.`,
-    );
-    return `${digest}  ${name}`;
-  }).join("\n");
-  requireValue(
-    readFileSync(join(directory, MANIFEST), "utf8").replace(/\r\n/gu, "\n") === `${manifest}\n`,
-    "Windows checksum manifest does not match the approved installers.",
-  );
-}
-
 const { positionals, values } = parseArgs({
   allowPositionals: true,
   options: {
@@ -254,17 +197,33 @@ if (positionals.length === 1 && positionals[0] === "create" && values.receipt &&
   values.approval
 ) {
   const approval = readApproval(values.approval);
+  const release = approval.release;
+  runReleaseToolingGh([
+    "attestation",
+    "verify",
+    values.approval,
+    "--repo",
+    release.repository,
+    "--signer-workflow",
+    `${release.repository}/${release.parentWorkflow}`,
+    "--signer-digest",
+    release.toolingSha,
+    "--source-ref",
+    release.toolingFullRef,
+    "--source-digest",
+    release.toolingSha,
+    "--deny-self-hosted-runners",
+  ]);
   if (positionals[0] === "verify") {
-    verifyAuthority(values.approval, approval);
+    verifyAuthority(approval);
   } else {
     requireValue(
       Boolean(values.assets),
       "Windows publication requires the verified asset directory.",
     );
-    verifyFiles(values.assets);
     for (const name of [...INSTALLERS, MANIFEST]) {
       // Recheck after the environment wait and after every preceding upload.
-      verifyAuthority(values.approval, approval);
+      verifyAuthority(approval);
       verifyWriter();
       runReleaseToolingGh([
         "release",

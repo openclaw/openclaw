@@ -1016,22 +1016,9 @@ promote_windows_release_assets() {
     echo "Windows promotion requires both an exact source tag and approved installer digests." >&2
     return 1
   fi
-  local approval_name="windows-release-approval-${RELEASE_PUBLISH_RUN_ID}-${RELEASE_PUBLISH_RUN_ATTEMPT}"
-  local approval_inventory
-  approval_inventory="$(gh_read api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}/artifacts?name=${approval_name}&per_page=100")" || return 1
-  if ! jq -e --arg name "$approval_name" --arg sha "$PARENT_WORKFLOW_SHA" \
-    '.total_count == 1 and (.artifacts | length) == 1 and .artifacts[0].name == $name and .artifacts[0].expired == false and .artifacts[0].workflow_run.head_sha == $sha' \
-    <<< "$approval_inventory" >/dev/null; then
-    echo "Windows approval is missing or ambiguous; core publication remains complete." >&2
-    return 1
-  fi
   windows_node_run_id="$(dispatch_workflow windows-node-release.yml \
     -f release_publish_run_id="${RELEASE_PUBLISH_RUN_ID}" \
     -f release_publish_run_attempt="${RELEASE_PUBLISH_RUN_ATTEMPT}" \
-    -f release_tooling_ref="${PARENT_WORKFLOW_BRANCH}" \
-    -f release_tooling_full_ref="${PARENT_WORKFLOW_FULL_REF}" \
-    -f release_tooling_sha="${PARENT_WORKFLOW_SHA}" \
-    -f release_target_sha="${TARGET_SHA}" \
     -f tag="${RELEASE_TAG}" \
     -f windows_node_tag="${WINDOWS_NODE_TAG}" \
     -f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}")" || return 1

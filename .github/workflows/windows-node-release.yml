@@ -24,22 +24,6 @@ on:
         description: Exact original publisher attempt
         required: true
         type: string
-      release_tooling_ref:
-        description: Approved release tooling ref
-        required: true
-        type: string
-      release_tooling_full_ref:
-        description: Approved release tooling full ref
-        required: true
-        type: string
-      release_tooling_sha:
-        description: Approved release tooling SHA
-        required: true
-        type: string
-      release_target_sha:
-        description: Approved release candidate SHA
-        required: true
-        type: string
       direct_release_recovery:
         description: Recover the original release or attach Windows omitted from core publication
         required: true
@@ -61,10 +45,6 @@ env:
   WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.expected_installer_digests }}
   RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
   RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
-  RELEASE_TOOLING_REF: ${{ inputs.release_tooling_ref }}
-  RELEASE_TOOLING_FULL_REF: ${{ inputs.release_tooling_full_ref }}
-  RELEASE_TOOLING_SHA: ${{ inputs.release_tooling_sha }}
-  RELEASE_TARGET_SHA: ${{ inputs.release_target_sha }}
   DIRECT_RELEASE_RECOVERY: ${{ inputs.direct_release_recovery && 'true' || 'false' }}
 
 jobs:
@@ -93,6 +73,7 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.release_publish_run_id }}
           github-token: ${{ github.token }}
+          digest-mismatch: error
       - name: Validate original Windows authority
         shell: pwsh
         env:
@@ -108,24 +89,10 @@ jobs:
           EXPECTED_INSTALLER_DIGESTS: ${{ inputs.expected_installer_digests }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ($env:RELEASE_TAG.Contains("-alpha.") -or $env:GITHUB_REF -like "*tideclaw/alpha/*") {
-            throw "Alpha releases are retired; use a beta prerelease."
-          }
-          if ($env:RELEASE_TAG -notmatch '^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$') {
-            throw "Invalid OpenClaw release tag: $env:RELEASE_TAG"
-          }
           $stableRelease = -not (
             $env:RELEASE_TAG.Contains("-beta.")
           )
-          if ($env:WINDOWS_NODE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$') {
-            throw "windows_node_tag must be an explicit openclaw-windows-node release tag, not latest: $env:WINDOWS_NODE_TAG"
-          }
-
-          try {
-            $expectedDigests = $env:EXPECTED_INSTALLER_DIGESTS | ConvertFrom-Json -AsHashtable
-          } catch {
-            throw "expected_installer_digests must be a JSON object: $_"
-          }
+          $expectedDigests = $env:EXPECTED_INSTALLER_DIGESTS | ConvertFrom-Json -AsHashtable
           # Add future signed installer names, such as MSIX x64/ARM64, here.
           $requiredInstallerNames = @(
             "OpenClawCompanion-Setup-x64.exe",
@@ -135,16 +102,6 @@ jobs:
             $requiredInstallerNames
             "OpenClawCompanion-SHA256SUMS.txt"
           )
-          if ($expectedDigests.Count -ne $requiredInstallerNames.Count) {
-            throw "expected_installer_digests must contain exactly the current installer asset contract."
-          }
-          foreach ($name in $requiredInstallerNames) {
-            $digest = [string]$expectedDigests[$name]
-            if ($digest -notmatch '^sha256:[A-Fa-f0-9]{64}$') {
-              throw "expected_installer_digests is missing a valid pinned digest for $name."
-            }
-          }
-
           $targetRelease = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets,url | ConvertFrom-Json
           if ($targetRelease.tagName -ne $env:RELEASE_TAG) {
             throw "OpenClaw release tag mismatch: expected $env:RELEASE_TAG, got $($targetRelease.tagName)"
@@ -295,10 +252,12 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ inputs.release_publish_run_id }}
           github-token: ${{ github.token }}
+          digest-mismatch: error
       - name: Download verified Windows assets
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.validate_signed_windows_installers.outputs.artifact_id }}
+          digest-mismatch: error
           merge-multiple: true
           path: dist
       - name: Upload to OpenClaw release

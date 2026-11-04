@@ -2594,8 +2594,6 @@ jobs:
         env:
           RELEASE_PUBLISH_RUN_ID: ${{ github.run_id }}
           RELEASE_PUBLISH_RUN_ATTEMPT: ${{ github.run_attempt }}
-          PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
-          PARENT_WORKFLOW_FULL_REF: ${{ github.ref }}
           GH_TOKEN: ${{ github.token }}
           PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ inputs.tag }}

@@ -164,8 +164,9 @@ exact and non-prerelease, with candidate-approved digests. The detached Windows
 child runs after GitHub finalization; failure does not keep the release drafted.
 To attach later or recover promotion, use the original publisher's attested
 `windows-release-approval-<run-id>-<attempt>/approval.json`. Its `release` object
-supplies `parentRunId`, `parentRunAttempt`, `toolingRef`, `toolingFullRef`,
-`toolingSha`, `releaseTag`, and `targetSha` for the corresponding variables below.
+supplies `parentRunId`, `parentRunAttempt`, `toolingRef`, and `releaseTag` for the
+variables below. The child binds its executing ref and SHA to that approval; the
+attested target is checked against the original signed tag object.
 Keep the original tooling ref; dispatching from current `main` does not recover
 a protected-tag publisher's approval.
 
@@ -186,10 +187,6 @@ ghx workflow run windows-node-release.yml --repo openclaw/openclaw --ref "$RELEA
   -f expected_installer_digests='{"OpenClawCompanion-Setup-x64.exe":"sha256:<approved-x64-sha256>","OpenClawCompanion-Setup-arm64.exe":"sha256:<approved-arm64-sha256>"}' \
   -f release_publish_run_id="$RELEASE_PUBLISH_RUN_ID" \
   -f release_publish_run_attempt="$RELEASE_PUBLISH_RUN_ATTEMPT" \
-  -f release_tooling_ref="$RELEASE_TOOLING_REF" \
-  -f release_tooling_full_ref="$RELEASE_TOOLING_FULL_REF" \
-  -f release_tooling_sha="$RELEASE_TOOLING_SHA" \
-  -f release_target_sha="$RELEASE_TARGET_SHA" \
   -F direct_release_recovery=true
 ```
 

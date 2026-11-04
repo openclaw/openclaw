@@ -374,7 +374,6 @@ jobs:
           RELEASE_TAG="$(jq -er '.inputs.tag' <<< "$RELEASE_REQUEST")"
           TARGET_SHA="$(jq -er '.sourceSha' <<< "$RELEASE_REQUEST")"
           PARENT_WORKFLOW_SHA="$(jq -er '.tooling.sha' <<< "$RELEASE_REQUEST")"
-          PARENT_WORKFLOW_BRANCH="$(jq -er '.tooling.ref' <<< "$RELEASE_REQUEST")"
           PARENT_WORKFLOW_FULL_REF="$(jq -er '.tooling.fullRef' <<< "$RELEASE_REQUEST")"
           RELEASE_PUBLISH_RUN_ID="$(jq -er '.releaseRunId' <<< "$RELEASE_REQUEST")"
           RELEASE_PUBLISH_RUN_ATTEMPT="$(jq -er '.releaseRunAttempt' <<< "$RELEASE_REQUEST")"

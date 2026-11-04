@@ -821,12 +821,6 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
       state.writes += 1;
       writeFileSync(process.env.FIXTURE_GITHUB_STATE, JSON.stringify(state));
       console.log(JSON.stringify(release()));
-    } else if (apiEndpoint === 'repos/${REPOSITORY}/actions/runs/700/artifacts?name=windows-release-approval-700-1&per_page=100') {
-      const artifacts = state.windowsApprovalMissing ? [] : [{
-        name: 'windows-release-approval-700-1', expired: false,
-        workflow_run: { id: 700, head_sha: '${TOOLING_SHA}' }
-      }];
-      console.log(JSON.stringify({ total_count: artifacts.length, artifacts }));
     } else if (args[0] === 'api' && args[1].startsWith('repos/${REPOSITORY}/actions/runs/700/artifacts?')) {
       console.log(JSON.stringify({ total_count: 1, artifacts: [{
         id: 710, name: 'openclaw-release-postpublish-evidence-' + process.env.FIXTURE_RELEASE_TAG,
@@ -2236,24 +2230,10 @@ describe("prepared Windows handoff", () => {
     ["beta", "v2026.9.2-beta.1", "beta", "success", true, true, false, false],
     ["failed activation", "v2026.9.2", "beta", "failure", true, true, false, false],
     ["dispatch failed", "v2026.9.2", "beta", "success", true, true, true, true],
-    ["missing approval", "v2026.9.2", "beta", "success", true, true, false, true, false],
   ] as const)(
     "uses the frozen optional selection after activation: %s",
-    (
-      _label,
-      tag,
-      channel,
-      activation,
-      selected,
-      digests,
-      dispatchFailure,
-      scheduled,
-      approval?: boolean,
-    ) => {
-      const fixture = finalizationFixture({
-        windowsDispatchFailure: dispatchFailure,
-        windowsApprovalMissing: approval === false,
-      });
+    (_label, tag, channel, activation, selected, digests, dispatchFailure, scheduled) => {
+      const fixture = finalizationFixture({ windowsDispatchFailure: dispatchFailure });
       const ready = readyRelease();
       ready.inputs = {
         ...ready.inputs,
@@ -2263,6 +2243,7 @@ describe("prepared Windows handoff", () => {
         windows_node_installer_digests: digests
           ? JSON.stringify({
               "OpenClawCompanion-Setup-x64.exe": `sha256:${"d".repeat(64)}`,
+              "OpenClawCompanion-Setup-arm64.exe": `sha256:${"e".repeat(64)}`,
             })
           : "",
       };
@@ -2319,23 +2300,15 @@ describe("prepared Windows handoff", () => {
         encoding: "utf8",
         timeout: 10_000,
       });
-      const canDispatch = digests && approval !== false;
-      expect(result.status, result.stderr).toBe(canDispatch && !dispatchFailure ? 0 : 1);
-      if (approval === false) {
-        expect(result.stderr).toContain("Windows approval is missing or ambiguous");
-      }
+      expect(result.status, result.stderr).toBe(digests && !dispatchFailure ? 0 : 1);
       const dispatches = fixture.trace().filter((entry) => entry.event === "windows-dispatch");
-      expect(dispatches).toHaveLength(canDispatch ? 1 : 0);
-      if (canDispatch) {
+      expect(dispatches).toHaveLength(digests ? 1 : 0);
+      if (digests) {
         expect(dispatches[0]?.body).toEqual({
           ref: TOOLING.ref,
           inputs: {
             release_publish_run_id: "700",
             release_publish_run_attempt: "1",
-            release_tooling_ref: TOOLING.ref,
-            release_tooling_full_ref: TOOLING.fullRef,
-            release_tooling_sha: TOOLING_SHA,
-            release_target_sha: SOURCE_SHA,
             tag,
             windows_node_tag: "v1.2.3",
             expected_installer_digests: ready.inputs.windows_node_installer_digests,
@@ -2362,9 +2335,7 @@ describe("prepared Windows handoff", () => {
       const evidence = JSON.parse(
         readFileSync(join(fixture.env.RUNNER_TEMP, "windows-dispatch.json"), "utf8"),
       );
-      expect(evidence.state).toBe(
-        canDispatch && !dispatchFailure ? "dispatched" : "dispatch-failed",
-      );
+      expect(evidence.state).toBe(digests && !dispatchFailure ? "dispatched" : "dispatch-failed");
       expect(
         job.steps.find(
           (entry: { name?: string }) => entry.name === "Upload Windows dispatch evidence",
