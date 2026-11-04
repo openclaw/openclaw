@@ -508,7 +508,7 @@ suite.define(() => {
         const error = "GitHub API rate limit exceeded (HTTP 403). Try again in 2 minutes.";
         await gateway.rejectDeferred("forge.preview", { message: error });
         await expectText(card.getByRole("status"), error);
-        await expectAttr(card, "aria-label", "Couldn’t load this preview.");
+        await expectAttr(card, "aria-label", "Couldn’t load preview");
         const externalLink = card.getByRole("link", { name: "Open on Forge" });
         await expectAttr(externalLink, "href", PULL_HREF);
         await expectAttr(externalLink, "target", "_blank");

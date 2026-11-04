@@ -374,7 +374,7 @@ export function resolveRunnerMatrix(params: {
     {
       os_id: "windows",
       display_name: "Windows",
-      runner: pick(params.windowsRunner, params.varWindowsRunner, "blacksmith-32vcpu-windows-2025"),
+      runner: pick(params.windowsRunner, params.varWindowsRunner, "windows-2025"),
       artifact_name: "windows",
     },
     {

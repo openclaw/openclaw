@@ -342,7 +342,9 @@ const enCron = {
       runAt: "Started at",
       transcript: "Conversation",
       viewTranscript: "View transcript",
-      transcriptEmpty: "No messages in this activity yet.",
+      transcriptScope:
+        "This is the conversation used by the selected run. Shared conversations can include messages from before and after that run.",
+      transcriptEmpty: "No messages in this conversation yet.",
       transcriptMissingMetadata:
         "Couldn’t open this conversation. Its session information is missing.",
       transcriptUnavailable:
