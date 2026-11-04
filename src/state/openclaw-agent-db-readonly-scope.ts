@@ -1,10 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { beginPostgresReadOnlyTransaction } from "../infra/postgres-sync/transaction.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
-import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -222,7 +222,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
         if (this.cached) {
           retainedScopes.paths.set(this.database.path, this);
         }
-        retainedScopes.unregisterExit ??= registerSqliteCacheExitClose(() => {
+        retainedScopes.unregisterExit ??= registerProcessExitCleanup(() => {
           for (const scope of retainedScopes.active) {
             scope.close();
           }

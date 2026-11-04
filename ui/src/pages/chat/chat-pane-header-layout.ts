@@ -303,6 +303,9 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           elements,
           chat: merge(paneChatProps, detailsActions, detailsOutputs, {
             cachedDetails: cached?.details,
+            sessionFactsReady:
+              this.resourceSessionObservation()?.hasObserved === true &&
+              state.sessionWorkspaceReadDisabledReason !== undefined,
             onDetailsSnapshot: cached?.write,
             selectedSession: paneChatProps.transcriptMetadata
               ? {

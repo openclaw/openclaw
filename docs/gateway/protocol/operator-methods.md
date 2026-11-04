@@ -51,6 +51,8 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
     authority, credentials, discovery, and final run policy can change which
     tools are offered. Absence from this preview does not establish that a tool
     is disabled, and inclusion does not guarantee execution access.
+    See [Codex pre-turn verification](/plugins/codex-harness/commands#verify-tool-access-before-a-codex-turn)
+    for supported checks and their limits.
   - The projection can use cached inventory while refreshing it. Unsaved UI
     edits are not inputs, and saved or runtime changes may not appear immediately.
   - Managed sessions using an OpenClaw tool runtime can include the GitHub
@@ -86,6 +88,9 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - Owner-only core wrappers such as `cron`, `gateway`, and `nodes` require
     owner/admin identity (`operator.admin`) even though `tools.invoke` itself
     is `operator.write`.
+  - Configured MCP tools are invocable by their `<server>__<tool>` name on a
+    private per-call MCP runtime, with `source="mcp"` in the response; see
+    [Configured MCP tools](/gateway/tools-invoke-http-api#configured-mcp-tools).
   - The response is an SDK-facing envelope with `ok`, `toolName`, optional
     `output`, and typed `error` fields. Approval or policy refusals return
     `ok:false` in the payload rather than bypassing the gateway tool policy

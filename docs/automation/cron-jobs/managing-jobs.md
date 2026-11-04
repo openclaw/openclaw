@@ -11,7 +11,9 @@ sidebarTitle: "Manage jobs"
 
 Day-to-day operation of stored jobs: copy-ready CLI examples, the management commands, run history semantics, and the `cron.*` configuration keys. Part of the [Automations](/automation/cron-jobs) guide.
 
-Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all runs** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
+In the Control UI, **Start now** starts an automation immediately. Open **Activity history** to review its activity. **Delete** removes the automation and stops future activity; the confirmation explains that this can’t be undone. An automation’s owner needs automation access to edit it. Admins can also edit it.
+
+Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all activity** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
 
 ## CLI examples
 
@@ -179,11 +181,25 @@ Once a successful one-shot consumes its scheduled occurrence, its finished event
 
 Control UI run history shows `OK · Error` or `OK · Unknown` when execution succeeded but whole-run completion failed or remains unknown. Its status filter still selects the execution status.
 
+A scheduled run can use the automations tool with `action: "runs"`, its own
+`jobId`, and optional `limit`, `offset`, or `runId` to read its job's recorded
+outcomes. This includes `deliveryStatus`, the recorded channel and target, and
+`delivery.receipts` with message IDs for confirmed scheduler announcements.
+Older records and providers that did not return message IDs may have only the
+status and target. The current run's automatic announcement happens after the
+agent finishes, so its receipt becomes available to later runs.
+
+This access follows the job identity bound to the active scheduled admission,
+including a scheduler-admitted restart continuation. It does not grant another
+job's history, channel history, or transcript access. A different delivery account
+does not change the job's identity. An admitted paced job or one-shot session
+continuation also retains `next_check`; a session key alone cannot restore it.
+
 Run-history search matches summaries, task names, and execution or delivery errors. You can search the delivery error shown on a run even when its execution status is `ok`.
 
 Run history shows a loading indicator while the selected history is unavailable. A failed request shows an error and a **Retry** button; previously loaded runs for the same selection remain visible. Empty-history guidance appears only after a successful request confirms there are no runs for the current selection and filters.
 
-After a temporary Gateway reconnect, Automations reopens the current selected job and run using fresh job data. Closing the panel or choosing another automation replaces that selection; reconnect does not replay a superseded link. **Show all runs** clears the linked-run selection across reconnects. Changing the Gateway identity or agent scope clears the selection.
+After a temporary Gateway reconnect, Automations reopens the current selected job and run using fresh job data. Closing the panel or choosing another automation replaces that selection; reconnect does not replay a superseded link. **Show all activity** clears the linked-run selection across reconnects. Changing the Gateway identity or agent scope clears the selection.
 
 Choose **View transcript** on a run to read that run’s recorded conversation, including earlier pages. Transcript selection stays bound to the recorded run when the scheduler reuses its session alias. Gateway clients use `cron.history` with a job `id` and an exact `runId` or `runAtMs`; the response contains `messages`, optional `activity`, and an opaque `nextCursor`. Missing or ambiguous run records remain unavailable rather than opening a different run. The selected run identifies its recorded conversation generation: isolated runs have a fresh generation, while custom sessions retain their shared conversation history across runs. Current job and session permissions apply to every page. Unavailable or inaccessible transcripts return a generic error without disclosing the selected session key.
 

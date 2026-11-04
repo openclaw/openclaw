@@ -132,12 +132,20 @@
   bottom: -3px;
   width: 11px;
   height: 11px;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-  border-top-color: var(--accent);
+  color: var(--accent);
   border-radius: 50%;
   background: var(--bg);
   box-shadow: 0 0 0 2px var(--bg);
   animation: btn-spinner-spin 1.5s linear infinite;
+}
+
+/* The disc behind the ring stays opaque, so only this layer takes the mask. */
+.subagents-desktop__spinner::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  mask: var(--spinner-mask);
 }
 
 .subagents-desktop__identity {

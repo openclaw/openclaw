@@ -259,7 +259,6 @@ describe("automation yield", () => {
     ]);
     const result = await runAttempt({
       attemptOverrides: {
-        contextTokenBudget: 8192,
         disableTools: false,
         config: { tools: { codeMode: false, toolSearch: false } },
         sessionManager: SessionManager.inMemory(),
@@ -338,7 +337,6 @@ describe("embedded yield tool batch", () => {
 
     const attemptResult = await runAttempt({
       attemptOverrides: {
-        contextTokenBudget: 8192,
         disableTools: false,
         abortSignal: externalAbort.signal,
         config: { tools: { codeMode: false, toolSearch: false } },
@@ -472,7 +470,6 @@ describe("conditional handoff yield at the runtime boundary", () => {
         const result = await refreshOwner.run(() =>
           runAttempt({
             attemptOverrides: {
-              contextTokenBudget: 8192,
               disableTools: false,
               config: { tools: { codeMode: false, toolSearch: false } },
               sessionManager: SessionManager.inMemory(),

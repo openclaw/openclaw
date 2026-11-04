@@ -175,6 +175,7 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
     "local workspace baselines → shared immutable trees and compact scan fingerprints",
   "template-names-v36": "starter installs and provenance → canonical Template storage names",
   "worker-resource-receipts-v37": "immutable provider resource identity retained through teardown",
+  "repository-disk-authority-v38": "repository authority and pending-result disk identity retained",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",
   "strict-tables-v3": "tables → SQLite STRICT typing",

@@ -13,8 +13,9 @@ What survives a dropped connection, and how the Control UI recovers when it retu
 An initial connection has a two-second grace period before connection feedback
 appears. A failed or closed connection shows feedback immediately, and retries
 keep it visible until the Gateway connects. Cached conversations retain their
-header controls; the connection indicator fills the header's existing gap without
-moving controls or covering conversation rows. Resolving a session link or loading
+header controls; on desktop the connection indicator floats centered below the
+pane header, for example **Reconnecting… · Saved conversation**, without moving
+header controls or the transcript. Resolving a session link or loading
 history does not imply a lost connection.
 
 Returning to a suspended tab or regaining network connectivity can recover a
@@ -29,6 +30,13 @@ Wi-Fi never reports an offline/online change. Young opening attempts and opened
 sockets keep their normal handshake. Announced startup, restart, suspension, and
 busy-Gateway waits keep their existing retry pacing; hidden tabs do not poll.
 Expected reachability failures do not trigger sign-in recovery notifications.
+
+After connecting, requests refused because the Gateway is still starting stay
+pending. The shared client honors the server's retry delay and doubles the wait
+after repeated startup refusals, up to eight seconds (or a longer server hint).
+Requests load their data on the next successful retry; their original timeout
+and cancellation still apply. Other requests can proceed independently while an
+agent or method is starting.
 
 An unanswered send starts a liveness check after about five seconds. Any inbound
 frame proves the connection is alive; otherwise, ten more seconds without a
@@ -219,6 +227,7 @@ older, unbounded transcript records; a connected visit fills the new cache.
 The first upward scroll or **Show earlier** refills the Gateway's current history
 window before continuing to older pages. Automatic viewport filling does not
 trigger this refill. Overlapping cached rows are deduplicated.
+Deleting a session removes its transcript and prunes its rows from the saved sidebar without clearing unrelated conversations or sidebar content. An unchanged live handoff reuses the saved sidebar; roster read receipts alone do not trigger another write. Tabs sharing the same saved sidebar write each changed presentation once. A malformed individual transcript snapshot discards only that conversation.
 Clearing site data removes local recovery data.
 If browser storage is unavailable or no usable record exists, the connection
 screen appears as usual.

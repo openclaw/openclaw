@@ -1325,10 +1325,7 @@ describe("previous release update compatibility", () => {
     return output;
   }
 
-  function serveTarball(
-    archive: string,
-    failFirstRequests = 0,
-  ): { child: childProcess.ChildProcess; url: string } {
+  function serveTarball(archive: string, failFirstRequests = 0) {
     const root = createTempDir("update-compat-registry-");
     const portFile = path.join(root, "port");
     const server = path.join(root, "server.cjs");
@@ -1350,7 +1347,8 @@ describe("previous release update compatibility", () => {
         "  fs.createReadStream(archive).pipe(response);",
         "});",
         'instance.listen(0, "127.0.0.1", () => {',
-        "  fs.writeFileSync(portFile, String(instance.address().port));",
+        '  fs.writeFileSync(portFile + ".tmp", String(instance.address().port));',
+        '  fs.renameSync(portFile + ".tmp", portFile);',
         "});",
       ].join("\n"),
     );

@@ -20,6 +20,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import * as fsSafe from "../../infra/fs-safe.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -37,6 +38,7 @@ import {
   proveLastFileDirectoryRetention,
 } from "./local-workspace-directory-retention.test-support.js";
 import {
+  expectMissing,
   observeAcknowledgedUpdate,
   prepareLocalWorkspaceArchiveFixture,
   prepareSandboxCheckpointFixture,
@@ -48,6 +50,7 @@ import {
   proveSharedSandboxCheckpoints,
   proveStagedInputCheckpointOwnership,
   proveWorkerOwnedIncrementalWorkspace,
+  proveWorkerOwnedArchive,
 } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import {
@@ -86,13 +89,12 @@ const writeText = (directory: string, relative: string, data: string) =>
 async function expectText(directory: string, relative: string, expected: string) {
   expect(await readText(directory, relative)).toBe(expected);
 }
-async function expectMissing(directory: string, ...parts: string[]) {
-  await expect(fs.stat(path.join(directory, ...parts))).rejects.toMatchObject({ code: "ENOENT" });
-}
 
 const archiveFixture = (provisionedPaths: string[] = []) =>
   prepareLocalWorkspaceArchiveFixture(owner, provisionedPaths);
 const treePaths = (tree: string) => git(repo, "ls-tree", "-r", "--name-only", tree);
+
+it("keeps archive preparation worker-owned and lossless", () => proveWorkerOwnedArchive(owner));
 
 const suiteDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -109,8 +111,8 @@ beforeAll(() => {
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-projection-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
-  vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
-  vi.stubEnv("GIT_CONFIG_SYSTEM", os.devNull);
+  vi.stubEnv("GIT_CONFIG_GLOBAL", gitNullConfigPath());
+  vi.stubEnv("GIT_CONFIG_SYSTEM", gitNullConfigPath());
   setRuntimeConfigSnapshot({});
   repo = path.join(root, "source");
   canonical = path.join(root, "canonical");
@@ -708,19 +710,21 @@ it.for([false, true])(
       events.push(kind);
     };
     // Keep the cleanup producer and projection gate real; model only container I/O.
-    vi.spyOn(docker, "ensureSandboxContainer").mockResolvedValue({
-      containerName: entry.containerName,
-      containerId: "a".repeat(64),
-      configHash: "checkpoint-fixture-config",
-      mountPlan: {
-        binds: [],
-        protectedTargets: [],
-        skippedBinds: [],
-        readOnlyWorkspaceSkillMounts: [],
-        tmpfs: [],
-      },
-      currentConfig: true,
-    });
+    vi.spyOn(docker, "ensureSandboxContainer").mockImplementation(async (_params, build) =>
+      build({
+        containerName: entry.containerName,
+        containerId: "a".repeat(64),
+        configHash: "checkpoint-fixture-config",
+        mountPlan: {
+          binds: [],
+          protectedTargets: [],
+          skippedBinds: [],
+          readOnlyWorkspaceSkillMounts: [],
+          tmpfs: [],
+        },
+        currentConfig: true,
+      }),
+    );
     vi.spyOn(docker, "execContainerRaw").mockImplementation(async (_engine, args) => {
       if (runtimePaused) {
         return { code: 125, stdout: Buffer.alloc(0), stderr: Buffer.from("Container is paused") };
@@ -739,10 +743,7 @@ it.for([false, true])(
       agentWorkspaceDir: canonical,
     });
     const backend: SandboxBackendHandle = {
-      id: "docker",
-      runtimeId: entry.containerName,
-      runtimeLabel: entry.containerName,
-      workdir: "/workspace",
+      ...container,
       prepareProcessCleanup: container.prepareProcessCleanup!.bind(container),
       buildExecSpec: async () => {
         dispatch("exec");

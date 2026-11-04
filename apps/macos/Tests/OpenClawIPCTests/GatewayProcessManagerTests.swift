@@ -980,13 +980,21 @@ struct GatewayProcessManagerTests {
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
                 ["status", "--runtime-intent-only", "--json"],
             ])
+            try makeExecutableForTests(at: replacement.bun)
+            defer { try? FileManager.default.removeItem(at: state.appendingPathComponent("runtime")) }
             let resumed = GatewayProcessManager()
             #expect(await resumed.enableLaunchAgentIfNeeded(port: 29871).installed)
             let command = try #require(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
                 .first { $0.contains("install") })
+            // The resumed service keeps the stable Bun path its macOS grants belong to.
             let expected = operatorRuntime ? original : GatewayLaunchAgentManager.InstalledServiceCLI(
-                prefix: replacement.cliCommand, sqliteLibrary: replacement.sqliteLibrary.path)
+                prefix: [replacement.serviceBun.path, replacement.cliCommand[1]],
+                sqliteLibrary: replacement.sqliteLibrary.path)
             #expect(Array(command.prefix(2)) == expected.prefix)
+            let runtimePath = try #require(command.firstIndex(of: "--runtime-path"))
+            #expect(command[runtimePath + 1] == expected.prefix[0])
+            #expect(FileManager.default.contentsEqual(
+                atPath: replacement.serviceBun.path, andPath: replacement.bun.path) == !operatorRuntime)
             #expect(resumed.retainedServiceCLI?.sqliteLibrary == expected.sqliteLibrary)
             #expect(resumed.retainedServiceCLI?.environment["OPENCLAW_SQLITE_LIBRARY"] == expected.sqliteLibrary)
         }
@@ -1285,7 +1293,8 @@ struct GatewayProcessManagerTests {
             try self.writeManagedLaunchAgent()
             let previous = try #require(GatewayLaunchAgentManager.installedServiceCLI())
             let runtime = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current-build"))
-            let replacement = try #require(StaleGatewayServiceReplacement.replacing(previous, with: runtime))
+            let replacement = try #require(StaleGatewayServiceReplacement.replacing(
+                previous, with: runtime, allowUnconfigured: false))
             if operatorReplaced {
                 // The operator reassigns the service while this build seeds its runtime.
                 let plist = try #require(previous.serviceAuthority?.plist)

@@ -1,7 +1,6 @@
 import { For } from "solid-js";
 import { sessionIconMask } from "../../../components/solid/icon.tsx";
 import { getSlashCommandDescription, type SlashCommandDef } from "../../../lib/chat/commands.ts";
-import { ComposerContent } from "./chat-composer-content.tsx";
 import { renderComposerMenuOption as ComposerMenuOption } from "./chat-composer-menu.tsx";
 import { renderSlashMatchedName } from "./chat-composer-slash-menu-dom.tsx";
 import {
@@ -25,20 +24,18 @@ export function SlashMenuOptions(props: {
         select={() => props.menu.selectCommand(childProps.command, props.host)}
         hover={() => props.menu.hover(childProps.index)}
         icon={
-          <ComposerContent>
-            <i
-              class="session-css-icon"
-              aria-hidden="true"
-              style={{
-                "mask-image": sessionIconMask(
-                  childProps.command.source === "skill"
-                    ? "pencilSparkles"
-                    : (childProps.command.icon ?? "terminal"),
-                  1.5,
-                ),
-              }}
-            />
-          </ComposerContent>
+          <i
+            class="session-css-icon"
+            aria-hidden="true"
+            style={{
+              "mask-image": sessionIconMask(
+                childProps.command.source === "skill"
+                  ? "pencilSparkles"
+                  : (childProps.command.icon ?? "terminal"),
+                1.5,
+              ),
+            }}
+          />
         }
         name={
           <>
@@ -72,15 +69,13 @@ export function SlashArgumentOptions(props: { menu: SlashMenuState; host: SlashM
           select={() => props.menu.selectArg(arg, props.host)}
           hover={() => props.menu.hover(index())}
           icon={
-            <ComposerContent>
-              <i
-                class="session-css-icon"
-                aria-hidden="true"
-                style={{
-                  "mask-image": sessionIconMask(state().slashMenuCommand?.icon ?? "terminal", 1.5),
-                }}
-              />
-            </ComposerContent>
+            <i
+              class="session-css-icon"
+              aria-hidden="true"
+              style={{
+                "mask-image": sessionIconMask(state().slashMenuCommand?.icon ?? "terminal", 1.5),
+              }}
+            />
           }
           name={arg}
           description={

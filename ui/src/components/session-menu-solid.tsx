@@ -46,7 +46,6 @@ type SessionMenuProps = {
   copyMarkdownAllowed: boolean;
   splitAllowed: boolean;
   selectionCount: number;
-  lastActive: string;
   anchor: { x: number; y: number };
   trigger: HTMLElement | null;
   disabled: boolean;
@@ -57,6 +56,7 @@ type SessionMenuProps = {
   snoozeAllowed: boolean;
   deleteAllowed: boolean;
   cloudWorkerStopAllowed: boolean;
+  cloudWorkerStopLabel?: string;
   groups: readonly string[];
   currentOwner: SessionCreatedActor | null;
   work: SessionMenuWork | null;
@@ -141,21 +141,11 @@ function SessionMenuContent(
   const primaryDivider = separator("primary-divider");
   const prDivider = separator("pr-divider");
   const advancedDivider = separator("advanced-divider");
-  const lastActive: MenuEntry = {
-    kind: "content",
-    id: "last-active",
-    content: (
-      <div class="session-menu__info">
-        {t("sessionsView.lastActive", { time: props.lastActive })}
-      </div>
-    ),
-  };
   const items = createMemo((): MenuEntry[] => {
     if (props.compact && compactView() !== "root") {
       return view.compact(compactView());
     }
     return [
-      ...(!batch() && props.lastActive ? [lastActive] : []),
       ...view.primary(),
       primaryDivider,
       ...view.organization(),
@@ -204,7 +194,7 @@ function SessionMenuContent(
         ? [
             {
               id: "stop-cloud-worker",
-              label: t("sessionsView.stopCloudWorker"),
+              label: props.cloudWorkerStopLabel || t("sessionsView.stopCloudWorker"),
               class: "session-menu__item session-menu__item--destructive",
               labelClass: "session-menu__text",
               variant: "danger" as const,
@@ -331,7 +321,6 @@ export const SessionMenu = defineSolidBridge<SessionMenuProps>(
       copyMarkdownAllowed: { default: false, attribute: false },
       splitAllowed: { default: false, attribute: false },
       selectionCount: { default: 1, attribute: false },
-      lastActive: { default: "", attribute: false },
       anchor: { default: { x: 0, y: 0 }, attribute: false },
       trigger: { default: null, attribute: false },
       disabled: { default: false, attribute: false },
@@ -342,6 +331,7 @@ export const SessionMenu = defineSolidBridge<SessionMenuProps>(
       snoozeAllowed: { default: false, attribute: false },
       deleteAllowed: { default: false, attribute: false },
       cloudWorkerStopAllowed: { default: false, attribute: false },
+      cloudWorkerStopLabel: { default: "", attribute: false },
       groups: { default: [], attribute: false },
       currentOwner: { default: null, attribute: false },
       work: { default: null, attribute: false },

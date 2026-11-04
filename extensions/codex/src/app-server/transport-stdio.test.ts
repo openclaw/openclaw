@@ -6,10 +6,18 @@ import {
   withCodexAppServerGitConfig,
 } from "./transport-stdio.js";
 
-const spawnMock = vi.hoisted(() => vi.fn(() => ({ pid: 1234 })));
+const spawnMock = vi.hoisted(() =>
+  vi.fn<(command: string, args: string[], options: unknown) => { pid: number }>(() => ({
+    pid: 1234,
+  })),
+);
 const prepareRegistration = vi.hoisted(() => vi.fn(async () => async () => {}));
 
-vi.mock("node:child_process", () => ({ spawn: spawnMock }));
+// mock-isolation: launch-option unit tests use a synthetic child, not a native worker.
+vi.mock("./stdio-worker.js", () => ({
+  spawnCodexStdio: (command: string, args: string[], options: unknown) =>
+    spawnMock(command, args, options),
+}));
 vi.mock("./transport-process-registration.js", () => ({
   prepareCodexAppServerProcessRegistration: prepareRegistration,
 }));
@@ -199,6 +207,8 @@ describe("resolveCodexAppServerSpawnEnv", () => {
         GIT_CONFIG_PARAMETERS: fixture.parameters,
         OPENCLAW_GIT_ENV_DROP: "fixture",
       },
+      // This fixture verifies removal of inherited Git settings from the private child.
+      // nosemgrep: security.opengrep.ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
       clearEnv: ["OPENCLAW_GIT_ENV_DROP", ...(fixture.clear ? ["GIT_CONFIG_PARAMETERS"] : [])],
     };
     const prepared = withCodexAppServerGitConfig(original, parameters);

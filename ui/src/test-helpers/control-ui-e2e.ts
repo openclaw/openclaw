@@ -1213,9 +1213,7 @@ function installControlUiMockGateway(
     if (method === "sessions.patchMany") {
       return recordSessionsPatchMany(params, response);
     }
-    if (method === "sessions.create" || method === "sessions.catalog.continue") {
-      sessions.materializeResponse(params, response);
-    }
+    sessions.materializeResponse(method, params, response);
     return response;
   }
 
@@ -1457,7 +1455,7 @@ function installControlUiMockGateway(
             bootId: gatewayBootId,
             controlUiBuildSource: scenario.controlUiBuildSource,
             connId: "control-ui-e2e",
-            version: scenario.serverVersion,
+            ...scenario.serverRelease,
           },
           policy: {
             maxPayload: scenario.maxPayload,

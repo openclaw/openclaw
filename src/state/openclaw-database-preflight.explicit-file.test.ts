@@ -14,6 +14,7 @@ import {
   preflightOpenClawStateDatabasePath,
 } from "./openclaw-database-preflight.js";
 import {
+  expectLiveReadSourceFamily,
   snapshotSourceFamily,
   writeUnreadableNewerStateSchema,
 } from "./openclaw-database-preflight.test-support.js";
@@ -306,6 +307,7 @@ it.each([false, true])(
       { kind: "local-workspace-cas-v35", path: pathname },
       { kind: "template-names-v36", path: pathname },
       { kind: "worker-resource-receipts-v37", path: pathname },
+      { kind: "repository-disk-authority-v38", path: pathname },
     ]);
     await withStateMigrationBackupForTest(options, async () => {
       using witness = openRawDatabase(pathname);
@@ -509,7 +511,7 @@ it.each(["gateway-startup", "gateway-restart"] as const)(
     }).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
     expectNewerSchema(String(failure));
-    deepStrictEqual(snapshotSourceFamily(databasePath), before);
+    expectLiveReadSourceFamily(databasePath, before);
   },
 );
 
@@ -560,6 +562,7 @@ it.each([33, 34])(
       { kind: "local-workspace-cas-v35", path: pathname },
       { kind: "template-names-v36", path: pathname },
       { kind: "worker-resource-receipts-v37", path: pathname },
+      { kind: "repository-disk-authority-v38", path: pathname },
     ]);
     await withStateMigrationBackupForTest(options, async () => {
       using witness = openRawDatabase(pathname);

@@ -390,6 +390,13 @@ These browser-clock phases sum to `browserSpanMs`, not Node `wallMs`. The report
 keeps wall and driver ratios visible. Missing input/commit boundaries are unranked,
 including navigation/reload and memory scenes.
 
+`--steps sidebar-open,sidebar-close --viewport mobile` measures each activation
+separately with the same 1,000-session fixture. The compound `sidebar-toggle`
+includes the exit animation and driver round trips before the second input;
+compare it only with the same motion contract. The single-action cases still
+wait for the real spring, while their input-to-commit clock excludes CSS-only
+motion after the last DOM mutation.
+
 This is an elapsed DOM-commit proxy, not CPU or input-to-paint latency. The driver
 prefix can include application focus work, and compound actions retain driver gaps
 between successive inputs inside `applicationMs`. Raw first/last-input, focus and

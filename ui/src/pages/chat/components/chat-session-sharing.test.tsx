@@ -174,7 +174,7 @@ describe("chat session sharing menu", () => {
           identities: Array.from({ length: count }, (_, index) => ({
             type: "human" as const,
             id: `person-${index}`,
-            label: `Person ${index} (${count})`,
+            label: `É ${index} (${count})`,
             get avatarUrl() {
               return readAvatar();
             },
@@ -200,7 +200,7 @@ describe("chat session sharing menu", () => {
     expect(root.querySelector('[data-value="member:person-100"]')).toBe(member);
     expect(member?.querySelector("openclaw-session-owner-chip")).toBe(avatar);
     expect(item(root, "permission:person-100")).toMatchObject({ title: "Requires write" });
-    expect(member && part(member, "sharing-member-label")?.textContent).toBe("Person 100 (102)");
+    expect(member && part(member, "sharing-member-label")?.textContent).toBe("É 100 (102)");
     expect(item(root, "permission:person-100")?.getAttribute("aria-label")).toContain("Can send");
     panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     flush();
@@ -211,7 +211,7 @@ describe("chat session sharing menu", () => {
     flush();
     const search = root.querySelector<HTMLInputElement>("input[data-search]")!;
     expect(document.activeElement).toBe(search);
-    search.value = "Person 101";
+    search.value = "e\u0301 101";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     expect(root.querySelector("input[data-search]")).toBe(search);
@@ -364,7 +364,7 @@ describe("chat session sharing menu", () => {
       onCopyPublicLink,
     });
     expect(root.textContent).toContain("Link sharing");
-    expect(root.textContent).toContain("The public link stays readable in Draft.");
+    expect(root.textContent).toContain("The public link stays readable in draft.");
     await select(root, "public:disable");
     expect(onPublicShareChange).toHaveBeenCalledWith(false);
     expect(onVisibilityChange).not.toHaveBeenCalled();
@@ -424,7 +424,7 @@ describe("chat session sharing menu", () => {
       expect(copy.disabled).toBe(true);
     });
     retry.resolve({ status: "success" });
-    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied"));
     expect(item(root, "public:copy")).toBe(copy);
     expect(copy.disabled).toBe(false);
     expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
