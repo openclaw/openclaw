@@ -1,0 +1,49 @@
+{
+  "generatedAt": 1792254693450,
+  "providers": {
+    "meta": {
+      "recommendedModels": [
+        "muse-spark-1.3",
+        "muse-wonder-1.0"
+      ]
+    }
+  },
+  "models": [
+    {
+      "id": "muse-spark-1.1",
+      "provider": "meta",
+      "name": "Muse Spark 1.1",
+      "contextWindow": 1048576
+    },
+    {
+      "id": "muse-spark-1.2",
+      "provider": "meta",
+      "name": "Muse Spark 1.2",
+      "contextWindow": 1048576
+    },
+    {
+      "id": "muse-spark-1.2-contributor",
+      "provider": "meta",
+      "name": "Muse Spark 1.2 Contributor",
+      "contextWindow": 1048576
+    },
+    {
+      "id": "muse-spark-1.3",
+      "provider": "meta",
+      "name": "Muse Spark 1.3",
+      "contextWindow": 1048576
+    },
+    {
+      "id": "muse-spark-1.3-contributor",
+      "provider": "meta",
+      "name": "Muse Spark 1.3 Contributor",
+      "contextWindow": 1048576
+    },
+    {
+      "id": "muse-wonder-1.0",
+      "provider": "meta",
+      "name": "Muse Wonder",
+      "contextWindow": 1048576
+    }
+  ]
+}

@@ -6,6 +6,48 @@ export function isNodeTestEvidencePath(file) {
   return typeof file === "string" && FILE.test(file) && !file.includes("..");
 }
 
+/** Rerun discovery only; incomplete reports never become admission signatures. */
+export function extractNodeFailedTests(log) {
+  const files = new Map();
+  const streams = new Map();
+  for (const raw of stripVTControlCharacters(log).split("\n")) {
+    const line = raw.replace(/^\d{4}-\d{2}-\d{2}T\S+\s+/u, "").trim();
+    const shard = /^\[shard:([^\]]+)\]\s*(.*)$/u.exec(line);
+    const stream = shard?.[1] ?? "";
+    const text = (shard?.[2] ?? line).trim();
+    const fileOnly = /Failed Suites|Unhandled (?:Errors?|Rejection)/u.test(text);
+    if (fileOnly) {
+      streams.set(stream, true);
+    } else if (/Failed Tests|Test Files\s/u.test(text)) {
+      streams.set(stream, false);
+    }
+    if (!/^FAIL\s/u.test(text) && !streams.get(stream)) {
+      continue;
+    }
+    const match =
+      /\b((?:src|test|extensions|packages|ui)\/[\w./-]+\.(?:test|spec)\.[cm]?[jt]sx?)\b(?::\d+(?::\d+)?)?(.*)$/u.exec(
+        text,
+      );
+    if (!match || !isNodeTestEvidencePath(match[1])) {
+      continue;
+    }
+    const tests = files.get(match[1]) ?? { names: new Set(), wholeFile: false };
+    const name = /^ > (.+)$/u.exec(match[2])?.[1]?.trim();
+    if (!name || streams.get(stream)) {
+      tests.wholeFile = true;
+    } else {
+      tests.names.add(name);
+    }
+    files.set(match[1], tests);
+  }
+  return [...files]
+    .map(([file, tests]) => ({
+      file,
+      tests: tests.wholeFile ? [] : [...tests.names].toSorted((a, b) => a.localeCompare(b)),
+    }))
+    .toSorted((a, b) => a.file.localeCompare(b.file));
+}
+
 function completeInvocations(rows) {
   const receipts = rows.filter((row) => row.stream === "completion");
   if (receipts.length !== 1) {
@@ -184,7 +226,7 @@ export function parseNodeFailureReport(log, requireComplete) {
         continue;
       }
       failureHeaders++;
-      const failure = /^FAIL\s+(?:\S+\s+)?(\S+) > (.+)$/u.exec(line);
+      const failure = /^FAIL\s+(?:\S+\s+)?(\S+?)(?::\d+(?::\d+)?)? > (.+)$/u.exec(line);
       const message = lines[index + 1];
       if (
         !failure ||

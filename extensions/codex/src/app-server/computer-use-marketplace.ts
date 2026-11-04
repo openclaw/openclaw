@@ -19,18 +19,13 @@ import {
   type CodexUnifiedComputerUseRuntime,
 } from "./computer-use-unified.js";
 import {
-  resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
   resolveMacOSDesktopCodexAppPathCandidates,
   type MacOSDesktopCodexAppPathCandidate,
 } from "./desktop-app-paths.js";
-import { waitForCodexDesktopGeneration } from "./desktop-generation.js";
 
 const MARKETPLACE_NAME = "openai-bundled";
 const UNIFIED_SOURCE_FINGERPRINT = ".openclaw-unified-source-fingerprint";
-const activeInstalls = new Map<
-  string,
-  { sourcePath: string; promise: Promise<string | undefined> }
->();
+const activeInstalls = new Map<string, Promise<string>>();
 
 function resolveCodexManagedBundledMarketplacePath(codexHome: string): string {
   return path.join(codexHome, ".tmp", "bundled-marketplaces", MARKETPLACE_NAME);
@@ -44,6 +39,8 @@ export async function ensureCodexManagedBundledMarketplace(params: {
   ownershipCandidates?: readonly MacOSDesktopCodexAppPathCandidate[];
   computerUsePluginName?: string;
   computerUseMcpServerName?: string;
+  desktopFingerprint?: string;
+  forceRefresh?: boolean;
   assertCurrent?: () => void;
 }): Promise<string | undefined> {
   const candidates = params.candidates ?? resolveMacOSDesktopCodexAppPathCandidates();
@@ -56,6 +53,7 @@ export async function ensureCodexManagedBundledMarketplace(params: {
     params.codexHome,
     params.computerUsePluginName,
     params.computerUseMcpServerName,
+    params.desktopFingerprint,
   );
   const parentPath = path.dirname(resolveCodexManagedBundledMarketplacePath(params.codexHome));
   const targetPath = path.join(parentPath, MARKETPLACE_NAME);
@@ -68,11 +66,8 @@ export async function ensureCodexManagedBundledMarketplace(params: {
   await assertNotSymlink(physicalTargetPath, "managed bundled marketplace");
   const active = activeInstalls.get(physicalTargetPath);
   if (active) {
-    if (active.sourcePath === source.bundledMarketplacePath) {
-      return await active.promise;
-    }
-    await active.promise.catch(() => undefined);
-    return await ensureCodexManagedBundledMarketplace(params);
+    // Source changes during publication are picked up by the next acquisition.
+    return await active;
   }
   const install = publishManagedWrapper({
     parent,
@@ -82,16 +77,14 @@ export async function ensureCodexManagedBundledMarketplace(params: {
     unifiedRuntime,
     ownershipCandidates: params.ownershipCandidates ?? candidates,
     assertCurrent: params.assertCurrent,
+    forceRefresh: params.forceRefresh,
   });
-  const activeEntry = { sourcePath: source.bundledMarketplacePath, promise: install };
-  activeInstalls.set(physicalTargetPath, activeEntry);
-  const clearActive = () => {
-    if (activeInstalls.get(physicalTargetPath) === activeEntry) {
-      activeInstalls.delete(physicalTargetPath);
-    }
-  };
-  void install.then(clearActive, clearActive);
-  return await install;
+  activeInstalls.set(physicalTargetPath, install);
+  try {
+    return await install;
+  } finally {
+    activeInstalls.delete(physicalTargetPath);
+  }
 }
 
 async function publishManagedWrapper(params: {
@@ -102,21 +95,18 @@ async function publishManagedWrapper(params: {
   unifiedRuntime?: CodexUnifiedComputerUseRuntime;
   ownershipCandidates: readonly MacOSDesktopCodexAppPathCandidate[];
   assertCurrent?: () => void;
+  forceRefresh?: boolean;
 }): Promise<string> {
   const { parent, physicalTargetPath, targetPath, source, ownershipCandidates, assertCurrent } =
     params;
   if (
-    await wrapperMatches(physicalTargetPath, source.bundledMarketplacePath, params.unifiedRuntime)
+    !params.forceRefresh &&
+    (await wrapperMatches(physicalTargetPath, source.bundledMarketplacePath, params.unifiedRuntime))
   ) {
     return targetPath;
   }
 
   const stagingPath = await fs.mkdtemp(path.join(parent.realPath, `.${MARKETPLACE_NAME}.staging-`));
-  const backupPath = path.join(
-    parent.realPath,
-    `.${MARKETPLACE_NAME}.backup-${process.pid}-${Date.now()}`,
-  );
-  let backupCreated = false;
   try {
     const manifestParent = path.join(stagingPath, ".agents", "plugins");
     await fs.mkdir(manifestParent, { recursive: true, mode: 0o700 });
@@ -146,9 +136,6 @@ async function publishManagedWrapper(params: {
         path.join(stagingPath, "plugins"),
       );
     }
-    await waitForCodexDesktopGeneration();
-    assertCurrent?.();
-    await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
     const existing = await fs.lstat(physicalTargetPath).catch((error: unknown) => {
       if (extractErrorCode(error) === "ENOENT") {
         return undefined;
@@ -164,46 +151,18 @@ async function publishManagedWrapper(params: {
       );
     }
     if (existing) {
+      assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
       assertCurrent?.();
-      await fs.rename(physicalTargetPath, backupPath);
-      backupCreated = true;
-      await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
+      // The wrapper is generated from the desktop bundle. If publication fails
+      // after removal, the next acquisition rebuilds it without a rollback tree.
+      await fs.rm(physicalTargetPath, { recursive: true });
     }
+    assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
     assertCurrent?.();
     await fs.rename(stagingPath, physicalTargetPath);
-    await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
-    if (backupCreated) {
-      await fs.rm(backupPath, { recursive: true });
-      backupCreated = false;
-    }
     return targetPath;
-  } catch (error) {
-    if (backupCreated) {
-      try {
-        await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
-        const replacement = await fs.lstat(physicalTargetPath).catch(() => undefined);
-        if (replacement) {
-          if (!(await wrapperOwnedBySource(physicalTargetPath, source.bundledMarketplacePath))) {
-            throw new Error("managed bundled marketplace replacement is no longer owned", {
-              cause: error,
-            });
-          }
-          await fs.rm(physicalTargetPath, { recursive: true });
-        }
-        await fs.rename(backupPath, physicalTargetPath);
-        backupCreated = false;
-      } catch (restoreError) {
-        throw new Error(
-          `Failed to restore the prior managed bundled marketplace: ${String(error)}`,
-          {
-            cause: restoreError,
-          },
-        );
-      }
-    }
-    throw error;
   } finally {
-    if (await directoryIdentityIsStable(parent)) {
+    if (directoryIdentityIsStable(parent)) {
       await fs.rm(stagingPath, { recursive: true, force: true });
     }
   }
@@ -352,21 +311,4 @@ export async function resolveClientManagedBundledMarketplacePath(
   }
   const managedPath = resolveCodexManagedBundledMarketplacePath(codexHome);
   return existsSync(managedPath) ? managedPath : undefined;
-}
-
-export function resolveBundledComputerUseMarketplacePath(params: {
-  defaultBundledMarketplacePath?: string;
-  defaultBundledMarketplacePathCandidates?: readonly string[];
-}): string | undefined {
-  if (params.defaultBundledMarketplacePath) {
-    return existsSync(params.defaultBundledMarketplacePath)
-      ? params.defaultBundledMarketplacePath
-      : undefined;
-  }
-  if (!params.defaultBundledMarketplacePathCandidates) {
-    return undefined;
-  }
-  return resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath({
-    candidates: params.defaultBundledMarketplacePathCandidates,
-  });
 }

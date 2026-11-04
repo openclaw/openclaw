@@ -87,7 +87,7 @@ function hasConfiguredCapabilityPlugin(config: OpenClawConfig, env: NodeJS.Proce
         providerIds: new Set([webFetchProviderId]),
       }),
     ) ||
-    hasOfficialExternalWebContractEnvTarget({ contract: "webFetchProviders", env })
+    hasOfficialExternalWebContractEnvTarget({ env })
   );
 }
 

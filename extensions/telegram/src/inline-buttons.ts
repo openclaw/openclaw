@@ -13,11 +13,6 @@ const DEFAULT_INLINE_BUTTONS_SCOPE: TelegramInlineButtonsScope = "allowlist";
 
 const INLINE_BUTTONS_SCOPES = ["off", "dm", "group", "all", "allowlist"] as const;
 
-function normalizeInlineButtonsScope(value: unknown): TelegramInlineButtonsScope | undefined {
-  const trimmed = normalizeOptionalLowercaseString(value);
-  return INLINE_BUTTONS_SCOPES.find((scope) => scope === trimmed);
-}
-
 export function resolveTelegramInlineButtonsConfigScope(
   capabilities: unknown,
 ): TelegramInlineButtonsScope | undefined {
@@ -29,7 +24,8 @@ export function resolveTelegramInlineButtonsConfigScope(
   ) {
     return undefined;
   }
-  return normalizeInlineButtonsScope(capabilities.inlineButtons);
+  const trimmed = normalizeOptionalLowercaseString(capabilities.inlineButtons);
+  return INLINE_BUTTONS_SCOPES.find((scope) => scope === trimmed);
 }
 
 export function resolveTelegramInlineButtonsScopeFromCapabilities(

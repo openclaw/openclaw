@@ -1,5 +1,19 @@
-import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
+import { CODEX_PLUGINS_MARKETPLACE_NAME, type CodexPluginConfig } from "./config.js";
 import type { v2 } from "./protocol.js";
+
+type PluginsConfig = NonNullable<CodexPluginConfig["codexPlugins"]>;
+type PluginEntry = NonNullable<PluginsConfig["plugins"]>[string];
+
+export function codexPluginConfig(options: PluginsConfig = {}): CodexPluginConfig {
+  return { codexPlugins: { enabled: true, ...options } };
+}
+
+export function curatedPlugin(
+  pluginName: string,
+  options: Omit<PluginEntry, "marketplaceName" | "pluginName"> = {},
+): PluginEntry & { marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME; pluginName: string } {
+  return { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, pluginName, ...options };
+}
 
 export function asPluginInstalled(listed: v2.PluginListResponse): v2.PluginInstalledResponse {
   const { featuredPluginIds: _featuredPluginIds, ...installed } = listed;
@@ -17,15 +31,10 @@ export function pluginList(
   plugins: v2.PluginSummary[],
   marketplace: { name?: string; path?: string | null } = {},
 ): v2.PluginListResponse {
+  const { name = CODEX_PLUGINS_MARKETPLACE_NAME, path = "/marketplaces/openai-curated" } =
+    marketplace;
   return {
-    marketplaces: [
-      {
-        name: marketplace.name ?? CODEX_PLUGINS_MARKETPLACE_NAME,
-        path: marketplace.path === undefined ? "/marketplaces/openai-curated" : marketplace.path,
-        interface: null,
-        plugins,
-      },
-    ],
+    marketplaces: [{ name, path, interface: null, plugins }],
     marketplaceLoadErrors: [],
     featuredPluginIds: [],
   };
@@ -52,7 +61,11 @@ export function pluginSummary(
 export function pluginDetail(
   pluginName: string,
   apps: v2.AppSummary[],
-  marketplace: { marketplaceName?: string; marketplacePath?: string | null } = {},
+  marketplace: {
+    marketplaceName?: string;
+    marketplacePath?: string | null;
+    mcpServers?: string[];
+  } = {},
 ): v2.PluginReadResponse {
   return {
     plugin: {
@@ -62,10 +75,8 @@ export function pluginDetail(
           ? "/marketplaces/openai-curated"
           : marketplace.marketplacePath,
       summary: pluginSummary(pluginName, { installed: true, enabled: true }),
-      description: null,
-      skills: [],
       apps,
-      mcpServers: [],
+      mcpServers: marketplace.mcpServers ?? [],
     },
   };
 }
@@ -84,14 +95,6 @@ export function appInfo(id: string, accessible: boolean, enabled = true): v2.App
   return {
     id,
     name: id,
-    description: null,
-    logoUrl: null,
-    logoUrlDark: null,
-    distributionChannel: null,
-    branding: null,
-    appMetadata: null,
-    labels: null,
-    installUrl: null,
     isAccessible: accessible,
     isEnabled: enabled,
     pluginDisplayNames: [],

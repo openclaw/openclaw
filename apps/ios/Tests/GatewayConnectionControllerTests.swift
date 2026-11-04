@@ -233,6 +233,22 @@ private func pendingHandoffDiagnostic(
 }
 
 @Suite(.serialized) struct GatewayReconnectErrorRetentionTests {
+    @Test @MainActor func `retained node timeout stays hidden while operator is connected`() throws {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let stableID = "manual|gateway.example.com|443"
+        appModel.connectedGatewayID = stableID
+        appModel.setOperatorConnected(true)
+        let problem = try #require(appModel._test_applyNodeGatewayConnectionError(URLError(.timedOut)))
+        #expect(appModel.gatewayProblemForToast == nil)
+
+        appModel.beginGatewayPreconnectVerification(stableID: stableID, statusText: "Checking gateway")
+
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.isOperatorGatewayConnected)
+        #expect(appModel.gatewayProblemForToast == nil)
+    }
+
     @Test @MainActor func `retained display problem does not control next retry`() {
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
@@ -1796,7 +1812,7 @@ private func pendingHandoffDiagnostic(
         #expect(appModel.activeGatewayConnectConfig?.stableID != duringResolutionConfig.stableID)
     }
 
-    @Test @MainActor func `trusted certificate keeps device auth route scoped`() async {
+    @Test @MainActor func `trusted certificate keeps device auth route scoped`() async throws {
         let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let host = "127.0.0.1"
@@ -1811,7 +1827,20 @@ private func pendingHandoffDiagnostic(
 
         await controller.connectManual(host: host, port: 1, useTLS: true)
         await controller.acceptPendingTrustPrompt(controller.pendingTrustPrompt)
-        await waitUntil(timeout: .seconds(1)) { appModel.activeGatewayConnectConfig != nil }
+        try #require(controller.pendingTrustPrompt == nil)
+        // Trust acceptance queues ingress and permission work; await its owner, including failure.
+        while controller.hasPendingConnectionHandoff {
+            try Task.checkCancellation()
+            let changed = AsyncStream<Void>.makeStream()
+            withObservationTracking {
+                _ = controller.hasPendingConnectionHandoff
+            } onChange: {
+                changed.continuation.finish()
+            }
+            if controller.hasPendingConnectionHandoff {
+                for await _ in changed.stream {}
+            }
+        }
 
         #expect(appModel.activeGatewayConnectConfig?.stableID == stableID)
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID == stableID)

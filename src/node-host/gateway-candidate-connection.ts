@@ -9,6 +9,7 @@ import {
   type GatewayClientRequestOptions,
   type GatewayReconnectPausedInfo,
 } from "../gateway/client.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { NodeHostGatewayConfig } from "./config.js";
 
@@ -161,15 +162,7 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
         const results = await Promise.allSettled(
           candidateClients.map((client) => client.stopAndWait()),
         );
-        const failures = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "node host gateway cleanup failed");
-        }
+        throwIfSettledRejected(results, "node host gateway cleanup failed");
       });
       return stopPromise;
     },

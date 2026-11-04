@@ -174,8 +174,7 @@ export function scheduleForcedAgentConsult(session: RelaySession, question: stri
       { audioPlaybackActive: true, force: true },
       noFallbackRelayOutputFlush,
     );
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
+    broadcastToOwner(session, {
       type: "toolCall",
       itemId,
       callId,
@@ -288,8 +287,7 @@ export function submitRealtimeAgentConsultWorkingResponse(
     if (session.toolResultEpoch !== epoch) {
       return;
     }
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
+    broadcastToOwner(session, {
       type: "toolResult",
       callId,
       talkEvent: session.harness.talk.emit({

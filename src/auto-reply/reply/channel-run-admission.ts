@@ -12,7 +12,11 @@ import {
   recordChannelAdmissionDecision,
   type ChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
-import { admitChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
+import {
+  admitChildSessionPublication,
+  prepareChildSessionPublication,
+} from "../../channels/message-access/child-session-publication.js";
+import { ChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   readGatewayLocalUserIngressFacts,
@@ -25,22 +29,22 @@ function consumeChannelRunAdmission(
   gatewayLocalUserIngress?: GatewayLocalUserIngress,
 ): {
   ingressState: ExecutionIdentityAdmissionFacts["ingress"]["state"];
-  facts: Pick<ExecutionIdentityAdmissionFacts, "invoker" | "assurance"> &
+  facts: Pick<ExecutionIdentityAdmissionFacts, "invoker" | "assurance" | "representedSubject"> &
     Partial<Pick<ExecutionIdentityAdmissionFacts, "ingress">>;
   onAdmitted: (context: AdmittedRunContext) => void;
 } {
   const gatewayFacts = readGatewayLocalUserIngressFacts(gatewayLocalUserIngress);
   if (gatewayFacts) {
-    return Object.freeze({
+    return {
       ingressState: gatewayFacts.ingress.state,
       facts: gatewayFacts,
       onAdmitted: () => undefined,
-    });
+    };
   }
   const admission = consumeChannelAdmissionEvidence(evidence);
-  return Object.freeze({
+  return {
     ingressState: admission.ingressState,
-    facts: Object.freeze({
+    facts: {
       invoker: admission.invoker,
       ...(admission.assuranceRef
         ? {
@@ -55,7 +59,7 @@ function consumeChannelRunAdmission(
             ],
           }
         : {}),
-    }),
+    },
     onAdmitted: (context) => {
       const token = context.executionIdentityToken;
       if (token && admission.decisionCoverage && admission.identifierAuthentication) {
@@ -69,7 +73,7 @@ function consumeChannelRunAdmission(
         });
       }
     },
-  });
+  };
 }
 
 /** Defer evidence consumption until the selected runtime actually admits the run. */
@@ -131,18 +135,25 @@ export function prepareChannelRunAdmission(params: {
             },
             ...channelAdmission.facts,
           },
-          onAdmitted: (context) => {
+          onAdmitted: async (context) => {
+            if (params.sourceContext) {
+              await prepareChildSessionPublication(params.sourceContext);
+            }
             channelAdmission.onAdmitted(context);
             if (params.sourceContext) {
-              admitChildSessionPublication(
-                params.sourceContext,
-                context.operationalRunInstance,
-                () => {
-                  if (!getAdmittedRunDelegatedAuthority(context)) {
-                    throw new Error("Public ingress run is no longer active.");
-                  }
-                },
-              );
+              try {
+                admitChildSessionPublication(
+                  params.sourceContext,
+                  context.operationalRunInstance,
+                  () => {
+                    if (!getAdmittedRunDelegatedAuthority(context)) {
+                      throw new Error("Public ingress run is no longer active.");
+                    }
+                  },
+                );
+              } catch (error) {
+                throw new ChannelRunAuthorizationError(error);
+              }
             }
             params.onAdmitted?.(context);
           },

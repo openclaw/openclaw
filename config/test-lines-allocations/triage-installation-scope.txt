@@ -1,0 +1,2 @@
+# Reuse the support ZIP regression to forbid unrelated native-service discovery for custom state/config targets.
+1

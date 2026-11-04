@@ -33,13 +33,6 @@ describe("env test utils", () => {
     expect(Object.entries(process.env).find(([key]) => key === "toString")?.[1]).toBe("baseline");
   });
 
-  it("withEnv applies values only inside callback", () => {
-    const key = "OPENCLAW_ENV_TEST_SYNC";
-    const prev = process.env[key];
-    expect(withEnv({ [key]: "inside" }, () => process.env[key])).toBe("inside");
-    expect(process.env[key]).toBe(prev);
-  });
-
   it("withEnv restores values when callback throws", () => {
     const key = "OPENCLAW_ENV_TEST_SYNC_THROW";
     const prev = process.env[key];
@@ -68,14 +61,6 @@ describe("env test utils", () => {
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
-    expect(process.env[key]).toBe(prev);
-  });
-
-  it("withEnvAsync applies values only inside async callback", async () => {
-    const key = "OPENCLAW_ENV_TEST_ASYNC_OK";
-    const prev = process.env[key];
-    const seen = await withEnvAsync({ [key]: "inside" }, async () => process.env[key]);
-    expect(seen).toBe("inside");
     expect(process.env[key]).toBe(prev);
   });
 

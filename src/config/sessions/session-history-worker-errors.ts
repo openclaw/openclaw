@@ -1,17 +1,17 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget.js";
+import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../../state/openclaw-state-worker-error.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionHistoryDelta } from "./session-history-types.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "./session-transcript-projection-error.js";
-import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence.js";
+import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
   SessionTranscriptWorkerError,

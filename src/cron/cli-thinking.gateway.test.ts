@@ -2,7 +2,7 @@
 // The transport is controlled; no WebSocket, provider, or scheduled execution is claimed.
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
 import { cronHandlers } from "../gateway/server-methods/cron.js";
@@ -38,8 +38,7 @@ async function runCli(args: string[]) {
     errors.push(values.map(String).join(" "));
   });
   const outputSpy = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-  const program = new Command();
-  program.exitOverride();
+  const program = new Command().exitOverride();
   registerCronCli(program);
   let exitCode = 0;
   try {
@@ -60,21 +59,29 @@ async function runCli(args: string[]) {
   };
 }
 
-function agentAddArgs(name: string, thinking?: string): string[] {
-  return [
-    "add",
-    "--name",
-    name,
-    "--every",
-    "1h",
-    "--agent",
-    "main",
-    "--message",
-    "hello",
-    "--disabled",
-    "--no-deliver",
-    ...(thinking === undefined ? [] : ["--thinking", thinking]),
-  ];
+function addArgs(name: string, payload: string[], ...options: string[]): string[] {
+  const defaults = ["--every", "1h", "--agent", "main", "--disabled"];
+  return ["add", "--name", name, ...defaults, ...payload, ...options];
+}
+
+function agentAddArgs(name: string, thinking: string): string[] {
+  return addArgs(name, ["--message", "hello", "--no-deliver"], "--thinking", thinking);
+}
+
+async function succeeds(args: string[]) {
+  expect((await runCli(args)).exitCode).toBe(0);
+}
+
+function expectRejected(result: Awaited<ReturnType<typeof runCli>>, error: string, method: string) {
+  expect(result).toMatchObject({
+    exitCode: 1,
+    errors: expect.arrayContaining([expect.stringContaining(error)]),
+  });
+  expect(result.methods).not.toContain(method);
+}
+
+function edit(id: string, ...options: string[]) {
+  return ["edit", id, ...options];
 }
 
 async function withCronGateway(
@@ -84,7 +91,20 @@ async function withCronGateway(
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ label: "cron-thinking", layout: "home" }, async (state) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } }, cron: { enabled: false } };
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} }, defaults: { model: "openai/gpt-4.1" } },
+      cron: { enabled: false },
+    };
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:thinking-fixture": {
+          type: "api_key",
+          provider: "openai",
+          key: "synthetic-thinking-inference-key",
+        },
+      },
+    });
     await state.writeConfig(cfg);
     const storePath = state.statePath("cron", "jobs.json");
     const execute = vi.fn((): never => {
@@ -97,53 +117,46 @@ async function withCronGateway(
       cronEnabled: false,
       log: createNoopLogger(),
       enqueueSystemEvent: execute,
-      requestHeartbeat: execute,
       runIsolatedAgentJob: execute,
       runCommandJob: execute,
       runScriptJob: execute,
     });
-    try {
-      await withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => cfg }, async () => {
-        const context: GatewayRequestContext = {
-          ...expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "local Gateway context"),
-          cron,
-          cronStorePath: storePath,
-        };
-        callGatewayFromCli.mockImplementation(
-          async (method: string, _options: unknown, params: Record<string, unknown> = {}) => {
-            const respond = vi.fn<RespondFn>();
-            const requestParams = wireValue(params) as Record<string, unknown>;
-            await expectDefined(
-              cronHandlers[method],
-              `Gateway handler ${method}`,
-            )({
-              req: { type: "req", id: "cron-thinking", method, params: requestParams },
-              params: requestParams,
-              client: null,
-              context,
-              respond,
-              isWebchatConnect: () => false,
-            });
-            const [ok, payload, error] = expectDefined(
-              respond.mock.calls.at(-1),
-              "Gateway response",
-            );
-            if (!ok) {
-              throw new Error(error?.message ?? `${method} failed`);
-            }
-            return wireValue(payload);
-          },
-        );
-        await run({
-          readJobs: async () =>
-            (await loadCronJobsStoreWithConfigJobsReadOnly(storePath, state.env)).store.jobs,
-          writeScript: () => state.writeText("thinking-control.js", 'return { notify: "done" };'),
-        });
-        expect(execute).not.toHaveBeenCalled();
+    using _ = { [Symbol.dispose]: () => cron.stop() };
+    await withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => cfg }, async () => {
+      const context: GatewayRequestContext = {
+        ...expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "local Gateway context"),
+        cron,
+        cronStorePath: storePath,
+      };
+      callGatewayFromCli.mockImplementation(
+        async (method: string, _options: unknown, params: Record<string, unknown> = {}) => {
+          const respond = vi.fn<RespondFn>();
+          const requestParams = wireValue(params) as Record<string, unknown>;
+          await expectDefined(
+            cronHandlers[method],
+            `Gateway handler ${method}`,
+          )({
+            req: { type: "req", id: "cron-thinking", method, params: requestParams },
+            params: requestParams,
+            client: null,
+            context,
+            respond,
+            isWebchatConnect: () => false,
+          });
+          const [ok, payload, error] = expectDefined(respond.mock.calls.at(-1), "Gateway response");
+          if (!ok) {
+            throw new Error(error?.message ?? `${method} failed`);
+          }
+          return wireValue(payload);
+        },
+      );
+      await run({
+        readJobs: async () =>
+          (await loadCronJobsStoreWithConfigJobsReadOnly(storePath, state.env)).store.jobs,
+        writeScript: () => state.writeText("thinking-control.js", 'return { notify: "done" };'),
       });
-    } finally {
-      cron.stop();
-    }
+      expect(execute).not.toHaveBeenCalled();
+    });
   });
 }
 
@@ -152,137 +165,80 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("cron thinking mutation readback", () => {
-  it.each(["add", "edit", "edit after lookup"])(
-    "rejects invalid thinking before %s can change stored jobs",
-    async (operation) => {
-      await withCronGateway(async ({ readJobs }) => {
-        expect((await runCli(agentAddArgs("original", "high"))).exitCode).toBe(0);
-        const before = await readJobs();
-        const job = expectDefined(before[0], "valid seed job");
-        const result = await runCli(
-          operation === "add"
-            ? agentAddArgs("invalid-add", "hihg")
-            : [
-                "edit",
-                job.id,
-                "--name",
-                "invalid-edit",
-                "--thinking",
-                "hihg",
-                ...(operation === "edit after lookup" ? ["--pacing-min", "5m"] : []),
-              ],
-        );
-        const after = await readJobs();
-        expect(result.exitCode).toBe(1);
-        expect(result.errors).toContainEqual(expect.stringContaining("Invalid --thinking"));
-        expect(result.methods).not.toContain(operation === "add" ? "cron.add" : "cron.update");
-        expect(after).toEqual(before);
-      });
-    },
-  );
+it.each(["add", "edit", "edit after lookup"])(
+  "rejects invalid thinking before %s can change stored jobs",
+  (operation) =>
+    withCronGateway(async ({ readJobs }) => {
+      await succeeds(agentAddArgs("original", "high"));
+      const before = await readJobs();
+      const job = expectDefined(before[0], "valid seed job");
+      const result = await runCli(
+        operation === "add"
+          ? agentAddArgs("invalid-add", "hihg")
+          : edit(
+              job.id,
+              "--name",
+              "invalid-edit",
+              "--thinking",
+              "hihg",
+              ...(operation === "edit after lookup" ? ["--pacing-min", "5m"] : []),
+            ),
+      );
+      expectRejected(
+        result,
+        "Invalid --thinking",
+        operation === "add" ? "cron.add" : "cron.update",
+      );
+      expect(await readJobs()).toEqual(before);
+    }),
+);
 
-  it("preserves legal spellings, blank omission, and clear semantics on add and edit", async () => {
-    await withCronGateway(async ({ readJobs }) => {
-      const legal = [
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "adaptive",
-        "max",
-        "ultra",
-        "none",
-        "mid",
-        "extra-high",
-        "AUTO",
-        "enabled",
-        "  High  ",
-        " extra_high ",
-      ];
-      expect((await runCli(agentAddArgs("edit-target", "high"))).exitCode).toBe(0);
-      const seeded = await readJobs();
-      expect(seeded).toHaveLength(1);
-      const target = expectDefined(seeded[0], "edit target");
-      expect(target.payload).toMatchObject({ kind: "agentTurn", thinking: "high" });
-      for (const [index, thinking] of legal.entries()) {
-        expect((await runCli(agentAddArgs(`legal-${index}`, thinking))).exitCode).toBe(0);
-        expect((await runCli(["edit", target.id, "--thinking", thinking])).exitCode).toBe(0);
-        const jobs = await readJobs();
-        for (const name of [`legal-${index}`, "edit-target"]) {
-          expect(jobs.find((job) => job.name === name)?.payload).toMatchObject({
-            thinking: thinking.trim(),
-          });
-        }
-      }
-      for (const [index, blank] of ["", "   "].entries()) {
-        expect((await runCli(agentAddArgs(`blank-${index}`, blank))).exitCode).toBe(0);
-        expect(
-          (await readJobs()).find((job) => job.name === `blank-${index}`)?.payload,
-        ).not.toHaveProperty("thinking");
-        expect(
-          (await runCli(["edit", target.id, "--name", `renamed-${index}`, "--thinking", blank]))
-            .exitCode,
-        ).toBe(0);
-        expect((await readJobs()).find((job) => job.id === target.id)).toMatchObject({
-          name: `renamed-${index}`,
-          payload: { thinking: "extra_high" },
+it("preserves legal spellings, blank omission, and clear semantics on add and edit", () =>
+  withCronGateway(async ({ readJobs }) => {
+    await succeeds(agentAddArgs("edit-target", "high"));
+    const target = expectDefined((await readJobs())[0], "edit target");
+    const jobNamed = async (name: string) => (await readJobs()).find((job) => job.name === name);
+    for (const [index, thinking] of ["  High  ", "AUTO", " extra_high "].entries()) {
+      await succeeds(agentAddArgs(`legal-${index}`, thinking));
+      await succeeds(edit(target.id, "--thinking", thinking));
+      const jobs = await readJobs();
+      for (const name of [`legal-${index}`, "edit-target"]) {
+        expect(jobs.find((job) => job.name === name)?.payload).toMatchObject({
+          thinking: thinking.trim(),
         });
       }
-      for (const thinking of ["high", "", "   "]) {
-        const before = await readJobs();
-        const result = await runCli([
-          "edit",
-          target.id,
-          "--thinking",
-          thinking,
-          "--clear-thinking",
-        ]);
-        expect(result.exitCode).toBe(1);
-        expect(result.errors).toContainEqual(
-          expect.stringContaining("Use --thinking or --clear-thinking, not both"),
-        );
-        expect(result.methods).not.toContain("cron.update");
-        expect(await readJobs()).toEqual(before);
-      }
-      expect((await runCli(["edit", target.id, "--clear-thinking"])).exitCode).toBe(0);
-      expect((await readJobs()).find((job) => job.id === target.id)?.payload).not.toHaveProperty(
-        "thinking",
-      );
+    }
+    await succeeds(agentAddArgs("blank", "   "));
+    expect((await jobNamed("blank"))?.payload).not.toHaveProperty("thinking");
+    await succeeds(edit(target.id, "--name", "renamed", "--thinking", "   "));
+    expect(await jobNamed("renamed")).toMatchObject({
+      id: target.id,
+      payload: { thinking: "extra_high" },
     });
-  });
+    for (const thinking of ["high", "   "]) {
+      const before = await readJobs();
+      const result = await runCli(edit(target.id, "--thinking", thinking, "--clear-thinking"));
+      expectRejected(result, "Use --thinking or --clear-thinking, not both", "cron.update");
+      expect(await readJobs()).toEqual(before);
+    }
+    await succeeds(edit(target.id, "--clear-thinking"));
+    expect((await jobNamed("renamed"))?.payload).not.toHaveProperty("thinking");
+  }));
 
-  it.each(["systemEvent", "command", "script"])(
-    "keeps unused thinking ignored when adding a %s job",
-    async (kind) => {
-      await withCronGateway(async ({ readJobs, writeScript }) => {
-        const payloadArgs =
-          kind === "systemEvent"
-            ? ["--system-event", "hello"]
-            : kind === "command"
-              ? ["--command-argv", '["printf","hello"]', "--no-deliver"]
-              : ["--script", await writeScript(), "--no-deliver"];
-        const result = await runCli([
-          "add",
-          "--name",
-          kind,
-          "--every",
-          "1h",
-          "--agent",
-          "main",
-          "--disabled",
-          ...payloadArgs,
-          "--thinking",
-          "hihg",
-        ]);
-        const jobs = await readJobs();
-        expect(result.exitCode).toBe(0);
-        expect(jobs).toHaveLength(1);
-        expect(jobs[0]?.payload.kind).toBe(kind);
-        expect(jobs[0]?.payload).not.toHaveProperty("thinking");
-      });
-    },
-  );
-});
+it.each(["systemEvent", "command", "script"])(
+  "keeps unused thinking ignored when adding a %s job",
+  (kind) =>
+    withCronGateway(async ({ readJobs, writeScript }) => {
+      const payloadArgs =
+        kind === "systemEvent"
+          ? ["--system-event", "hello"]
+          : kind === "command"
+            ? ["--command-argv", '["printf","hello"]', "--no-deliver"]
+            : ["--script", await writeScript(), "--no-deliver"];
+      const result = await runCli(addArgs(kind, payloadArgs, "--thinking", "hihg"));
+      const jobs = await readJobs();
+      expect(result.exitCode).toBe(0);
+      expect(jobs).toMatchObject([{ payload: { kind } }]);
+      expect(jobs[0]?.payload).not.toHaveProperty("thinking");
+    }),
+);

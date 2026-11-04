@@ -18,7 +18,6 @@ import {
   unknownTargetError,
 } from "./target-errors.js";
 import {
-  buildTargetResolverSignature,
   looksLikeTargetId,
   maybeResolvePluginMessagingTarget,
   normalizeTargetForProvider,
@@ -38,6 +37,8 @@ type ResolveMessagingTargetResult =
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
+const directoryPluginIds = new WeakMap<ChannelPlugin, number>();
+let nextDirectoryPluginId = 1;
 
 export function resetDirectoryCache(params?: {
   cfg: OpenClawConfig;
@@ -72,41 +73,32 @@ export function formatTargetDisplay(params: {
   channel: ChannelId;
   target: string;
   display?: string;
-  kind?: ChannelDirectoryEntryKind;
 }): string {
   const plugin = getRuntimeVisibleChannelPlugin(params.channel);
   if (plugin?.messaging?.formatTargetDisplay) {
     return plugin.messaging.formatTargetDisplay({
       target: params.target,
       display: params.display,
-      kind: params.kind,
     });
   }
 
   const trimmedTarget = params.target.trim();
   const lowered = trimmedTarget.toLowerCase();
   const display = params.display?.trim();
-  const kind =
-    params.kind ??
-    (lowered.startsWith("user:") ? "user" : lowered.startsWith("channel:") ? "group" : undefined);
-
   if (display) {
     if (display.startsWith("#") || display.startsWith("@")) {
       return display;
     }
-    if (kind === "user") {
+    if (lowered.startsWith("user:")) {
       return `@${display}`;
     }
-    if (kind === "group" || kind === "channel") {
+    if (lowered.startsWith("channel:")) {
       return `#${display}`;
     }
     return display;
   }
 
-  if (!trimmedTarget) {
-    return trimmedTarget;
-  }
-  if (trimmedTarget.startsWith("#") || trimmedTarget.startsWith("@")) {
+  if (!trimmedTarget || trimmedTarget.startsWith("#") || trimmedTarget.startsWith("@")) {
     return trimmedTarget;
   }
 
@@ -115,13 +107,7 @@ export function formatTargetDisplay(params: {
     ? trimmedTarget.slice(channelPrefix.length)
     : trimmedTarget;
 
-  if (/^channel:/i.test(withoutProvider)) {
-    return `#${withoutProvider.replace(/^channel:/i, "")}`;
-  }
-  if (/^user:/i.test(withoutProvider)) {
-    return `@${withoutProvider.replace(/^user:/i, "")}`;
-  }
-  return withoutProvider;
+  return withoutProvider.replace(/^channel:/i, "#").replace(/^user:/i, "@");
 }
 
 function detectTargetKind(
@@ -179,13 +165,19 @@ async function getDirectoryEntries(params: {
   preferLiveOnMiss?: boolean;
   plugin?: ChannelPlugin;
 }): Promise<ChannelDirectoryEntry[]> {
-  const signature = buildTargetResolverSignature(params.channel, params.plugin);
+  const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
+  let pluginId = plugin ? directoryPluginIds.get(plugin) : undefined;
+  if (plugin && pluginId === undefined) {
+    pluginId = nextDirectoryPluginId++;
+    directoryPluginIds.set(plugin, pluginId);
+  }
   const cacheQuery = normalizeLowercaseStringOrEmpty(params.query ?? "");
   const cacheKey = buildDirectoryCacheKey({
     channel: params.channel,
     accountId: params.accountId,
     kind: params.kind,
-    signature,
+    // Plugin metadata is stable; in-place edits use the normal TTL or explicit reset.
+    signature: pluginId?.toString(),
     query: cacheQuery,
   });
   const cached = directoryCache.get(cacheKey, params.cfg);
@@ -193,20 +185,13 @@ async function getDirectoryEntries(params: {
     return cached;
   }
   const listEntries = async (useLive: boolean): Promise<ChannelDirectoryEntry[]> => {
-    const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
     const directory = plugin?.directory;
     if (!directory) {
       return [];
     }
     const runtime = params.runtime ?? defaultRuntime;
-    const fn =
-      params.kind === "user"
-        ? useLive
-          ? (directory.listPeersLive ?? directory.listPeers)
-          : directory.listPeers
-        : useLive
-          ? (directory.listGroupsLive ?? directory.listGroups)
-          : directory.listGroups;
+    const method = params.kind === "user" ? "listPeers" : "listGroups";
+    const fn = useLive ? (directory[`${method}Live`] ?? directory[method]) : directory[method];
     if (!fn) {
       return [];
     }
@@ -239,19 +224,15 @@ export async function resolveChannelTarget(params: {
   plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
   const raw = params.input.trim();
+  const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
+  const providerLabel = plugin?.meta.label ?? params.channel;
+  const hint = plugin?.messaging?.targetResolver?.hint;
   if (!raw) {
-    const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
     return {
       ok: false,
-      error: missingTargetError(
-        plugin?.meta?.label ?? params.channel,
-        plugin?.messaging?.targetResolver?.hint,
-      ),
+      error: missingTargetError(providerLabel, hint),
     };
   }
-  const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
-  const providerLabel = plugin?.meta?.label ?? params.channel;
-  const hint = plugin?.messaging?.targetResolver?.hint;
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
   const normalizedInput = resolveNormalizedTargetInput(params.channel, raw, plugin);
   const normalized = normalizedInput?.normalized ?? raw;
@@ -355,7 +336,6 @@ export async function lookupDirectoryDisplay(params: {
   channel: ChannelId;
   targetId: string;
   accountId?: string | null;
-  runtime?: RuntimeEnv;
 }): Promise<string | undefined> {
   const normalized = normalizeTargetForProvider(params.channel, params.targetId) ?? params.targetId;
 
@@ -367,7 +347,6 @@ export async function lookupDirectoryDisplay(params: {
         channel: params.channel,
         accountId: params.accountId,
         kind,
-        runtime: params.runtime,
         preferLiveOnMiss: false,
       }),
     ),

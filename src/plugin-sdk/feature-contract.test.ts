@@ -1,8 +1,10 @@
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { expect, expectTypeOf, it, vi } from "vitest";
 import {
   createFeatureClient,
   defineFeatureContract,
+  type FeatureClient,
+  type FeatureClientContract,
   type FeatureTransport,
 } from "./feature-contract.js";
 
@@ -15,12 +17,22 @@ const contract = defineFeatureContract({
       input: Type.Object({}),
       output: Type.String(),
     },
-    update: { kind: "action", description: "Update", input: Type.Object({}), output: Type.Null() },
+    update: {
+      kind: "action",
+      description: "Update",
+      input: Type.Object({ value: Type.String() }),
+      output: Type.Boolean(),
+    },
   },
   events: { changed: Type.Object({}) },
 });
 
-function hostFixture() {
+const browserContract = {
+  pluginId: "feature-fixture",
+  operations: { inspect: { kind: "query" }, update: { kind: "action" } },
+} satisfies FeatureClientContract<typeof contract>;
+
+function watchFixture(clientContract: FeatureClientContract<typeof contract>, sessionKey?: string) {
   const controller = new AbortController();
   const events = new Map<string, (payload: unknown) => void>();
   const listeners = new Set<() => void>();
@@ -29,96 +41,99 @@ function hostFixture() {
     pluginId: contract.pluginId,
     signal: controller.signal,
     connection: { connected: true },
-    request<T = unknown>(_method: string, _params?: Record<string, unknown>): Promise<T> {
+    request<T>(): Promise<T> {
       return new Promise<T>((resolve) => {
         pending.push((value) => resolve(value as T));
       });
     },
     onEvent: (event: string, listener: (payload: unknown) => void) => {
       events.set(event, listener);
-      return () => {
-        events.delete(event);
-      };
+      return () => events.delete(event);
     },
     subscribe: (listener: () => void) => {
       listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
+      return () => listeners.delete(listener);
     },
   };
   vi.spyOn(host, "request");
+  const callbacks = { onChange: vi.fn(), onError: vi.fn() };
+  const client = createFeatureClient<typeof contract>(clientContract, host);
+  const dispose = client.watch("inspect", {}, { events: ["changed"], ...callbacks, sessionKey });
   return {
+    client,
     host,
-    pending,
-    events,
-    listeners,
     controller,
-    client: createFeatureClient(contract, host),
+    ...callbacks,
+    dispose,
+    changed: () => events.get("plugin.feature-fixture.changed")?.({}),
+    subscriptions: () => [events.size, listeners.size],
+    connect(connected: boolean) {
+      host.connection.connected = connected;
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+    async settle(...responses: unknown[]) {
+      for (const response of responses) {
+        pending.shift()?.(response);
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+    },
   };
 }
 
-describe("feature browser client", () => {
-  it("refreshes watched queries on events and reconnect while fencing stale results", async () => {
-    const fixture = hostFixture();
-    const onChange = vi.fn();
-    const onError = vi.fn();
-    const dispose = fixture.client.watch(
-      "inspect",
-      {},
-      { events: ["changed"], onChange, onError, sessionKey: "agent:fixture:task" },
-    );
+it.each(["dispose", "abort"] as const)(
+  "refreshes queries, fences stale results, and closes via %s",
+  async (close) => {
+    const f = watchFixture(browserContract, "agent:fixture:task");
     await Promise.resolve();
-    expect(fixture.host.request).toHaveBeenCalledWith("plugins.sessionAction", {
+    expect(f.host.request).toHaveBeenCalledWith("plugins.sessionAction", {
       pluginId: contract.pluginId,
       actionId: "inspect",
       payload: {},
       sessionKey: "agent:fixture:task",
       agentId: undefined,
     });
-    fixture.events.get("plugin.feature-fixture.changed")?.({});
+    f.changed();
     await Promise.resolve();
-    fixture.pending[0]?.({ ok: true, result: "stale" });
-    fixture.pending[1]?.({ ok: true, result: "current" });
+    await f.settle({ ok: true, result: "stale" }, { ok: true, result: "current" });
+    expect(f.onChange.mock.calls).toEqual([["current"]]);
+    f.connect(false);
+    f.changed();
     await Promise.resolve();
+    expect(f.host.request).toHaveBeenCalledTimes(2);
+    f.connect(true);
     await Promise.resolve();
-    expect(onChange.mock.calls).toEqual([["current"]]);
-
-    fixture.host.connection.connected = false;
-    for (const listener of fixture.listeners) {
-      listener();
+    await f.settle({ ok: false, error: "query unavailable" });
+    expect(f.onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "query unavailable" }),
+    );
+    f.onChange.mockClear();
+    f.onError.mockClear();
+    f.changed();
+    await Promise.resolve();
+    if (close === "abort") {
+      f.controller.abort();
+    } else {
+      f.dispose();
     }
-    fixture.events.get("plugin.feature-fixture.changed")?.({});
-    await Promise.resolve();
-    expect(fixture.host.request).toHaveBeenCalledTimes(2);
-    fixture.host.connection.connected = true;
-    for (const listener of fixture.listeners) {
-      listener();
-    }
-    await Promise.resolve();
-    expect(fixture.host.request).toHaveBeenCalledTimes(3);
-    fixture.pending[2]?.({ ok: false, error: "query unavailable" });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "query unavailable" }));
-    dispose();
-    expect(fixture.events.size).toBe(0);
-    expect(fixture.listeners.size).toBe(0);
-  });
+    await f.settle({ ok: true, result: "late" });
+    expect(f.onChange).not.toHaveBeenCalled();
+    expect(f.onError).not.toHaveBeenCalled();
+    expect(f.subscriptions()).toEqual([0, 0]);
+  },
+);
 
-  it("disposes event subscriptions and in-flight deliveries with the browser owner", async () => {
-    const fixture = hostFixture();
-    const onChange = vi.fn();
-    const onError = vi.fn();
-    fixture.client.watch("inspect", {}, { events: ["changed"], onChange, onError });
-    await Promise.resolve();
-    fixture.controller.abort();
-    fixture.pending[0]?.({ ok: true, result: "late" });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(onChange).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
-    expect(fixture.events.size).toBe(0);
-    expect(fixture.listeners.size).toBe(0);
-  });
+it("preserves canonical client inference and query-only watches without schemas", () => {
+  const { client, host, controller } = watchFixture(browserContract);
+  const inferred = createFeatureClient(contract, host);
+  expectTypeOf(inferred).toEqualTypeOf<FeatureClient<typeof contract>>();
+  expectTypeOf(client).toEqualTypeOf<typeof inferred>();
+  expectTypeOf<Parameters<typeof client.watch>[0]>().toEqualTypeOf<"inspect">();
+  expectTypeOf<ReturnType<typeof client.invoke<"update">>>().toEqualTypeOf<Promise<boolean>>();
+  expect(() =>
+    Reflect.apply(client.watch, undefined, ["update", { value: "changed" }, {}]),
+  ).toThrow("Only feature queries can be watched");
+  controller.abort();
 });

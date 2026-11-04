@@ -2,7 +2,9 @@
 import * as session from "./pw-session.js";
 import * as activity from "./pw-tools-core.activity.js";
 import * as downloads from "./pw-tools-core.downloads.js";
-import * as interactions from "./pw-tools-core.interactions.js";
+import * as interactionActions from "./pw-tools-core.interactions.actions.js";
+import * as interactionContent from "./pw-tools-core.interactions.content.js";
+import * as interactionExecution from "./pw-tools-core.interactions.execution.js";
 import * as responses from "./pw-tools-core.responses.js";
 import * as snapshot from "./pw-tools-core.snapshot.js";
 import * as state from "./pw-tools-core.state.js";
@@ -15,18 +17,12 @@ export const pwAi = {
   closePlaywrightBrowserConnection: session.closePlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact: session.retirePlaywrightBrowserConnectionExact,
   createPageViaPlaywright: session.createPageViaPlaywright,
-  ensurePageState: session.ensurePageState,
-  forceDisconnectPlaywrightForTarget: session.forceDisconnectPlaywrightForTarget,
   focusPageByTargetIdViaPlaywright: session.focusPageByTargetIdViaPlaywright,
-  createObservedDialogAbortSignalForPage: session.createObservedDialogAbortSignalForPage,
-  getObservedBrowserStateForPage: session.getObservedBrowserStateForPage,
   getObservedBrowserStateViaPlaywright: session.getObservedBrowserStateViaPlaywright,
   getDocumentIdentitiesViaPlaywright: session.getDocumentIdentitiesViaPlaywright,
   getPageForTargetId: session.getPageForTargetId,
   hasCachedPlaywrightBrowserConnection: session.hasCachedPlaywrightBrowserConnection,
-  isBrowserObservedDialogBlockedError: session.isBrowserObservedDialogBlockedError,
   listPagesViaPlaywright: session.listPagesViaPlaywright,
-  respondToObservedDialogOnPage: session.respondToObservedDialogOnPage,
   armDialogViaPlaywright: downloads.armDialogViaPlaywright,
   armFileUploadViaPlaywright: downloads.armFileUploadViaPlaywright,
   cookiesClearViaPlaywright: storage.cookiesClearViaPlaywright,
@@ -35,12 +31,12 @@ export const pwAi = {
   cookiesSetViaPlaywright: storage.cookiesSetViaPlaywright,
   downloadViaPlaywright: downloads.downloadViaPlaywright,
   emulateMediaViaPlaywright: state.emulateMediaViaPlaywright,
-  executeActViaPlaywright: interactions.executeActViaPlaywright,
+  executeActViaPlaywright: interactionExecution.executeActViaPlaywright,
   getConsoleMessagesViaPlaywright: activity.getConsoleMessagesViaPlaywright,
   getNetworkRequestsViaPlaywright: activity.getNetworkRequestsViaPlaywright,
   getPageErrorsViaPlaywright: activity.getPageErrorsViaPlaywright,
   getPageTextViaPlaywright: activity.getPageTextViaPlaywright,
-  highlightViaPlaywright: interactions.highlightViaPlaywright,
+  highlightViaPlaywright: interactionActions.highlightViaPlaywright,
   navigateViaPlaywright: snapshot.navigateViaPlaywright,
   pdfViaPlaywright: snapshot.pdfViaPlaywright,
   responseBodyViaPlaywright: responses.responseBodyViaPlaywright,
@@ -48,18 +44,18 @@ export const pwAi = {
   setExtraHTTPHeadersViaPlaywright: state.setExtraHTTPHeadersViaPlaywright,
   setGeolocationViaPlaywright: state.setGeolocationViaPlaywright,
   setHttpCredentialsViaPlaywright: state.setHttpCredentialsViaPlaywright,
-  setInputFilesViaPlaywright: interactions.setInputFilesViaPlaywright,
+  setInputFilesViaPlaywright: interactionContent.setInputFilesViaPlaywright,
   setLocaleViaPlaywright: state.setLocaleViaPlaywright,
   setOfflineViaPlaywright: state.setOfflineViaPlaywright,
   setTimezoneViaPlaywright: state.setTimezoneViaPlaywright,
   snapshotAriaViaPlaywright: snapshot.snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright: snapshot.snapshotRoleViaPlaywright,
   storeSnapshotRefsViaPlaywright: snapshot.storeSnapshotRefsViaPlaywright,
-  screenshotWithLabelsViaPlaywright: interactions.screenshotWithLabelsViaPlaywright,
+  screenshotWithLabelsViaPlaywright: interactionContent.screenshotWithLabelsViaPlaywright,
   storageClearViaPlaywright: storage.storageClearViaPlaywright,
   storageGetViaPlaywright: storage.storageGetViaPlaywright,
   storageSetViaPlaywright: storage.storageSetViaPlaywright,
-  takeScreenshotViaPlaywright: interactions.takeScreenshotViaPlaywright,
+  takeScreenshotViaPlaywright: interactionContent.takeScreenshotViaPlaywright,
   traceStartViaPlaywright: trace.traceStartViaPlaywright,
   traceStopViaPlaywright: trace.traceStopViaPlaywright,
   uploadViaPlaywright: downloads.uploadViaPlaywright,

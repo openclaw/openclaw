@@ -237,10 +237,10 @@ struct MacNodeModeCoordinatorTests {
             runtime: MacNodeRuntime(nodeHostWorker: worker),
             nodeHostWorker: worker)
 
-        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        await coordinator.handleNodeHostConfigurationChange().value
         #expect(await worker.stops() == 1)
 
-        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        await coordinator.handleNodeHostConfigurationChange().value
         #expect(await worker.stops() == 2)
 
         await coordinator.stopAndWait()
@@ -254,8 +254,8 @@ struct MacNodeModeCoordinatorTests {
             runtime: MacNodeRuntime(nodeHostWorker: worker),
             nodeHostWorker: worker)
 
-        coordinator.enqueueRouteInvalidationForTesting()
-        await coordinator.waitForRouteInvalidationForTesting()
+        coordinator.enqueueRouteInvalidation(mode: .ordinaryDisconnect)
+        await coordinator.awaitStableRouteInvalidationDrain()
 
         #expect(await worker.stops() == 0)
         await coordinator.stopAndWait()
@@ -303,7 +303,7 @@ struct MacNodeModeCoordinatorTests {
             coordinator.handleNodeHostWorkerFailureForTesting()
             notificationCenter.removeObserver(observer)
         }
-        await coordinator.waitForRouteInvalidationForTesting()
+        await coordinator.awaitStableRouteInvalidationDrain()
         #expect(await worker.stops() == 0)
     }
 
@@ -347,7 +347,7 @@ struct MacNodeModeCoordinatorTests {
         let command = ["/usr/local/bin/openclaw", "node", "worker"]
 
         try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
-        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        await coordinator.handleNodeHostConfigurationChange().value
         try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
 
         // Generation zero belongs to the replaced process. Handle it only after
@@ -374,14 +374,14 @@ struct MacNodeModeCoordinatorTests {
 
         try coordinator.prepareNodeHostWorkerRetryForTesting(
             command: ["/usr/local/bin/openclaw", "node", "worker"])
-        let initialFailure = try await coordinator.resolveWorkerManifestForConnectionForTesting()
+        let initialFailure = try await coordinator.resolveWorkerManifestForConnection(provider: .peekaboo)
         #expect(initialFailure.unavailable?.reason == CoordinatorFailingStartWorkerProbe.failureReason)
         #expect(initialFailure.unavailable?.diagnostic == CoordinatorFailingStartWorkerProbe.failureDiagnostic)
 
         coordinator.handleNodeHostWorkerFailureForTesting()
-        await coordinator.waitForRouteInvalidationForTesting()
+        await coordinator.awaitStableRouteInvalidationDrain()
 
-        let resolved = try await coordinator.resolveWorkerManifestForConnectionForTesting()
+        let resolved = try await coordinator.resolveWorkerManifestForConnection(provider: .peekaboo)
         #expect(resolved.manifest == nil)
         #expect(resolved.unavailable?.reason.contains("unexpected exits") == true)
         #expect(resolved.unavailable?.reason.contains(CoordinatorFailingStartWorkerProbe.failureReason) == true)
@@ -401,6 +401,7 @@ struct MacNodeModeCoordinatorTests {
         #expect(degraded?.label == "Mac node degraded — worker exited: schema mismatch")
         #expect(degraded?.diagnostic == nil)
         #expect(degraded?.isDegraded == true)
+        #expect(degraded?.recoveryAction == nil)
 
         let unavailable = MacNodeChannelState
             .unavailable(reason: "state database uses newer schema version 10\nTry: openclaw doctor")
@@ -408,6 +409,25 @@ struct MacNodeModeCoordinatorTests {
         #expect(unavailable?.label == "Mac node unavailable — state database uses newer schema version 10")
         #expect(unavailable?.diagnostic == nil)
         #expect(unavailable?.isDegraded == false)
+        #expect(unavailable?.recoveryAction == nil)
+    }
+
+    @Test func `newer state schema exposes app update recovery from native node status`() throws {
+        let diagnostic = "OpenClaw state database /state/state.db uses newer schema version 18; " +
+            "this build supports 17."
+        let line = try #require(MacNodeChannelState.connected(
+            workerUnavailableReason: "worker exited with status exited(1)",
+            diagnostic: diagnostic).operatorStatusLine)
+
+        #expect(line.label == "Mac node degraded — update the OpenClaw app: its worker supports schema 17, " +
+            "but shared state requires schema 18")
+        #expect(line.recoveryAction == .checkForUpdates)
+        #expect(line.diagnostic == diagnostic)
+
+        let unrelated = try #require(MacNodeChannelState.connected(
+            workerUnavailableReason: "worker exited with status exited(1)",
+            diagnostic: "worker could not initialize").operatorStatusLine)
+        #expect(unrelated.recoveryAction == nil)
     }
 
     @Test func `worker stderr never becomes part of the operator status headline`() throws {
@@ -423,6 +443,7 @@ struct MacNodeModeCoordinatorTests {
             #expect(line.label.contains(reason))
             #expect(!line.label.contains(diagnostic))
             #expect(line.diagnostic == diagnostic)
+            #expect(line.recoveryAction == nil)
         }
     }
 
@@ -651,9 +672,10 @@ struct MacNodeModeCoordinatorTests {
 
             let originalRoute = try #require(await gateway.currentRoute())
             let generationsBeforeRefresh = coordinator.generationsForTesting()
-            coordinator.refreshForTesting(
+            coordinator.refresh(
                 isPaused: false,
-                computerControlEnabled: true)
+                computerControlEnabled: true,
+                computerControlProvider: .peekaboo)
             for _ in 0..<20 {
                 await Task.yield()
             }
@@ -664,16 +686,17 @@ struct MacNodeModeCoordinatorTests {
             #expect(!stateAfterOrdinaryRefresh.invalidated)
             #expect(generationsAfterOrdinaryRefresh.endpointAttempt == generationsBeforeRefresh.endpointAttempt + 1)
             #expect(generationsAfterOrdinaryRefresh.routeAuthority == generationsBeforeRefresh.routeAuthority)
-            #expect(coordinator.routeAuthorityAllowsInvokeForTesting(
+            #expect(coordinator.routeAuthorityAllowsInvoke(
                 generationsBeforeRefresh.routeAuthority,
                 isPaused: false))
 
-            coordinator.refreshForTesting(
+            coordinator.refresh(
                 isPaused: true,
-                computerControlEnabled: true)
+                computerControlEnabled: true,
+                computerControlProvider: .peekaboo)
             let generationsAfterPause = coordinator.generationsForTesting()
             #expect(generationsAfterPause.routeAuthority == generationsBeforeRefresh.routeAuthority + 1)
-            #expect(!coordinator.routeAuthorityAllowsInvokeForTesting(
+            #expect(!coordinator.routeAuthorityAllowsInvoke(
                 generationsBeforeRefresh.routeAuthority,
                 isPaused: true))
             try await TestWait.state("route invalidation start") {
@@ -682,7 +705,7 @@ struct MacNodeModeCoordinatorTests {
 
             let successorURL = try #require(URL(string: "ws://successor.example.invalid"))
             let successorTask = Task {
-                await coordinator.waitForRouteInvalidationForTesting(
+                await coordinator.awaitStableRouteInvalidationDrain(
                     onPendingSnapshot: { await drainSnapshot.recordCapture() })
                 try await gateway.connect(
                     url: successorURL,
@@ -697,7 +720,7 @@ struct MacNodeModeCoordinatorTests {
             try await TestWait.state("successor captured first invalidation") {
                 await drainSnapshot.hasCaptured()
             }
-            coordinator.enqueueRouteInvalidationForTesting()
+            coordinator.enqueueRouteInvalidation(mode: .ordinaryDisconnect)
             let generationsAfterSecondRevocation = coordinator.generationsForTesting()
             #expect(generationsAfterSecondRevocation.routeAuthority == generationsBeforeRefresh.routeAuthority + 2)
             #expect(generationsAfterSecondRevocation.completedRouteAuthority == generationsBeforeRefresh.routeAuthority)
@@ -711,7 +734,7 @@ struct MacNodeModeCoordinatorTests {
             let generationsWhileSecondRevocationBlocked = coordinator.generationsForTesting()
             #expect(generationsWhileSecondRevocationBlocked.completedRouteAuthority ==
                 generationsBeforeRefresh.routeAuthority + 1)
-            #expect(!coordinator.routeAuthorityAllowsInvokeForTesting(
+            #expect(!coordinator.routeAuthorityAllowsInvoke(
                 generationsAfterSecondRevocation.routeAuthority,
                 isPaused: false))
 
@@ -800,12 +823,11 @@ struct MacNodeModeCoordinatorTests {
             defaults: defaults,
             isExistingInstallation: false) == .primary)
     }
+}
 
+extension MacNodeModeCoordinatorTests {
     @Test func `native manifest excludes CLI-owned node commands`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
             connectionMode: .remote)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
@@ -836,9 +858,6 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `local native manifest leaves browser proxy to the CLI worker`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
             connectionMode: .local)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
@@ -848,30 +867,19 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `local mode omits native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
             connectionMode: .local,
-            codexThreadCatalogEnabled: true,
-            claudeSessionCatalogEnabled: true)
+            codexThreadCatalogEnabled: true)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
         #expect(!caps.contains(MacNodeCodexThreadCatalogContract.capability))
         #expect(!commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
         #expect(!commands.contains(MacNodeCodexThreadCatalogContract.turnsCommand))
-        #expect(!caps.contains(MacNodeClaudeSessionCatalogContract.capability))
-        #expect(!commands.contains(MacNodeClaudeSessionCatalogContract.listCommand))
-        #expect(!commands.contains(MacNodeClaudeSessionCatalogContract.readCommand))
     }
 
     @Test func `remote mode advertises native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
             connectionMode: .remote,
-            codexThreadCatalogEnabled: true,
-            claudeSessionCatalogEnabled: true)
+            codexThreadCatalogEnabled: true)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
         #expect(caps.contains(MacNodeCodexThreadCatalogContract.capability))
@@ -889,9 +897,6 @@ struct MacNodeModeCoordinatorTests {
         #expect(MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
             command: OpenClawSystemCommand.notify.rawValue,
             catalogAdvertised: false))
-        #expect(caps.contains(MacNodeClaudeSessionCatalogContract.capability))
-        #expect(commands.contains(MacNodeClaudeSessionCatalogContract.listCommand))
-        #expect(commands.contains(MacNodeClaudeSessionCatalogContract.readCommand))
         #expect(MacNodeModeCoordinator.routeSnapshotAllowsClaudeCatalogInvoke(
             command: MacNodeClaudeSessionCatalogContract.listCommand,
             catalogAdvertised: true))
@@ -942,17 +947,17 @@ struct MacNodeModeCoordinatorTests {
         ]
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericPluginEnable))
 
-        let numericNestedEnable: [String: Any] = [
+        let numericCatalogEnable: [String: Any] = [
             "plugins": [
                 "entries": [
                     "codex": [
                         "enabled": true,
-                        "config": ["supervision": ["enabled": NSNumber(value: 1)]],
+                        "config": ["sessionCatalog": ["enabled": NSNumber(value: 1)]],
                     ],
                 ],
             ],
         ]
-        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericNestedEnable))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericCatalogEnable))
 
         let numericGlobalEnable: [String: Any] = [
             "plugins": [
@@ -1054,7 +1059,9 @@ struct MacNodeModeCoordinatorTests {
             "codex",
             root: omittedByAllowlist))
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: omittedByAllowlist))
+    }
 
+    @Test func `Codex catalog activation normalizes plugin identifiers`() {
         let paddedIds: [String: Any] = [
             "plugins": [
                 "allow": [" codex "],
@@ -1112,45 +1119,21 @@ struct MacNodeModeCoordinatorTests {
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: ambiguousEntryAliases))
     }
 
-    @Test func `computer control cap gates the computer.act command`() {
-        let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: true,
-            locationMode: .off,
+    @Test func `computer control remains discoverable before consent`() {
+        let caps = MacNodeModeCoordinator.resolvedCaps(
             connectionMode: .local)
-        let enabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: enabledCaps)
-        #expect(enabledCaps.contains(OpenClawCapability.computer.rawValue))
-        #expect(enabledCommands.contains(OpenClawComputerCommand.act.rawValue))
-
-        let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
-            connectionMode: .local)
-        let disabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: disabledCaps)
-        #expect(!disabledCaps.contains(OpenClawCapability.computer.rawValue))
-        #expect(!disabledCommands.contains(OpenClawComputerCommand.act.rawValue))
+        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
+        #expect(caps.contains(OpenClawCapability.computer.rawValue))
+        #expect(commands.contains(OpenClawComputerCommand.act.rawValue))
     }
 
-    @Test func `camera cap gates capture and PTZ commands`() {
-        let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: true,
-            computerControlEnabled: false,
-            locationMode: .off,
+    @Test func `camera remains discoverable before consent`() {
+        let caps = MacNodeModeCoordinator.resolvedCaps(
             connectionMode: .local)
-        let enabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: enabledCaps)
-        #expect(enabledCommands.contains(OpenClawCameraCommand.list.rawValue))
-        #expect(enabledCommands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
-        #expect(enabledCommands.contains(OpenClawCameraCommand.ptzControl.rawValue))
-
-        let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
-            connectionMode: .local)
-        let disabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: disabledCaps)
-        #expect(!disabledCommands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
-        #expect(!disabledCommands.contains(OpenClawCameraCommand.ptzControl.rawValue))
+        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
+        #expect(commands.contains(OpenClawCameraCommand.list.rawValue))
+        #expect(commands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
+        #expect(commands.contains(OpenClawCameraCommand.ptzControl.rawValue))
     }
 
     @Test func `tls pin store key uses default wss port`() throws {
@@ -1272,7 +1255,7 @@ struct MacNodeModeCoordinatorTests {
             configuredFingerprint: nil,
             storedFingerprint: "old"))
 
-        #expect(route.permitsTrustedPinReplacement(url: url, failure: failure))
+        #expect(route.trustedPinReplacementDecline(url: url, failure: failure) == nil)
     }
 
     @Test func `does not auto repair a redirected TLS authority`() throws {
@@ -1308,9 +1291,9 @@ struct MacNodeModeCoordinatorTests {
             systemTrustOk: true,
             port: 443)
 
-        #expect(!route.permitsTrustedPinReplacement(url: url, failure: redirectedHost))
-        #expect(!route.permitsTrustedPinReplacement(url: url, failure: redirectedPort))
-        #expect(!route.permitsTrustedPinReplacement(url: url, failure: otherStore))
+        #expect(route.trustedPinReplacementDecline(url: url, failure: redirectedHost) == .hostMismatch)
+        #expect(route.trustedPinReplacementDecline(url: url, failure: redirectedPort) == .portMismatch)
+        #expect(route.trustedPinReplacementDecline(url: url, failure: otherStore) == .pinStoreMismatch)
     }
 
     @Test func `does not auto repair untrusted remote pin mismatch`() throws {
@@ -1329,7 +1312,7 @@ struct MacNodeModeCoordinatorTests {
             configuredFingerprint: nil,
             storedFingerprint: "old"))
 
-        #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
+        #expect(route.trustedPinReplacementDecline(url: url, failure: failure) == .systemTrustFailed)
     }
 
     @Test func `does not auto repair configured pin mismatch`() throws {
@@ -1348,7 +1331,7 @@ struct MacNodeModeCoordinatorTests {
             configuredFingerprint: "configured",
             storedFingerprint: "old"))
 
-        #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
+        #expect(route.trustedPinReplacementDecline(url: url, failure: failure) == .configuredPin)
     }
 
     @Test(.gatewayTLSStoreIsolated) func `stale repair cannot replace a newer stored pin`() throws {
@@ -1408,7 +1391,7 @@ struct MacNodeModeCoordinatorTests {
             configuredFingerprint: nil,
             storedFingerprint: "old"))
 
-        #expect(route.permitsTrustedPinReplacement(url: url, failure: failure))
+        #expect(route.trustedPinReplacementDecline(url: url, failure: failure) == nil)
     }
 
     @Test func `does not auto repair untrusted loopback pin mismatch`() throws {
@@ -1427,6 +1410,6 @@ struct MacNodeModeCoordinatorTests {
             configuredFingerprint: nil,
             storedFingerprint: "old"))
 
-        #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
+        #expect(route.trustedPinReplacementDecline(url: url, failure: failure) == .systemTrustFailed)
     }
 }

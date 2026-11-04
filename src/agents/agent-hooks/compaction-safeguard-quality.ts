@@ -3,11 +3,16 @@ import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-cor
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
-import type { CompactionSummarizationInstructions } from "../compaction.js";
+import type {
+  CompactionSummarizationInstructions,
+  summarizeCompactionHistory,
+} from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 
 const MAX_EXTRACTED_IDENTIFIERS = 12;
 const MAX_UNTRUSTED_INSTRUCTION_CHARS = 4000;
+// Reserve room for the other audit reasons and corrective sentence inside the 4k wrapper.
+const MAX_MISSING_IDENTIFIER_REASON_CHARS = MAX_UNTRUSTED_INSTRUCTION_CHARS - 600;
 const MAX_ASK_OVERLAP_TOKENS = 12;
 const MIN_ASK_OVERLAP_TOKENS_FOR_DOUBLE_MATCH = 3;
 const REQUIRED_SUMMARY_SECTIONS = [
@@ -26,6 +31,20 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).";
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
+
+export function resolveSummaryReserveTokens(
+  requestedReserveTokens: number,
+  model: NonNullable<Parameters<typeof summarizeCompactionHistory>[0]["model"]>,
+): number {
+  // Safeguard owns retained-summary policy, so its summary requests reserve at most 20k output
+  // tokens; generic callers own their output budget.
+  const requested = Math.max(1, Math.min(Math.floor(requestedReserveTokens), 20_000));
+  const modelMaxTokens = model.maxTokens;
+  if (!Number.isFinite(modelMaxTokens) || modelMaxTokens <= 0) {
+    return requested;
+  }
+  return Math.max(1, Math.min(requested, Math.floor(modelMaxTokens)));
+}
 
 /** Demotes canonical headings when a summary is embedded as supporting context. */
 export function nestRequiredSummaryHeadings(text: string): string {
@@ -81,7 +100,10 @@ export function buildCompactionStructureInstructions(
     "Do not omit unresolved asks from the user.",
     "Record completed requests outside ## Pending user asks; list only unresolved user requests there.",
     "Use tool results to update task status: a check that ran and returned a failing result is completed, not an open TODO. Record its result under ## Decisions and keep only the remaining remediation in ## Open TODOs (e.g. failing tests -> fix the failures, not run the same tests again).",
-    "When prior compaction summaries are present, re-distill them with new messages and remove stale duplicate detail.",
+    "Treat prior summaries as drafts to update: reconcile them with all supplied messages, including preserved turns and split-turn progress, and remove stale duplicate detail.",
+    "Apply explicit corrections and observed results in the main sections. Preserve unaffected facts; retain superseded values only as clearly labeled history, never as competing current decisions.",
+    "A factual correction is not a pending task unless the user requested work that remains undone. Distinguish requested, attempted, completed, and failed actions without inferring overall success from a completed check.",
+    "Before returning, check that all sections agree on current facts and status. Appending a correction in context is insufficient if the main summary still asserts the old state. If evidence does not resolve a conflict, record the uncertainty.",
   ].join("\n");
   const latestRequestBlock = latestUnresolvedUserRequest
     ? wrapUntrustedInstructionBlock("Latest unresolved user request", latestUnresolvedUserRequest)
@@ -204,13 +226,9 @@ export function createSummaryQualityRetentionPlan(
           (hasAskOverlap(pendingAsk, params.latestAsk) && !pendingAsk.includes(requiredAskContext)))
       ? `${LATEST_USER_REQUEST_CONTEXT_LABEL}\n${JSON.stringify(requiredAskContext)}`
       : "";
-  const protectedTails = REQUIRED_SUMMARY_SECTIONS.map((_, index) =>
-    index === PENDING_ASK_SECTION_INDEX
-      ? protectedAskContext
-      : index === EXACT_IDENTIFIERS_SECTION_INDEX
-        ? auditedIdentifiers.join("\n")
-        : "",
-  );
+  const protectedTails = REQUIRED_SUMMARY_SECTIONS.map(() => "");
+  protectedTails[PENDING_ASK_SECTION_INDEX] = protectedAskContext;
+  protectedTails[EXACT_IDENTIFIERS_SECTION_INDEX] = auditedIdentifiers.join("\n");
   const bodyHasIdentifiers = auditedIdentifiers.every((identifier) =>
     summaryIncludesIdentifier(summary, identifier),
   );
@@ -246,17 +264,19 @@ export function createSummaryQualityRetentionPlan(
       ? [tail, isEmptyPendingAsk(leading) ? "" : optional].filter(Boolean).join("\n")
       : [isEmptyPendingAsk(optional) ? "" : optional, tail].filter(Boolean).join("\n");
   };
+  const joinBlocks = (blocks: string[], includeMarker: boolean) =>
+    [
+      ...(requiredContextBlock ? [requiredContextBlock] : []),
+      ...blocks.slice(0, QUALITY_PROTECTED_SECTION_START),
+      ...(includeMarker ? [marker] : []),
+      ...blocks.slice(QUALITY_PROTECTED_SECTION_START),
+    ].join("\n\n");
   // Reserve every heading/content/tail separator up front so trimmed optional
   // text can never push the rendered artifact past `maxChars`.
   const minimumBlocks = REQUIRED_SUMMARY_SECTIONS.map(
     (heading, index) => `${heading}\n\n${protectedTails[index] ?? ""}`,
   );
-  const minimumSummary = [
-    ...(requiredContextBlock ? [requiredContextBlock] : []),
-    ...minimumBlocks.slice(0, QUALITY_PROTECTED_SECTION_START),
-    marker,
-    ...minimumBlocks.slice(QUALITY_PROTECTED_SECTION_START),
-  ].join("\n\n");
+  const minimumSummary = joinBlocks(minimumBlocks, true);
   // Audit-bearing sections (pending asks, exact identifiers) are funded first so
   // a runaway earlier section cannot starve them, but each is hard-capped: an
   // uncapped identifier list re-distills into the whole budget — even while the
@@ -321,12 +341,7 @@ export function createSummaryQualityRetentionPlan(
       );
       const blocks = renderSections(sectionContents);
       return {
-        text: [
-          ...(requiredContextBlock ? [requiredContextBlock] : []),
-          ...blocks.slice(0, QUALITY_PROTECTED_SECTION_START),
-          ...(trimmed ? [marker] : []),
-          ...blocks.slice(QUALITY_PROTECTED_SECTION_START),
-        ].join("\n\n"),
+        text: joinBlocks(blocks, trimmed),
         trimmed,
       };
     },
@@ -340,7 +355,7 @@ export function buildStructuredFallbackSummary(previousSummary: string | undefin
     return trimmedPreviousSummary;
   }
   const values = [
-    trimmedPreviousSummary || "No prior history.",
+    nestRequiredSummaryHeadings(trimmedPreviousSummary) || "No prior history.",
     "None.",
     "None.",
     "None.",
@@ -447,6 +462,26 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
   return overlapCount >= requirement.requiredMatches;
 }
 
+/** Preserve whole identifiers; count values that cannot fit in the corrective request. */
+function missingIdentifierAuditReasons(missing: string[]): string[] {
+  const named: string[] = [];
+  let used = 0;
+  for (const identifier of missing) {
+    // Skip rather than stop: one pathological value must not hide the short ones behind it.
+    const cost = named.length === 0 ? identifier.length : identifier.length + 1;
+    if (used + cost > MAX_MISSING_IDENTIFIER_REASON_CHARS) {
+      continue;
+    }
+    used += cost;
+    named.push(identifier);
+  }
+  const omitted = missing.length - named.length;
+  return [
+    ...(named.length > 0 ? [`missing_identifiers:${named.join(",")}`] : []),
+    ...(omitted > 0 ? [`missing_identifiers_omitted:${omitted}`] : []),
+  ];
+}
+
 /** Audits a candidate summary for required sections, pending asks, and identifier preservation. */
 export function auditSummaryQuality(params: {
   summary: string;
@@ -477,9 +512,7 @@ export function auditSummaryQuality(params: {
     const missingIdentifiers = params.identifiers.filter(
       (identifier) => !summaryIncludesIdentifier(params.summary, identifier),
     );
-    if (missingIdentifiers.length > 0) {
-      reasons.push(`missing_identifiers:${missingIdentifiers.slice(0, 3).join(",")}`);
-    }
+    reasons.push(...missingIdentifierAuditReasons(missingIdentifiers));
   }
   const leadingPendingAsk = extractLeadingPendingAsk(params.structuralSummary);
   if (

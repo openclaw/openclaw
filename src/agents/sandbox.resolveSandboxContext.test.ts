@@ -8,8 +8,10 @@ import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { registerSandboxBackend, type SandboxBackendHandle } from "./sandbox/backend.js";
+import { createConfig as createCustodyConfig } from "./sandbox/context-custody.test-support.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
+import { resolveWorkspaceMounts } from "./sandbox/workspace-mounts.js";
 
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const syncSkillsToWorkspaceMock = vi.hoisted(() =>
@@ -46,8 +48,9 @@ vi.mock("../plugin-sdk/browser-control-auth.js", () => browserControlAuthMock);
 
 vi.mock("../plugin-sdk/browser-profiles.js", () => browserProfilesMock);
 
+// mock-isolation: Sandbox provisioning tests must not read the host approval store for skill eligibility.
 vi.mock("./exec-defaults.js", () => ({
-  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
+  resolveNodeExecEligibilityAsync: resolveNodeExecEligibilityMock,
 }));
 
 vi.mock("../skills/runtime/remote.js", () => ({
@@ -75,20 +78,47 @@ function createBackend(
 }
 
 function sandboxConfig(backend: string, overrides: AgentSandboxConfig = {}): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        sandbox: {
-          mode: "all",
-          backend,
-          scope: "session",
-          workspaceAccess: "rw",
-          prune: { idleHours: 0, maxAgeDays: 0 },
-          ...overrides,
-        },
-      },
+  return createCustodyConfig({ backend, scope: "session", ...overrides });
+}
+
+function workspaceConfig(sandbox: AgentSandboxConfig): OpenClawConfig {
+  return { agents: { defaults: { sandbox } } };
+}
+
+async function requiredSession(workspaceDir: string) {
+  const sessionKey = "agent:main:guest";
+  const storePath = path.join(workspaceDir, "agents", "main", "sessions", "sessions.json");
+  await replaceSessionEntry(
+    { sessionKey, storePath },
+    {
+      sessionId: "guest-session",
+      updatedAt: 1,
+      sandbox: "required",
+      createdActor: { type: "human", source: "unknown", id: "guest-principal" },
     },
+  );
+  return { sessionKey, storePath };
+}
+
+function requiredConfig(storePath: string, backend: string, scope: "shared" | "session") {
+  const config = sandboxConfig(backend, { mode: "off", scope, workspaceAccess: "rw" });
+  return {
+    ...config,
+    session: { store: storePath },
+    agents: { ...config.agents, entries: { main: {} } },
   };
+}
+
+function workspaceRequest(
+  config: OpenClawConfig,
+  workspaceDir = "/tmp/openclaw-test",
+  sessionKey = "agent:main:main",
+) {
+  return { config, workspaceDir, sessionKey };
+}
+
+function backendFixture(...args: Parameters<typeof registerSandboxBackend>) {
+  return { [Symbol.dispose]: registerSandboxBackend(...args) };
 }
 
 let sandboxFixtureRoot = "";
@@ -114,6 +144,39 @@ afterAll(async () => {
 });
 
 describe("resolveSandboxContext", () => {
+  it.each(["rw", "none"] as const)(
+    "protects initially absent skill roots in a %s workspace",
+    async (workspaceAccess) => {
+      const workspaceDir = await createSandboxFixtureDir("absent-skills");
+      const config = sandboxConfig("docker", {
+        workspaceAccess,
+        workspaceRoot: path.join(workspaceDir, "sandboxes"),
+      });
+      const workspace = await ensureSandboxWorkspaceForSession({
+        config,
+        sessionKey: "agent:main:absent-skills",
+        workspaceDir,
+      });
+      if (!workspace) {
+        throw new Error("expected sandbox workspace resolution");
+      }
+      expect(workspace.workspaceAccess).toBe(workspaceAccess);
+      const mounts = resolveWorkspaceMounts({
+        ...workspace,
+        workspaceAccess,
+        agentWorkspaceDir: workspaceDir,
+        workdir: "/workspace",
+      }).filter((mount) => mount.source === "protectedSkill");
+      expect(mounts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ containerPath: "/workspace/skills", readOnly: true }),
+          expect.objectContaining({ containerPath: "/workspace/.agents/skills", readOnly: true }),
+        ]),
+      );
+      expect(mounts).toHaveLength(workspaceAccess === "rw" ? 3 : 2);
+    },
+  );
+
   it("bypasses the selected main session in global scope", async () => {
     const cfg: OpenClawConfig = {
       session: { scope: "global" },
@@ -137,52 +200,26 @@ describe("resolveSandboxContext", () => {
   }, 15_000);
 
   it("provisions and marks a required sandbox when the agent sandbox mode is off", async () => {
-    const sessionKey = "agent:main:guest";
     const workspaceDir = await createSandboxFixtureDir("required-sandbox");
-    const storePath = path.join(workspaceDir, "agents", "main", "sessions", "sessions.json");
-    const entry = {
-      sessionId: "guest-session",
-      updatedAt: 1,
-      sandbox: "required" as const,
-      createdActor: { type: "human" as const, source: "unknown" as const, id: "guest-principal" },
-    };
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
-    const backendFactory = vi.fn(async () => ({
-      id: "required-backend",
-      runtimeId: "required-runtime",
-      runtimeLabel: "Required Runtime",
-      workdir: "/workspace",
-      buildExecSpec: async () => ({
-        argv: ["required-backend", "exec"],
-        env: {},
-        stdinMode: "pipe-closed" as const,
+    const { sessionKey, storePath } = await requiredSession(workspaceDir);
+    const backendFactory = vi.fn(async () =>
+      createBackend({
+        id: "required-backend",
+        runtimeId: "required-runtime",
+        runtimeLabel: "Required Runtime",
+        buildExecSpec: async () => ({
+          argv: ["required-backend", "exec"],
+          env: {},
+          stdinMode: "pipe-closed",
+        }),
       }),
-      runShellCommand: async () => ({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      }),
-    }));
-    const restore = registerSandboxBackend("required-backend", backendFactory);
+    );
+    using _ = backendFixture("required-backend", backendFactory);
     const warnLogs = createWarnLogCapture("openclaw-required-sandbox-workspace");
 
     try {
       const sandbox = await resolveSandboxContext({
-        config: {
-          session: { store: storePath },
-          agents: {
-            defaults: {
-              sandbox: {
-                mode: "off",
-                backend: "required-backend",
-                scope: "shared",
-                workspaceAccess: "rw",
-                prune: { idleHours: 0, maxAgeDays: 0 },
-              },
-            },
-            entries: { main: {} },
-          },
-        },
+        config: requiredConfig(storePath, "required-backend", "shared"),
         sessionKey,
         workspaceDir,
       });
@@ -198,7 +235,6 @@ describe("resolveSandboxContext", () => {
       );
     } finally {
       warnLogs.cleanup();
-      restore();
     }
   }, 15_000);
 
@@ -213,37 +249,14 @@ describe("resolveSandboxContext", () => {
       },
     };
 
-    expect(
-      await resolveSandboxContext({
-        config: cfg,
-        sessionKey: "main",
-        workspaceDir: "/tmp/openclaw-test",
-      }),
-    ).toBeNull();
-
-    expect(
-      await resolveSandboxContext({
-        config: cfg,
-        sessionKey: "agent:main:main",
-        workspaceDir: "/tmp/openclaw-test",
-      }),
-    ).toBeNull();
-
-    expect(
-      await ensureSandboxWorkspaceForSession({
-        config: cfg,
-        sessionKey: "work",
-        workspaceDir: "/tmp/openclaw-test",
-      }),
-    ).toBeNull();
-
-    expect(
-      await ensureSandboxWorkspaceForSession({
-        config: cfg,
-        sessionKey: "agent:main:main",
-        workspaceDir: "/tmp/openclaw-test",
-      }),
-    ).toBeNull();
+    for (const sessionKey of ["main", "agent:main:main"]) {
+      expect(await resolveSandboxContext(workspaceRequest(cfg, undefined, sessionKey))).toBeNull();
+    }
+    for (const sessionKey of ["work", "agent:main:main"]) {
+      expect(
+        await ensureSandboxWorkspaceForSession(workspaceRequest(cfg, undefined, sessionKey)),
+      ).toBeNull();
+    }
   }, 15_000);
 
   it("resolves a registered non-docker backend", async () => {
@@ -258,7 +271,7 @@ describe("resolveSandboxContext", () => {
         workdir: "/runtime/workspace",
       }),
     );
-    const restore = registerSandboxBackend("test-backend", {
+    using _ = backendFixture("test-backend", {
       factory: backendFactory,
       resolveWorkdir: () => "/runtime/workspace",
     });
@@ -278,10 +291,12 @@ describe("resolveSandboxContext", () => {
         workspaceDir: "/tmp/openclaw-test",
       });
 
-      expect(result?.backendId).toBe("test-backend");
-      expect(result?.runtimeId).toBe("test-runtime");
-      expect(result?.containerName).toBe("test-runtime");
-      expect(result?.backend?.id).toBe("test-backend");
+      expect(result).toMatchObject({
+        backendId: "test-backend",
+        runtimeId: "test-runtime",
+        containerName: "test-runtime",
+        backend: { id: "test-backend" },
+      });
       expect(backendFactory).toHaveBeenCalledWith(
         expect.objectContaining({
           registeredRuntimeIds: ["registered-runtime"],
@@ -304,14 +319,13 @@ describe("resolveSandboxContext", () => {
       expect(workspace?.containerWorkdir).toBe("/runtime/workspace");
     } finally {
       readRegisteredSandboxRuntimeIdsMock.mockResolvedValue([]);
-      restore();
     }
   }, 15_000);
 
   it("passes one workspace-qualified scope key through backend and browser setup", async () => {
     ensureSandboxBrowserMock.mockClear();
     const scopeKeys: string[] = [];
-    const restore = registerSandboxBackend("workspace-scope-backend", async (params) => {
+    using _ = backendFixture("workspace-scope-backend", async (params) => {
       scopeKeys.push(params.scopeKey);
       return createBackend({
         id: "workspace-scope-backend",
@@ -321,91 +335,61 @@ describe("resolveSandboxContext", () => {
         capabilities: { browser: true },
       });
     });
-    try {
-      const cfg = sandboxConfig("workspace-scope-backend", {
-        scope: "agent",
-        browser: { enabled: true },
-      });
-      const firstWorkspace = await createSandboxFixtureDir("workspace-scope-a");
-      const secondWorkspace = await createSandboxFixtureDir("workspace-scope-b");
+    const cfg = sandboxConfig("workspace-scope-backend", {
+      scope: "agent",
+      browser: { enabled: true },
+    });
+    const firstWorkspace = await createSandboxFixtureDir("workspace-scope-a");
+    const secondWorkspace = await createSandboxFixtureDir("workspace-scope-b");
 
-      await resolveSandboxContext({
-        config: cfg,
-        sessionKey: "agent:poly:msteams:channel-1",
-        workspaceDir: firstWorkspace,
-      });
-      await resolveSandboxContext({
-        config: cfg,
-        sessionKey: "agent:poly:msteams:channel-1",
-        workspaceDir: secondWorkspace,
-      });
+    await resolveSandboxContext({
+      config: cfg,
+      sessionKey: "agent:poly:msteams:channel-1",
+      workspaceDir: firstWorkspace,
+    });
+    await resolveSandboxContext({
+      config: cfg,
+      sessionKey: "agent:poly:msteams:channel-1",
+      workspaceDir: secondWorkspace,
+    });
 
-      expect(scopeKeys).toHaveLength(2);
-      expect(scopeKeys[0]).toMatch(/^agent:poly:workspace:[a-f0-9]{32}$/);
-      expect(scopeKeys[1]).toMatch(/^agent:poly:workspace:[a-f0-9]{32}$/);
-      expect(scopeKeys[0]).not.toBe(scopeKeys[1]);
-      expect(ensureSandboxBrowserMock.mock.calls.map(([params]) => params.scopeKey)).toEqual(
-        scopeKeys,
-      );
-      expect(ensureSandboxBrowserMock.mock.calls[0]?.[0].ssrfPolicy).toEqual({
-        dangerouslyAllowPrivateNetwork: true,
-      });
-    } finally {
-      restore();
-    }
+    expect(scopeKeys).toHaveLength(2);
+    expect(scopeKeys[0]).toMatch(/^agent:poly:workspace:[a-f0-9]{32}$/);
+    expect(scopeKeys[1]).toMatch(/^agent:poly:workspace:[a-f0-9]{32}$/);
+    expect(scopeKeys[0]).not.toBe(scopeKeys[1]);
+    expect(ensureSandboxBrowserMock.mock.calls.map(([params]) => params.scopeKey)).toEqual(
+      scopeKeys,
+    );
+    expect(ensureSandboxBrowserMock.mock.calls[0]?.[0].ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+    });
   }, 15_000);
 
   it("fails closed when a required sandbox cannot be provisioned with agent sandbox mode off", async () => {
-    const sessionKey = "agent:main:guest";
     const workspaceDir = await createSandboxFixtureDir("required-sandbox-failure");
-    const storePath = path.join(workspaceDir, "agents", "main", "sessions", "sessions.json");
-    const entry = {
-      sessionId: "guest-session",
-      updatedAt: 1,
-      sandbox: "required" as const,
-      createdActor: { type: "human" as const, source: "unknown" as const, id: "guest-principal" },
-    };
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    const { sessionKey, storePath } = await requiredSession(workspaceDir);
     const backendFailure = new Error("Required sandbox backend unavailable");
-    const restore = registerSandboxBackend("required-broken-backend", async () => {
+    using _ = backendFixture("required-broken-backend", async () => {
       throw backendFailure;
     });
 
-    try {
-      await expect(
-        resolveSandboxContext({
-          config: {
-            session: { store: storePath },
-            agents: {
-              defaults: {
-                sandbox: {
-                  mode: "off",
-                  backend: "required-broken-backend",
-                  scope: "session",
-                  workspaceAccess: "rw",
-                  prune: { idleHours: 0, maxAgeDays: 0 },
-                },
-              },
-              entries: { main: {} },
-            },
-          },
-          sessionKey,
-          workspaceDir,
-        }),
-      ).rejects.toMatchObject({
-        code: "sandbox_provisioning",
-        backendId: "required-broken-backend",
-        message: "Required sandbox backend unavailable",
-        cause: backendFailure,
-      });
-    } finally {
-      restore();
-    }
+    await expect(
+      resolveSandboxContext({
+        config: requiredConfig(storePath, "required-broken-backend", "session"),
+        sessionKey,
+        workspaceDir,
+      }),
+    ).rejects.toMatchObject({
+      code: "sandbox_provisioning",
+      backendId: "required-broken-backend",
+      message: "Required sandbox backend unavailable",
+      cause: backendFailure,
+    });
   }, 15_000);
 
   it("keeps filesystem bridge failures inside the provisioning boundary", async () => {
     const bridgeFailure = new Error("sandbox filesystem bridge failed");
-    const restore = registerSandboxBackend("bridge-failure-backend", async () =>
+    using _ = backendFixture("bridge-failure-backend", async () =>
       createBackend({
         id: "bridge-failure-backend",
         runtimeId: "bridge-failure-runtime",
@@ -416,24 +400,20 @@ describe("resolveSandboxContext", () => {
         },
       }),
     );
-    try {
-      const cfg = sandboxConfig("bridge-failure-backend");
+    const cfg = sandboxConfig("bridge-failure-backend");
 
-      const error = await resolveSandboxContext({
-        config: cfg,
-        sessionKey: "agent:worker:bridge-failure",
-        workspaceDir: await createSandboxFixtureDir("bridge-failure"),
-      }).catch((caught: unknown) => caught);
+    const error = await resolveSandboxContext({
+      config: cfg,
+      sessionKey: "agent:worker:bridge-failure",
+      workspaceDir: await createSandboxFixtureDir("bridge-failure"),
+    }).catch((caught: unknown) => caught);
 
-      expect(isSandboxProvisioningError(error)).toBe(true);
-      expect(error).toMatchObject({
-        backendId: "bridge-failure-backend",
-        message: "sandbox filesystem bridge failed",
-        cause: bridgeFailure,
-      });
-    } finally {
-      restore();
-    }
+    expect(isSandboxProvisioningError(error)).toBe(true);
+    expect(error).toMatchObject({
+      backendId: "bridge-failure-backend",
+      message: "sandbox filesystem bridge failed",
+      cause: bridgeFailure,
+    });
   }, 15_000);
 
   it("uses Podman directly when the Podman backend is configured", async () => {
@@ -445,35 +425,31 @@ describe("resolveSandboxContext", () => {
         workdir: "/workspace",
       }),
     );
-    const restore = registerSandboxBackend("podman", backendFactory);
-    try {
-      const cfg = sandboxConfig("podman");
+    using _ = backendFixture("podman", backendFactory);
+    const cfg = sandboxConfig("podman");
 
-      const result = await resolveSandboxContext({
-        config: cfg,
-        sessionKey: "agent:worker:podman",
-        workspaceDir: "/tmp/openclaw-test",
-      });
+    const result = await resolveSandboxContext({
+      config: cfg,
+      sessionKey: "agent:worker:podman",
+      workspaceDir: "/tmp/openclaw-test",
+    });
 
-      expect(result?.backendId).toBe("podman");
-      const workspaceStat = await fs.stat("/tmp/openclaw-test");
-      const expectedUser =
-        workspaceStat.uid === 0 || workspaceStat.gid === 0
-          ? undefined
-          : `${workspaceStat.uid}:${workspaceStat.gid}`;
-      expect(backendFactory).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cfg: expect.objectContaining({
-            backend: "podman",
-            docker: expect.objectContaining({
-              user: expectedUser,
-            }),
+    expect(result?.backendId).toBe("podman");
+    const workspaceStat = await fs.stat("/tmp/openclaw-test");
+    const expectedUser =
+      workspaceStat.uid === 0 || workspaceStat.gid === 0
+        ? undefined
+        : `${workspaceStat.uid}:${workspaceStat.gid}`;
+    expect(backendFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          backend: "podman",
+          docker: expect.objectContaining({
+            user: expectedUser,
           }),
         }),
-      );
-    } finally {
-      restore();
-    }
+      }),
+    );
   }, 15_000);
 
   it("requests skill sync for read-only sandbox workspaces", async () => {
@@ -490,18 +466,12 @@ describe("resolveSandboxContext", () => {
     ];
     syncSkillsToWorkspaceMock.mockResolvedValueOnce(skillUsagePaths);
 
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "session",
-            workspaceAccess: "ro",
-            workspaceRoot: path.join(bundledDir, "sandboxes"),
-          },
-        },
-      },
-    };
+    const cfg = workspaceConfig({
+      mode: "all",
+      scope: "session",
+      workspaceAccess: "ro",
+      workspaceRoot: path.join(bundledDir, "sandboxes"),
+    });
 
     const result = await ensureSandboxWorkspaceForSession({
       config: cfg,
@@ -514,10 +484,12 @@ describe("resolveSandboxContext", () => {
     }
     expect(typeof result.workspaceDir).toBe("string");
     const [syncOptions] = syncSkillsToWorkspaceMock.mock.calls[0] ?? [];
-    expect(syncOptions?.sourceWorkspaceDir).toBe(workspaceDir);
-    expect(syncOptions?.targetWorkspaceDir).toBe(result.workspaceDir);
+    expect(syncOptions).toMatchObject({
+      sourceWorkspaceDir: workspaceDir,
+      targetWorkspaceDir: result.workspaceDir,
+      agentId: "main",
+    });
     expect(syncOptions?.config).toBe(cfg);
-    expect(syncOptions?.agentId).toBe("main");
     expect(syncOptions?.eligibility).toEqual({
       nodeSkills: { canExec: false },
       remote: { note: "test-remote" },
@@ -528,22 +500,13 @@ describe("resolveSandboxContext", () => {
   it("uses the SSH backend remote workspace for sandbox workspace info", async () => {
     syncSkillsToWorkspaceMock.mockClear();
     const workspaceDir = await createSandboxFixtureDir("ssh-workspace");
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "ssh",
-            scope: "session",
-            workspaceAccess: "rw",
-            ssh: {
-              target: "ssh.example.test",
-              workspaceRoot: "/remote/openclaw",
-            },
-          },
-        },
-      },
-    };
+    const cfg = workspaceConfig({
+      mode: "all",
+      backend: "ssh",
+      scope: "session",
+      workspaceAccess: "rw",
+      ssh: { target: "ssh.example.test", workspaceRoot: "/remote/openclaw" },
+    });
 
     const result = await ensureSandboxWorkspaceForSession({
       config: cfg,
@@ -574,18 +537,12 @@ describe("resolveSandboxContext", () => {
     await fs.mkdir(userOwnedSandboxSkillsDir, { recursive: true });
     await fs.writeFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "# User owned\n");
 
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "shared",
-            workspaceAccess: "rw",
-            workspaceRoot: workspaceDir,
-          },
-        },
-      },
-    };
+    const cfg = workspaceConfig({
+      mode: "all",
+      scope: "shared",
+      workspaceAccess: "rw",
+      workspaceRoot: workspaceDir,
+    });
 
     const result = await ensureSandboxWorkspaceForSession({
       config: cfg,

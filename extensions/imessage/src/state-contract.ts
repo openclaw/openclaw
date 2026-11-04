@@ -17,7 +17,6 @@ export function resolveIMessageReplyCacheEntryKey(messageId: string): string {
 // Defense-in-depth bound on the retry map. The cursor is one plugin-state
 // value, so keep the retry payload well below the 1 MiB facade limit.
 const MAX_FAILURE_RETRY_MAP_SIZE = 512;
-const MAX_FAILURE_RETRY_MAP_JSON_BYTES = 48_000;
 const textEncoder = new TextEncoder();
 export const IMESSAGE_CATCHUP_CURSOR_NAMESPACE = "imessage.catchup-cursors";
 export const IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES = 256;
@@ -56,8 +55,8 @@ export function resolveIMessageCatchupCursorKey(accountId: string): string {
 export function capFailureRetriesMap(
   map: Record<string, number>,
   maxSize: number = MAX_FAILURE_RETRY_MAP_SIZE,
-  maxBytes: number = MAX_FAILURE_RETRY_MAP_JSON_BYTES,
 ): Record<string, number> {
+  const maxBytes = 48_000;
   const entries = Object.entries(map);
   if (entries.length <= maxSize && textEncoder.encode(JSON.stringify(map)).byteLength <= maxBytes) {
     return map;

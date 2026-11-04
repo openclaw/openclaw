@@ -1,26 +1,20 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { CronService } from "../../cron/service.js";
-import { createNoopLogger } from "../../cron/service.test-harness.js";
+import type { CronService } from "../../cron/service.js";
 import type { CronDelivery } from "../../cron/types.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
+import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { isRecord } from "../../utils.js";
 import {
@@ -29,32 +23,52 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { cronHandlers } from "./cron.js";
-import type { GatewayClient } from "./types.js";
+import { callCron, createReadService } from "./cron-read.test-support.js";
+import { createCronCallerClient } from "./cron.validation.test-support.js";
 
 const sessionKey = "agent:main:dashboard:webchat-conversation";
 afterEach(() => resetPluginRuntimeStateForTest());
 
 async function withWebchatTool(
   check: (fixture: {
-    add: (delivery?: CronDelivery) => Promise<void>;
+    add: (
+      delivery?: CronDelivery,
+      target?: "current" | "isolated",
+    ) => ReturnType<ReturnType<typeof createCronTool>["execute"]>;
+    tool: ReturnType<typeof createCronTool>;
     cron: CronService;
     revoke: () => void;
   }) => Promise<void>,
   storedContext: DeliveryContext = { channel: "webchat", to: sessionKey },
+  channelsEnabled = true,
 ) {
   await withOpenClawTestState({ layout: "home" }, async (state) => {
     const sessionStorePath = path.join(state.sessionsDir(), "sessions.json");
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      agents: {
+        entries: { main: { workspace: state.workspaceDir } },
+        defaults: { model: "openai/gpt-4.1" },
+      },
       session: { store: sessionStorePath },
-      channels: { discord: { token: "test-token" }, telegram: { botToken: "test-token" } },
+      channels: channelsEnabled
+        ? { discord: { token: "test-token" }, telegram: { botToken: "test-token" } }
+        : {},
       plugins: { entries: { discord: { enabled: true }, telegram: { enabled: true } } },
     };
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:webchat-fixture": {
+          type: "api_key",
+          provider: "openai",
+          key: "synthetic-webchat-inference-key",
+        },
+      },
+    });
     setRuntimeConfigSnapshot(cfg);
     setActivePluginRegistry(
       createTestRegistry(
-        ["discord", "telegram"].map((id) => ({
+        (channelsEnabled ? ["discord", "telegram"] : []).map((id) => ({
           pluginId: id,
           plugin: {
             ...createChannelTestPluginBase({ id, config: { isConfigured: () => true } }),
@@ -73,37 +87,21 @@ async function withWebchatTool(
       },
     );
     const storePath = state.statePath("cron", "jobs.json");
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
+    const cron = createReadService({
       storePath,
       cronEnabled: false,
       defaultAgentId: "main",
-      log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: async () => {
         throw new Error("disabled fixture must not run an agent");
       },
     });
-    const operationalRunInstance = createOperationalRunInstanceRef("webchat-cron-create");
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-    const revoke = () => releaseAgentRunDelegatedAuthority(authority);
-    const client: GatewayClient = {
-      connect: {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: { id: "test", version: "test", platform: "test", mode: "test" },
-      },
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...authority },
-        },
-      },
+    const client = createCronCallerClient("main", undefined, sessionKey);
+    const revoke = () => {
+      const authority = client.internal?.agentRuntimeIdentity?.delegatedAuthority;
+      if (authority?.kind === "local") {
+        releaseAgentRunDelegatedAuthority(authority);
+      }
     };
     const context = createDirectChatContext({
       cron,
@@ -111,8 +109,22 @@ async function withWebchatTool(
       getRuntimeConfig: () => cfg,
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     });
-    const tool = createCronTool(
-      {
+    const gatewaySpy = vi
+      .spyOn(gatewayModule, "callGatewayTool")
+      .mockImplementation(async (method, _opts, params) => {
+        expect(["cron.add", "cron.update", "cron.get"]).toContain(method);
+        if (!isRecord(params)) {
+          throw new Error("expected cron request record");
+        }
+        const respond = await callCron(context, method, params, { client });
+        const [ok, result, error] = expectDefined(respond.mock.calls[0], "cron response");
+        if (!ok) {
+          throw new Error(expectDefined(error, "cron error response").message);
+        }
+        return result;
+      });
+    try {
+      const tool = createCronTool({
         config: cfg,
         agentSessionKey: sessionKey,
         currentDeliveryContext: {
@@ -122,44 +134,18 @@ async function withWebchatTool(
           threadId: "internal-thread",
         },
         creatorToolAllowlist: ["read"],
-      },
-      {
-        callGatewayTool: async (method, _opts, params) => {
-          expect(method).toBe("cron.add");
-          if (!isRecord(params)) {
-            throw new Error("expected cron.add request record");
-          }
-          const respond = vi.fn();
-          await expectDefined(
-            cronHandlers["cron.add"],
-            "cron.add handler",
-          )({
-            req: { type: "req", id: "webchat-cron-add", method, params },
-            params,
-            respond,
-            context,
-            client,
-            isWebchatConnect: () => false,
-          });
-          const [ok, result, error] = expectDefined(respond.mock.calls[0], "cron.add response");
-          if (!ok) {
-            throw new Error(String(error.message));
-          }
-          return result;
-        },
-      },
-    );
-    try {
+      });
       await check({
         cron,
         revoke,
-        add: async (delivery) => {
-          await tool.execute("webchat-condition-watcher", {
+        tool,
+        add: async (delivery, target = "current") => {
+          return await tool.execute("webchat-condition-watcher", {
             action: "add",
             job: {
               name: "WebChat condition watcher",
               enabled: false,
-              sessionTarget: "current",
+              sessionTarget: target,
               schedule: { kind: "every", everyMs: 60_000 },
               payload: { kind: "agentTurn", message: "Report the condition result." },
               trigger: { script: "return { fire: false };", once: true },
@@ -169,6 +155,7 @@ async function withWebchatTool(
         },
       });
     } finally {
+      gatewaySpy.mockRestore();
       revoke();
       cron.stop();
     }
@@ -176,6 +163,87 @@ async function withWebchatTool(
 }
 
 describe("WebChat automation creation through the tool and Gateway", () => {
+  it("guides schema-eager reminder retries without silently discarding authored fields", async () => {
+    await withWebchatTool(async ({ tool, cron }) => {
+      const at = new Date(Date.now() + 3_600_000).toISOString();
+      const args = {
+        action: "add",
+        gatewayUrl: "",
+        gatewayToken: "",
+        job: {
+          name: "basketball-reminder",
+          enabled: false,
+          schedule: { kind: "at", at, everyMs: 1, anchorMs: 0, expr: "", tz: "", staggerMs: 0 },
+          trigger: { script: "return { fire: true };", once: true },
+          payload: {
+            kind: "systemEvent",
+            text: "Reminder: play basketball!",
+            message: "",
+            model: "",
+          },
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "synthetic-recipient",
+            threadId: "",
+            failureDestination: { channel: "", to: "", accountId: "", mode: "announce" },
+          },
+          deleteAfterRun: true,
+        },
+        patch: { name: "", schedule: { kind: "at", at: "" }, trigger: null },
+      };
+      await expect(tool.execute("blank-destination", args)).rejects.toThrow(
+        "omit delivery.failureDestination if unused, or supply a valid target. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds.",
+      );
+      expect(await cron.list({ includeDisabled: true })).toEqual([]);
+
+      // This main-session reminder needs no separate delivery destination.
+      const retry = { ...args, job: { ...args.job, delivery: undefined } };
+      await expect(tool.execute("incompatible-trigger", retry)).rejects.toThrow(
+        'schedule.kind="at" cannot include trigger. Remove trigger for a one-time reminder, or use a recurring every/cron schedule. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds.',
+      );
+      expect(await cron.list({ includeDisabled: true })).toEqual([]);
+
+      await tool.execute("corrected-reminder", {
+        ...retry,
+        job: { ...retry.job, trigger: undefined },
+      });
+      expect(await cron.list({ includeDisabled: true })).toEqual([
+        expect.objectContaining({
+          name: "basketball-reminder",
+          enabled: false,
+          schedule: { kind: "at", at },
+          sessionTarget: "main",
+          payload: { kind: "systemEvent", text: "Reminder: play basketball!" },
+          deleteAfterRun: true,
+        }),
+      ]);
+    });
+  });
+
+  it("previews the creating conversation on add, but not a name-only update", async () => {
+    await withWebchatTool(
+      async ({ add, cron, tool }) => {
+        const added = await add(undefined, "isolated");
+        const [job] = await cron.list({ includeDisabled: true });
+        const updated = await tool.execute("edit-delivery", {
+          action: "update",
+          jobId: expectDefined(job, "created job").id,
+          job: { name: "Renamed watcher" },
+        });
+        expect(updated.details).not.toHaveProperty("deliveryPreview");
+        expect(added.details).toMatchObject({
+          deliveryPreview: {
+            label: "announce -> creating conversation",
+            detail: "commits to this conversation (no external channel route)",
+          },
+        });
+      },
+      undefined,
+      false,
+    );
+  });
+
   it.each([
     {
       name: "ignores stale external route",
@@ -193,7 +261,15 @@ describe("WebChat automation creation through the tool and Gateway", () => {
     storedContext: DeliveryContext | undefined;
   }>)("persists $name delivery", async ({ delivery, storedContext }) => {
     await withWebchatTool(async ({ add, cron }) => {
-      await add(delivery);
+      const added = await add(delivery);
+      if (delivery?.channel === "telegram") {
+        expect(added.details).toMatchObject({
+          deliveryPreview: {
+            label: "announce -> telegram:recipient",
+            detail: "commits to the destination conversation; sends one external notification",
+          },
+        });
+      }
       const jobs = await cron.list({ includeDisabled: true });
       expect(jobs).toEqual([
         expect.objectContaining({
@@ -205,7 +281,6 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           trigger: { script: "return { fire: false };", once: true },
         }),
       ]);
-      expect(jobs[0]?.delivery).toEqual(delivery ?? { mode: "announce" });
     }, storedContext);
   });
 

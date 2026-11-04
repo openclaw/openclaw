@@ -19,16 +19,19 @@ export async function stopGatewayForCleanup(
     }
     return !uninstall;
   }
+  const reportFailure = (label: string, error: unknown, nextStep: string) => {
+    runtime.error(
+      uninstall
+        ? `${label}: ${formatErrorMessage(error)}. Run ${formatCliCommand("openclaw gateway status --deep")} ${nextStep}.`
+        : `${label}: ${String(error)}`,
+    );
+  };
   const service = resolveGatewayService();
   let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    runtime.error(
-      uninstall
-        ? `Gateway service check failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for service diagnostics.`
-        : `Gateway service check failed: ${String(err)}`,
-    );
+    reportFailure("Gateway service check failed", err, "for service diagnostics");
     return false;
   }
   let stopped = true;
@@ -37,11 +40,7 @@ export async function stopGatewayForCleanup(
       await service.stop({ env: process.env, stdout: process.stdout });
     } catch (err) {
       stopped = false;
-      runtime.error(
-        uninstall
-          ? `Gateway stop failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} before retrying uninstall.`
-          : `Gateway stop failed: ${String(err)}`,
-      );
+      reportFailure("Gateway stop failed", err, "before retrying uninstall");
     }
   } else if (uninstall) {
     runtime.log(`Gateway service ${service.notLoadedText}.`);
@@ -51,9 +50,7 @@ export async function stopGatewayForCleanup(
     try {
       await service.uninstall({ env: process.env, stdout: process.stdout });
     } catch (err) {
-      runtime.error(
-        `Gateway uninstall failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for the service state.`,
-      );
+      reportFailure("Gateway uninstall failed", err, "for the service state");
       return false;
     }
   }

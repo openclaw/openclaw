@@ -3,6 +3,7 @@ import {
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
   parseNodeWorkerWorkspaceExecInput,
@@ -29,14 +30,10 @@ export function respondToNodeShutdown(
       ok: true,
       payloadJSON: JSON.stringify(
         isDrain
-          ? projectNodeWorkerWorkspaceExecResult("/node/workspace", {
-              stdout: "drained\n",
-              stderr: "",
-              code: 0,
-              signal: null,
-              killed: false,
-              termination: "exit",
-            })
+          ? projectNodeWorkerWorkspaceExecResult(
+              "/node/workspace",
+              createCommandResult({ stdout: "drained\n" }),
+            )
           : isStop
             ? null
             : { applied: true, deleted: 0, hasMore: false },

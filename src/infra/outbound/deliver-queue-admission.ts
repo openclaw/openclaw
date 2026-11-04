@@ -69,7 +69,12 @@ export function restoreQueuedDeliveryCustody(
     );
   }
   const payloads = preparedOutboundPayloads(custody.preparedBatch);
-  return { ...params, ...custody, payloads, sessionGeneration: entry.sessionGeneration };
+  return {
+    ...params,
+    ...custody,
+    payloads,
+    sessionGeneration: entry.sessionGeneration,
+  };
 }
 
 /** Stages producer-owned media and atomically admits one durable outbound intent. */
@@ -155,6 +160,7 @@ export async function stageAndEnqueueOutboundDelivery(
       to,
       queuePolicy,
       requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
+      retryAmbiguousFinalText: params.retryAmbiguousFinalText,
       ...(params.reusePendingDeliveryIntent ? { requiresProducerClaim: true } : {}),
       ...(initialProducerClaim ? { initialProducerClaim } : {}),
       preparedBatch: queuedPreparedBatch,

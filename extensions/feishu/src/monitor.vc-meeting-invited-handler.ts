@@ -3,32 +3,12 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { normalizeOptionalString as pickString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuMessage } from "./bot.js";
-import { claimUnprocessedFeishuMessage, type FeishuMessageProcessingClaim } from "./dedup.js";
+import { claimUnprocessedFeishuMessage } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 
 const FEISHU_MEETING_NUMBER_PATTERN = /^\d{9}$/;
-
-type FeishuVcIdentity = {
-  open_id?: string | null;
-  user_id?: string | null;
-  union_id?: string | null;
-};
-
-type FeishuVcMeetingInvitedEvent = {
-  event_id?: string;
-  call_id?: string;
-  meeting?: {
-    meeting_no?: string;
-    topic?: string;
-  };
-  inviter?: {
-    id?: FeishuVcIdentity;
-    user_name?: string;
-  };
-  invite_time?: string;
-};
 
 function parseInviteTimestamp(value: string | undefined): number {
   const parsed = Number.parseInt(value ?? "", 10);
@@ -36,73 +16,6 @@ function parseInviteTimestamp(value: string | undefined): number {
     return Date.now();
   }
   return parsed < 10_000_000_000 ? parsed * 1000 : parsed;
-}
-
-function createVcInviteAdoption(params: {
-  claim: FeishuMessageProcessingClaim;
-  abortSignal?: AbortSignal;
-  isAccountActive?: () => boolean;
-  trackTask?: (task: Promise<void>) => void;
-}): { lifecycle: FeishuIngressLifecycle; finish: () => Promise<void> } {
-  const cancellation = new AbortController();
-  const settled = createDeferred<void>();
-  let handedOff = false;
-  let released = false;
-  let adoption: Promise<void> | undefined;
-  const abandon = () => {
-    if (released || adoption) {
-      return;
-    }
-    released = true;
-    params.abortSignal?.removeEventListener("abort", abandon);
-    const error =
-      params.abortSignal?.reason ?? new Error("Feishu VC invitation abandoned before adoption");
-    // Cancel queued ownership before making this logical identity available again.
-    cancellation.abort(error);
-    params.claim.release({ error });
-    settled.resolve();
-  };
-  params.trackTask?.(settled.promise);
-  params.abortSignal?.addEventListener("abort", abandon, { once: true });
-  if (params.abortSignal?.aborted) {
-    abandon();
-  }
-  return {
-    lifecycle: {
-      abortSignal: cancellation.signal,
-      onAdopted: () => {
-        if (adoption) {
-          return adoption;
-        }
-        if (params.isAccountActive?.() === false) {
-          abandon();
-        }
-        cancellation.signal.throwIfAborted();
-        handedOff = true;
-        // Adoption retires source cancellation; a started commit owns its completion.
-        params.abortSignal?.removeEventListener("abort", abandon);
-        adoption = Promise.resolve()
-          .then(async () => {
-            await params.claim.commit();
-          })
-          .finally(() => settled.resolve());
-        return adoption;
-      },
-      onDeferred: () => {
-        handedOff = true;
-      },
-      onAdoptionFinalizing: () => {
-        handedOff = true;
-      },
-      onAbandoned: abandon,
-    },
-    finish: async () => {
-      if (!handedOff) {
-        abandon();
-      }
-      await adoption;
-    },
-  };
 }
 
 export function createFeishuVcMeetingInvitedHandler(params: {
@@ -131,7 +44,23 @@ export function createFeishuVcMeetingInvitedHandler(params: {
       return;
     }
     try {
-      const invite = data as FeishuVcMeetingInvitedEvent;
+      const invite = data as {
+        event_id?: string;
+        call_id?: string;
+        meeting?: {
+          meeting_no?: string;
+          topic?: string;
+        };
+        inviter?: {
+          id?: {
+            open_id?: string | null;
+            user_id?: string | null;
+            union_id?: string | null;
+          };
+          user_name?: string;
+        };
+        invite_time?: string;
+      };
       const meetingNo = pickString(invite.meeting?.meeting_no);
       const id = invite.inviter?.id;
       const openId = pickString(id?.open_id);
@@ -155,9 +84,6 @@ export function createFeishuVcMeetingInvitedHandler(params: {
       const prompt = callId
         ? `${basePrompt} If the join tool supports a call_id parameter, pass call_id=${JSON.stringify(callId)}; otherwise join by meeting number only.`
         : basePrompt;
-      runtime?.log?.(
-        `feishu[${accountId}]: vc meeting invited, dispatching synthetic p2p message sender=${senderId} meeting_no=${meetingNo}`,
-      );
       const event = setFeishuSyntheticDirectPreDispatchTarget(
         {
           sender: {
@@ -191,12 +117,59 @@ export function createFeishuVcMeetingInvitedHandler(params: {
         claim.handle.release({ error: new Error("Feishu account stopped before VC dispatch") });
         return;
       }
-      const adoption = createVcInviteAdoption({
-        claim: claim.handle,
-        abortSignal: params.abortSignal,
-        isAccountActive: params.isAccountActive,
-        trackTask: params.trackTask,
-      });
+      const processingClaim = claim.handle;
+      const { abortSignal, isAccountActive, trackTask } = params;
+      const cancellation = new AbortController();
+      const settled = createDeferred<void>();
+      let handedOff = false;
+      let released = false;
+      let adoption: Promise<void> | undefined;
+      const abandon = () => {
+        if (released || adoption) {
+          return;
+        }
+        released = true;
+        abortSignal?.removeEventListener("abort", abandon);
+        const abandonReason =
+          abortSignal?.reason ?? new Error("Feishu VC invitation abandoned before adoption");
+        // Cancel queued ownership before making this logical identity available again.
+        cancellation.abort(abandonReason);
+        processingClaim.release({ error: abandonReason });
+        settled.resolve();
+      };
+      trackTask?.(settled.promise);
+      abortSignal?.addEventListener("abort", abandon, { once: true });
+      if (abortSignal?.aborted) {
+        abandon();
+      }
+      const lifecycle: FeishuIngressLifecycle = {
+        abortSignal: cancellation.signal,
+        onAdopted: () => {
+          if (adoption) {
+            return adoption;
+          }
+          if (isAccountActive?.() === false) {
+            abandon();
+          }
+          cancellation.signal.throwIfAborted();
+          handedOff = true;
+          // Adoption retires source cancellation; a started commit owns its completion.
+          abortSignal?.removeEventListener("abort", abandon);
+          adoption = Promise.resolve()
+            .then(async () => {
+              await processingClaim.commit();
+            })
+            .finally(() => settled.resolve());
+          return adoption;
+        },
+        onDeferred: () => {
+          handedOff = true;
+        },
+        onAdoptionFinalizing: () => {
+          handedOff = true;
+        },
+        onAbandoned: abandon,
+      };
       try {
         await handleFeishuMessage({
           trackTask: params.trackTask,
@@ -205,13 +178,16 @@ export function createFeishuVcMeetingInvitedHandler(params: {
           event,
           runtime,
           channelRuntime: params.channelRuntime,
-          turnAdoptionLifecycle: adoption.lifecycle,
+          turnAdoptionLifecycle: lifecycle,
         });
       } catch (dispatchError) {
-        await adoption.lifecycle.onAbandoned();
+        await lifecycle.onAbandoned();
         throw dispatchError;
       } finally {
-        await adoption.finish();
+        if (!handedOff) {
+          abandon();
+        }
+        await adoption;
       }
     } catch (err) {
       error(`feishu[${accountId}]: error handling vc meeting invited event: ${String(err)}`);

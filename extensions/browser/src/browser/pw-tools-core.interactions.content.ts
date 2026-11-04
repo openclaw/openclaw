@@ -7,12 +7,17 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { FileChooser, Locator, Page } from "playwright-core";
-import { ACT_MAX_WAIT_TIME_MS, resolveActWaitTimeoutMs } from "./act-policy.js";
+import { resolveActWaitTimeoutMs } from "./act-policy.js";
 import {
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
+  EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
 } from "./constants.js";
-import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
+import { normalizeBrowserWaitFunctionSource } from "./evaluate-source.js";
+import {
+  evaluateBrowserWaitPredicate,
+  type BrowserWaitPredicateState,
+} from "./page-function-runtime.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   ensurePageState,
@@ -23,21 +28,17 @@ import {
 import {
   assertInteractionCurrent,
   awaitActionWithAbort,
-  awaitNavigationGuardedInteraction,
-  createAbortPromiseWithListener,
   type GuardedInteractionOptions,
   type InteractionTargetOptions,
-  interactionNavigationPolicy,
   reconcileRemoteDialogAfterActionSettled,
-  resolveBoundedDelayMs,
   runCancellablePageInteraction,
+  runGuardedPageInteraction,
   throwIfInteractionAborted,
 } from "./pw-tools-core.interactions.navigation.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 import { runPageEmulationTransition } from "./pw-tools-core.state.js";
 import {
   ANNOTATION_MAX_LABELS_DEFAULT,
-  type AnnotationItem,
   buildOverlayClearScript,
   buildOverlayInjectionScript,
   type CoordinateSpace,
@@ -48,10 +49,25 @@ import {
 
 const DEFAULT_UPLOAD_MIME_TYPE = "application/octet-stream";
 const PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES = 50 * 1024 * 1024;
+/**
+ * Aggregate upload size below which the byte-payload branch is known to fit a
+ * single extension-relay WebSocket message. Playwright delivers file payloads to
+ * CDP-attached browsers as base64 inside an evaluate command, so the relay-safe
+ * bound is three quarters of the relay's message cap, minus headroom for JSON
+ * framing. Extension uploads at or above this bound take the local path handoff
+ * so a file that the relay could not carry as bytes still uploads for extensions
+ * with local file access.
+ */
+const PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES =
+  Math.floor((EXTENSION_RELAY_MAX_PAYLOAD_BYTES * 3) / 4) - 1024 * 1024;
 
-async function toPlaywrightFilePayloads(paths: string[]) {
+async function toPlaywrightFilePayloads(paths: string[], fallbackOnPayloadLimit: boolean) {
   const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
   const totalSize = stats.reduce((size, stat) => size + stat.size, 0);
+  // Local extension handoff avoids a base64 payload larger than the relay accepts.
+  if (fallbackOnPayloadLimit && totalSize >= PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES) {
+    return paths;
+  }
   if (totalSize >= PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES) {
     throw new Error(
       "Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.",
@@ -77,53 +93,17 @@ async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { 
       if (!resolved.ok) {
         throw new Error(resolved.error);
       }
-      return opts.ssrfPolicy && opts.browserFilesystemLocal !== true
-        ? await toPlaywrightFilePayloads(resolved.paths)
-        : resolved.paths;
+      if (!(opts.ssrfPolicy && opts.browserFilesystemLocal !== true)) {
+        return resolved.paths;
+      }
+      return await toPlaywrightFilePayloads(
+        resolved.paths,
+        opts.uploadPathsFallbackOnPayloadLimit === true,
+      );
     })(),
     opts.signal,
     ({ reason }) => toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
   );
-}
-
-type BrowserWaitPredicateState = {
-  document: unknown;
-  pending?: boolean;
-  predicate?: () => unknown;
-  settled?: { kind: "value"; value: unknown } | { error: unknown; kind: "error" };
-};
-
-function createBrowserWaitPredicate(source: string): (state: BrowserWaitPredicateState) => boolean {
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- compile only; Playwright runs it in-page
-  return new Function(
-    "state",
-    `
-      if (state.document !== this.document) throw "Wait predicate document changed";
-      state.predicate ??= (${source});
-      var settled = state.settled;
-      if (settled) {
-        delete state.settled;
-        if (settled.kind === "error") throw settled.error;
-        if (!!settled.value) return true;
-      }
-      if (state.pending) return false;
-      var predicate = state.predicate;
-      var value = predicate();
-      if (!value || typeof value.then !== "function") return !!value;
-      state.pending = true;
-      value.then(
-        function(resolved) {
-          state.settled = { kind: "value", value: resolved };
-          delete state.pending;
-        },
-        function(error) {
-          state.settled = { error: error, kind: "error" };
-          delete state.pending;
-        }
-      );
-      return false;
-    `,
-  ) as (state: BrowserWaitPredicateState) => boolean;
 }
 
 export async function waitForViaPlaywright(
@@ -140,13 +120,11 @@ export async function waitForViaPlaywright(
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
-  const fn = normalizeOptionalString(opts.fn) ?? "";
-  const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
-  const predicate = fn ? createBrowserWaitPredicate(predicateSource) : undefined;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
+  const fn = opts.fn;
+  const predicateSource = fn ? normalizeBrowserWaitFunctionSource(fn) : "";
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   const waitForStep = async <T>(stepPromise: Promise<T>) => {
-    await awaitActionWithAbort(stepPromise, abortPromise, reconcileRemoteDialog);
+    await awaitActionWithAbort(stepPromise, opts.signal, reconcileRemoteDialog);
   };
   const waitForSettledStep = async <T>(stepPromise: Promise<T>) => {
     await stepPromise;
@@ -156,40 +134,21 @@ export async function waitForViaPlaywright(
   const runWaitSequence = async (
     waitFor: <T>(stepPromise: Promise<T>) => Promise<void>,
   ): Promise<void> => {
-    if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
-      await waitFor(
-        page.waitForTimeout(
-          resolveBoundedDelayMs(opts.timeMs, "wait timeMs", ACT_MAX_WAIT_TIME_MS),
-        ),
-      );
+    if (opts.timeMs !== undefined) {
+      await waitFor(page.waitForTimeout(opts.timeMs));
     }
-    if (opts.text) {
-      await waitFor(
-        page.getByText(opts.text).first().waitFor({
-          state: "visible",
-          timeout,
-        }),
-      );
-    }
-    if (opts.textGone) {
-      await waitFor(
-        page.getByText(opts.textGone).first().waitFor({
-          state: "hidden",
-          timeout,
-        }),
-      );
+    for (const field of ["text", "textGone"] as const) {
+      const text = opts[field];
+      if (text) {
+        const state = field === "text" ? "visible" : "hidden";
+        await waitFor(page.getByText(text).first().waitFor({ state, timeout }));
+      }
     }
     if (opts.selector) {
-      const selector = normalizeOptionalString(opts.selector) ?? "";
-      if (selector) {
-        await waitFor(page.locator(selector).first().waitFor({ state: "visible", timeout }));
-      }
+      await waitFor(page.locator(opts.selector).first().waitFor({ state: "visible", timeout }));
     }
     if (opts.url) {
-      const url = normalizeOptionalString(opts.url) ?? "";
-      if (url) {
-        await waitFor(page.waitForURL(url, { timeout }));
-      }
+      await waitFor(page.waitForURL(opts.url, { timeout }));
     }
     if (opts.loadState) {
       await waitFor(page.waitForLoadState(opts.loadState, { timeout }));
@@ -206,18 +165,17 @@ export async function waitForViaPlaywright(
       // recreating this predicate in a replacement execution context.
       const documentHandle = await page.evaluateHandle(() => globalThis.document);
       try {
-        if (opts.assertCurrent) {
-          const assertion = assertInteractionCurrent(opts);
-          if (assertion) {
-            await assertion;
-          }
+        const assertion = assertInteractionCurrent(opts);
+        if (assertion) {
+          await assertion;
         }
         throwIfInteractionAborted(opts.signal);
         await waitFor(
           page.waitForFunction(
-            predicate!,
+            evaluateBrowserWaitPredicate,
             {
               document: documentHandle,
+              source: predicateSource,
             } satisfies BrowserWaitPredicateState,
             { timeout },
           ),
@@ -228,32 +186,16 @@ export async function waitForViaPlaywright(
     }
   };
 
-  try {
-    // Playwright exposes no per-wait cancellation; retiring the shared
-    // connection would disrupt sibling tabs. Only executable waits need the
-    // request guard, which must own the full sequence before their predicate.
-    // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
-    // this guard owns navigation during the action, not jobs trusted JS schedules later.
-    if (!fn) {
-      await runWaitSequence(waitForStep);
-      return;
-    }
-    await awaitNavigationGuardedInteraction(
-      {
-        action: async () => await runWaitSequence(waitForSettledStep),
-        cdpUrl: opts.cdpUrl,
-        page,
-        ...interactionNavigationPolicy(opts),
-        targetId: opts.targetId,
-        assertCurrent: opts.assertCurrent,
-      },
-      abortPromise,
-      opts.signal,
-      reconcileRemoteDialog,
-    );
-  } finally {
-    cleanup();
+  // Playwright exposes no per-wait cancellation; retiring the shared
+  // connection would disrupt sibling tabs. Only executable waits need the
+  // request guard, which must own the full sequence before their predicate.
+  // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
+  // this guard owns navigation during the action, not jobs trusted JS schedules later.
+  if (!fn) {
+    await runWaitSequence(waitForStep);
+    return;
   }
+  await runGuardedPageInteraction(page, opts, () => runWaitSequence(waitForSettledStep));
 }
 
 type ScreenshotOptions = {
@@ -394,7 +336,6 @@ export async function takeScreenshotViaPlaywright(
 type LabeledScreenshotOptions = InteractionTargetOptions &
   ScreenshotOptions & {
     refs?: Record<string, { role: string; name?: string; nth?: number }>;
-    maxLabels?: number;
     ref?: string;
     element?: string;
   };
@@ -406,23 +347,10 @@ export async function screenshotWithLabelsViaPlaywright(opts: LabeledScreenshotO
   );
 }
 
-async function screenshotWithLabelsOnPage(
-  page: Page,
-  opts: LabeledScreenshotOptions,
-): Promise<{
-  buffer: Buffer;
-  labels: number;
-  skipped: number;
-  annotations: AnnotationItem[];
-}> {
+async function screenshotWithLabelsOnPage(page: Page, opts: LabeledScreenshotOptions) {
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const maxLabels =
-    typeof opts.maxLabels === "number" && Number.isFinite(opts.maxLabels)
-      ? Math.max(1, Math.floor(opts.maxLabels))
-      : ANNOTATION_MAX_LABELS_DEFAULT;
-
-  const refKey = normalizeOptionalString(opts.ref) ?? undefined;
-  const elementSelector = normalizeOptionalString(opts.element) ?? undefined;
+  const refKey = normalizeOptionalString(opts.ref);
+  const elementSelector = normalizeOptionalString(opts.element);
   const locator = screenshotLocator(page, refKey, elementSelector);
   const space: CoordinateSpace = opts.fullPage
     ? "fullpage"
@@ -483,7 +411,7 @@ async function screenshotWithLabelsOnPage(
     }
     const target = refLocator(page, ref);
     // Full-page tail refs cannot contribute annotations after the label budget fills.
-    if (space === "fullpage" && inputs.length >= maxLabels) {
+    if (space === "fullpage" && inputs.length >= ANNOTATION_MAX_LABELS_DEFAULT) {
       skippedRefs += 1;
       continue;
     }
@@ -512,7 +440,6 @@ async function screenshotWithLabelsOnPage(
     scroll: origin,
     viewport: view,
     elementRect,
-    maxLabels,
   });
 
   try {

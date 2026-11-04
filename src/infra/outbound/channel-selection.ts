@@ -58,19 +58,19 @@ const loggedChannelSelectionErrors = createDedupeCache({
   maxSize: 1024,
 });
 
-function logChannelSelectionError(params: {
-  pluginId: string;
-  accountId: string;
-  operation: "inspectAccount" | "resolveAccount" | "isConfigured";
-  error: unknown;
-}) {
-  const message = formatErrorMessage(params.error);
-  const key = `${params.pluginId}:${params.accountId}:${params.operation}:${message}`;
+function logChannelSelectionError(
+  pluginId: string,
+  accountId: string,
+  operation: "inspectAccount" | "resolveAccount" | "isConfigured",
+  error: unknown,
+) {
+  const message = formatErrorMessage(error);
+  const key = `${pluginId}:${accountId}:${operation}:${message}`;
   if (loggedChannelSelectionErrors.check(key)) {
     return;
   }
   defaultRuntime.error?.(
-    `[channel-selection] ${params.pluginId}(${params.accountId}) ${params.operation} failed: ${message}`,
+    `[channel-selection] ${pluginId}(${accountId}) ${operation} failed: ${message}`,
   );
 }
 
@@ -99,12 +99,7 @@ async function isPluginConfigured(
       operation = "resolveAccount";
       account = await resolveChannelAccount({ plugin, cfg, accountId });
     } catch (error) {
-      logChannelSelectionError({
-        pluginId: plugin.id,
-        accountId,
-        operation,
-        error,
-      });
+      logChannelSelectionError(plugin.id, accountId, operation, error);
       continue;
     }
     const enabled = plugin.config.isEnabled
@@ -118,12 +113,7 @@ async function isPluginConfigured(
         return true;
       }
     } catch (error) {
-      logChannelSelectionError({
-        pluginId: plugin.id,
-        accountId,
-        operation: "isConfigured",
-        error,
-      });
+      logChannelSelectionError(plugin.id, accountId, "isConfigured", error);
     }
   }
 

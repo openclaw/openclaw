@@ -34,7 +34,7 @@ export function normalizeAskUserParams(value: unknown) {
   }));
 
   if (!questions.every((question) => Value.Check(QuestionRequestQuestionSchema, question))) {
-    throw new ToolInputError("ask_user questions do not match the canonical question contract");
+    throw new ToolInputError("ask_user questions do not match the required question format");
   }
   if (
     questions.some(

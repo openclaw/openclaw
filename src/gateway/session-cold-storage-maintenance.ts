@@ -1,4 +1,5 @@
 import type { SessionsStorageStatusResult } from "../../packages/gateway-protocol/src/index.js";
+import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
@@ -13,6 +14,14 @@ type MaintenanceOwner = {
   stop: () => Promise<void>;
 };
 const owners = new WeakMap<() => OpenClawConfig, MaintenanceOwner>();
+
+function hasTranscriptMaintenanceWork(config: OpenClawConfig): boolean {
+  const maintenance = resolveMaintenanceConfigFromInput(config.session?.maintenance);
+  return (
+    config.session?.maintenance?.coldStorage?.enabled === true ||
+    (maintenance.mode === "enforce" && maintenance.resetArchiveRetentionMs != null)
+  );
+}
 
 function idleStatus(): MaintenanceStatus {
   return {
@@ -39,8 +48,8 @@ export function startSessionColdStorageMaintenance(params: {
     status: () => ({ ...status }),
     run: () => {
       const config = params.getRuntimeConfig();
-      if (scheduler.signal.aborted || config.session?.maintenance?.coldStorage?.enabled !== true) {
-        throw new Error("Transcript cold storage is disabled");
+      if (scheduler.signal.aborted || !hasTranscriptMaintenanceWork(config)) {
+        throw new Error("Transcript maintenance is disabled");
       }
       if (inFlight) {
         return inFlight;
@@ -109,11 +118,12 @@ export function startSessionColdStorageMaintenance(params: {
     id: "maintenance:session-cold-storage",
     delayMs: 0,
     everyMs: 60_000,
+    phase: "maintenance",
     run: () => {
       if (
         inFlight ||
         isGatewayWorkAdmissionClosed() ||
-        params.getRuntimeConfig().session?.maintenance?.coldStorage?.enabled !== true
+        !hasTranscriptMaintenanceWork(params.getRuntimeConfig())
       ) {
         return undefined;
       }

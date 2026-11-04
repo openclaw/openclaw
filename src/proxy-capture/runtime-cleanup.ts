@@ -1,4 +1,5 @@
 import { registerSignalExitBarrier } from "../cli/signal-exit-barrier.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 
 // Application teardown can drain active capture without loading its storage graph.
 const finalizers = new Set<() => Promise<void>>();
@@ -16,8 +17,5 @@ export async function finalizeActiveDebugProxyCaptures(): Promise<void> {
   const results = await Promise.allSettled(
     [...finalizers].map(async (finalize) => await finalize()),
   );
-  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-  if (errors.length) {
-    throw new AggregateError(errors, "Capture finalization failed.");
-  }
+  throwSettledAggregate(results, "Capture finalization failed.");
 }

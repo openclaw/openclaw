@@ -217,19 +217,15 @@ export function buildTelegramPresentationButtons(
     if (!isMessagePresentationInteractiveBlock(block)) {
       continue;
     }
-    if (block.type === "buttons") {
-      chunkInteractiveButtons(block.buttons, rows, options);
-      continue;
-    }
-    chunkInteractiveButtons(
-      block.options.map((option) => ({
-        label: option.label,
-        action: option.action,
-        value: option.value,
-      })),
-      rows,
-      options,
-    );
+    const buttons =
+      block.type === "buttons"
+        ? block.buttons
+        : block.options.map((option) => ({
+            label: option.label,
+            action: option.action,
+            value: option.value,
+          }));
+    chunkInteractiveButtons(buttons, rows, options);
   }
   return rows.length > 0 ? rows : undefined;
 }

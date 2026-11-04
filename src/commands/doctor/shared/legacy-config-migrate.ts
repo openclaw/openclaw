@@ -1,6 +1,5 @@
 import { getDeferredPluginMigrationConfigFacts } from "../../../config/deferred-plugin-migration-config.js";
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
-// Validating legacy config migration wrapper used by doctor config flow.
 import type { OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectRawWithPlugins } from "../../../config/validation.js";
 import {

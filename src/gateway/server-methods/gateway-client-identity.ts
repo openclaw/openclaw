@@ -12,6 +12,7 @@ import {
 } from "../../auto-reply/command-sender-authority.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
 import { gitHubPublicApi } from "../github-public-api.js";
 import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
@@ -61,6 +62,9 @@ export async function authorizeAuthenticatedProfileForMethod(params: {
   }
   if (!requiresSessionProfile && !params.requiresProfile()) {
     return null;
+  }
+  if (isArtifactPreservingStateRead()) {
+    return authenticatedProfileUnavailableError();
   }
   try {
     await sync();
@@ -117,13 +121,32 @@ export function resolveChatSendCallerContext(
   const commandSenderAuthority = synthetic
     ? undefined
     : (getCommandSenderAuthority(client) ??
-      (() =>
-        client?.authenticatedUserId &&
-        !client.invalidated &&
-        !client.connectionSignal?.aborted &&
-        !isSyntheticGatewayCaller(client)
-          ? client.authenticatedUserProfile?.profileId
-          : undefined));
+      (() => {
+        if (
+          !client ||
+          client.invalidated ||
+          client.connectionSignal?.aborted ||
+          isSyntheticGatewayCaller(client)
+        ) {
+          return undefined;
+        }
+        const delegated = client.internal?.remoteIngressPrincipal;
+        if (delegated) {
+          try {
+            delegated.signal.throwIfAborted();
+            delegated.assertCurrent();
+          } catch {
+            return undefined;
+          }
+          return delegated.operatorRoleActor.kind === "operator" &&
+            client.internal?.operatorRoleActor?.kind === "operator" &&
+            delegated.operatorRoleActor.profileId === client.internal.operatorRoleActor.profileId &&
+            delegated.operatorRoleActor.profileId === client.authenticatedUserProfile?.profileId
+            ? delegated.operatorRoleActor.profileId
+            : undefined;
+        }
+        return client.authenticatedUserId ? client.authenticatedUserProfile?.profileId : undefined;
+      }));
   return withCommandSenderAuthority(
     {
       Provider: INTERNAL_MESSAGE_CHANNEL,

@@ -17,10 +17,8 @@ export function createTestNodeSocket(
   return {
     readyState,
     bufferedAmount: 0,
-    send: vi.fn((frame: unknown) => {
-      if (typeof frame === "string") {
-        sent.push(frame);
-      }
+    send: vi.fn((frame: string | Buffer) => {
+      sent.push(frame.toString());
     }),
     close: vi.fn(),
   };

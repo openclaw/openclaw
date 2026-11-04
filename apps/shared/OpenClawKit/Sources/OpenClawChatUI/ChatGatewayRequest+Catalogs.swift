@@ -8,13 +8,12 @@ public protocol OpenClawSidebarCatalogTransport {
 }
 
 public enum OpenClawSidebarCatalogEvent: Sendable {
-    case connected(OpenClawSidebarCatalogConnection), changed(String?), disconnected, unavailable
+    case connected(OpenClawSidebarCatalogConnection), disconnected, unavailable
 }
 
 @MainActor
 public struct OpenClawSidebarCatalogConnection {
     let profileID: String
-    let changedEvents: Bool
     let allowsArchive: Bool
     let request: (OpenClawChatGatewayRequest) async throws -> Data
     let isCurrent: () -> Bool
@@ -22,14 +21,12 @@ public struct OpenClawSidebarCatalogConnection {
 
     public init(
         profileID: String,
-        changedEvents: Bool,
         allowsArchive: Bool,
         request: @escaping @MainActor (OpenClawChatGatewayRequest) async throws -> Data,
         isCurrent: @escaping @MainActor () -> Bool,
         openSources: @escaping @MainActor () -> Void)
     {
         self.profileID = profileID
-        self.changedEvents = changedEvents
         self.allowsArchive = allowsArchive
         self.request = request
         self.isCurrent = isCurrent
