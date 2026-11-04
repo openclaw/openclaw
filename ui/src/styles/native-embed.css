@@ -48,38 +48,29 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
   gap: var(--space-3);
   flex: 0 0 auto;
   padding-bottom: var(--space-3);
-}
 
-.native-embed-header .page-title {
-  min-width: 0;
-  font-size: calc(24px * var(--control-ui-text-scale));
-  overflow-wrap: anywhere;
+  .page-title {
+    min-width: 0;
+    font-size: calc(24px * var(--control-ui-text-scale));
+    overflow-wrap: anywhere;
+  }
 }
 
 .native-embed-header__back {
   min-width: 44px;
   min-height: 44px;
   flex: 0 0 auto;
-}
 
-.native-embed-header__back > span {
-  display: inline-flex;
-  align-items: center;
+  svg {
+    width: 20px;
+    height: 20px;
+  }
 }
 
 /* Center the visible capitals, not the fonts' different ascender/descender space. */
 .native-embed-header .page-title,
-.native-embed-header__back .native-embed-header__back-label {
+.native-embed-header__back-label {
   text-box: trim-both cap alphabetic;
-}
-
-.native-embed-header__back .native-embed-header__back-label {
-  display: block;
-}
-
-.native-embed-header__back svg {
-  width: 20px;
-  height: 20px;
 }
 
 .native-embed-header > openclaw-settings-save-indicator {
@@ -90,16 +81,13 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
   display: none;
 }
 
-.native-embed-header + .settings-sidebar__agent {
-  padding-inline: 0;
-}
-
-.native-embed-header + .settings-sidebar__agent .agent-select__trigger {
-  padding-inline: 0;
-}
-
-.shell--embed-settings .content-header,
-.shell--embed-settings .settings-page {
+.shell--embed-settings
+  :is(
+    .content-header,
+    .settings-page,
+    .settings-sidebar__agent,
+    .settings-sidebar__agent .agent-select__trigger
+  ) {
   padding-inline: 0;
 }
 

@@ -312,9 +312,7 @@ function EmbeddedSettingsHeader(props: SettingsSidebarProps) {
           aria-label={t("common.back")}
           onClick={() => props.onExit()}
         >
-          <span aria-hidden="true">
-            <Icon name="chevronLeft" />
-          </span>
+          <Icon name="chevronLeft" />
           <span class="native-embed-header__back-label">{t("common.back")}</span>
         </button>
       </Show>
