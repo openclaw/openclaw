@@ -200,6 +200,17 @@ describe("renderSkills", () => {
     },
   );
 
+  it("distinguishes an empty inventory from a search with no matches", async () => {
+    const { container, render } = createView();
+    render({ report: skillReport([]) });
+    await Promise.resolve();
+    expect(container.textContent).toContain("No skills yet. Search ClawHub to add one.");
+    render({ report: skillReport([createSkill()]), filter: "no-matching-skill" });
+    await Promise.resolve();
+    expect(container.textContent).toContain("No skills match your search.");
+    expect(container.textContent).not.toContain("No skills yet.");
+  });
+
   it("preserves Unicode matches, raw detail targets and retained groups", async () => {
     const { container, render } = createView();
     const report = skillReport([
