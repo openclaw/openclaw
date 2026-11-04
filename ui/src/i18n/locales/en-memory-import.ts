@@ -6,22 +6,23 @@ const enMemoryImport = {
   onboarding: {
     memoryImport: {
       title: en.onboarding.memoryImport.title,
-      body: "OpenClaw found memory from other coding assistants. Import it into your agent workspace?",
+      body: "OpenClaw found memory from other coding agents. Import it into your agent’s workspace?",
       plannedCount: "{count} ready to import",
       alreadyImported: "Already imported: {count}",
       sourceUnavailable: "Source path unavailable",
       import: "Import",
-      skip: "Skip",
+      skip: "Skip for now",
       reviewDetails: "Review details",
       importingProvider: "Importing…",
-      providerResult: "Migrated {migrated}, skipped {skipped}",
+      providerResult: "Imported {migrated}, skipped {skipped}",
       providerIncomplete:
-        "Migrated {migrated}, skipped {skipped}, {errors} failed, {conflicts} conflicts",
-      providerError: "Import failed: {error}",
-      connectionChanged: "Skipped: the Gateway connection changed during the import",
-      unknownError: "Request failed",
+        "Imported {migrated}, skipped {skipped}, {errors} failed, {conflicts} conflicts",
+      providerError: "Couldn’t import memory. Continue setup, then try importing again.\n{error}",
+      connectionChanged:
+        "Import skipped because the Gateway connection changed. Reconnect and try again.",
+      unknownError: "No error details available",
       doneTitle: "Memory import finished",
-      doneBody: "Migrated {migrated}, skipped {skipped}. You can continue setting up OpenClaw.",
+      doneBody: "Imported {migrated}, skipped {skipped}. Continue setting up OpenClaw.",
     },
   },
   memoryImport: {
@@ -57,7 +58,7 @@ const enMemoryImport = {
       "Existing destination files will be backed up in the migration report before replacement.",
     confirmBackup: "OpenClaw creates a verified pre-import backup before copying memory.",
     confirmImport: "Import memory",
-    disconnected: "Connect to the gateway to import memory.",
+    disconnected: "Reconnect to import memory.",
     adminRequired: "Memory import requires operator.admin access.",
     title: "Import assistant memory",
     subtitle:

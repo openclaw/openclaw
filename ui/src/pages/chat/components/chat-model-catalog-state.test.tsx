@@ -18,7 +18,7 @@ it.each([
   ["loading", false, ["clawrouter"], "loading", "Loading models…"],
   ["ready", false, ["clawrouter"], "loading", "Loading models…"],
   ["error", true, ["clawrouter"], "settled", "Some models could not be refreshed."],
-  ["offline", true, ["clawrouter"], "settled", "Offline"],
+  ["offline", true, ["clawrouter"], "settled", "Disconnected"],
   ["ready", false, undefined, "setup", "No models available"],
 ] as const)(
   "presents %s with options=%s and pending=%j",
