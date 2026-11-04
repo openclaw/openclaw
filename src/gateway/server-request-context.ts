@@ -294,6 +294,7 @@ export function createGatewayRequestContext(
         ? []
         : (runtimeState.configReloader.getDeferredChannelReloads?.() ?? []),
     getGatewayMethodRegistry: runtime.getAttachedGatewayMethodRegistry,
+    clients,
     get gatewayTlsFingerprint() {
       return runtime.gatewayTls.enabled ? runtime.gatewayTls.fingerprintSha256 : undefined;
     },
