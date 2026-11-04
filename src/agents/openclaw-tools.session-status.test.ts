@@ -9,12 +9,14 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import {
   createMockConfig,
   expectSpawnedSessionLookupCalls,
   fixedStoreConfig,
 } from "./openclaw-tools.session-status.test-support.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -114,18 +116,10 @@ function createSessionsModuleMock() {
 function createModelCatalogModuleMock() {
   return {
     loadProviderScopedThinkingCatalog: async () => [],
-    // A run's captured config goes stale after any Gateway config republish; the exact
-    // loader then throws, and session_status must read the published owner instead.
     readPreparedModelCatalog: async () => {
       throw new Error("prepared model catalog owner config was replaced during the read (/tmp)");
     },
     loadPublishedPreparedModelCatalog: async () => [
-      {
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        contextWindow: 200000,
-      },
       {
         provider: "openai",
         id: "gpt-5.4",
@@ -152,20 +146,17 @@ function createCommandsStatusRuntimeModuleMock() {
   };
 }
 
-// mock-isolation: Session status reads and mutations use the suite's in-memory session entries.
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.entry.js")>()),
   resolveSessionEntryCandidateTargetForRuntime:
     createSessionsModuleMock().resolveSessionEntryCandidateTarget,
 }));
-// mock-isolation: Gateway requests are observed without connecting to an operator Gateway.
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
 vi.mock("./tools/in-process-gateway.js", () => ({
   callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
   hasGatewayToolRoutingContext: () => false,
 }));
-// mock-isolation: Each scenario supplies its own runtime config instead of reading host state.
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => mockConfig }));
 vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
@@ -186,35 +177,27 @@ vi.mock("../plugins/provider-thinking.js", () => ({
   resolveEffectiveThinkingProfile: () => undefined,
   resolveProviderXHighThinking: () => undefined,
 }));
-// Keep provider-runtime/plugin activation out of this focused tool test. The
-// session_status surface only needs model selection semantics here, not real
-// bundled provider registration.
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: () => [],
 }));
-// mock-isolation: Auth profiles are synthetic labels; host credentials must not be discovered.
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: () => ({ profiles: {} }),
   resolveAuthProfileDisplayLabel: () => undefined,
   resolveAuthProfileOrder: () => [],
 }));
-// mock-isolation: Session status uses fixture auth labels without discovering host keys or accounts.
 vi.mock("../agents/model-auth.js", () => ({
   resolveEnvApiKey: () => null,
   resolveUsableCustomProviderApiKey: () => null,
   resolveModelAuthModeAsync: () => "api-key",
 }));
-// mock-isolation: Provider usage is a fixed empty response without remote quota requests.
 vi.mock("../infra/provider-usage.js", () => ({
   resolveUsageProviderId: () => undefined,
   loadProviderUsageSummary: async () => ({ updatedAt: Date.now(), providers: [] }),
 }));
-// mock-isolation: Observe status rendering inputs without loading unrelated status providers.
 vi.mock("../status/status-text.js", createCommandsStatusRuntimeModuleMock);
 vi.mock("../auto-reply/group-activation.js", () => ({
   normalizeGroupActivation: (value: unknown) => value ?? "always",
 }));
-// mock-isolation: Session status observes fixed queue metrics without opening live queues.
 vi.mock("../auto-reply/reply/queue.js", () => ({
   getFollowupQueueDepth: () => 0,
   resolveQueueSettings: () => ({ mode: "interrupt" }),
@@ -599,14 +582,29 @@ describe("session_status tool", () => {
     );
 
     const tool = getSessionStatusTool();
-    const result = await tool.execute("call-capabilities-error", { capabilities: true });
+    const result = await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "main",
+        operatorAuthority: createAdmittedRunOperatorAuthority({
+          profileId: "status-scope-proof",
+          scopes: ["operator.sessions.write"],
+          assertCurrent() {},
+        }),
+      },
+      () => tool.execute("call-capabilities-error", { capabilities: true }),
+    );
     const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
     expect(result.details).toMatchObject({
       ok: true,
-      capabilities: { checked: "unavailable", error: "missing scope: operator.read" },
+      capabilities: {
+        checked: "unavailable",
+        error: "missing scope: operator.read",
+        grantedScopes: ["operator.sessions.write"],
+      },
     });
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(text).toContain("not evidence that OpenClaw lacks a capability");
+    expect(text).toContain("This session holds operator.sessions.write.");
   });
 
   it("resolves whitespace-decorated current to the webchat requester (#89773, #89800)", async () => {
