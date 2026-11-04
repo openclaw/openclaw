@@ -170,23 +170,19 @@ it("keeps exact identity input visible when the server rejects a colliding link"
     expect(page.querySelector("#settings-profile-channel-identities input")).not.toBeNull(),
   );
   const section = page.querySelector<HTMLElement>("#settings-profile-channel-identities")!;
-  const entered = [
-    ["Channel ID", "matrix"],
-    ["Configured account ID", "primary"],
-    ["Native sender ID", "@ada:example.test"],
-  ] as const;
-  for (const [label, value] of entered) {
-    const input = section.querySelector<HTMLInputElement>('input[aria-label="' + label + '"]')!;
-    input.value = value;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  }
+  const entered = { channelId: "matrix", accountId: "primary", senderId: "@ada:example.test" };
+  fillChannelIdentityDraft(section, entered);
   section.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
   await waitForFast(() => expect(section.querySelector('[role="alert"]')).not.toBeNull());
 
   expect(section.querySelector('[role="alert"]')?.textContent).toContain(
     "already linked to another profile",
   );
-  for (const [label, value] of entered) {
+  for (const [label, value] of [
+    ["Channel ID", entered.channelId],
+    ["Configured account ID", entered.accountId],
+    ["Native sender ID", entered.senderId],
+  ]) {
     expect(
       section.querySelector<HTMLInputElement>('input[aria-label="' + label + '"]')?.value,
     ).toBe(value);
@@ -485,15 +481,11 @@ it("retires a hidden channel identity owner before a same-turn reconnect", async
   );
 
   const section = page.querySelector<HTMLElement>("#settings-profile-channel-identities")!;
-  for (const [label, value] of [
-    ["Channel ID", "old-channel"],
-    ["Configured account ID", "old-account"],
-    ["Native sender ID", "old-target-draft"],
-  ] as const) {
-    const input = section.querySelector<HTMLInputElement>('input[aria-label="' + label + '"]')!;
-    input.value = value;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  }
+  fillChannelIdentityDraft(section, {
+    channelId: "old-channel",
+    accountId: "old-account",
+    senderId: "old-target-draft",
+  });
   const initialListCalls = request.mock.calls.filter(
     ([method]) => method === "users.listChannelIdentities",
   ).length;
@@ -524,17 +516,7 @@ it("retires a hidden channel identity owner before a same-turn reconnect", async
   }
 
   const identity = { channelId: "telegram", accountId: "main", senderId: "usable-after-reconnect" };
-  for (const [label, value] of [
-    ["Channel ID", identity.channelId],
-    ["Configured account ID", identity.accountId],
-    ["Native sender ID", identity.senderId],
-  ] as const) {
-    const input = reconnectedSection.querySelector<HTMLInputElement>(
-      'input[aria-label="' + label + '"]',
-    )!;
-    input.value = value;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  }
+  fillChannelIdentityDraft(reconnectedSection, identity);
   reconnectedSection.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
   await waitForFast(() =>
     expect(reconnectedSection.querySelector('[role="status"]')?.textContent).toContain(
@@ -599,15 +581,11 @@ it("retires the prior personal identity and channel form on principal change", a
   );
 
   const staleForm = page.querySelector<HTMLFormElement>("#settings-profile-channel-identities")!;
-  for (const [label, value] of [
-    ["Channel ID", "old-channel"],
-    ["Configured account ID", "old-account"],
-    ["Native sender ID", "old-sender"],
-  ] as const) {
-    const input = staleForm.querySelector<HTMLInputElement>('input[aria-label="' + label + '"]')!;
-    input.value = value;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  }
+  fillChannelIdentityDraft(staleForm, {
+    channelId: "old-channel",
+    accountId: "old-account",
+    senderId: "old-sender",
+  });
 
   profile = nextProfile;
   harness.emitSnapshot({
@@ -786,15 +764,7 @@ it.each(["link", "unlink"] as const)(
       expect(channelListReads).toBe(1);
       const section = page.querySelector<HTMLElement>("#settings-profile-channel-identities")!;
       if (operation === "link") {
-        for (const [label, value] of [
-          ["Channel ID", linked.identity.channelId],
-          ["Configured account ID", linked.identity.accountId],
-          ["Native sender ID", linked.identity.senderId],
-        ] as const) {
-          const input = section.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
-          input.value = value;
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-        }
+        fillChannelIdentityDraft(section, linked.identity);
         section.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
       } else {
         section
