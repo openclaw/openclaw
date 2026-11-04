@@ -78,7 +78,7 @@ it.each([
   }
 
   await waitForSolid(() => {
-    expect(container.querySelector('[aria-busy="true"], .skeleton')).toBeNull();
+    expect(busy?.isConnected).toBe(false);
     expect(container.querySelector(selector)?.textContent).toContain(message);
   });
   if (outcome === "empty") {
