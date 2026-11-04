@@ -359,7 +359,11 @@ def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=N
             if deadline is not None and time.monotonic() >= deadline:
                 timed_out = True
                 raise FetchTimeout()
-            time.sleep(0.05)
+            # Wake on Git exit without delaying cancellation/deadline checks beyond 50ms.
+            try:
+                child.wait(timeout=0.05)
+            except subprocess.TimeoutExpired:
+                pass
     finally:
         # Failed inspection/cleanup permanently fences this policy process. Only
         # verified extinction permits another command, even after a caught error.
@@ -469,6 +473,8 @@ def checkout_harness(sha):
     # Preflight imports these siblings by file-relative paths.
     preflight_scripts = (
         "scripts/ci-build-manifest.mjs",
+        "scripts/ci-adaptive-priors.mjs",
+        "scripts/lib/actions-artifact-archive.mjs",
         "scripts/lib/ci-ios-smoke-plan.mjs",
         "scripts/lib/release-context.mjs",
         "scripts/lib/release-version.mjs",
@@ -479,6 +485,10 @@ def checkout_harness(sha):
         "scripts/generate-npm-package-lock.mts",
         "scripts/changed-lanes.mts",
         "scripts/lib/merge-head-diff-base.mjs",
+        "scripts/lib/npm-lock-package-selection.mjs",
+        "scripts/lib/npm-lock-package-selection.d.mts",
+        "scripts/lib/record-shared.mjs",
+        "scripts/lib/record-shared.d.mts",
     )
     linux_node_scripts = (
         *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",

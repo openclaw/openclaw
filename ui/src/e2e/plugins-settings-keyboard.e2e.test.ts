@@ -29,8 +29,7 @@ suite.define(() => {
       expect(await search.inputValue()).toBe("");
       expect(await page.locator(".plugin-editor").isVisible()).toBe(true);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
-      await search.blur();
-      await page.keyboard.press("Escape");
+      await search.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins");
     });
   });

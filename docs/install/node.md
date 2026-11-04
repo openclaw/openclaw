@@ -177,7 +177,10 @@ fnm use 26
 If Homebrew removes the running Gateway's Node executable, command relays,
 their process-group anchors, and managed Codex JavaScript launchers use the
 formula's available stable Homebrew path for new launches without searching
-`PATH`. They keep using the original executable while it exists. Workers
+`PATH`. They keep using the original executable while it exists. The
+Gateway-materialized agent CLI launcher records the stable Homebrew path
+whenever one exists, so a Node upgrade cannot strand the `openclaw` command
+that agents resolve through the Gateway-local `PATH` entry. Workers
 that share native modules or V8 messages, including the spawn broker, keep the
 exact runtime and report a restart action if it is gone. Restart the Gateway
 after upgrading Node to move the Gateway itself onto the new runtime.

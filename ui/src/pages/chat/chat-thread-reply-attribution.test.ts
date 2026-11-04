@@ -183,7 +183,7 @@ it.each(["human", "forwarded", "projected source"] as const)(
 );
 
 it.each(["pending", "local"] as const)(
-  "attributes recovered output across hidden %s prompts",
+  "uses only live input custody across hidden %s prompts",
   (source) => {
     const local = source === "local";
     const prompt = namedPrompt("Please resume", 1002, "bob", "Bob", { id: "pending:bob" });
@@ -217,17 +217,21 @@ it.each(["pending", "local"] as const)(
         : [{ id: "bob", acceptedAt: 1002, state: "interrupted", message: prompt }],
     });
     const replies = groups.filter((group) => group.role === "assistant");
-    expect(replies.map((group) => [group.messages.length, group.replyToSender?.name])).toEqual([
-      [1, local ? "Bob" : "Alice"],
-      [1, local ? undefined : "Bob"],
-    ]);
+    expect(replies.map((group) => [group.messages.length, group.replyToSender?.name])).toEqual(
+      local
+        ? [
+            [1, "Bob"],
+            [1, undefined],
+          ]
+        : [[2, undefined]],
+    );
     if (local) {
       expect(replies[1]).toMatchObject({
         replyShared: true,
         replyTurnSource: { key: "msg:send:local-run:0" },
       });
     } else {
-      expect(replies[1]?.replyTurnSource?.message).toBe(prompt);
+      expect(replies[0]?.replyTurnSource?.message).not.toBe(prompt);
       expect(groups.some((group) => group.messages.some((entry) => entry.message === prompt))).toBe(
         false,
       );

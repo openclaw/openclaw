@@ -284,6 +284,11 @@ suite.define(() => {
             expect(await summary.isVisible()).toBe(false);
             await heading.click();
             await summary.waitFor();
+            // Desktop Details keeps each stacked subagent's identity tint.
+            const tints = await summary
+              .locator(".chat-details-subagents__avatar")
+              .evaluateAll((els) => els.map((el) => getComputedStyle(el).backgroundColor));
+            expect(new Set(tints).size).toBe(4);
           }
           // The whole summary remains a hit target, including its leading inset.
           await checkThemes(async () => {
@@ -465,9 +470,21 @@ suite.define(() => {
               });
               await gateway.resolveDeferred("sessions.processes.stop", { requested: true });
               await first.waitFor({ state: "detached" });
-              await processGroup
-                .getByRole("button", { name: "View all processes", exact: true })
-                .waitFor();
+              const viewAll = processGroup.getByRole("button", {
+                name: "View all processes",
+                exact: true,
+              });
+              const paint = () =>
+                viewAll.evaluate((element) => {
+                  const style = getComputedStyle(element);
+                  return { background: style.backgroundColor, color: style.color };
+                });
+              await page.mouse.move(0, 0);
+              const rest = await paint();
+              await viewAll.hover();
+              // "View all" is a text link: hover brightens it without the shared button background.
+              await expect.poll(async () => (await paint()).color).not.toBe(rest.color);
+              expect((await paint()).background).toBe("rgba(0, 0, 0, 0)");
               expect(await first.locator(".chat-details-processes__stop").count()).toBe(0);
               await page.mouse.move(0, 0);
               await subagents.locator(":scope > summary").scrollIntoViewIfNeeded();
@@ -893,5 +910,64 @@ suite.define(() => {
         },
       );
     }
+  });
+  it("keeps a collapsed Processes section collapsed for its session across pane eviction", async () => {
+    await suite.withPage(
+      { viewport: { width: 1728, height: 1100 }, reducedMotion: "reduce" },
+      async ({ page }) => {
+        const gateway = await installBackgroundWorkGateway(page, false);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
+        const activePane = () => page.locator(".chat-pane-cache__pane--active");
+        const processesHeading = async () => {
+          const details = await openChatDetails(activePane());
+          const heading = details.locator('[data-details-group="processes"] summary');
+          await heading.waitFor();
+          return heading;
+        };
+        const heading = await processesHeading();
+        expect(await heading.getAttribute("aria-expanded")).toBe("true");
+        await heading.click();
+        await expect.poll(() => heading.getAttribute("aria-expanded")).toBe("false");
+
+        const publish = async (rows: SessionProcessSummary[]) => {
+          await gateway.setMethodResponse("sessions.processes.list", {
+            sessionId: "details-background",
+            processes: rows,
+            truncated: false,
+          });
+          await gateway.emitGatewayEvent("sessions.processes.changed", {
+            sessionKey: parentKey,
+            agentId: "main",
+          });
+        };
+        await publish([]);
+        await heading.waitFor({ state: "detached" });
+        await publish(processes);
+        expect(await (await processesHeading()).getAttribute("aria-expanded")).toBe("false");
+
+        // Visiting more sessions than the pane retains remounts Details on return; that is
+        // still this browsing session, so the choice holds.
+        const previous = await heading.evaluateHandle((element) => element);
+        const visit = async (key: string, title: string) => {
+          await page.evaluate(
+            (url) => {
+              history.pushState(null, "", url);
+              window.dispatchEvent(new PopStateEvent("popstate"));
+            },
+            controlUiSessionUrl(suite.server.baseUrl, key),
+          );
+          await activePane()
+            .locator(".chat-pane__session-title-text")
+            .filter({ hasText: title })
+            .waitFor();
+        };
+        for (const row of children.slice(0, 4)) {
+          await visit(row.key, row.label!);
+        }
+        await visit(parentKey, "Visualize background work");
+        expect(await previous.evaluate((element) => element.isConnected)).toBe(false);
+        expect(await (await processesHeading()).getAttribute("aria-expanded")).toBe("false");
+      },
+    );
   });
 });

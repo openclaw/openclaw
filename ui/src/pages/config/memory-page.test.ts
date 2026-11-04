@@ -96,13 +96,11 @@ it("defaults to the disabled slot owner and offers Enable even when another engi
     setEnabled,
   });
   await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
-  expect(element.textContent).toContain("falls back to its default owner");
   expect(
     [
-      ...(element
-        .querySelector('.settings-segmented[role="radiogroup"]')
-        ?.querySelectorAll(".settings-segmented__btn") ?? []),
-    ].map((radio) => radio.textContent?.trim()),
+      ...(element.querySelector<HTMLSelectElement>("select[aria-label='Memory engine']")?.options ??
+        []),
+    ].map((option) => option.textContent?.trim()),
   ).toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
   await waitText(element, "This engine is disabled");
   const enable = [...element.querySelectorAll("button")].find(
@@ -134,7 +132,6 @@ it("persists Off and drains its autosave before re-enabling memory", async () =>
   element.configObject = { plugins: { slots: { memory: "none" } } };
   flush();
   expect(activeEngine(element)).toBe("");
-  expect(element.textContent).toContain("switched off");
 
   selectEngine(element, "memory-core");
   await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledOnce());
@@ -200,19 +197,21 @@ it("retains catalog controls during a plugin publication refresh", async () => {
         : refresh.promise,
   });
   await waitAddon(element, "Active memory", true);
-  const engineControl = element.querySelector<HTMLInputElement>('input[value="memory-core"]');
+  const engineControl = element.querySelector<HTMLSelectElement>(
+    "select[aria-label='Memory engine']",
+  );
   const addonControl = addonSwitch(element, "Active memory");
   engineControl!.focus();
 
   publishPluginGeneration(1);
   flush();
-  expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
+  expect(element.querySelector("select[aria-label='Memory engine']")).toBe(engineControl);
   expect(addonSwitch(element, "Active memory")).toBe(addonControl);
   expect(document.activeElement).toBe(engineControl);
 
   refresh.resolve({ plugins: [engine("memory-core", true), addon("active-memory", false)] });
   await waitAddon(element, "Active memory", false);
-  expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
+  expect(element.querySelector("select[aria-label='Memory engine']")).toBe(engineControl);
   expect(addonSwitch(element, "Active memory")).toBe(addonControl);
 });
 
@@ -225,7 +224,7 @@ it("falls back to read-only add-on status rows without operator.admin", async ()
   expect(addonStatus(element, "Memory wiki")).toBe("Disabled");
   expect(addonSwitch(element, "Active memory")).toBeNull();
   expect(addonSwitch(element, "Memory wiki")).toBeNull();
-  expect(element.querySelector("a.memory-page__link")?.textContent).toContain("Open Plugins");
+  expect(element.querySelector("a.memory-page__nav-row")?.textContent).toContain("All plugins");
 });
 
 it("ignores an older catalog reload from a parallel add-on mutation", async () => {

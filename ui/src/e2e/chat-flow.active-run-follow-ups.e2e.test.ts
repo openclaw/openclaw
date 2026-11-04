@@ -35,7 +35,7 @@ async function followUpSettings(page: import("playwright").Page, mode: string, s
   await page.goto(`${suite.server.baseUrl}settings/appearance`);
   await page.locator("[data-settings-follow-up-mode]").selectOption(mode);
   if (shortcut) {
-    await page.locator("[data-settings-send-shortcut]").selectOption(shortcut);
+    await page.locator(`[data-test-id="send-shortcut-${shortcut}"]`).click();
   }
 }
 
@@ -127,7 +127,7 @@ suite.define(() => {
       sessionInfo,
     });
     await page.goto(`${suite.server.baseUrl}chat`);
-    const stop = page.getByRole("button", { name: "Stop generating" });
+    const stop = page.getByRole("button", { name: "Stop", exact: true });
     await stop.waitFor();
     const steerText = "Keep the numbers in metrics.json, not USER.md.";
     await gateway.deferNext("chat.send");
@@ -219,7 +219,7 @@ suite.define(() => {
     await sendMessage(page, activePrompt);
 
     await gateway.waitForRequest("chat.send");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ timeout: 10_000 });
 
     const queuedPrompt = "queue this on the server";
     await sendMessage(page, queuedPrompt, "Queue message");
@@ -264,9 +264,9 @@ suite.define(() => {
     const configPatchesBefore = (await gateway.getRequests("config.patch")).length;
     await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
     await waitForRequests(gateway, "config.patch", configPatchesBefore + 1);
-    const shortcut = page.locator("[data-settings-send-shortcut]");
-    await shortcut.selectOption("enter");
-    expect(await shortcut.inputValue()).toBe("enter");
+    const shortcut = page.locator('[data-test-id="send-shortcut-enter"]');
+    await shortcut.click();
+    expect(await shortcut.locator("input").isChecked()).toBe(true);
     await page.goto(`${suite.server.baseUrl}chat`);
 
     const composer = chatComposer(page);
@@ -274,7 +274,7 @@ suite.define(() => {
       .locator(".chat-tool-msg-summary")
       .getByRole("img", { name: "exec", exact: true })
       .waitFor();
-    await page.getByRole("button", { name: "Stop generating" }).waitFor();
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
     let agentSequence = 0;
     const commentaryText = "The active commentary stays visible.";
     await gateway.emitGatewayEvent(
@@ -500,7 +500,7 @@ suite.define(() => {
       });
       await reconnect();
       await transcript.getByText(steerText, { exact: true }).waitFor();
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
       if (historyOrder === "before") {
         await emitSteer();
       }
@@ -596,7 +596,7 @@ suite.define(() => {
     });
     await reconnect();
     await transcript.getByText(commentaryText, { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Stop generating" }).waitFor();
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
     await emitDelta(afterText);
 
     await expect
@@ -631,7 +631,7 @@ suite.define(() => {
     const composer = chatComposer(page);
     await sendMessage(page, "keep the modifier shortcut run active");
     await gateway.waitForRequest("chat.send");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ timeout: 10_000 });
 
     const queuedText = "leave this modifier follow-up queued";
     await composer.fill(queuedText);
@@ -652,7 +652,7 @@ suite.define(() => {
     await sendMessage(page, "keep the disconnect run active");
     const initial = requireRecord((await gateway.waitForRequest("chat.send")).params);
     const activeRunId = requireString(initial.idempotencyKey, "initial accepted run");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ timeout: 10_000 });
 
     // Establish delivery before disconnect; the follow-up is the only unsent turn.
     const acceptedSession = {
@@ -724,7 +724,7 @@ suite.define(() => {
 
     await sendMessage(page, "keep this run active");
     await gateway.waitForRequest("chat.send");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ timeout: 10_000 });
 
     const followUp = "interrupt for this session override";
     await sendMessage(page, followUp);
@@ -746,7 +746,7 @@ suite.define(() => {
 
     await sendMessage(page, "keep this run active");
     await gateway.waitForRequest("chat.send");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ timeout: 10_000 });
 
     const queuedPrompt = "steer this after restoring the queue";
     await sendMessage(page, queuedPrompt, "Queue message");

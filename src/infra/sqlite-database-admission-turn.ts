@@ -9,9 +9,16 @@ import {
   canShareSqliteDatabaseAdmissions,
   hasSqliteDatabaseSchemaAdmissionForPath,
 } from "./sqlite-database-admission.js";
-import { inspectDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
+import {
+  inspectDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "./sqlite-worker-identity.js";
 
 type AdmissionTurnScope = { active: boolean };
+export type PreparedSqliteReadAdmission = {
+  readIdentities?: ReadonlyMap<string, DatabasePathIdentity>;
+  physicalFamilies?: true;
+};
 
 const pending = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteDatabaseAdmissionTurns"),
@@ -21,22 +28,33 @@ const current = new AsyncContext<AdmissionTurnScope>(
   Symbol.for("openclaw.sqliteDatabaseAdmissionTurnContext"),
 );
 
-function reserveAdmissionTurn(locations: string | readonly string[], families: readonly string[]) {
+function reserveAdmissionTurn(
+  locations: string | readonly string[],
+  families: readonly string[],
+  prepared?: PreparedSqliteReadAdmission,
+) {
   // Nested dispatch belongs to the outer turn; it must not queue behind its own callers.
   if (current.getStore()?.active || !canShareSqliteDatabaseAdmissions()) {
     return undefined;
   }
   const keys = new Set(
-    families.map((directory) => `family:${resolveIdentityPathViaExistingAncestorSync(directory)}`),
+    families.map(
+      (directory) =>
+        `family:${prepared?.physicalFamilies ? directory : resolveIdentityPathViaExistingAncestorSync(directory)}`,
+    ),
   );
   for (const location of typeof locations === "string" ? [locations] : locations) {
     let identity: ReturnType<typeof inspectDatabasePathIdentitySync>;
     try {
       // A native task can request a host writer after publishing its completed schema.
-      if (hasSqliteDatabaseSchemaAdmissionForPath(location)) {
+      if (
+        !prepared?.readIdentities?.has(location) &&
+        hasSqliteDatabaseSchemaAdmissionForPath(location)
+      ) {
         continue;
       }
-      identity = inspectDatabasePathIdentitySync(location);
+      identity =
+        prepared?.readIdentities?.get(location) ?? inspectDatabasePathIdentitySync(location);
     } catch (error) {
       if (!isMissingPathError(error)) {
         throw error;
@@ -86,11 +104,12 @@ export function runWithSqliteDatabaseAdmissionTurn<T>(
   operation: () => Promise<T>,
   families: readonly string[] = [],
   signal?: AbortSignal,
+  prepared?: PreparedSqliteReadAdmission,
 ): Promise<T> {
   if (current.getStore()?.active) {
     return operation();
   }
-  const turn = reserveAdmissionTurn(locations, families);
+  const turn = reserveAdmissionTurn(locations, families, prepared);
   const run = () => {
     // Warm dispatch can lose schema admission while queued; nested work still belongs to this turn.
     const scope: AdmissionTurnScope = { active: true };

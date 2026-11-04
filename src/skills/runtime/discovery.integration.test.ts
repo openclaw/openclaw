@@ -1,10 +1,15 @@
-import nativeFs, { writeFileSync } from "node:fs";
+import { channel } from "node:diagnostics_channel";
+import { once } from "node:events";
+import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as directoryWatch from "../../infra/directory-watch-host.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import * as workerCpu from "../../infra/worker-cpu.js";
 import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
@@ -182,6 +187,50 @@ it("discovers external edits without waiting for a periodic scan and shares one 
   await expect.poll(() => descriptions(request(other)), { timeout: 10_000 }).toEqual(["Other"]);
 });
 
+it("retires idle discovery workers while retaining the catalog and explicit refresh", async ({
+  signal,
+}) => {
+  vi.useRealTimers();
+  const created = vi.spyOn(workerCpu, "createCpuTrackedWorker");
+  const entry = String(resolveRuntimeProcessEntrypointUrl("skillsDiscovery"));
+  const observedWorkers = () =>
+    created.mock.calls.flatMap(([url], index) => {
+      const result = created.mock.results[index];
+      return String(url) === entry && result?.type === "return" ? [result.value] : [];
+    });
+  const load = () => descriptions(request(), false);
+  try {
+    await write("Original");
+    expect(await load()).toEqual(["Original"]);
+    expect(await load()).toEqual(["Original"]);
+    expect(observedWorkers()).toHaveLength(1);
+    const version = getSkillsSnapshotVersion(workspace);
+    const worker = observedWorkers()[0];
+    if (!worker) {
+      throw new Error("Expected the real discovery worker");
+    }
+    const exited = once(worker, "exit", { signal: AbortSignal.timeout(5_000) });
+    channel("openclaw.memory.critical").publish(undefined);
+    await expect(
+      withinTest(exited, signal),
+      "idle discovery worker exits after critical pressure",
+    ).resolves.toBeDefined();
+    expect(worker.threadId).toBe(-1);
+    expect(await load()).toEqual(["Original"]);
+    expect(getSkillsSnapshotVersion(workspace)).toBe(version);
+    expect(observedWorkers()).toHaveLength(1);
+
+    await write("Edited");
+    await refreshSkillsDiscovery({ workspaceDir: workspace });
+    expect(await load()).toEqual(["Edited"]);
+    expect(observedWorkers()).toHaveLength(2);
+    expect(observedWorkers()[1]).not.toBe(worker);
+    expect(getSkillsSnapshotVersion(workspace)).toBeGreaterThan(version);
+  } finally {
+    await closeSkillsWatchers(true);
+  }
+}, 20_000);
+
 it("observes edits inside an admitted external symlink target", async () => {
   vi.useRealTimers();
   const external = temporary.make("skills-external-target-");
@@ -333,7 +382,7 @@ it("rediscovers replaced workspaces and roots that disappear and return", async 
   await write("Original");
   expect(await descriptions(request(), false)).toEqual(["Original"]);
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-  const watch = vi.spyOn(nativeFs, "watch");
+  const watch = vi.spyOn(directoryWatch, "watchDirectory");
   // Register the Windows observation on an already prepared source, so this
   // exercises its handle boundary without changing worker launch semantics.
   Object.defineProperty(process, "platform", { ...platform, value: "win32" });
@@ -353,6 +402,41 @@ it("rediscovers replaced workspaces and roots that disappear and return", async 
     expect(await descriptions()).toEqual(description ? [description] : []);
   }
 });
+
+it.each([false, true])(
+  "narrows Windows personal skill watches (initially missing=%s)",
+  async (missing) => {
+    const home = temporary.make("skills-personal-");
+    const skills = path.join(home, ".agents", "skills");
+    if (!missing) {
+      await write("Personal", home, ".agents/skills/guide");
+    }
+    const input = request();
+    input.sourcePlan.roots = [{ dir: skills, source: "openclaw-workspace", tier: "workspace" }];
+    expect(await descriptions(input, false)).toEqual(missing ? [] : ["Personal"]);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const watch = vi.spyOn(directoryWatch, "watchDirectory");
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    try {
+      await descriptions(input);
+      const opened = watch.mock.calls.filter(
+        (_, index) => watch.mock.results[index]?.type === "return",
+      );
+      expect(opened.map(([directory, , recursive]) => [directory, recursive])).toEqual([
+        [missing ? home : skills, !missing],
+      ]);
+      if (missing) {
+        await write("Created later", home, ".agents/skills/guide");
+        opened[0]![1]("rename", ".agents");
+        await completePassiveScan();
+        expect(await descriptions(input)).toEqual(["Created later"]);
+        expect(watch.mock.calls.at(-1)?.[0]).toBe(skills);
+      }
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  },
+);
 
 it("refreshes supporting resources without publishing an unchanged catalog", async () => {
   await write("Stable catalog");

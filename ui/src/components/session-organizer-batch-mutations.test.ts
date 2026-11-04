@@ -412,7 +412,6 @@ function withHiddenRun(
     subagentSummary: {
       attention: { kind: "none" },
       runningChildCount: 0,
-      failedChildCount: 0,
       unreadHiddenRuns: [run],
     },
   });
@@ -576,7 +575,7 @@ describe("session organizer destructive confirmations", () => {
       return;
     }
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(showToast).toHaveBeenCalledWith({ message: operation.staleMessage });
+    expect(showToast).toHaveBeenCalledWith({ severity: "error", message: operation.staleMessage });
 
     // Reconnecting must release the old dialog's lock before the operator retries.
     h.renewScope();

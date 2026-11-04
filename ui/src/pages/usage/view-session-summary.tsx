@@ -1,8 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { For } from "solid-js";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatMs } from "../../lib/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { ParsedSessionLog } from "./helpers.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import type { UsageSessionEntry } from "./types.ts";
@@ -88,9 +87,9 @@ export function renderSessionSummary(
   const modelItems =
     usage.modelUsage?.slice(0, 6).map((entry) => ({
       label: entry.model ?? t("usage.common.unknown"),
-      value: formatUsageCost(entry.totals.totalCost, 2, entry.totals.usageReport),
+      value: formatUsageCost(entry.totals.totalCost),
       weight: entry.totals.totalCost || entry.totals.totalTokens / 1e9,
-      sub: formatUsageTokens(entry.totals.totalTokens, entry.totals.usageReport),
+      sub: formatUsageTokens(entry.totals.totalTokens),
     })) ?? [];
   const cards = [
     {
@@ -101,7 +100,10 @@ export function renderSessionSummary(
           {" "}
           {hasInterval && !messageCounts
             ? t("usage.common.emptyValue")
-            : `${(messageCounts?.user ?? 0).toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${(messageCounts?.assistant ?? 0).toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`}
+            : t("usage.overview.messageCounts", {
+                user: (messageCounts?.user ?? 0).toLocaleString(getLocale()),
+                assistant: (messageCounts?.assistant ?? 0).toLocaleString(getLocale()),
+              })}
           {hasInterval ? (
             <>
               {" "}
@@ -115,12 +117,7 @@ export function renderSessionSummary(
     {
       labelKey: "usage.overview.toolCalls",
       value: toolCallCount,
-      meta: (
-        <>
-          {" "}
-          {uniqueToolCount} {t("usage.overview.toolsUsed")}{" "}
-        </>
-      ),
+      meta: <> {t("usage.overview.uniqueToolsCount", { count: String(uniqueToolCount) })} </>,
     },
     {
       labelKey: "usage.overview.errors",

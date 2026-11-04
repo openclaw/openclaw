@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-
 import { createSignal, flush } from "solid-js";
 import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
@@ -100,36 +98,6 @@ it("does not offer enablement or Settings for an uninstalled plugin", () => {
   expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
 });
 
-it("updates native UI disclosure from inventory and inspection across enablement", () => {
-  const { container, find, update } = mount({});
-  expect(find(".plugin-native-ui-disclosure")).toBeNull();
-  for (const [inventory, inspected, enabled, visible] of [
-    [true, null, false, true],
-    [true, null, true, true],
-    [true, undefined, true, true],
-    [true, false, true, false],
-    [false, true, true, true],
-    [undefined, undefined, true, false],
-  ] as const) {
-    update({
-      result: createResult(
-        createPlugin({ hasNativeUi: inventory, enabled, state: enabled ? "enabled" : "disabled" }),
-      ),
-      inspection:
-        inspected === null
-          ? null
-          : createInspectResult({
-              overview: {
-                hasNativeUi: inspected,
-                capabilities: { providers: [], channels: [], contracts: {}, ui: ["page"] },
-              },
-            }),
-    });
-    expect(Boolean(container.querySelector(".plugin-native-ui-disclosure"))).toBe(visible);
-    expect(find(`[aria-label="${enabled ? "Disable" : "Enable"} Workboard"]`)).not.toBeNull();
-  }
-});
-
 it("retains inspection retry focus and uses the current error and callback", async () => {
   const firstRetry = vi.fn();
   const nextRetry = vi.fn();
@@ -197,13 +165,15 @@ it("gives inherited host permissions the setting menu and preserves read-only va
   await Promise.resolve();
   flush();
   const row = setting(container, "hooks.allowPromptInjection");
+  expect(row.textContent).toContain("add or change the context and instructions sent to the model");
+  expect(row.textContent).toContain("Only allow this for plugins you trust.");
   expect(row.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true);
   expect(row.querySelector('[data-value="reset"]')?.hasAttribute("disabled")).toBe(true);
   await selectSettingAction(row, "ask");
   const hooksPath = ["plugins", "entries", "workboard", "hooks"];
   const path = [...hooksPath, "allowPromptInjection"];
   expect(props.onAskSetting).toHaveBeenCalledWith(
-    expect.objectContaining({ path, value: true, label: "Add context to prompts" }),
+    expect.objectContaining({ path, value: true, label: "Modify prompts" }),
   );
   row.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
   expect(props.onConfigPatch).toHaveBeenCalledWith(path, false);
@@ -236,7 +206,7 @@ it("shows selected capabilities without a catalog", () => {
   const titles = [...container.querySelectorAll(".plugin-capabilities h2")].map(
     (heading) => heading.textContent,
   );
-  expect(titles).toEqual(["Capabilities2", "Tools1"]);
+  expect(titles).toEqual(["Capabilities", "Extensions", "Tools"]);
   expect(container.textContent).toContain("Text to speech");
   expect(container.textContent).toContain("Pages");
   expect(container.textContent).not.toMatch(/speechProviders:|sibling-|Video generation/);
