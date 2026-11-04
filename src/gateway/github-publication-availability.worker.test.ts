@@ -10,6 +10,10 @@ import {
 import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import * as configIo from "../config/io.js";
+import {
+  setRuntimeConfigSnapshot,
+  clearRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
@@ -133,7 +137,7 @@ vi.mock("../agents/worktrees/service.js", () => ({
       checkoutRoot: worktree.path,
       repoRoot: worktree.repoRoot,
       fingerprint: worktree.repoFingerprint,
-      originUrl: "https://github.com/example/publication.git",
+      originUrl: repositoryOrigin,
     }),
     findLiveByOwner: async (kind: ManagedWorktreeRecord["ownerKind"], id: string) =>
       findLiveRegistryWorktreeByOwner(process.env, kind, id),
@@ -160,6 +164,7 @@ vi.mock("../secrets/runtime-state.js", () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionStorePath = "/publication-availability/sessions.sqlite";
+let repositoryOrigin = "https://github.com/example/publication.git";
 const session = { sessionKey: "agent:main:publication", sessionId: "session", agentId: "main" };
 const admittedSource = {
   agentId: session.agentId,
@@ -239,6 +244,7 @@ async function memoryFixture(sessionKey: string, activeWriterRunId?: string) {
 
 beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("publication-worktree-read-"));
+  repositoryOrigin = "https://github.com/example/publication.git";
   mocks.config.mockReset().mockReturnValue({});
   vi.spyOn(configIo, "getRuntimeConfig").mockImplementation(mocks.config);
   mocks.session.mockReset().mockReturnValue({
@@ -316,6 +322,28 @@ it.each([
     );
   },
 );
+
+it("qualifies repository targets against the configured GitHub host without reusing another host cache", async () => {
+  using prepared = await prepareGitHubPublicationSession(session.sessionKey, {
+    agentId: session.agentId,
+  });
+  try {
+    setRuntimeConfigSnapshot({});
+    expect(
+      await qualifyGitHubPublicationSource(session, () => undefined, prepared.readCurrent),
+    ).toMatchObject({ ok: true, target: { kind: "supported" } });
+    setRuntimeConfigSnapshot({ gateway: { github: { host: "github.example.test" } } });
+    expect(
+      await qualifyGitHubPublicationSource(session, () => undefined, prepared.readCurrent),
+    ).toMatchObject({ ok: true, target: { kind: "unsupported" } });
+    repositoryOrigin = "https://github.example.test/example/publication.git";
+    expect(
+      await qualifyGitHubPublicationSource(session, () => undefined, prepared.readCurrent),
+    ).toMatchObject({ ok: true, target: { kind: "supported" } });
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
+});
 
 it("rejects a worktree retired while publication identity is prepared", async () => {
   mocks.identity.mockImplementationOnce(async () => {
