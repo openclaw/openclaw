@@ -48,6 +48,17 @@ export function isArchiveAccessDeniedError(err: unknown): boolean {
   );
 }
 
+const missingScopeAccessLabels = new Map([
+  ["operator.read", "read access"],
+  ["operator.write", "write access"],
+  ["operator.admin", "admin access"],
+]);
+
+export function formatMissingScopeMessage(scope: string, action: string): string {
+  const access = missingScopeAccessLabels.get(scope) ?? "the required access";
+  return `Couldn’t ${action}. Ask an admin to grant ${access}.`;
+}
+
 export async function formatMissingOperatorReadScopeMessage(
   feature: string,
   fallback: string,
