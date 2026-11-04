@@ -10,7 +10,7 @@ import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
 
 const SW_READY_TIMEOUT = 10_000;
 const VAPID_MISMATCH_MESSAGE =
-  "This browser push subscription belongs to another Gateway. Open this Gateway's own Control UI, or configure every mutually trusted Gateway behind this PWA with the same VAPID keypair.";
+  "This browser push subscription belongs to another Gateway. Open this Gateway’s own Control UI, or configure every mutually trusted Gateway behind this PWA with the same VAPID keypair.";
 const WEB_PUSH_USER_PREFERENCES_KEY = "notifications.web.v1";
 
 type WebPushReconcileResult =

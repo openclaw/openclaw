@@ -83,7 +83,7 @@ export async function loadSessionWorkspaceFileContent(
       reference.result.source?.fileRoot !== document.workspaceSource?.fileRoot)
   ) {
     throw new Error(
-      "The document's workspace changed. Reopen the document before following its links.",
+      "The document’s workspace changed. Reopen the document before following its links.",
     );
   }
   return (
