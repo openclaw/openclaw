@@ -7,6 +7,7 @@ const enModelControls = {
       subscription: "Subscription",
       api: "API",
       default: "Default",
+      defaultModel: "Default model",
       routes: {
         claudeCli: {
           label: "Claude CLI · native",

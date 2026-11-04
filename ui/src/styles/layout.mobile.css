@@ -596,19 +596,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     font-size: 18px;
   }
 
-  .field input,
-  .field textarea,
-  .field select {
-    padding: 8px 10px;
-    border-radius: var(--radius-md);
-    font-size: 14px;
-  }
-
-  .btn {
-    padding: 8px 12px;
-    font-size: 12px;
-  }
-
   .chat-thread {
     --chat-thread-padding-top: 0px;
 
@@ -674,6 +661,22 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .code-block {
     padding: 8px;
     border-radius: var(--radius-md);
+    font-size: 12px;
+  }
+}
+
+/* Controls take their phone size with the floating header and stacked rows. */
+@media (max-width: 640px) {
+  .field input,
+  .field textarea,
+  .field select {
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    font-size: 14px;
+  }
+
+  .btn {
+    padding: 8px 12px;
     font-size: 12px;
   }
 }

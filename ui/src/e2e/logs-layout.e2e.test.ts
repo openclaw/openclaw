@@ -158,7 +158,7 @@ suite.define(() => {
         // width where the shell header takes over the title.
         const heading = page.getByRole("heading", { name: "Logs", level: 1 });
         await expect.poll(() => heading.count()).toBe(1);
-        await page.setViewportSize({ height: 844, width: 620 });
+        await page.setViewportSize({ height: 844, width: 641 });
         await heading.waitFor({ state: "visible" });
         await expect
           .poll(async () => (await heading.boundingBox())?.height ?? 0)

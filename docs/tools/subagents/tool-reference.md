@@ -261,6 +261,14 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
 <ParamField path="worktree" type="boolean" default="false">
   Provision a managed git worktree for a hidden or visible native sub-agent. Acceptance returns before checkout and setup finish; the first turn waits for the managed workspace. ACP does not support this option.
 </ParamField>
+For a same-agent repository-only parent, a cloud-profile child inherits an independent
+repository workspace instead of creating a Gateway checkout. It keeps the parent
+repository URL, selected ref, accepted base and checkpoint; setup permission is
+limited by both parent and caller. Omit `worktreeName` and `worktreeBaseRef`. The
+Gateway creates the child without an initial turn, then dispatches it before
+sending its task. A disk-authoritative parent still requires a fresh disk export
+and cannot use its old initialization checkpoint.
+
 <ParamField path="worktreeName" type="string">
   Optional managed-worktree name matching `[a-z0-9][a-z0-9-]{0,63}`. Pass a lowercase slug, not a branch name such as `codex/review`; OpenClaw supplies the `openclaw/` branch prefix. Invalid names are rejected before child creation. Used with `worktree: true` and `runtime: "subagent"`; hidden native children ignore this selector when `worktree` is false or omitted.
 </ParamField>

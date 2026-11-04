@@ -229,6 +229,9 @@
   "ignorePatterns": [
     "dist/",
     "dist-runtime/",
+    // napi-rs generates the iroh binding loader and its type declarations.
+    "crates/openclaw-iroh-node/index.js",
+    "crates/openclaw-iroh-node/index.d.ts",
     // Intentional negative-test corpora contain parser and lint violations by contract.
     "test/fixtures/oxlint-boundary-guards/**",
     "extensions/diffs/assets/viewer-runtime.js",

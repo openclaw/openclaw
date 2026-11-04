@@ -166,7 +166,7 @@ export function SidebarAgentRoster(props: {
       confirmLabel: t("common.delete"),
       danger: true,
     }).catch((error: unknown) => {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
       return false;
     });
     if (
@@ -179,7 +179,7 @@ export function SidebarAgentRoster(props: {
     try {
       await client.request("agents.delete", { agentId: agent.id, deleteFiles: true });
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     } finally {
       await currentContext.agents.refreshList();
     }
