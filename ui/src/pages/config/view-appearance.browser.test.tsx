@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { normalizeThemePalette } from "../../app/theme-palette.ts";
 import { i18n } from "../../i18n/index.ts";
 
@@ -77,6 +78,32 @@ function settingsRow(container: HTMLElement, title: string) {
   }
   return row;
 }
+
+it("shows a palette for an inactive plugin theme and keeps the import icon separate", () => {
+  const { container } = renderAppearance({
+    theme: "claw",
+    themeCatalog: {
+      themes: [
+        ...BUILTIN_THEMES,
+        {
+          id: "lobster/default",
+          name: "Lobster",
+          description: "Lobster theme",
+          source: "plugin",
+        },
+      ],
+      error: null,
+    },
+  });
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  const lobster = required(container, 'button[title="Lobster theme"]', HTMLButtonElement);
+  expect(lobster.querySelector(".settings-theme-card__palette")).not.toBeNull();
+  expect(lobster.querySelector(".settings-theme-card__icon")).toBeNull();
+  expect(
+    container.querySelector(".settings-theme-card:last-child .settings-theme-card__icon"),
+  ).not.toBeNull();
+});
 
 describe("config appearance preferences", () => {
   beforeAll(async () => {
