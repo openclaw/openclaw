@@ -806,11 +806,11 @@ rows = %w[capture result missing success].map do |scenario|
     error = nil
     begin
       capture_release_ios_screenshots!(
-        project: "fixture", device: "fixture-device",
+        xctestrun_path: "fixture products/OpenClawUITests.xctestrun", device: "fixture-device",
         output_directory: root, result_bundle_path: @result_path,
         result_bundle_archive_directory: archive, capture_attempts: [],
         log_directory: logs,
-        capture_attempts_path: ledger, derived_data_path: root,
+        capture_attempts_path: ledger,
         device_udid: "fixture-udid", snapshot_cache_directory: root
       )
     rescue => failure
@@ -852,6 +852,10 @@ puts JSON.generate(rows)
       { scenario: "success", calls: 1, checks: 1, error: null },
     ]);
     for (const row of rows) {
+      expect(row.xcodeArguments.slice(0, 2)).toEqual([
+        "-xctestrun",
+        "fixture products/OpenClawUITests.xctestrun",
+      ]);
       const diagnosticsIndex = row.xcodeArguments.indexOf("-collect-test-diagnostics");
       expect(row.xcodeArguments.slice(diagnosticsIndex, diagnosticsIndex + 2)).toEqual([
         "-collect-test-diagnostics",
@@ -1118,24 +1122,38 @@ module Open3
     [File.read(args.last), "", Struct.new(:success?).new(true)]
   end
 end
-def run_screenshot_xcodebuild!(arguments, log_path:)
-  raise "not building test products" unless arguments.last == "build-for-testing"
+def verify_screenshot_build_inputs!(arguments)
   derived_data_path = arguments.fetch(arguments.index("-derivedDataPath") + 1)
-  package_source = File.join(derived_data_path, "SourcePackages", "checkouts", "fixture", "Package.swift")
+  packages_index = arguments.index("-clonedSourcePackagesDirPath")
+  raise "missing shared package download directory" unless packages_index
+  packages_path = arguments.fetch(packages_index + 1)
+  raise "incorrect shared package download directory" unless packages_path == File.join(ios_root, "build", "SourcePackages")
+  package_source = File.join(packages_path, "checkouts", "fixture", "Package.swift")
   if @scenario == "iphone"
     raise "unexpected cached Swift package source on cold build" if File.exist?(package_source)
   else
     raise "cached Swift package source was removed" unless File.exist?(package_source) && File.read(package_source) == "downloaded package source"
   end
-  raise "stale non-package state survived clean build" if File.exist?(File.join(derived_data_path, ".previous-state"))
+  raise "stale compilation state survived clean build" if File.directory?(derived_data_path) && !Dir.empty?(derived_data_path)
+  derived_data_path
+end
+def run_screenshot_xcodebuild!(arguments, log_path:)
+  raise "not building test products" unless arguments.last == "build-for-testing"
+  derived_data_path = verify_screenshot_build_inputs!(arguments)
   FileUtils.mkdir_p(File.dirname(log_path))
   File.write(log_path, "native build log")
   @builds << "snapshot"
   raise "snapshot build failed" if @scenario == "build-failure"
   make_product(derived_data_path)
+  products = File.join(derived_data_path, "Build", "Products")
+  FileUtils.mkdir_p(products)
+  File.write(File.join(products, "OpenClawUITests.xctestrun"), "fresh test specification") unless @scenario == "missing-spec"
+  File.write(File.join(products, "Other.xctestrun"), "ambiguous test specification") if @scenario == "ambiguous-spec"
 end
 def capture_release_ios_screenshots!(**options)
   raise "capture before successful build" unless @builds == ["snapshot"]
+  spec = File.join(ios_root, "build", "SnapshotDerivedData", "Build", "Products", "OpenClawUITests.xctestrun")
+  raise "capture did not reuse fresh specification" unless options.fetch(:xctestrun_path) == spec && File.read(spec) == "fresh test specification"
   active = @owned.fetch(options.fetch(:device_udid))
   raise "selected older runtime" unless active.fetch("runtime").end_with?("27-0")
   raise "capture failed" if @scenario == "capture-failure" || @scenario == "capture-cleanup-failure"
@@ -1282,9 +1300,10 @@ def sh(command, *arguments, **options)
     end
     FileUtils.mkdir_p(File.join(@root, "watch-runtime")) unless @scenario == "runtime-path-missing"
   elsif args.include?("xcodebuild") && args.include?("build")
+    derived_data_path = verify_screenshot_build_inputs!(args)
     @builds << "watch"
     raise "Watch build failed" if @scenario == "standalone-build-failure"
-    make_product(args.fetch(args.index("-derivedDataPath") + 1))
+    make_product(derived_data_path)
   elsif args[0, 3] == ["xcrun", "simctl", "install"]
     @installed = args.last.sub(@root, "")
     raise "simulator rejected Watch product" if @scenario == "invalid-install"
@@ -1293,7 +1312,7 @@ def sh(command, *arguments, **options)
   end
 end
 
-results = %w[combined watch-unrelated-runtime watch-staging watch-staging-empty watch-staging-retained watch-staging-rejected watch-staging-unverified watch-staging-ambiguous unavailable-staged unavailable-staged-rescan-timeout unavailable-package-missing watch-maintenance watch-runtime-missing diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-deleting unavailable-deletion-natural unavailable-deletion-reregistered unavailable-deletion-stuck unavailable-deletion-retained unavailable-deletion-delayed unavailable-ambiguous unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
+results = %w[combined missing-spec ambiguous-spec watch-unrelated-runtime watch-staging watch-staging-empty watch-staging-retained watch-staging-rejected watch-staging-unverified watch-staging-ambiguous unavailable-staged unavailable-staged-rescan-timeout unavailable-package-missing watch-maintenance watch-runtime-missing diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-deleting unavailable-deletion-natural unavailable-deletion-reregistered unavailable-deletion-stuck unavailable-deletion-retained unavailable-deletion-delayed unavailable-ambiguous unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
@@ -1338,9 +1357,10 @@ results = %w[combined watch-unrelated-runtime watch-staging watch-staging-empty 
     end
     unless scenario == "iphone"
       snapshot_data = File.join(ios_root, "build", "SnapshotDerivedData")
-      package_checkout = File.join(snapshot_data, "SourcePackages", "checkouts", "fixture")
+      package_checkout = File.join(ios_root, "build", "SourcePackages", "checkouts", "fixture")
       FileUtils.mkdir_p(package_checkout)
       File.write(File.join(package_checkout, "Package.swift"), "downloaded package source")
+      FileUtils.mkdir_p(File.join(snapshot_data, "SourcePackages"))
       File.write(File.join(snapshot_data, ".previous-state"), "previous invocation")
     end
     if scenario.start_with?("standalone")
@@ -1411,6 +1431,10 @@ puts JSON.generate(results)
     }[];
     const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
     const versionArgs = ["--version", "2026.9.1", "--revision", "2", "--build-number", "123"];
+    for (const scenario of ["missing-spec", "ambiguous-spec"]) {
+      expect(row(scenario)).toMatchObject({ pngs: 0, xcresults: 0, admissions: [], owned: [] });
+      expect(row(scenario).error).toContain("Expected one fresh screenshot .xctestrun");
+    }
     expect(row("watch-maintenance")).toMatchObject({
       error: null,
       pngs: 9,

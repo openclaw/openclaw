@@ -64,6 +64,25 @@ and policy runtime into the workspace root. Locks and late writes in the failed
 attempt's directory cannot alter the retry's files. Both attempts retain the
 event's trusted default-branch revision and sparse file selection.
 
+Security-fast also exports its trusted harness from the index when the actual
+checked-out `HEAD` equals `WORKFLOW_SHA`. It includes the security scanner, audit,
+report collector, and Zizmor configuration. Different revisions retain the pinned
+Actions checkout; inspection or export errors stop the job before candidate code.
+
+On Linux, compare the index export with the unchanged, cached checkout action:
+
+```sh
+python3 scripts/perf/ci-security-harness-measure.py \
+  --checkout-action /path/to/actions/checkout/3d3c42e5aac5ba805825da76410c181273ba90b1/dist/index.js \
+  --action-node /path/to/node24 --output /tmp/security-harness-result.json
+```
+
+This uses an isolated local Git origin, one excluded warm-up per variant, and five
+serial interleaved pairs with a fresh harness and warm filesystem. It checks indexed
+bytes, symlinks, executable modes and fetch counts, recording wall time, waited-child
+CPU, maximum single-process RSS and host resources. It does not measure WAN transfer,
+runner scheduling or whole-workflow savings.
+
 ## Preflight materialization
 
 Preflight uses two Git checkout workers for the complete candidate tree. The planner

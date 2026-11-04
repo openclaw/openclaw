@@ -1075,7 +1075,7 @@ export async function inspectContinuation(plan, client, options = {}) {
         runId: child.runId,
         status: run.status,
       };
-      const passed = !active && terminalPolicyPass(policyChild);
+      const passed = !active && terminalPolicyPass(policyChild, plan.targetVersion);
       return {
         compositeJobsSha256: evidence.compositeJobsSha256,
         conclusion: String(run.conclusion ?? ""),
