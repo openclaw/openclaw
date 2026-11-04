@@ -205,10 +205,7 @@ it("does not dispatch after cancellation during payload preparation", async () =
   const controller = new AbortController();
   const result = await run({
     signal: controller.signal,
-    onPayload: () => {
-      controller.abort();
-      return new Promise<undefined>(() => {});
-    },
+    onPayload: () => new Promise<undefined>(() => queueMicrotask(() => controller.abort())),
   }).result();
   expect(result.stopReason).toBe("aborted");
   expect(fetchMock).not.toHaveBeenCalled();

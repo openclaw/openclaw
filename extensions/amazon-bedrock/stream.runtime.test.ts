@@ -86,19 +86,11 @@ it("destroys the client after an aborted Bedrock request", async () => {
 
 it("aborts before send while the payload hook is pending", async () => {
   const controller = new AbortController();
-  const hookStarted = createDeferred<void>();
   const send = vi.spyOn(BedrockRuntimeClient.prototype, "send");
-
   const result = streamBedrockForTest(bedrockModel({}), userContext(), {
     signal: controller.signal,
-    onPayload: () => {
-      hookStarted.resolve();
-      return new Promise<undefined>(() => {});
-    },
+    onPayload: () => new Promise<undefined>(() => queueMicrotask(() => controller.abort())),
   }).result();
-  await hookStarted.promise;
-  controller.abort();
-
   await expect(result).resolves.toMatchObject({ stopReason: "aborted" });
   expect(send).not.toHaveBeenCalled();
 });
@@ -146,32 +138,29 @@ it("rejects malformed base64 and decodes a valid PNG without Node Buffer", async
   expect(input.messages?.[0]?.content?.[0]?.image?.source?.bytes?.byteLength).toBeGreaterThan(0);
 });
 
-it("resolves a GovCloud inference-profile ARN ahead of the ambient region", async () => {
-  vi.stubEnv("AWS_PROFILE", "");
-  vi.stubEnv("AWS_REGION", "us-east-1");
-  const send = mockStream();
-  await streamBedrockForTest(
+it.each([
+  [
+    "GovCloud ARN",
     bedrockModel({
       id: "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:application-inference-profile/profile-abc",
     }),
-    userContext(),
-  ).result();
-  const client = send.mock.contexts[0] as BedrockRuntimeClient;
-  await expect(client.config.region()).resolves.toBe("us-gov-west-1");
-});
-
-it("lets configured profiles own standard endpoint resolution", async () => {
-  const send = mockStream();
-
-  await streamBedrockForTest(
+    {},
+    "us-gov-west-1",
+  ],
+  [
+    "configured profile",
     bedrockModel({ baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com" }),
-    userContext(),
     { profile: "prod-bedrock", region: "us-west-2" },
-  ).result();
-
-  const client = send.mock.contexts.at(-1) as BedrockRuntimeClient;
+    "us-west-2",
+  ],
+] as const)("resolves %s ahead of the ambient region", async (_name, model, options, region) => {
+  vi.stubEnv("AWS_PROFILE", "");
+  vi.stubEnv("AWS_REGION", "us-east-1");
+  const send = mockStream();
+  await streamBedrockForTest(model, userContext(), options).result();
+  const client = send.mock.contexts[0] as BedrockRuntimeClient;
   expect(client.config.endpoint).toBeUndefined();
-  await expect(client.config.region()).resolves.toBe("us-west-2");
+  await expect(client.config.region()).resolves.toBe(region);
 });
 it.each([
   [BedrockStopReason.STOP_SEQUENCE, "stop", undefined],

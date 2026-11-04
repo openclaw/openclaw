@@ -20,24 +20,18 @@ const quotaError = {
 const encodeEvent = (event: unknown) =>
   `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`;
 function response(events: readonly unknown[], cancel = vi.fn(), open = false) {
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(events.map(encodeEvent).join("")));
-        if (!open) {
-          controller.close();
-        }
-      },
-      cancel,
-    }),
-    { headers: { "content-type": "text/event-stream" } },
-  );
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(events.map(encodeEvent).join("")));
+      if (!open) {
+        controller.close();
+      }
+    },
+    cancel,
+  });
+  return new Response(body, { headers: { "content-type": "text/event-stream" } });
 }
-async function startStream(
-  signal: AbortSignal,
-  id = "gemini-2.5-pro",
-  onPayload?: () => Promise<undefined>,
-) {
+async function startStream(signal: AbortSignal, id = "gemini-2.5-pro", hook?: () => Promise<void>) {
   const model = makeProviderModel("google-generative-ai", "google", id, {
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
   });
@@ -47,11 +41,8 @@ async function startStream(
     model,
   });
   assert(streamFn, "Google registration must provide its stream");
-  return streamFn(
-    model,
-    { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-    { apiKey: "fixture-key-1", signal, onPayload },
-  );
+  const context = { messages: [{ role: "user" as const, content: "hello", timestamp: 0 }] };
+  return streamFn(model, context, { apiKey: "fixture-key-1", signal, onPayload: hook });
 }
 async function advanceResponse(ms: number, id: string, expected: object = completedResponse) {
   const controller = new AbortController();
@@ -73,23 +64,23 @@ describe("Google stream lifecycle", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    {
-      name: "terminal marker",
-      events: [
+  it.each<[string, readonly unknown[], object]>([
+    [
+      "terminal marker",
+      [
         { responseId: "fixture-response", usageMetadata: { promptTokenCount: 10 } },
         terminal,
         "[DONE]",
         quotaError,
       ],
-      expected: { ...completedResponse, responseId: "fixture-response", usage: { input: 10 } },
-    },
-    {
-      name: "blocked prompt",
-      events: [{ promptFeedback: { blockReason: "SAFETY" } }],
-      expected: { stopReason: "error", errorCode: "SAFETY" },
-    },
-  ])("releases the open body after $name", async ({ events, expected }) => {
+      { ...completedResponse, responseId: "fixture-response", usage: { input: 10 } },
+    ],
+    [
+      "blocked prompt",
+      [{ promptFeedback: { blockReason: "SAFETY" } }],
+      { stopReason: "error", errorCode: "SAFETY" },
+    ],
+  ])("releases the open body after %s", async (_name, events, expected) => {
     vi.useFakeTimers();
     const cancel = vi.fn();
     guardedFetch.mockResolvedValueOnce(response(events, cancel, true));
@@ -99,14 +90,11 @@ describe("Google stream lifecycle", () => {
 
   it("aborts before dispatch while the payload hook is pending", async () => {
     const controller = new AbortController();
-    const hookStarted = Promise.withResolvers<void>();
-    const stream = await startStream(controller.signal, undefined, () => {
-      hookStarted.resolve();
-      return new Promise<undefined>(() => {});
-    });
-    await hookStarted.promise;
-    controller.abort();
-
+    const stream = await startStream(
+      controller.signal,
+      undefined,
+      () => new Promise<undefined>(() => queueMicrotask(() => controller.abort())),
+    );
     await expect(stream.result()).resolves.toMatchObject({ stopReason: "aborted" });
     expect(guardedFetch).not.toHaveBeenCalled();
   });
