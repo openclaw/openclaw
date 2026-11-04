@@ -131,7 +131,7 @@ async function assertFeedback(page: Page) {
   expect(
     await page.getByRole("button", { name: "Busy panel", exact: true }).getAttribute("aria-busy"),
   ).toBe("true");
-  expect(await page.locator("kbd").last().textContent()).toBe("Ctrl+K");
+  expect(await page.locator("kbd").last().textContent()).toBe("CtrlK");
   const copy = page.locator('[data-example="Actions and shortcuts"] .chat-copy-btn').nth(0);
   await copy.click();
   await expect.poll(() => copy.getAttribute("data-copy-state")).toBe("copied");
