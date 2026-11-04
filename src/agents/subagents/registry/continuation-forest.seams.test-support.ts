@@ -1,17 +1,17 @@
 // Continuation (karmaterminal/openclaw#1271): the seams the burning-annex world
 // (continuation-forest.test-support.ts) installs into the modules it doubles or observes. Suites
-// declare each `vi.mock` themselves and delegate here:
+// declare each `vi.mock`, spread the real module and add the seam's overrides:
 //
-//   vi.mock("../spawn/subagent-spawn.js", async (importOriginal) =>
-//     (await import("./continuation-forest.seams.test-support.js")).withForestSpawnOwner(
-//       await importOriginal(),
-//     ));
+//   const forestSeams = vi.hoisted(() => () => import("./continuation-forest.seams.test-support.js"));
+//   vi.mock("../spawn/subagent-spawn.js", async (importOriginal) => {
+//     const actual = await importOriginal<typeof import("../spawn/subagent-spawn.js")>();
+//     return { ...actual, ...(await forestSeams()).spawnOwner(actual) };
+//   });
 //
 // This module imports types only, so a mock factory can load it while the module it mocks is
-// still being linked. With no world installed every wrapper is a pass-through.
+// still being linked. With no world installed every override passes through to the real export.
 import type { requestContinuationWake } from "../../../auto-reply/continuation/continuation-wake.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply/get-reply.js";
-import type { stopSessionResetSubagents } from "../../../auto-reply/reply/session-reset-cleanup.js";
 import type {
   enqueueSessionDelivery,
   QueuedSessionDeliveryPayload,
@@ -19,8 +19,6 @@ import type {
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { sleep } from "../../../utils/sleep.js";
 import type { spawnSubagentDirect } from "../spawn/subagent-spawn.js";
-
-type ResetKillParams = Parameters<typeof stopSessionResetSubagents>[0];
 
 /** What the installed world does at each seam. */
 export type ContinuationForestSeams = {
@@ -30,65 +28,39 @@ export type ContinuationForestSeams = {
   reply?: typeof getReplyFromConfig;
   /** Continuation return wakes are process-external; the world records them. */
   wake?: typeof requestContinuationWake;
-  /** Runs inside a reset, after its retention marks and before upstream's reset kill. */
-  beforeResetKill?: (params: ResetKillParams) => Promise<void> | void;
   /** Runs after a durable session-delivery row is written, before its producer continues. */
   afterDeliveryRowWritten?: (payload: QueuedSessionDeliveryPayload, id: string) => Promise<void>;
   /** Every subsystem log line at info level or above. */
   logLine?: (subsystem: string, message: string) => void;
-  /** A wait on the clock begins; the returned callback runs when it ends. */
+  /** A product sleep begins; the returned callback runs when it ends. */
   clockWait?: () => () => void;
 };
 
 export const continuationForestSeams: ContinuationForestSeams = {};
 
-export function withForestSpawnOwner<M extends { spawnSubagentDirect: typeof spawnSubagentDirect }>(
-  actual: M,
-): M {
+export function spawnOwner(actual: { spawnSubagentDirect: typeof spawnSubagentDirect }) {
   return {
-    ...actual,
     spawnSubagentDirect: (...args: Parameters<typeof spawnSubagentDirect>) =>
       (continuationForestSeams.spawn ?? actual.spawnSubagentDirect)(...args),
   };
 }
 
-export function withForestReplyOwner<M extends { getReplyFromConfig: typeof getReplyFromConfig }>(
-  actual: M,
-): M {
+export function replyOwner(actual: { getReplyFromConfig: typeof getReplyFromConfig }) {
   return {
-    ...actual,
     getReplyFromConfig: (...args: Parameters<typeof getReplyFromConfig>) =>
       (continuationForestSeams.reply ?? actual.getReplyFromConfig)(...args),
   };
 }
 
-export function withForestWakeOwner<
-  M extends { requestContinuationWake: typeof requestContinuationWake },
->(actual: M): M {
+export function wakeOwner(actual: { requestContinuationWake: typeof requestContinuationWake }) {
   return {
-    ...actual,
     requestContinuationWake: (...args: Parameters<typeof requestContinuationWake>) =>
       (continuationForestSeams.wake ?? actual.requestContinuationWake)(...args),
   };
 }
 
-export function withForestResetKill<
-  M extends { stopSessionResetSubagents: typeof stopSessionResetSubagents },
->(actual: M): M {
+export function deliveryRows(actual: { enqueueSessionDelivery: typeof enqueueSessionDelivery }) {
   return {
-    ...actual,
-    stopSessionResetSubagents: async (params: ResetKillParams) => {
-      await continuationForestSeams.beforeResetKill?.(params);
-      return await actual.stopSessionResetSubagents(params);
-    },
-  };
-}
-
-export function withForestDeliveryRows<
-  M extends { enqueueSessionDelivery: typeof enqueueSessionDelivery },
->(actual: M): M {
-  return {
-    ...actual,
     enqueueSessionDelivery: async (...args: Parameters<typeof enqueueSessionDelivery>) => {
       const id = await actual.enqueueSessionDelivery(...args);
       await continuationForestSeams.afterDeliveryRowWritten?.(args[0], id);
@@ -97,11 +69,8 @@ export function withForestDeliveryRows<
   };
 }
 
-export function withForestLogLines<
-  M extends { createSubsystemLogger: typeof createSubsystemLogger },
->(actual: M): M {
+export function logLines(actual: { createSubsystemLogger: typeof createSubsystemLogger }) {
   return {
-    ...actual,
     createSubsystemLogger: (subsystem: string) => {
       const logger = actual.createSubsystemLogger(subsystem);
       const record =
@@ -114,9 +83,8 @@ export function withForestLogLines<
   };
 }
 
-export function withForestSleep<M extends { sleep: typeof sleep }>(actual: M): M {
+export function clock(actual: { sleep: typeof sleep }) {
   return {
-    ...actual,
     sleep: async (...args: Parameters<typeof sleep>) => {
       const ended = continuationForestSeams.clockWait?.();
       try {
