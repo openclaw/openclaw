@@ -572,6 +572,24 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
     expect((await fs.stat(path.join(real, "newdir"))).isDirectory()).toBe(true);
     await bridge.mkdirp(await pin(".", "mkdir", logical, physical));
   });
+
+  it("resolves literal whitespace-prefixed file names instead of their trimmed siblings", async () => {
+    const { workspaceDir, put, bridge } = await createFixture();
+    // A file whose name starts with a space is a distinct entry from its trimmed sibling.
+    await put(" x.txt", "literal bytes");
+    await put("x.txt", "decoy bytes");
+    await expect(bridge.readFile({ filePath: " x.txt" })).resolves.toEqual(
+      Buffer.from("literal bytes"),
+    );
+    await expect(bridge.readFile({ filePath: "x.txt" })).resolves.toEqual(
+      Buffer.from("decoy bytes"),
+    );
+    // Writes keep the literal name too: creating " y.txt" must not clobber a "y.txt".
+    await put("y.txt", "decoy bytes");
+    await bridge.writeFile({ filePath: " y.txt", data: "literal write" });
+    await expectFile(path.join(workspaceDir, " y.txt"), "literal write");
+    await expectFile(path.join(workspaceDir, "y.txt"), "decoy bytes");
+  });
 });
 
 it.runIf(process.platform === "linux").each(["remove", "rename"] as const)(

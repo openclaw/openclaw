@@ -1,0 +1,3 @@
+# Regression: literal whitespace-prefixed/suffixed remote-shell file names resolve
+# to their own entry instead of the trimmed sibling (#192041).
+18
