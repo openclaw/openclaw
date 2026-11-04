@@ -127,12 +127,14 @@ it.skipIf(hostPlatform !== "win32")("real Claude consumes exactly the relocated 
    });
   }});
  });
- const transport=await createClaudeCliTransport({context,args:context.args,initialize:{},currentContext:()=>context,
+ let transport:Awaited<ReturnType<typeof createClaudeCliTransport>>|undefined;
+ let deadline:ReturnType<typeof setTimeout>|undefined;
+ try {
+ transport=await createClaudeCliTransport({context,args:context.args,initialize:{},currentContext:()=>context,
   onMessage:async()=>{},onRequest:async()=>()=>({behavior:"deny",message:"No model prompt in this probe."}),onError:error=>{
    console.log(JSON.stringify({scenario:"real-claude-startup-diagnostic",message:formatErrorMessageForDisplay(error).replaceAll(context.cwd,"<private-probe>")}));rejectRules(error);
   }});
- const deadline=setTimeout(()=>{rejectRules(new Error("Offline Claude initialization exceeded 30 seconds"));transport.close();},30000);
- try {
+ deadline=setTimeout(()=>{rejectRules(new Error("Offline Claude initialization exceeded 30 seconds"));transport?.close();},30000);
   await transport.initialize();
   await transport.send({type:"control_request",request_id:"permission-probe",request:{subtype:"list_permission_rules"}});
   const response=await rules;
@@ -143,7 +145,7 @@ it.skipIf(hostPlatform !== "win32")("real Claude consumes exactly the relocated 
   expect(settingsFile).not.toBe(JSON.stringify(CLAUDE_RESTRICTED_SETTINGS));
   expect(modelRequests).toBe(0);
   console.log(JSON.stringify({scenario:"real-claude-permission-rules",version:metadata.version,admittedMcpNames:tools.length,exactNames:true,wildcardAdded:false,allowSource:"flagSettings",explicitDenials:["Write","Bash"],modelPrompts:0,realModelCredentials:0,syntheticStartupToken:true,modelRequests}));
- } finally {clearTimeout(deadline);transport.close();await transport.waitForExit();await observedChild?.waitForExtinction?.();endpoint.closeAllConnections();await new Promise<void>(resolve=>endpoint.close(()=>resolve()));}
+ } finally {clearTimeout(deadline);try {transport?.close();await transport?.waitForExit();await observedChild?.waitForExtinction?.();} finally {endpoint.closeAllConnections();await new Promise<void>(resolve=>endpoint.close(()=>resolve()));}}
  await expect(access(settingsFile!)).rejects.toThrow();
 },240000);
 
