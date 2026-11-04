@@ -384,7 +384,6 @@ describe("worker GitHub launch binding", () => {
     const retain = vi.fn(() => release);
     const operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "original-operator",
-      role: "operator",
       scopes: ["operator.write"],
       assertCurrent: () => {
         if (!current) {
