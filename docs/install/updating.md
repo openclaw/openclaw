@@ -1423,6 +1423,9 @@ ownership. It preserves later independent changes; conflicting records, settings
 or artifacts leave recovery unfinished instead of overwriting those changes or
 reporting the old Gateway ready. The updater performing the operation must contain
 this support; installing a newer candidate does not add it to an older parent.
+When recovery stays pending, the update prints the first failure below the
+unfinished-recovery refusal and names `openclaw update repair` when it can settle
+that plugin cohort.
 When a legacy Doctor fails or is interrupted, package rollback leaves compatible
 databases in place. Database restoration still requires the existing schema and
 write-generation checks; later independent changes prevent an unsafe restore.
