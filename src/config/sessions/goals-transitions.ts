@@ -96,7 +96,9 @@ export function buildCreatedSessionGoal(
 export function buildUpdatedSessionGoalStatus(
   entry: SessionEntry,
   options: {
-    status: Extract<SessionGoalStatus, "active" | "paused" | "blocked" | "complete">;
+    status:
+      | Extract<SessionGoalStatus, "active" | "paused" | "blocked" | "complete">
+      | "waiting_on_human";
     note?: string;
   },
   now: number,
@@ -104,6 +106,24 @@ export function buildUpdatedSessionGoalStatus(
   const accounted = accountSessionGoalUsage(entry, now);
   if (!accounted) {
     throw new SessionGoalTransitionError("goal not found");
+  }
+  // Human decisions use the existing durable blocker state, so queue settlement,
+  // stale-nudge admission, recovery, and operator resume share the same owner.
+  const waitingOnHuman = options.status === "waiting_on_human";
+  const status = options.status === "waiting_on_human" ? "blocked" : options.status;
+  const note = waitingOnHuman ? `Waiting on human: ${options.note?.trim() ?? ""}` : options.note;
+  if (waitingOnHuman) {
+    if (!options.note?.trim()) {
+      throw new SessionGoalTransitionError(
+        "waiting_on_human requires a note describing the pending decision",
+      );
+    }
+    if (accounted.status === "blocked" && accounted.lastStatusNote === note) {
+      return accounted;
+    }
+    if (accounted.status !== "active") {
+      throw new SessionGoalTransitionError(`goal is already ${accounted.status}`);
+    }
   }
   if (
     accounted.status === "complete" &&
@@ -121,11 +141,11 @@ export function buildUpdatedSessionGoalStatus(
   const freshTokenStart = resetsBudgetWindow ? resolveEntryFreshTotalTokens(entry) : undefined;
   const next: SessionGoal = {
     ...accounted,
-    status: options.status,
+    status,
     updatedAt: now,
-    ...(options.note ? { lastStatusNote: options.note } : {}),
+    ...(note ? { lastStatusNote: note } : {}),
     ...(options.status === "paused" ? { pausedAt: now } : {}),
-    ...(options.status === "blocked" ? { blockedAt: now } : {}),
+    ...(status === "blocked" ? { blockedAt: now } : {}),
     ...(options.status === "complete" ? { completedAt: accounted.completedAt ?? now } : {}),
   };
   if (accounted.status === "complete" && options.status === "active") {

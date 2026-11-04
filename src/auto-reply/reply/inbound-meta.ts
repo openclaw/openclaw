@@ -29,7 +29,7 @@ const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
 const ACTIVE_GOAL_CONTEXT_PREFIX = "Active goal: ";
 const ACTIVE_GOAL_CONTEXT_SUFFIX =
-  " — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.";
+  " — advance; keep active until fully achieved; use update_goal waiting_on_human immediately for required human authorization/decisions, with a note; otherwise block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.";
 const INBOUND_SOURCE_MODALITIES = new Set(["text", "voice", "audio", "image", "video", "document"]);
 
 export function formatActiveGoalContext(sessionEntry?: SessionEntry): string | undefined {
