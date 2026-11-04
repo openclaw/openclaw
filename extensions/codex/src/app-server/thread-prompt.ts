@@ -152,7 +152,10 @@ function hasAuthoredCodexBaseInstructions(
 /** OpenClaw's rendered base, whichever carrier holds it; ring-zero threads have none. */
 export function resolveCodexOpenClawBaseInstructions(
   params: CodexThreadPromptContext,
-  options: CodexThreadConfigurationOptions,
+  options: Pick<
+    CodexThreadConfigurationOptions,
+    "dynamicTools" | "nativeCodeModeEnabled" | "nativeModelProvider" | "hostSystemAgentActive"
+  >,
 ): string | undefined {
   return isCodexRingZeroThread(params, options.hostSystemAgentActive)
     ? undefined

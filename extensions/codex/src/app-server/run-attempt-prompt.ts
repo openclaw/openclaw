@@ -44,6 +44,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     workspaceBootstrapContext,
     buildActiveContextEngineRuntimeContext,
     baseDeveloperInstructions,
+    openClawBaseInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
     refreshableInstructions,
@@ -193,6 +194,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             resolveProjectionPromptBudgetTokens({ contextTokenBudget: configuredContextBudget }),
           inputTokens: (params.images?.length ?? 0) * IMAGE_BLOCK_TOKENS,
           systemPrompt: joinPresentSections(
+            openClawBaseInstructions,
             baseDeveloperInstructions,
             refreshableInstructions,
             buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
@@ -449,11 +451,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   let parentLocalEgress = false;
   let inferenceInstructions: string | undefined;
-  // Observability view of OpenClaw-managed developer instructions for reports,
-  // trajectory, and size estimates; not the complete native/provider prompt.
-  // Reuse registered relay text so diagnostics include every relay component.
-  // Hook context is already in that text, so only native policy precedes it.
-  // This combined projection must never feed native thread requests.
+  // Observability view of OpenClaw-managed developer instructions; not the complete
+  // native/provider prompt. Reuse registered relay text so diagnostics include every
+  // relay component. Hook context is already in that text, so only native policy
+  // precedes it. These projections must never feed native thread requests.
   const buildRenderedCodexDeveloperInstructions = () =>
     inferenceInstructions !== undefined
       ? joinPresentSections(
@@ -466,6 +467,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           refreshableInstructions,
           buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
         );
+  // Reports, hooks, trajectory, and history budgets also count the pinned base. The
+  // rotation fuse does not: native token counts already include it.
+  const buildRenderedCodexInstructions = () =>
+    joinPresentSections(openClawBaseInstructions, buildRenderedCodexDeveloperInstructions());
   const rebuildCodexPromptBuildFromCurrentProjection = async (preserveInstructions = false) => {
     const nextPromptBuild = await buildPromptFromCurrentInputs();
     turnState.promptBuild = preserveInstructions
@@ -657,7 +662,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       attempt: params,
       sessionKey: contextSessionKey,
       workspaceDir: effectiveWorkspace,
-      developerInstructions: buildRenderedCodexDeveloperInstructions(),
+      developerInstructions: buildRenderedCodexInstructions(),
       workspaceBootstrapContext,
       omitWorkspaceReferences,
       parentLocalEgress,
@@ -686,7 +691,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       parentLocalEgress = !usesSupervisionConnection;
       Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
     },
-    buildRenderedCodexDeveloperInstructions,
+    buildRenderedCodexInstructions,
     rebuildCodexTurnPromptTextFromCurrentProjection: () =>
       rebuildCodexPromptBuildFromCurrentProjection(true),
     applyNoContextEngineContinuityProjection,
