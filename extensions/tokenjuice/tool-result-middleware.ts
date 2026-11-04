@@ -7,6 +7,9 @@ import type {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createTokenjuiceOpenClawEmbeddedExtension } from "./runtime-api.js";
 
+// Tokenjuice's process-wide rule cache has one entry per cwd and no eviction.
+const retainedRuleScopes = new Set<string>();
+
 type TokenjuiceToolResultHandler = (
   event: {
     toolName: string;
@@ -73,23 +76,39 @@ export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMidd
       : typeof workdir === "string" && workdir.trim()
         ? workdir
         : process.cwd();
-    const next = await handler?.(
-      {
-        toolName: event.toolName,
-        input: event.args,
-        content: current.content,
-        details: normalizeDetails(event, current),
-        isError: event.isError,
-      },
-      { cwd },
-    );
-    return next
-      ? {
-          result: Object.assign({}, current, {
-            content: next.content ?? current.content,
-            details: next.details ?? current.details,
-          }),
-        }
-      : undefined;
+    const details = normalizeDetails(event, current);
+    // Include every cwd source the dependency may choose without changing its precedence.
+    const ruleScope = JSON.stringify([
+      typeof workdir === "string" ? workdir : undefined,
+      isRecord(details) && typeof details.cwd === "string" ? details.cwd : undefined,
+      cwd,
+    ]);
+    try {
+      const next = await handler?.(
+        {
+          toolName: event.toolName,
+          input: event.args,
+          content: current.content,
+          details,
+          isError: event.isError,
+        },
+        { cwd },
+      );
+      return next
+        ? {
+            result: Object.assign({}, current, {
+              content: next.content ?? current.content,
+              details: next.details ?? current.details,
+            }),
+          }
+        : undefined;
+    } finally {
+      retainedRuleScopes.add(ruleScope);
+      if (retainedRuleScopes.size >= 128) {
+        const { clearRuleCache } = await import("tokenjuice");
+        clearRuleCache();
+        retainedRuleScopes.clear();
+      }
+    }
   };
 }
