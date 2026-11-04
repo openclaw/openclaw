@@ -6,7 +6,7 @@ import { navigateMarkdownSession } from "../../components/markdown-session-links
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canPresentGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
   projectSessionObserverDigest,
@@ -281,7 +281,15 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const composerPendingReason = state.connected ? null : pendingReason;
     const auth = gatewaySnapshot.hello?.auth ?? null;
     const hasWriteScope = hasOperatorWriteAccess(auth);
-    const composerAccess = hasWriteScope || (!catalog && mutationAccess.composeScope.allowed);
+    const composerAccess = catalogKey
+      ? hasWriteScope ||
+        (catalogKey.catalogId === "beam" &&
+          canPresentGatewayMethod(
+            gatewaySnapshot,
+            "beam.owned.continue",
+            "operator.sessions.write",
+          ))
+      : hasWriteScope || mutationAccess.composeScope.allowed;
     const suggestionViewer =
       multiIdentity &&
       !selectedSessionArchived &&
