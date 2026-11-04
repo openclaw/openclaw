@@ -66,6 +66,9 @@ the idle limit is not a substitute for caller cleanup.
 | Build artifacts       | 16-vCPU Ubuntu x64    | 35 minutes      | 35 minutes                |
 | Windows               | 8- or 16-vCPU Windows | 75 minutes      | 75 minutes                |
 
+The ARM workflow's pull-request setup check uses `ubuntu-24.04-arm`. Manual
+dispatches retain the admitted ARM Testbox profile above.
+
 Routine remote proof uses the 16-class. The explicit high-memory workflow can
 use only four of the shared 32 slots; it does not add four more slots. Normal
 leases can also occupy those slots, so hash collisions may queue high-memory
@@ -437,8 +440,8 @@ A maintainer can dispatch `ci.yml` with `runner_backend=boat`,
 current same-repository PR head. The workflow branch and revision must match
 that head. Existing maintainer and exact-head admission applies.
 
-The first attempt runs only `build-artifacts` on `boat-xlarge`, using store-only
-dependency setup. The rest of the plan and its runner routes use `hybrid`.
+The default-shape first attempt runs only `build-artifacts` on `boat-xlarge`,
+using store-only dependency setup. Other runner routes use `hybrid`.
 Retries use the existing hosted route. Boat is not a repository backend value;
 this pilot does not change defaults, fork admission, or worker limits. The Boat
 GitHub integration, repository access, and account capacity must be configured
@@ -450,6 +453,13 @@ the 35-minute dispatch budget, and the plan selects the existing macOS runtime
 and published-driver artifact consumers even for a CI-only change. Those
 consumers remain selected on hosted retries. The macOS scope retains its native
 Node, Swift, and shared-package checks; no platform proof moves to Boat.
+
+With `ci_shape=main` and `test_runtime_policy=node`, the first attempt also routes
+`checks-node-compact-large-4` to `boat-xlarge` when the existing plan selects its
+8-class, serial, source-only row. It retains the planned groups, worker limits,
+8-GiB Node heap, and 60-minute job budget. This row uses store-only dependency
+setup; failed-job-only retries stay hosted even when preflight outputs are reused.
+Retire the build and row overrides when the general Boat backend replaces this pilot.
 
 ### RunsOn qualification
 

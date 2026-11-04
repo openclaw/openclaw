@@ -894,6 +894,9 @@ next mutation. Start a new job to use the updated settings.
 
 Without a running local Gateway, `openclaw worktrees gc` runs cleanup to completion under exclusive local state ownership and returns the completed summary. Offline mode cannot poll Gateway jobs with `--job`. The CLI includes partial results and recovery locations in its output and exits nonzero for partial cleanup.
 
+An empty or offline `--job` selector and an unreadable exact-state request report
+their specific input error and exit with code 1 before cleanup or removal.
+
 ## Gateway methods
 
 | Method                     | Purpose                                                                 |

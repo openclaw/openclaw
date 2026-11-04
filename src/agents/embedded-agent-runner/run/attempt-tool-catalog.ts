@@ -26,8 +26,8 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
 import { createToolSearchSelectionMatcher } from "../../tool-search-selection.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
   collectUniqueCatalogToolNames,
   TOOL_CALL_RAW_TOOL_NAME,
