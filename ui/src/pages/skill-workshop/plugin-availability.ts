@@ -2,7 +2,7 @@ import type { PluginsListResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { setPluginEnabled } from "../../lib/plugins/index.ts";
 
-export const SKILL_WORKSHOP_PLUGIN_ID = "skill-workshop";
+const SKILL_WORKSHOP_PLUGIN_ID = "skill-workshop";
 
 /** Why the Gateway serves no Workshop methods, and whether the page can turn the plugin on. */
 export type WorkshopPluginAvailability =
