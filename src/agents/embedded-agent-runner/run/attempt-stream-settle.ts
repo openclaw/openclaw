@@ -17,7 +17,7 @@ import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { prepareFlexProcessingParams } from "../../flex-processing.js";
+import { isFlexProcessingRequest } from "../../flex-processing.js";
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { configuredModelSupportsNativeVideo } from "../../model-input.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
@@ -472,22 +472,21 @@ export async function prepareEmbeddedAttemptTransport(input: {
     model: attempt.model,
     resolvedTransport,
   };
-  const { extraParams: resolvedExtraParams, isFlexProcessing } = prepareFlexProcessingParams({
-    model: attempt.model,
-    thinkingLevel: input.providerThinkingLevel,
-    extraParams:
-      attempt.runtimePlan?.transport.resolveExtraParams(extraParamsContext) ??
-      resolvePreparedExtraParams({
-        ...extraParamsContext,
-        cfg: attempt.config,
-        transportConfig: attempt.transportConfig,
-        provider: attempt.provider,
-        modelId: attempt.modelId,
-        providerRuntimeHandle: input.getProviderRuntimeHandle(),
-        agentDir: input.agentDir,
-        auth,
-      }),
-  });
+  const resolvedExtraParams =
+    attempt.runtimePlan?.transport.resolveExtraParams(extraParamsContext) ??
+    resolvePreparedExtraParams({
+      ...extraParamsContext,
+      cfg: attempt.config,
+      transportConfig: attempt.transportConfig,
+      provider: attempt.provider,
+      modelId: attempt.modelId,
+      providerRuntimeHandle: input.getProviderRuntimeHandle(),
+      agentDir: input.agentDir,
+      auth,
+    });
+  // Session speed can change between physical requests in the same turn.
+  const isFlexProcessing = () =>
+    isFlexProcessingRequest({ model: attempt.model, extraParams: resolvedExtraParams });
   const ownsCompaction = input.contextEngineInfo?.ownsCompaction === true;
   const suppressResponsesCompaction =
     attempt.model.api === "openai-responses" &&

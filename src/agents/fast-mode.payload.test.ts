@@ -15,7 +15,7 @@ import {
   resolveExtraParams,
 } from "./embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "./fast-mode.js";
-import { prepareFlexProcessingParams } from "./flex-processing.js";
+import { isFlexProcessingRequest } from "./flex-processing.js";
 import type { StreamFn } from "./runtime/index.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
@@ -114,8 +114,8 @@ async function checkSpeeds(cfg: OpenClawConfig, inherited?: string, key?: string
 }
 
 describe("fast-mode request assembly", () => {
-  it("lets automatic Flex reach the request while honoring explicit session speeds", async () => {
-    const cfg = config({ models: models({ flexProcessing: true }) });
+  it("applies Flex policy to the actual request while honoring explicit session speeds", async () => {
+    const cfg = config({ models: models({ serviceTier: "flex" }) });
     for (const [fastMode, tier] of [[undefined, "flex"], ...selections] as const) {
       const requestMode = resolveFastModeState({
         cfg,
@@ -123,18 +123,14 @@ describe("fast-mode request assembly", () => {
         model: model.id,
         sessionEntry: { fastMode },
       }).requestMode;
-      const prepared = prepareFlexProcessingParams({
-        model,
-        thinkingLevel: "high",
-        extraParams: {
-          ...resolveExtraParams({ cfg, provider: model.provider, modelId: model.id }),
-          fastMode: requestMode,
-        },
-      });
-      expect(await captureRequest(cfg, undefined, prepared.extraParams, true)).toMatchObject({
+      const extraParams = {
+        ...resolveExtraParams({ cfg, provider: model.provider, modelId: model.id }),
+        fastMode: requestMode,
+      };
+      expect(await captureRequest(cfg, undefined, extraParams, true)).toMatchObject({
         service_tier: tier,
       });
-      expect(prepared.isFlexProcessing()).toBe(fastMode === undefined);
+      expect(isFlexProcessingRequest({ model, extraParams })).toBe(fastMode === undefined);
     }
   });
 

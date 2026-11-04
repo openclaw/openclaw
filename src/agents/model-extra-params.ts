@@ -17,10 +17,7 @@ const FAST_MODE_CUTOFF_MODEL_PARAM_KEYS = new Set([
 
 // Native harnesses receive recognized values as typed run controls. Other value
 // shapes with the same keys remain authored provider request parameters.
-export function isAgentRuntimeModelParam(key: string, value: unknown, provider?: string): boolean {
-  if (key === "flexProcessing") {
-    return provider === "openai" && typeof value === "boolean";
-  }
+export function isAgentRuntimeModelParam(key: string, value: unknown): boolean {
   if (key === "thinking") {
     return (
       value === false ||
@@ -91,8 +88,7 @@ export function hasAuthoredProviderRequestParams(
   }
   return [sources.modelParams, sources.agentModelParams].some((modelParams) =>
     Object.entries(modelParams ?? {}).some(
-      ([key, value]) =>
-        !usesHostCompaction(key, value) && !isAgentRuntimeModelParam(key, value, params.provider),
+      ([key, value]) => !usesHostCompaction(key, value) && !isAgentRuntimeModelParam(key, value),
     ),
   );
 }

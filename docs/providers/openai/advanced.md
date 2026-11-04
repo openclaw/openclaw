@@ -292,17 +292,16 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
   <Accordion title="Flex Processing retries">
     Direct OpenAI Responses requests can wait longer and retry temporary Flex
-    capacity failures with `params.flexProcessing: true`:
+    capacity failures when `params.serviceTier: "flex"` is selected:
 
     ```json5
     {
       agents: {
         defaults: {
-          thinkingDefault: "high",
           models: {
             "openai/gpt-5.6-luna": {
               agentRuntime: { id: "openclaw" },
-              params: { flexProcessing: true },
+              params: { serviceTier: "flex" },
             },
           },
         },
@@ -310,9 +309,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     }
     ```
 
-    For `high` reasoning or above, the option selects `serviceTier: "flex"` when
-    no tier was authored. An explicitly authored Flex tier can use the policy at
-    other reasoning levels. Official regional OpenAI endpoints are supported.
+    The policy applies at any reasoning level. Official regional OpenAI
+    endpoints are supported.
     It allows up to 10 minutes before the first event and
     between events, and up to four retries for temporary capacity, overload,
     server, or request-timeout failures. Retries use exponential backoff with a
@@ -325,8 +323,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     and shared token-rate-limit fallback retain their existing behavior.
 
     The policy follows the effective request tier: an explicit non-Flex tier or
-    speed override disables it. It does not select Flex for lower or adaptive
-    reasoning, proxy endpoints, other APIs/providers, or native Codex turns.
+    speed override disables it. Proxy endpoints, other APIs/providers, and
+    native Codex turns retain their existing behavior.
     Retries continue the existing transcript under the normal recovery rules.
 
   </Accordion>
