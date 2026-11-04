@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createProviderOperationDeadline,
@@ -186,6 +187,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
   requireFreshProxyCatalog?: boolean;
 }): Promise<ClawRouterCapabilityOffer[]> {
   params.signal?.throwIfAborted();
+  captureProviderPhase("speech:discovery-remaining");
   const remaining = createProviderOperationTimeoutResolver({
     deadline: createProviderOperationDeadline({
       timeoutMs: Math.min(5_000, params.timeoutMs()),
@@ -194,6 +196,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
     defaultTimeoutMs: 5_000,
   });
   const { context } = params;
+  captureProviderPhase("speech:discovery-get-start");
   const { response, release, finalUrl } = await fetchWithTimeoutGuarded(
     context.baseUrl.replace(/\/+$/u, "") + "/catalog",
     { method: "GET", headers: context.headers, signal: params.signal },
@@ -242,5 +245,16 @@ export async function fetchClawRouterCapabilityOffers(params: {
   } finally {
     void response.body?.cancel().catch(() => undefined);
     await release();
+  }
+}
+
+// Temporary secret-free CI attribution probe; removed after the owned fixture is qualified.
+function captureProviderPhase(
+  phase: string,
+  values: Record<string, number | null | undefined> = {},
+) {
+  const probe = channel("openclaw.clawrouter.fixture-phase");
+  if (probe.hasSubscribers) {
+    probe.publish({ phase, wallMs: Date.now(), monotonicMs: performance.now(), ...values });
   }
 }

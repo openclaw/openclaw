@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -99,18 +100,25 @@ export function buildClawRouterSpeechProvider(
     );
     let store: AuthProfileStore | undefined;
     if (config.profileId) {
+      captureProviderPhase("speech:profile-import-start");
       const { ensureAuthProfileStoreAsync, listProfilesForProvider } =
         await import("openclaw/plugin-sdk/provider-auth");
+      captureProviderPhase("speech:profile-import-end");
+      captureProviderPhase("speech:agent-import-start");
       const { resolveDefaultAgentDir } =
         await import("openclaw/plugin-sdk/agent-harness-registration");
+      captureProviderPhase("speech:agent-import-end");
+      captureProviderPhase("speech:profile-read-start");
       store = await ensureAuthProfileStoreAsync(resolveDefaultAgentDir(cfg), {
         allowKeychainPrompt: false,
       });
+      captureProviderPhase("speech:profile-read-end");
       // The generic explicit-profile resolver locks identity, not provider ownership.
       if (!listProfilesForProvider(store, "clawrouter").includes(config.profileId)) {
         throw new Error("Selected speech auth profile is unavailable for ClawRouter");
       }
     }
+    captureProviderPhase("speech:auth-entry");
     const auth = await context.resolveApiKeyForProvider({
       provider: "clawrouter",
       ...(store ? { store } : {}),
@@ -138,10 +146,13 @@ export function buildClawRouterSpeechProvider(
       capability: "audio.speech",
       ...(config.profileId ? { profileId: config.profileId, lockedProfile: true } : {}),
     });
+    captureProviderPhase("speech:auth-exit");
     if (!auth.apiKey) {
       throw new Error("Configure a ClawRouter API key for speech");
     }
+    captureProviderPhase("speech:context-import-start");
     const { resolveClawRouterCapabilityHttpContext } = await import("./capability-offers.js");
+    captureProviderPhase("speech:context-import-end");
     return resolveClawRouterCapabilityHttpContext(
       {
         ...cfg,
@@ -169,11 +180,16 @@ export function buildClawRouterSpeechProvider(
       assertOkOrThrowProviderError,
       readProviderBinaryResponse,
     } = await import("openclaw/plugin-sdk/provider-http");
+    const deadline = createProviderOperationDeadline({
+      timeoutMs: req.timeoutMs,
+      label: "ClawRouter speech",
+    });
+    captureProviderPhase("speech:deadline", {
+      deadlineAtMs: deadline.deadlineAtMs,
+      timeoutMs: deadline.timeoutMs,
+    });
     const remaining = createProviderOperationTimeoutResolver({
-      deadline: createProviderOperationDeadline({
-        timeoutMs: req.timeoutMs,
-        label: "ClawRouter speech",
-      }),
+      deadline,
       defaultTimeoutMs: req.timeoutMs,
     });
     const base = readConfig(req.providerConfig, "tts.providers.clawrouter");
@@ -245,14 +261,22 @@ export function buildClawRouterSpeechProvider(
     ) {
       throw new Error("ClawRouter Azure speech requires valid XML text within 64 KiB");
     }
+    captureProviderPhase("speech:ssrf-import-start");
     const { mergeSsrFPolicies } = await import("openclaw/plugin-sdk/ssrf-runtime");
+    captureProviderPhase("speech:ssrf-import-end");
+    captureProviderPhase("speech:media-import-start");
     const { resolveGeneratedMediaMaxBytes } =
       await import("openclaw/plugin-sdk/media-generation-runtime");
+    captureProviderPhase("speech:media-import-end");
+    captureProviderPhase("speech:resolve-auth-start");
     const http = await resolveAuth(req.cfg, {
       ...req.providerConfig,
       model: config.model,
     });
+    captureProviderPhase("speech:resolve-auth-end");
+    captureProviderPhase("speech:offers-import-start");
     const { fetchClawRouterCapabilityOffers } = await import("./capability-offers.js");
+    captureProviderPhase("speech:offers-import-end");
     if (modelLess) {
       http.headers.delete("x-api-key");
     }
@@ -465,4 +489,15 @@ export function buildClawRouterSpeechProvider(
       return { ...result, sampleRate: 24_000 };
     },
   };
+}
+
+// Temporary secret-free CI attribution probe; removed after the owned fixture is qualified.
+function captureProviderPhase(
+  phase: string,
+  values: Record<string, number | null | undefined> = {},
+) {
+  const probe = channel("openclaw.clawrouter.fixture-phase");
+  if (probe.hasSubscribers) {
+    probe.publish({ phase, wallMs: Date.now(), monotonicMs: performance.now(), ...values });
+  }
 }
