@@ -3,6 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CDPSession, Page } from "playwright-core";
 import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
+import { isRetiredFetchInterceptionError } from "./cdp-fetch-interception.js";
 import {
   assertBrowserNavigationAllowed,
   type BrowserNavigationPolicyOptions,
@@ -67,9 +68,8 @@ export type NavigationAuthorityFenceDisposeOptions = {
 };
 
 /**
- * Resolve or fail one paused request. Chromium retires a paused request's id
- * when the page cancels it first (frame removed or re-navigated). That request
- * can no longer load, so there is nothing left to admit or deny.
+ * Resolve or fail one paused request. A request the page already cancelled has
+ * nothing left to admit or deny, so its retired id is not a navigation failure.
  */
 async function settleInterception(
   target: NavigationTargetSession,
@@ -79,7 +79,7 @@ async function settleInterception(
   try {
     await target.send(method, params);
   } catch (error) {
-    if (!(error instanceof Error && error.message.includes("Invalid InterceptionId"))) {
+    if (!isRetiredFetchInterceptionError(error)) {
       throw error;
     }
   }

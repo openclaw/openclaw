@@ -175,9 +175,11 @@ describe("navigation authority fence lifecycle", () => {
 
   it("removes the paused-request listener before detachment releases interception", async () => {
     let detached = false;
+    const lateCommands: string[] = [];
     const { session, errors, dispose } = await fence({
-      send: async () => {
+      send: async (method) => {
         if (detached) {
+          lateCommands.push(method);
           throw new Error("Invalid InterceptionId");
         }
       },
@@ -191,6 +193,10 @@ describe("navigation authority fence lifecycle", () => {
       },
     });
     expect(await dispose()).toBeUndefined();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(lateCommands).toEqual([]);
     expect(errors).toEqual([]);
     expect(session.listenerCount("Fetch.requestPaused")).toBe(0);
   });
