@@ -933,6 +933,97 @@ function buildModelProviderMocks(baseTime: number) {
   };
 }
 
+const MCP_RECORD_SCHEMA = {
+  type: "object",
+  propertyNames: { type: "string" },
+  additionalProperties: { type: ["string", "number", "boolean"] },
+};
+
+/** The Gateway's `mcp` schema shape, so one server's fields render as they really do. */
+const MCP_CONFIG_SCHEMA = {
+  type: "object",
+  title: "MCP",
+  additionalProperties: false,
+  properties: {
+    sessionIdleTtlMs: { type: "number", minimum: 0, title: "MCP Session Idle TTL (ms)" },
+    apps: {
+      type: "object",
+      title: "MCP Apps",
+      additionalProperties: false,
+      properties: {
+        enabled: { type: "boolean", title: "MCP Apps Enabled" },
+        sandboxOrigin: { type: "string", format: "uri", title: "MCP Apps Sandbox Origin" },
+        sandboxPort: { type: "integer", minimum: 1, title: "MCP Apps Sandbox Port" },
+      },
+    },
+    servers: {
+      type: "object",
+      title: "MCP Servers",
+      propertyNames: { type: "string" },
+      additionalProperties: {
+        type: "object",
+        additionalProperties: {},
+        properties: {
+          enabled: { type: "boolean", title: "MCP Server Enabled" },
+          command: { type: "string" },
+          args: { type: "array", items: { type: "string" } },
+          env: MCP_RECORD_SCHEMA,
+          cwd: { type: "string" },
+          url: { type: "string", format: "uri" },
+          transport: {
+            anyOf: [
+              { type: "string", const: "stdio" },
+              { type: "string", const: "sse" },
+              { type: "string", const: "streamable-http" },
+            ],
+          },
+          headers: MCP_RECORD_SCHEMA,
+          connectionTimeoutMs: { type: "number", title: "MCP Connect Timeout (ms)" },
+          requestTimeoutMs: { type: "number", title: "MCP Request Timeout (ms)" },
+          supportsParallelToolCalls: { type: "boolean", title: "MCP Parallel Tool Calls" },
+          auth: { type: "string", const: "oauth", title: "MCP Server Auth" },
+          sslVerify: { type: "boolean", title: "MCP TLS Verification" },
+          toolFilter: {
+            type: "object",
+            title: "MCP Tool Selection",
+            additionalProperties: false,
+            properties: {
+              include: { type: "array", items: { type: "string" }, title: "Included MCP Tools" },
+              exclude: { type: "array", items: { type: "string" }, title: "Excluded MCP Tools" },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+/** What a warm session reports: one server listed its tools, one needs a look. */
+const MCP_EFFECTIVE_TOOLS = {
+  agentId: "main",
+  profile: "full",
+  groups: [
+    {
+      id: "mcp",
+      label: "MCP",
+      source: "mcp",
+      tools: [
+        ["resolve-library-id", "Resolve a package name to a library identifier."],
+        ["query-docs", "Query up-to-date documentation for a library."],
+      ].map(([name, description]) => ({
+        id: `context7__${name}`,
+        label: name,
+        description,
+        rawDescription: description,
+        source: "mcp",
+        pluginId: "bundle-mcp",
+        mcpServer: "context7",
+        mcpToolName: name,
+      })),
+    },
+  ],
+};
+
 /**
  * Small but coherent config fixture so the schema-driven settings pages are
  * demoable: `config.schema` covers a boolean, an enum, numbers, and strings
@@ -969,7 +1060,12 @@ function buildConfigMocks(
           transport: "streamable-http",
           auth: "oauth",
         },
-        "local-tools": { command: "npx", args: ["some-mcp-server", "--stdio"], enabled: false },
+        "local-tools": {
+          command: "npx",
+          args: ["some-mcp-server", "--stdio"],
+          env: { API_TOKEN: "__OPENCLAW_REDACTED__" },
+          enabled: false,
+        },
       },
     },
   };
@@ -977,6 +1073,7 @@ function buildConfigMocks(
     type: "object",
     title: "OpenClaw config",
     properties: {
+      mcp: MCP_CONFIG_SCHEMA,
       logging: {
         type: "object",
         title: "Logging",
@@ -2329,6 +2426,9 @@ async function createChatPickerScenario(
       ...(fixture === "config-full" ? ["config.apply", "config.set"] : []),
       "config.patch",
       "config.schema",
+      "config.set",
+      "mcp.authLogin",
+      "tools.effective",
       "cron.add",
       "cron.get",
       "cron.list",
@@ -2716,6 +2816,7 @@ async function createChatPickerScenario(
       "config.set": configMocks.set,
       "config.apply": configMocks.apply,
       "config.schema": configMocks.schema,
+      "tools.effective": MCP_EFFECTIVE_TOOLS,
       "openclaw.chat.history": custodianHistory,
       "openclaw.changes.list": custodianChanges,
       // The sidebar recovers pending questions through question.list after the

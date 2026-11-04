@@ -173,15 +173,13 @@ suite.define(() => {
       await page.getByRole("link", { name: "Notifications", exact: true }).click();
       await page.getByRole("heading", { name: "Push notifications", exact: true }).waitFor();
 
-      const section = page.locator("#settings-communications-notifications");
+      const statusRow = page
+        .locator("#settings-communications-notifications .settings-row")
+        .filter({ has: page.getByText("Status", { exact: true }) });
       await expect.poll(() => page.locator(".config-toolbar").count()).toBe(0);
       await expect.poll(() => page.getByText("Saved", { exact: true }).count()).toBe(0);
-      await expect
-        .poll(() => section.locator(".settings-section__header .settings-status").count())
-        .toBe(1);
-      await expect
-        .poll(() => section.locator(".settings-section__header").textContent())
-        .toContain("Ready");
+      await expect.poll(() => statusRow.locator(".settings-status").count()).toBe(1);
+      await expect.poll(() => statusRow.textContent()).toContain("Ready");
 
       await capture(page, "05-notifications-ready-aligned.png", true);
     });
