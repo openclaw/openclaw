@@ -104,7 +104,9 @@ async function resolveGatewayVapidPublicKey(
     {},
   );
   if (!vapidPublicKey) {
-    throw new Error("Failed to retrieve VAPID public key");
+    throw new Error(
+      "Couldn’t retrieve the VAPID public key. Check the Gateway connection and try enabling notifications again.",
+    );
   }
   const padding = "=".repeat((4 - (vapidPublicKey.length % 4)) % 4);
   const base64 = (vapidPublicKey + padding).replace(/-/g, "+").replace(/_/g, "/");

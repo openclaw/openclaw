@@ -32,7 +32,7 @@ export function formatBrowserWebSocketConstructorError(err: unknown, url: string
         (isPlaintextWs
           ? " Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789."
           : " Check the Gateway WebSocket URL and browser security policy.")
-      : `Could not create the Gateway WebSocket: ${browserMessage}`,
+      : `Couldn’t create the Gateway WebSocket. Check the Gateway WebSocket URL and browser security policy. Details: ${browserMessage}`,
     details: { code, browserErrorName, browserMessage },
   };
 }

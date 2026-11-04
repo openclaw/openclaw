@@ -646,7 +646,10 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
     }
     if (!res.ok) {
       await publishFailure(
-        formatUiExternalText(res.error, "Failed to open config file"),
+        formatUiExternalText(
+          res.error,
+          "Couldn’t open the config file. Open the file manually on the Gateway device.",
+        ),
         res.path || state.configSnapshot?.path,
       );
       return;
