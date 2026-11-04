@@ -255,7 +255,7 @@ describe("renderSidebarUpdateSurface", () => {
         if (revokeAccess) {
           await vi.waitFor(() =>
             expect(modal.textContent).toContain(
-              "Status could not be refreshed. Check your connection and try again.",
+              "Couldn’t refresh update status. Check your connection and try again.",
             ),
           );
           expect(modal.querySelector(".update-confirmation-details")).toBeNull();

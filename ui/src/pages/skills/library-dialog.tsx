@@ -19,7 +19,7 @@ export function LibraryDialog(props: {
       onModal-cancel={(event: Event) => {
         // Native dismissal must not bypass the library's busy and discard checks.
         event.preventDefault();
-        props.library.close();
+        void props.library.close();
       }}
     >
       <form
@@ -50,7 +50,7 @@ export function LibraryDialog(props: {
         <DialogHeader
           title={props.editor?.title ?? t("skillLibrary.import")}
           closeDisabled={busy()}
-          onClose={() => props.library.close()}
+          onClose={() => void props.library.close()}
         />
         <div class={["oc-dialog__body", { "skill-library-import": !props.editor }]}>
           {props.children}

@@ -64,6 +64,30 @@ it("removes its failed unsealed capture after the backup work settles", async ()
   });
 });
 
+it("retains an original capture that completes after the former ten-minute deadline", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let elapsed = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    vi.spyOn(retention, "retireExpiredStandaloneDoctorCaptures").mockResolvedValue({
+      retired: [],
+      warnings: [],
+    });
+    const capture = vi
+      .spyOn(baselineCapture, "captureUpdateRecoveryBaseline")
+      .mockImplementation(async ({ assertCurrent, signal }) => {
+        await vi.advanceTimersByTimeAsync(15 * 60_000);
+        elapsed = 15 * 60_000;
+        assertCurrent();
+        signal?.throwIfAborted();
+        return captured(state.stateDir);
+      });
+    const result = await preserveDoctorOriginalState({ ...captureDefaults(), env: state.env });
+    expect(capture).toHaveBeenCalledOnce();
+    expect(result).toEqual({ findings: [], warnings: [] });
+  });
+});
+
 it.each(["admission", "worker"] as const)(
   "bounds %s capture work and reports recovery advice",
   async (work) => {
@@ -74,17 +98,17 @@ it.each(["admission", "worker"] as const)(
       vi.spyOn(baselineCapture, "captureUpdateRecoveryBaseline").mockImplementation(
         async ({ assertCurrent, signal }) => {
           if (work === "admission") {
-            elapsed = 10 * 60_000;
+            elapsed = 20 * 60_000;
             assertCurrent();
           } else {
-            await vi.advanceTimersByTimeAsync(10 * 60_000);
+            await vi.advanceTimersByTimeAsync(20 * 60_000);
           }
           signal?.throwIfAborted();
           return captured(state.stateDir);
         },
       );
       const result = await preserveDoctorOriginalState({ ...captureDefaults(), env: state.env });
-      expect(result.warnings.join("\n")).toContain("timed out after 600 s");
+      expect(result.warnings.join("\n")).toContain("timed out after 1200 s");
       expect(result.warnings.join("\n")).toContain("verified backup");
       expect(result.warnings.join("\n")).toContain("openclaw doctor --fix");
     });

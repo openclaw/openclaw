@@ -573,6 +573,8 @@ export function createPluginsPage(options: {
     return pluginMutationBlockedReason({
       connected,
       hasAdminAccess: hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
+      actorKind:
+        context.gateway.snapshot.hello?.auth.roleAllowsAdmin === false ? "member" : "browser",
       mutationAllowed,
     });
   }

@@ -150,6 +150,7 @@ export async function completeInitialSessionTurn(
       } catch (error) {
         if (canDispatch()) {
           showToast({
+            severity: "error",
             message: t("chat.nativeRuntimeRecovery.failed", { error: "" }).trim(),
             detail: formatUiErrorDetails(error),
           });

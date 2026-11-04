@@ -34,8 +34,7 @@ const catalog = {
         webSearch: "Web search",
         webSearchGloballyDisabled:
           "Web search is off in Gateway config (tools.web.search.enabled). It can’t be turned on for a single session.",
-        webSearchClearStaleEnable:
-          "Web search is off in Gateway config. Click to remove this session’s override.",
+        webSearchClearStaleEnable: "Web search is off in Settings. Remove this session’s override.",
         managePlugins: "Manage plugins",
         manageSkills: "Manage skills",
         addMcpServer: "Add MCP server",
