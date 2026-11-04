@@ -345,7 +345,7 @@ it("keeps sidebar and chat actions readable until the session management dialog 
   expect(en.sessionsView).toBe(sessionsView);
   expect(manager.t("profilePage.modelAccounts.loadMore")).toBe("Load more saved accounts");
   expect(manager.t("profilePage.modelAccounts.inventoryFailed")).toBe(
-    "Could not load saved accounts. Refresh to retry.",
+    "Couldn’t load saved accounts. Refresh to try again.",
   );
   expect(manager.t("profilePage.modelAccounts.connectAction")).toBe(
     "profilePage.modelAccounts.connectAction",

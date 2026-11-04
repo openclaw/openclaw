@@ -111,7 +111,7 @@ describe("Model Setup explicit discovery", () => {
           expect(session!.getStatus()).toBe("running");
           allowCommit.resolve();
           await terminal.promise;
-          await waitForText(page, "Connection verified");
+          await waitForText(page, "Model verified");
           expect(answers).toEqual([true, "synthetic-key"]);
         }
         expect(starts).toBe(1);
@@ -163,7 +163,7 @@ describe("Model Setup explicit discovery", () => {
         page.querySelector("openclaw-modal-dialog")!.dispatchEvent(new CustomEvent("modal-cancel"));
       cancel();
       if (failure === "missing wizard") {
-        await waitForText(page, "It may already have finished");
+        await waitForText(page, "This setup may have finished");
         expect(cancels).toBe(1);
         expect(pendingReceipt()).toBe(receipt);
         expect(modalButton(page, "Close")).toBeDefined();
