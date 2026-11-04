@@ -1074,6 +1074,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   );
 
   // Strings preview, [text] blocks, [text, true] error finals. null idles, true holds, false rejects.
+  // 0 idles after the close and the first static send fail.
   it.each([
     ["delta blocks", ["hello", ["lo world"]], ["hellolo world"]],
     ["covered tail", ["First.\n\nLast.", ["First."], ["\n\nLast."]], ["First.\n\nLast."]],
@@ -1086,6 +1087,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["rejection", ["A.", ["A."], "A. X.", true, false, "A. X. E.", [" X. E."]], ["A. X.", "X. E."]],
     ["late rejection", [["A."], "A. X.", true, "A. X. E.", ["Z."], false], ["A. X.", "X. E.Z."]],
     ["late error", [["A."], "A. X.", true, "A. X. E.", ["E.F", true], false], ["A. X.", "E.F"]],
+    ["failed recovery", ["A. B.", ["A."], ["B."], 0, "A. B. C."], ["A. B.", "A. B. C."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1104,6 +1106,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         expectSend(sendStructuredCardFeishuMock, { text: "A." });
         expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
         expect(streamingInstances).toHaveLength(name === "rejection" ? 1 : 2);
+      } else if (event === 0) {
+        sendStructuredCardFeishuMock.mockRejectedValueOnce(new Error("no"));
+        stream(0).closeWithResult.mockResolvedValueOnce({ visibleReplySent: false });
+        await options.onIdle?.();
       } else if (typeof event === "string") {
         result.replyOptions.onPartialReply?.({ text: event });
       } else {
@@ -1746,13 +1752,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it.each([
     { name: "newer silence", skippedIndex: 2, deliveryIndex: 1, rewritten: false, recover: false },
     { name: "unindexed failure", rewritten: false, recover: true },
-    {
-      name: "rewritten later block",
-      skippedIndex: 1,
-      deliveryIndex: 2,
-      rewritten: true,
-      recover: true,
-    },
+    { name: "rewritten block", skippedIndex: 1, deliveryIndex: 2, rewritten: true, recover: true },
   ])(
     "preserves fallback ordering after $name",
     async ({ skippedIndex, deliveryIndex, rewritten, recover }) => {

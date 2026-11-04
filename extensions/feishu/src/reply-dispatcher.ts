@@ -295,7 +295,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   type PendingStreamingDelivery = {
     result: FeishuReplyDeliveryResult;
     infoKind?: string;
-    previewCovered?: { text: string; epoch: number };
+    previewCovered?: { text: string; epoch: number; from: number };
     resolve: (result: FeishuReplyDeliveryResult) => void;
     reject: (error: unknown) => void;
   };
@@ -575,7 +575,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const deferStreamingDelivery = (
     result: FeishuReplyDeliveryResult,
     infoKind?: string,
-    previewCovered?: { text: string; epoch: number },
+    previewCovered?: { text: string; epoch: number; from: number },
   ): FeishuReplyDeliveryResultWithFinalization => {
     const { promise: finalization, resolve, reject } = createDeferred<FeishuReplyDeliveryResult>();
     pendingStreamingDeliveries.push({
@@ -889,7 +889,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               if (
                 providerFinalized !== closeOutcome.result &&
                 covered?.text.startsWith(closedPreviewText) &&
-                covered.text.length > closedPreviewText.length
+                covered.text.length > closedPreviewText.length &&
+                // Nothing before this block may be unshown, such as a block whose recovery failed.
+                covered.from <= closedPreviewText.length
               ) {
                 setClosedPreview(covered.text, covered.epoch);
               }
@@ -1310,7 +1312,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
         const shouldStreamText = info?.kind === "block" || info?.kind === "final";
         if (shouldStreamText && (streaming?.isActive() || matchingClosingStream)) {
-          let previewCovered: { text: string; epoch: number } | undefined;
+          let previewCovered: { text: string; epoch: number; from: number } | undefined;
           if (!matchingClosingStream) {
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
@@ -1321,6 +1323,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 previewCovered = {
                   text: previewText.slice(0, previewBlockOffset),
                   epoch: previewEpoch,
+                  from: consumedBefore,
                 };
               }
             }
