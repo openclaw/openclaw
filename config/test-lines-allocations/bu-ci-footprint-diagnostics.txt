@@ -1,0 +1,2 @@
+# CI footprint bounds/no-follow/hardlink contracts, termination traces, preparation failure detail.
+83

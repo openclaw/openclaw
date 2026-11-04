@@ -1113,6 +1113,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     if ("scratchFailure" in scenario) {
       vi.spyOn(fsPromises, "rm").mockRejectedValue(new Error("scratch cleanup failed"));
     }
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     let invocations = 0;
     const spawn = vi.spyOn(processOwner, "spawnOwnedVitestProcess").mockImplementation((spec) => {
       const child = new childProcess.ChildProcess();
@@ -1130,6 +1131,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       };
       const completion = new Promise<typeof outcome>((resolve) => {
         queueMicrotask(() => {
+          child.emit("exit", outcome.code, outcome.signal);
           child.emit("close", outcome.code, outcome.signal);
           resolve(outcome);
         });
@@ -1163,6 +1165,15 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     if (scenario.code !== 0 && !("unjoined" in scenario)) {
       expect(output.join("")).toContain(
         `[shard-failure:one] FAILED (exit ${scenario.signal === "SIGKILL" ? 137 : (scenario.code ?? 2)}${scenario.signal ? `, signal ${scenario.signal}` : ""})`,
+      );
+    }
+    if (scenario.signal === "SIGKILL" || "unjoined" in scenario) {
+      const traces = errors.mock.calls.map(([line]) => String(line));
+      expect(traces).toContainEqual(expect.stringContaining("[shard:termination] "));
+      expect(traces.join("\n")).toContain(
+        scenario.signal === "SIGKILL"
+          ? '"observedExit":{"code":null,"signal":"SIGKILL"}'
+          : '"causes":[{"name":"Error"}]',
       );
     }
     expect(receipts).toEqual(
