@@ -209,8 +209,8 @@ draft. Other printable keys still type into the composer; editing an answer fiel
 collapsed questions, and disabled controls keep their existing keyboard behavior.
 
 Saved split panes keep their conversation and arrangement. If an older saved pane
-does not identify its agent, it shows **Choose a conversation** instead of opening
-another agent's history. Select that pane, then choose **Home** or a conversation
+does not identify its agent, it shows **Choose a session** instead of opening
+another agent's history. Select that pane, then choose **Home** or a session
 in the sidebar. Home works even when you are already on its route; the other
 panes stay unchanged.
 
@@ -308,7 +308,7 @@ action for uploaded or managed previews.
 
 ## Collaborator drafts
 
-In a shared session, another person’s in-progress message stays visible when they pause typing. Draft previews update up to four times per second, keeping the latest text when input arrives faster. After 10 seconds without typing, its label changes from **is typing...** to **Draft** without removing the bubble or shifting the transcript. Typing again updates the same bubble. Sending, clearing the draft, leaving the composer, or leaving the session removes it. An idle preview fades out and smoothly closes its space during the final 300 milliseconds before its 30-second expiry, so an abandoned tab cannot leave it visible indefinitely. Typing again cancels the exit. With reduced motion enabled, the preview stays still and disappears at the same deadline without animation. Draft previews are temporary browser state, not saved messages; changing sessions or reconnecting clears them.
+In a shared session, another person’s in-progress message stays visible when they pause typing. Draft previews update up to four times per second, keeping the latest text when input arrives faster. After 10 seconds without typing, its label changes from **is typing…** to **Draft** without removing the bubble or shifting the transcript. Typing again updates the same bubble. Sending, clearing the draft, leaving the composer, or leaving the session removes it. An idle preview fades out and smoothly closes its space during the final 300 milliseconds before its 30-second expiry, so an abandoned tab cannot leave it visible indefinitely. Typing again cancels the exit. With reduced motion enabled, the preview stays still and disappears at the same deadline without animation. Draft previews are temporary browser state, not saved messages; changing sessions or reconnecting clears them.
 
 Busy sessions keep the first two people’s preview bubbles in arrival order, including their separate **Draft** lifecycle. Only actively typing people beyond those two appear in the overflow row: its bounded stack shows up to five avatars and one sentence. One, two, or three active overflow collaborators are named naturally; four or five use the first two names and the number of others. With more than five active overflow people, the sentence becomes **Several people are typing…**. Stopping, pausing, sending, or leaving removes a person from that row immediately; the row disappears when nobody remains active there, even while the first two preview bubbles retain drafts. Long names remain visibly part of the sentence, with responsive ellipsis and full accessible names; enlarged text can wrap. The group reserves two text lines. Its first avatar aligns with the preview avatars, and the sentence follows the actual stack width with a small gap. Active typing text uses a subtle shared shimmer; preview **Draft** labels, reduced motion, and forced colors retain legible static text. Editing or pausing does not reorder the two preview slots; a slot opens only when its person sends, leaves, clears, or expires.
 
@@ -371,7 +371,7 @@ Double-click selections stay inside the message where they started, including
 when you drag on the second click. Ordinary drag selection and Select All can
 still span multiple messages.
 
-Highlight text and choose **Add to chat** to attach a comment to the main
+Highlight text and choose **Add to message** to attach a comment to the main
 composer. The optional comment field starts on one line, grows to five lines,
 then scrolls internally. Confirm or press Enter to save; Shift+Enter adds a line.
 Saving keeps your existing draft and does not send a message.
@@ -1204,6 +1204,7 @@ and use extra space only as needed, without widening the surrounding prose or
 borrowing the space reserved for an open Details panel. Long
 cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
 Short values such as byte counts stay intact beside long filenames or hashes, including on mobile.
+Faded edges indicate hidden columns on that physical side, including in right-to-left locales.
 Table controls appear below the table. Wide desktop tables use compact icon-only
 controls; mobile and phone-landscape views retain larger touch controls and a visible
 **Expand table** label.

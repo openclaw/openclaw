@@ -46,7 +46,7 @@ async function expectPairingLayout(page: Page, mode: "node" | "qr") {
     const setup = document.querySelector<HTMLElement>(".device-pair-setup")!;
     const setupBounds = setup.getBoundingClientRect();
     const elements = document.querySelectorAll<HTMLElement>(
-      `.device-pair-setup, .device-pair-setup__body, .device-pair-setup__access label, .device-pair-setup__meta, .device-pair-setup__fallback, .device-pair-setup__footer, ${
+      `.device-pair-setup, .device-pair-setup__body, .device-pair-setup__meta, .device-pair-setup__fallback, .device-pair-setup__footer, ${
         currentMode === "node"
           ? ".device-pair-setup__command, .login-gate__command, .login-gate__command code, .device-pair-setup .chat-copy-btn"
           : ".device-pair-setup__qr-frame, .device-pair-setup__qr"
@@ -88,7 +88,8 @@ async function expectPairingLayout(page: Page, mode: "node" | "qr") {
   }, mode);
 
   expect(layout).toEqual({
-    accessCards: 3,
+    // A code is minted for one access level, so the choice is gone once it exists.
+    accessCards: 0,
     outside: [],
     pageOverflow: false,
     qrState: true,
@@ -347,9 +348,7 @@ suite.define(() => {
           await page.getByRole("status").getByText("Creating a secure setup code…").isVisible(),
         ).toBe(true);
         expect(await qr.count()).toBe(0);
-        expect(await page.locator('input[name="device-pair-access"]').first().isDisabled()).toBe(
-          true,
-        );
+        expect(await page.locator('input[name="device-pair-access"]').count()).toBe(0);
         await captureUiProof(page, "02-mobile-loading.png");
         await gateway.resolveDeferred("device.pair.setupCode", setupResult("setup-full", "full"));
         await qr.waitFor();
@@ -603,6 +602,7 @@ suite.define(() => {
           }
         }
         // The body scrolls while completion actions stay outside it in the pinned footer.
+        await page.setViewportSize({ height: 480, width: 390 });
         const scrollBody = setup.locator(".device-pair-setup__body");
         await scrollBody.hover();
         await page.mouse.wheel(0, 1000);

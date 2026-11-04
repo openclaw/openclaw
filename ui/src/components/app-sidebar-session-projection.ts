@@ -251,7 +251,7 @@ export class SidebarSessionProjection {
       data.sessionsLoading,
       data.sessionsStartupPending,
       data.sessionsResult?.hasMore,
-      data.sessionMutationError,
+      data.sessionListError,
       data.sessionCatalogRefreshStatus,
       data.loadingMoreSessionCatalogIds,
       data.childSessionErrorsByParent,

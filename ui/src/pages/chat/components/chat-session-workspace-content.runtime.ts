@@ -8,9 +8,12 @@ import {
 } from "../../../api/session-file-download.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
+import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { readBlobAsDataUrl } from "../../../lib/blob-data-url.ts";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { formatDateTimeMs, formatUnit } from "../../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { isTextAttachment } from "../../../lib/media-file-extension.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
@@ -530,7 +533,7 @@ function formatFileUpdatedAt(updatedAtMs: number | undefined): string | null {
     return null;
   }
   const updatedAt = new Date(updatedAtMs);
-  return Number.isNaN(updatedAt.getTime()) ? null : updatedAt.toISOString();
+  return Number.isNaN(updatedAt.getTime()) ? null : formatDateTimeMs(updatedAtMs);
 }
 
 function unsupportedFileSidebarContent(
@@ -538,15 +541,22 @@ function unsupportedFileSidebarContent(
   fallbackPath: string,
   download: (signal: AbortSignal) => Promise<SessionFileDownload | null>,
 ): Extract<SidebarContent, { kind: "markdown" }> {
+  registerFilePreviewEnglish();
   const filePath = file.workspacePath || file.path || fallbackPath;
   const updatedAt = formatFileUpdatedAt(file.updatedAtMs);
   const lines = [
-    "This file is not previewable inline.",
+    t("chat.detailPanel.filePreviewUnavailable"),
     "",
-    `- Path: ${formatMarkdownCodeSpan(filePath)}`,
-    file.mimeType ? `- Type: ${formatMarkdownCodeSpan(file.mimeType)}` : null,
-    typeof file.size === "number" ? `- Size: ${file.size.toLocaleString()} bytes` : null,
-    updatedAt ? `- Updated: ${updatedAt}` : null,
+    t("chat.detailPanel.filePreviewPath", { path: formatMarkdownCodeSpan(filePath) }),
+    file.mimeType
+      ? t("chat.detailPanel.filePreviewType", { type: formatMarkdownCodeSpan(file.mimeType) })
+      : null,
+    typeof file.size === "number"
+      ? t("chat.detailPanel.filePreviewSize", {
+          size: formatUnit({ value: file.size, unit: "byte", unitDisplay: "long" }),
+        })
+      : null,
+    updatedAt ? t("chat.detailPanel.filePreviewUpdated", { date: updatedAt }) : null,
   ].filter((line): line is string => line !== null);
   const content = lines.join("\n");
   return {

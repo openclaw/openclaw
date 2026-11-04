@@ -53,6 +53,13 @@ backup.
 
 ## Update implementation contract
 
+Candidate state inventory includes normally discovered global plugins even when
+there is no install record or explicit load path. Their private copies retain
+`extensions/<name>` discovery, including linked plugin directories, so candidate
+Doctor validates configured slots against the same installed plugins. The
+candidate snapshot worker must contain this fix; validation remains strict and
+live plugin configuration is unchanged.
+
 During captured SQLite migrations, candidate Doctor reads current update authority
 through private snapshots. It does not retain an independent WAL reader that can
 block its own next migration's exclusive lock. Exec approvals policy, local socket
@@ -1286,6 +1293,14 @@ Startup failure reports retain the last meaningful stderr diagnostic and the end
 of bounded log lines, with secrets redacted. Canary progress markers do not
 replace the failure reason. The installed updater owns this reporting, so an
 older updater can retain its earlier diagnostic behavior on the first update.
+During private rehearsal, exec SecretRef providers are deferred and their owners
+start cold with a recorded warning. Provider prerequisites such as a 1Password
+service-account token stay in the serving state directory; rehearsal does not
+copy them or run a resolver against that directory. SecretRefs remain references
+in the copied configuration. Credential availability is checked by the normally
+activated Gateway. This repair must be present in the candidate; it also applies
+to older updaters that supply the complete private-rehearsal environment.
+
 The canary verifies the copied plugin payloads without downloading replacements.
 It warns when plugin refresh is deferred; live update finalization owns that
 refresh, so a slow registry cannot consume the canary's startup budget.
@@ -2089,7 +2104,7 @@ openclaw doctor
 
 Migrates config, audits DM policies, and checks gateway health. Doctor also compares active official plugins with the OpenClaw package the managed service will load after restart. Resolve any plugin restart-readiness warning before continuing. Details: [Doctor](/gateway/doctor)
 
-Standalone repair cancels its pre-repair original-state capture after ten minutes.
+Standalone repair allows up to twenty minutes for its pre-repair original-state capture.
 If that capture times out, Doctor waits for its workers to settle and reports a
 warning with backup and retry instructions; repair-specific migration backups still apply.
 Doctor restores a managed Gateway it stopped, including after SIGINT, SIGTERM,
@@ -2124,6 +2139,12 @@ On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
 after a systemd user-manager re-exec. The manager's `--deserialize` argument and
 its protected `(sd-pam)` child do not count as runtime holders. Actual runtime
 references and unverified processes still preserve the affected artifacts.
+
+On Windows, the same reclamation reads native process command lines and working
+directories. Processes owned by another account and protected system processes
+do not hold runtimes, matching unreadable foreign processes on macOS. A process
+of the same account whose command line is hidden still preserves runtimes when
+its image is Node.js, Bun, or OpenClaw, and Doctor names its PID.
 
 On Windows, `openclaw doctor --fix` can also retry abandoned backup scratch
 cleanup after an older release reported `EPERM` while renaming to an

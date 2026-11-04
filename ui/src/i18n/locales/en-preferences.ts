@@ -50,7 +50,6 @@ const enPreferences = {
         "This theme hides Lobsterdex. Your collection and preferences are preserved.",
     },
     security: {
-      intro: "Review gateway access, tool policy, device authentication, and approvals.",
       title: "Security",
       accessTitle: "Access",
       agentsTitle: "Agents",
@@ -76,11 +75,20 @@ const enPreferences = {
         serve: "Tailscale Serve",
         funnel: "Tailscale Funnel",
         via: "Remote",
+        reportedLoopback: "This device only",
+        reportedAllInterfaces: "All interfaces",
+        reportedTailnet: "Tailnet",
+        reportedHost: "Custom host",
+        reportedServe: "Tailnet",
+        reportedFunnel: "Public internet",
       },
       networkAccessDetail: {
         configured: "As configured. A startup flag can override this.",
         configuredHost: "{host}, as configured. A startup flag can override this.",
         via: "Reached through {host}.",
+        listening: "Listening on {host}.",
+        reportedServe: "Through Tailscale Serve.",
+        reportedFunnel: "Through Tailscale Funnel.",
       },
       devicesDescription: "Paired devices, nodes, and pairing.",
       execPolicy: "Exec policy",
@@ -128,6 +136,9 @@ const enPreferences = {
       runtime: "Node {version} · PID {pid}",
     },
     personal: {
+      deviceOnly: "This preference is saved only on this device.",
+      shortcutsLocalOnly:
+        "Shortcuts are saved only on this device because their previous sync state is missing. Edit a shortcut to sync again.",
       browserOnly: en.quickSettings.personal.browserOnly,
     },
   },

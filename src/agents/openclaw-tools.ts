@@ -89,7 +89,6 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSkillLibraryTool } from "./tools/skill-library-tool.js";
-import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
@@ -604,17 +603,6 @@ function* createOpenClawToolsSteps(
     ...[createGetGoalTool, createCreateGoalTool, createUpdateGoalTool].map((createTool) =>
       createTool({ ...options, sessionAgentId }),
     ),
-    resolvedConfig
-      ? createConfiguredSkillWorkshopTool({
-          config: resolvedConfig,
-          agentId: sessionAgentId,
-          sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-          runId: options?.runId,
-          run: options?.skillWorkshop,
-          libraryAuthoring: options?.skillLibraryAuthoring,
-          sandboxed: options?.sandboxed,
-        })
-      : null,
     options?.skillLibraryAuthoring ? createSkillLibraryTool(options.skillLibraryAuthoring) : null,
     progressCardTool,
     ...swarmToolGroups.structuredOutput,

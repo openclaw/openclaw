@@ -95,7 +95,7 @@ function ghFixture(root: string, replies: Record<string, unknown>, name = "gh") 
   writeFileSync(
     command,
     `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 const replies = ${JSON.stringify(wire)};
@@ -944,7 +944,7 @@ describe("GitHub API commands", () => {
       writeFileSync(
         plainGh,
         `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(plainLog)}, JSON.stringify(args) + "\\n");
 if (process.env.GH_TOKEN !== "wrapper-only-token") throw new Error("missing wrapper authentication");

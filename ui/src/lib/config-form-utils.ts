@@ -320,3 +320,20 @@ export function removePathValue(
 ) {
   patchPathValue(obj, path, 0, undefined, "remove");
 }
+
+/**
+ * The named fields of a setting whose string form is shorthand for its `primary` field, such as a
+ * model and its fallbacks. Those fields describe the setting better than a raw JSON box can.
+ */
+export function objectFormOfUnion(schema: JsonSchema): JsonSchema | undefined {
+  const branches = (schema.anyOf ?? schema.oneOf ?? []).filter(
+    (branch) => schemaType(branch) !== "null",
+  );
+  const object = branches.find(
+    (branch) => schemaType(branch) === "object" && branch.properties?.primary !== undefined,
+  );
+  const string = branches.find(
+    (branch) => schemaType(branch) === "string" && !branch.enum && branch.const === undefined,
+  );
+  return branches.length === 2 && string ? object : undefined;
+}
