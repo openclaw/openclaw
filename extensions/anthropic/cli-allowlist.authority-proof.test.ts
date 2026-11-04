@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import path from "node:path";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as tempPath from "openclaw/plugin-sdk/temp-path";
@@ -30,7 +31,7 @@ createInterface({input:process.stdin}).on("line",line=>{
  else if(message.type==="user") ask("read","Read",{file_path:process.cwd()+"/admitted.txt"});
  else if(message.type==="control_response" && message.response.request_id==="read") {
   const decision=message.response.response;
-  admitted={behavior:decision.behavior,content:decision.behavior==="allow"?readFileSync(decision.updatedInput.file_path,"utf8"):undefined};
+  admitted={behavior:decision.behavior,message:decision.message,content:decision.behavior==="allow"?readFileSync(decision.updatedInput.file_path,"utf8"):undefined};
   ask("write","Write",{file_path:process.cwd()+"/forbidden.txt",content:"must not be written"});
  } else if(message.type==="control_response" && message.response.request_id==="write") {
   const denied=message.response.response;
@@ -57,7 +58,9 @@ function runProbe(context: Awaited<ReturnType<typeof createExecution>>["context"
 }
 
 it("retains real host policy at admitted Read and nearest-forbidden Write effects after relocation", async()=>{
- const {context}=await createExecution({nativeTools:["Read"],timeoutMs:60000,config:{tools:{exec:{security:"deny",ask:"off"}}}});
+ // Native Read follows the existing exec approval policy; full/off admits the
+ // declared Read, while availability still forbids undeclared Write and Bash.
+ const {context}=await createExecution({nativeTools:["Read"],timeoutMs:60000});
  const probe=await harness.context(fixture,{timeoutMs:60000,abortSignal:AbortSignal.timeout(60000)});
  await writeFile(path.join(probe.cwd,"admitted.txt"),"synthetic admitted content");
  if(hostPlatform!=="win32") injectWindowsLimit();
@@ -72,13 +75,19 @@ it("retains real host policy at admitted Read and nearest-forbidden Write effect
 
 it.skipIf(hostPlatform !== "win32")("real Claude consumes exactly the relocated grants and retains explicit denials without model credentials", async()=>{
  const context=await harness.context("",{timeoutMs:180000,abortSignal:AbortSignal.timeout(180000)});
+ for(const name of ["SystemRoot","SYSTEMROOT","ComSpec","COMSPEC","PATHEXT"]) {
+  if(process.env[name]) context.env[name]=process.env[name]!;
+ }
+ Object.assign(context.env,{USERPROFILE:context.cwd,TEMP:context.cwd,TMP:context.cwd,
+  APPDATA:path.join(context.cwd,"AppData/Roaming"),LOCALAPPDATA:path.join(context.cwd,"AppData/Local"),CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS:"1"});
+ await mkdir(context.env.APPDATA!,{recursive:true});await mkdir(context.env.LOCALAPPDATA!,{recursive:true});
  const npm=path.join(path.dirname(process.execPath),"node_modules/npm/bin/npm-cli.js");
  await access(npm);
  execFileSync(process.execPath,[npm,"install","--prefix",context.cwd,"--ignore-scripts","--no-package-lock","--omit=dev","@anthropic-ai/claude-code@2.1.280"],{timeout:180000,stdio:"pipe"});
  const packageRoot=path.join(context.cwd,"node_modules/@anthropic-ai/claude-code");
  const metadata=JSON.parse(await readFile(path.join(packageRoot,"package.json"),"utf8"));
  const entry=path.join(packageRoot,typeof metadata.bin === "string" ? metadata.bin : metadata.bin.claude);
- context.args=[entry,"--print","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-prompt-tool","stdio","--permission-mode","default","--setting-sources","","--no-session-persistence","--strict-mcp-config","--mcp-config","{}","--settings",JSON.stringify(CLAUDE_RESTRICTED_SETTINGS),"--allowedTools",tools.join(","),"--tools","Read","--disallowedTools","Write,Bash"];
+ context.args=[entry,"--print","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-prompt-tool","stdio","--permission-mode","default","--setting-sources","","--no-session-persistence","--strict-mcp-config","--mcp-config",'{"mcpServers":{}}',"--settings",JSON.stringify(CLAUDE_RESTRICTED_SETTINGS),"--allowedTools",tools.join(","),"--tools","Read","--disallowedTools","Write,Bash"];
  let resolveRules:(value:unknown)=>void;
  let rejectRules:(error:unknown)=>void;
  const rules=new Promise<unknown>((resolve,reject)=>{resolveRules=resolve;rejectRules=reject;});
@@ -101,7 +110,9 @@ it.skipIf(hostPlatform !== "win32")("real Claude consumes exactly the relocated 
   }});
  });
  const transport=await createClaudeCliTransport({context,args:context.args,initialize:{},currentContext:()=>context,
-  onMessage:async()=>{},onRequest:async()=>()=>({behavior:"deny",message:"No model prompt in this probe."}),onError:error=>rejectRules(error)});
+  onMessage:async()=>{},onRequest:async()=>()=>({behavior:"deny",message:"No model prompt in this probe."}),onError:error=>{
+   console.log(JSON.stringify({scenario:"real-claude-startup-diagnostic",message:formatErrorMessageForDisplay(error).replaceAll(context.cwd,"<private-probe>")}));rejectRules(error);
+  }});
  try {
   await transport.initialize();
   await transport.send({type:"control_request",request_id:"permission-probe",request:{subtype:"list_permission_rules"}});
