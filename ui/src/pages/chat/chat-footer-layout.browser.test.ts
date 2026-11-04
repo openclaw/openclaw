@@ -436,7 +436,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
                 ${nest("sidebar-region__header", '<header class="chat-pane__header">Session</header>')}
                 <div class="sidebar-region__primary" data-region="main"><section class="chat">${chat}</section></div>
               </div></main>
-              <openclaw-toast-host data-toast-placement="shell">${nest("app-toast", "Connection notice")}</openclaw-toast-host>
+              <openclaw-toast-host data-toast-placement="shell">${nest("app-toast-lanes > app-toast-lane app-toast-lane--top-center > app-toast", "Connection notice")}</openclaw-toast-host>
             </div>
           </body></html>`);
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
