@@ -1,5 +1,6 @@
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { z } from "zod";
+import { MAX_API_RESPONSE_LABEL } from "../../limits.js";
 import type {
   ActivityEntry,
   DiscordMessage,
@@ -7,7 +8,13 @@ import type {
   SourceRuntime,
   SourceStatus,
 } from "../../types.js";
-import { createResponseParser, parseApiBase, readApiResponse } from "../http.js";
+import {
+  ApiResponseReadError,
+  createResponseParser,
+  describeResponseOverflow,
+  parseApiBase,
+  readApiResponse,
+} from "../http.js";
 
 const retrySchema = z.object({ retry_after: z.number().finite().nonnegative() });
 
@@ -82,10 +89,17 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
           let result: Awaited<ReturnType<typeof request>>;
           try {
             result = await request(url.toString());
-          } catch {
+          } catch (error) {
+            if (error instanceof ApiResponseReadError && error.kind === "too-large") {
+              throw new Error(
+                `Discord response exceeded the ${MAX_API_RESPONSE_LABEL} limit${describeResponseOverflow(error)}; check for oversized API output, then regenerate the affected days.`,
+                { cause: error },
+              );
+            }
             if (retries >= 2) {
               throw new Error(
                 "Discord request failed after retries; check connectivity and API access.",
+                { cause: error },
               );
             }
             await sleepWithAbort(1000 * 2 ** retries++);
