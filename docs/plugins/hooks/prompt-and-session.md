@@ -469,12 +469,13 @@ turn; use the explicit fallback below when needed.
 
 Steering requires `plugins.entries.<id>.hooks.allowPromptModification` (enabled
 unless explicitly set to `false`) and a live plugin instance. Disabled prompt
-modification returns `steered: false`; calling `steerActiveRun` from an already
-unloaded plugin instance throws an error.
-The host and guarded runtime recheck the plugin instance before dispatch,
-including after transcript persistence. Disabling or disposing the plugin while
-guidance is pending rejects the steer with `steered: false` rather than silently
-dropping it.
+modification returns `steered: false`. Calling `steerActiveRun` from an already
+unloaded plugin instance, or disabling or disposing the plugin while the host is
+still preparing the steer, rejects the returned promise with an error. Once the
+host hands the guidance to the active run, the guarded runtime rechecks the
+plugin instance before dispatch, including after transcript persistence, and an
+unload detected there returns `steered: false`. Neither path silently drops the
+guidance, so handle both the rejection and `result.steered`.
 The input remains hidden, plugin-authored internal context, with provenance
 `{ kind: "internal_system", sourceTool: "plugin:<id>" }`. It carries no sender or
 owner authority and never answers a pending user question. The Control UI alone
