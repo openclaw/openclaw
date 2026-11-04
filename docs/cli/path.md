@@ -45,7 +45,7 @@ grep, regex, or parser per file kind. The same `oc://` path can be validated,
 resolved, searched, dry-run, and written from the terminal, which keeps narrow
 automation reviewable and replayable. It preserves the rest of the file, so
 writing one leaf does not disturb its comments, line endings, or nearby
-formatting.
+formatting. YAML edits also retain an existing UTF-8 byte order mark (BOM).
 
 Use it when the thing you want has a logical address, but the file shape
 varies:
@@ -220,6 +220,11 @@ For JSONL, `**` can span both the physical line and nested value keys:
 `insertion-point`, with a 1-based line number. Leaf values are surfaced as
 text plus a `leafType` so plugin authors can render previews without
 depending on the per-kind AST shape.
+
+Markdown frontmatter string reads decode YAML quoting and inline comments:
+`key: value # note` resolves to `value`. A quoted `#` or adjacent hash such as
+`a#b` remains part of the string, and non-string scalar spelling such as
+`00123` is preserved. Reads leave the source bytes unchanged.
 
 ## Mutation contract
 

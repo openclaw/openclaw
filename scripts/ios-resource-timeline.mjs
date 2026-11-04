@@ -209,11 +209,14 @@ function delta(current, previous) {
 
 function processRows(output, previous, elapsedMs) {
   const rows = output.split("\n").flatMap((line) => {
-    const match = /^\s*(\d+)\s+(\d+)\s+([\d:.-]+)\s+(\d+)\s+([A-Za-z+<>=-]+)\s+(.+)$/u.exec(line);
+    const match =
+      /^\s*(\d+)\s+(\d+)\s+([\d:.-]+)\s+(\d+)\s+([A-Za-z+<>=-]+)\s+(\d+(?:\.\d+)?)\s+(.+)$/u.exec(
+        line,
+      );
     if (!match) {
       return [];
     }
-    const [, pid, ppid, time, rss, state, command] = match;
+    const [, pid, ppid, time, rss, state, recent, command] = match;
     const [day, clock] = time.includes("-") ? time.split("-") : ["0", time];
     const cpuMs =
       (Number(day) * 86_400 + clock.split(":").reduce((s, n) => s * 60 + Number(n), 0)) * 1_000;
@@ -254,6 +257,7 @@ function processRows(output, previous, elapsedMs) {
         rssBytes: Number(rss) * 1024,
         cpuMs,
         cpuDeltaMs,
+        cpuRecentPercent: Number(recent),
         cpuPercent:
           cpuDeltaMs === null ? null : Math.round((cpuDeltaMs / elapsedMs) * 10_000) / 100,
       },
@@ -276,8 +280,10 @@ function processSummary(rows) {
       count: 0,
       cpuObservedCount: 0,
       cpuDeltaMs: 0,
+      cpuRecentPercent: 0,
     };
     group.count += 1;
+    group.cpuRecentPercent += row.cpuRecentPercent;
     if (row.cpuDeltaMs !== null) {
       group.cpuObservedCount += 1;
       group.cpuDeltaMs += row.cpuDeltaMs;
@@ -289,7 +295,7 @@ function processSummary(rows) {
     runnableCount: rows.filter((row) => row.state.startsWith("R")).length,
     uninterruptibleCount: rows.filter((row) => row.state.startsWith("U")).length,
     // All observed rows contribute, including those outside the top-process display.
-    groups: [...groups.values()].toSorted((a, b) => b.cpuDeltaMs - a.cpuDeltaMs),
+    groups: [...groups.values()].toSorted((a, b) => b.cpuRecentPercent - a.cpuRecentPercent),
   };
 }
 
@@ -473,7 +479,10 @@ function startTimeline(output) {
     if (performance.now() < nextProcessAt) {
       probeStatus.ps = { wallMs: 0, outcome: "not-due" };
     } else {
-      const processOutput = await probe("/bin/ps", ["-axo", "pid=,ppid=,time=,rss=,state=,comm="]);
+      const processOutput = await probe("/bin/ps", [
+        "-axo",
+        "pid=,ppid=,time=,rss=,state=,%cpu=,comm=",
+      ]);
       // Intentional skips retain the CPU baseline; earlier probes may delay the next observation.
       const processAt = performance.now();
       processIntervalMs = previousProcesses.size ? Math.round(processAt - previousProcessAt) : null;
@@ -490,7 +499,8 @@ function startTimeline(output) {
       Object.keys(cpu).map((key) => [key, delta(cpu[key], previousCpu[key])]),
     );
     const total = Object.values(cpuDeltas).reduce((sum, n) => sum + n, 0);
-    const topCpu = rows.toSorted((a, b) => (b.cpuDeltaMs ?? 0) - (a.cpuDeltaMs ?? 0)).slice(0, 6);
+    // Native decaying CPU averages also rank new processes and fresh post-timeout baselines.
+    const topCpu = rows.toSorted((a, b) => b.cpuRecentPercent - a.cpuRecentPercent).slice(0, 6);
     const topMemory = rows.toSorted((a, b) => b.rssBytes - a.rssBytes).slice(0, 6);
     const selected = [...new Map([...topCpu, ...topMemory].map((row) => [row.pid, row])).values()];
     samples += 1;

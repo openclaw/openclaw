@@ -437,6 +437,10 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
       cfg: resolveSandboxConfigForAgent(createConfig("podman", false)),
     }),
   );
+  // Discovery can become unavailable after admission; the prepared target still works.
+  mocks.validateSandboxContainerEngineTarget.mockRejectedValue(new Error("discovery unavailable"));
+  mocks.execContainerRaw.mockResolvedValueOnce(rawResult());
+  await expect(backend.runShellCommand({ script: "true" })).resolves.toMatchObject({ code: 0 });
   const execSpec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
 
   expect(mocks.ensureSandboxContainer).toHaveBeenCalledWith(

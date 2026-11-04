@@ -30,6 +30,7 @@ import {
 } from "./legacy-config-migrations.runtime.models.refs.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 import { normalizeLegacyMistralModelCost } from "./legacy-mistral-model-cost.js";
+import { normalizeKnownModelRef } from "./legacy-model-ref-normalization.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 import { modelEntryWithRuntimePolicy } from "./legacy-runtime-model-policy.js";
 import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
@@ -158,16 +159,19 @@ function* runtimePins(
  * canonical provider with an exact runtime pin, which outranks provider-wide, wildcard, and bare
  * model pins. When config already routes that provider's models (or bare model keys) to another
  * runtime, the operator runs both routes side by side and the rewrite could silently move one
- * onto the other, changing billing. Keep that legacy provider's refs as authored and say why.
+ * onto the other, changing billing. Explicit canonical/CLI primary and fallback pairs also
+ * keep their separate routes without requiring runtime pins. Retain the authored refs and say why.
  */
-function retainPinnedLegacyCliProviders(
+function retainConflictingLegacyCliProviders(
   cfg: OpenClawConfig,
   blockedModelIdentities: ReadonlySet<LegacyCodexModelIdentity> | undefined,
   warnings: string[],
 ): ReadonlySet<string> {
+  const migrate = (ref: string) =>
+    migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
   const legacy = new Map<string, { ref: string; migrated: LegacyRuntimeRefMigration }>();
   rewriteModelRefs(cfg, "config", [], (ref) => {
-    const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
+    const migrated = migrate(ref);
     if (migrated?.cli && !legacy.has(migrated.legacyProvider)) {
       legacy.set(migrated.legacyProvider, { ref, migrated });
     }
@@ -188,6 +192,38 @@ function retainPinnedLegacyCliProviders(
           `Kept legacy ${migrated.legacyProvider}/* model refs: ${pin.path} routes models to the ${sanitizeForLog(runtime)} runtime, and rewriting ${sanitizeForLog(ref)} to ${sanitizeForLog(migrated.ref)} could switch a route between ${sanitizeForLog(runtime)} and ${migrated.runtime}. Both routes keep working as configured.`,
         );
         break;
+      }
+    }
+  }
+  for (const [path, agent] of agentScopes(cfg.agents)) {
+    for (const [suffix, owner] of [
+      ["model", agent],
+      ["subagents.model", agent.subagents],
+    ] as const) {
+      const selection = isRecord(owner) ? owner.model : undefined;
+      if (!isRecord(selection) || !Array.isArray(selection.fallbacks)) {
+        continue;
+      }
+      const refs = [selection.primary, ...selection.fallbacks].filter(
+        (ref): ref is string => typeof ref === "string",
+      );
+      for (const ref of refs) {
+        const migrated = migrate(ref);
+        if (
+          !migrated?.cli ||
+          retained.has(migrated.legacyProvider) ||
+          !refs.some(
+            (candidate) =>
+              !migrate(candidate) &&
+              (normalizeKnownModelRef(candidate) ?? candidate.trim()) === migrated.ref,
+          )
+        ) {
+          continue;
+        }
+        retained.add(migrated.legacyProvider);
+        warnings.push(
+          `Kept legacy ${migrated.legacyProvider}/* model refs: ${path}.${suffix} selects both canonical and legacy CLI references for ${sanitizeForLog(migrated.ref)}; rewriting them would collapse a configured fallback route.`,
+        );
       }
     }
   }
@@ -351,7 +387,7 @@ export function normalizeLegacyRuntimeModelRefs(
       }
     }
   }
-  const retained = retainPinnedLegacyCliProviders(next, blockedModelIdentities, warnings);
+  const retained = retainConflictingLegacyCliProviders(next, blockedModelIdentities, warnings);
   const migrate: LegacyRuntimeRefMigrator = (ref) => {
     const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
     return migrated && !retained.has(migrated.legacyProvider) ? migrated : null;

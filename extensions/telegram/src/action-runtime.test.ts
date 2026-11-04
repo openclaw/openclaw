@@ -21,6 +21,7 @@ import {
   resetTelegramMessageCacheForTest,
 } from "./runtime.test-support.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
+import { getTopicName, resolveTelegramDirectTopicNameCacheScope } from "./topic-name-cache.js";
 
 describe("Telegram registered action authority and input contracts", () => {
   const fixture = useTelegramHttpFixture();
@@ -73,19 +74,21 @@ describe("Telegram registered action authority and input contracts", () => {
     await state.cleanup();
   });
 
+  const pollInput = { question: "Ready?", answers: ["Yes", "No"] };
+  it.each([
+    { label: "true", params: { silent: true }, notification: { disable_notification: true } },
+    { label: "false", params: { silent: false }, notification: {} },
+    { label: "omitted", params: {}, notification: {} },
+  ])("preserves silent sticker delivery ($label)", async ({ params, notification }) => {
+    cfg.channels!.telegram!.actions = { sticker: true };
+    await invoke("sticker", { to: "-1001", stickerId: ["sticker-file"], ...params });
+    const fields = { chat_id: "-1001", sticker: "sticker-file", ...notification };
+    expect(requests).toEqual([{ method: "sendSticker", fields }]);
+  });
+
   it.for([
-    {
-      action: "poll",
-      params: { question: "Ready?", answers: ["Yes", "No"] },
-      method: "sendPoll",
-      revoke: false,
-    },
-    {
-      action: "poll",
-      params: { question: "Ready?", answers: ["Yes", "No"] },
-      method: "sendPoll",
-      revoke: true,
-    },
+    { action: "poll", params: pollInput, method: "sendPoll", revoke: false },
+    { action: "poll", params: pollInput, method: "sendPoll", revoke: true },
     { action: "sticker", params: { fileId: "fixture-sticker" }, revoke: true },
     { action: "topic-create", params: { name: "Guarded topic" }, revoke: true },
     { action: "topic-edit", params: { threadId: 77, name: "Guarded topic" }, revoke: true },
@@ -151,6 +154,34 @@ describe("Telegram registered action authority and input contracts", () => {
         }
         await pending.catch(() => undefined);
       }
+    },
+  );
+
+  it.each(["123", "-1001"])(
+    "records topic edits in the metadata owner's scope for %s",
+    async (chatId) => {
+      cfg.agents = { ownership: "explicit", entries: { main: {}, ops: {} } };
+      cfg.bindings = [{ agentId: "ops", match: { channel: "telegram", accountId: "alerts" } }];
+      cfg.channels!.telegram!.defaultAccount = "alerts";
+      cfg.channels!.telegram!.accounts = { alerts: { botToken: "654321:topic-edit-fixture" } };
+      cfg.channels!.telegram!.actions = { editForumTopic: true };
+      await invoke("topic-edit", { chatId, threadId: 77, name: "Explicit topic title" });
+      const ownerStore = resolveStorePath(cfg.session?.store, { agentId: "ops" });
+      const scope =
+        chatId === "123"
+          ? resolveTelegramDirectTopicNameCacheScope(ownerStore, "alerts")
+          : ownerStore;
+      expect(await getTopicName(chatId, 77, scope)).toBe("Explicit topic title");
+      expect(
+        await getTopicName(
+          chatId,
+          77,
+          resolveTelegramDirectTopicNameCacheScope(ownerStore, "other"),
+        ),
+      ).toBeUndefined();
+      expect(
+        await getTopicName(chatId, 77, resolveStorePath(cfg.session?.store, { agentId: "main" })),
+      ).toBeUndefined();
     },
   );
 
@@ -457,13 +488,7 @@ describe("Telegram registered action authority and input contracts", () => {
     { action: "send", params: { to: "123" }, error: /content required/i },
     {
       action: "poll",
-      params: {
-        to: "123",
-        question: "Ready?",
-        answers: ["Yes", "No"],
-        pollAnonymous: true,
-        pollPublic: true,
-      },
+      params: { to: "123", ...pollInput, pollAnonymous: true, pollPublic: true },
       error: /mutually exclusive/i,
     },
     {
