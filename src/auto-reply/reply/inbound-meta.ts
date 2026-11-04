@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveInboundSourceModalityFromOwnMedia } from "../../channels/turn/source-modality.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -314,19 +315,7 @@ function resolveInboundSourceModality(ctx: TemplateContext): string | undefined 
   if (sourceModality && INBOUND_SOURCE_MODALITIES.has(sourceModality)) {
     return sourceModality;
   }
-  const resolveMediaType = (value: unknown): string | undefined => {
-    const mediaType = normalizePromptMetadataString(value);
-    if (!mediaType) {
-      return undefined;
-    }
-    const slash = mediaType.indexOf("/");
-    const mediaKind = (slash > 0 ? mediaType.slice(0, slash) : mediaType).toLowerCase();
-    if (mediaKind === "application" || mediaKind === "text") {
-      return "document";
-    }
-    return INBOUND_SOURCE_MODALITIES.has(mediaKind) ? mediaKind : undefined;
-  };
-  return ctx.media?.map((media) => resolveMediaType(media.contentType ?? media.kind)).find(Boolean);
+  return resolveInboundSourceModalityFromOwnMedia(ctx.media);
 }
 
 export function buildInboundMetaSystemPrompt(

@@ -42,6 +42,7 @@ import type {
 import { createHostChannelInboundEventContextBuilder } from "./host-context-builder.js";
 import type { InboundEventKind } from "./kind.js";
 import { buildChannelInboundMediaPayload } from "./media.js";
+import { resolveInboundSourceModalityFromOwnMedia } from "../turn/source-modality.js";
 
 type MaybePromise<T> = T | Promise<T>;
 type ChannelInboundSupplementalMediaResolver = () => MaybePromise<
@@ -270,9 +271,15 @@ export function finalizeChannelInboundContext<T extends Record<string, unknown>>
     const suppressSelfQuoteBody = suppressSelfQuoteBodyOption ?? false;
     const suppressSelfQuoteMedia = suppressSelfQuoteMediaOption ?? true;
     const finalizeQuote = (quoteMedia?: readonly InboundMediaFacts[] | null) => {
-      if (!(selfQuote && suppressSelfQuoteMedia)) {
-        media.push(...(quoteMedia ?? []));
+      const mergedQuoteMedia = selfQuote && suppressSelfQuoteMedia ? [] : (quoteMedia ?? []);
+      // Per-turn metadata describes the current message; quoted media merged for
+      // context must not redefine source_modality. Pin it from the message's own
+      // media before the merge, defaulting to "text" for a text-only reply.
+      if (mergedQuoteMedia.length > 0 && params.context.SourceModality === undefined) {
+        params.context.SourceModality =
+          resolveInboundSourceModalityFromOwnMedia(media) ?? "text";
       }
+      media.push(...mergedQuoteMedia);
       const { media: _media, isSelf: _isSelf, ...stripped } = quote;
       const visibleQuote =
         selfQuote && suppressSelfQuoteBody

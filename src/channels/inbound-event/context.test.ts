@@ -237,6 +237,24 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
     },
   );
 
+  it.each([
+    { name: "text-only reply to a photo", media: [] as InboundMediaFacts[], expected: "text" },
+    {
+      name: "own media keeps its own modality",
+      media: [{ path: "/tmp/current.png", contentType: "image/png" }] as InboundMediaFacts[],
+      expected: "image",
+    },
+  ])("pins source_modality for $name before quote media merges", async ({ media, expected }) => {
+    const quoteMedia = vi.fn(async () => [{ path: "/tmp/quote.png", contentType: "image/png" }]);
+    const result = await finalizeQuote({
+      media,
+      contextVisibility: "all",
+      supplemental: { quote: { body: "previous message", media: quoteMedia } },
+    });
+
+    expect(result.context.SourceModality).toBe(expected);
+  });
+
   it("does not resolve media for hidden quotes", async () => {
     const media = vi.fn(async () => [{ path: "/tmp/hidden.png", contentType: "image/png" }]);
     const result = await finalizeQuote({
