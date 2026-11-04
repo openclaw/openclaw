@@ -47,6 +47,18 @@ function harness(
     warnings: [] as string[],
     sequence: [] as string[],
   };
+  const record =
+    (kind: "create" | "update" | "comment", data = {}) =>
+    async (args: unknown) => {
+      calls[kind].push(args);
+      if (kind !== "create") {
+        calls.sequence.push(kind);
+      }
+      if (kind === "comment" && options.commentError) {
+        throw options.commentError;
+      }
+      return { data };
+    };
   const github = {
     paginate: async (_method: unknown, args: Record<string, unknown>) =>
       "labels" in args
@@ -66,23 +78,9 @@ function harness(
       issues: {
         getLabel: async () => ({ data: { name: "dated-todo-sweep" } }),
         createLabel: async () => ({ data: {} }),
-        create: async (args: unknown) => {
-          calls.create.push(args);
-          return { data: { number: 123 } };
-        },
-        update: async (args: unknown) => {
-          calls.update.push(args);
-          calls.sequence.push("update");
-          return { data: {} };
-        },
-        createComment: async (args: unknown) => {
-          calls.comment.push(args);
-          calls.sequence.push("comment");
-          if (options.commentError) {
-            throw options.commentError;
-          }
-          return { data: {} };
-        },
+        create: record("create", { number: 123 }),
+        update: record("update"),
+        createComment: record("comment"),
         listComments: async () => ({ data: options.comments ?? [] }),
         listForRepo: async () => ({ data: searchItems }),
       },
@@ -182,6 +180,9 @@ describe("dated TODO issue upsert", () => {
 });
 
 describe("dated TODO report validation", () => {
+  const validate =
+    (report: string, options?: Parameters<typeof validateDatedTodoReport>[1]) => () =>
+      validateDatedTodoReport(report, options);
   it.each([
     ["invalid date", "(2026-07-01)", "(2026-99-01)", /Invalid dated TODO checklist item/u],
     ["future OVERDUE date", "(2026-07-01)", "(2027-01-01)", /Non-overdue date/u],
@@ -207,34 +208,23 @@ describe("dated TODO report validation", () => {
       /prologue or section order/u,
     ],
   ] as const)("rejects %s", (_name, from, to, error) => {
-    expect(() => validateDatedTodoReport(REPORT.replace(from, to))).toThrow(error);
+    expect(validate(REPORT.replace(from, to))).toThrow(error);
   });
 
   it("binds the report date and file locations to the fresh checkout", () => {
     const verifiedReport = REPORT.replace("src/urgent.ts:7", "scripts/github/pr-ci-sweeper.mjs:1");
 
-    expect(() =>
-      validateDatedTodoReport(verifiedReport, {
-        expectedDate: "2026-07-25",
-        repoRoot: process.cwd(),
-      }),
-    ).not.toThrow();
-    expect(() => validateDatedTodoReport(verifiedReport, { expectedDate: "2026-07-26" })).toThrow(
+    const checkout = { expectedDate: "2026-07-25", repoRoot: process.cwd() };
+    expect(validate(verifiedReport, checkout)).not.toThrow();
+    expect(validate(verifiedReport, { expectedDate: "2026-07-26" })).toThrow(
       /expected 2026-07-26/u,
     );
-    expect(() =>
-      validateDatedTodoReport(REPORT, {
-        expectedDate: "2026-07-25",
-        repoRoot: process.cwd(),
-      }),
-    ).toThrow(/Untracked or missing repository path/u);
+    expect(validate(REPORT, checkout)).toThrow(/Untracked or missing repository path/u);
   });
 
   it("allows underscores inside plain identifiers", () => {
-    expect(() =>
-      validateDatedTodoReport(
-        REPORT.replace("remove expired compatibility", "remove media_legacy compatibility"),
-      ),
+    expect(
+      validate(REPORT.replace("remove expired compatibility", "remove media_legacy compatibility")),
     ).not.toThrow();
   });
 });

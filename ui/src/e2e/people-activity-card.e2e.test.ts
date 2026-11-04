@@ -199,6 +199,8 @@ suite.define(() => {
       await person.hover();
       const card = activityCard(page);
       await card.waitFor({ state: "visible" });
+      // Presence reorders the row; keep focus in the card while its activity changes.
+      await link(card, "View activity").focus();
       await expectText(card.locator(".person-activity-card__status"), "Idle");
       await expectText(card, "Online for");
       await expectText(card, "Last interaction");
@@ -225,7 +227,11 @@ suite.define(() => {
       await gateway.waitForRequest("connect");
       await emitPresence(gateway, [
         {
-          user: { id: "gateway-owner", identity: { type: "profile", id: "gateway-owner" } },
+          user: {
+            id: "gateway-owner",
+            identity: { type: "profile", id: "gateway-owner" },
+            name: "Synthetic operator",
+          },
           platform: "macOS 27.0.0",
           deviceFamily: "Mac",
           clientId: "openclaw-macos",
@@ -239,9 +245,9 @@ suite.define(() => {
       await owner.hover();
       const card = page.locator(".person-activity-hovercard");
       await card.waitFor({ state: "visible" });
-      await expectText(owner, "Shared owner");
-      await expectAttribute(card, "aria-label", "Activity for Shared owner");
-      expect(await card.locator("h2").textContent()).toBe("Shared owner");
+      await expectText(owner, "Synthetic operator · Shared owner");
+      await expectAttribute(card, "aria-label", "Activity for Synthetic operator · Shared owner");
+      expect(await card.locator("h2").textContent()).toBe("Synthetic operator · Shared owner");
       await expectText(
         card,
         "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
@@ -253,7 +259,7 @@ suite.define(() => {
       await expectAttribute(
         page.locator('.chat-pane__presence [data-viewer-id="gateway-owner"]'),
         "aria-label",
-        "Shared owner",
+        "Synthetic operator · Shared owner",
       );
     }));
 
@@ -312,7 +318,7 @@ suite.define(() => {
         await person.waitFor({ state: "visible" });
         await expectCount(card, 0);
         await expectCount(row.locator("a, button"), 2);
-        await expectCount(row.getByRole("button", { name: "Pin", exact: true }), 1);
+        await expectCount(row.getByRole("button", { name: "Actions for Alice", exact: true }), 1);
         await person.hover();
         await card.waitFor({ state: "visible" });
         await expectText(card, "Reported time zone: Europe/Paris");
@@ -341,6 +347,7 @@ suite.define(() => {
           .getByRole("link");
         const recentTitle = recent.locator(".person-activity-card__session-name");
         await recent.hover();
+        await pollScrolling(recentTitle).toBe(true);
         const initialShift = await shift(recentTitle);
         expect(initialShift).not.toBe("");
         await updateRecent(gateway, recentTitle, updatedRecentLabel);

@@ -178,30 +178,6 @@ function realtimeTalkAbortReason(signal: AbortSignal): Error {
     : new DOMException("Realtime Talk input cancelled", "AbortError");
 }
 
-async function awaitRealtimeTalkMediaRequest(
-  startRequest: () => Promise<MediaStream>,
-  signal: AbortSignal | undefined,
-): Promise<MediaStream> {
-  if (signal?.aborted) {
-    throw realtimeTalkAbortReason(signal);
-  }
-  const request = startRequest();
-  try {
-    return await racePromiseWithAbortSignal(request, signal, realtimeTalkAbortReason);
-  } catch (error) {
-    if (signal?.aborted) {
-      // Browser permission prompts are not cancellable. Release any stream that
-      // arrives after the lifecycle owner has already moved on.
-      void request.then(
-        (stream) => stream.getTracks().forEach((track) => track.stop()),
-        () => undefined,
-      );
-      throw realtimeTalkAbortReason(signal);
-    }
-    throw error;
-  }
-}
-
 export class RealtimeTalkSelectedMicrophoneError extends Error {
   constructor() {
     super(t("chat.composer.selectedMicrophoneUnavailable"));
@@ -227,22 +203,35 @@ async function openRealtimeTalkMedia(
   const deviceId = selectedDeviceId?.trim();
   let acquisition: MediaStream;
   try {
-    acquisition = await awaitRealtimeTalkMediaRequest(
-      () =>
-        devices.getUserMedia(
-          kind === "audioinput"
-            ? {
-                audio: {
-                  autoGainControl: true,
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-                },
-              }
-            : { video: deviceId ? { deviceId: { exact: deviceId } } : true },
-        ),
-      signal,
+    if (signal?.aborted) {
+      throw realtimeTalkAbortReason(signal);
+    }
+    const request = devices.getUserMedia(
+      kind === "audioinput"
+        ? {
+            audio: {
+              autoGainControl: true,
+              echoCancellation: true,
+              noiseSuppression: true,
+              ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+            },
+          }
+        : { video: deviceId ? { deviceId: { exact: deviceId } } : true },
     );
+    try {
+      acquisition = await racePromiseWithAbortSignal(request, signal, realtimeTalkAbortReason);
+    } catch (error) {
+      if (signal?.aborted) {
+        // Browser permission prompts are not cancellable. Release any stream that
+        // arrives after the lifecycle owner has already moved on.
+        void request.then(
+          (stream) => stream.getTracks().forEach((track) => track.stop()),
+          () => undefined,
+        );
+        throw realtimeTalkAbortReason(signal);
+      }
+      throw error;
+    }
   } catch (error) {
     if (signal?.aborted) {
       throw realtimeTalkAbortReason(signal);
@@ -319,7 +308,7 @@ export class RealtimeTalkInputOwner {
         this.onEnded(t("chat.composer.microphoneStopped"));
       };
       for (const track of media.getTracks()) {
-        track.addEventListener("ended", onEnded, { signal: controller.signal });
+        listen(track, "ended", onEnded, { signal: controller.signal });
       }
       // Only the current, successful acquisition advances the visible startup phase.
       // Cancellation must not overwrite idle or a replacement's microphone prompt.

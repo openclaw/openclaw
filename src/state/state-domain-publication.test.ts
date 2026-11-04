@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -25,13 +24,9 @@ afterEach(() => {
   }
 });
 
-function domain(
-  sourceIdentity?: (db: DatabaseSync) => string | symbol,
-  name = `receipt-test-${randomUUID()}`,
-) {
+function domain(name = `receipt-test-${randomUUID()}`) {
   return createStateDomainPublication<Row>({
     domain: name,
-    sourceIdentity,
     keyOf: (row) => row.id,
     isValue: (value): value is Row =>
       isRecord(value) && typeof value.id === "string" && typeof value.version === "number",
@@ -47,6 +42,10 @@ function observe(publication: ReturnType<typeof domain>) {
 const postimages = (...rows: Row[]) =>
   new Map(rows.map((value) => [value.id, { kind: "postimage", value }]));
 const kinds = (changes: StateDomainChange<Row>[]) => changes.map(({ kind }) => kind);
+const committedKeys = (changes: StateDomainChange<Row>[]) =>
+  changes.flatMap((change) =>
+    change.kind === "committed" ? [...change.receipt.facts.keys()] : [],
+  );
 
 function fixture(publishPending = true) {
   const db = openTrackedStateDatabase(
@@ -76,29 +75,13 @@ function fixture(publishPending = true) {
   return { db, publication, transaction, capture, write, begin };
 }
 
-it("publishes committed facts under the domain's admitted source identity", () => {
-  const { capture, write } = fixture();
-  const identity = "admitted-agent-database";
-  const publication = domain(() => identity);
-  const credential = { id: "credential", version: 2 };
-  const captured = capture(() => write(credential, publication), publication);
-  const changes = observe(publication);
-  const pending = publication.begin({ identity, assertCurrent() {} });
-  pending.committed(captured.receipt);
-  pending.finish(true);
-  const receipt = { source: { identity }, facts: postimages(credential) };
-  expect(changes).toMatchObject([
-    { kind: "pending", identity },
-    { kind: "committed", receipt },
-    { kind: "settled", identity },
-  ]);
-});
-
 it("captures only committed postimages across nested rollback and waits for the outer commit", () => {
   const { db, publication, transaction, capture, write } = fixture();
   const changes = observe(publication);
+  const kept = { id: "kept", version: 1 };
+  const sibling = { id: "sibling", version: 3 };
   const captured = capture(() => {
-    write({ id: "kept", version: 1 });
+    write(kept);
     expect(() =>
       transaction(() => {
         write({ id: "kept", version: 2 });
@@ -106,24 +89,19 @@ it("captures only committed postimages across nested rollback and waits for the 
         throw new Error("rollback");
       }),
     ).toThrow("rollback");
-    transaction(() => write({ id: "sibling", version: 3 }));
+    transaction(() => write(sibling));
     expect(changes).toEqual([]);
   });
-  expect(captured.receipt.facts).toEqual(
-    postimages({ id: "kept", version: 1 }, { id: "sibling", version: 3 }),
-  );
-  expect(db.prepare("SELECT * FROM facts ORDER BY id").all()).toEqual([
-    { id: "kept", version: 1 },
-    { id: "sibling", version: 3 },
-  ]);
+  expect(captured.receipt.facts).toEqual(postimages(kept, sibling));
+  expect(db.prepare("SELECT * FROM facts ORDER BY id").all()).toEqual([kept, sibling]);
   expect(changes).toHaveLength(2);
 });
 
 it("shares nested captures across facades for the same domain and database", () => {
   const { db, capture, write } = fixture();
   const name = `shared-receipt-test-${randomUUID()}`;
-  const first = domain(undefined, name);
-  const second = domain(undefined, name);
+  const first = domain(name);
+  const second = domain(name);
   const captured = capture(() => {
     write({ id: "before", version: 1 }, first);
     const nested = second.capture(db, () => write({ id: "nested", version: 2 }, second));
@@ -174,28 +152,17 @@ it("installs all worker domains when their shared publication batch completes", 
       write({ id: "grant", version: 1 }, sibling);
     }),
   );
-  const installed = new Set<string>();
-  for (const owner of [publication, sibling]) {
-    cleanup.push(
-      owner.subscribeFacts((change) => {
-        if (change.kind === "committed") {
-          for (const key of change.receipt.facts.keys()) {
-            installed.add(key);
-          }
-        }
-      }),
-    );
-  }
+  const changes = [observe(publication), observe(sibling)];
   const first = begin();
   const second = begin(sibling);
   batchStateDomainPublications(() => {
     first.committed(captured.receipt);
     second.committed(captured.result.receipt);
-    expect(installed.size).toBe(0);
+    expect(changes.flatMap(committedKeys)).toEqual([]);
   });
   first.finish(true);
   second.finish(true);
-  expect([...installed].toSorted()).toEqual(["approval", "grant"]);
+  expect(changes.flatMap(committedKeys).toSorted()).toEqual(["approval", "grant"]);
 });
 
 it.each([true, false])(

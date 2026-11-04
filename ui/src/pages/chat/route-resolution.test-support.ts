@@ -48,6 +48,7 @@ export function createSessionRouteRow(
 export function createSessionRouteContext(
   resolution: SessionsResolveResult | Error = { ok: false },
   cachedSessions: GatewaySessionRow[] = [],
+  { agentId = "roboclaw", mainKey = "main" } = {},
 ) {
   const router = createRouter({ routes: [] });
   const lifecycle = new AbortController();
@@ -59,7 +60,7 @@ export function createSessionRouteContext(
     sessions.dispose();
     expect([gatewayListeners.size, eventListeners.size]).toEqual([0, 0]);
   });
-  const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
+  const request = vi.fn(async (method: string, _params: unknown): Promise<unknown> => {
     if (method !== "sessions.resolve") {
       throw new Error(`Unexpected gateway request: ${method}`);
     }
@@ -80,17 +81,17 @@ export function createSessionRouteContext(
         phase: "connected",
         client: { request },
         hello: null,
-        sessionKey: "agent:roboclaw:main",
+        sessionKey: `agent:${agentId}:${mainKey}`,
       },
       subscribe: (listener: Parameters<ApplicationContext["gateway"]["subscribe"]>[0]) =>
         registerListener(gatewayListeners, listener),
       subscribeEvents: (listener: GatewayEventListener) =>
         registerListener(eventListeners, listener),
     },
-    agents: { state: { agentsList: { mainKey: "main" } } },
-    agentSelection: { state: { selectedId: "roboclaw" } },
+    agents: { state: { agentsList: { mainKey } } },
+    agentSelection: { state: { selectedId: agentId } },
   } as unknown as ApplicationContext;
-  const sessions = createTestSessionCapability(context.gateway, "roboclaw");
+  const sessions = createTestSessionCapability(context.gateway, agentId);
   sessions.state.result = sessionRouteListResult(cachedSessions);
   return {
     context: { ...context, sessions },

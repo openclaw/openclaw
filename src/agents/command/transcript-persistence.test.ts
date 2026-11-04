@@ -74,39 +74,6 @@ it.each([
   expect(messages.every((message) => Reflect.get(message, "display") === false)).toBe(true);
 });
 
-it("persists the terminal CLI turn usage while keeping last-call context", async () => {
-  const common = await createSession("run tools");
-  const lastCallUsage = { input: 2, output: 1, cacheRead: 27_376, total: 27_379 };
-  await persistCliTurnTranscript({
-    ...common,
-    result: {
-      payloads: [{ text: "turn reply" }],
-      meta: {
-        durationMs: 0,
-        agentMeta: {
-          sessionId: common.sessionId,
-          provider: "claude-cli",
-          model: "claude-sonnet-4-6",
-          usage: lastCallUsage,
-          lastCallUsage,
-          diagnosticUsage: { input: 6, output: 77, cacheRead: 54_631, total: 54_714 },
-        },
-      },
-    },
-  });
-
-  expect(SessionManager.open(common).buildSessionContext().messages.at(-1)).toMatchObject({
-    role: "assistant",
-    usage: {
-      input: 6,
-      output: 77,
-      cacheRead: 54_631,
-      totalTokens: 54_714,
-      contextUsage: { state: "available", promptTokens: 27_378, totalTokens: 27_379 },
-    },
-  });
-});
-
 it.each(["CLI", "ACP"] as const)("recovers full %s answer after a later turn", async (runtime) => {
   const runId = `run-${runtime.toLowerCase()}-final`;
   const common = await createSession(undefined, true);

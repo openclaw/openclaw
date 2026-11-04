@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   compareEventCoverage,
@@ -7,6 +11,10 @@ import {
   extractSwiftHandledEvents,
   extractSwiftStaticStringConstants,
 } from "../../scripts/check-protocol-event-coverage.mts";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
+import { createScriptTestHarness } from "./test-helpers.js";
+
+const { createTempDir } = createScriptTestHarness();
 
 const GATEWAY_LIST_FIXTURE = `
 export const GATEWAY_EVENTS = [
@@ -25,6 +33,61 @@ const swiftConstants = extractSwiftStaticStringConstants(`
 `);
 
 describe("protocol event coverage", () => {
+  it.each(["wrapper", "direct", "symlink", "import"])(
+    "runs the %s entry without TSX and keeps imports quiet",
+    (mode) => {
+      const root = fs.realpathSync(createTempDir("protocol-coverage-entry-"));
+      for (const file of [
+        "check-protocol-event-coverage.mjs",
+        "check-protocol-event-coverage.mts",
+        "lib/protocol-codegen-names.mts",
+        "lib/record-shared.mjs",
+        "tsx.mjs",
+        "lib/tsx-cli-shim.mjs",
+        "lib/local-check-runtime.mts",
+        "lib/managed-cleanup-handoff.mts",
+      ]) {
+        const target = path.join(root, "scripts", file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(path.resolve("scripts", file), target);
+      }
+      const alias = path.join(root, "alias");
+      fs.symlinkSync(path.join(root, "scripts"), alias, "junction");
+      const entry = path.join(
+        mode === "symlink" ? alias : path.join(root, "scripts"),
+        `check-protocol-event-coverage.${mode === "wrapper" ? "mjs" : "mts"}`,
+      );
+      const args =
+        mode === "import"
+          ? [
+              "--input-type=module",
+              "--eval",
+              `await import(${JSON.stringify(pathToFileURL(entry).href)})`,
+            ]
+          : [entry];
+      const result = spawnSync(requireNodeTool("node"), args, {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          NODE_OPTIONS: "",
+          PNPM_CONFIG_MODULES_DIR: "",
+          pnpm_config_modules_dir: "",
+          npm_config_modules_dir: "",
+        },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(mode === "import" ? 0 : 1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(
+        mode === "import"
+          ? ""
+          : "Protocol event coverage check failed: Required file src/gateway/events.ts is missing. If it moved, update scripts/check-protocol-event-coverage.mjs.\n",
+      );
+    },
+  );
+
   it("collects literals and resolves identifiers", () => {
     const names = extractGatewayEventNames(GATEWAY_CONSTANTS_FIXTURE + GATEWAY_LIST_FIXTURE);
     expect(names).toContain("connect.challenge");
@@ -64,14 +127,11 @@ describe("protocol event coverage", () => {
       }
       if evt.event == "connect.challenge" { return }
     `;
-    expect([...extractSwiftHandledEvents(source, swiftConstants)].toSorted()).toEqual([
-      "ApprovalBridge.requestedKind",
-      "chat",
-      "connect.challenge",
-      "exec.approval.requested",
-      "session.message",
-      "tick",
-    ]);
+    expect([...extractSwiftHandledEvents(source, swiftConstants)].toSorted()).toEqual(
+      "ApprovalBridge.requestedKind chat connect.challenge exec.approval.requested session.message tick".split(
+        " ",
+      ),
+    );
   });
 
   it("collects literals and generated enum constants inside handler functions only", () => {
@@ -138,19 +198,11 @@ describe("protocol event coverage", () => {
       }
     `;
     const handled = extractKotlinHandledEvents(source, constants);
-    expect([...handled].toSorted()).toEqual([
-      "assignment",
-      "block/*event*/",
-      "chat",
-      "connect.challenge",
-      "health",
-      "other",
-      "session.message",
-      "sessions.changed",
-      "slash//event",
-      "tick",
-      "when-condition",
-    ]);
+    expect([...handled].toSorted()).toEqual(
+      "assignment block/*event*/ chat connect.challenge health other session.message sessions.changed slash//event tick when-condition".split(
+        " ",
+      ),
+    );
   });
 
   it("reports missing and stale allowances while accepting explained omissions", () => {
@@ -165,12 +217,11 @@ describe("protocol event coverage", () => {
         cron: "",
       },
     });
-    expect(errors).toHaveLength(4);
-    expect(errors.some((error) => error.includes('[ios] gateway event "unhandled"'))).toBe(true);
-    expect(errors.some((error) => error.includes('"presence" is now handled'))).toBe(true);
-    expect(errors.some((error) => error.includes('"gone.event" is not a gateway event'))).toBe(
-      true,
-    );
-    expect(errors.some((error) => error.includes('"cron" needs a non-empty reason'))).toBe(true);
+    expect(errors.toSorted()).toEqual([
+      expect.stringContaining('"cron" needs a non-empty reason'),
+      expect.stringContaining('"gone.event" is not a gateway event'),
+      expect.stringContaining('"presence" is now handled'),
+      expect.stringContaining('[ios] gateway event "unhandled"'),
+    ]);
   });
 });

@@ -50,9 +50,11 @@ function expectFinalized(
 it("bounds run ID tracker FIFO membership and supports explicit cleanup", () => {
   const tracker = createTuiRunIdTracker();
   tracker.note("");
-  for (let index = 0; index <= 200; index += 1) {
+  for (let index = 0; index < 200; index += 1) {
     tracker.note(`run-${index}`);
   }
+  tracker.note("run-0");
+  tracker.note("run-200");
   expect(tracker.has("")).toBe(false);
   expect(tracker.has("run-0")).toBe(false);
   expect(tracker.has("run-200")).toBe(true);

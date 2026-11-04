@@ -1,19 +1,14 @@
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserProgram,
   mockBrowserGateway,
-  getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "./browser-cli.test-support.js";
 
 const gatewayMock = mockBrowserGateway();
 gatewayMock.mockResolvedValue({ response: { body: "ok" } });
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
-vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+mockBrowserCliRuntime();
 
 const { registerBrowserActionObserveCommands } = await import("./browser-cli-actions-observe.js");
 
@@ -63,33 +58,24 @@ describe("browser action observe commands", () => {
   });
 
   it.each([
-    { label: "truncated prefix", body: "ABC", truncated: true, json: false },
-    { label: "empty truncated prefix", body: "", truncated: true, json: false },
-    { label: "complete at the limit", body: "ABC", truncated: undefined, json: false },
-    { label: "explicitly complete", body: "ABC", truncated: false, json: false },
-    { label: "empty complete body", body: "", truncated: undefined, json: false },
-    { label: "JSON truncated prefix", body: "ABC", truncated: true, json: true },
-  ])("reports completeness for $label without changing body output", async (testCase) => {
-    const result = {
-      response: {
-        body: testCase.body,
-        ...(testCase.truncated === undefined ? {} : { truncated: testCase.truncated }),
-      },
-    };
+    ["ABC", true, false],
+    ["", true, false],
+    ["ABC", undefined, false],
+    ["ABC", false, false],
+    ["", undefined, false],
+    ["ABC", true, true],
+  ] as const)("prints body=%j truncated=%s json=%s", async (body, truncated, json) => {
+    const result = { response: { body, ...(truncated === undefined ? {} : { truncated }) } };
     gatewayMock.mockResolvedValueOnce(result);
-
-    await run(...(testCase.json ? ["--json"] : []), "responsebody", "**/api", "--max-chars", "3");
-
+    await run(...(json ? ["--json"] : []), "responsebody", "**/api", "--max-chars", "3");
     const { runtimeLogs, runtimeErrors } = getBrowserCliRuntimeCapture();
-    expect(runtimeLogs).toHaveLength(1);
-    if (testCase.json) {
+    if (json) {
+      expect(runtimeLogs).toHaveLength(1);
       expect(JSON.parse(runtimeLogs[0]!)).toEqual(result);
     } else {
-      expect(runtimeLogs).toEqual([testCase.body]);
+      expect(runtimeLogs).toEqual([body]);
     }
-    expect(runtimeErrors).toEqual(
-      testCase.truncated && !testCase.json ? [expect.stringMatching(/truncat/i)] : [],
-    );
+    expect(runtimeErrors).toEqual(truncated && !json ? [expect.stringMatching(/truncat/i)] : []);
   });
 
   it.each([

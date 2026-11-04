@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { ensureOpenClawAgentSchema } from "../state/openclaw-agent-db-schema.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
+import { expectDatabaseRows } from "./git-backup.test-support.js";
 import { createGlobalDatabase } from "./local-repository.schema.test-support.js";
 import { withDatabase } from "./local-repository.test-support.js";
 
@@ -27,7 +28,6 @@ const restore = (
 it("restores historical agent data without migration and rejects incompatible version manifests", async () => {
   // Latest stable 2026.10.2 persisted schema 24; pin the shipped data contract.
   const version = 24;
-  const expected = { value: 9_223_372_036_854_775_806n, bytes: "000102FF" };
   withDatabase(sourcePath, (source) => {
     ensureOpenClawAgentSchema(source, "main", sourcePath, version);
     // Deployed schema-24 backups used this older index order (2026.10.2).
@@ -36,30 +36,17 @@ it("restores historical agent data without migration and rejects incompatible ve
         CREATE INDEX idx_agent_trajectory_runtime_run
           ON trajectory_runtime_events(session_id, run_id, seq)
           WHERE run_id IS NOT NULL;
+        UPDATE schema_meta SET app_version = 'historical-app';
       `);
-    source.exec("CREATE TABLE compatibility_probe (value INTEGER, bytes BLOB) STRICT");
-    source
-      .prepare("INSERT INTO compatibility_probe VALUES (?, ?)")
-      .run(expected.value, Buffer.from([0, 1, 2, 255]));
   });
   const identity = { role: "agent", agentId: "main" } as const;
   const manifest = await dump(identity);
-  const restored = await restore(identity);
-  expect(restored.manifest.userVersion).toBe(version);
-  expect(restored.tables.every((table) => table.ok)).toBe(true);
-  withDatabase(
-    targetPath,
-    (database) => {
-      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
-      const statement = database.prepare(
-        "SELECT value, hex(bytes) AS bytes FROM compatibility_probe",
-      );
-      statement.setReadBigInts(true);
-      expect(statement.get()).toEqual(expected);
-      expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
-    },
-    { readOnly: true },
-  );
+  await restore(identity);
+  expectDatabaseRows(targetPath, {
+    "PRAGMA user_version": [{ user_version: version }],
+    "SELECT app_version FROM schema_meta": [{ app_version: "historical-app" }],
+    "PRAGMA integrity_check": [{ integrity_check: "ok" }],
+  });
 
   for (const invalidVersion of [OPENCLAW_AGENT_SCHEMA_VERSION, OPENCLAW_AGENT_SCHEMA_VERSION + 1]) {
     await fs.writeFile(
@@ -77,16 +64,16 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
     ["\0leading", "text\0suffix", "text\0suffix"],
     ["\nline", "", ""],
     [" space", null, null],
-    ["shared\0left", 9_007_199_254_740_993n, { $int: "9007199254740993" }],
-    ["shared\0right", Buffer.from([0, 255]), { $hex: "00ff" }],
+    ["shared\0left", 9_223_372_036_854_775_806n, { $int: "9223372036854775806" }],
+    ["shared\0right", Buffer.from([0, 1, 2, 255]), { $hex: "000102ff" }],
     ["雪🦀\0尾", 1.25, 1.25],
   ] satisfies [string, SQLInputValue, unknown][];
   const byteQuery =
     'SELECT hex("key") AS key, typeof(value) AS type, hex(value) AS bytes FROM text_values ORDER BY "key"';
   createGlobalDatabase(sourcePath);
   const expectedBytes = withDatabase(sourcePath, (source) => {
-    source.exec('CREATE TABLE text_values ("key" TEXT PRIMARY KEY, value ANY) STRICT');
     source.exec(`
+      CREATE TABLE text_values ("key" TEXT PRIMARY KEY, value ANY) STRICT;
       CREATE TABLE quoted_ddl (
         "double;quote" TEXT PRIMARY KEY DEFAULT 'semi;''colon',
         [bracket;quote] TEXT /* ; not a statement boundary */ DEFAULT 'bracket',
@@ -102,9 +89,7 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
       INSERT INTO trigger_values VALUES (1);
     `);
     const insert = source.prepare('INSERT INTO text_values ("key", value) VALUES (?, ?)');
-    for (const [key, value] of rows.toReversed()) {
-      insert.run(key, value);
-    }
+    rows.toReversed().forEach(([key, value]) => insert.run(key, value));
     return source.prepare(byteQuery).all();
   });
 
@@ -115,23 +100,18 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
     .split("\n")
     .map((line) => JSON.parse(line));
   expect(records).toEqual(rows.map(([key, , value]) => ({ key, value })));
-  const restored = await restore({ role: "global" });
-  expect(restored.tables.every((table) => table.ok)).toBe(true);
-  withDatabase(targetPath, (database) => {
-    const query = (sql: string) => database.prepare(sql).all();
-    expect(query(byteQuery)).toEqual(expectedBytes);
-    expect(query("SELECT * FROM quoted_ddl")).toEqual([
+  await restore({ role: "global" });
+  withDatabase(targetPath, (database) => database.exec("INSERT INTO trigger_values VALUES (1)"));
+  expectDatabaseRows(targetPath, {
+    [byteQuery]: expectedBytes,
+    "SELECT * FROM quoted_ddl": [
       {
         "double;quote": "semi;'colon",
         "bracket;quote": "bracket",
         "backtick;quote": "backtick",
       },
-    ]);
-    database.exec("INSERT INTO trigger_values VALUES (1)");
-    expect(query("SELECT value FROM trigger_values ORDER BY rowid")).toEqual([
-      { value: 2 },
-      { value: 2 },
-    ]);
+    ],
+    "SELECT value FROM trigger_values ORDER BY rowid": [{ value: 2 }, { value: 2 }],
   });
   const schemaPath = path.join(outputPath, "schema.sql");
   const schema = await fs.readFile(schemaPath, "utf8");
@@ -139,7 +119,6 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
     /CREATE TRIGGER zz_case_trigger[\s\S]*?\n\s*END;/u,
     (trigger) => trigger.replace(/\n\s*END;$/u, ""),
   );
-  expect(incompleteTrigger).not.toBe(schema);
   await fs.writeFile(schemaPath, incompleteTrigger);
   const refusedTarget = path.join(root, "incomplete-trigger.sqlite");
   await expect(

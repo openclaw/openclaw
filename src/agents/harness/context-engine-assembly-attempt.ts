@@ -1,5 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { AsyncContext } from "../../shared/async-context.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -20,9 +19,8 @@ export type ContextEngineAssemblySnapshot = AssemblyTarget & {
 type AssemblyAttempt = { snapshot?: ContextEngineAssemblySnapshot };
 // Core selection and SDK assembly can load in different runtime chunks. Share the
 // scope carrier, never a last-budget value or settings across attempts.
-const assemblyAttempt = resolveGlobalSingleton(
+const assemblyAttempt = new AsyncContext<AssemblyAttempt>(
   Symbol.for("openclaw.contextEngineAssemblyAttempt"),
-  () => new AsyncLocalStorage<AssemblyAttempt>(),
 );
 
 /** Each concrete retry owns its assembly facts; rejected and concurrent attempts share none. */

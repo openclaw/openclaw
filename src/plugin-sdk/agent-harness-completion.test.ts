@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { AgentHarnessCompletionCustody as CompletionCustody } from "../agents/agent-harness-completion-custody.js";
 import type { AgentHarnessCompletionScope as CompletionScope } from "../agents/agent-harness-completion-scope.js";
 import {
@@ -11,11 +11,9 @@ import type * as AnnounceRuntime from "../agents/subagents/announce/subagent-ann
 const mocks = vi.hoisted(() => ({
   deliver: vi.fn(),
   loadRequester: vi.fn(),
-  reconcile: vi.fn(async () => "unowned"),
   resolveCompletionOrigin: vi.fn(async () => undefined),
   custodyCurrent: true,
   custodyError: new Error("Completion custody retired"),
-  isCustodyCurrent: vi.fn((custody: CompletionCustody) => custody.isCurrent()),
   runWithCustody: vi.fn(
     <T>(custody: CompletionCustody, _scope: CompletionScope, run: () => T): T => {
       if (!custody.isCurrent()) {
@@ -25,14 +23,11 @@ const mocks = vi.hoisted(() => ({
     },
   ),
 }));
+// mock-isolation: Keep process-global custody and Gateway continuation state outside this fixture.
 vi.mock("../agents/agent-harness-completion-custody.js", () => ({
   captureAgentHarnessCompletionCustody: vi.fn(),
   createAgentHarnessCompletionEventSink: vi.fn(),
-  isAgentHarnessCompletionCustodyCurrent: mocks.isCustodyCurrent,
   runWithAgentHarnessCompletionCustody: mocks.runWithCustody,
-}));
-vi.mock("../agents/agent-harness-completion-delivery.js", () => ({
-  reconcileHarnessCompletionDelivery: mocks.reconcile,
 }));
 vi.mock("../agents/subagents/announce/subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: mocks.deliver,
@@ -108,80 +103,38 @@ function retireDuringOriginResolution(retire: () => void) {
   });
 }
 
-describe("SDK harness completion delivery contract", () => {
-  it.each<{ name: string; delivery: AgentHarnessCompletionDelivery; durable: boolean }>([
-    {
-      name: "direct result without phases",
-      delivery: { delivered: true, path: "direct" },
-      durable: true,
-    },
-    {
-      name: "direct result with no executed phase",
-      delivery: { delivered: true, path: "direct", phases: [] },
-      durable: false,
-    },
-    {
-      name: "completed direct phase",
-      delivery: {
-        delivered: true,
-        path: "direct",
-        phases: [
-          {
-            phase: "direct-primary",
-            delivered: true,
-            path: "direct",
-            deliveredAt: 123,
-            enqueuedAt: 100,
-          },
-        ],
-      },
-      durable: true,
-    },
-    {
-      name: "unsuccessful direct phase",
-      delivery: {
-        delivered: true,
-        path: "direct",
-        phases: [
-          {
-            phase: "direct-primary",
-            delivered: false,
-            path: "none",
-            reason: "requester_turn_pending",
-            error: "requester is pending",
-          },
-        ],
-      },
-      durable: false,
-    },
-    {
-      name: "steer evidence does not prove direct delivery",
-      delivery: {
-        delivered: true,
-        path: "direct",
-        phases: [
-          { phase: "steer-primary", delivered: true, path: "steered" },
-          { phase: "steer-fallback", delivered: false, path: "none", reason: "steer_dropped" },
-        ],
-      },
-      durable: false,
-    },
-    {
-      name: "successful steer",
-      delivery: { delivered: true, path: "steered", phases: [] },
-      durable: true,
-    },
-    { name: "queued result", delivery: { delivered: true, path: "queued" }, durable: false },
-    { name: "failed result", delivery: { delivered: false, path: "direct" }, durable: false },
-  ])("preserves $name", ({ delivery, durable }) => {
-    expect(isDurableAgentHarnessCompletionDelivery(delivery)).toBe(durable);
-  });
+type Phases = NonNullable<AgentHarnessCompletionDelivery["phases"]>;
+const direct = (phases?: Phases): AgentHarnessCompletionDelivery => ({
+  delivered: true,
+  path: "direct",
+  ...(phases ? { phases } : {}),
+});
+const directPhase = (delivered: boolean): Phases => [
+  { phase: "direct-primary", delivered, path: delivered ? "direct" : "none" },
+];
+it.each<[string, AgentHarnessCompletionDelivery, boolean]>([
+  ["direct result without phases", direct(), true],
+  ["direct result with no executed phase", direct([]), false],
+  ["completed direct phase", direct(directPhase(true)), true],
+  ["unsuccessful direct phase", direct(directPhase(false)), false],
+  [
+    "steer evidence does not prove direct delivery",
+    direct([
+      { phase: "steer-primary", delivered: true, path: "steered" },
+      { phase: "steer-fallback", delivered: false, path: "none", reason: "steer_dropped" },
+    ]),
+    false,
+  ],
+  ["successful steer", { delivered: true, path: "steered", phases: [] }, true],
+  ["queued result", { delivered: true, path: "queued" }, false],
+  ["failed result", { delivered: false, path: "direct" }, false],
+])("preserves %s", (_name, delivery, durable) => {
+  expect(isDurableAgentHarnessCompletionDelivery(delivery)).toBe(durable);
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.custodyCurrent = true;
-  mocks.reconcile.mockResolvedValue("unowned");
   mocks.resolveCompletionOrigin.mockImplementation(async () => undefined);
   mocks.loadRequester.mockReturnValue({
     entry: {
@@ -295,40 +248,6 @@ it("rechecks source authority after asynchronous delivery work", async () => {
     assertCurrent();
   });
   await rejects({ isSourceSessionAdmissionAllowed: () => current }, "source owner retired");
-});
-
-it.each(["pending", "delivered", "blocked"])(
-  "honors existing %s requester custody without admitting a second source",
-  async (custody) => {
-    mocks.reconcile.mockResolvedValue(custody);
-    const result = await deliver({ isSourceSessionAdmissionAllowed: () => false });
-    expect(result.delivered).toBe(custody === "delivered");
-    expect(result.recoveryPending === true).toBe(custody === "pending");
-    expect(result.recoveryBlocked === true).toBe(custody === "blocked");
-    expect(mocks.reconcile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: source.requesterAgentId,
-        sessionKey: source.requesterSessionKey,
-        sourceRunId: source.sourceRunId,
-        taskRunId: source.sourceSessionKey,
-      }),
-    );
-    expect(mocks.deliver).not.toHaveBeenCalled();
-  },
-);
-
-it("rejects requester replacement during awaited unowned reconciliation", async () => {
-  mocks.reconcile.mockImplementationOnce(async () => {
-    await Promise.resolve();
-    replaceRequester();
-    return "unowned";
-  });
-  await expect(deliver()).resolves.toMatchObject({
-    delivered: false,
-    recoveryBlocked: true,
-    error: "completion requester locator is missing or replaced",
-  });
-  expect(mocks.deliver).not.toHaveBeenCalled();
 });
 
 it("blocks a replaced requester revision after awaited origin resolution", async () => {

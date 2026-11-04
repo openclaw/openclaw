@@ -2,22 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginDeclaredSurface } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { createPluginDeclaredSurface } from "../../test/helpers/plugin-declared-surface.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { projectInstalledPluginComponents } from "./installed-plugin-components.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
-const emptyDeclared: PluginDeclaredSurface = {
-  channels: [],
-  providers: [],
-  tools: [],
-  contracts: [],
-  hooks: [],
-  mcpServers: [],
-  cliCommands: [],
-  cliBackends: [],
-  skills: [],
-  dangerousConfigFlags: [],
-};
+const emptyDeclared: PluginDeclaredSurface = createPluginDeclaredSurface();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

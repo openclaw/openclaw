@@ -120,12 +120,11 @@ export async function resolveClickClackInboundAccess(params: {
       : { chatType: "group", kind: "channel", id: routingMessage.channel_id ?? "" },
   );
   const routingConfig = routeConfig as OpenClawConfig;
-  const accountRuntime = getClickClackRuntime();
   const peer: RoutePeer = {
     kind: isDirect ? "direct" : "channel",
     id: target,
   };
-  let accountRoute: ResolvedAgentRoute = accountRuntime.channel.routing.resolveAgentRoute({
+  let accountRoute: ResolvedAgentRoute = routeRuntime.channel.routing.resolveAgentRoute({
     cfg: routingConfig,
     channel: CHANNEL_ID,
     accountId: routingAccount.accountId,
@@ -136,7 +135,7 @@ export async function resolveClickClackInboundAccess(params: {
     const dmScope = routingConfig.session?.dmScope ?? "main";
     // Account-level agent ownership changes only the agent prefix. Preserve the
     // resolved session policy so outbound recipient routing reaches this key.
-    const sessionKey = accountRuntime.channel.routing.buildAgentSessionKey({
+    const sessionKey = routeRuntime.channel.routing.buildAgentSessionKey({
       agentId,
       mainKey: routingConfig.session?.mainKey,
       channel: CHANNEL_ID,
@@ -145,7 +144,7 @@ export async function resolveClickClackInboundAccess(params: {
       dmScope,
       identityLinks: routingConfig.session?.identityLinks,
     });
-    const mainSessionKey = accountRuntime.channel.routing.buildAgentSessionKey({
+    const mainSessionKey = routeRuntime.channel.routing.buildAgentSessionKey({
       agentId,
       mainKey: routingConfig.session?.mainKey,
       channel: CHANNEL_ID,
@@ -248,7 +247,20 @@ export async function resolveClickClackInboundAccess(params: {
   );
 
   const mentionFacts = resolveMentionFacts(cfg, effectiveGroupPolicy.mentionPatterns);
-  if (!isCurrent() || (params.message.kind !== undefined && params.message.kind !== "message")) {
+  // Older ClickClack servers may omit author classification. Preserve the
+  // legacy ingress path for those responses and apply bot-only policy only to
+  // messages positively classified as bot-authored.
+  const isBotAuthor = params.message.author?.kind === "bot";
+  const botMentionAllowed =
+    !isBotAuthor ||
+    effectiveGroupPolicy.allowBots === true ||
+    (effectiveGroupPolicy.allowBots === "mentions" &&
+      (preparedRoute.isDirect || mentionFacts.wasMentioned));
+  if (
+    !isCurrent() ||
+    (params.message.kind !== undefined && params.message.kind !== "message") ||
+    !botMentionAllowed
+  ) {
     return {
       shouldDispatch: false,
       isCurrent,
@@ -258,10 +270,6 @@ export async function resolveClickClackInboundAccess(params: {
       preparedRoute,
     };
   }
-  // Older ClickClack servers may omit author classification. Preserve the
-  // legacy ingress path for those responses and apply bot-only policy only to
-  // messages positively classified as bot-authored.
-  const isBotAuthor = params.message.author?.kind === "bot";
   // The account's default allowFrom is wildcarded for human traffic. Bot
   // admission is a separate opt-in boundary, so wildcard authorization must
   // not implicitly trust every bot in the workspace.
@@ -269,21 +277,6 @@ export async function resolveClickClackInboundAccess(params: {
   const ingressAllowFrom = isBotAuthor
     ? allowFrom.filter((entry) => normalizeClickClackUserId(entry) !== "*")
     : allowFrom;
-  const botMentionAllowed =
-    !isBotAuthor ||
-    effectiveGroupPolicy.allowBots === true ||
-    (effectiveGroupPolicy.allowBots === "mentions" &&
-      (preparedRoute.isDirect || mentionFacts.wasMentioned));
-  if (!botMentionAllowed) {
-    return {
-      shouldDispatch: false,
-      isCurrent,
-      commandAuthorized: false,
-      requireMention: threadMentionPolicy.requireMention,
-      mentionFacts,
-      preparedRoute,
-    };
-  }
   const botLoopNowMs = parseDateStringTimestampMs(params.message.created_at);
   const botLoopProtection =
     isBotAuthor && params.message.author_id !== params.account.botUserId && params.account.botUserId
@@ -350,6 +343,7 @@ export async function resolveClickClackInboundAccess(params: {
       ? {
           cfg,
           modeWhenAccessGroupsOff: "configured",
+          hasControlCommand: runtime.channel.text.hasControlCommand(params.message.body, cfg),
         }
       : false,
   });
@@ -435,7 +429,7 @@ export async function resolveClickClackInboundAccess(params: {
           }),
         hasControlCommand:
           shouldCheckCommand &&
-          runtime.channel.commands.shouldComputeCommandAuthorized(params.message.body, currentCfg),
+          runtime.channel.text.hasControlCommand(params.message.body, currentCfg),
         commandAuthorized: resolved.commandAccess.authorized,
       },
     }).shouldSkip;

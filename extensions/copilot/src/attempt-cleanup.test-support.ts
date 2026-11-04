@@ -16,6 +16,54 @@ export function registerCopilotCleanupTests({
   makeParams: (overrides?: Pick<Params, "onAgentEvent">) => Params;
   requireSession: (sdk: copilot.FakeSdk) => copilot.FakeSession;
 }) {
+  const run = (
+    params: Parameters<typeof copilot.runCopilotAttempt>[0],
+    pool: ReturnType<typeof copilot.makeFakePool>,
+  ) => copilot.runCopilotAttempt(params, { pool });
+  it("joins detached background compaction before deleting its fresh native session", async () => {
+    const compacted = copilot.createAttemptGate();
+    const sdk = copilot.makeFakeSdk((session) => {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { content: "hello" });
+        session.emit("session.compaction_start", {});
+        void compacted.wait().then(() => {
+          session.emit("session.compaction_complete", { success: true });
+          session.emit("session.idle", {});
+        });
+        return copilot.makeAssistantMessageEvent("done");
+      });
+    });
+    const pool = copilot.makeFakePool(sdk);
+    const attempt = run({ ...makeParams(), sessionPersistence: "detached" }, pool);
+    try {
+      await copilot.awaitAttemptStage(compacted.entered, attempt);
+      expect(sdk.client.deleteSession).not.toHaveBeenCalled();
+      expect(pool.release).not.toHaveBeenCalled();
+    } finally {
+      compacted.release();
+    }
+    expect((await attempt).terminal.kind).toBe("ok");
+    expect(requireSession(sdk).disconnect).toHaveBeenCalledOnce();
+    expect(sdk.client.deleteSession).toHaveBeenCalledWith(requireSession(sdk).sessionId);
+    expect(pool.release).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the primary failure when detached native deletion also fails", async () => {
+    const primary = new Error("synthetic send failure");
+    const cleanupFailure = new Error("synthetic deletion failure");
+    const sdk = copilot.makeFakeSdk((session) => {
+      session.sendAndWait.mockRejectedValueOnce(primary);
+    });
+    sdk.client.deleteSession.mockRejectedValueOnce(cleanupFailure);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const pool = copilot.makeFakePool(sdk);
+    const result = await run({ ...makeParams(), sessionPersistence: "detached" }, pool);
+    const { promptError } = copilot.projectAgentRunAttemptTerminal(result.terminal);
+    expect(promptError).toBe(primary);
+    expect(warning.mock.calls[0]?.[1]).toBe(cleanupFailure);
+    expect(pool.release).toHaveBeenCalledOnce();
+  });
+
   it.each(["auth", "proxy"] as const)("cleans up pre-session %s failures", async (stage) => {
     const controller = new AbortController();
     const callerAbort = vi.fn();
@@ -28,7 +76,7 @@ export function registerCopilotCleanupTests({
         const auth = { useLoggedInUser: false, gitHubToken: "synthetic-token" };
         const invalidAuth = { ...base, auth } satisfies Params &
           Pick<import("./attempt-types.js").AttemptParamsLike, "auth">;
-        await expect(copilot.runCopilotAttempt(invalidAuth, { pool })).rejects.toThrow(
+        await expect(run(invalidAuth, pool)).rejects.toThrow(
           "gitHubToken auth requires profileId+profileVersion",
         );
       } else {
@@ -36,14 +84,14 @@ export function registerCopilotCleanupTests({
         vi.spyOn(byokProxy, "createCopilotByokProxy").mockRejectedValueOnce(failure);
         const provider = "custom-openai";
         const model = { ...base.model, provider, baseUrl: "https://api.example.test/v1" };
-        const result = await copilot.runCopilotAttempt(
+        const result = await run(
           {
             ...base,
             model,
             resolvedApiKey: "synthetic-token",
             authProfileId: "custom-openai:main",
           },
-          { pool },
+          pool,
         );
         const { promptError } = copilot.projectAgentRunAttemptTerminal(result.terminal);
         expect(promptError).toMatchObject({ code: "model_not_supported", cause: failure });
@@ -61,9 +109,9 @@ export function registerCopilotCleanupTests({
     const sandbox = copilot.createAttemptGate<null>();
     const sdk = copilot.makeFakeSdk();
     copilotAttemptOverrides.resolveSandboxContext = sandbox.wait;
-    const attempt = copilot.runCopilotAttempt(
+    const attempt = run(
       { ...makeParams(), abortSignal: controller.signal },
-      { pool: copilot.makeFakePool(sdk) },
+      copilot.makeFakePool(sdk),
     );
     try {
       await copilot.awaitAttemptStage(sandbox.entered, attempt);

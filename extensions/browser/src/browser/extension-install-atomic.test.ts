@@ -2,17 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  chromeProductRoots,
-  installChromeExtensionBootstrap,
-} from "./extension-install-fixture.test-support.js";
-import {
-  FOUNDATION_STORE_ID,
-  useExtensionInstallFixture,
-  writeChromePreferences,
-} from "./extension-install.test-support.js";
+import { useInstallFixture } from "./extension-install-fixture.test-support.js";
+import { FOUNDATION_STORE_ID } from "./extension-install.test-support.js";
 
-const fixture = useExtensionInstallFixture();
+const fixture = useInstallFixture();
 
 afterEach(() => vi.restoreAllMocks());
 const readManifest = async (file: string): Promise<{ path: string }> =>
@@ -23,20 +16,9 @@ it.each(["launcher", "manifest"] as const)(
   "cleans up a failed %s publication and allows a same-process retry",
   async (target) => {
     const value = await fixture();
-    const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
-    assert(chrome, "missing Chrome fixture root");
-    await writeChromePreferences({
-      userDataDir: chrome.userDataDir,
-      profile: "Default",
-      entries: { [FOUNDATION_STORE_ID]: { location: 1, from_webstore: true } },
-    });
-    const params = {
-      bundledDir: value.bundledDir,
-      pluginRoot: value.pluginRoot,
-      waitMs: 1_000,
-      requestStoreInstall: false,
-    };
-    const before = await installChromeExtensionBootstrap({ ...params, deps: value.deps });
+    await value.preferences({ [FOUNDATION_STORE_ID]: { location: 1, from_webstore: true } });
+    const install = (deps = value.deps) => value.install({ deps, requestStoreInstall: false });
+    const before = await install();
     expect(before.issues).toEqual([]);
     const registration = before.registrations.find((entry) => entry.product === "chrome");
     assert(registration, "missing Chrome fixture registration");
@@ -62,13 +44,13 @@ it.each(["launcher", "manifest"] as const)(
       await rename(source, destination);
     });
 
-    const failed = await installChromeExtensionBootstrap({ ...params, deps });
+    const failed = await install(deps);
     renameSpy.mockRestore();
     expect(failed.issues.join("\n")).toContain("native host publication failed");
     expect(await fs.readFile(targetPath, "utf8")).toBe(targetBytes);
     expect.soft(await list(directory)).toEqual(entries);
 
-    const retried = await installChromeExtensionBootstrap({ ...params, deps });
+    const retried = await install(deps);
     expect(retried).toMatchObject({ issues: [], manualSetupRequired: false });
     expect(retried.registrations).toEqual(before.registrations);
     const current = await readManifest(registration.manifestPath);

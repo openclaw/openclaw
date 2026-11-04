@@ -23,6 +23,7 @@ import {
   isCustodianWizardCancelAvailable,
 } from "./custodian-wizard-step.ts";
 import * as eventNudgeState from "./event-nudge.ts";
+import type { CustodianSendOutcome } from "./event-nudge.ts";
 import {
   custodianChatParams,
   custodianFailure,
@@ -184,6 +185,15 @@ export class CustodianSessionStore {
     return this.variant;
   }
 
+  get operationEpoch(): number {
+    return this.requestEpoch;
+  }
+
+  reportError(error: unknown): void {
+    this.error = custodianErrorMessage(error);
+    this.emit();
+  }
+
   hasUnresolvedQuestion(): boolean {
     return hasUnresolvedCustodianQuestion(
       this.messages,
@@ -238,12 +248,13 @@ export class CustodianSessionStore {
     return isCustodianWizardCancelAvailable(this.context);
   }
 
-  retry(): void {
+  retry(): Promise<void> {
     const client = this.activeClient;
     const params = this.retryParams;
     if (client && params && !hasCustodianUserInput(params) && this.chatAvailable && !this.sending) {
-      void this.initializeSession(client, params, false);
+      return this.initializeSession(client, params, false);
     }
+    return Promise.resolve();
   }
 
   async send(
@@ -251,7 +262,7 @@ export class CustodianSessionStore {
     display?: string,
     questionReply = this.hasUnresolvedQuestion(),
     admission?: CustodianTurnAdmission,
-  ): Promise<eventNudgeState.CustodianSendOutcome> {
+  ): Promise<CustodianSendOutcome> {
     // Trim decides emptiness only; sensitive values may carry meaningful whitespace.
     const input = text ?? this.input;
     const message = this.sensitive ? input : input.trim();
@@ -283,7 +294,7 @@ export class CustodianSessionStore {
     displayText: string,
     questionReply: boolean,
     admit?: () => boolean,
-  ): Promise<eventNudgeState.CustodianSendOutcome> {
+  ): Promise<CustodianSendOutcome> {
     const questionState = [this.answeredQuestions, this.questionReplyUncertain] as const;
     let replyEpoch: number | undefined;
     const outcome = await this.requestReply(client, params, () => {
@@ -363,27 +374,27 @@ export class CustodianSessionStore {
     }
   }
 
-  answerQuestion(message: CustodianMessage, label: string): void {
+  answerQuestion(message: CustodianMessage, label: string): Promise<CustodianSendOutcome> {
     const question = message.question;
     if (!question) {
-      return;
+      return Promise.resolve("rejected");
     }
     const option = question.options.find((candidate) => candidate.label === label);
-    void this.send(option?.reply ?? label, label, true);
+    return this.send(option?.reply ?? label, label, true);
   }
 
-  answerWizardStep(message: CustodianMessage, value: unknown): void {
+  answerWizardStep(message: CustodianMessage, value: unknown): Promise<CustodianSendOutcome> {
     if (!message.step || !this.wizardInputPending) {
-      return;
+      return Promise.resolve("rejected");
     }
     const submission = custodianWizardSubmission(message.step, value);
     const client = this.activeClient;
     if (!submission || !client || !this.canSend) {
       this.emit();
-      return;
+      return Promise.resolve("rejected");
     }
     const displayText = message.step.sensitive ? t("custodian.sensitiveReply") : submission.display;
-    void this.sendUserTurn(
+    return this.sendUserTurn(
       client,
       { sessionId: this.sessionId, wizardAnswer: submission.answer },
       displayText,
@@ -391,20 +402,14 @@ export class CustodianSessionStore {
     );
   }
 
-  cancelWizardStep(message: CustodianMessage): void {
+  cancelWizardStep(message: CustodianMessage): Promise<CustodianSendOutcome> {
     const step = message.step;
-    const client = this.activeClient;
-    if (
-      !step ||
-      !this.wizardInputPending ||
-      !client ||
-      !this.canSend ||
-      !this.wizardCancelAvailable
-    ) {
+    const client = this.canSend ? this.activeClient : null;
+    if (!step || !this.wizardInputPending || !client || !this.wizardCancelAvailable) {
       this.emit();
-      return;
+      return Promise.resolve("rejected");
     }
-    void this.sendUserTurn(
+    return this.sendUserTurn(
       client,
       { sessionId: this.sessionId, wizardCancel: { stepId: step.id } },
       t("custodian.cancel"),
@@ -653,7 +658,7 @@ export class CustodianSessionStore {
     client: GatewayBrowserClient,
     params: SystemAgentChatParams,
     admit?: () => false | (() => void),
-  ): Promise<eventNudgeState.CustodianSendOutcome> {
+  ): Promise<CustodianSendOutcome> {
     const context = this.context;
     if (!context) {
       return "rejected";

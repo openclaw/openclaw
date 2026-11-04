@@ -80,27 +80,6 @@ export function resolveDiscordConversationRoute(params: {
   }
 }
 
-export function resolveDiscordBoundConversationRoute(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  guildId?: string | null;
-  memberRoleIds?: string[];
-  isDirectMessage: boolean;
-  isGroupDm: boolean;
-  directUserId?: string | null;
-  conversationId: string;
-  parentConversationId?: string | null;
-  boundSessionKey?: string | null;
-  configuredRoute?: { route: ResolvedAgentRoute } | null;
-  matchedBy?: ResolvedAgentRoute["matchedBy"];
-}): ResolvedAgentRoute {
-  const route = resolveDiscordConversationRoute({
-    ...params,
-    peer: buildDiscordRoutePeer(params),
-  });
-  return resolveDiscordEffectiveRoute({ ...params, route });
-}
-
 export function resolveDiscordEffectiveRoute(params: {
   route: ResolvedAgentRoute;
   boundSessionKey?: string | null;

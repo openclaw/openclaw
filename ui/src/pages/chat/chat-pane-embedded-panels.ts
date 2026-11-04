@@ -66,7 +66,7 @@ export function sidebarPanelDefinitions(
         variant:
           textKey === "conversation" || textKey === "companion"
             ? "chat"
-            : textKey === "subagents" || textKey === "processes"
+            : textKey === "subagents" || textKey === "processes" || textKey === "context"
               ? "file-list"
               : textKey === "portal"
                 ? "browser"
@@ -99,6 +99,7 @@ export function sidebarPanelDefinitions(
     definePanel("conversation", "messageSquare", false),
     definePanel("subagents", "bot"),
     definePanel("processes", "terminal"),
+    definePanel("context", "layers"),
     definePanel("detail", "diff", Boolean(data?.detailContent)),
     definePanel("terminal", "terminal", Boolean(state?.terminalAvailable)),
     {
@@ -144,6 +145,7 @@ export function sidebarPanelDefinitions(
       slot,
       label: entry?.value.label ?? slot.slice("plugin:".length),
       icon: "plug",
+      iconSvg: entry?.panelIcon,
       available: entry !== undefined,
       content: null,
       view: entry ? data : undefined,

@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { writeCronJobScratchInDatabase } from "../../cron/scratch-write.kernel.js";
 import { createCronStoreHarness } from "../../cron/service.test-harness.js";
 import { loadCronStore } from "../../cron/store.js";
@@ -11,6 +11,8 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { createHistoryJob, createReadService } from "./cron-read.test-support.js";
 import { cronHandlers } from "./cron.js";
 import {
+  cronAccountPolicy,
+  expectCronReply,
   createCronCallerClient as callerClient,
   createCronTestContext,
   createCronTestInvoker,
@@ -29,7 +31,6 @@ it.each(["caller closes after read", "owner transfers before read"] as const)(
       cronEnabled: true,
       defaultAgentId: "main",
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: async () => ({ status: "skipped" }),
     });
     const entered = createDeferred();
@@ -37,12 +38,7 @@ it.each(["caller closes after read", "owner transfers before read"] as const)(
     let invocation: Promise<unknown> | undefined;
     try {
       const owner = { agentId: "ops", sessionKey: "agent:ops:main", accountId: "work" };
-      const scheduledToolPolicy = {
-        version: 1 as const,
-        mode: "account" as const,
-        ownerSessionKey: owner.sessionKey,
-        ownerAccountId: owner.accountId,
-      };
+      const scheduledToolPolicy = cronAccountPolicy(owner.sessionKey, owner.accountId);
       const job = await cron.add(
         {
           ...createHistoryJob("ops", owner.sessionKey),
@@ -63,13 +59,13 @@ it.each(["caller closes after read", "owner transfers before read"] as const)(
       const request = { context, client };
       context.cron.readScratch.mockImplementation((...args) => cron.readScratch(...args));
       const { respond: permitted } = await invokeCron("cron.scratch.get", { id: job.id }, request);
-      expect(permitted).toHaveBeenCalledExactlyOnceWith(
-        true,
+      expectCronReply(
+        permitted,
         expect.objectContaining({
           currentRevision: 1,
           scratch: expect.objectContaining({ content: "original private scratch" }),
         }),
-        undefined,
+        "once",
       );
       context.cron.readScratch.mockClear();
       let current = true;
@@ -95,11 +91,11 @@ it.each(["caller closes after read", "owner transfers before read"] as const)(
         },
       ).catch((error: unknown) => ({ error }));
       if (change === "owner transfers before read") {
-        const enteredFirst = await Promise.race([
-          entered.promise.then(() => true),
-          invocation.then(() => false),
-        ]);
-        expect(enteredFirst).toBe(true);
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          invocation,
+          "scratch read was not reached",
+        );
         {
           using peer = new DatabaseSync(resolveOpenClawStateSqlitePath());
           const storeKey = cronStoreKey(storePath);
@@ -131,7 +127,6 @@ it.each(["caller closes after read", "owner transfers before read"] as const)(
         release.resolve();
       }
       const result = await invocation;
-      expect(context.cron.readScratch).toHaveBeenCalledOnce();
       if (change === "caller closes after read") {
         expect.soft(result).toMatchObject({
           error: { message: expect.stringContaining("authority closed") },

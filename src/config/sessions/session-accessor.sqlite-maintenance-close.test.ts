@@ -59,20 +59,21 @@ it.for([false, true])(
       const releaseStarted = createDeferredCore<{ completion: Promise<void> }>();
       const closeEntered = createDeferredCore<{ completion: Promise<void> }>();
       let insideKick = false;
-      let insideExecutorCapture = false;
+      let maintenanceExecutionCaptured = false;
       const captureExecution = databaseExecution.captureOpenClawAgentDatabaseExecution;
       vi.spyOn(databaseExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
         (...args) => {
-          if (!insideKick) {
+          const [executionOptions, constraints] = args;
+          if (
+            maintenanceExecutionCaptured ||
+            executionOptions.agentId !== scope.databaseAgentId ||
+            executionOptions.path !== requestedPath ||
+            constraints?.expectedIdentity?.nativeLocation !== canonicalPath
+          ) {
             return captureExecution(...args);
           }
-          insideExecutorCapture = true;
-          let execution: ReturnType<typeof captureExecution>;
-          try {
-            execution = captureExecution(...args);
-          } finally {
-            insideExecutorCapture = false;
-          }
+          maintenanceExecutionCaptured = true;
+          const execution = captureExecution(...args);
           const release = execution.release.bind(execution);
           vi.spyOn(execution, "release").mockImplementation(() => {
             releaseStarted.resolve({ completion: release() });
@@ -84,7 +85,7 @@ it.for([false, true])(
       const register = databaseResources.registerOpenClawAgentDatabaseAsyncResource;
       vi.spyOn(databaseResources, "registerOpenClawAgentDatabaseAsyncResource").mockImplementation(
         (resource) => {
-          if (!insideKick || insideExecutorCapture || resource.path !== canonicalPath) {
+          if (!insideKick || resource.path !== canonicalPath) {
             return register(resource);
           }
           return register({
@@ -212,35 +213,21 @@ it.for([
           execution.assertCurrent();
           throw new Error("Retired execution admitted maintenance");
         }
-        if (scenario === "live admission") {
-          throw new AgentDatabaseExecutionAdmissionClosedError(message);
-        }
-        if (scenario === "live mutation") {
-          throw new SqliteMutationWorkerRetiredError();
-        }
-        if (scenario === "retired plain error") {
-          throw new Error(message);
-        }
-        if (scenario === "retired plain mutation") {
-          throw new Error(mutationMessage);
-        }
-        if (scenario === "retired wrapped mutation") {
-          throw new Error("mutation cleanup failed", {
+        const ioError = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
+        throw {
+          "live admission": new AgentDatabaseExecutionAdmissionClosedError(message),
+          "live mutation": new SqliteMutationWorkerRetiredError(),
+          "retired plain error": new Error(message),
+          "retired plain mutation": new Error(mutationMessage),
+          "retired wrapped mutation": new Error("mutation cleanup failed", {
             cause: new SqliteMutationWorkerRetiredError(),
-          });
-        }
-        if (scenario === "retired aggregate") {
-          throw new AggregateError(
-            [
-              new SqliteMutationWorkerRetiredError(),
-              Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" }),
-            ],
+          }),
+          "retired aggregate": new AggregateError(
+            [new SqliteMutationWorkerRetiredError(), ioError],
             "mutation and cleanup failed",
-          );
-        }
-        throw new Error("maintenance write failed", {
-          cause: Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" }),
-        });
+          ),
+          "retired I/O error": new Error("maintenance write failed", { cause: ioError }),
+        }[scenario];
       });
       const scheduled = observeNextPeriodicMaintenance();
       let closing: Promise<boolean> | undefined;

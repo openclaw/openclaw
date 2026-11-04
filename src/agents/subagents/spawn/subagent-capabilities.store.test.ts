@@ -1,12 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
+import * as sessionEntryReads from "../../../config/sessions/session-entry-read-runtime.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { createDirectChatContext } from "../../../gateway/server-chat.agent-events.test-helpers.js";
@@ -22,7 +26,9 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { resolveRequesterToolPolicies } from "../../requester-tool-policy.js";
+import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   isSubagentEnvelopeSession,
   resolveStoredSubagentCapabilities as resolveCapabilities,
@@ -30,7 +36,10 @@ import {
   resolveStoredSubagentInheritedToolDenylist as resolveDenylist,
   resolveSubagentCapabilityStore as resolveStore,
 } from "./subagent-capabilities.js";
-import { getSubagentDepthFromSessionStore as resolveDepth } from "./subagent-depth.js";
+import {
+  getSubagentDepthFromSessionStore as resolveDepth,
+  getSubagentDepthFromSessionStoreInWorker,
+} from "./subagent-depth.js";
 import {
   createSubagentSessionStore,
   prepareSessionCapabilityRead,
@@ -111,7 +120,8 @@ describe("persisted subagent capability lookups", () => {
               const request = { config: cfg, agentId: "main", sessionKey: key };
               const resolve = () => resolveRequesterToolPolicies(request);
               const readPolicy = () => {
-                const { inheritedToolPolicy: inherited, subagentStore: store } = resolve();
+                const { inheritedToolPolicy: inherited } = resolve();
+                const store = resolveStore(key, { cfg });
                 return { policy: inherited, depth: resolveCapabilities(key, { cfg, store }).depth };
               };
               expect(resolve().inheritedToolPolicy).toEqual(policy);
@@ -225,10 +235,63 @@ describe("persisted subagent capability lookups", () => {
       expect(retained.read()).toBe(1);
       writeEntries(storePath, { [key]: makeEntry("nested-child", { spawnDepth: 2 }) });
       expect(() => retained.read()).toThrow("Session capability metadata changed");
+      const run = vi.fn(async () => retained.read());
+      await expect(
+        runWithModelFallback({
+          cfg: undefined,
+          provider: "fixture-provider",
+          model: "fixture-model",
+          manifestPlugins: [],
+          fallbacksOverride: ["fixture-next/fixture-model"],
+          run,
+        }),
+      ).rejects.toThrow("Session capability metadata changed");
+      expect(run).toHaveBeenCalledOnce();
     } finally {
       retained.release();
     }
   });
+
+  it.each([1, 2])(
+    "bounds capability refresh after %s intervening publications",
+    async (changes) => {
+      const { storePath, key } = fixture("subagent-capability-refresh-");
+      const entry = makeEntry("child", { inheritedToolDeny: ["exec"] });
+      writeEntries(storePath, { [key]: entry });
+      const readEntries = sessionEntryReads.withSessionEntriesFromStoreInWorker;
+      let reads = 0;
+      vi.spyOn(sessionEntryReads, "withSessionEntriesFromStoreInWorker").mockImplementation(
+        async (...args) => {
+          const result = await readEntries(...args);
+          reads += 1;
+          if (reads <= changes) {
+            writeEntries(storePath, {
+              [key]: { ...entry, inheritedToolDeny: ["exec", "tool-" + reads] },
+            });
+          }
+          return result;
+        },
+      );
+      const store = createSubagentSessionStore(storePath, "main");
+      const pending = prepareSessionCapabilityRead(() => store.get(key)?.inheritedToolDeny);
+      if (changes === 2) {
+        await expect(pending).rejects.toThrow("Session capability metadata changed");
+      } else {
+        const prepared = await pending;
+        try {
+          expect(prepared.read()).toEqual(["exec", "tool-1"]);
+          writeEntries(storePath, { [key]: { ...entry, inheritedToolDeny: ["exec", "write"] } });
+          // A new preparation may read new policy, but cannot renew this retained guard.
+          await expect(withPreparedRead(() => prepared.read())).rejects.toThrow(
+            "Session capability metadata changed",
+          );
+        } finally {
+          prepared.release();
+        }
+      }
+      expect(reads).toBe(2);
+    },
+  );
 
   it("prepares requested capability rows and observes the next committed policy", async () => {
     const { storePath, cfg, key } = fixture("subagent-capability-memo-");
@@ -365,4 +428,116 @@ describe("persisted subagent capability lookups", () => {
       expect(listing).not.toHaveBeenCalled();
     },
   );
+});
+
+async function depthStore(
+  entries: Array<[string, { spawnDepth?: number; spawnedBy?: string }, string?]>,
+  fixed = false,
+) {
+  const store = path.join(
+    tempDirs.make("subagent-depth-"),
+    fixed ? "sessions.sqlite" : "sessions-{agentId}.json",
+  );
+  for (const [sessionKey, fields, owner] of entries) {
+    const agentId = expectDefined(owner ?? sessionKey.split(":")[1], "fixture owner");
+    await sessionAccessor.replaceSessionEntry(
+      { agentId, sessionKey, storePath: store.replaceAll("{agentId}", agentId) },
+      { sessionId: sessionKey, updatedAt: Date.now(), ...fields },
+    );
+  }
+  return store;
+}
+
+describe("getSubagentDepthFromSessionStore", () => {
+  it("ignores non-decimal and unsafe stored spawnDepth strings", () => {
+    const key = "agent:main:subagent:flat";
+    for (const spawnDepth of ["1e3", "0x10", "1.5", "9007199254740993"]) {
+      const depth = resolveDepth(key, {
+        store: createSessionCapabilityLookup({
+          [key]: { spawnDepth },
+        }),
+      });
+      expect(depth).toBe(1);
+    }
+  });
+
+  it("ignores parentSessionKey threading when resolving spawn depth", () => {
+    const store = createSessionCapabilityLookup({
+      "agent:main:main": {},
+      "agent:main:dashboard:operator": { spawnDepth: 0, parentSessionKey: "agent:main:main" },
+      "agent:main:dashboard:legacy": { parentSessionKey: "agent:main:main" },
+    });
+    expect(resolveDepth("agent:main:dashboard:operator", { store })).toBe(0);
+    expect(resolveDepth("agent:main:dashboard:legacy", { store })).toBe(0);
+  });
+
+  it("resolves prefixed store keys when caller key omits the agent prefix", async () => {
+    const store = await depthStore([["agent:main:subagent:flat", { spawnDepth: 2 }]]);
+    expect(
+      await getSubagentDepthFromSessionStoreInWorker("subagent:flat", {
+        cfg: { session: { store } },
+      }),
+    ).toBe(2);
+  });
+
+  it("reads a bare fixed-store key through its persisted owner", async () => {
+    const store = await depthStore([["global", { spawnDepth: 2 }, "ops"]], true);
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store },
+    } satisfies OpenClawConfig;
+
+    expect(await getSubagentDepthFromSessionStoreInWorker("global", { cfg })).toBe(2);
+  });
+
+  it("resolves a cross-agent parent outside the supplied child store", async () => {
+    const parentKey = "agent:main:dashboard:parent";
+    const store = await depthStore([[parentKey, { spawnDepth: 2 }]]);
+
+    const depth = await getSubagentDepthFromSessionStoreInWorker("agent:work:dashboard:child", {
+      cfg: { session: { store } },
+      store: createSessionCapabilityLookup({
+        "agent:work:dashboard:child": { spawnedBy: parentKey },
+      }),
+    });
+
+    expect(depth).toBe(3);
+  });
+
+  it("keeps agent-scoped views separate for a fixed shared store", async () => {
+    const childKey = "agent:ops:dashboard:child";
+    const parentKey = "agent:research:dashboard:parent";
+    const store = await depthStore(
+      [
+        [childKey, { spawnedBy: parentKey }],
+        [parentKey, { spawnDepth: 2 }],
+      ],
+      true,
+    );
+
+    expect(
+      await getSubagentDepthFromSessionStoreInWorker(childKey, {
+        cfg: {
+          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+          session: { store },
+        },
+      }),
+    ).toBe(3);
+  });
+});
+
+describe("resolveAgentTimeoutMs", () => {
+  it("uses a timer-safe sentinel for no-timeout overrides", () => {
+    expect(resolveAgentTimeoutMs({ overrideSeconds: 0 })).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolveAgentTimeoutMs({ overrideMs: 0 })).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("clamps very large timeout overrides to timer-safe values", () => {
+    expect(resolveAgentTimeoutMs({ overrideSeconds: 9_999_999 })).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolveAgentTimeoutMs({ overrideMs: 9_999_999_999 })).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
 });

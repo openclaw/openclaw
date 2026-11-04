@@ -54,11 +54,8 @@ fixture.installGatewayTestHooks({
 });
 
 await import("./server.js");
-// Prepare the lazy handler before the first creation RPC starts its response deadline.
-await import("./server-methods/sessions-create.js");
 
 for (const [suffix, name] of [
-  ["success", "public session creation and child Stop publish readable cancellation state"],
   ["fault", "chat.abort interrupts all siblings before cleanup and preserves failure accounting"],
   [
     "replacement",
@@ -82,7 +79,7 @@ for (const [suffix, name] of [
     const sessionKey = (runId: string) => `agent:main:subagent:${runId}`;
     const stateDir = process.env.OPENCLAW_STATE_DIR!;
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    let parentSessionId = `parent-session-${suffix}`;
+    const parentSessionId = `parent-session-${suffix}`;
     const replacementScope = {
       storePath,
       agentId: "main",
@@ -99,10 +96,8 @@ for (const [suffix, name] of [
         sessionKey: key,
         defaultSessionId: id,
       });
-    if (fault || replaceParent) {
-      // Prior cases still have Gateway-owned monitors; preserve their rows.
-      await seedSession(parentKey, parentSessionId);
-    }
+    // Prior cases still have Gateway-owned monitors; preserve their rows.
+    await seedSession(parentKey, parentSessionId);
 
     const socket = await gateway.openWs();
     const parentStarted = createDeferred<AgentCommandOpts>();
@@ -128,17 +123,6 @@ for (const [suffix, name] of [
       shape: Record<string, unknown>,
     ) => expect(response, JSON.stringify(response.error)).toMatchObject(shape);
     const runtimeKey = (runId: string) => getSubagentRunRuntimeKey(subagentRuns.get(runId)!);
-    const describe = async (
-      key: string,
-      sessionId: string,
-      fields: Record<string, unknown> = {},
-    ) => {
-      const response = await fixture.rpcReq(socket, "sessions.describe", { key, agentId: "main" });
-      expectResponse(response, {
-        ok: true,
-        payload: { session: { key, sessionId, ...fields } },
-      });
-    };
 
     const cancellationInspected = createDeferred();
     // Hold the child's kill owner: an aborted parent no longer delays confirmation,
@@ -148,29 +132,10 @@ for (const [suffix, name] of [
       : undefined;
     await runQaGatewayFixture(
       async () => {
-        if (!fault && !replaceParent) {
-          await fixture.prepareGatewayReplyRuntimeForTest({ force: true });
-        }
         await fixture.connectOk(socket, {
           scopes: ["operator.read", "operator.write"],
           prePairDevice: true,
         });
-        if (!fault && !replaceParent) {
-          const created = await fixture.rpcReq<{ key: string; sessionId: string }>(
-            socket,
-            "sessions.create",
-            {
-              agentId: "main",
-              key: parentKey,
-            },
-          );
-          expectResponse(created, {
-            ok: true,
-            payload: { key: parentKey },
-          });
-          parentSessionId = expectDefined(created.payload, "created non-main parent").sessionId;
-          expect(parentSessionId).not.toBe("");
-        }
         fixture.agentCommandMock.mockImplementationOnce(async (input) => {
           const command = input as AgentCommandOpts;
           expect(command.abortSignal).toBeInstanceOf(AbortSignal);
@@ -363,7 +328,7 @@ for (const [suffix, name] of [
             replacementScope.sessionId,
           );
           expect(await sessions.loadTranscriptEvents(replacementScope)).toEqual(replacementBefore);
-        } else if (fault) {
+        } else {
           expectResponse(outcome.value, {
             ok: false,
             error: {
@@ -371,19 +336,6 @@ for (const [suffix, name] of [
               message: expect.stringContaining("synthetic sibling interruption failure"),
             },
           });
-        } else {
-          expectResponse(outcome.value, {
-            ok: true,
-            payload: { ok: true, aborted: true, runIds: [parentRunId] },
-          });
-        }
-
-        if (!fault && !replaceParent) {
-          await describe(sessionKey(firstRunId), `${firstRunId}-session`, {
-            status: "killed",
-            hasActiveRun: false,
-          });
-          await describe(parentKey, parentSessionId);
         }
         const persistedRuns = listRunsForControllerFromRuns(
           loadSubagentRegistryFromSqlite(),
@@ -454,7 +406,6 @@ for (const [suffix, name] of [
         } finally {
           await Promise.all(reservationReleases);
         }
-        socket.close();
         expect(getSessionMutationCount()).toBe(0);
         expect(getSessionControllerWorkCount()).toBe(0);
       },

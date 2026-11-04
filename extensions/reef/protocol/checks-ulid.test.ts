@@ -1,6 +1,12 @@
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { deterministicChecks, type CheckFinding } from "./checks.js";
 import { createMonotonicUlidFactory } from "./ulid.js";
+
+// mock-isolation: Fix entropy for the independent exact-ID assertions below.
+vi.mock("@noble/hashes/utils.js", () => ({
+  randomBytes: (length: number) => new Uint8Array(length),
+}));
+afterEach(() => vi.restoreAllMocks());
 
 // Assemble secret-shaped fixtures to avoid source-scanner matches.
 const fake = (...parts: string[]) => parts.join("");
@@ -86,8 +92,9 @@ it("rejects invalid UTF-8 and oversize input", () => {
   expect(deterministicChecks("x".repeat(32 * 1024 + 1)).findings[0]?.code).toBe("too_large");
 });
 
-it("generates deterministic, monotonic ULIDs with injected clock and rng", () => {
-  const make = createMonotonicUlidFactory({ clock: () => 1_000, rng: () => new Uint8Array(10) });
+it("generates deterministic, monotonic ULIDs", () => {
+  vi.spyOn(Date, "now").mockReturnValue(1_000);
+  const make = createMonotonicUlidFactory();
   const first = make();
   const second = make();
   expect([first, second]).toEqual(["00000000Z80000000000000000", "00000000Z80000000000000001"]);

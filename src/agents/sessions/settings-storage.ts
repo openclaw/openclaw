@@ -1,7 +1,5 @@
 import { readFileSync } from "node:fs";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { hasErrnoCode } from "../../infra/errno.js";
 import type { ThinkingBudgets, Transport } from "../../llm/types.js";
 
 interface CompactionSettings {
@@ -110,21 +108,12 @@ export interface Settings {
 export type SettingsScope = "global" | "project";
 
 /** Read one settings file without applying runtime-specific validation or defaults. */
-export function readSettingsScope(path: string): { settings: Settings; loadError: Error | null } {
+export function readSettingsScope(path: string): Settings {
   try {
     const content = readFileSync(path, "utf-8");
     const settings: unknown = content ? JSON.parse(content) : {};
-    if (!isRecord(settings)) {
-      throw new TypeError("Session settings must be an object");
-    }
-    return { settings, loadError: null };
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return { settings: {}, loadError: null };
-    }
-    return {
-      settings: {},
-      loadError: toErrorObject(error, "Session settings could not be loaded"),
-    };
+    return isRecord(settings) ? settings : {};
+  } catch {
+    return {};
   }
 }

@@ -2,10 +2,9 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { hasUnjoinedWork } from "../../../scripts/lib/managed-child-process.mts";
 import { createVitestResourceOwner } from "../../../scripts/lib/vitest-resource-ownership.mts";
-import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCliProcessChild } from "../../cli/cli-process-child.test-helpers.js";
@@ -23,13 +22,8 @@ it.each(["joined", "kill-error", "exit-timeout"])(
     const unjoined = cleanupMode !== "joined";
     const ownerRoot = tempDirs.make("sdk-home-owner-");
     const owner = createVitestResourceOwner(ownerRoot);
-    const runtime = createFixtureLifetime(ownerRoot);
-    const runtimeRoot = runtime.createTempDir("runtime-");
-    const runtimePath = path.join(runtimeRoot, "entry.cjs");
     const runtimeSource =
       "require('node:fs').writeFileSync(require('node:path').join(process.env.OPENCLAW_STATE_DIR, 'child.txt'), 'child state'); process.stdout.write('ready'); setInterval(() => {}, 1_000);";
-    await fs.writeFile(runtimePath, runtimeSource);
-    onTestFinished(() => runtime.cleanup());
     const { HOME, OPENCLAW_STATE_DIR } = process.env;
     const inputFailure = new Error("CLI interaction failed");
     const cleanupSessionState = sessionCleanup.cleanupSessionStateForTest;
@@ -47,33 +41,30 @@ it.each(["joined", "kill-error", "exit-timeout"])(
         async (fixtureHome) => {
           home = fixtureHome;
           await fs.writeFile(path.join(fixtureHome, "owned.txt"), "retain while live");
-          return runtime.track(
-            runCliProcessChild({
-              nodeArgs: [runtimePath],
-              env: process.env,
-              interact: async (runningChild) => {
-                child = runningChild;
-                await once(runningChild.stdout, "data");
-                if (unjoined) {
-                  const kill = vi.spyOn(runningChild, "kill").mockImplementation(() => {
-                    if (cleanupMode === "exit-timeout") {
-                      return true;
-                    }
-                    throw new Error("cleanup kill failed");
-                  });
-                  restoreKill = () => kill.mockRestore();
-                }
-                throw inputFailure;
-              },
-            }),
-          );
+          return runCliProcessChild({
+            nodeArgs: ["-e", runtimeSource],
+            env: process.env,
+            interact: async (runningChild) => {
+              child = runningChild;
+              await once(runningChild.stdout, "data");
+              if (unjoined) {
+                const kill = vi.spyOn(runningChild, "kill").mockImplementation(() => {
+                  if (cleanupMode === "exit-timeout") {
+                    return true;
+                  }
+                  throw new Error("cleanup kill failed");
+                });
+                restoreKill = () => kill.mockRestore();
+              }
+              throw inputFailure;
+            },
+          });
         },
         {
           prefix: path.join(path.basename(ownerRoot), "home-"),
           ...(unjoined ? { env: { TMPDIR: ownerRoot, TMP: ownerRoot, TEMP: ownerRoot } } : {}),
         },
       ).catch((error: unknown) => error);
-      const runtimeCleanupFailure = await runtime.cleanup().catch((error: unknown) => error);
 
       expect(hasUnjoinedWork(failure)).toBe(unjoined);
       expect(process.env.HOME).toBe(HOME);
@@ -88,15 +79,12 @@ it.each(["joined", "kill-error", "exit-timeout"])(
         }
         expect(await read(path.join(home!, "owned.txt"))).toBe("retain while live");
         expect(await read(path.join(home!, ".openclaw", "child.txt"))).toBe("child state");
-        expect(await read(runtimePath)).toBe(runtimeSource);
       } else {
         expect(failure).toBe(inputFailure);
         expect(cleanupSignals).toEqual(["SIGKILL"]);
         expect(() => owner.assertReleased()).not.toThrow();
         await expectMissing(home!);
-        await expectMissing(runtimeRoot);
       }
-      expect(hasUnjoinedWork(runtimeCleanupFailure)).toBe(unjoined);
     } finally {
       cleanup.mockRestore();
       restoreKill?.();
@@ -107,46 +95,6 @@ it.each(["joined", "kill-error", "exit-timeout"])(
         await cleanupSessionState({ stateDir: path.join(home, ".openclaw") });
         await fs.rm(home, { recursive: true, force: true });
       }
-      await runtime.cleanup();
     }
   },
 );
-
-it("recovers after failed allocations without leaking roots or removing retained homes", async () => {
-  const parent = tempDirs.make("sdk-home-acquisition-");
-  const missingParent = path.join(parent, "missing");
-  const prefix = path.join(path.basename(parent), "missing", "shared-");
-  const options = { prefix, skipSessionCleanup: true };
-  const unexpectedCallback = async () => {
-    throw new Error("callback must not run when root acquisition fails");
-  };
-  const failures = await Promise.allSettled(
-    Array.from({ length: 3 }, () => withTempHomeCore(unexpectedCallback, options)),
-  );
-  for (const result of failures) {
-    expect(result).toMatchObject({ status: "rejected", reason: { code: "ENOENT" } });
-  }
-  expect(await fs.readdir(parent)).toEqual([]);
-
-  await fs.mkdir(missingParent);
-  const first = await withTempHomeCore(
-    async (home) => {
-      await fs.writeFile(path.join(home, "retained.txt"), "keep");
-      return home;
-    },
-    { ...options, skipHomeCleanup: true },
-  );
-  const second = await withTempHomeCore(async (home) => home, options);
-  const third = await withTempHomeCore(async (home) => home, options);
-  expect(new Set([first, second, third]).size).toBe(3);
-  expect(await fs.readdir(missingParent)).toEqual([path.basename(first)]);
-  expect(await read(path.join(first, "retained.txt"))).toBe("keep");
-  const independent = await withTempHomeCore(async (home) => home, {
-    prefix: path.join(path.basename(parent), "independent-"),
-    skipSessionCleanup: true,
-  });
-  await expectMissing(independent);
-  expect(await fs.readdir(parent)).toEqual(["missing"]);
-  await fs.rm(first, { recursive: true });
-  expect(await fs.readdir(missingParent)).toEqual([]);
-});

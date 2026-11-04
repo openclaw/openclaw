@@ -84,7 +84,6 @@ export function attachEmbeddedFinalPresentation(
     input.prepared.replyDeliveryState === "delivered" &&
     input.prepared.sourceReplyDeliveryState !== "pending" &&
     input.runParams.sourceReplyDeliveryMode !== "message_tool_only" &&
-    !input.attempt.heartbeatToolResponse &&
     !hasCommittedSourceReplyDeliveryEvidence(input.attempt) &&
     !hasMessagingToolDeliveryEvidence(input.attempt)
   ) {

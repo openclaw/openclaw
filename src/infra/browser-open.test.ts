@@ -113,14 +113,9 @@ describe("openLocalFile", () => {
 });
 
 describe("browser support and launch", () => {
-  it("retains process-level WSL detection caching through support detection", async () => {
+  it("reports a missing display on native Linux", async () => {
     mockProcessPlatform("linux");
-
-    const unsupported = { ok: false, reason: "no-display" };
-    await expect(detectSupport()).resolves.toEqual(unsupported);
-    await expect(detectSupport()).resolves.toEqual(unsupported);
-
-    expect(readRelease).toHaveBeenCalledTimes(1);
+    await expect(detectSupport()).resolves.toEqual({ ok: false });
   });
 
   it("reports display-less WSL support only when wslview is installed", async () => {
@@ -134,7 +129,7 @@ describe("browser support and launch", () => {
     openedWith("wslview", url);
 
     detect.mockResolvedValue(false);
-    await expect(detectSupport()).resolves.toEqual({ ok: false, reason: "wsl-no-wslview" });
+    await expect(detectSupport()).resolves.toEqual({ ok: false });
   });
 
   it("prefers the registry-backed Windows system root over process env", async () => {
@@ -171,7 +166,7 @@ describe("browser support and launch", () => {
     mockProcessPlatform("linux");
     vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
 
-    await expect(detectSupport()).resolves.toEqual({ ok: false, reason: "ssh-no-display" });
+    await expect(detectSupport()).resolves.toEqual({ ok: false });
     await expect(openUrl(url)).resolves.toBe(false);
     expect(launch).not.toHaveBeenCalled();
   });

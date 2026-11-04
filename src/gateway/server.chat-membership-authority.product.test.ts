@@ -1,12 +1,9 @@
 // Load the deferred Gateway and model runtime during collection, outside the authority deadline.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import assert from "node:assert/strict";
 import { randomUUID, X509Certificate } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
-import { text as readStreamText } from "node:stream/consumers";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -14,6 +11,7 @@ import type { UsersSelfResult } from "../../packages/gateway-protocol/src/schema
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import {
   listSessionPendingInputs,
   loadTranscriptEvents,
@@ -29,16 +27,24 @@ import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-e
 import { readResidentUserProfileIdentity } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  closeProvider,
+  listenProvider,
+  writeToolCall,
+} from "./gateway-provider-fixture.test-support.js";
+import {
+  createProductState,
+  productModelConfig,
+  productProvider,
+} from "./server.chat-product.test-support.js";
 import * as sessionSharingAuthorization from "./session-sharing-authorization-async.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
-import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
@@ -159,20 +165,13 @@ it(
   "carries current caller, membership and global ownership through transcript persistence and agent dispatch",
   { timeout: 90_000 },
   async () => {
-    const state = await createOpenClawTestState({
-      label: "chat-membership-authority",
-      env: {
-        ...KERNEL_TEST_ENV,
-        VITEST: process.env.VITEST,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-    });
+    const state = await createProductState("chat-membership-authority");
     const requests: string[] = [];
     const providerErrors: unknown[] = [];
     const expectRequests = (count: number) =>
       expect({ count: requests.length, errors: providerErrors }).toEqual({ count, errors: [] });
     let providerReply = "Authorized member reply.";
+    let toolWrite: { message: string; file: string; supplied: boolean } | undefined;
     const providerHolds: ReturnType<typeof holdProviderResponse>[] = [];
     function holdProviderResponse(message: string) {
       const hold = {
@@ -186,41 +185,32 @@ it(
     }
     const cleanups: Array<() => Promise<unknown>> = [() => state.cleanup()];
     try {
-      const providerServer = createServer((request, response) => {
-        void (async () => {
-          const body = await readStreamText(request);
-          requests.push(body);
-          const reply = providerReply;
-          const hold = providerHolds.find(
-            (candidate) => !candidate.claimed && body.includes(candidate.message),
-          );
-          if (hold) {
-            hold.claimed = true;
-            hold.entered.resolve();
-            await hold.resume.promise;
-          }
+      const providerServer = productProvider(providerErrors, async (body, response) => {
+        requests.push(body);
+        const reply = providerReply;
+        const hold = providerHolds.find(
+          (candidate) => !candidate.claimed && body.includes(candidate.message),
+        );
+        if (hold) {
+          hold.claimed = true;
+          hold.entered.resolve();
+          await hold.resume.promise;
+        }
+        if (toolWrite && body.includes(toolWrite.message) && !toolWrite.supplied) {
+          toolWrite.supplied = true;
+          writeToolCall(response, "write", { path: toolWrite.file, content: toolWrite.message });
+        } else {
           writeOpenAiResponsesText(response, {
             text: reply,
             messageId: `msg_${randomUUID()}`,
             responseId: `resp_${randomUUID()}`,
           });
-        })().catch((error: unknown) => {
-          providerErrors.push(error);
-          response.writeHead(500).end("fixture provider failed");
-        });
+        }
       });
-      cleanups.push(async () => {
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
-      });
-      await once(providerServer.listen(0, "127.0.0.1"), "listening");
-      const address = providerServer.address();
-      assert(address && typeof address !== "string", "fixture provider did not bind");
+      cleanups.push(() => closeProvider(providerServer));
       const agentExecutions: Array<{ release(): Promise<void> }> = [];
       const provider = buildMockOpenAiResponsesProvider(
-        `http://127.0.0.1:${address.port}/v1`,
+        await listenProvider(providerServer),
         "membership-authority",
       );
       const proxyUser = "member@example.test";
@@ -236,8 +226,7 @@ it(
         allowLoopback: true,
         deviceAutoApprove: { enabled: true, scopes: operatorScopes },
       };
-      const providerConfig = { ...provider.config, request: { allowPrivateNetwork: true } };
-      const modelParams = { transport: "sse", openaiWsWarmup: false };
+      const model = productModelConfig(state.workspaceDir, provider);
       const identityScopes = { [proxyAdministrator]: adminScopes };
       const roles = {
         administrator: { sessions: { others: "write" }, agents: "*", scopes: adminScopes },
@@ -247,20 +236,18 @@ it(
         agents: {
           ownership: "explicit",
           entries: { main: {}, work: {} },
-          defaults: {
-            workspace: state.workspaceDir,
-            skipBootstrap: true,
-            model: { primary: provider.modelRef },
-            models: {
-              [provider.modelRef]: { agentRuntime: { id: "openclaw" }, params: modelParams },
-            },
-          },
+          defaults: model.defaults,
         },
         session: { scope: "global" },
         messages: { queue: { allowCollaborativeSteering: true } },
-        models: { mode: "replace", providers: { [provider.providerId]: providerConfig } },
+        models: model.models,
         plugins: { enabled: false, slots: { memory: "none" } },
-        tools: { profile: "minimal" },
+        tools: {
+          allow: ["write"],
+          fs: { workspaceOnly: true },
+          codeMode: { enabled: false },
+          toolSearch: false,
+        },
         gateway: {
           auth: { mode: "trusted-proxy", trustedProxy, identityScopes },
           trustedProxies: ["127.0.0.1"],
@@ -541,6 +528,61 @@ it(
       );
       expect(countMessage("assistant", providerReply)).toBe(2);
       expect(await listSessionPendingInputs(profile)).toEqual({ items: [], total: 0 });
+      for (const method of ["agent", "chat.send"] as const) {
+        const workspace = resolveAgentWorkspaceDir(cfg, "main", state.env);
+        const target = {
+          agentId: "main",
+          sessionKey: `agent:main:live-membership-${method}-${randomUUID()}`,
+          sessionId: randomUUID(),
+        };
+        await seedSession(target, owner.id);
+        await administrator.request("session.members.add", {
+          sessionKey: target.sessionKey,
+          identityId: replacement.id,
+        });
+        const allowed = {
+          message: `LIVE_WRITE_${method}_${randomUUID()}`,
+          file: path.join(workspace, `${method}-allowed.txt`),
+          supplied: false,
+        };
+        toolWrite = allowed;
+        const positive = await send(client, target.sessionKey, allowed.message, {}, method);
+        await waitForRun(administrator, positive.runId);
+        expect(allowed.supplied).toBe(true);
+        expect(await fs.readFile(allowed.file, "utf8")).toBe(allowed.message);
+        const forbidden = {
+          message: `REVOKED_WRITE_${method}_${randomUUID()}`,
+          file: path.join(workspace, `${method}-revoked.txt`),
+          supplied: false,
+        };
+        toolWrite = forbidden;
+        const hold = holdProviderResponse(forbidden.message);
+        const revokedRun = await send(client, target.sessionKey, forbidden.message, {}, method);
+        const terminal = administrator.request<{ status: string }>(
+          "agent.wait",
+          { runId: revokedRun.runId, timeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        );
+        void terminal.catch(() => undefined);
+        try {
+          await expectHeld(hold.entered.promise, terminal, `${method} tool response`);
+          await administrator.request("session.members.remove", {
+            sessionKey: target.sessionKey,
+            identityId: replacement.id,
+          });
+          const beforeDenied = requests.length;
+          await expect(
+            send(client, target.sessionKey, "Revoked next request", {}, method),
+          ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+          expect(requests).toHaveLength(beforeDenied);
+        } finally {
+          hold.resume.resolve();
+        }
+        expect(await terminal).toMatchObject({ status: expect.stringMatching(/^(ok|error)$/) });
+        expect(forbidden.supplied).toBe(true);
+        await expect(fs.stat(forbidden.file)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await fs.readFile(allowed.file, "utf8")).toBe(allowed.message);
+      }
       expect(providerErrors).toEqual([]);
     } finally {
       providerHolds.forEach((hold) => hold.resume.resolve());

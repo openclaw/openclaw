@@ -27,11 +27,6 @@ import {
 import { t, wizardT } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
-type ChannelStatusSummary = {
-  statusByChannel: Map<ChannelChoice, ChannelSetupStatus>;
-  statusLines: string[];
-};
-
 type ChannelSetupSelectionEntry = {
   id: ChannelChoice;
   meta: {
@@ -262,7 +257,7 @@ export async function collectChannelStatus(params: {
   accountOverrides: Partial<Record<ChannelChoice, string>>;
   installedPlugins: ChannelSetupPlugin[];
   resolveAdapter: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
-}): Promise<ChannelStatusSummary> {
+}) {
   const { installedPlugins, resolveAdapter } = params;
   const workspaceDir = params.workspaceDir ?? resolveChannelSetupWorkspaceDir(params.cfg);
   const { installedCatalogEntries, installableCatalogEntries } = resolveChannelSetupEntries({
@@ -300,12 +295,10 @@ export async function collectChannelStatus(params: {
         }),
     )
   ).filter((status): status is ChannelSetupStatus => status !== undefined);
-  const statusByChannel = new Map(
-    statusEntries.map((entry: ChannelSetupStatus) => [entry.channel, entry]),
-  );
+  const statusChannels = new Set(statusEntries.map((entry) => entry.channel));
   const fallbackStatuses = listChatChannels()
     .filter((meta) => shouldShowChannelInSetup(meta))
-    .filter((meta) => !statusByChannel.has(meta.id))
+    .filter((meta) => !statusChannels.has(meta.id))
     .map((meta) => {
       const configured = isChannelConfigured(params.cfg, meta.id);
       const statusLabel = configured ? "configured (plugin disabled)" : "not configured";
@@ -318,7 +311,7 @@ export async function collectChannelStatus(params: {
       };
     });
   const discoveredPluginStatuses = installedCatalogEntries
-    .filter((entry) => !statusByChannel.has(entry.id as ChannelChoice))
+    .filter((entry) => !statusChannels.has(entry.id as ChannelChoice))
     .map((entry) => {
       const configured = isChannelConfigured(params.cfg, entry.id);
       const pluginEnabled =

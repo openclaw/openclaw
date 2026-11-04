@@ -15,7 +15,9 @@ import {
   targetDiscoveryLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readPluginNoticeData, type PluginNotice } from "../shared/plugin-notice.js";
 import { isActiveStoreWriter } from "../shared/store-writer-queue.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -128,6 +130,76 @@ describe("channel-final transcript mirrors", () => {
       "conflicts with the admitted message",
     );
     expect(rows()).toEqual(before);
+  });
+
+  it("records a plugin notice that stays out of model replay without its provenance", async () => {
+    const data = { runId: "review-1", skills: [{ name: "deploy", action: "created" }] };
+    const notice: PluginNotice = { kind: "plugin-notice", pluginId: "demo", type: "changed", data };
+    const withExtraField = { ...notice, extra: "dropped" };
+    expect(
+      await appendMirror({
+        ...scope,
+        idempotencyKey: "demo-notice:review-1",
+        deliveryMirror: withExtraField,
+        text: "Learned: created deploy.",
+        updateMode: "none",
+      }),
+    ).toMatchObject({ ok: true });
+
+    const message = (await mirrorEntries()).at(-1)?.message;
+    expect(message).toHaveProperty("openclawDeliveryMirror", notice);
+    expect(readPluginNoticeData(message, "demo", "changed")).toEqual(data);
+    expect(readPluginNoticeData(message, "other", "changed")).toBeUndefined();
+    // Rows whose provider and model were stripped stay out of replay by their marker (#99470).
+    expect(isTranscriptOnlyOpenClawAssistantMessage({ ...message, provider: "", model: "" })).toBe(
+      true,
+    );
+  });
+
+  it("keeps unkeyed plugin notices with the same text as separate rows", async () => {
+    const post = (runId: string) =>
+      appendMirror({
+        ...scope,
+        deliveryMirror: {
+          kind: "plugin-notice",
+          pluginId: "demo",
+          type: "changed",
+          data: { runId },
+        },
+        text: "Review complete",
+        updateMode: "none",
+      });
+    await answer("ordinary-answer", "Review complete");
+
+    const first = await post("review-1");
+    const second = await post("review-2");
+
+    expect(first).toMatchObject({ ok: true });
+    expect(second).toMatchObject({ ok: true });
+    expect(first.ok && second.ok && first.messageId !== second.messageId).toBe(true);
+    const notices = (await entries()).flatMap(
+      (entry) => readPluginNoticeData(entry.message, "demo", "changed") ?? [],
+    );
+    expect(notices).toEqual([{ runId: "review-1" }, { runId: "review-2" }]);
+  });
+
+  it("keeps a 2026.10.10-beta Learned row out of model replay", () => {
+    // Literal row written by 2026.10.10 betas before the plugin-notice marker.
+    const betaRow = {
+      role: "assistant",
+      content: [{ type: "text", text: "💾 Learned: updated `deploy`." }],
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      idempotencyKey: "skill-workshop-notice:skill-workshop-review:r1",
+      openclawDeliveryMirror: {
+        kind: "skill-workshop-change",
+        agentId: "main",
+        runId: "skill-workshop-review:r1",
+        skills: [{ name: "deploy", action: "updated" }],
+      },
+    };
+    expect(isTranscriptOnlyOpenClawAssistantMessage(betaRow)).toBe(true);
   });
 
   it("retains distinct unkeyed media identities and suppresses an exact repeat", async () => {

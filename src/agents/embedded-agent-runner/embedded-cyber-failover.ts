@@ -1,8 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { markFallbackCandidateSkipped } from "../fallback-skip-cache.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
-import type { ModelManifestNormalizationContext, ModelRef } from "../model-ref-shared.js";
-import { buildModelAliasIndex, resolveModelRefFromString } from "../model-selection-resolve.js";
+import type { ModelRef } from "../model-ref-shared.js";
 import { hasCommittedOutboundDeliveryEvidence } from "./delivery-evidence.js";
 import { hasVisibleAgentPayload } from "./message-visibility.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
@@ -11,13 +10,11 @@ export const EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE = "OPENAI_CYBER_POLICY_REFUSAL
 
 export type EmbeddedCyberFailoverConfig = {
   mode: "auto" | "off";
-  model: string;
   cooloffMs: number;
 };
 
 const DEFAULT_EMBEDDED_CYBER_FAILOVER: EmbeddedCyberFailoverConfig = {
   mode: "auto",
-  model: "openai/gpt-daybreak-blue-latest",
   cooloffMs: 600_000,
 };
 
@@ -27,32 +24,8 @@ export function resolveEmbeddedCyberFailoverConfig(
   const configured = cfg?.agents?.defaults?.embeddedAgent?.cyberFailover;
   return {
     mode: configured?.mode ?? DEFAULT_EMBEDDED_CYBER_FAILOVER.mode,
-    model: configured?.model ?? DEFAULT_EMBEDDED_CYBER_FAILOVER.model,
     cooloffMs: configured?.cooloffMs ?? DEFAULT_EMBEDDED_CYBER_FAILOVER.cooloffMs,
   };
-}
-
-export function resolveEmbeddedCyberFailoverTarget(
-  params: {
-    cfg: OpenClawConfig;
-    agentId?: string;
-    raw: string;
-  } & ModelManifestNormalizationContext,
-): ModelRef | null {
-  const modelContext = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    defaultProvider: "openai",
-    manifestPlugins: params.manifestPlugins,
-  };
-  const aliasIndex = buildModelAliasIndex(modelContext);
-  return (
-    resolveModelRefFromString({
-      ...modelContext,
-      raw: params.raw,
-      aliasIndex,
-    })?.ref ?? null
-  );
 }
 
 export function isReplaySafeEmbeddedOpenAiCyberRefusal(params: {
@@ -67,13 +40,6 @@ export function isReplaySafeEmbeddedOpenAiCyberRefusal(params: {
     refusal?.provider === "openai" &&
     refusal.category === "cyber"
   );
-}
-
-// An explicit empty fallback override locks selection, including policy escalation.
-export function isEmbeddedModelSelectionStrict(selection: {
-  fallbacksOverride?: readonly string[];
-}): boolean {
-  return selection.fallbacksOverride !== undefined && selection.fallbacksOverride.length === 0;
 }
 
 export function isEmbeddedCyberFailoverTargetUsable(result: EmbeddedAgentRunResult): boolean {

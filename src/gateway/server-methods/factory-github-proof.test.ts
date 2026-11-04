@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { issueFactoryGitHubProof } from "../factory-github-proof.js";
+import { createFactoryGitHubReadClaim } from "../factory-github-proof.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -17,17 +19,7 @@ afterEach(() => {
 });
 beforeEach(() => vi.stubEnv("FACTORY_AUTH_MODE", "github"));
 
-const claim = {
-  purpose: "session-item-read" as const,
-  binding: {
-    kind: "session" as const,
-    agentId: "main",
-    sessionKey: "agent:main:room",
-    sessionId: "session-1",
-    lifecycleRevision: "revision-1",
-    requestDigest: "digest-1",
-  },
-};
+const claim = createFactoryGitHubReadClaim("digest-1");
 
 function issue(assertCurrent = () => {}) {
   const proof = issueFactoryGitHubProof({
@@ -41,22 +33,12 @@ function issue(assertCurrent = () => {}) {
 }
 
 function expectForbidden(respond: Awaited<ReturnType<typeof rpc>>) {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "FORBIDDEN" }),
-  );
+  expect(respond).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
 }
 
 const broker: GatewayClient = {
   connId: "broker-connection",
-  connect: {
-    minProtocol: 1,
-    maxProtocol: 1,
-    client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-    role: "operator",
-    scopes: ["operator.admin"],
-  },
+  connect: gatewayConnect(["operator.admin"], { id: "cli", mode: "cli" }),
   internal: {
     isLocalClient: true,
     authenticatedOperator: true,
@@ -83,20 +65,20 @@ async function rpc(
     hasCurrentClientAuthority: () => true,
     ...requestOverrides,
   });
-  return respond;
+  return respond.mock.lastCall;
 }
 
-it("redeems the exact session read once through the registered direct private method", async () => {
+it("redeems once through the registered direct private method", async () => {
   const issued = issue();
-  expect(await rpc(issued.proof)).toHaveBeenCalledWith(
+  expect(await rpc(issued.proof)).toMatchObject([
     true,
-    expect.objectContaining({
+    {
       ...claim,
       actorId: 101,
       actorPrincipal: "github:example.ghe.com:101",
       profileId: "person-1",
-    }),
-  );
+    },
+  ]);
   expectForbidden(await rpc(issued.proof));
 });
 
@@ -138,10 +120,7 @@ it.each([
     const issued = issue();
     expectForbidden(await rpc(issued.proof, client, request));
     expect(issued.wasRedeemed()).toBe(false);
-    expect(await rpc(issued.proof)).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ actorId: 101 }),
-    );
+    expect(await rpc(issued.proof)).toMatchObject([true, { actorId: 101 }]);
   },
 );
 

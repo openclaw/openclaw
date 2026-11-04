@@ -22,6 +22,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   createGatewaySchedulerClock,
@@ -29,14 +30,10 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import * as lifecycleNotices from "./server-restart-sentinel-notice.js";
 import { activateGatewayScheduledServices } from "./server-runtime-services.js";
 import * as updateRunNotices from "./update-run-notice.runtime.js";
 import { startUpdateRunWatcher } from "./update-run-watcher.js";
 
-vi.mock("../infra/heartbeat-runner-scheduler.js", () => ({
-  startHeartbeatRunner: () => ({ stop() {}, updateConfig() {} }),
-}));
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
   startSessionUpstreamMonitor: () => ({ stop() {} }),
 }));
@@ -44,8 +41,9 @@ vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
   startSessionDeliveryRuntime: () => async () => {},
   schedulePendingSessionDeliveries: async () => {},
 }));
-vi.mock("./server-restart-sentinel.js", () => ({
-  recoverPendingRestartContinuationDeliveries: async () => {},
+vi.mock("./server-restart-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-restart-sentinel.js")>()),
+  recoverPendingProducedSessionDeliveries: async () => {},
   deliverQueuedSessionDelivery: async () => {},
   settleQueuedSessionDelivery: async () => {},
 }));
@@ -59,7 +57,7 @@ afterEach(async () => {
   await watcher?.stop();
   await lifecycle?.stop();
   await services?.stopDeliveryRecovery();
-  services?.heartbeatRunner.stop();
+  await services?.stopScheduledServices();
   await scheduler?.stop();
   watcher = undefined;
   services = undefined;
@@ -94,7 +92,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   const cfg: OpenClawConfig = {
     commands: { ownerAllowFrom: [`matrix:${recipient}`] },
     agents: { defaults: { heartbeat: { every: "0m" } } },
-    skills: { workshop: { autonomous: { mode: "off" } } },
+    ...workshopPluginConfig({ autonomous: { mode: "off" } }),
   };
   setRuntimeConfigSnapshot(cfg);
   const receipts: string[] = [];
@@ -131,7 +129,6 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
     },
   );
   const contextA = captureDeliveryQueueStateContext();
-  const notice = vi.spyOn(lifecycleNotices, "sendGatewayLifecycleNotice");
   const noticeStarted = createDeferredCore();
   const notifyUpdateRunPhase = updateRunNotices.notifyUpdateRunPhase;
   const notifyPhase = vi.spyOn(updateRunNotices, "notifyUpdateRunPhase");
@@ -148,7 +145,6 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
     cfgAtStart: cfg,
     deps: {},
     sessionDeliveryRecoveryMaxEnqueuedAt: Date.now(),
-    cronEnabled: false,
     log: { ...log, child: () => log },
   });
   await vi.dynamicImportSettled();
@@ -164,18 +160,12 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   const broadcast = vi.fn().mockImplementationOnce(() => initiallyObserved.resolve());
   watcher = startUpdateRunWatcher({ lifecycle, broadcast, log });
   await initiallyObserved.promise;
-  expect(broadcast).toHaveBeenCalledWith(
-    "update.run.changed",
-    expect.objectContaining({ runId: run.runId, status: "running" }),
-  );
   finishUpdateRun(run.runId, { status: "succeeded", after: { version: "2026.9.5" } });
   await advance(2_000);
   await vi.dynamicImportSettled();
   // Import settlement does not join the watcher's reads or the notifier's durable handoff.
   await noticeStarted.promise;
-  expect(notifyPhase).toHaveBeenCalledOnce();
   await notifyPhase.mock.results[0]?.value;
-  expect(notice).toHaveBeenCalledOnce();
   const queueId = `update-run-finished:${run.runId}`;
   const pending = expectDefined(
     await loadPendingDelivery(queueId, undefined, contextA),

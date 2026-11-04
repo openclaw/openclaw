@@ -16,10 +16,7 @@ import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 export type DaemonSetupOutcome = "succeeded" | "failed" | "skipped";
 
-export async function maybeInstallDaemon(params: {
-  port: number;
-  daemonRuntime?: GatewayDaemonRuntime;
-}): Promise<DaemonSetupOutcome> {
+export async function maybeInstallDaemon(params: { port: number }): Promise<DaemonSetupOutcome> {
   const service = resolveGatewayService();
   let installed;
   try {
@@ -62,7 +59,6 @@ export async function maybeInstallDaemon(params: {
     const selection = await resolveGatewaySetupRuntime({
       env: process.env,
       existingCommand,
-      runtime: params.daemonRuntime,
       selectRuntime: async (suggested) => {
         if (GATEWAY_DAEMON_RUNTIME_OPTIONS.length === 1) {
           return GATEWAY_DAEMON_RUNTIME_OPTIONS[0]?.value ?? suggested;

@@ -25,9 +25,7 @@ export function waitForPlacementTurnClaimRelease(
         return;
       }
       settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);
       removeTurnClaimReleaseWaiter(path, sessionId, finish);
       if (error) {

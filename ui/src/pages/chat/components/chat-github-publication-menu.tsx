@@ -1,23 +1,41 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createUniqueId, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuControls } from "../../../components/solid/menu.tsx";
+import { Menu, type MenuControls, type MenuItem } from "../../../components/solid/menu.tsx";
 import { resolveAvatarInitials } from "../../../lib/identity-avatar.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 
-/** GitHub supplies a login here, not a Gateway profile or a remote avatar URL. */
-export function GitHubPublicationAvatar(props: { login: string }) {
+/** The Gateway supplies verified GitHub account images; initials cover absent or failed loads. */
+export function GitHubPublicationAvatar(props: { login: string; url?: string }) {
+  const [failedUrl, setFailedUrl] = createSignal<string>();
   return (
     <span class="github-publication-mobile__avatar" aria-hidden="true">
-      {resolveAvatarInitials({ username: props.login }).initials}
+      <Show
+        when={props.url !== failedUrl() && props.url}
+        fallback={resolveAvatarInitials({ username: props.login }).initials}
+      >
+        {(url) => (
+          <img
+            src={url()}
+            alt=""
+            referrerpolicy="no-referrer"
+            onError={() => setFailedUrl(props.url)}
+          />
+        )}
+      </Show>
     </span>
   );
 }
 
-export function GitHubPublicationMenu(props: {
-  choices: readonly { source: "shared" | "personal"; login: string; label: string }[];
+type GitHubPublicationMenuProps = {
+  choices: readonly {
+    source: "shared" | "personal";
+    login: string;
+    label: string;
+    avatarUrl?: string;
+  }[];
   selected?: "shared" | "personal";
   duplicateLogin: boolean;
   busy: boolean;
@@ -27,7 +45,52 @@ export function GitHubPublicationMenu(props: {
   controls?: MenuControls;
   trigger?: JSX.Element;
   onSelect: (source: "shared" | "personal") => void;
-}) {
+};
+
+export function createGitHubPublicationAccountMenuItems(
+  props: Pick<
+    GitHubPublicationMenuProps,
+    "choices" | "selected" | "duplicateLogin" | "busy" | "mobile"
+  > & { trailingCheck?: boolean; accountLabels?: boolean },
+) {
+  return createMemo<MenuItem[]>(() =>
+    props.choices.map((choice) => ({
+      id: choice.source,
+      label: `@${choice.login}${props.mobile || props.duplicateLogin ? ` · ${choice.label}` : ""}`,
+      class: "session-menu__item",
+      type: "radio" as const,
+      checked: props.selected === choice.source,
+      disabled: props.busy,
+      content: props.mobile ? (
+        <span class="github-publication-mobile__choice">
+          <GitHubPublicationAvatar login={choice.login} url={choice.avatarUrl} />
+          <span class="github-publication-mobile__choice-text">
+            <span>{choice.label}</span>
+            <span class="github-publication-mobile__choice-login">@{choice.login}</span>
+          </span>
+        </span>
+      ) : props.accountLabels ? (
+        <span class="chat-pr-account-choice">
+          <span>{choice.label}</span>
+          <span class="chat-pr-account-choice__login">@{choice.login}</span>
+        </span>
+      ) : (
+        <span class="session-menu__text">
+          @{choice.login}
+          {props.duplicateLogin ? ` · ${choice.label}` : undefined}
+        </span>
+      ),
+      details:
+        props.trailingCheck === false ? undefined : (
+          <span class="session-menu__icon" aria-hidden="true">
+            {props.selected === choice.source && <Icon name="check" />}
+          </span>
+        ),
+    })),
+  );
+}
+
+export function GitHubPublicationMenu(props: GitHubPublicationMenuProps) {
   const id = createUniqueId();
   const triggerRef = props.controls?.ref();
   const presentation = createMemo(() => projectPresentation(props.presented));
@@ -38,35 +101,7 @@ export function GitHubPublicationMenu(props: {
       ? `${t("githubPublication.account")}: ${selected.label}, @${selected.login}`
       : t("githubPublication.account");
   };
-  const items = createMemo(() =>
-    props.choices.map((choice) => ({
-      id: choice.source,
-      label: `@${choice.login}${props.mobile || props.duplicateLogin ? ` · ${choice.label}` : ""}`,
-      class: "session-menu__item",
-      type: "radio" as const,
-      checked: props.selected === choice.source,
-      disabled: props.busy,
-      content: props.mobile ? (
-        <span class="github-publication-mobile__choice">
-          <GitHubPublicationAvatar login={choice.login} />
-          <span class="github-publication-mobile__choice-text">
-            <span>{choice.label}</span>
-            <span class="github-publication-mobile__choice-login">@{choice.login}</span>
-          </span>
-        </span>
-      ) : (
-        <span class="session-menu__text">
-          @{choice.login}
-          {props.duplicateLogin ? ` · ${choice.label}` : undefined}
-        </span>
-      ),
-      details: (
-        <span class="session-menu__icon" aria-hidden="true">
-          {props.selected === choice.source && <Icon name="check" />}
-        </span>
-      ),
-    })),
-  );
+  const items = createGitHubPublicationAccountMenuItems(props);
   return (
     <Menu
       ref={(handle) => {

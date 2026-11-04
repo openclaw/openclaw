@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { provisionDefaultProactiveJob } from "../../../../src/cron/default-proactive-job.js";
 import { loadGatewayTestConfig } from "../../../../src/gateway/test-helpers.config-runtime.js";
 import {
@@ -16,35 +16,13 @@ import { withTimeout } from "../../../../src/infra/fs-safe.js";
 installGatewayTestHooks({ scope: "suite" });
 
 const TOKEN = `rpc-identity-presence-${process.pid}`;
-let started:
-  | {
-      port: number;
-      server: Awaited<ReturnType<typeof startTestGatewayServer>>;
-      client: Awaited<ReturnType<typeof connectGatewayClient>>;
-      proactiveJobId: string;
-    }
-  | undefined;
-let observer: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-let stateDir = "";
 type ObserverEvent = {
   event?: string;
   payload?: unknown;
   stateVersion?: { presence?: number };
 };
-let resolvePresenceEvent: ((event: ObserverEvent) => void) | undefined;
-
-function nextCatalogPresenceEvent(): Promise<ObserverEvent> {
-  if (resolvePresenceEvent) {
-    throw new Error("presence event waiter is already armed");
-  }
-  return new Promise((resolve) => {
-    resolvePresenceEvent = resolve;
-  });
-}
-
-beforeAll(async () => {
-  stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
-  if (!stateDir) {
+it("exposes stable identity, host information, presence broadcasts, and heartbeat controls", async () => {
+  if (!process.env.OPENCLAW_STATE_DIR) {
     throw new Error("OPENCLAW_STATE_DIR is required");
   }
   await loadOrCreateProcessDeviceIdentityAsync();
@@ -54,83 +32,51 @@ beforeAll(async () => {
   if (!proactiveJob) {
     throw new Error("Expected setup to provision the default proactive automation");
   }
-  // Suite hooks must retain this server's state through their per-test reset.
   const port = await getGatewayTestPort();
   const server = await startTestGatewayServer(port, {
     bind: "loopback",
     auth: { mode: "token", token: TOKEN },
   });
-  try {
+  const clients: Awaited<ReturnType<typeof connectGatewayClient>>[] = [];
+  const connect = async (options: Omit<Parameters<typeof connectGatewayClient>[0], "url">) => {
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
       token: TOKEN,
-      clientDisplayName: "rpc-identity-presence-bootstrap",
+      ...options,
     });
-    started = { port, server, client, proactiveJobId: proactiveJob.id };
-  } catch (error) {
-    await server.close();
-    throw error;
-  }
-  observer = await connectGatewayClient({
-    url: `ws://127.0.0.1:${started.port}`,
-    token: TOKEN,
-    clientDisplayName: "rpc-identity-presence-observer",
-    deviceFamily: "observer",
-    onEvent: (event) => {
-      if (
-        resolvePresenceEvent &&
-        event.event === "presence" &&
-        Array.isArray((event.payload as { presence?: unknown } | undefined)?.presence) &&
-        (event.payload as { presence: Array<{ deviceId?: string }> }).presence.some(
-          (entry) => entry.deviceId === "rpc-catalog-device",
-        )
-      ) {
-        const resolve = resolvePresenceEvent;
-        resolvePresenceEvent = undefined;
-        resolve(event);
-      }
-    },
-  });
-});
-
-afterAll(async () => {
-  if (!started) {
-    return;
-  }
-  await (observer ? disconnectGatewayClient(observer).catch(() => undefined) : undefined);
-  await disconnectGatewayClient(started.client).catch(() => undefined);
-  await started.server.close({ reason: "gateway RPC identity and presence proof complete" });
-});
-
-describe("gateway RPC identity and presence", () => {
-  it("exposes stable identity, host information, presence broadcasts, and heartbeat controls", async () => {
-    if (!started || !observer) {
-      throw new Error("Gateway clients did not start");
-    }
-    const writer = started.client;
-    const writerIdentity = (await writer.request("gateway.identity.get", {})) as {
-      deviceId: string;
-      publicKey: string;
-    };
-    const observerIdentity = (await observer.request("gateway.identity.get", {})) as {
-      deviceId: string;
-      publicKey: string;
-    };
+    clients.push(client);
+    return client;
+  };
+  try {
+    const writer = await connect({ clientDisplayName: "rpc-identity-presence-bootstrap" });
+    let resolvePresenceEvent: ((event: ObserverEvent) => void) | undefined;
+    const observer = await connect({
+      clientDisplayName: "rpc-identity-presence-observer",
+      deviceFamily: "observer",
+      onEvent: (event) => {
+        const presence = (event.payload as { presence?: Array<{ deviceId?: string }> } | undefined)
+          ?.presence;
+        if (
+          event.event === "presence" &&
+          Array.isArray(presence) &&
+          presence.some((entry) => entry.deviceId === "rpc-catalog-device")
+        ) {
+          resolvePresenceEvent?.(event);
+        }
+      },
+    });
+    const writerIdentity = await writer.request("gateway.identity.get", {});
+    const observerIdentity = await observer.request("gateway.identity.get", {});
     expect(observerIdentity).toEqual(writerIdentity);
     expect(writerIdentity).toEqual({
       deviceId: expect.any(String),
       publicKey: expect.any(String),
     });
 
-    const systemInfo = (await writer.request("system.info", {})) as {
-      arch: string;
-      cpuCount: number;
-      hostname: string;
-      memoryTotalBytes: number;
-      nodeVersion: string;
-      platform: string;
-      processInstanceId: string;
-    };
+    const systemInfo = await writer.request<{ cpuCount: number; memoryTotalBytes: number }>(
+      "system.info",
+      {},
+    );
     expect(systemInfo).toMatchObject({
       arch: expect.any(String),
       cpuCount: expect.any(Number),
@@ -143,10 +89,11 @@ describe("gateway RPC identity and presence", () => {
     expect(systemInfo.cpuCount).toBeGreaterThan(0);
     expect(systemInfo.memoryTotalBytes).toBeGreaterThan(0);
 
-    const before = await observer.request("system-presence", {});
-    expect(Array.isArray(before)).toBe(true);
+    expect(Array.isArray(await observer.request("system-presence", {}))).toBe(true);
 
-    const presenceEvent = nextCatalogPresenceEvent();
+    const presenceEvent = new Promise<ObserverEvent>((resolve) => {
+      resolvePresenceEvent = resolve;
+    });
     const systemEvent = await writer.request("system-event", {
       text: "Node: rpc-catalog-host (127.0.0.2) · app 1.0.0 · last input 2s ago · mode qa · reason catalog-proof",
       deviceId: "rpc-catalog-device",
@@ -165,39 +112,37 @@ describe("gateway RPC identity and presence", () => {
       stateVersion: { presence: expect.any(Number) },
     });
 
-    const after = await observer.request("system-presence", {});
-    expect(after).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          deviceId: "rpc-catalog-device",
-          host: "rpc-catalog-host",
-          mode: "qa",
-          reason: "catalog-proof",
-        }),
-      ]),
+    expect(await observer.request("system-presence", {})).toContainEqual(
+      expect.objectContaining({
+        deviceId: "rpc-catalog-device",
+        host: "rpc-catalog-host",
+        mode: "qa",
+        reason: "catalog-proof",
+      }),
     );
 
     const lastHeartbeat = await writer.request("last-heartbeat", {});
     expect(lastHeartbeat === null || typeof lastHeartbeat === "object").toBe(true);
 
+    const setHeartbeats = async (enabled: boolean) => {
+      expect(await writer.request("set-heartbeats", { enabled })).toMatchObject({
+        enabled,
+        ok: true,
+      });
+      expect(await writer.request("cron.get", { id: proactiveJob.id })).toMatchObject({
+        id: proactiveJob.id,
+        enabled,
+      });
+    };
     try {
-      expect(await writer.request("set-heartbeats", { enabled: false })).toMatchObject({
-        enabled: false,
-        ok: true,
-      });
-      expect(await writer.request("cron.get", { id: started.proactiveJobId })).toMatchObject({
-        id: started.proactiveJobId,
-        enabled: false,
-      });
+      await setHeartbeats(false);
     } finally {
-      expect(await writer.request("set-heartbeats", { enabled: true })).toMatchObject({
-        enabled: true,
-        ok: true,
-      });
-      expect(await writer.request("cron.get", { id: started.proactiveJobId })).toMatchObject({
-        id: started.proactiveJobId,
-        enabled: true,
-      });
+      await setHeartbeats(true);
     }
-  });
+  } finally {
+    for (const client of clients.toReversed()) {
+      await disconnectGatewayClient(client).catch(() => undefined);
+    }
+    await server.close({ reason: "gateway RPC identity and presence proof complete" });
+  }
 });

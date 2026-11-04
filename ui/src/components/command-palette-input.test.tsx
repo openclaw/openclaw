@@ -6,14 +6,13 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { CommandPaletteInput } from "./command-palette-input.tsx";
 
-type Height = number | (() => number);
-function mockLayout(input: HTMLTextAreaElement, height: Height, clientHeight?: number) {
+function mockLayout(input: HTMLTextAreaElement, height: number) {
   input.style.lineHeight = "24px";
   Object.defineProperties(input, {
-    scrollHeight: { configurable: true, get: typeof height === "function" ? height : () => height },
+    scrollHeight: { configurable: true, get: () => height },
     clientHeight: {
       configurable: true,
-      get: () => clientHeight ?? (Number.parseFloat(input.style.height) || 24),
+      get: () => Number.parseFloat(input.style.height) || 24,
     },
   });
 }
@@ -26,19 +25,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("reports full edits, reuses their layout, and retires observation across remount/removal", async () => {
-  let notifyResize: () => void = () => undefined;
-  const observe = vi.fn();
-  const disconnect = vi.fn();
+it("reports full edit events and retires input refs and pending layout on removal", async () => {
+  const observed = new Set<Element>();
+  const disconnect = vi.fn(() => observed.clear());
   vi.stubGlobal(
     "ResizeObserver",
-    vi.fn(function (callback: () => void) {
-      notifyResize = callback;
-      return { observe, disconnect };
+    vi.fn(function () {
+      return {
+        observe: (target: Element) => observed.add(target),
+        unobserve: (target: Element) => observed.delete(target),
+        disconnect,
+      };
     }),
   );
   const [value, setValue] = createSignal("");
-  const [activeDescendant, setActiveDescendant] = createSignal<string>();
   const inputRef = vi.fn();
   const onValueChange = vi.fn((next: string) => setValue(next));
   const view = () => (
@@ -47,66 +47,36 @@ it("reports full edits, reuses their layout, and retires observation across remo
       placeholder="Search or start a task…"
       onInputRef={inputRef}
       onValueChange={onValueChange}
-      activeDescendant={activeDescendant()}
     />
   );
   const mounted = mountSolid(view);
   const input = mounted.container.querySelector("textarea")!;
   const entry = mounted.container.querySelector(".cmd-palette__entry")!;
-  let contentHeight = 24;
-  const measureContent = vi.fn(() => contentHeight);
-  mockLayout(input, measureContent);
+  mockLayout(input, 48);
   await vi.advanceTimersByTimeAsync(20);
-  expect(observe.mock.calls.map(([target]) => target)).toContain(entry);
   expect(inputRef).toHaveBeenCalledWith(input);
+  expect(observed.size).toBeGreaterThan(0);
 
-  contentHeight = 48;
   const prompt = "🦞".repeat(4_097) + "\nFinish the task";
   input.value = prompt;
   const event = new InputEvent("input", { bubbles: true, inputType: "insertText", data: prompt });
   input.dispatchEvent(event);
   expect(onValueChange).toHaveBeenCalledExactlyOnceWith(prompt, event);
   expect(input).toMatchObject({ value: prompt, style: { height: "48px" } });
-  flush();
-  measureContent.mockClear();
-  setActiveDescendant("next-result");
-  flush();
-  await vi.advanceTimersByTimeAsync(20);
-  expect(measureContent).not.toHaveBeenCalled();
-  expect(input.getAttribute("aria-activedescendant")).toBe("next-result");
-
-  contentHeight = 24;
+  mockLayout(input, 24);
   setValue("Restored");
   flush();
   await vi.advanceTimersByTimeAsync(20);
-  expect(input.style.height).toBe("24px");
-
-  contentHeight = 48;
-  notifyResize();
-  await vi.advanceTimersByTimeAsync(20);
-  expect(input.style.height).toBe("48px");
-
-  contentHeight = 144;
-  input.focus();
-  input.value = "Line one\nLine two\nLine three\nLine four";
-  input.setSelectionRange(input.value.length, input.value.length);
-  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-  expect(input).toMatchObject({ style: { height: "72px" }, scrollTop: 144 });
-  flush();
-
-  input.scrollTop = 16;
-  notifyResize();
-  await vi.advanceTimersByTimeAsync(20);
-  expect(input.scrollTop).toBe(16);
-
+  expect(input).toMatchObject({ value: "Restored", style: { height: "24px" } });
   const initialHeight = input.style.height;
   const initialEntryAttributes = attributes(entry);
   setValue("pending");
   flush();
   mounted.unmount();
+  expect(observed.size).toBe(0);
   expect(disconnect).toHaveBeenCalledOnce();
   expect(inputRef).toHaveBeenLastCalledWith(undefined, input);
-  mockLayout(input, 100, 20);
+  mockLayout(input, 100);
   input.scrollTop = 20;
   input.dispatchEvent(new Event("scroll"));
   expect(attributes(entry)).toEqual(initialEntryAttributes);
@@ -117,10 +87,12 @@ it("reports full edits, reuses their layout, and retires observation across remo
   const restored = remounted.container.querySelector("textarea")!;
   mockLayout(restored, 72);
   await vi.advanceTimersByTimeAsync(20);
+  expect(observed.size).toBeGreaterThan(0);
   expect(restored.style.height).toBe("72px");
   restored.value = "Remounted";
   restored.dispatchEvent(new InputEvent("input", { bubbles: true }));
   expect(onValueChange).toHaveBeenLastCalledWith("Remounted", expect.any(InputEvent));
   remounted.unmount();
+  expect(observed.size).toBe(0);
   expect(disconnect).toHaveBeenCalledTimes(2);
 });

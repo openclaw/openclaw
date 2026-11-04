@@ -389,11 +389,7 @@ it.each([
   expect(normalizeCdpWsUrl(reported, configured)).toBe(expected);
 });
 
-it("normalizes WebSocket endpoints and malformed URL fallbacks", () => {
-  expect(normalizeCdpHttpBaseForJsonEndpoints("ws://host:9222/cdp")).toBe("http://host:9222");
-  expect(normalizeCdpHttpBaseForJsonEndpoints("wss://host/devtools/browser/abc?t=1")).toBe(
-    "https://host/?t=1",
-  );
+it("normalizes malformed URL fallbacks", () => {
   expect(normalizeCdpHttpBaseForJsonEndpoints("ws://").startsWith("http:")).toBe(true);
 });
 

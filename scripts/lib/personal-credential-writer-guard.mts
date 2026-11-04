@@ -17,6 +17,10 @@ const personalPublication = "src/gateway/github-personal-publication-store.worke
 const repositoryPublication = "src/gateway/github-repository-publication-store.worker.ts";
 const publicationLifecycle = "src/state/github-publication-session-lifecycles.worker.ts";
 const publicationDeletion = "src/state/github-personal-publication-lifecycle.ts";
+const offlinePublicationFixture = key(
+  "scripts/bench-gateway-startup.ts",
+  "seedTeamBootPublication",
+);
 const sessionMembers = "src/config/sessions/session-sharing-store.native.ts";
 const sessionArtifacts = "src/config/sessions/session-accessor.sqlite-node-artifacts.ts";
 const sessionEntries = "src/config/sessions/session-accessor.sqlite-entry-store.ts";
@@ -47,7 +51,8 @@ const guardedTables = new Set([
   "session_members",
 ]);
 
-// Schema owners create/rebuild tables and v18 adds a column; no publication row-DML exception.
+// Offline benchmark roots are synthetic and owned before any Gateway runs.
+// Historical startup receipts lack requester authority and can only reconcile reads.
 const publicationWriters = new Map<string, readonly string[]>([
   [
     key(publicationLifecycle, "insertGitHubPublicationSessionLifecycle"),
@@ -64,7 +69,15 @@ const publicationWriters = new Map<string, readonly string[]>([
     ] as const
   ).map(([file, name]): [string, string[]] => [
     key(file, name),
-    [key(publicationRequestWorker, "githubPublications.insert/write")],
+    [
+      key(publicationRequestWorker, "githubPublications.insert/write"),
+      ...(file === sharedPublication
+        ? [
+            offlinePublicationFixture,
+            key("scripts/perf/publication-empty-recovery-measure.ts", "seedPublicationRequests"),
+          ]
+        : []),
+    ],
   ]),
   ...[
     "markSharedGitHubPublicationReportedInDatabase",
@@ -73,16 +86,22 @@ const publicationWriters = new Map<string, readonly string[]>([
     "bindAcceptedGitHubPublicationClaimSnapshotInDatabase",
   ].map((name): [string, string[]] => [
     key(sharedPublication, name),
-    [key(publicationWorker, "sharedMutation")],
+    [
+      key(publicationWorker, "sharedMutation"),
+      ...(name === "claimGitHubPublicationExecutionInDatabase" ? [offlinePublicationFixture] : []),
+    ],
   ]),
   [
     key(sharedPublication, "writeGitHubPublicationExecutionInDatabase"),
     [key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase")],
   ],
+  [
+    key(personalPublication, "requirePersonalGitHubPublicationConfirmationInDatabase"),
+    [key(personalPublication, "githubPublications.personalRestart")],
+  ],
   ...[
     "claimPersonalGitHubPublicationInDatabase",
     "writePersonalGitHubPublicationInDatabase",
-    "requirePersonalGitHubPublicationConfirmationInDatabase",
     "markPersonalGitHubPublicationReportedInDatabase",
   ].map((name): [string, string[]] => [
     key(personalPublication, name),
@@ -301,12 +320,23 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
       key("src/state/config-machine-state.worker.ts", "machineState.write"),
       // localOnboardingStateKey always uses the onboarding.local. namespace.
       key("src/state/local-onboarding-state.worker.ts", "localOnboarding.complete"),
+      // installationCountStateKey is fixed to telemetry.installationCount.<endpoint hash>.
+      key("src/infra/telemetry-store.worker.ts", "telemetry.claimInstallationCount"),
+      // Fixed update recovery/cohort prefixes cannot address authProfiles.store.
+      ...[
+        "beginPluginCohortRecovery",
+        "writePluginCohortRecovery",
+        "recordPluginCohortIndexPublicationInDatabase",
+        "recordPluginCohortMigrationPublicationInDatabase",
+      ].map((name) => key("src/infra/update-run-recovery-store.ts", name)),
     ],
   ],
   [
     key(machineState, "updateConfigMachineStateInDatabase"),
     [
       key(machineState, "updateConfigMachineState"),
+      // Deletes only the exact run/transaction-bound update recovery pair.
+      key("src/infra/update-run-recovery-store.ts", "deletePluginCohortRecovery"),
       // Both receipt writers construct only automation-default: keys in their kernel.
       ...["recordDefaultProactiveJobInDatabase", "recordConvertedProactiveJobInDatabase"].map(
         (name) => key("src/cron/proactive-job-receipt.kernel.ts", name),
@@ -319,6 +349,9 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
     [
       key("src/tui/tui-last-session.kernel.ts", "tui.lastSession.write"),
       key("src/commands/doctor/shared/legacy-webhook-pins.ts", "recordUnwrittenWebhookCompletion"),
+      // Exclusive Doctor repair records only sessions.relative-store.v1.<path hash> fingerprints.
+      // This receipt prevents retained originals from resurrecting later-deleted conversations.
+      key("src/commands/doctor-relative-session-store.ts", "repairRelativeSessionStores"),
     ],
   ],
   [
@@ -418,7 +451,7 @@ const nativeReadCallers = new Map<string, readonly string[]>([
       "src/cli/capability-cli/model.ts:runModelAuthLogout",
       "src/cli/capability-cli/shared.ts:providerHasGenericConfig",
       "src/commands/doctor-auth.ts:loadAuthProfileHealth",
-      "src/commands/doctor-auth.ts:noteCopilotAmbientToken",
+      "src/commands/doctor-auth.ts:collectCopilotAmbientTokenFindings",
     ],
   ],
   [
@@ -510,6 +543,16 @@ const callers = new Map<string, readonly string[]>([
     [key("src/config/sessions/session-sharing-store.worker.ts", "bindSqliteWorkerBackend/execute")],
   ]),
   [
+    key(sessionMembers, "addSessionMemberInTransaction"),
+    [
+      key(sessionMembers, "addSessionMember"),
+      key(
+        "src/config/sessions/session-accessor.sqlite-involvement.worker.ts",
+        "updateSessionProfileInvolvementInTransaction",
+      ),
+    ],
+  ],
+  [
     key(sessionArtifacts, "clearSessionCollaborationForKey"),
     [
       key(
@@ -527,7 +570,9 @@ const callers = new Map<string, readonly string[]>([
     key(sessionArtifacts, "copySessionNodeArtifactsForRepair"),
     [
       key(sessionEntries, "deleteLegacySessionEntryRows"),
-      key("src/config/sessions/legacy-main-session-migration-operations.ts", "copyClaimCrossStore"),
+      // Moved from copyClaimCrossStore: the same offline claim-copy transaction now also
+      // preserves relocation membership after source/destination claim and sharing checks.
+      key("src/config/sessions/session-claim-repair-copy.ts", "copySessionClaimForRepair"),
       key(
         "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
         "copySqliteSessionOwnedStateForRepair",
@@ -579,7 +624,7 @@ const callers = new Map<string, readonly string[]>([
   ]),
   [
     key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase"),
-    [key(publicationWorker, "sharedMutation")],
+    [key(publicationWorker, "sharedMutation"), offlinePublicationFixture],
   ],
   [
     key(publicationDeletion, "deletePersonalGitHubSessionReceiptsInDatabase"),
@@ -672,7 +717,15 @@ const exclusiveMaintenanceCallers = new Map([
 
 // Counts shrink freely. An additional sink, even in an existing function, needs review.
 const sinks = new Map<string, number>([
-  ...["addSessionMember", "removeSessionMember"].map((name): [string, number] => [
+  // Private restore output copies the validated named pair verbatim under parent exclusion.
+  [
+    key(
+      "src/infra/update-database-restore-source.ts",
+      "prepareUpdateDatabaseRestoreSourceInProcess",
+    ),
+    2,
+  ],
+  ...["addSessionMemberInTransaction", "removeSessionMember"].map((name): [string, number] => [
     key(sessionMembers, name),
     1,
   ]),
@@ -869,6 +922,10 @@ const credentialCommandOwners = new Map([
 ]);
 
 const repeatedEdges = new Map([
+  [
+    `${key(machineState, "writeConfigMachineStateInDatabase")}<-${key("src/infra/update-run-recovery-store.ts", "beginPluginCohortRecovery")}`,
+    2,
+  ],
   ...[
     key(
       "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
@@ -1194,6 +1251,8 @@ export function inspectPersonalCredentialWriters(
       );
     };
     const references: ts.Node[] = [];
+    const commandNodes: (readonly [ts.Node, ts.Expression])[] = [];
+    const commandExpressions: ts.Expression[] = [];
     const visit = (node: ts.Node) => {
       if (
         ts.isTypeNode(node) ||
@@ -1208,20 +1267,9 @@ export function inspectPersonalCredentialWriters(
         node.name.text === "type"
       ) {
         const initializer = ts.isPropertyAssignment(node) ? node.initializer : node.name;
-        // Literal command values are already exact; only expressions need semantic resolution.
-        const type = ts.isStringLiteralLikeNode(initializer)
-          ? undefined
-          : checker.getTypeAtLocation(initializer);
-        const commands = ts.isStringLiteralLikeNode(initializer)
-          ? [initializer.text]
-          : (type?.isUnionType() ? type.getTypes() : type ? [type] : [])
-              .filter((value) => value.isStringLiteralType())
-              .map((value) => value.value);
-        for (const command of commands) {
-          const owner = credentialCommandOwners.get(command);
-          if (owner && key(file, operation(node)) !== owner) {
-            fail(node, `${command} credential writes require the host publication adapter`);
-          }
+        commandNodes.push([node, initializer]);
+        if (!ts.isStringLiteralLikeNode(initializer)) {
+          commandExpressions.push(initializer);
         }
       }
       if (
@@ -1295,6 +1343,21 @@ export function inspectPersonalCredentialWriters(
           const count = (rawSinkCounts.get(id) ?? 0) + 1;
           rawSinkCounts.set(id, count);
           if (
+            id === offlinePublicationFixture &&
+            count === 1 &&
+            ts.isStringLiteralLikeNode(node) &&
+            ts.isCallExpression(node.parent) &&
+            ts.isPropertyAccessExpression(node.parent.expression) &&
+            node.parent.expression.name.text === "prepare" &&
+            node.parent.arguments.length === 1 &&
+            node.parent.arguments[0] === node &&
+            /^UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id IN \('startup-publication', 'startup-publication-0', 'startup-publication-1', 'startup-publication-2', 'startup-publication-3'\)$/u.test(
+              node.text,
+            )
+          ) {
+            continue;
+          }
+          if (
             write[1]?.toLowerCase() !== "config_machine_state" ||
             count > (rawMachineStateSinks.get(id) ?? 0) ||
             (subagentRecoveryMetadataSinks.has(id) &&
@@ -1332,6 +1395,28 @@ export function inspectPersonalCredentialWriters(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
+    // Literal commands need no compiler query; resolve every expression in the
+    // same immutable file together instead of one native round trip per field.
+    const commandTypes = commandExpressions.length
+      ? checker.getTypeAtLocation(commandExpressions)
+      : [];
+    let commandTypeIndex = 0;
+    for (const [node, initializer] of commandNodes) {
+      const type = ts.isStringLiteralLikeNode(initializer)
+        ? undefined
+        : commandTypes[commandTypeIndex++];
+      const commands = ts.isStringLiteralLikeNode(initializer)
+        ? [initializer.text]
+        : (type?.isUnionType() ? type.getTypes() : type ? [type] : [])
+            .filter((value) => value.isStringLiteralType())
+            .map((value) => value.value);
+      for (const command of commands) {
+        const owner = credentialCommandOwners.get(command);
+        if (owner && key(file, operation(node)) !== owner) {
+          fail(node, `${command} credential writes require the host publication adapter`);
+        }
+      }
+    }
     const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
     for (const [index, node] of references.entries()) {
       const symbol = ts.isShorthandPropertyAssignment(node.parent)

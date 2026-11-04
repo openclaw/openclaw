@@ -11,7 +11,6 @@ import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 /** Resolves provider/model precedence for scheduled runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronJob } from "../types.js";
 import { resolveCronAgentConfig } from "./run-config.js";
 import {
   DEFAULT_MODEL,
@@ -48,7 +47,7 @@ type ResolveCronModelSelectionParams = {
   owner?: CronModelSelectionOwner;
   agentConfigOverride?: Pick<AgentConfig, "model" | "subagents" | "runtime">;
   sessionEntry: CronSessionModelOverrides;
-  payload: CronJob["payload"];
+  payloadModel?: string;
   isGmailHook: boolean;
   agentId?: string;
   agentDir: string;
@@ -292,9 +291,8 @@ export async function resolveCronModelSelection(
       : undefined;
   };
 
-  const modelOverrideRaw = params.payload.kind === "agentTurn" ? params.payload.model : undefined;
   const payloadSelection = override(
-    typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined,
+    typeof params.payloadModel === "string" ? params.payloadModel.trim() : undefined,
     "payload",
   );
   if (payloadSelection) {

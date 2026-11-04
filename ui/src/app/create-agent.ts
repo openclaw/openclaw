@@ -16,15 +16,17 @@ import { patchSettings } from "./settings.ts";
 
 registerAgentCreationEnglish();
 
-export type ApplicationAgentIdentity = { name: string; avatar: string | null };
-
 /** Creation belongs to the application, so closing the selector cannot cancel it. */
 export async function createApplicationAgent(
   context: ApplicationContext,
-  identity?: ApplicationAgentIdentity,
+  identity?: { name: string; avatar: string | null },
 ): Promise<void> {
   if (!canCallGatewayMethod(context.gateway.snapshot, "agents.create", "operator.admin")) {
-    showToast({ message: t("agentChip.creationUnavailable"), durationMs: 12_000 });
+    showToast({
+      severity: "error",
+      message: t("agentChip.creationUnavailable"),
+      durationMs: 12_000,
+    });
     return;
   }
   const client = context.gateway.snapshot.client;
@@ -117,6 +119,7 @@ export async function createApplicationAgent(
       restoreUncreatedChat();
     }
     showToast({
+      severity: created ? "warning" : "error",
       message:
         error instanceof AgentCreationUncertainError
           ? error.message

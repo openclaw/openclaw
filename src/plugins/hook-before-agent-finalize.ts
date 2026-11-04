@@ -1,5 +1,5 @@
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
-import type { PluginHookBeforeAgentFinalizeResult } from "./hook-before-agent-finalize.types.js";
+import type { PluginHookBeforeAgentFinalizeResult } from "./hook-agent-finalize.types.js";
 import type {
   BeforeAgentFinalizeResultWithRetryCandidates,
   BeforeAgentFinalizeRetry,

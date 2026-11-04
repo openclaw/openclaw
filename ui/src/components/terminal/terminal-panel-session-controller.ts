@@ -1,4 +1,5 @@
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   TerminalConnection,
@@ -14,7 +15,10 @@ import {
   createTerminalSessionBootOperations,
 } from "./terminal-panel-session-boot.ts";
 import { TerminalPanelSessionRecovery } from "./terminal-panel-session-recovery.ts";
-import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
+import {
+  focusTerminalSession,
+  repaintTerminalSession,
+} from "./terminal-panel-session-rendering.ts";
 import type {
   TerminalOperation,
   TerminalPanelError,
@@ -29,6 +33,8 @@ import { createTerminalIntentQueue, terminalIntentQueue } from "./terminal-pendi
 import type { TerminalIntentHost } from "./terminal-pending-actions.ts";
 import { createTerminalTabReadiness } from "./terminal-tab-readiness.ts";
 import { TerminalTaskQueue } from "./terminal-task-queue.ts";
+
+registerTerminalEnglish();
 
 /** Owns gateway PTY sessions and the Ghostty controllers bound to them. */
 export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
@@ -213,12 +219,21 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
   }
 
   function removeTab(tab: TerminalPanelSessionTab): void {
+    const wasActive = state.activeId === tab.id;
     disposeTab(tab);
     const tabs = state.tabs.filter((entry) => entry.id !== tab.id);
     updateState({
       tabs,
-      activeId: state.activeId === tab.id ? (tabs.at(-1)?.id ?? null) : state.activeId,
+      activeId: wasActive ? (tabs.at(-1)?.id ?? null) : state.activeId,
     });
+    const replacement = tabs.at(-1);
+    if (wasActive && replacement) {
+      void host.updateComplete.then(() => {
+        if (state.activeId === replacement.id) {
+          repaintTerminalSession(replacement);
+        }
+      });
+    }
   }
 
   const { openSessionNow, attachSession } = createTerminalSessionBootOperations({

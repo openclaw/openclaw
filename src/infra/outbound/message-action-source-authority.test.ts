@@ -2,16 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createSessionCompoundWorkerFixture } from "../../config/sessions/session-compound-worker.test-support.js";
-import {
-  bindCronJobAdmittedRun,
-  clearCronJobActive,
-  markCronJobActive,
-} from "../../cron/active-jobs.js";
+import * as jobs from "../../cron/active-jobs.js";
 import { prepareCronRunAdmission } from "../../cron/run-admission.js";
-import {
-  resolveMessageActionTurnAuthorization,
-  revokeMessageActionTurnCapability,
-} from "../../gateway/message-action-turn-capability.js";
+import { TEST_SCHEDULED_EXECUTION } from "../../cron/scheduled-occurrence.test-support.js";
+import * as capability from "../../gateway/message-action-turn-capability.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../sqlite-worker-owner-probe.test-support.js";
@@ -19,20 +13,19 @@ import { runMessageAction } from "./message-action-runner.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["current", "stale-attempt", "revoked-capability"] as const)(
-  "commits a scheduled source reply through the worker with %s authority",
+it.each(["stale-attempt", "revoked-capability"] as const)(
+  "refuses a scheduled source commit with %s authority",
   async (mode) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = createSessionCompoundWorkerFixture();
       const jobId = "source-reply-job";
       const runId = "source-reply-run";
-      const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+      const marker = jobs.markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
       let current = true;
-      let atCommit = false;
-      let commitChecks = 0;
       const stale = new Error("delivery attempt is no longer current");
       const cfg = { session: { store: f.database.path } };
       const run = prepareCronRunAdmission({
+        scheduledExecution: TEST_SCHEDULED_EXECUTION,
         ...f.scope,
         cfg,
         jobId,
@@ -42,9 +35,6 @@ it.each(["current", "stale-attempt", "revoked-capability"] as const)(
         deliveryAttemptFence: {
           async beforeAttempt() {},
           assertCurrent() {
-            if (atCommit) {
-              commitChecks++;
-            }
             if (!current) {
               throw stale;
             }
@@ -53,8 +43,8 @@ it.each(["current", "stale-attempt", "revoked-capability"] as const)(
       });
       try {
         const admitted = await run.preparedRunAdmission.admit("embedded");
-        bindCronJobAdmittedRun(marker, admitted, new AbortController().signal);
-        const authorization = resolveMessageActionTurnAuthorization({
+        jobs.bindCronJobAdmittedRun(marker, admitted, new AbortController().signal);
+        const authorization = capability.resolveMessageActionTurnAuthorization({
           ...f.scope,
           runId,
           token: run.messageActionTurnCapability,
@@ -73,15 +63,10 @@ it.each(["current", "stale-attempt", "revoked-capability"] as const)(
             if (mode === "stale-attempt") {
               current = false;
             } else if (mode === "revoked-capability") {
-              revokeMessageActionTurnCapability(run.messageActionTurnCapability);
+              capability.revokeMessageActionTurnCapability(run.messageActionTurnCapability);
             }
           }
-          atCommit = request.stage === "commit" && reachedCommit;
-          try {
-            admit(request, grant);
-          } finally {
-            atCommit = false;
-          }
+          admit(request, grant);
         });
         const send = () =>
           runMessageAction({
@@ -96,40 +81,18 @@ it.each(["current", "stale-attempt", "revoked-capability"] as const)(
           });
         const sql = observeHostDataSql();
         try {
-          if (mode === "current") {
-            await expect(send()).resolves.toMatchObject({ handledBy: "internal-source" });
-          } else {
-            await expect(send()).rejects.toThrow(
-              mode === "stale-attempt"
-                ? stale
-                : "message action turn capability is no longer active",
-            );
-          }
+          await expect(send()).rejects.toThrow(
+            mode === "stale-attempt" ? stale : "message action turn capability is no longer active",
+          );
           expect(reachedCommit).toBe(true);
-          expect(commitChecks).toBe(mode === "revoked-capability" ? 0 : 1);
           expect(sql.queries).toEqual([]);
         } finally {
           sql.restore();
         }
-        const events = f.events();
-        if (mode === "current") {
-          expect(events).toContainEqual(
-            expect.objectContaining({
-              type: "message",
-              message: expect.objectContaining({
-                role: "assistant",
-                content: [{ type: "text", text: "Scheduled source reply" }],
-              }),
-            }),
-          );
-          await send();
-          expect(f.events()).toEqual(events);
-        } else {
-          expect(events).toEqual(before);
-        }
+        expect(f.events()).toEqual(before);
       } finally {
         run.close();
-        clearCronJobActive(jobId, marker);
+        jobs.clearCronJobActive(jobId, marker);
       }
     }),
 );

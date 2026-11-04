@@ -23,7 +23,6 @@ import {
   usageMocks,
 } from "./usage-fixture.test-support.js";
 import {
-  clearExpiredCooldowns,
   isProfileInCooldown,
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
@@ -155,67 +154,43 @@ async function markFailureAt(store: AuthProfileStore, reason: FailureReason, tim
 describe("failure retry windows (#23516)", () => {
   it.each([
     [2_000, 2_000],
-    [1_600_000, 1_600_000],
-    [172_800_000, 86_400_000],
-    [undefined, 30_000],
-    [0, 30_000],
-    [Infinity, 30_000],
-  ])("bounds a new rate-limit cooldown using Retry-After %s", async (retryAfterMs, expected) => {
-    const store = makeStore(undefined);
-    await atTime(testNow, () =>
-      markAuthProfileFailure({ store, profileId: anthropicId, reason: "rate_limit", retryAfterMs }),
-    );
-    expect(store.usageStats?.[anthropicId]?.cooldownUntil).toBe(testNow + expected);
-    await atTime(testNow + 1_000, () =>
-      markAuthProfileFailure({
-        store,
-        profileId: anthropicId,
-        reason: "rate_limit",
-        retryAfterMs: 86_400_000,
-      }),
-    );
-    expect(store.usageStats?.[anthropicId]?.cooldownUntil).toBe(testNow + expected);
-  });
+    [172_800_000, 172_800_000],
+    [undefined, undefined],
+    [0, undefined],
+    [Infinity, undefined],
+    [Number.MAX_SAFE_INTEGER, undefined],
+  ])(
+    "cools a rate limit down only for usable provider timing %s",
+    async (retryAfterMs, expected) => {
+      const store = makeStore(undefined);
+      await atTime(testNow, () =>
+        markAuthProfileFailure({
+          store,
+          profileId: anthropicId,
+          reason: "rate_limit",
+          retryAfterMs,
+        }),
+      );
+      expect(store.usageStats?.[anthropicId]).toEqual({
+        lastRateLimitAt: testNow,
+        ...(expected === undefined
+          ? {}
+          : { cooldownUntil: testNow + expected, cooldownReason: "rate_limit" }),
+      });
+    },
+  );
 
-  it("exponentially backs off rate limits without a provider reset up to 24 hours", async () => {
+  it("keeps rate limits out of the counters that time other failures", async () => {
     const store = makeStore(undefined);
-    let now = testNow;
-    const delays = [0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 1440, 1440].map(
-      (minutes) => minutes * 60_000,
-    );
-    for (const [index, delay] of delays.entries()) {
-      clearExpiredCooldowns(store, now);
-      await markFailureAt(store, "rate_limit", now);
-      expect(
-        (store.usageStats?.[anthropicId]?.cooldownUntil ?? 0) - now,
-        `attempt ${index + 1}`,
-      ).toBe(delay);
-      now += delay + 1;
-    }
-    expect(store.usageStats?.[anthropicId]?.failureCounts?.rate_limit).toBe(delays.length);
-  });
-
-  it("preserves rate-limit history through a differently classified failed probe", async () => {
-    let now = testNow;
-    const store = makeStore({
-      [anthropicId]: {
-        cooldownUntil: now - 1,
-        cooldownReason: "rate_limit",
-        errorCount: 3,
-        failureCounts: { rate_limit: 3 },
-        lastFailureAt: now - 60_000,
-      },
-    });
-    await markFailureAt(store, "timeout", now);
-    expect(store.usageStats?.[anthropicId]?.errorCount).toBe(1);
-    expect(store.usageStats?.[anthropicId]?.failureCounts).toEqual({ rate_limit: 3, timeout: 1 });
-    now = (store.usageStats?.[anthropicId]?.cooldownUntil ?? now) + 1;
-    clearExpiredCooldowns(store, now);
-    expect(store.usageStats?.[anthropicId]?.failureCounts).toEqual({ rate_limit: 3 });
-    await markFailureAt(store, "rate_limit", now);
+    await markFailureAt(store, "rate_limit", testNow);
+    await markFailureAt(store, "rate_limit", testNow + 1);
+    await markFailureAt(store, "timeout", testNow + 2);
     expect(store.usageStats?.[anthropicId]).toMatchObject({
-      cooldownUntil: now + 4 * 60_000,
-      failureCounts: { rate_limit: 4 },
+      cooldownReason: "timeout",
+      cooldownUntil: testNow + 2 + 30_000,
+      errorCount: 1,
+      failureCounts: { timeout: 1 },
+      lastRateLimitAt: testNow + 1,
     });
   });
 
@@ -238,7 +213,7 @@ describe("failure retry windows (#23516)", () => {
   });
 
   it.each([
-    ["cooldownUntil", "rate_limit"],
+    ["cooldownUntil", "timeout"],
     ["disabledUntil", "billing"],
   ] as const)("keeps recomputed %s inside the valid Date range", async (field, reason) => {
     const store = makeStore({});
@@ -274,6 +249,7 @@ describe("markAuthProfileBlockedUntil", () => {
     expect(store.usageStats?.[codexId]).toMatchObject({
       blockedModel: expectedModel,
       blockedScope: expectedModel ? "model" : undefined,
+      lastRateLimitAt: now,
       ...(wide ? { blockedUntil: now + 120_000 } : {}),
       ...(checks.length === 2 ? { cooldownClassification: undefined } : {}),
     });
@@ -632,8 +608,8 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
   });
 
   it.each([
-    ["fresh burst", available, 15_000, "fresh"],
-    ["active burst", available, 6 * 3_600_000, "cooldown"],
+    ["fresh available quota", available, undefined, "fresh"],
+    ["active provider window", available, 6 * 3_600_000, "cooldown"],
     [
       "team rolling",
       whamResponse(true, whamWindow(100, 7_200), whamWindow(85, 201_600)),
@@ -655,9 +631,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
             [codexId]: {
               cooldownUntil: now + 6 * 60 * 60 * 1000,
               cooldownReason: "rate_limit",
-              errorCount: 12,
-              failureCounts: { rate_limit: 12 },
-              lastFailureAt: now - 1_000,
+              lastRateLimitAt: now - 1_000,
             },
           },
     );
@@ -681,11 +655,12 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     const stats = store.usageStats?.[codexId];
     expect(stats?.lastProbeAt).toBe(now);
     if (state === "blocked") {
-      expect(stats?.blockedUntil).toBe(now + expectedMs);
+      expect(stats?.blockedUntil).toBe(now + (expectedMs ?? 0));
       expect(stats?.blockedReason).toBe("subscription_limit");
       expect(stats?.cooldownUntil).toBeUndefined();
     } else {
-      expect(stats?.cooldownUntil).toBe(now + expectedMs);
+      // Available quota adds no local burst delay to a rate limit.
+      expect(stats?.cooldownUntil).toBe(expectedMs === undefined ? undefined : now + expectedMs);
     }
   });
 
@@ -731,7 +706,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
       profile.authFlow = authFlow;
       mockWhamResponse(401);
 
-      await markCodexFailureAt({ store });
+      await markCodexFailureAt({ store, retryAfterMs: 30_000 });
       expect(fetchMock).not.toHaveBeenCalled();
       expect(store.usageStats?.[codexId]?.cooldownUntil).toBe(now + 30_000);
 
@@ -753,7 +728,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     profile.expires = now - 1;
     mockWhamResponse(401);
 
-    await markCodexFailureAt({ store });
+    await markCodexFailureAt({ store, retryAfterMs: 30_000 });
 
     expect(fetchMock).not.toHaveBeenCalled();
     const stats = store.usageStats?.[codexId];
@@ -782,18 +757,15 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
           },
         });
       }
-      const unsafeReset = failure === "reset_after_seconds" || failure === "reset_at";
-      const store = await markCodexFailureAt({
-        reason: failure === "network" ? "unknown" : "rate_limit",
-      });
+      const reason = failure === "network" ? "unknown" : "rate_limit";
+      const store = await markCodexFailureAt({ reason });
       const stats = store.usageStats?.[codexId];
-      expect(stats?.cooldownUntil).toBe(testNow + 30_000);
+      // A failed probe supplies no rate-limit deadline; other reasons keep local timing.
+      expect(stats?.cooldownUntil).toBe(reason === "rate_limit" ? undefined : testNow + 30_000);
+      expect(stats?.blockedUntil).toBeUndefined();
+      expect(stats?.lastProbeAt).toBe(testNow);
       if (cancel) {
         expect(cancel).toHaveBeenCalledOnce();
-      }
-      if (unsafeReset) {
-        expect(stats?.blockedUntil).toBeUndefined();
-        expect(stats?.cooldownReason).toBe("rate_limit");
       }
     },
   );
@@ -825,7 +797,13 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
         vi.setSystemTime(now);
       }
       mockLockedUpdateForStore(store);
-      await markAuthProfileFailure({ store, profileId: copilotId, reason, modelId });
+      await markAuthProfileFailure({
+        store,
+        profileId: copilotId,
+        reason,
+        modelId,
+        retryAfterMs: 30_000,
+      });
       expect(store.usageStats?.[copilotId]).toMatchObject({
         cooldownReason: reason,
         cooldownModel: expectedModel,

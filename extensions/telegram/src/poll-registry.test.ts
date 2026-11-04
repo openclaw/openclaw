@@ -1,40 +1,28 @@
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { useTelegramKeyedState } from "./keyed-state.test-support.js";
 import {
   findTelegramPollRegistryEntry,
   recordTelegramPollRegistryEntry,
   retireTelegramPollRegistryEntry,
   type TelegramPollRegistryEntry,
 } from "./poll-registry.js";
-import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
-import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 
 const storeOptions = {
   namespace: "telegram.poll-registry",
   maxEntries: 10_000,
   overflowPolicy: "reject-new",
 } as const;
-const openStore = () =>
-  createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", storeOptions);
 const privateChat = { id: 123, type: "private", first_name: "Ada" };
 const group = { id: -123, type: "group", title: "Reviewers" };
 const supergroup = { id: -123, type: "supergroup", title: "Forum" };
 const poll = { messageId: 44, question: "Ready?", options: ["Yes", "No"] };
 
 describe("telegram poll registry", () => {
-  beforeEach(async () => {
-    await openStore().clear();
-    setTelegramPluginStateRuntimeForTests();
-  });
-
-  afterEach(() => {
-    clearTelegramRuntimeForTest();
-    resetPluginStateStoreForTests();
-  });
+  const fixture = useTelegramKeyedState<TelegramPollRegistryEntry>(storeOptions, 2);
 
   it("reclaims a closed poll after the durable replay grace", async () => {
     await recordTelegramPollRegistryEntry({
@@ -45,7 +33,7 @@ describe("telegram poll registry", () => {
     });
 
     await retireTelegramPollRegistryEntry({ pollId: "poll-closed" });
-    const entries = await openStore().entries();
+    const entries = await fixture.store.entries();
     expect(entries).toHaveLength(1);
     const entry = entries[0];
     if (!entry || entry.expiresAt === undefined) {

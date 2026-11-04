@@ -8,7 +8,7 @@ import { createChannelProgressDraftCompositor } from "openclaw/plugin-sdk/channe
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as discordMessagingActionRuntime from "../send.js";
 import { buildDiscordTextChunks } from "../send.shared.js";
-import { resolveDiscordChannelId } from "../targets.js";
+import { resolveDiscordChannelId } from "../target-parsing.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 
 function parseDiscordMessageLink(link: string) {
@@ -45,9 +45,13 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
             channelId,
             ctx.withOpts(),
           )
-        : (await discordMessagingActionRuntime.listPinsDiscord(channelId, ctx.withOpts())).map(
-            (pin) => ctx.normalizeMessage(pin),
-          );
+        : (
+            await discordMessagingActionRuntime.listPinsDiscord(
+              channelId,
+              ctx.withOpts(),
+              readPositiveIntegerParam(ctx.params, "limit"),
+            )
+          ).map((pin) => ctx.normalizeMessage(pin));
       return jsonResult({ ok: true, [gate]: value });
     }
     case "fetchMessage": {

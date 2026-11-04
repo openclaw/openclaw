@@ -34,7 +34,7 @@ describe("renderDreamingToggleConfirmation", () => {
   it("states the global scope and never promises a gateway restart", () => {
     for (const enabling of [true, false]) {
       const text = renderToggle({ enabling }).textContent ?? "";
-      expect(text).toContain("All Agents");
+      expect(text).toContain("all agents");
       expect(text).toContain("global setting");
       expect(text.toLowerCase()).not.toContain("restart");
       expect(text.toLowerCase()).not.toContain("interrupt");
@@ -42,9 +42,9 @@ describe("renderDreamingToggleConfirmation", () => {
   });
 
   it("uses direction-specific copy for enabling and disabling", () => {
-    expect(renderToggle({ enabling: true }).textContent).toContain("Turn On Dreaming");
+    expect(renderToggle({ enabling: true }).textContent).toContain("Turn on dreaming");
     const disabling = renderToggle({ enabling: false });
-    expect(disabling.textContent).toContain("Turn Off Dreaming");
+    expect(disabling.textContent).toContain("Turn off dreaming");
     // Disabling is the destructive direction: it stops the sweep for every agent.
     expect(disabling.querySelector("button.btn.danger")).not.toBeNull();
     expect(renderToggle({ enabling: true }).querySelector("button.btn.danger")).toBeNull();
@@ -54,7 +54,9 @@ describe("renderDreamingToggleConfirmation", () => {
     const pending = createDeferred();
     const onCancel = vi.fn();
     const host = renderToggle({ onConfirm: () => pending.promise, onCancel });
-    const confirm = host.querySelector("button");
+    const confirm = host.querySelector<HTMLButtonElement>(
+      "openclaw-modal-actions button:last-child",
+    );
     confirm?.click();
     await waitForSolid(() => expect(confirm?.textContent?.trim()).toBe("Saving…"));
     expect(confirm?.hasAttribute("disabled")).toBe(true);

@@ -4,6 +4,16 @@ import { en } from "./en.ts";
 const enChatCommandResults = {
   chat: {
     commandResults: {
+      newUnavailable: "New Chat is unavailable.",
+      forkUnavailable: "Fork conversation is unavailable.",
+      connectionChanged: "The Gateway connection changed. Retry the command.",
+      notConnected: "Gateway not connected",
+      cannotRunDisconnected: "Cannot run `/{name}`: Control UI is not connected to the Gateway.",
+      failedUnexpectedly: "Command `/{name}` failed unexpectedly.",
+      failed: "Command /{name} failed.",
+      unknownCommand: "Unknown command: `{command}`",
+      options: "Options: {options}.",
+      sessionUnavailable: "Session capability is unavailable",
       help: {
         availableCommands: "Available Commands",
         agentCommand: "agent",

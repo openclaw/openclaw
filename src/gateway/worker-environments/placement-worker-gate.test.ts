@@ -1,17 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { placementTurnOwner, type WorkerSessionTurnClaim } from "./placement-record.js";
-import {
-  createWorkerSessionPlacementStore,
-  type WorkerSessionPlacementStore,
-} from "./placement-store.js";
+import { usePlacementStoreFixture } from "./placement-store-fixture.test-support.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 
@@ -20,14 +13,11 @@ const BINDING = { sessionId: REQUEST.sessionId, ...ENVIRONMENT };
 const OWNER = { kind: "worker", ...ENVIRONMENT } as const;
 
 describe("worker session placement gate", () => {
-  const tempDirs = useStateDatabaseTempDirs();
-  let database: OpenClawStateDatabase;
-  let store: WorkerSessionPlacementStore;
-
+  const fixture = usePlacementStoreFixture(undefined, undefined, Date.now);
+  let database: typeof fixture.database;
+  let store: typeof fixture.store;
   beforeEach(() => {
-    const root = tempDirs.make("openclaw-worker-gate-");
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerSessionPlacementStore({ database });
+    ({ database, store } = fixture);
   });
 
   const activate = (executionMode: "worker-turn" | "remote-exec" = "worker-turn") =>

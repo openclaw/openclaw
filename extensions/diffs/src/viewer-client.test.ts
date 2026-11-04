@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { DiffViewerPayload } from "./types.js";
 
 const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
@@ -47,12 +47,16 @@ const viewerPayload: DiffViewerPayload = {
   newFile: { name: "a.ts", lang: "text", contents: "new" },
 };
 
-async function hydrateOptions() {
+function addCard(payload = JSON.stringify(viewerPayload)) {
   document.body.insertAdjacentHTML(
     "beforeend",
     `<section class="oc-diff-card"><div data-openclaw-diff-host></div>
-      <script type="application/json" data-openclaw-diff-payload>${JSON.stringify(viewerPayload)}</script></section>`,
+      <script type="application/json" data-openclaw-diff-payload>${payload}</script></section>`,
   );
+}
+
+async function hydrateOptions() {
+  addCard();
   const { hydrateViewer } = await import("./viewer-client.js");
   await hydrateViewer();
   return fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -64,17 +68,11 @@ beforeEach(() => {
   delete document.body.dataset.theme;
   vi.clearAllMocks();
 });
+afterEach(() => vi.restoreAllMocks());
 
-describe("createToolbarButton icon safety", () => {
-  it("innerHTML reads only from toolbarIconSvg lookup", () => {
-    expect(VIEWER_CLIENT_SRC.includes("button.innerHTML = toolbarIconSvg[params.icon]")).toBe(true);
-  });
-
-  it("SVG strings in toolbarIconSvg contain no XSS patterns", () => {
-    for (const pattern of ["onerror", "<script", "onclick", "javascript:", "onload"]) {
-      expect(VIEWER_CLIENT_SRC, `source must not contain "${pattern}"`).not.toContain(pattern);
-    }
-  });
+it("restricts toolbar innerHTML to static SVG without XSS patterns", () => {
+  expect(VIEWER_CLIENT_SRC).toContain("button.innerHTML = toolbarIconSvg[params.icon]");
+  expect(VIEWER_CLIENT_SRC).not.toMatch(/onerror|<script|onclick|javascript:|onload/);
 });
 
 it.each([
@@ -99,24 +97,21 @@ it.each([
   }
 });
 
-describe("header metadata", () => {
-  it("drops the interactive toolbar in image render mode", async () => {
-    document.body.insertAdjacentHTML(
-      "beforeend",
-      '<main class="oc-frame" data-render-mode="image"></main>',
-    );
-    const options = await hydrateOptions();
-    const renderHeaderMetadata = options.renderHeaderMetadata as () => HTMLElement | null;
+it("drops the interactive toolbar in image render mode", async () => {
+  document.body.innerHTML = '<main class="oc-frame" data-render-mode="image"></main>';
+  const options = await hydrateOptions();
+  const renderHeaderMetadata = options.renderHeaderMetadata as () => HTMLElement | null;
+  expect(renderHeaderMetadata()).toBeNull();
+});
 
-    expect(renderHeaderMetadata()).toBeNull();
-  });
-
-  it("skips summary nav cards during hydration", async () => {
-    document.body.insertAdjacentHTML(
-      "beforeend",
-      '<nav class="oc-diff-card oc-diff-nav" aria-label="Changed files"><ol></ol></nav>',
-    );
-    await hydrateOptions();
-    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(1);
-  });
+it("skips nav cards and invalid JSON while hydrating valid sibling cards", async () => {
+  document.body.innerHTML = '<nav class="oc-diff-card oc-diff-nav"><ol></ol></nav>';
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  addCard("{not-json");
+  await hydrateOptions();
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    "Skipping invalid diff payload",
+    new Error("Diff payload is not valid JSON."),
+  );
+  expect(fileDiffHydrateMock).toHaveBeenCalledTimes(1);
 });

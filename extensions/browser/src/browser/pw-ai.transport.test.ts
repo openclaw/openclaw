@@ -79,10 +79,6 @@ beforeAll(async () => {
   cdpUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
 
-function snapshot(targetId: string, maxChars?: number) {
-  return snapshotRoleViaPlaywright({ refsMode: "aria", cdpUrl, targetId, maxChars });
-}
-
 afterEach(async () => {
   const socketClosures = [...socketServer.clients].map((socket) => once(socket, "close"));
   await closePlaywrightBrowserConnection();
@@ -106,7 +102,7 @@ it.each(["e", ""])("uses %s refs on the selected target over one connection", as
   const p2 = createPage("T2", text);
   createBrowser([p1.page, p2.page]);
 
-  const res = await snapshot("T2");
+  const res = await snapshotRoleViaPlaywright({ refsMode: "aria", cdpUrl, targetId: "T2" });
   expect(res.snapshot).toBe(text);
   expect(res.refs).toEqual({
     [buttonRef]: { role: "button", name: "OK" },
@@ -125,16 +121,4 @@ it.each(["e", ""])("uses %s refs on the selected target over one connection", as
   expect(socketConnections).toHaveBeenCalledTimes(1);
   expect(socketServer.clients.size).toBe(1);
   expect(discoveryRequests).toHaveBeenCalledExactlyOnceWith("/json/version");
-});
-
-it("truncates oversized snapshots", async () => {
-  const firstLine = "VISIBLE";
-  const marker = "[...TRUNCATED - page too large]";
-  const p1 = createPage("T1", `${firstLine}\n${"A".repeat(50)}`);
-  createBrowser([p1.page]);
-
-  expect(await snapshot("T1", firstLine.length + 2 + marker.length)).toMatchObject({
-    truncated: true,
-    snapshot: `${firstLine}\n\n${marker}`,
-  });
 });

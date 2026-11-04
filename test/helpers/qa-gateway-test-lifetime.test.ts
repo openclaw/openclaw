@@ -122,7 +122,8 @@ it("retains acquisition rollback failure even before a resource reaches the call
 it("preserves successful values and refuses an already-cancelled body", async (context) => {
   const controller = new AbortController();
   const owner = testOwner(controller.signal);
-  await expect(runQaGatewayTestFixture(owner.context, async () => 42)).resolves.toBe(42);
+  const value = { fixture: "result" };
+  await expect(runQaGatewayTestFixture(owner.context, async () => value)).resolves.toBe(value);
   await owner.finish(context);
   const reason = new Error("cancelled before body admission");
   controller.abort(reason);

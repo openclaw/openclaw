@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { showToast } from "../lib/toast.ts";
-import { SidebarDropdown } from "./app-sidebar-nav-menus.tsx";
+import { SidebarDropdown } from "./app-sidebar-dropdown.tsx";
 import { iconData, type IconName } from "./icon-data.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
@@ -56,7 +56,10 @@ export function renderSidebarPluginNavigationMenuForMenus(
     } catch (error) {
       if (!entry.signal.aborted) {
         host.sessionDataContext?.plugins.reportError(entry.pluginId, error);
-        showToast({ message: error instanceof Error ? error.message : String(error) });
+        showToast({
+          severity: "error",
+          message: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   };

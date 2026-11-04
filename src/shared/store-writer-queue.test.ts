@@ -102,7 +102,7 @@ it.each(["outer", "inner"] as const)("guards only live %s writer ownership", asy
   expectHeld(false);
 });
 
-it("marks synchronous idle and reentrant execution across runtime chunks", async () => {
+it("preserves reentrant timing and queues ordinary nested writes across chunks", async () => {
   const sibling = await siblingModule("store-writer-timing");
   const { queues, write, order } = createQueue();
   const outerTiming: StoreWriterTiming = {};
@@ -110,6 +110,7 @@ it("marks synchronous idle and reentrant execution across runtime chunks", async
   let clock = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
   const siblingWrite = createQueue("store", queues, sibling.runQueuedStoreWrite).write;
+  let queued: Promise<string> | undefined;
   const pending = write(
     "outer",
     async () => {
@@ -126,6 +127,12 @@ it("marks synchronous idle and reentrant execution across runtime chunks", async
       );
       expect(innerTiming.startedAt).toBe(5);
       const result = await inner;
+      queued = siblingWrite("ordinary", async () => {
+        order.push("ordinary");
+        return "queued-result";
+      });
+      await nextTurn();
+      expect(order).toEqual(["outer:start", "inner"]);
       order.push("outer:end");
       clock = 15;
       return result;
@@ -135,56 +142,21 @@ it("marks synchronous idle and reentrant execution across runtime chunks", async
   expect(order).toEqual(["outer:start", "inner"]);
   expect(outerTiming.startedAt).toBe(0);
   expect(await pending).toBe("result");
-  expect(order).toEqual(["outer:start", "inner", "outer:end"]);
+  await expect(queued).resolves.toBe("queued-result");
+  expect(order).toEqual(["outer:start", "inner", "outer:end", "ordinary"]);
   expect(innerTiming).toEqual({ startedAt: 5, finishedAt: 10, reentrant: true });
   expect(outerTiming).toEqual({ startedAt: 0, finishedAt: 15, reentrant: false });
   expect(queues.size).toBe(0);
 });
 
-it.each([
-  { outcome: "rejected-undefined", cost: 0 },
-  { outcome: "fulfilled", cost: 10 },
-] as const)("shares a bounded turn with I/O: $outcome, cost $cost", async ({ outcome, cost }) => {
-  const { queues, write } = createQueue();
-  const release = makeGate();
-  const order: number[] = [];
-  const failed = outcome !== "fulfilled";
-  const rejectWrite = vi.fn<() => Promise<never>>().mockRejectedValue(undefined);
-  let now = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => now);
-  const first = write("held-first", async () => release.promise);
-  const writes = Array.from({ length: 8 }, (_, index) =>
-    write("queued", async () => {
-      order.push(index);
-      now += cost;
-      return failed ? rejectWrite() : index;
-    }),
-  );
-  const settled = Promise.allSettled(writes);
-  const ioProgress = nextTurn().then(() => order.length);
-  release.resolve();
-  const completedAtIoTurn = await ioProgress;
-  await first;
-  expect(completedAtIoTurn).toBeGreaterThan(0);
-  expect(completedAtIoTurn).toBeLessThan(writes.length);
-  if (cost) {
-    expect(completedAtIoTurn).toBe(1);
-  }
-  expect(await settled).toEqual(
-    Array.from({ length: 8 }, (_, value) =>
-      failed ? { status: "rejected", reason: undefined } : { status: "fulfilled", value },
-    ),
-  );
-  expect(order).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-  expect(queues.size).toBe(0);
-});
-
-it("keeps I/O progressing across store backlogs in separate runtime chunks", async () => {
+it.each([0, 10])("shares I/O turns across chunks (writer cost %s)", async (cost) => {
   const sibling = await siblingModule("shared-turn-budget");
   const queues = new Map<string, StoreWriterQueue>();
   const release = makeGate();
   const orders = Array.from({ length: 8 }, () => [] as number[]);
-  vi.spyOn(performance, "now").mockReturnValue(0);
+  const rejectWrite = vi.fn<() => Promise<never>>().mockRejectedValue(undefined);
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   let completed = 0;
   let done = false;
   const batches: number[] = [];
@@ -200,11 +172,13 @@ it("keeps I/O progressing across store backlogs in separate runtime chunks", asy
         write("queued", async () => {
           order.push(value);
           completed++;
+          now += cost;
+          return cost ? value : rejectWrite();
         }),
       ),
     ];
   });
-  const settled = Promise.all(writers).finally(() => {
+  const settled = Promise.allSettled(writers).finally(() => {
     done = true;
   });
   const ioProgress = own(
@@ -221,14 +195,28 @@ it("keeps I/O progressing across store backlogs in separate runtime chunks", asy
     })(),
   );
   release.resolve();
-  await settled;
+  const results = await settled;
   await ioProgress;
   // I/O must not wait for even one successor from every busy store at once.
   expect(Math.max(...batches)).toBeLessThan(orders.length);
+  if (cost) {
+    expect(Math.max(...batches)).toBe(1);
+  }
   expect(completed).toBe(64);
   for (const order of orders) {
     expect(order).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
   }
+  expect(results).toEqual(
+    orders.flatMap(() =>
+      Array.from({ length: 9 }, (_, index) =>
+        index === 0
+          ? { status: "fulfilled", value: undefined }
+          : cost
+            ? { status: "fulfilled", value: index - 1 }
+            : { status: "rejected", reason: undefined },
+      ),
+    ),
+  );
   expect(queues.size).toBe(0);
 });
 
@@ -345,28 +333,6 @@ it("reenters only keys covered by the active writer", async () => {
   );
   expect(value).toBe("covered");
   expect(expanded).not.toHaveBeenCalled();
-});
-
-it("queues ordinary nested writes behind the active writer", async () => {
-  const { queues, write, order } = createQueue();
-  const releaseOuter = makeGate();
-  let nested: Promise<unknown> | undefined;
-  const outer = write("outer", async () => {
-    order.push("outer:start");
-    nested = write("inner", async () => {
-      order.push("inner");
-      return "inner-result";
-    });
-    await releaseOuter.promise;
-    order.push("outer:end");
-    return "outer-result";
-  });
-  await nextTurn();
-  expect(order).toEqual(["outer:start"]);
-  releaseOuter.resolve();
-  await expect(Promise.all([outer, nested])).resolves.toEqual(["outer-result", "inner-result"]);
-  expect(order).toEqual(["outer:start", "outer:end", "inner"]);
-  expect(queues.size).toBe(0);
 });
 
 it.each(["clear", "drain"] as const)(
