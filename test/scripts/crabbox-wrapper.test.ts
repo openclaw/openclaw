@@ -24,6 +24,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { constants as osConstants, homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -56,6 +57,7 @@ const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const artifactTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const dependencyTempDirs = useAutoCleanupTempDirTracker(afterAll);
 const repoRoot = process.cwd();
+const require = createRequire(import.meta.url);
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
 const bundledOutputPaths = new Set<string>();
@@ -1799,6 +1801,16 @@ describe("scripts/crabbox-wrapper", () => {
       platform: "node",
       target: "node22",
       plugins: [
+        {
+          name: "fs-safe-source-owner",
+          setup(builder) {
+            // Relocated fixtures keep the parser beside its package-owned WASM asset.
+            builder.onResolve({ filter: /^@openclaw\/fs-safe(?:\/|$)/ }, (args) => ({
+              path: pathToFileURL(require.resolve(args.path)).href,
+              external: true,
+            }));
+          },
+        },
         {
           name: "canonical-state-schemas",
           setup(builder) {
