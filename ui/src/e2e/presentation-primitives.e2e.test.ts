@@ -119,9 +119,9 @@ async function assertFeedback(page: Page) {
   await error.locator("summary").click();
   expect(await error.locator("details").getAttribute("open")).not.toBeNull();
   expect(await error.locator("code").textContent()).toContain("Synthetic module failure");
-  expect(
-    await page.locator('[data-example="Refresh stale"] [role="status"]').textContent(),
-  ).toContain("stale");
+  expect(await page.locator('[data-example="Refresh stale"] [role="status"]').textContent()).toBe(
+    "Showing last known data.",
+  );
   expect(
     await page.locator('[data-example="Refresh failed"] [role="alert"]').textContent(),
   ).toContain("Synthetic refresh failure");
