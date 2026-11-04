@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -38,6 +39,20 @@ const devPlan = (index: number) => (payloads()[index] as { plan: TemplateAddPlan
 
 describe("Template project CLI", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    { option: "name", code: "invalid_package_name" },
+    { option: "agentId", code: "invalid_agent_id" },
+  ])("rejects an explicitly empty $option before creating a project", async ({ option, code }) => {
+    const root = join(tempDirs.make("openclaw-template-empty-identity-"), "project");
+    await expect(runTemplatesCreateCommand(root, { [option]: "", json: true })).rejects.toThrow(
+      "__exit__:1",
+    );
+    expect(payloads()).toMatchObject([
+      { schemaVersion: "openclaw.templateProject.v1", ok: false, error: { code } },
+    ]);
+    expect(existsSync(root)).toBe(false);
+  });
 
   it("previews a Template with ordinary sessions_spawn authority", async () => {
     await runTemplatesDevCommand("src/templates/fixtures/delegating-agent", {

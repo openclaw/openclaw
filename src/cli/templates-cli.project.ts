@@ -57,8 +57,8 @@ export async function runTemplatesCreateCommand(
 ): Promise<void> {
   try {
     const result = await createTemplateProject(projectPath, {
-      ...(opts.name ? { name: opts.name } : {}),
-      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      name: opts.name,
+      agentId: opts.agentId,
     });
     if (opts.json) {
       writeRuntimeJson(runtime, {
