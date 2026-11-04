@@ -47,9 +47,7 @@ export function isDurablyRetryableInboundMediaError(err: unknown): boolean {
     ? typeof err.status === "number" &&
         (err.status === 408 || err.status === 429 || err.status >= 500)
     : err.code === "fetch_failed" &&
-        (isAbortError(err) ||
-          isAbortError(err.cause) ||
-          isRecoverableTelegramNetworkError(err, { context: "polling" }));
+        (isAbortError(err) || isAbortError(err.cause) || isRecoverableTelegramNetworkError(err));
 }
 
 export function hasInboundMedia(msg: Message): boolean {

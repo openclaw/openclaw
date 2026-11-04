@@ -7,6 +7,7 @@
     "onStartup": false,
     "onAgentHarnesses": ["agentsapi"]
   },
+  "doctorContract": { "configRepair": true },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -71,9 +72,8 @@
         "description": "Execution environment for new sessions. Self-hosted uses the prepared OpenClaw workspace and requires an externally connected executor. Reset existing sessions after changing this setting."
       },
       "executorController": {
-        "type": "string",
-        "minLength": 1,
-        "description": "Plugin ID that owns this self-hosted executor controller. Omit for an externally connected executor. Enable the selected plugin and reset existing sessions before changing controllers."
+        "not": {},
+        "description": "No longer supported. Retire controlled sessions with the previous OpenClaw version and original controller plugin, then remove executorController and configure an external executor lifecycle owner before upgrading."
       },
       "openai_host": {
         "type": "object",

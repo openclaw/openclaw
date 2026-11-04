@@ -232,7 +232,7 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
         }, 250);
       }
       // Sending the gate can start mutation even if its write callback fails.
-      // From here, only the updater can authorize recovery of this installation.
+      // An interrupted updater requires the helper to inspect durable recovery state.
       if (phase === "update") updaterStarted = true;
       if (timeoutMs !== undefined) {
         timeout = setTimeout(() => {

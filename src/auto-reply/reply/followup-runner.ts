@@ -28,7 +28,7 @@ import { createCompactionNoticePayload } from "./compaction-notice.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
-import { enqueueGoalContinuation } from "./goal-continuation.js";
+import { enqueueGoalContinuation, createGoalContinuationReturn } from "./goal-continuation.js";
 import { completeFollowupRunLifecycle, type FollowupRun } from "./queue.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
@@ -37,10 +37,10 @@ import {
   type AdmittedFollowupTurn,
   type FollowupRunnerParams,
 } from "./reply-agent-turn-preparation.js";
-import { resolveReplyAdmissionRunId } from "./source-turn-id.js";
+import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
 import {
   isReplyOperationStalledBeforeOutput,
-  STALLED_TURN_NOTICE_TEXT,
+  resolveStalledTurnNoticeText,
 } from "./stalled-turn-recovery.js";
 
 type FollowupDrainDisposition = { kind: "consumed" } | { kind: "retry"; error: unknown };
@@ -81,6 +81,9 @@ function resolveFollowupCompletion(
     return {
       kind: "failed",
       error: terminal.error ?? "Follow-up failed.",
+      ...(outcome.kind === "rejected" && outcome.payload.text
+        ? { notice: outcome.payload.text }
+        : {}),
       ...stopReason,
       ...(classification === "timeout" ? { errorKind: "timeout" } : {}),
     };
@@ -185,9 +188,6 @@ export function createFollowupRunner(
       const admission = await prepareReplyAgentTurn({
         queued,
         defaults,
-        recoveryAdmissionRunId: resolveReplyAdmissionRunId({
-          MessageSid: resolveFollowupCurrentMessageId(queued),
-        }),
         onOperationOwned: (owned) => {
           operation = owned;
         },
@@ -225,14 +225,44 @@ export function createFollowupRunner(
             turn.session.current(),
           );
       }
-      const initialGoalId = turn.session.current()?.goal?.id;
+      const initialSessionEntry = turn.session.current();
+      const initialGoalId = initialSessionEntry?.goal?.id;
+      const runWithGoalReturn = createGoalContinuationReturn(
+        turn.session.kind === "session" &&
+          turn.session.storePath &&
+          initialSessionEntry &&
+          (initialSessionEntry.agentHarnessId === undefined ||
+            initialSessionEntry.agentHarnessId === "openclaw")
+          ? {
+              base: turn.queued,
+              initialGoalId:
+                initialSessionEntry.goal?.status === "active" ? initialGoalId : undefined,
+              expectedSession: initialSessionEntry,
+              sessionKey: turn.session.key,
+              storePath: turn.session.storePath,
+              queueKey: turn.queued.run.sessionKey ?? turn.session.key,
+              settings: resolveQueueSettings({
+                cfg: turn.config,
+                sessionEntry: initialSessionEntry,
+                channel: turn.queued.originatingChannel,
+              }),
+              operation: turn.operation,
+              runFollowup,
+            }
+          : undefined,
+      );
       executionEntered = true;
-      const execution = await executeFollowupTurn({
-        turn,
-        defaults,
-        onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
-        onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
-      });
+      // Nested backend preparation borrows this successor, never the waking predecessor.
+      const execution = await runWithReplyOperationLifecycleAdmission(turn.operation, () =>
+        runWithGoalReturn(() =>
+          executeFollowupTurn({
+            turn,
+            defaults,
+            onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
+            onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
+          }),
+        ),
+      );
       // A closed execution result is terminal queue work. Commit consumption
       // before accounting/delivery so their failures cannot replay model or tool effects.
       disposition = { kind: "consumed" };
@@ -241,7 +271,7 @@ export function createFollowupRunner(
         isReplyOperationStalledBeforeOutput(turn.operation)
           ? // A watchdog stall is a failure, not a user cancel: source owners
             // surface its last-resort notice through their terminal error.
-            { kind: "failed", error: STALLED_TURN_NOTICE_TEXT }
+            { kind: "failed", error: resolveStalledTurnNoticeText(turn.operation) }
           : resolveFollowupCompletion(execution.execution.outcome);
       try {
         await execution.progress.drain();
@@ -278,40 +308,35 @@ export function createFollowupRunner(
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
         onObservedReplyDelivery,
       };
-      const { decision, accounting: completedAccounting } = await withAgentTurnCompletion(
-        {
-          agentId: turn.queued.run.agentId,
-          storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-          sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
-          entry: turn.session.current(),
-          writer:
-            execution.execution.outcome.kind === "settled"
-              ? execution.execution.outcome.sessionWriter
-              : undefined,
-          operation: turn.operation,
-          prepareRestartClaimCleanup:
-            execution.execution.outcome.kind === "settled"
-              ? turn.restartRecovery?.prepareCompletionCleanup
-              : undefined,
-          activitySummaryCompletion,
-          publish: (entry) => turn.session.publish(entry),
-        },
-        async (turnCompletion) => {
-          const accounting = await accountFollowupTurn({
-            turn,
-            defaults,
-            execution,
-            completion: turnCompletion,
-          });
-          const resolved = await resolveFollowupDeliveryDecision({
-            turn,
-            execution: execution.execution,
-            accounting,
-            opts: deliveryOpts,
-          });
-          await turnCompletion?.complete();
-          return { decision: resolved, accounting };
-        },
+      const { decision, accounting: completedAccounting } = await runWithGoalReturn(() =>
+        withAgentTurnCompletion(
+          {
+            agentId: turn.queued.run.agentId,
+            storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+            sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
+            entry: turn.session.current(),
+            writer: execution.execution.outcome.sessionWriter,
+            operation: turn.operation,
+            activitySummaryCompletion,
+            publish: (entry) => turn.session.publish(entry),
+          },
+          async (turnCompletion) => {
+            const accounting = await accountFollowupTurn({
+              turn,
+              defaults,
+              execution,
+              completion: turnCompletion,
+            });
+            const resolved = await resolveFollowupDeliveryDecision({
+              turn,
+              execution: execution.execution,
+              accounting,
+              opts: deliveryOpts,
+            });
+            await turnCompletion?.complete();
+            return { decision: resolved, accounting };
+          },
+        ),
       );
       if (decision.kind === "deliver") {
         for (const payload of decision.payloads) {
@@ -471,19 +496,16 @@ export function createFollowupRunner(
         }
         completeFollowupRunLifecycle(queued);
       }
-      try {
-        await admittedTurn?.restartRecovery?.clear();
-      } catch (error) {
-        defaultRuntime.error?.(
-          `followup queue: recovery settlement failed: ${formatErrorMessage(error)}`,
-        );
-      }
       if (admittedTurn?.runId) {
         clearAgentRunContext(admittedTurn.runId);
       }
-      operation?.complete();
-      defaults.typing.markRunComplete();
-      defaults.typing.markDispatchIdle();
+      try {
+        await admittedTurn?.releaseSourceAdmission?.();
+      } finally {
+        operation?.complete();
+        defaults.typing.markRunComplete();
+        defaults.typing.markDispatchIdle();
+      }
     }
 
     if (disposition.kind === "retry") {

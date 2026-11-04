@@ -1,8 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
+import { promoteGoalContinuationYield } from "../../../auto-reply/reply/goal-continuation-return.js";
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import type { OperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { promoteFollowupYield } from "../completion/session-followup-completion.js";
 import {
   promoteRequesterCronAuthority,
@@ -13,7 +15,7 @@ import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
 import { hasSubagentControllerInput } from "./subagent-controller-inputs.js";
 import { trackSubagentProgressYield } from "./subagent-progress-draft.js";
 import { SESSION_DELIVERY_DEADLINE_MS } from "./subagent-registry-helpers.js";
-import { getSubagentSessionReadLookup } from "./subagent-registry-memory.js";
+import { getSubagentSessionReadLookup, subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
@@ -45,6 +47,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
   requesterSessionKey: string;
   requesterAgentId: string;
   requesterTurnRunId: string;
+  requesterRunInstance?: OperationalRunInstanceRef;
   assertCurrent: () => void;
   runs: Map<string, SubagentRunRecord>;
 }): Promise<AcceptedSessionSpawn | undefined> {
@@ -88,6 +91,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
         expectsCompletionMessage: true,
       };
       if (entry.requesterTurnRunId === requesterTurnRunId) {
+        subagentRuns.bindRequesterRunInstance(entry, params.requesterRunInstance);
         return { value: accepted };
       }
       const next = structuredClone(entry);
@@ -103,6 +107,12 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
       runs: params.runs,
       context: captureOpenClawStateWorkerContext(),
       assertCurrent: params.assertCurrent,
+      onPublished: (postimages) => {
+        const entry = postimages.get(params.expected.runId);
+        if (entry) {
+          subagentRuns.bindRequesterRunInstance(entry, params.requesterRunInstance);
+        }
+      },
     },
   );
 }
@@ -270,7 +280,7 @@ export function listUnsettledRequesterChildrenInRuns(params: {
 }
 
 /** Completion children that a requester turn still claims. */
-export function selectRequesterTurnChildren(
+function selectRequesterTurnChildren(
   runs: ReadonlyMap<string, SubagentRunRecord>,
   requesterSessionKey: string,
   requesterAgentId: string | undefined,
@@ -643,6 +653,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
       const entries = children(members);
       trackSubagentProgressYield(requesterTurnRunId, entries);
       promoteFollowupYield({ requesterTurnRunId, entries, rearmGeneration });
+      promoteGoalContinuationYield({ requesterTurnRunId, entries, rearmGeneration });
       promoteRequesterCronAuthority({ requesterTurnRunId, batch: entries, rearmGeneration });
       if (rearmGeneration !== undefined && params.requesterAgentId) {
         promoteRequesterFinalAttachment({

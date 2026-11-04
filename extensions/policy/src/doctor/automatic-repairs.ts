@@ -62,11 +62,8 @@ export function repairPolicyAutomaticNarrower(
   }
   if (
     findings.length === 0 ||
-    findings.some(
-      (finding) =>
-        finding.checkId !== checkId ||
-        POLICY_FIX_METADATA_BY_CHECK_ID.get(finding.checkId)?.fixClass !== "automatic",
-    )
+    POLICY_FIX_METADATA_BY_CHECK_ID.get(checkId)?.fixClass !== "automatic" ||
+    findings.some((finding) => finding.checkId !== checkId)
   ) {
     return Promise.resolve({
       status: "skipped",

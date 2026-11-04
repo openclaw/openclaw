@@ -1,6 +1,9 @@
 import { spread } from "@solidjs/web";
-import { createMemo, createSignal, onSettled, Show, useContext } from "solid-js";
-import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
+import { createSignal, omit, onSettled, Show, useContext } from "solid-js";
+import {
+  CanvasWidgetView,
+  type OpenClawCanvasWidgetView,
+} from "../../../components/canvas-widget-view.tsx";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
 type WidgetProperties = Pick<
@@ -14,6 +17,9 @@ type WidgetProperties = Pick<
   | "allowScripts"
   | "connectionGeneration"
 >;
+type CanvasWidgetMountProps = WidgetProperties & {
+  onElement?: (element: OpenClawCanvasWidgetView | undefined) => void;
+};
 type ParkedWidget = {
   element: OpenClawCanvasWidgetView;
   container: HTMLDivElement;
@@ -33,20 +39,22 @@ function releaseParking(key: string, parked: ParkedWidget): void {
   }
 }
 
-function CanvasWidgetHost(props: { properties: WidgetProperties; widgetKey: string }) {
+function CanvasWidgetHost(props: {
+  properties: WidgetProperties;
+  widgetKey: string;
+  onElement: CanvasWidgetMountProps["onElement"];
+}) {
   const presented = useContext(ContentPresentation);
   let container!: HTMLSpanElement;
   const [element, setElement] = createSignal<OpenClawCanvasWidgetView>();
   onSettled(() => {
+    const onElement = props.onElement;
     const retained =
       container.isConnected && typeof container.moveBefore === "function"
         ? parkedWidgets.get(props.widgetKey)
         : undefined;
-    const view = retained?.element ?? document.createElement("openclaw-canvas-widget-view");
+    const view = retained?.element ?? new CanvasWidgetView.Element();
     Object.assign(view, props.properties);
-    if (!customElements.get("openclaw-canvas-widget-view")) {
-      view.style.cssText = `display:block;min-height:${props.properties.preferredHeight ?? 420}px`;
-    }
     view.presentationActive = presented();
     if (retained) {
       container.moveBefore(view, null);
@@ -55,7 +63,9 @@ function CanvasWidgetHost(props: { properties: WidgetProperties; widgetKey: stri
       container.append(view);
     }
     setElement(view);
+    onElement?.(view);
     return () => {
+      onElement?.(undefined);
       if (typeof Element.prototype.moveBefore !== "function" || !view.isConnected) {
         return;
       }
@@ -119,11 +129,17 @@ function CanvasWidgetHost(props: { properties: WidgetProperties; widgetKey: stri
   );
 }
 
-export function CanvasWidgetMount(props: WidgetProperties) {
-  const key = createMemo(() => `${props.sessionKey}\0${props.docId}`);
+export function CanvasWidgetMount(props: CanvasWidgetMountProps) {
+  const properties = omit(props, "onElement");
   return (
-    <Show when={key()} keyed>
-      {(widgetKey) => <CanvasWidgetHost properties={props} widgetKey={widgetKey} />}
+    <Show when={`${props.sessionKey}\0${props.docId}`} keyed>
+      {(widgetKey) => (
+        <CanvasWidgetHost
+          properties={properties}
+          widgetKey={widgetKey}
+          onElement={props.onElement}
+        />
+      )}
     </Show>
   );
 }

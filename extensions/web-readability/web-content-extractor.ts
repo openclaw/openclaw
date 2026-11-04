@@ -1,10 +1,9 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   htmlToMarkdown,
-  normalizeWhitespace,
+  markdownToText,
   sanitizeHtml,
   stripInvisibleUnicode,
-  type WebContentExtractionRequest,
   type WebContentExtractorPlugin,
 } from "openclaw/plugin-sdk/web-content-extractor";
 
@@ -108,32 +107,17 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
   return false;
 }
 
-async function extractWithReadability(request: WebContentExtractionRequest) {
-  const cleanHtml = await sanitizeHtml(request.html);
-  if (
-    cleanHtml.length > READABILITY_MAX_HTML_CHARS ||
-    exceedsEstimatedHtmlNestingDepth(cleanHtml, READABILITY_MAX_ESTIMATED_NESTING_DEPTH)
-  ) {
-    return null;
-  }
-  try {
-    const [{ Readability }, { parseHTML }] = await loadReadabilityDeps();
-    const { document } = parseHTML(cleanHtml, { location: { href: request.url } });
-    const textMode = request.extractMode === "text";
-    // Text mode consumes textContent; skip serializing the HTML it would discard.
-    const reader = new Readability(document, textMode ? { serializer: () => "" } : undefined);
-    const parsed = reader.parse();
-    if (!parsed) {
-      return null;
+// linkedom uses the first <base>'s raw href (null for `<base target>`) as baseURI, so
+// Readability cannot absolutize links; browsers resolve the first <base href> against the page.
+function resolveDocumentBase(document: Document, pageUrl: string): void {
+  const base = document.querySelector("base[href]");
+  const href = base ? URL.parse(base.getAttribute("href") ?? "", pageUrl)?.href : undefined;
+  for (const element of document.querySelectorAll("base")) {
+    if (element === base && href) {
+      element.setAttribute("href", href);
+    } else {
+      element.remove();
     }
-    const title = parsed.title || undefined;
-    const rendered = textMode
-      ? { text: normalizeWhitespace(parsed.textContent ?? ""), title }
-      : htmlToMarkdown(parsed.content ?? "");
-    const text = stripInvisibleUnicode(rendered.text);
-    return text ? { text, title: title ?? rendered.title } : null;
-  } catch {
-    return null;
   }
 }
 
@@ -142,6 +126,34 @@ export function createReadabilityWebContentExtractor(): WebContentExtractorPlugi
     id: "readability",
     label: "Readability",
     autoDetectOrder: 10,
-    extract: extractWithReadability,
+    extract: async (request) => {
+      const cleanHtml = await sanitizeHtml(request.html);
+      if (
+        cleanHtml.length > READABILITY_MAX_HTML_CHARS ||
+        exceedsEstimatedHtmlNestingDepth(cleanHtml, READABILITY_MAX_ESTIMATED_NESTING_DEPTH)
+      ) {
+        return null;
+      }
+      try {
+        const [{ Readability }, { parseHTML }] = await loadReadabilityDeps();
+        const { document } = parseHTML(cleanHtml, { location: { href: request.url } });
+        resolveDocumentBase(document, request.url);
+        const textMode = request.extractMode === "text";
+        const reader = new Readability(document);
+        const parsed = reader.parse();
+        if (!parsed) {
+          return null;
+        }
+        const title = parsed.title || undefined;
+        // Render the selected HTML because textContent joins adjacent block elements.
+        const rendered = htmlToMarkdown(parsed.content ?? "", { linksAsText: textMode });
+        const text = stripInvisibleUnicode(
+          textMode ? markdownToText(rendered.text) : rendered.text,
+        );
+        return text ? { text, title: title ?? rendered.title } : null;
+      } catch {
+        return null;
+      }
+    },
   };
 }

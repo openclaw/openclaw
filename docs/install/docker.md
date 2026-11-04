@@ -127,6 +127,7 @@ the same Compose files and overlays as your current deployment:
 
 ```bash
 docker compose pull openclaw-gateway openclaw-cli
+docker compose stop openclaw-gateway
 docker compose up -d openclaw-gateway
 ```
 
@@ -146,8 +147,43 @@ For a new installation from a local source build, bake Chromium into the image:
 OPENCLAW_IMAGE=openclaw:local OPENCLAW_INSTALL_BROWSER=1 ./scripts/docker/setup.sh
 ```
 
-This build-time option installs Chromium and Xvfb; setting it on
-an already-built container does not install a browser.
+`OPENCLAW_INSTALL_BROWSER=1` installs full Chromium and headless shell, preserving
+existing Playwright scripts that use default headless launches. Choose `chromium`
+to install only full Chromium, or `headless-shell` for a smaller, headless-only image:
+
+```bash
+OPENCLAW_IMAGE=openclaw:local OPENCLAW_INSTALL_BROWSER=headless-shell ./scripts/docker/setup.sh
+```
+
+All modes use the repository-pinned Playwright installer, including its system
+libraries, fonts, and FFmpeg helper. Empty or `0` omits the browser. These are
+build-time choices; setting them on an already-built container does not install
+or replace a browser. Headless shell cannot provide a headed browser window or
+Chrome extensions. Keep full Chromium for those workflows and validate your sites
+before switching. Neither browser distribution is MIT-only; inventory the actual
+image and preserve all third-party license notices.
+
+OpenClaw automatically discovers full Chromium only. A `headless-shell` image
+requires an explicit shell executable path on a separate managed profile. Find
+the installed path inside the container (the revision directory changes with
+Playwright updates):
+
+```bash
+find /home/node/.cache/ms-playwright -type f -name chrome-headless-shell
+```
+
+Set `browser.profiles.shell.executablePath` to that path, give the profile its own
+`cdpPort`, and keep it headless. Select that profile when starting the browser.
+Do not reuse an existing full Chromium profile: switching distributions can
+discard localStorage. See [Browser configuration](/tools/browser/configuration).
+
+With the explicit `chromium` mode,
+your own Playwright scripts must use `channel: "chromium"` for headless launches;
+Playwright's default headless launch expects the separate shell binary. Keep `1`
+to retain both binaries without changing existing scripts.
+The bundled Diffs PNG/PDF renderer supports all image modes. After explicit and
+system-browser choices, it selects Playwright's full Chromium when installed and
+otherwise retains Playwright's default headless-shell selection.
 
 The image supplies Chromium, not a replacement for your browser configuration:
 
@@ -157,7 +193,7 @@ The image supplies Chromium, not a replacement for your browser configuration:
 - OpenClaw auto-detects the image's Playwright-managed Chromium on Linux. An
   explicit `browser.executablePath` or profile executable path must point to a
   binary inside the container; a path from your laptop will not work there.
-- A headless container needs headless browser operation. Check explicit
+- Managed browsers run headless by default. Check explicit
   `browser.headless`, profile headless settings, and `OPENCLAW_BROWSER_HEADLESS`
   overrides if startup reports a missing display. See [Browser configuration](/tools/browser-control).
 - Connect with `operator.admin` access to a Gateway advertising `browser.request`.
@@ -233,6 +269,23 @@ maintenance ownership before starting the Gateway. This covers the default image
 command and Compose's foreground Gateway command, including its selected profile.
 Routine image upgrades do not require a separate Doctor pass.
 
+Keep one Gateway replica per state volume, and stop the old container before
+starting its replacement. The startup repair needs exclusive maintenance
+ownership of that state; an overlapping Gateway can prevent it from completing.
+For Compose, use the same files and overlays as your running deployment:
+
+```bash
+docker compose pull openclaw-gateway openclaw-cli
+docker compose stop openclaw-gateway
+docker compose up -d openclaw-gateway
+```
+
+In Docker Swarm, keep `replicas: 1` and use `update_config.order: stop-first` and
+`rollback_config.order: stop-first`. In Kubernetes, keep `replicas: 1` and use a
+`Recreate` Deployment strategy, as the [provided manifest](/install/kubernetes)
+does. A shared volume is not a way to scale Gateway replicas. Back up the state
+before upgrading; see [Backups](/install/backups).
+
 Activation retains a full pre-repair copy of local state under
 `<state-dir>.update-captures/` the first time Doctor captures in a container.
 Later starts of the same container (`docker stop`/`docker start`, restart
@@ -241,6 +294,47 @@ full copy, keep it, and still retire other Doctor copies older than 30 days;
 repair-specific backups still apply. If a capture fails, the next
 start tries again. A new image, a recreated container, or a container whose
 `/tmp` does not persist across restarts captures again.
+
+### Read-only container root
+
+A read-only container root still needs writable runtime storage. For example,
+with `HOME=/state` and `OPENCLAW_STATE_DIR=/state`, provide these mounts:
+
+| Path                                                                   | Purpose                                                                                                  | Storage                             |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `/state`                                                               | SQLite databases and sidecars, credentials, and state ownership locks under `/state/tmp/openclaw-<uid>/` | Persistent writable volume          |
+| Configured workspace directories, such as `/workspace`                 | Agent files and workspace migrations                                                                     | Persistent writable volume          |
+| `/state/.cache` or the absolute directory selected by `XDG_CACHE_HOME` | Private SQLite snapshot staging                                                                          | Writable volume or tmpfs            |
+| `/tmp`                                                                 | Runtime temporary files and the container activation marker                                              | Writable tmpfs                      |
+| `/state.update-captures`                                               | Retained pre-repair state captures                                                                       | Separate persistent writable volume |
+
+Set ownership so the container's UID/GID can create files and directories in each
+writable location. Database files and their parent directories must be writable;
+mounting only the database file writable is insufficient for SQLite sidecars.
+Configured plugin storage or other file outputs may need additional mounts.
+See [Gateway lock](/gateway/gateway-lock#state-and-config-locks) for the lock paths.
+`TMPDIR` does not relocate state ownership locks.
+
+The capture path is a sibling of the resolved state directory, not a child. A
+writable `/state` therefore does not make `/state.update-captures` writable. If
+that sibling is unavailable, standalone Doctor reports that the original state
+capture was unavailable and continues. This warning does not identify the cause
+of a later fatal filesystem error. Keep the capture volume private: it contains
+raw pre-repair state and credentials, and is excluded from normal backups and
+support exports.
+
+For a read-only config bind such as `/run/config/openclaw.json`, set
+`OPENCLAW_CONFIG_PATH=/run/config/openclaw.json` and
+`OPENCLAW_CONFIG_READONLY=1` in both the Gateway and CLI container environments.
+Doctor can still repair writable state, but config repairs must be applied in
+your external deployment source. Invalid or legacy config that blocks startup
+must be migrated there before restarting. See
+[Externally managed config](/cli/config#externally-managed-config).
+
+If startup reports `EROFS`, inspect the path and operation in the error and check
+that its mount is writable. Changing file modes cannot make a read-only mount
+writable. Do not delete state or lock files to repair a mount error, and do not
+disable native filesystem checks.
 
 On older Linux hosts such as Synology DSM, an unavailable `openat2` syscall can
 make older images report that another Gateway owns even an empty state volume.
@@ -330,7 +424,12 @@ podman run --rm -v <openclaw-state>:/home/node/.openclaw <image> openclaw doctor
 
 After doctor finishes, restart the Gateway container with its default command.
 In Kubernetes, run the same command in a one-off Job or debug pod mounted to the
-same PVC, then restart the Deployment or StatefulSet.
+same PVC. First scale the Gateway workload to zero and wait for its pods to
+terminate; in Swarm, scale the Gateway service to zero and wait for its tasks to
+stop. Keep the workload stopped until Doctor finishes, then restore one replica.
+If ownership is still refused after the old container has stopped, follow
+[Gateway lock recovery](/gateway/gateway-lock#recover-a-crashed-foreign-owner).
+Do not delete lock files or repeatedly restart competing containers.
 
 After the container is running again, run the read-only deployment preflight
 against the same mounted state:
@@ -351,6 +450,18 @@ published separately with
 `openclaw.build.bundledDist: false`; that marker still preserves the plugin's
 external npm or ClawHub ownership and does not change either artifact contract.
 Unknown, invalid, or ambiguous ids fail the image build.
+Custom package builds using `scripts/package-openclaw-for-docker.mjs --bundle-plugin`
+retain each selected plugin's declared npm bundles from its own installation,
+including their installed runtime dependencies and local patches. Packaging does
+not change the checkout's dependency links or shared package store.
+
+After the frozen production install, Docker also composes the selected plugins'
+exact production and optional pins into the final distribution manifest and
+links their already-installed package identities at the root resolution scope.
+This lets plugin-owned code emitted into shared root chunks resolve the same
+packages while retaining the plugin-local links needed by plugin-root chunks.
+The composition performs no second install or dependency resolution and fails
+instead of replacing an incompatible root binding.
 This includes WhatsApp: `OPENCLAW_EXTENSIONS=whatsapp` compiles and packages its
 runtime. Ordinary source builds generate its runtime through the separate
 external-plugin build path; root npm artifacts continue to exclude it. Selected
@@ -447,6 +558,9 @@ curl -fsS http://127.0.0.1:18789/readyz    # deep, channel-aware readiness
 ```
 
 The image's built-in `HEALTHCHECK` pings `/healthz`; repeated failures mark the container `unhealthy` so orchestrators can restart or replace it.
+It uses the live Gateway lock's port first, then `OPENCLAW_GATEWAY_PORT`, then
+the configured port. An explicit environment port still works when the config
+cannot be loaded.
 Use `/startupz` for an orchestrator startup or readiness check so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
 
 Authenticated deep health snapshot:
@@ -510,3 +624,101 @@ docker compose exec openclaw-gateway sh -lc 'node dist/index.js gateway health -
 - [Cloudflare Containers](/install/cloudflare) — experimental Worker plus container deployment with Litestream backups to R2
 - [Updating](/install/updating) — keeping OpenClaw up to date
 - [Configuration](/gateway/configuration) — Gateway configuration after install
+
+## Build from an offline installed runtime
+
+Release tooling can combine a portable OpenClaw package with an inventoried
+Linux/x64 dependency tree without rebuilding the package. Keep the package,
+dependency input, and source checkout immutable during composition. The source
+checkout must match the dependency input's package and lockfile hashes and the
+package's build identity; the tooling checkout has its own identity.
+
+From the tooling checkout:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/compose-installed-runtime.mts \
+--package /path/to/openclaw.tgz \
+--package-receipt /path/to/package-receipt.json \
+--dependency-root /path/to/linux-dependencies \
+--dependency-manifest /path/to/linux-dependencies.jsonl \
+--dependency-manifest-sha256 "$DEPENDENCY_MANIFEST_SHA256" \
+--source-root /path/to/runtime-source \
+--platform linux --arch x64 \
+--output-dir /path/to/new-composition
+
+```
+
+The output directory must not exist or overlap an input. The package receipt
+supplies `sha256`, `bytes`, and `buildInfo: { version, commit, buildId }`.
+The dependency root supplies `runtime-input.json` with `platform`, `arch`,
+`packageJsonSha256`, and `lockfileSha256`. Its newline-delimited JSON inventory
+uses paths prefixed with `node-runtime-dependencies/linux-x64` and records each
+entry's `kind` and octal `mode`, plus `size`/`sha256` for files or `target` for
+links. These input artifacts and their trusted digests come from the release
+owner; this command does not install dependencies or authorize their source.
+
+Composition preserves packaged bundled dependencies, materializes the remaining
+importer-relative dependency closure, and stages the maintained Linux lifecycle
+helpers. It writes `app/`, `installed-runtime.tgz`, a complete output inventory,
+and `receipt.json`. Symlink permission bits can differ across input filesystems;
+that count is recorded, while file/directory modes, content, targets and
+containment remain strict. No input is modified.
+
+Full-inventory checking remains the default. To reuse a prior strict composition,
+add `--qualified-dependency-receipt /path/to/prior/receipt.json` and
+`--qualified-dependency-receipt-sha256 "$PRIOR_RECEIPT_SHA256"`. The release owner
+must supply the trusted receipt digest; a caller-written operation report is not
+qualification. The receipt must bind the same dependency manifest, source package,
+lockfile, and target. Relocated donors are supported, but never trusted by location
+or by a prior receipt alone: composition rechecks their complete topology, modes,
+sizes, link targets/containment, and package manifests, then hashes the actual
+selected copies against the qualified inventory. Unselected payload bytes are
+not rehashed. The new receipt labels this `qualified-reuse` with
+`inputInventory: false`; it cannot qualify another reuse.
+
+Before passing the composition to Docker, verify it and obtain the maintained
+image recipe:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/compose-installed-runtime.mts \
+--operation image-recipe \
+--composition-root /path/to/composition \
+--receipt-sha256 "$RECEIPT_SHA256" \
+--portable-package-sha256 "$PACKAGE_SHA256" \
+--runtime-version "$RUNTIME_VERSION" \
+--runtime-commit "$RUNTIME_COMMIT" \
+--runtime-build-id "$RUNTIME_BUILD_ID"
+
+```
+
+All six location/identity flags are required. `--operation verify` uses the same
+flags. By default both operations verify the complete installed inventory.
+They also check the tooling lockfile against the runtime
+source lock, the Docker entrypoint against the original runtime commit's Git
+blob, and the maintained final-stage COPY inputs. The runtime commit must be
+available in the tooling checkout's Git object database.
+
+For an archive-bound recipe, add `--image-input archive` to `image-recipe`. This
+checks the receipt, archive, and manifest digests plus the small identity, root
+module, and helper inputs used during admission, without rehashing all of `app/`.
+Its `archive-bound` result is not a full directory verification. The recipe adds
+`OPENCLAW_INSTALLED_RUNTIME_INPUT=installed-runtime-archive-input` and
+`OPENCLAW_INSTALLED_RUNTIME_SHA256`: Docker copies the archive, verifies that exact
+digest inside the build, and only then extracts it. Changes to unchecked `app/`
+bytes cannot enter this route; a changed archive fails before extraction.
+
+The JSON recipe names the maintained Dockerfile, `openclaw-runtime` target,
+`OPENCLAW_RUNTIME_ASSETS=installed-runtime-assets` build argument, and
+`openclaw_installed_runtime` named context pointing at the composition root.
+Pass these to Buildx from the pinned tooling checkout. Keep the context unchanged
+through consumption, then verify it again. The default source-build route is
+unchanged. The installed-assets stage runs finalization with networking disabled;
+it checks the native prebuild before lifecycle and never repairs missing app
+dependencies with npm. Later shared image stages still install OS utilities and
+operator tools and can require network access.
+
+Composition and recipe verification are **not Linux runtime qualification**.
+Receipts retain `compositionOnly: true`, ABI/libc `requires-target-acceptance`,
+and lifecycle `target-required`. Native loading, lifecycle completion,
+entrypoint, provider identity, and runtime export checks still require actual
+Linux target acceptance.

@@ -2,11 +2,11 @@ import path from "node:path";
 import { afterEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  isTestCliProvider,
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createReplyOperation as createRegisteredReplyOperation,
   type ReplyOperation,
@@ -16,7 +16,7 @@ import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import {
   createMockFollowupRun,
   createMockReplyOperation,
-  createMockTypingController,
+  createReplyParams,
 } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -80,14 +80,7 @@ vi.mock("../../agents/model-selection.js", async () => {
   );
   return {
     ...actual,
-    isCliProvider: (provider: string, _cfg?: OpenClawConfig) => {
-      const normalized = provider.trim().toLowerCase();
-      return (
-        normalized === "claude-cli" ||
-        normalized === "google-gemini-cli" ||
-        normalized === "codex-cli"
-      );
-    },
+    isCliProvider: isTestCliProvider,
   };
 });
 
@@ -208,8 +201,11 @@ vi.mock("./reply-media-paths.js", async (importOriginal) => {
 
 const { runReplyAgent } = await import("./agent-runner-run.js");
 
-function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupRun>[0]) {
-  const followupRun = createMockFollowupRun(overrides);
+function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupRun>[0] = {}) {
+  const followupRun = createMockFollowupRun({
+    ...overrides,
+    run: { senderId: "alice", ...overrides.run },
+  });
   followupRun.run.thinkingCatalog = [
     {
       provider: followupRun.run.provider,
@@ -290,15 +286,10 @@ async function makeRunReplyAgentParams(
     });
   }
 
-  return {
+  return createReplyParams(followupRun, {
     commandBody: prompt,
-    followupRun,
     queueKey: overrides.sessionKey ?? "main",
     resolvedQueue: { mode: "interrupt" } as QueueSettings,
-    shouldSteer: false,
-    shouldFollowup: false,
-    isActive: false,
-    typing: createMockTypingController(),
     sessionCtx: {
       Provider: provider,
       Surface: provider,
@@ -308,15 +299,10 @@ async function makeRunReplyAgentParams(
       MessageSid: "msg-1",
     },
     defaultModel: "anthropic/claude",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
     typingMode: "instant",
     replyOperation,
     ...overrides,
-  };
+  });
 }
 
 export function resetAgentRunnerMediaTestState() {

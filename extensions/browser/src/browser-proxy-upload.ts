@@ -93,7 +93,6 @@ async function readBrowserProxyUploadFiles(
   paths: string[],
   signal?: AbortSignal,
 ): Promise<BrowserProxyUploadFile[]> {
-  assertBrowserProxyFileCountWithinLimit(paths.length, "request");
   const files: BrowserProxyUploadFile[] = [];
   let totalBytes = 0;
   for (const filePath of paths) {
@@ -175,7 +174,6 @@ function decodeUploadFile(file: BrowserProxyUploadFile, totalBytes: number): Buf
   if (buffer.toString("base64") !== file.contentBase64) {
     throw new Error("INVALID_REQUEST: invalid browser proxy upload encoding");
   }
-  assertBrowserProxyFileBytesWithinLimits(buffer.byteLength, totalBytes + buffer.byteLength);
   return buffer;
 }
 

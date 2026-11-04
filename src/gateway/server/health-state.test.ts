@@ -1,5 +1,6 @@
 // Health-state tests cover probe coalescing, sensitive snapshots, and broadcast version behavior.
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -109,6 +110,38 @@ async function loadHealthState() {
 }
 
 describe("buildGatewaySnapshot update metadata", () => {
+  it("presents the pinned config and state paths together after runtime selection", async () => {
+    const healthState = await loadHealthState();
+    const paths = await import("../../config/paths.js");
+    const original = { configPath: paths.CONFIG_PATH, stateDir: paths.STATE_DIR };
+    try {
+      for (const selection of ["first", "second"]) {
+        const stateDir = path.join(original.stateDir, selection);
+        const configPath = path.join(stateDir, "gateway.json");
+        paths.pinRuntimePaths({
+          ...process.env,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: stateDir,
+        });
+        const snapshot = healthState.buildGatewaySnapshot({
+          client: null,
+          includeSensitive: true,
+          revisionProjector,
+        });
+        expect(snapshot).toMatchObject({ configPath, stateDir });
+        expect(
+          healthState.buildGatewaySnapshot({ client: null, revisionProjector }),
+        ).not.toHaveProperty("configPath");
+      }
+    } finally {
+      paths.pinRuntimePaths({
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: original.configPath,
+        OPENCLAW_STATE_DIR: original.stateDir,
+      });
+    }
+  });
+
   it("reads suspension synchronously without waiting for health collection", async () => {
     const healthState = await loadHealthState();
     resetGatewayWorkAdmission();

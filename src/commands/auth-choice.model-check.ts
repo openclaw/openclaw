@@ -1,7 +1,7 @@
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
@@ -25,14 +25,13 @@ type DefaultModelAuthStatus = {
   provider: string;
   model: string;
 } & (
-  | { status: "ready"; hasAuth: true }
+  | { status: "ready" }
   | {
       status: "missing";
-      hasAuth: false;
       authRequirement?: ProviderModelRouteAuthRequirement;
     }
-  | { status: "indeterminate"; hasAuth: false }
-  | { status: "incompatible"; hasAuth: false; code: string; message: string }
+  | { status: "indeterminate" }
+  | { status: "incompatible"; message: string }
 );
 
 /**
@@ -79,15 +78,13 @@ export async function resolveDefaultModelAuthStatus(
       provider: ref.provider,
       model: ref.model,
       status: "incompatible",
-      hasAuth: false,
-      code: evaluation.routeResolution.code,
       message: evaluation.routeResolution.message,
     };
   }
   const availability = evaluation.availability;
   const authRequirement = evaluation.selectedRoute?.authRequirement;
   if (availability === true) {
-    return { provider: ref.provider, model: ref.model, status: "ready", hasAuth: true };
+    return { provider: ref.provider, model: ref.model, status: "ready" };
   }
   if (
     availability === undefined &&
@@ -95,13 +92,12 @@ export async function resolveDefaultModelAuthStatus(
       evaluation.routeResolution !== null ||
       evaluation.evidence !== undefined)
   ) {
-    return { provider: ref.provider, model: ref.model, status: "indeterminate", hasAuth: false };
+    return { provider: ref.provider, model: ref.model, status: "indeterminate" };
   }
   return {
     provider: ref.provider,
     model: ref.model,
     status: "missing",
-    hasAuth: false,
     ...(authRequirement ? { authRequirement } : {}),
   };
 }

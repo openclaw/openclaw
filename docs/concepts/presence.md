@@ -183,8 +183,11 @@ sessions cannot overwrite each other. Node connections use their device id,
 then `connect.client.instanceId`, then the connection id.
 
 `system-event` beacons merge by device id or instance id when supplied, otherwise
-by parsed host or other beacon metadata. A stable `instanceId` helps consumers
-associate rows with the same client. It does not merge separate user WebSocket
+by parsed host or other beacon metadata. Native macOS `Node:` beacons that omit
+`deviceId` use the authenticated connection's device id, so a paired Mac does not
+also appear under **Connected without pairing**. Explicit beacon device ids remain
+unchanged. A stable `instanceId` helps consumers associate rows with the same client.
+It does not merge separate user WebSocket
 connections. Ephemeral control-plane clients are excluded from tracking entirely.
 
 Reconnecting removes retained offline rows for the same operator identity: device
@@ -216,6 +219,11 @@ the first pending change. Later changes do not postpone it. Hello snapshots and
 `system-presence` replies read the current state immediately. The people card's
 activity age can therefore lag the latest interaction by less than 30 seconds.
 Fresh snapshots and `system-presence` reads include the latest stored timestamp.
+
+The Control UI combines viewer declarations within one browser turn. Replacing a
+chat pane with another owner of the same session does not briefly clear and
+re-add its viewer presence. Leaving the session still publishes an empty
+declaration and waits for acknowledgment.
 
 ## Online and recent activity
 
@@ -270,9 +278,11 @@ The Control UI opts into [presence deltas](/gateway/protocol/presence#opt-in-pre
 to send changed fields, including heartbeat timestamps, without retransmitting
 each connection's metadata. Its Gateway
 store reconstructs the same ordered presence list and requests a fresh snapshot
-if an update does not match its current version. Native clients keep full
-presence events. Recipient visibility and the best-effort freshness policy are
-the same for both formats.
+if an update does not match its current version. Current macOS and iOS clients
+also reconstruct full rosters from deltas, reconnecting on a missing baseline.
+Android opts in without consuming roster events. Older native versions retain
+full presence events. Recipient visibility and the best-effort freshness policy
+are the same for both formats.
 
 ### Control UI Devices page
 

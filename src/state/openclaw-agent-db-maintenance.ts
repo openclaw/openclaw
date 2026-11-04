@@ -4,7 +4,7 @@ import {
   enableNodeSqliteKyselyStatementCache,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
+import { repairDoctorSqliteIndexCorruptionAsync } from "../infra/sqlite-index-recovery.js";
 import { runSqliteIntegrityOperationInWorker } from "../infra/sqlite-integrity-operation.js";
 import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { invalidateSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
@@ -25,7 +25,7 @@ import {
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "./openclaw-agent-db-schema.js";
-import { OPENCLAW_AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
+import { AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
@@ -127,9 +127,9 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
       }
       return;
     }
-    const repairIndexes = () => {
-      const changes = repairDoctorSqliteIndexCorruption(database, pathname, {
-        ftsSchemas: OPENCLAW_AGENT_FTS_SCHEMAS,
+    const repairIndexes = async () => {
+      const changes = await repairDoctorSqliteIndexCorruptionAsync(database, pathname, {
+        ftsSchemas: AGENT_FTS_SCHEMAS,
         label: `agent ${agentId}`,
         assertCurrent: () => {
           assertOwned();
@@ -145,7 +145,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
     if (userVersion === AGENT_MEDIA_SCHEMA_VERSION) {
       // v17 checks integrity inside its additive-schema transaction; repair only
       // physical indexes here so rejected migrations still roll schema changes back.
-      repairIndexes();
+      await repairIndexes();
     }
     const operation = ensureOpenClawAgentDatabaseSchemaSteps(database, {
       agentId,

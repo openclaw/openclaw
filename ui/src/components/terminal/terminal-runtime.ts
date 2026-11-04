@@ -1,8 +1,11 @@
 import type { CreateGhosttyTerminalOptions } from "@openclaw/libterminal/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { showToast } from "../../lib/toast.ts";
 import { observeTerminalFonts } from "./terminal-fonts.ts";
+
+registerTerminalEnglish();
 
 function isEventListener(value: unknown): value is EventListener {
   return typeof value === "function";

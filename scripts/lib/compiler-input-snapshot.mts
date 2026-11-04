@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { CompilerOptions } from "typescript/unstable/sync";
+import type { CompilerOptions } from "typescript/sync";
 import {
   ARTIFACT_CACHE_VERSION,
   portableRelativePath,

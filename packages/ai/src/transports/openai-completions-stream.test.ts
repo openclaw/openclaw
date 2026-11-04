@@ -1,12 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import { streamFixture } from "./openai-completions-suite.test-support.js";
 import {
-  type CapturedStreamEvent,
   type OpenAICompletionsOutput,
   createAssistantOutput,
   createDeepSeekCompletionsModel,
-  expectRecordFields,
   makeCompletionsChunk,
   makeCompletionsModel,
   streamChunks,
@@ -151,10 +149,8 @@ describe("openai completions stream", () => {
   });
 
   it.each(["abort", "error"] as const)("does not recover unfinished tags after %s", async (end) => {
-    const model = makeCompletionsModel();
-    const output = createAssistantOutput(model);
+    const { output, events, runStream } = streamFixture();
     const abort = new AbortController();
-    const events: CapturedStreamEvent[] = [];
     async function* interruptedStream() {
       yield makeCompletionsChunk({ content: "Answer. <think>unfinished reasoning" });
       if (end === "abort") {
@@ -165,13 +161,7 @@ describe("openai completions stream", () => {
     }
 
     await expect(
-      processCompletionsStream(
-        interruptedStream(),
-        output,
-        model,
-        { push: (event) => events.push(event) },
-        { signal: abort.signal, emitReasoning: false },
-      ),
+      runStream(interruptedStream(), { signal: abort.signal, emitReasoning: false }),
     ).rejects.toThrow(end === "abort" ? "Request was aborted" : "Provider disconnected");
     expect(collectVisibleText(output)).toBe("Answer. ");
     expect(
@@ -290,10 +280,9 @@ describe("openai completions stream", () => {
       await run(chunks);
 
       expect(output.stopReason).toBe("toolUse");
-      expect(output.content).toHaveLength(3);
-      expectRecordFields(output.content[0], expectedFirst);
-      expectRecordFields(output.content[1], expectedSecond);
-      expectRecordFields(output.content[2], expectedThird);
+      expect(output.content).toEqual(
+        [expectedFirst, expectedSecond, expectedThird].map((part) => expect.objectContaining(part)),
+      );
     },
   );
 
@@ -361,12 +350,10 @@ describe("openai completions stream", () => {
     ]);
 
     expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toHaveLength(2);
-    expectRecordFields(
-      output.content[0],
-      expectedToolCall("call_1", "lookup", { query: "weather" }),
-    );
-    expectRecordFields(output.content[1], { type: "text", text: "Working on it." });
+    expect(output.content).toEqual([
+      expect.objectContaining(expectedToolCall("call_1", "lookup", { query: "weather" })),
+      expect.objectContaining({ type: "text", text: "Working on it." }),
+    ]);
   });
 });
 
@@ -433,9 +420,8 @@ describe("openai completions stream", () => {
       baseUrl: "http://localhost:8000/v1",
       reasoning: false,
     });
-    const output = createAssistantOutput(model);
+    const { events, runStream } = streamFixture(model);
     const abort = new AbortController();
-    const stream = { push: vi.fn() };
     let yieldedToTimer = false;
 
     async function* mockStream() {
@@ -449,18 +435,16 @@ describe("openai completions stream", () => {
       abort.abort();
     }, 0);
 
-    await expect(
-      processCompletionsStream(mockStream(), output, model, stream, { signal: abort.signal }),
-    ).rejects.toThrow("Request was aborted");
+    await expect(runStream(mockStream(), { signal: abort.signal })).rejects.toThrow(
+      "Request was aborted",
+    );
     expect(yieldedToTimer).toBe(true);
-    expect(stream.push.mock.calls.length).toBeLessThan(512);
+    expect(events.length).toBeLessThan(512);
   });
 
   it("does not finalize tool calls when cancellation ends the iterator normally", async () => {
-    const model = makeCompletionsModel();
-    const output = createAssistantOutput(model);
+    const { output, events, runStream } = streamFixture();
     const abort = new AbortController();
-    const events: CapturedStreamEvent[] = [];
 
     async function* silentlyAbortedStream() {
       yield makeCompletionsChunk(
@@ -470,15 +454,9 @@ describe("openai completions stream", () => {
       abort.abort();
     }
 
-    await expect(
-      processCompletionsStream(
-        silentlyAbortedStream(),
-        output,
-        model,
-        { push: (event) => events.push(event as CapturedStreamEvent) },
-        { signal: abort.signal },
-      ),
-    ).rejects.toThrow("Request was aborted");
+    await expect(runStream(silentlyAbortedStream(), { signal: abort.signal })).rejects.toThrow(
+      "Request was aborted",
+    );
     expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
     expect(output.stopReason).not.toBe("toolUse");
   });
@@ -566,8 +544,7 @@ describe("OpenAI-compatible provider processing timing", () => {
   it.each([false, true])(
     "does not publish timing after cancellation (direct=%s)",
     async (direct) => {
-      const model = makeCompletionsModel();
-      const output = createAssistantOutput(model);
+      const { output, runStream } = streamFixture();
       const abort = new AbortController();
       async function* interrupted() {
         yield makeCompletionsChunk({ content: "ok" }, "stop", {
@@ -577,11 +554,8 @@ describe("OpenAI-compatible provider processing timing", () => {
         yield usageChunk(2);
       }
       await expect(
-        processCompletionsStream(
+        runStream(
           interrupted(),
-          output,
-          model,
-          { push() {} },
           direct
             ? { signal: abort.signal, mode: "direct", beforeContentBlock() {} }
             : { signal: abort.signal },

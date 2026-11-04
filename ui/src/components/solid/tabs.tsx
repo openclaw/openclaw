@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, untrack } from "solid-js";
+import { For } from "solid-js";
 import { createShadowStyles } from "../../lib/reactive/shadow-styles.ts";
 import { createTabList, type TabsOptions } from "../../lib/tabs.ts";
 import tabsStyles from "../../styles/tabs.css?inline";
@@ -42,7 +42,7 @@ export function Tabs(props: TabsProps) {
     () => element,
     () => {
       // Tab updates refresh the actual shadow root after a hosted tablist moves.
-      const [extra] = [props.shadowStyles, props.items, props.active, props.defaultActive] as const;
+      const [extra] = [props.shadowStyles, props.items, props.active] as const;
       return [tabsStyles, ...(extra ?? [])];
     },
   );
@@ -56,35 +56,30 @@ export function Tabs(props: TabsProps) {
       class={["oc-tabs", props.class]}
       role="tablist"
       aria-label={props.ariaLabel}
-      aria-orientation={props.orientation ?? "horizontal"}
+      aria-orientation="horizontal"
     >
       <For each={props.items} keyed={(item) => item.value}>
-        {(item) => {
-          // The keyed value is this node's lifetime identity.
-          const initialValue = untrack(() => item().value);
-          const ref = tabs.ref(initialValue);
-          return (
-            <button
-              {...item().attributes}
-              ref={ref}
-              type="button"
-              role="tab"
-              class={["oc-tab", item().className]}
-              id={item().id}
-              data-tab-value={item().value}
-              data-test-id={item().testId}
-              aria-controls={item().panelId}
-              aria-selected={item().value === tabs.active() ? "true" : "false"}
-              {...{ active: item().value === tabs.active() ? "" : undefined }}
-              disabled={item().disabled}
-              tabindex={tabs.tabIndex(item().value)}
-              onClick={tabs.onClick}
-              onKeyDown={tabs.onKeyDown}
-            >
-              {item().label}
-            </button>
-          );
-        }}
+        {(item) => (
+          <button
+            {...item().attributes}
+            ref={[tabs.ref(item().value)]}
+            type="button"
+            role="tab"
+            class={["oc-tab", item().className]}
+            id={item().id}
+            data-tab-value={item().value}
+            data-test-id={item().testId}
+            aria-controls={item().panelId}
+            aria-selected={item().value === tabs.active() ? "true" : "false"}
+            {...{ active: item().value === tabs.active() ? "" : undefined }}
+            disabled={item().disabled}
+            tabindex={tabs.tabIndex(item().value)}
+            onClick={tabs.onClick}
+            onKeyDown={tabs.onKeyDown}
+          >
+            {item().label}
+          </button>
+        )}
       </For>
     </div>
   );

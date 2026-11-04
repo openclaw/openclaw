@@ -1,28 +1,15 @@
 import { vi } from "vitest";
-import { captureSessionTarget } from "./session-controller.lifecycle.js";
 import * as sessionLifecycle from "./session-controller.lifecycle.js";
-import {
-  registerRpcSource,
-  type RpcSourceIdentity,
-  type RpcSourceRef,
-} from "./session-controller.rpc-sources.js";
-import {
-  rpcSourceRemovalByRef,
-  rpcSourcesByRunId,
-  sessionControllerEntriesByAlias,
-  sessionControllerEntriesByStore,
-  sessionControllers,
-} from "./session-controller.storage.js";
+import * as rpc from "./session-controller.rpc-sources.js";
+import * as storage from "./session-controller.storage.js";
 
+type InterruptionParams = Parameters<typeof sessionLifecycle.startSessionControllerInterruption>[0];
 export function observeSessionWorkAdmissionDrain(
-  afterDrain: (
-    params: Parameters<typeof sessionLifecycle.startSessionControllerInterruption>[0],
-    released: boolean,
-  ) => Promise<void> | void,
+  afterDrain: (params: InterruptionParams, released: boolean) => Promise<void> | void,
 ): () => void {
   const startInterruption = sessionLifecycle.startSessionControllerInterruption;
   const waitForRelease = sessionLifecycle.waitForSessionControllerSettlement;
-  const interruptions = new WeakMap<Promise<void>, Parameters<typeof startInterruption>[0]>();
+  const interruptions = new WeakMap<Promise<void>, InterruptionParams>();
   const start = vi
     .spyOn(sessionLifecycle, "startSessionControllerInterruption")
     .mockImplementation((params) => {
@@ -48,17 +35,13 @@ export function observeSessionWorkAdmissionDrain(
   };
 }
 
-type RunExclusiveSessionLifecycleParams<T> = {
+/** Holds real effect validation for boundary race fixtures; no production test API. */
+export async function runExclusiveSessionLifecycle<T>(params: {
   scope: string;
   identities: Iterable<string | undefined>;
   signal?: AbortSignal;
   run: () => Promise<T>;
-};
-
-/** Holds real effect validation for boundary race fixtures; no production test API. */
-export async function runExclusiveSessionLifecycle<T>(
-  params: RunExclusiveSessionLifecycleParams<T>,
-): Promise<T> {
+}): Promise<T> {
   let result: { value: T } | undefined;
   const effect = await sessionLifecycle.beginSessionEffect({
     scope: params.scope,
@@ -78,36 +61,35 @@ export async function runExclusiveSessionLifecycle<T>(
 
 /** Rebinds a fixture through controller-owned target and operation identity. */
 export function setRpcSourceIdentityForTest(
-  source: RpcSourceRef,
-  identity: Partial<RpcSourceIdentity>,
+  source: rpc.RpcSourceRef,
+  { sessionKey, agentId, sessionId }: Partial<rpc.RpcSourceIdentity>,
 ): void {
   const current = source.input.target;
   if (!current) {
     throw new Error("Test RPC source has no captured target");
   }
   const operation = source.input.claim?.operation;
-  if (operation && (identity.sessionKey !== undefined || identity.agentId !== undefined)) {
+  if (operation && (sessionKey !== undefined || agentId !== undefined)) {
     operation.updateSessionKey(
-      identity.sessionKey ?? operation.key,
-      identity.agentId ?? operation.agentId,
+      sessionKey ?? operation.key,
+      agentId ?? operation.agentId,
       source.input.claim,
     );
   }
-  source.input.target = captureSessionTarget({
+  source.input.target = sessionLifecycle.captureSessionTarget({
     storeScope: current.storeScope,
-    sessionKey: identity.sessionKey ?? current.sessionKey,
-    incarnation: identity.sessionId ?? source.input.sourceSessionId ?? current.incarnation,
-    agentId: identity.agentId ?? current.agentId,
+    sessionKey: sessionKey ?? current.sessionKey,
+    incarnation: sessionId ?? source.input.sourceSessionId ?? current.incarnation,
+    agentId: agentId ?? current.agentId,
   });
-  if (identity.sessionId !== undefined) {
-    source.input.sourceSessionId = identity.sessionId;
-    operation?.updateSessionId(identity.sessionId);
+  if (sessionId !== undefined) {
+    source.input.sourceSessionId = sessionId;
+    operation?.updateSessionId(sessionId);
   }
 }
 
-/** Updates an unclaimed fixture's terminal presentation. */
 export function setRpcSourceTerminalProjectionForTest(
-  source: RpcSourceRef,
+  source: rpc.RpcSourceRef,
   terminal: boolean,
 ): void {
   source.adapter.projectSessionTerminalPending = terminal;
@@ -116,105 +98,73 @@ export function setRpcSourceTerminalProjectionForTest(
 
 /** Drops test-owned controller singletons after their operations have been completed. */
 export function resetSessionControllerStateForTest(): void {
-  rpcSourcesByRunId.clear();
-  sessionControllers.clear();
-  sessionControllerEntriesByAlias.clear();
-  sessionControllerEntriesByStore.clear();
+  storage.rpcSourcesByRunId.clear();
+  storage.sessionControllers.clear();
+  storage.sessionControllerEntriesByAlias.clear();
+  storage.sessionControllerEntriesByStore.clear();
 }
 
 // Bind the fixture's protocol ID before using the controller's registration owner.
-function registerFixtureRpcSource(runId: string, source: RpcSourceRef): void {
+function registerFixtureRpcSource(runId: string, source: rpc.RpcSourceRef): void {
   if (source.input.protocolRunId !== undefined && source.input.protocolRunId !== runId) {
     throw new Error("Fixture RPC source protocol ID does not match its index key");
   }
   source.input.protocolRunId = runId;
-  registerRpcSource(runId, source);
+  rpc.registerRpcSource(runId, source);
 }
 
-class RpcSourceTestMap extends Map<string, RpcSourceRef> {
-  override get size(): number {
-    return rpcSourcesByRunId.size;
-  }
+function uniqueRpcSource(runId: string): rpc.RpcSourceRef | undefined {
+  const sources = storage.rpcSourcesByRunId.get(runId);
+  return sources?.size === 1 ? sources.values().next().value : undefined;
+}
 
-  override clear(): void {
-    rpcSourcesByRunId.clear();
-  }
+function rpcSnapshot(): Map<string, rpc.RpcSourceRef> {
+  return new Map(
+    [...storage.rpcSourcesByRunId.keys()].flatMap((runId) => {
+      const source = uniqueRpcSource(runId);
+      return source ? [[runId, source] as const] : [];
+    }),
+  );
+}
 
-  override delete(runId: string): boolean {
-    return rpcSourcesByRunId.delete(runId);
-  }
-
-  override entries(): MapIterator<[string, RpcSourceRef]> {
-    return new Map(this.uniqueEntries()).entries();
-  }
-
-  override forEach(
-    callbackfn: (value: RpcSourceRef, key: string, map: Map<string, RpcSourceRef>) => void,
-    thisArg?: unknown,
-  ): void {
-    for (const [runId, source] of this) {
-      callbackfn.call(thisArg, source, runId, this);
-    }
-  }
-
-  override get(runId: string): RpcSourceRef | undefined {
-    const sources = rpcSourcesByRunId.get(runId);
-    return sources?.size === 1 ? sources.values().next().value : undefined;
-  }
-
-  override has(runId: string): boolean {
-    return (rpcSourcesByRunId.get(runId)?.size ?? 0) > 0;
-  }
-
-  override keys(): MapIterator<string> {
-    return new Map(this.uniqueEntries()).keys();
-  }
-
-  override set(runId: string, source: RpcSourceRef): this {
-    if (rpcSourcesByRunId.get(runId)?.has(source)) {
-      return this;
-    }
-    rpcSourcesByRunId.delete(runId);
-    registerFixtureRpcSource(runId, source);
-    return this;
-  }
-
-  override values(): MapIterator<RpcSourceRef> {
-    return new Map(this.uniqueEntries()).values();
-  }
-
-  override [Symbol.iterator](): MapIterator<[string, RpcSourceRef]> {
+// The production registry owns correlation; fixtures expose only unambiguous IDs.
+export const rpcSourceTesting = {
+  get size() {
+    return storage.rpcSourcesByRunId.size;
+  },
+  clear: () => storage.rpcSourcesByRunId.clear(),
+  delete: (runId: string) => storage.rpcSourcesByRunId.delete(runId),
+  get: uniqueRpcSource,
+  has: (runId: string) => (storage.rpcSourcesByRunId.get(runId)?.size ?? 0) > 0,
+  entries: () => rpcSnapshot().entries(),
+  values: () => rpcSnapshot().values(),
+  [Symbol.iterator]() {
     return this.entries();
-  }
-
-  /** Legacy test fixtures only observe unambiguous protocol IDs. */
-  private uniqueEntries(): Array<[string, RpcSourceRef]> {
-    return [...rpcSourcesByRunId].flatMap(([runId, sources]) => {
-      const source = sources.size === 1 ? sources.values().next().value : undefined;
-      return source ? [[runId, source]] : [];
-    });
-  }
-}
-
-/** Test-only Map-shaped access to controller-owned protocol correlation. */
-export const rpcSourceTesting = Object.assign(new RpcSourceTestMap(), {
-  deleteExpected(runId: string, expected: RpcSourceRef): boolean {
-    const sources = rpcSourcesByRunId.get(runId);
+  },
+  set(runId: string, source: rpc.RpcSourceRef) {
+    if (!storage.rpcSourcesByRunId.get(runId)?.has(source)) {
+      storage.rpcSourcesByRunId.delete(runId);
+      registerFixtureRpcSource(runId, source);
+    }
+    return this;
+  },
+  deleteExpected(runId: string, expected: rpc.RpcSourceRef): boolean {
+    const sources = storage.rpcSourcesByRunId.get(runId);
     if (!sources?.delete(expected)) {
       return false;
     }
     if (sources.size === 0) {
-      rpcSourcesByRunId.delete(runId);
+      storage.rpcSourcesByRunId.delete(runId);
     }
-    const onRemoved = rpcSourceRemovalByRef.get(expected);
-    rpcSourceRemovalByRef.delete(expected);
+    const onRemoved = storage.rpcSourceRemovalByRef.get(expected);
+    storage.rpcSourceRemovalByRef.delete(expected);
     onRemoved?.();
     return true;
   },
-  reset(entries: Iterable<readonly [string, RpcSourceRef]> = []): void {
-    rpcSourcesByRunId.clear();
+  reset(entries: Iterable<readonly [string, rpc.RpcSourceRef]> = []): void {
+    storage.rpcSourcesByRunId.clear();
     for (const [runId, ref] of entries) {
       registerFixtureRpcSource(runId, ref);
     }
   },
-});
+};

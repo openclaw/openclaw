@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, vi } from "vitest";
 import { captureNodeWakeLifecycle } from "../node-wake-state.js";
 import {
@@ -10,10 +9,11 @@ import {
   expectDeviceError,
   captureSecurityEvents,
   resetDeviceHandlerTestState,
+  invokeDevice as invoke,
+  expectPrivate,
 } from "./devices.test-support.js";
 
 const { pairing, approval } = mocks;
-const { deviceHandlers } = await import("./devices.js");
 const hash = expect.stringMatching(/^sha256:[a-f0-9]{12}$/u);
 const scopes = ["operator.pairing"];
 
@@ -25,15 +25,6 @@ const pending = [
   { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
 ];
 const paired = [device(1), device(2)];
-async function invoke(opts: ReturnType<typeof createOptions>) {
-  await expectDefined(deviceHandlers[opts.req.method], opts.req.method)(opts);
-}
-function expectPrivate(events: unknown, secrets: string[]) {
-  const text = JSON.stringify(events);
-  for (const secret of secrets) {
-    expect(text).not.toContain(secret);
-  }
-}
 beforeEach(resetDeviceHandlerTestState);
 
 it.each([

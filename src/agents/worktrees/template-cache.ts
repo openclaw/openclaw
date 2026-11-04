@@ -24,6 +24,7 @@ import {
 import {
   setWorktreePreparationTemplate,
   startWorktreePreparationPhase,
+  timeWorktreePreparationPhase,
 } from "./preparation-timing.js";
 import {
   deleteTemplateAsync,
@@ -41,7 +42,7 @@ const log = createSubsystemLogger("agents/worktrees");
 export const WORKTREE_TEMPLATE_DIRECTORY = ".templates";
 const pendingPreparations = new Map<string, Promise<void>>();
 
-async function retainWorktreeTemplate(
+export async function retainWorktreeTemplate(
   env: NodeJS.ProcessEnv,
   selection:
     | WorktreeTemplateRecord
@@ -145,7 +146,10 @@ export async function collectWorktreeTemplates(
   onError?: (error: unknown, id: string) => void,
 ): Promise<void> {
   for (const record of await listTemplatesAsync(env)) {
-    if (record.status === "ready" && record.lastUsedAt >= before) {
+    const expiresBefore = record.cacheKey.startsWith("warm:")
+      ? Math.max(before, Date.now() - 60 * 60_000)
+      : before;
+    if (record.status === "ready" && record.lastUsedAt >= expiresBefore) {
       continue;
     }
     try {
@@ -156,7 +160,7 @@ export async function collectWorktreeTemplates(
           if (
             !current ||
             current.id !== record.id ||
-            (current.status === "ready" && current.lastUsedAt >= before) ||
+            (current.status === "ready" && current.lastUsedAt >= expiresBefore) ||
             (await hasTemplateReadersAsync(env, current.id, guard.commitGuard))
           ) {
             return;
@@ -289,7 +293,9 @@ export async function prepareWorktreeTemplate(params: {
           if (
             hasReaders ||
             ((await worktreePathExists(existing.path)) &&
-              (await params.validate(existing, options)) &&
+              (await timeWorktreePreparationPhase("templateValidate", () =>
+                params.validate(existing, options),
+              )) &&
               (existing.contentKey === params.contentKey ||
                 (await params.refresh?.(existing, options))))
           ) {
@@ -324,7 +330,12 @@ export async function prepareWorktreeTemplate(params: {
         }
         setWorktreePreparationTemplate("cold", { reason: "template-disk-admission" });
         await params.requireSpace();
-        if (existing && !(await retireWorktreeTemplate(params.env, existing, options))) {
+        if (
+          existing &&
+          !(await timeWorktreePreparationPhase("templateRetire", () =>
+            retireWorktreeTemplate(params.env, existing, options),
+          ))
+        ) {
           return undefined;
         }
         const id = randomUUID();

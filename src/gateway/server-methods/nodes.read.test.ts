@@ -7,11 +7,18 @@ import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
-import { updateNodeRunnerInventory } from "../node-registry-private.js";
+import {
+  getNodeWorkerSupervisorTransport,
+  updateNodeRunnerInventory,
+} from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import { createDevicePairingNodeSnapshot, pairedNodeDevice } from "./environments.test-support.js";
 import { nodeEventHandlers } from "./nodes.event.js";
-import { invokeNodeRequest } from "./nodes.invoke.test-support.js";
+import {
+  expectNodeFailure,
+  expectNodeReply,
+  invokeNodeRequest,
+} from "./nodes.invoke.test-support.js";
 import { nodeReadHandlers } from "./nodes.read.js";
 import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -99,7 +106,7 @@ async function request(
   client?: GatewayRequestHandlerOptions["client"],
 ) {
   const respond = await invoke(method, params, client);
-  expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+  expectNodeReply(respond, expect.anything());
   return respond.mock.calls[0]![1];
 }
 
@@ -130,6 +137,10 @@ it("uses current node bindings when pairing publications replace historical role
 
 it("shares immutable catalog rows until pairing or live node facts change", async () => {
   const paired = createPairedNode("cached-node");
+  registry = new NodeRegistry({
+    resolveCurrentPairingState: async () =>
+      prepareDevicePairingBinding(paired.deviceId, paired).binding ?? undefined,
+  });
   const client = registerNode(paired);
   publishPairing([paired]);
   const admin = {
@@ -154,6 +165,61 @@ it("shares immutable catalog rows until pairing or live node facts change", asyn
   expect(initial.hostStats).toBeUndefined();
   expect(await read()).toBe(stats);
 
+  const transport = getNodeWorkerSupervisorTransport(registry);
+  const publishCapacity = (available: number) => {
+    expect(
+      updateNodeRunnerInventory({
+        registry,
+        nodeId: paired.deviceId,
+        connId: client.connId,
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: {
+            enabled: true,
+            capacity: { total: 2, available },
+            bundleRetention: 1,
+            bundleStatus: 1,
+          },
+        },
+      }),
+    ).toEqual({ changed: true });
+  };
+  publishCapacity(1);
+  const proof = expectDefined(
+    await transport.getCurrentNode(paired.deviceId),
+    "current node proof",
+  );
+  expect(
+    transport.acceptBundleStatus?.(proof, {
+      bundleHash: "a".repeat(64),
+      status: { status: "installed", version: "1" },
+    }),
+  ).toBe(true);
+  const inventory = await read();
+  expect(inventory.workerSlots).toEqual({ total: 2, available: 1 });
+  expect(inventory.workerBundle).toEqual({ status: "installed", version: "1" });
+  const described = await request("node.describe", { nodeId: paired.deviceId }, admin);
+  expect(described).toMatchObject({
+    nodeId: paired.deviceId,
+    workerSlots: { total: 2, available: 1 },
+    workerBundle: { status: "installed", version: "1" },
+    sessionHost: true,
+  });
+  for (const projection of [inventory, described]) {
+    expect(JSON.stringify(projection)).not.toContain("bundleHash");
+  }
+  expect(Object.isFrozen(inventory.workerSlots)).toBe(true);
+  expect(Object.isFrozen(inventory.workerBundle)).toBe(true);
+  expect(() => Object.assign(inventory.workerSlots!, { available: 0 })).toThrow();
+  expect(() => Object.assign(inventory.workerBundle!, { status: "missing" })).toThrow();
+  expect((await transport.getCurrentNode(paired.deviceId))?.workerHost.capacity.available).toBe(1);
+  expect(transport.getBundleStatus?.(paired.deviceId)?.status.status).toBe("installed");
+  publishCapacity(0);
+  const full = await read();
+  expect(full.workerSlots?.available).toBe(0);
+  expect(inventory.workerSlots?.available).toBe(1);
+  expect(await read()).toBe(full);
+
   paired.nodeSurface!.displayName = "Renamed node";
   publishPairing([paired]);
   const renamed = await read();
@@ -173,6 +239,7 @@ it("shares immutable catalog rows until pairing or live node facts change", asyn
 it("retains received stats after replacement and rejects the retired connection", async () => {
   const pairedNode = createPairedNode("stats-node");
   registry = new NodeRegistry({
+    persistHostStats: mocks.stats,
     resolveCurrentPairingState: async () =>
       prepareDevicePairingBinding(pairedNode.deviceId, pairedNode).binding ?? undefined,
   });
@@ -191,11 +258,12 @@ it("retains received stats after replacement and rejects the retired connection"
     invoke("node.event", { event: "node.host.stats", payload: sampleStats }, registered);
   const readNode = async (): Promise<NodeListNode> => (await request()).nodes[0];
 
-  expect(await sendStats()).toHaveBeenCalledWith(
-    true,
-    { ok: true, event: "node.host.stats", handled: true, reason: "updated" },
-    undefined,
-  );
+  expectNodeReply(await sendStats(), {
+    ok: true,
+    event: "node.host.stats",
+    handled: true,
+    reason: "updated",
+  });
   const hostStats = registry.get(pairedNode.deviceId)!.hostStats!;
   expect(hostStats).toEqual({ ...sampleStats, updatedAtMs: expect.any(Number) });
   const connected = await readNode();
@@ -206,11 +274,7 @@ it("retains received stats after replacement and rejects the retired connection"
   expect(registry.unregister(registered.connId)).toBeNull();
   expect(await readNode()).toMatchObject({ connected: true });
   expect(await readNode()).not.toHaveProperty("hostStats");
-  expect(await sendStats()).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ details: { code: "PAIRING_CHANGED" } }),
-  );
+  expectNodeFailure(await sendStats(), { details: { code: "PAIRING_CHANGED" } });
   registry.unregister(replacement.connId);
   const offline = await readNode();
   expect(offline).toMatchObject({ connected: false, hostStats });
@@ -279,11 +343,7 @@ it("names the pending capability surface approval when inventory publication lac
     client,
   );
 
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      message: expect.stringContaining("openclaw nodes approve surface-request-1"),
-    }),
-  );
+  expectNodeFailure(respond, {
+    message: expect.stringContaining("openclaw nodes approve surface-request-1"),
+  });
 });

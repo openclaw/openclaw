@@ -1,25 +1,53 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { expect } from "vitest";
+import type { resolveAcpxPluginConfig } from "./config.js";
 import { AcpxRuntime } from "./runtime.js";
 
 export type RuntimeHandle = Awaited<ReturnType<AcpxRuntime["ensureSession"]>>;
 export type RuntimeOptions = ConstructorParameters<typeof AcpxRuntime>[0];
-export type OwnerRuntimeOptions = Partial<RuntimeOptions> & { agent?: string; args?: string[] };
+export type OwnerRuntimeOptions = Partial<
+  RuntimeOptions & { agent: string; args: string[]; script: string }
+>;
+type TurnInput = Parameters<AcpxRuntime["startTurn"]>[0];
+
+export async function prepareTestWrappers(
+  root: string,
+  pluginConfig: ReturnType<typeof resolveAcpxPluginConfig>,
+) {
+  // This module also runs in the standalone retention child, outside Vitest.
+  const { vi } = await import("vitest");
+  const { prepareAcpxCodexAuthConfig } = await import("./codex-auth-bridge.js");
+  const codexHome = path.join(root, "empty-codex-home");
+  await fs.mkdir(codexHome);
+  vi.stubEnv("CODEX_HOME", codexHome);
+  return prepareAcpxCodexAuthConfig({ pluginConfig, stateDir: root });
+}
+
+export async function testProcessLeases(state: OpenClawTestState) {
+  const { createAcpxProcessLeaseStore, openAcpxProcessLeaseStateStore } =
+    await import("./process-lease.js");
+  const { createPluginStateKeyedStoreForTests } =
+    await import("openclaw/plugin-sdk/plugin-state-test-runtime");
+  return createAcpxProcessLeaseStore({
+    store: openAcpxProcessLeaseStateStore((options) =>
+      createPluginStateKeyedStoreForTests("acpx", { ...options, env: state.env }),
+    ),
+  });
+}
 
 export function createTestGate() {
   const entered = createDeferred<void>();
   const released = createDeferred<void>();
-  const release = () => released.resolve();
   return {
     entered: entered.promise,
-    release,
+    release: released.resolve,
     settle: async (...pending: (Promise<unknown> | undefined)[]) => {
-      release();
+      released.resolve();
       await Promise.allSettled(pending.filter((operation) => operation !== undefined));
     },
     hold: async () => {
@@ -35,10 +63,7 @@ export function createHeldCall<Args extends unknown[], Result>(
   const gate = createTestGate();
   return {
     ...gate,
-    call: async (...args: Args) => {
-      await gate.hold();
-      return call(...args);
-    },
+    call: (...args: Args) => gate.hold().then(() => call(...args)),
   };
 }
 
@@ -73,21 +98,15 @@ export async function withProcessRuntime(
     const directory = path.join(state.root, "peer");
     await fs.mkdir(directory);
     const resolved = typeof options === "function" ? await options(state) : options;
-    const store = resolved.sessionStore ?? createFileSessionStore({ stateDir: state.root });
+    const base = ownerRuntimeOptions(state.root, resolved);
     const runtimes: AcpxRuntime[] = [];
     const create = (overrides: Partial<RuntimeOptions> = {}) => {
-      const runtime = new AcpxRuntime(
-        ownerRuntimeOptions(state.root, {
-          sessionStore: store,
-          ...resolved,
-          ...overrides,
-        }),
-      );
+      const runtime = new AcpxRuntime({ ...base, ...overrides });
       runtimes.push(runtime);
       return runtime;
     };
     try {
-      await run({ runtime: create(), state, store, directory, create });
+      await run({ runtime: create(), state, store: base.sessionStore, directory, create });
     } finally {
       for (const runtime of runtimes) {
         await runtime.shutdown();
@@ -101,18 +120,18 @@ export const ownerAgentScript = fileURLToPath(
 
 export function ownerRuntimeOptions(
   root: string,
-  { agent = "fixture", args = [], ...overrides }: OwnerRuntimeOptions = {},
+  options: OwnerRuntimeOptions = {},
 ): RuntimeOptions {
+  const { agent = "fixture", args = [], script = ownerAgentScript, ...overrides } = options;
+  const agentRegistry =
+    overrides.agentRegistry ??
+    createAgentRegistry({
+      overrides: { [agent]: [process.execPath, script, path.join(root, "peer"), ...args] },
+    });
   return {
     cwd: root,
     sessionStore: overrides.sessionStore ?? createFileSessionStore({ stateDir: root }),
-    agentRegistry:
-      overrides.agentRegistry ??
-      createAgentRegistry({
-        overrides: {
-          [agent]: [process.execPath, ownerAgentScript, path.join(root, "peer"), ...args],
-        },
-      }),
+    agentRegistry,
     permissionMode: "deny-all",
     timeoutMs: 5000,
     ...overrides,
@@ -122,12 +141,19 @@ export function ownerRuntimeOptions(
 export async function copyNodeExecutable(root: string, name: string) {
   const destination = path.join(root, process.platform === "win32" ? `${name}.exe` : name);
   // Symlinks preserve executable-relative libraries (including Homebrew's libnode).
-  if (process.platform === "win32") {
-    await fs.copyFile(process.execPath, destination);
-  } else {
-    await fs.symlink(process.execPath, destination);
-  }
+  await (process.platform === "win32" ? fs.copyFile : fs.symlink)(process.execPath, destination);
   return destination;
+}
+
+export async function runPrompt(runtime: AcpxRuntime, input: TurnInput) {
+  const turn = runtime.startTurn(input);
+  let text = "";
+  for await (const event of turn.events) {
+    if (event.type === "text_delta") {
+      text += event.text;
+    }
+  }
+  return { text, result: await turn.result };
 }
 
 export async function promptJson(
@@ -136,13 +162,7 @@ export async function promptJson(
   text: string,
   requestId = text,
 ) {
-  const turn = runtime.startTurn({ handle, text, mode: "prompt", requestId });
-  const chunks: string[] = [];
-  for await (const event of turn.events) {
-    if (event.type === "text_delta") {
-      chunks.push(event.text);
-    }
-  }
-  expect(await turn.result).toMatchObject({ status: "completed" });
-  return JSON.parse(chunks.join(""));
+  const turn = await runPrompt(runtime, { handle, text, mode: "prompt", requestId });
+  assert.equal(turn.result.status, "completed");
+  return JSON.parse(turn.text);
 }

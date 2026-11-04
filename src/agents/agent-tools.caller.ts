@@ -15,7 +15,10 @@ import {
   expandPolicyWithPluginGroups,
   normalizeToolPolicyName,
 } from "./tool-policy.js";
-import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  wrapToolWithGatewayCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 /** Carries the coding surface's prepared policy and requesting route into plugin delegation. */
 export function createCodingToolsGatewayCaller(params: {
@@ -36,6 +39,7 @@ export function createCodingToolsGatewayCaller(params: {
       toolMetadata.set(normalizeToolPolicyName(tool.name), { pluginId: meta.pluginId });
     }
   }
+  const activeCaller = getGatewayToolCallerIdentity();
   const delegatedPolicy = capabilityProfile.policy.delegatedToolPolicy;
   if (delegatedPolicy && !options?.config) {
     throw new Error("Delegated execution requires its source configuration.");
@@ -59,6 +63,10 @@ export function createCodingToolsGatewayCaller(params: {
       ? {
           agentId,
           sessionKey: sessionKey.trim(),
+          requesterOrigin:
+            activeCaller?.agentId === agentId && activeCaller.sessionKey === sessionKey.trim()
+              ? (activeCaller.requesterOrigin ?? capabilityProfile.requesterOrigin)
+              : capabilityProfile.requesterOrigin,
           sessionEventToolsAllow: params.sessionEventSourcePolicy?.toolsAllow,
           sessionEventSettings: params.sessionEventSourcePolicy?.settings ?? {
             permissionMode: options.sessionPermissionPolicy?.mode,

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterEach, beforeEach, vi } from "vitest";
 import * as chromeMcpConnect from "./chrome-mcp-connect.js";
 import type {
@@ -153,7 +154,7 @@ export function createFakeSession(): ChromeMcpSession {
     ...createSessionStub(callTool, 123),
     routing: {
       sessionNonce: "000000000001",
-      withOperationLock: async <T>(operation: () => Promise<T>) => await operation(),
+      operationPermits: createPermitPool(1),
       targetIdByPageId: new Map([
         [1, FAKE_TARGET_1],
         [2, FAKE_TARGET_2],

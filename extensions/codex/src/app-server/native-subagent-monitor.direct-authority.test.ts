@@ -1,8 +1,16 @@
 import { invokeNativeHookRelay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi, onTestFinished } from "vitest";
+import {
+  ensureCodexAppServerClientRuntime,
+  protectCodexAppServerLiveThread,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { createCodexNativeHookRelay } from "./native-hook-relay.js";
 import {
+  createClient,
+  createRuntime,
+  turnStartedNotification,
   directSpawnItem,
   itemNotification,
   collabItem,
@@ -16,6 +24,8 @@ import {
   createNativeModelSourceFixture as modelSource,
   requireNativeModelSourceCapture as requireCapture,
 } from "./native-subagent-monitor.test-support.js";
+import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
+import { releaseCodexBoundLiveThread } from "./thread-lifecycle-warm.js";
 
 type Monitor = InstanceType<typeof CodexNativeSubagentMonitor>;
 type ParentOptions = Omit<Parameters<Monitor["registerParent"]>[0], "parentThreadId">;
@@ -24,11 +34,8 @@ function registerDirect(monitor: Monitor, options: ParentOptions) {
   return monitor.registerParent({ parentThreadId: "parent-thread", ...options });
 }
 
-async function directFixture(
-  options: ParentOptions = {},
-  monitorOptions?: ConstructorParameters<typeof CodexNativeSubagentMonitor>[2],
-) {
-  const f = monitorFixture(monitorOptions);
+async function directFixture(options: ParentOptions = {}) {
+  const f = monitorFixture();
   const release = vi.fn();
   const claimDirectChild = vi.fn(() => release);
   const owner = await registerDirect(f.monitor, { claimDirectChild, ...options });
@@ -41,8 +48,82 @@ const mainRequester = {
 };
 
 describe("CodexNativeSubagentMonitor", () => {
+  it.each(["completed", "interrupted"] as const)(
+    "protects resumed inference before turn/started until it is %s",
+    async (status) => {
+      const client = createClient();
+      ensureCodexAppServerClientRuntime(client.client, {
+        agentDir: "/tmp/codex-resumed-inference-retention",
+      });
+      const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime(), {
+        retainParentThread: (threadId) => protectCodexAppServerLiveThread(client.client, threadId),
+      });
+      onTestFinished(async () => {
+        await monitor.retireParent("parent-thread");
+        await monitor.dispose();
+        client.close();
+      });
+      const releaseForResume = () =>
+        releaseCodexBoundLiveThread({
+          client: client.client,
+          threadId: "parent-thread",
+          lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
+        });
+      await retainCodexAppServerLiveThread(client.client, "parent-thread");
+      const first = await monitor.registerParent({
+        parentThreadId: "parent-thread",
+        modelSource: modelSource(["model-a"]),
+      });
+      first.bindTurn("parent-a");
+      await notifyChildStarted(client);
+      await client.notify(
+        itemNotification(directSpawnItem("v2", "parent-thread", "child-thread"), "parent-a"),
+      );
+      await client.notify(turnStartedNotification("child-a"));
+      await client.notify(
+        childTurnCompletedNotification({ turnId: "child-a", status: "interrupted" }),
+      );
+      await first.unregister();
+      await expect(releaseForResume()).resolves.toBe(true);
+
+      await retainCodexAppServerLiveThread(client.client, "parent-thread");
+      const second = await monitor.registerParent({
+        parentThreadId: "parent-thread",
+        modelSource: modelSource(["model-b"]),
+      });
+      second.bindTurn("parent-b");
+      await client.notify(interactionNotification("accepted-resume", "parent-b"));
+      const resumed = requireCapture(
+        await monitor.captureModelSource({
+          threadId: "child-thread",
+          turnId: "child-b",
+          parentThreadId: "parent-thread",
+          parentTurnId: "parent-b",
+          rootTurnId: "parent-b",
+        }),
+      );
+      await second.unregister();
+      await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
+      if (status === "interrupted") {
+        resumed.cancel();
+        expect(() => resumed.assertCurrent()).toThrow("execution was cancelled");
+      }
+      await client.notify(
+        childTurnCompletedNotification({
+          turnId: "child-b",
+          status,
+          items:
+            status === "completed"
+              ? [{ id: "resumed-result", type: "agentMessage", text: "Resumed result" }]
+              : [],
+        }),
+      );
+      await expect(releaseForResume()).resolves.toBe(true);
+    },
+  );
+
   it("keeps A during an accepted B follow-up and gives the new child turn only B's ceiling", async () => {
-    const { client, monitor, captureSource } = monitorFixture({ recoveryPollDelaysMs: [] });
+    const { client, monitor, captureSource } = monitorFixture();
     const a = modelSource(["model-a"]);
     const b = modelSource(["model-b"]);
     const mappingA = {
@@ -89,10 +170,7 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(monitor.resolveModelThreadId("child-b")).toBeUndefined();
     const stillA = await captureSource(originalRequest);
     expect(stillA.modelMapping).toEqual(mappingA);
-    expect(stillA.source?.bindModelExecution?.(testModel("model-a"))).toBeDefined();
-    expect(() => stillA.source?.bindModelExecution?.(testModel("model-b"))).toThrow(
-      "does not admit",
-    );
+    expect(stillA.source).toBe(a);
     expect(b.release).not.toHaveBeenCalled();
     stillA.release();
     await client.finishTurn("child-a", agentMessage("a-final", "A finished"));
@@ -107,8 +185,7 @@ describe("CodexNativeSubagentMonitor", () => {
       rootTurnId: "parent-b",
     });
     expect(next.modelMapping).toEqual(mappingB);
-    expect(next.source?.bindModelExecution?.(testModel("model-b"))).toBeDefined();
-    expect(() => next.source?.bindModelExecution?.(testModel("model-a"))).toThrow("does not admit");
+    expect(next.source).toBe(b);
     await client.finishTurn("child-b", agentMessage("b-final", "B finished"));
     next.release();
     expect(monitor.resolveModelThreadId("child-b")).toBeUndefined();
@@ -119,7 +196,7 @@ describe("CodexNativeSubagentMonitor", () => {
   });
 
   it("retains nested admitted work and fences only the cancelled execution across regrant", async () => {
-    const { client, monitor, captureSource } = monitorFixture({ recoveryPollDelaysMs: [] });
+    const { client, monitor, captureSource } = monitorFixture();
     const source = modelSource(["model-a", "model-b"]);
     const parent = await registerDirect(monitor, { modelSource: source });
     parent.bindTurn("parent-turn");
@@ -152,7 +229,7 @@ describe("CodexNativeSubagentMonitor", () => {
       turnId: "child-b-turn",
     });
     expect(sibling.nativeReviewRequired).toBe(false);
-    expect(sibling.source?.bindModelExecution?.(testModel("model-b"))).toBeDefined();
+    expect(sibling.source).toBe(source);
     await notifyChildStarted(client, "child-b", "grandchild", "/root/child-b/grandchild");
     await client.item(directSpawnItem("v2", "child-b", "grandchild"), "child-b-turn", "child-b");
     await client.notify({
@@ -167,7 +244,7 @@ describe("CodexNativeSubagentMonitor", () => {
       parentTurnId: "child-b-turn",
       rootTurnId: "parent-turn",
     });
-    expect(nested.source?.bindModelExecution?.(testModel("model-b"))).toBeDefined();
+    expect(nested.source).toBe(source);
     first.release();
     sibling.release();
     nested.release();
@@ -553,9 +630,7 @@ describe("CodexNativeSubagentMonitor", () => {
   );
 
   it("keeps follow-up admission through repeated active predecessor history", async () => {
-    const { client, monitor, claimDirectChild, owner } = await directFixture(mainRequester, {
-      recoveryPollDelaysMs: [],
-    });
+    const { client, monitor, claimDirectChild, owner } = await directFixture(mainRequester);
     client.setThreadRead(
       "child-thread",
       threadRead({ turnId: "turn-a", status: "inProgress", threadStatus: "active" }),

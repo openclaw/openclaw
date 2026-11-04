@@ -1,11 +1,12 @@
 import { createEffect } from "solid-js";
+import type { AppSidebarMethods } from "../components/app-sidebar.tsx";
+import { scheduleLayout } from "../lib/layout-frame.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
   ControlUiReadiness,
   type ControlUiCommittedPresentation,
   type ControlUiReadinessOutlet,
 } from "./control-ui-readiness.ts";
-import { APP_SIDEBAR_ELEMENT } from "./lazy-custom-element.ts";
 
 type CommittedElement = HTMLElement & { readonly updateComplete?: Promise<unknown> };
 export type SolidReadinessShell = {
@@ -13,10 +14,15 @@ export type SolidReadinessShell = {
   readonly updateComplete?: Promise<unknown>;
   readiness: ControlUiReadiness | undefined;
   readonly activeSessionKey: string;
-  readonly navigationSidebar: CommittedElement & { readonly navigationVisible?: boolean };
+  readonly workspaceChromeVisible: boolean;
+  readonly navDrawerElement?: HTMLElement;
+  readonly navigationSidebar: CommittedElement & { readonly navigationVisible?: boolean } & Partial<
+      Pick<AppSidebarMethods, "findSidebarHovercardRowByKey">
+    >;
   readonly shellElement?: HTMLElement;
   readonly routeOutlet?: ControlUiReadinessOutlet;
   readonly terminalPanel?: CommittedElement & { readonly available?: boolean };
+  readonly terminalActivationReady?: boolean;
 };
 
 async function settleShellReadiness(
@@ -29,11 +35,19 @@ async function settleShellReadiness(
     return { kind: "loading", navigationVisible: false };
   }
   const sidebar = shell.navigationSidebar;
-  const navigationVisible = sidebar.isConnected && sidebar.navigationVisible !== false;
+  const navigationVisible =
+    shell.workspaceChromeVisible &&
+    shell.navDrawerElement?.isConnected === true &&
+    sidebar.navigationVisible !== false;
   if (navigationVisible) {
-    if (!customElements.get(APP_SIDEBAR_ELEMENT.tagName)) {
+    if (!sidebar.isConnected || !customElements.get("openclaw-app-sidebar")) {
       return { kind: "loading", navigationVisible: true };
     }
+    await sidebar.updateComplete;
+    // Windowed rows publish after the shared geometry reads, then commit through Solid.
+    await new Promise<void>((resolve) => {
+      scheduleLayout(resolve, () => () => resolve());
+    });
     await sidebar.updateComplete;
   }
   const outlet = shell.routeOutlet;
@@ -72,7 +86,10 @@ export function createSolidControlUiReadiness(
     await terminal?.updateComplete;
     return {
       ...presentation,
-      terminalActivationReady: terminal?.isConnected === true && terminal.available === true,
+      // The shell accepts the first shortcut before its terminal code is requested.
+      terminalActivationReady: shell?.element.isConnected
+        ? shell.terminalActivationReady === true
+        : terminal?.isConnected === true && terminal.available === true,
     };
   });
   // Publish committed DOM readiness to the external automation hook.

@@ -2,11 +2,6 @@ import path from "node:path";
 import { resolveRepoToolBinPath } from "./local-check-runtime.mts";
 import { isCiEnvironment, pinnedBunEnv, resolvePinnedBun } from "./pinned-bun.mts";
 
-// Keep oxfmt until the pinned fork is faster for both writing and checking.
-const DEFAULT_FORMAT_TOOL: "oxfmt" | "bun" = "oxfmt";
-// Flip only after the pinned fork includes b39aa848 and lint parity passes.
-const DEFAULT_LINT_TOOL: "oxlint" | "bun" = "oxlint";
-
 export function resolveDevTool(
   kind: "format" | "lint",
   env: NodeJS.ProcessEnv = process.env,
@@ -18,20 +13,16 @@ export function resolveDevTool(
   if (override && override !== "bun" && override !== fallback) {
     throw new Error(`${name} must be bun or ${fallback}`);
   }
-  const selected =
-    override ||
-    (isCiEnvironment(env) ? fallback : kind === "format" ? DEFAULT_FORMAT_TOOL : DEFAULT_LINT_TOOL);
+  const selected = override || (isCiEnvironment(env) ? fallback : "bun");
   if (selected === "bun") {
     const result = deps.resolvePinnedBun(env);
     if (result.command) {
       return {
         command: result.command,
-        args: [kind === "format" ? "fmt" : "lint"],
+        args: kind === "format" ? ["fmt"] : ["lint", "--no-script"],
         env: {
           ...env,
           ...pinnedBunEnv(result.command, env),
-          // Bun otherwise resolves the repository's lint script recursively.
-          ...(kind === "lint" ? { npm_lifecycle_event: "lint" } : {}),
         },
       };
     }

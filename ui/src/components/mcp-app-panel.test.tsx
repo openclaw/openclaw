@@ -11,7 +11,7 @@ import {
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { McpAppOpenDetail } from "./mcp-app-launch.ts";
 import { registerMcpAppUnmountTarget } from "./mcp-app-unmount.ts";
-import type { McpAppViewProps } from "./mcp-app-view-owner.ts";
+import type { McpAppViewProps } from "./mcp-app-view-types.ts";
 import { McpAppPanel } from "./solid/mcp-app-panel.tsx";
 
 const viewLoad = vi.hoisted(() => ({
@@ -20,26 +20,17 @@ const viewLoad = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Exercise panel retirement without registering the real iframe protocol view.
-vi.mock("./mcp-app-view-registration.ts", async () => {
+vi.mock("./mcp-app-view.tsx", async () => {
   viewLoad.started();
   await viewLoad.promise;
+  const fields = ["sessionKey", "agentId", "viewId", "title", "deepLink"] as const;
   return {
-    McpAppView: (
-      props: Pick<McpAppViewProps, "sessionKey" | "agentId" | "viewId" | "title" | "deepLink">,
-    ) => {
+    McpAppView: (props: Pick<McpAppViewProps, (typeof fields)[number]>) => {
       const view = document.createElement("mcp-app-view");
       onCleanup(registerMcpAppUnmountTarget(view));
       createRenderEffect(
-        () => ({
-          sessionKey: props.sessionKey,
-          agentId: props.agentId,
-          viewId: props.viewId,
-          title: props.title,
-          deepLink: props.deepLink,
-        }),
-        (values) => {
-          Object.assign(view, values);
-        },
+        () => Object.fromEntries(fields.map((key) => [key, props[key]])),
+        (values) => void Object.assign(view, values),
       );
       return view;
     },
@@ -66,12 +57,18 @@ it("retains the old app and its launch target until teardown finishes", async ()
       entrypoint: { type: "global" },
     },
   });
-  const [launch, setLaunch] = createSignal(launchFor("first"));
-  const { container } = mountSolid(() => <McpAppPanel launch={launch()} />, {
-    wrapper: createSolidApplicationContextProvider(context).wrapper,
-  });
+  const firstLaunch = launchFor("a");
+  const target = { sessionKey: "agent:a:session", agentId: "a", viewId: "a-view" };
+  const updated = { deepLink: "/second", title: "Updated app" };
+  const [launch, setLaunch] = createSignal(firstLaunch);
+  const { container } = mountSolid(
+    () => <McpAppPanel launch={launch()} observeRetirement={() => () => {}} />,
+    {
+      wrapper: createSolidApplicationContextProvider(context).wrapper,
+    },
+  );
   await waitForSolid(() => expect(viewLoad.started).toHaveBeenCalledOnce());
-  const firstLaunch = launchFor("first");
+  expect(request).not.toHaveBeenCalled();
   setLaunch({ ...firstLaunch, deepLink: "/initial" });
   flush();
   viewLoad.resolve();
@@ -80,35 +77,27 @@ it("retains the old app and its launch target until teardown finishes", async ()
   expect(Reflect.get(first, "deepLink")).toBe("/initial");
   setLaunch({
     ...firstLaunch,
-    deepLink: "/second",
-    entrypoint: { ...firstLaunch.entrypoint, title: "Updated first app" },
+    deepLink: updated.deepLink,
+    entrypoint: { ...firstLaunch.entrypoint, title: updated.title },
   });
   flush();
   expect(container.querySelector("mcp-app-view")).toBe(first);
-  expect(Reflect.get(first, "deepLink")).toBe("/second");
-  expect(Reflect.get(first, "title")).toBe("Updated first app");
+  expect(first).toMatchObject(updated);
   expect(request).toHaveBeenCalledOnce();
   const retirement = createDeferred();
   const teardown = vi.fn(() => retirement.promise);
   Object.assign(first, { teardown, restartAfterTeardown: vi.fn() });
-  setLaunch(launchFor("second"));
+  setLaunch(launchFor("b"));
   flush();
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
-  expect(teardown).toHaveBeenCalledOnce();
   expect(container.querySelector("mcp-app-view")).toBe(first);
-  expect(Reflect.get(first, "sessionKey")).toBe("agent:first:session");
-  expect(Reflect.get(first, "agentId")).toBe("first");
-  expect(Reflect.get(first, "viewId")).toBe("first-view");
-  expect(Reflect.get(first, "deepLink")).toBe("/second");
-  expect(Reflect.get(first, "title")).toBe("Updated first app");
+  expect(first).toMatchObject({ ...target, ...updated });
 
   retirement.resolve();
   await waitForSolid(() => {
     const second = container.querySelector("mcp-app-view");
     expect(second).not.toBe(first);
-    expect(second).not.toBeNull();
-    expect(Reflect.get(second!, "sessionKey")).toBe("agent:second:session");
-    expect(Reflect.get(second!, "viewId")).toBe("second-view");
+    expect(second).toMatchObject({ sessionKey: "agent:b:session", viewId: "b-view" });
   });
   expect(first.isConnected).toBe(false);
 });

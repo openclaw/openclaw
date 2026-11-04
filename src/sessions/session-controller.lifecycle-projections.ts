@@ -140,6 +140,16 @@ function isRestartRecoverableEffect(effect: Effect): boolean {
     (!effect.isSettling?.() || !isAgentRunDirectAbortReason(abortReason))
   );
 }
+function isRestartRecoverableOperation(operation: ReplyOperation): boolean {
+  // Stop retains cleanup custody, not permission to resume the cancelled turn.
+  return !isAgentRunDirectAbortReason(operation.abortSignal.reason);
+}
+function isRestartRecoverableClaim(claim: SessionControllerMailboxClaim): boolean {
+  return (
+    !isAgentRunDirectAbortReason(claim.abortController.signal.reason) &&
+    (!claim.operation || isRestartRecoverableOperation(claim.operation))
+  );
+}
 export function matchingEntries(target: SessionTarget): SessionControllerEntry[] {
   return findSessionControllerEntries(target.sessionKey, target);
 }
@@ -236,14 +246,25 @@ export function captureGatewaySessionControllerWork(resolveGatewayContext: Gatew
   }
   for (const entry of sessionControllers.values()) {
     const claim = entry.mailbox?.claim;
-    if (claim && hasGatewayContextOwner(claim, resolveGatewayContext)) {
+    if (
+      claim &&
+      isRestartRecoverableClaim(claim) &&
+      hasGatewayContextOwner(claim, resolveGatewayContext)
+    ) {
       owners.add(claim);
     }
-    if (entry.active && hasGatewayContextOwner(entry.active, resolveGatewayContext)) {
+    if (
+      entry.active &&
+      isRestartRecoverableOperation(entry.active) &&
+      hasGatewayContextOwner(entry.active, resolveGatewayContext)
+    ) {
       owners.add(entry.active);
     }
     for (const operation of entry.lifecycle?.operations ?? []) {
-      if (hasGatewayContextOwner(operation, resolveGatewayContext)) {
+      if (
+        isRestartRecoverableOperation(operation) &&
+        hasGatewayContextOwner(operation, resolveGatewayContext)
+      ) {
         owners.add(operation);
       }
     }
@@ -262,9 +283,14 @@ export function captureGatewaySessionControllerWork(resolveGatewayContext: Gatew
         agentId: params.agentId,
       });
       return (
-        selectedClaims(target).some((claim) => owners.has(claim)) ||
+        selectedClaims(target).some(
+          (claim) => owners.has(claim) && isRestartRecoverableClaim(claim),
+        ) ||
         [...selectedOperations([target])].some(
-          (operation) => owners.has(operation) && operation.hasOwnedSessionId(params.sessionId),
+          (operation) =>
+            owners.has(operation) &&
+            isRestartRecoverableOperation(operation) &&
+            operation.hasOwnedSessionId(params.sessionId),
         ) ||
         [...selectedEffects([target])].some(
           (effect) =>
@@ -310,7 +336,7 @@ export function isSessionMutationActive(
 export function hasOnlySessionMutationKindActive(
   scope: string,
   identities: Iterable<string | undefined>,
-  kind: "compaction",
+  kind: "compaction" | "read-marker" | "background-result",
 ): boolean {
   const mutations = matchingEntries(targetFrom({ scope, identities })).flatMap(
     (entry) => entry.lifecycle?.mutations.filter((mutation) => mutation.phase === "active") ?? [],

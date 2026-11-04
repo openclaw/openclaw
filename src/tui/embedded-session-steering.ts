@@ -10,6 +10,7 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js"
 export function steerEmbeddedSessionInput(params: {
   operation: ReplyOperation | undefined;
   text: string;
+  senderId: string;
   sessionEntry?: SessionEntry;
   debounceMs: number;
   abortSignal: AbortSignal;
@@ -27,6 +28,7 @@ export function steerEmbeddedSessionInput(params: {
       toolAuthorityOverlay: {
         originatingChannel: INTERNAL_MESSAGE_CHANNEL,
         messageProvider: INTERNAL_MESSAGE_CHANNEL,
+        senderId: params.senderId,
         permissionMode: sessionEntry?.permissionMode,
         toolOverrides: sessionEntry?.toolOverrides,
         chatType: sessionEntry?.chatType,

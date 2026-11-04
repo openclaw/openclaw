@@ -72,6 +72,7 @@ describe("skill payload normalization", () => {
       ["/learn first\n\n    second", "/learn first\nsecond"],
       ["/goal set first\n\n    second", "/goal set first\n\n    second"],
       ["/steer first\n\n    second", "/steer first\n\n    second"],
+      ["/followup first\n\n    second", "/followup first\n\n    second"],
       ["  /skill demo_skill first\n    second\n  ", "/skill demo_skill first\n    second"],
     ] as const;
     for (const [raw, expected] of cases) {

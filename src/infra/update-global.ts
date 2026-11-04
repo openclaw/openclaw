@@ -17,13 +17,17 @@ import {
   readPackageDistInventoryIfPresent,
 } from "./package-dist-inventory.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
+import { realpathOrResolve } from "./path-existence.js";
 import { parseSemver } from "./runtime-guard.js";
 import { collectGitRuntimeErrors, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
-import type { GlobalInstallManager } from "./update-global-env.js";
+import {
+  applyNonInteractivePackageManagerEnv,
+  type GlobalInstallManager,
+} from "./update-global-env.js";
 import {
   resolvePnpmGlobalDirFromGlobalRoot,
-  resolvePnpmHome,
+  resolvePnpmCommand,
 } from "./update-native-package-owner.js";
 import {
   inspectNpmLauncher,
@@ -60,8 +64,6 @@ export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
 };
 
 const PRIMARY_PACKAGE_NAME = "openclaw";
-/** npm-compatible spec used when the user asks to install the moving main branch. */
-const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG = `--allow-build=${PRIMARY_PACKAGE_NAME}`;
 const BUN_OPENCLAW_TRUST_FLAG = "--trust";
@@ -130,7 +132,7 @@ function normalizePackageVersionForComparison(value: string | null | undefined):
   return trimmed.replace(/^[vV](?=\d)/, "");
 }
 
-function isMainPackageTarget(value: string): boolean {
+export function isMainPackageTarget(value: string | null): boolean {
   return normalizeLowercaseStringOrEmpty(value) === "main";
 }
 
@@ -322,7 +324,7 @@ export async function verifyPackageUpdateRecovery(
 }
 
 async function collectSourceCheckoutInstallErrors(packageRoot: string): Promise<string[]> {
-  const realPackageRoot = await tryRealpath(packageRoot);
+  const realPackageRoot = await realpathOrResolve(packageRoot);
   const hasSourceCheckoutShape =
     ((await pathExists(path.join(realPackageRoot, ".git"))) ||
       (await pathExists(path.join(realPackageRoot, "pnpm-workspace.yaml")))) &&
@@ -447,11 +449,10 @@ async function collectInstalledPathErrors(params: {
 
 /**
  * Returns true when a target can be resolved through npm registry metadata.
- * Explicit tarball, URL, git, and main-branch specs bypass registry lookup.
+ * Explicit tarball, URL, and git specs bypass registry lookup.
  */
 export function canResolveRegistryVersionForPackageTarget(value: string): boolean {
-  const trimmed = stripPrimaryPackageAlias(value);
-  return !isMainPackageTarget(trimmed) && !isExplicitPackageInstallSpec(trimmed);
+  return !isExplicitPackageInstallSpec(stripPrimaryPackageAlias(value));
 }
 
 /** Same-version registry targets are no-ops; explicit artifacts still require validation/install. */
@@ -479,9 +480,6 @@ export function resolveGlobalInstallSpec(params: {
     return override;
   }
   const target = params.tag.trim();
-  if (isMainPackageTarget(target)) {
-    return OPENCLAW_MAIN_PACKAGE_SPEC;
-  }
   if (isExplicitPackageInstallSpec(target)) {
     return target;
   }
@@ -489,14 +487,6 @@ export function resolveGlobalInstallSpec(params: {
 }
 
 export { createGlobalInstallEnv } from "./update-global-env.js";
-
-async function tryRealpath(targetPath: string): Promise<string> {
-  try {
-    return await fs.realpath(targetPath);
-  } catch {
-    return path.resolve(targetPath);
-  }
-}
 
 function resolveBunGlobalRoot(): string {
   return (
@@ -697,7 +687,7 @@ export async function resolvePnpmIsolatedInstallOwner(
   pkgRoot?: string | null,
 ): Promise<string | null> {
   const projectRoot = inferPnpmProjectRoot(pkgRoot);
-  return projectRoot ? await tryRealpath(projectRoot) : null;
+  return projectRoot ? await realpathOrResolve(projectRoot) : null;
 }
 
 async function listPnpmIsolatedGlobalPackages(params: {
@@ -834,16 +824,14 @@ function normalizeGlobalInstallCommand(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   pkgRoot?: string | null,
 ): ResolvedGlobalInstallCommand {
-  const pnpmHome = resolvePnpmHome(inferPnpmGlobalRootFromPackageRoot(pkgRoot));
-  const pnpm =
-    pnpmHome && path.join(pnpmHome, "bin", process.platform === "win32" ? "pnpm.cmd" : "pnpm");
+  const pnpm = resolvePnpmCommand(inferPnpmGlobalRootFromPackageRoot(pkgRoot));
   return typeof managerOrCommand === "string"
     ? {
         manager: managerOrCommand,
         command:
           managerOrCommand === "npm"
             ? (resolvePreferredNpmCommand(pkgRoot) ?? managerOrCommand)
-            : managerOrCommand === "pnpm" && pnpm && fsSync.existsSync(pnpm)
+            : managerOrCommand === "pnpm" && pnpm
               ? pnpm
               : managerOrCommand === "bun" && process.versions.bun
                 ? process.execPath
@@ -878,7 +866,15 @@ async function resolveGlobalRoot(
   if (resolved.manager === "bun") {
     return inferBunGlobalRootFromPackageRoot(pkgRoot) ?? resolveBunGlobalRoot();
   }
-  const res = await runCommand([resolved.command, "root", "-g"], { timeoutMs }).catch(() => null);
+  // Discovery runs while the updater owns the terminal pane: a Corepack shim must not prompt,
+  // and the probe must never wait for input that the pane cannot answer.
+  const probeEnv: NodeJS.ProcessEnv = { ...process.env };
+  applyNonInteractivePackageManagerEnv(probeEnv);
+  const res = await runCommand([resolved.command, "root", "-g"], {
+    timeoutMs,
+    env: probeEnv,
+    input: "",
+  }).catch(() => null);
   if (!res || res.code !== 0) {
     return null;
   }
@@ -1036,10 +1032,10 @@ async function inspectNpmGlobalOwner(
     resolvePreferredNpmCommand(pkgRoot) ?? "npm",
     diagnostics,
   );
-  const pkgReal = await tryRealpath(pkgRoot);
+  const pkgReal = await realpathOrResolve(pkgRoot);
   if (
     selected &&
-    (await tryRealpath(path.join(selected.globalRoot, PRIMARY_PACKAGE_NAME))) === pkgReal
+    (await realpathOrResolve(path.join(selected.globalRoot, PRIMARY_PACKAGE_NAME))) === pkgReal
   ) {
     return true;
   }
@@ -1063,7 +1059,7 @@ export async function detectGlobalInstallManagerForRoot(
   timeoutMs: number,
   diagnostics: string[] = [],
 ): Promise<GlobalInstallManager | null> {
-  const pkgReal = await tryRealpath(pkgRoot);
+  const pkgReal = await realpathOrResolve(pkgRoot);
   diagnostics.push(`package root: ${pkgRoot} (resolved: ${pkgReal})`);
   const bunOwner = resolveBunGlobalInstallOwner(pkgRoot) ?? resolveBunGlobalInstallOwner(pkgReal);
   if (bunOwner) {
@@ -1080,11 +1076,11 @@ export async function detectGlobalInstallManagerForRoot(
     if (!globalRoot) {
       continue;
     }
-    const globalReal = await tryRealpath(globalRoot);
+    const globalReal = await realpathOrResolve(globalRoot);
     if (manager === "pnpm" && (await resolvePnpmIsolatedGlobalPackage({ globalRoot, pkgRoot }))) {
       return "pnpm";
     }
-    const expectedReal = await tryRealpath(path.join(globalReal, PRIMARY_PACKAGE_NAME));
+    const expectedReal = await realpathOrResolve(path.join(globalReal, PRIMARY_PACKAGE_NAME));
     if (path.resolve(expectedReal) === path.resolve(pkgReal)) {
       return manager;
     }

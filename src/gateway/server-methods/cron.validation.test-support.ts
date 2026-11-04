@@ -1,12 +1,20 @@
+import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveCronListSnapshotRevision } from "../../cron/list-snapshot-revision.js";
+import {
+  resolveCronListSnapshotRevision,
+  resolveCronListSnapshotRows,
+} from "../../cron/list-snapshot-revision.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronService } from "../../cron/service.js";
 import type { CronJob } from "../../cron/types.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
@@ -113,6 +121,7 @@ export function createCronTestContext(
       waitForManualRun: vi.fn(async () => false),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
+      getLoadedJobs: vi.fn(() => jobs),
       prepareWake: vi.fn(async () => undefined),
       wake: vi.fn(async (opts: Parameters<CronService["wake"]>[0]) => {
         opts.commitGuard?.();
@@ -141,7 +150,10 @@ export function createCronTestContext(
         const nextOffset = offset + pageJobs.length;
         return {
           jobs: freezeJsonSnapshot(structuredClone(pageJobs)),
-          snapshotRevision: resolveCronListSnapshotRevision(filteredJobs),
+          snapshotRevision: resolveCronListSnapshotRevision(
+            filteredJobs,
+            resolveCronListSnapshotRows(filteredJobs),
+          ),
           total,
           offset,
           limit,
@@ -178,6 +190,29 @@ export function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
     state: {},
     ...overrides,
   };
+}
+
+export function cronAccountPolicy(ownerSessionKey: string, ownerAccountId = "default") {
+  return { version: 1, mode: "account", ownerSessionKey, ownerAccountId } as const;
+}
+
+export function expectCronReply(
+  respond: ReturnType<typeof vi.fn>,
+  payload: unknown,
+  call: "any" | "once" | "last" = "any",
+) {
+  const assertion = expect(respond);
+  if (call === "once") {
+    assertion.toHaveBeenCalledExactlyOnceWith(true, payload, undefined);
+  } else if (call === "last") {
+    assertion.toHaveBeenLastCalledWith(true, payload, undefined);
+  } else {
+    assertion.toHaveBeenCalledWith(true, payload, undefined);
+  }
+}
+
+export function expectCronFailure(respond: ReturnType<typeof vi.fn>, error: unknown) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, error);
 }
 
 export function pluginEntries(...ids: string[]): OpenClawConfig["plugins"] {
@@ -233,18 +268,19 @@ export function createCronCallerClient(
   currentJobId?: string,
   currentJobExpiresAtMs = Date.now() + 60_000,
 ): GatewayClient {
-  const operationalRunInstance = createOperationalRunInstanceRef("run-cron-validation");
+  const operationalRunInstance = createOperationalRunInstanceRef(
+    `run-cron-validation-${randomUUID()}`,
+  );
+  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  onTestFinished(() => {
+    releaseAgentRunDelegatedAuthority(authority);
+  });
   const identity: AgentRuntimeIdentity = {
     kind: "agentRuntime",
     agentId,
     sessionKey: sessionKey ?? `agent:${agentId}:main`,
     operationalRunInstance,
-    delegatedAuthority: {
-      kind: "local",
-      operationalRunInstance,
-      lifecycleGeneration: "test-generation",
-      claimId: "test-claim",
-    },
+    delegatedAuthority: { kind: "local", ...authority },
   };
   if (accountId) {
     identity.turnSourceAccountId = accountId;

@@ -12,7 +12,7 @@ import {
 } from "../../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { buildCollectPrompt } from "../../../utils/queue-helpers.js";
-import { hasPreparedCurrentTurnImages } from "./delivery-context.js";
+import { getFollowupOriginRouting, hasPreparedCurrentTurnImages } from "./delivery-context.js";
 import type { FollowupRun, InternalFollowupRun } from "./types.js";
 type OriginRoutingMetadata = Pick<
   FollowupRun,
@@ -43,16 +43,7 @@ export function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutin
   if (!source) {
     return {};
   }
-  return {
-    originatingChannel: source.originatingChannel,
-    originatingTo: source.originatingTo,
-    originatingAccountId: source.originatingAccountId,
-    originatingThreadId: source.originatingThreadId,
-    originatingChatId: source.originatingChatId,
-    originatingReplyToId: source.originatingReplyToId,
-    originatingReplyToMode: source.originatingReplyToMode,
-    originatingChatType: source.originatingChatType,
-  };
+  return getFollowupOriginRouting(source);
 }
 
 export function renderCollectItem(item: FollowupRun, idx: number): string {
@@ -232,6 +223,7 @@ export function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
     return {
       ...transcriptInput,
       senderIsOwner: source.run.senderIsOwner,
+      requesterOrigin: source.run.requesterOrigin,
       provenance: source.run.inputProvenance,
       idempotencyKey: `followup-collect:${source.run.sessionId}:${identityHash}`,
       ...(timestamp === undefined ? {} : { timestamp }),
@@ -243,6 +235,7 @@ export function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
     input: {
       ...initialTranscriptInput,
       senderIsOwner: source.run.senderIsOwner,
+      requesterOrigin: source.run.requesterOrigin,
       provenance: source.run.inputProvenance,
     },
     resolveInput: buildInput,

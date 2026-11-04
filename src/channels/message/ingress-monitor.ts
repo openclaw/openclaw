@@ -99,6 +99,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   const withAdmissionClaimLock = createAdmissionClaimLock();
   let stopTask: Promise<void> | undefined;
   let lastReportedActive = false;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let recoveryRequested = true;
 
   const clearSuspensionSubscription = (): void => {
     suspensionDrainPending = false;
@@ -160,6 +162,18 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         queue: getQueue(),
         abortSignal: drainAbortSignal,
         now,
+        onClaimSettled: requestDrain,
+        onRetryAt: (retryAt) => {
+          clearTimeout(retryTimer);
+          retryTimer = undefined;
+          if (retryAt !== undefined && running && !isAborted()) {
+            retryTimer = setTimeout(
+              requestDrain,
+              Math.min(2_147_483_647, Math.max(0, retryAt - now())),
+            );
+            retryTimer.unref?.();
+          }
+        },
         retryPolicy: options.drain?.retryPolicy ?? {
           maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
           deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
@@ -267,7 +281,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             trackDeferredClaim();
             try {
               await settle();
-              requestDrain();
             } finally {
               settleDeferredClaim();
             }
@@ -310,6 +323,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
               if (releasedStartCapacity) {
                 releasedStartCapacity = false;
                 deferredStartCapacity -= 1;
+              } else if (handedOff) {
+                requestDrain();
               }
               publishActivity();
             });
@@ -422,15 +437,18 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         const activeDrain = getDrain();
         // Claiming and durable admission are mutually exclusive so a row cannot
         // dispatch before its transport-owned post-append acknowledgement finishes.
-        const { started } = await withAdmissionClaimLock(() =>
-          activeDrain.drainOnce({
+        const { started } = await withAdmissionClaimLock(() => {
+          const recoverStaleClaims = recoveryRequested;
+          recoveryRequested = false;
+          return activeDrain.drainOnce({
+            recoverStaleClaims,
             shouldStop: () =>
               !running ||
               isAborted() ||
               getGatewaySuspendAdmissionPhase() !== "accepting" ||
               activeDeliveries.size + activeInspections.size - deferredStartCapacity >= startLimit,
-          }),
-        );
+          });
+        });
         if (waitForDeliveryIdleBeforeRepump) {
           await waitForActiveDeliveries();
           await activeDrain.waitForIdle();
@@ -516,16 +534,18 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     publishActivity();
   };
 
-  const clearPollTimer = () => {
+  const clearTimers = () => {
     clearInterval(pollTimer);
     pollTimer = undefined;
+    clearTimeout(retryTimer);
+    retryTimer = undefined;
   };
 
   const pause = async (): Promise<void> => {
     running = false;
     requested = false;
     releaseRestartFenceWake();
-    clearPollTimer();
+    clearTimers();
     publishActivity();
     await waitForPumpIdle();
   };
@@ -548,13 +568,17 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     getGatewaySuspendAdmissionPhase() !== "accepting";
   const admitRawBatch = createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMetadata>({
     payload: options.payload,
+    prepareAdmission: options.prepareAdmission,
+    signal: drainAbortSignal,
     reuseAdmissionFactsForFreshClaims: options.reuseAdmissionFactsForFreshClaims,
     appendRetryDelaysMs: options.appendRetryDelaysMs,
     onDurableAdmission: options.onDurableAdmission,
     onAdmissionFailure: options.onAdmissionFailure,
     inspect: (raw) => inspect(raw, { phase: "admission" }),
     getQueue,
-    pruneBeforeAdmission: () => pruneIfDue("admission"),
+    // Retention is maintenance: a busy database must not cost the transport its
+    // only delivery of this event. The next admission prunes again.
+    pruneBeforeAdmission: () => pruneIfDue("admission").catch(reportError),
     getIdleDrain: () =>
       // Wrappers own dispatch context; only prepared identities can skip reconciliation.
       // Released deferrals and post-adoption deliveries must finish first.
@@ -573,6 +597,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     recoverUntrackedClaim: (idleDrain) => {
       idleDrain.dispose();
       drain = undefined;
+      recoveryRequested = true;
       requestDrain();
     },
     scheduleDrainIdleWake,
@@ -647,7 +672,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           requestDrain();
         }
       });
-      pollTimer = setInterval(requestDrain, options.pollIntervalMs);
+      // Admissions and claim settlements wake normal work; only abandoned or
+      // externally enqueued rows need a bounded recovery sweep.
+      recoveryRequested = true;
+      pollTimer = setInterval(
+        () => {
+          recoveryRequested = true;
+          requestDrain();
+        },
+        Math.max(5 * 60_000, options.pollIntervalMs),
+      );
       pollTimer.unref?.();
       requestDrain();
     },
@@ -661,7 +695,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         requested = false;
         clearSuspensionSubscription();
         releaseRestartFenceWake();
-        clearPollTimer();
+        clearTimers();
         publishActivity();
         // Every transport callback accepted before stop keeps its durable-append guarantee.
         await admissionTail;

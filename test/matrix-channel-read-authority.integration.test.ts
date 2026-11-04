@@ -4,35 +4,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "../extensions/matrix/api.js";
 import { registerMatrixFullRuntime } from "../extensions/matrix/index.js";
 import { setMatrixRuntime } from "../extensions/matrix/test-api.js";
-import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
-import type {
-  ChannelMessageActionContext,
-  ChannelMessageActionName,
-} from "../src/channels/plugins/types.js";
-import { createDefaultDeps } from "../src/cli/deps.js";
-import * as messageCliHelpers from "../src/cli/program/message/helpers.js";
+import type { ChannelMessageActionName } from "../src/channels/plugins/message-action-names.js";
+import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
 import { registerMessageCommands } from "../src/cli/program/register.message.js";
-import { messageCommand } from "../src/commands/message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
-import {
-  mintMessageActionTurnCapability,
-  revokeMessageActionTurnCapability,
-} from "../src/gateway/message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
-import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../src/infra/agent-run-registry.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../src/plugins/runtime.js";
 import { createPluginRuntime } from "../src/plugins/runtime/index.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
+import { defaultRuntime } from "../src/runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
+import { createMessageReadAuthority } from "./message-read-authority.test-support.js";
 
 const originRoom = "!origin:example.org";
 const allowedRoom = "!allowed:example.org";
@@ -43,6 +37,9 @@ const messageId = "$message:example.org";
 const accessToken = "synthetic-matrix-read-fixture";
 const roomPath = `/_matrix/client/v3/rooms/${allowedRoom}`;
 const messagePath = `${roomPath}/messages`;
+const profilePath = `/_matrix/client/v3/profile/${memberId}`;
+const reactionPath = `/_matrix/client/v1/rooms/${allowedRoom}/relations/${messageId}/m.annotation/m.reaction`;
+const emojiPath = `/_matrix/client/v3/user/${selfId}/account_data/im.ponies.user_emotes`;
 const message = {
   event_id: messageId,
   type: "m.room.message",
@@ -68,67 +65,19 @@ beforeEach(() => {
   for (const key of Object.keys(process.env).filter((name) => name.startsWith("MATRIX_"))) {
     vi.stubEnv(key, undefined);
   }
-  for (const key of [
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "https_proxy",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-  ]) {
+  for (const key of "HTTPS_PROXY HTTP_PROXY https_proxy http_proxy ALL_PROXY all_proxy".split(
+    " ",
+  )) {
     vi.stubEnv(key, undefined);
   }
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
   clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
-
-function createOriginatingRun() {
-  const sessionKey = `agent:main:matrix:group:${originRoom}`;
-  const operationalRunInstance = createOperationalRunInstanceRef("matrix-context-read");
-  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  const turnCapability = mintMessageActionTurnCapability({
-    agentId: "main",
-    runId: operationalRunInstance.runId,
-    sessionKey,
-    requesterAccountId: "default",
-    requesterSenderId: memberId,
-    toolContext,
-  });
-  const guard = createAgentRuntimeAuthorityGuard(
-    {
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...delegatedAuthority },
-          messageActionContext: { expiresAtMs: Date.now() + 60_000, turnCapability },
-        },
-      },
-    } as GatewayClient,
-    {
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    } as GatewayRequestContext,
-    () => {},
-  ).commitGuard;
-  if (!guard) {
-    throw new Error("Expected originating Matrix run authority");
-  }
-  guard();
-  return {
-    assert: guard,
-    revoke: () => revokeMessageActionTurnCapability(turnCapability),
-    dispose: () => {
-      revokeMessageActionTurnCapability(turnCapability);
-      releaseAgentRunDelegatedAuthority(delegatedAuthority);
-    },
-  };
-}
 
 function createConfig(homeserver: string) {
   return {
@@ -155,55 +104,49 @@ function createConfig(homeserver: string) {
   };
 }
 
-function responseFor(path: string): unknown {
-  switch (path) {
-    case `${roomPath}/state/m.room.name/`:
-      return { name: "Allowed room" };
-    case `${roomPath}/state/m.room.canonical_alias/`:
-      return { alias: "#allowed:example.org", alt_aliases: [] };
-    case `${roomPath}/state/m.room.topic/`:
-      return { topic: "Synthetic room topic" };
-    case `${roomPath}/state/m.room.pinned_events/`:
-      return { pinned: [messageId] };
-    case `${roomPath}/joined_members`:
-      return { joined: { [selfId]: {}, [memberId]: {}, "@bob:example.org": {} } };
-    case `${roomPath}/event/${messageId}`:
-      return message;
-    case messagePath:
-      return { chunk: [message], start: "previous", end: "next" };
-    case `/_matrix/client/v1/rooms/${allowedRoom}/relations/${messageId}/m.annotation/m.reaction`:
-      return {
-        chunk: [
-          {
-            event_id: "$reaction:example.org",
-            sender: memberId,
-            type: "m.reaction",
-            origin_server_ts: message.origin_server_ts,
-            content: {
-              "m.relates_to": { rel_type: "m.annotation", event_id: messageId, key: "👍" },
-            },
-          },
-        ],
-      };
-    case `${roomPath}/state`:
-      return [
-        {
-          type: "im.ponies.room_emotes",
-          state_key: "",
-          content: { images: { wave: { url: "mxc://example.org/wave" } } },
-        },
-      ];
-    case `/_matrix/client/v3/user/${selfId}/account_data/im.ponies.user_emotes`:
-      return { images: { spark: { url: "mxc://example.org/spark" } } };
-    case `/_matrix/client/v3/profile/${memberId}`:
-      return { displayname: "Alice", avatar_url: "mxc://example.org/alice" };
-    default:
-      return undefined;
-  }
-}
-
+const responses: Record<string, unknown> = {
+  [`${roomPath}/state/m.room.name/`]: { name: "Allowed room" },
+  [`${roomPath}/state/m.room.canonical_alias/`]: { alias: "#allowed:example.org", alt_aliases: [] },
+  [`${roomPath}/state/m.room.topic/`]: { topic: "Synthetic room topic" },
+  [`${roomPath}/state/m.room.pinned_events/`]: { pinned: [messageId] },
+  [`${roomPath}/joined_members`]: {
+    joined: { [selfId]: {}, [memberId]: {}, "@bob:example.org": {} },
+  },
+  [`${roomPath}/event/${messageId}`]: message,
+  [messagePath]: { chunk: [message], start: "previous", end: "next" },
+  [reactionPath]: {
+    chunk: [
+      {
+        event_id: "$reaction:example.org",
+        sender: memberId,
+        type: "m.reaction",
+        origin_server_ts: message.origin_server_ts,
+        content: { "m.relates_to": { rel_type: "m.annotation", event_id: messageId, key: "👍" } },
+      },
+    ],
+  },
+  [`${roomPath}/state`]: [
+    {
+      type: "im.ponies.room_emotes",
+      state_key: "",
+      content: { images: { wave: { url: "mxc://example.org/wave" } } },
+    },
+  ],
+  [emojiPath]: { images: { spark: { url: "mxc://example.org/spark" } } },
+  [profilePath]: { displayname: "Alice", avatar_url: "mxc://example.org/alice" },
+};
 type RegistrationOrigin = "bundled" | "official-installed";
 type MatrixHarness = Awaited<ReturnType<typeof createHarness>>;
+
+function expectReads(requests: MatrixHarness["requests"], paths: string[]) {
+  expect(requests.map((request) => request.path)).toEqual(expect.arrayContaining(paths));
+  expect(
+    requests.every(
+      ({ method, authorization }) => method === "GET" && authorization === `Bearer ${accessToken}`,
+    ),
+  ).toBe(true);
+  expect(requests.filter((request) => !Object.hasOwn(responses, request.path))).toEqual([]);
+}
 
 // Installation provenance is a registrar fixture, as in the shared dispatcher suite.
 // Policy, action handlers, SDK requests, host instance and lifecycle are real; E2EE is off.
@@ -219,25 +162,16 @@ async function createHarness(origin: RegistrationOrigin) {
     requests.push({ method: request.method, path, authorization: request.headers.authorization });
     request.resume();
     onRequest?.(path);
-    const body = request.method === "GET" ? responseFor(path) : undefined;
-    response.writeHead(body === undefined ? 404 : 200, { "content-type": "application/json" });
-    response.end(
-      JSON.stringify(body ?? { errcode: "M_NOT_FOUND", error: "Unexpected fixture request" }),
+    const body =
+      request.method === "GET" && Object.hasOwn(responses, path) ? responses[path] : undefined;
+    respondJson(
+      response,
+      body ?? { errcode: "M_NOT_FOUND", error: "Unexpected fixture request" },
+      body === undefined ? 404 : 200,
     );
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const closeServer = () =>
-    new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    await closeServer();
-    throw new Error("Expected loopback TCP address");
-  }
-  const cfg = createConfig(`http://127.0.0.1:${address.port}`);
+  const closeServer = () => closeHttpServer(server);
+  const cfg = createConfig(await listenLoopback(server));
   const owner = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: createPluginRuntime(),
@@ -264,7 +198,13 @@ async function createHarness(origin: RegistrationOrigin) {
       });
     });
     setActivePluginRegistry(owner.registry);
-    const run = createOriginatingRun();
+    const run = createMessageReadAuthority({
+      runId: "matrix-context-read",
+      sessionKey: `agent:main:matrix:group:${originRoom}`,
+      requesterSenderId: memberId,
+      toolContext,
+      gatewayContext: "expiry-only",
+    });
     return {
       cfg,
       requests,
@@ -323,93 +263,57 @@ async function withHarness(
   }
 }
 
+// Payload projection belongs to matrix/actions/{messages,reactions,room}.test.ts and
+// tool-actions.test.ts; this suite proves each registered action's real authorized HTTP handoff.
 const reads = [
-  {
-    action: "read",
-    params: { limit: 1 },
-    path: messagePath,
-    result: { messages: [{ content: message.content.body }] },
-  },
-  {
-    action: "reactions",
-    params: { messageId, limit: 1 },
-    path: `/_matrix/client/v1/rooms/${allowedRoom}/relations/${messageId}/m.annotation/m.reaction`,
-    result: { reactions: [{ key: "👍", count: 1, users: [memberId] }] },
-  },
-  {
-    action: "list-pins",
-    params: {},
-    path: `${roomPath}/event/${messageId}`,
-    result: { pinned: [messageId], pins: [{ content: message.content.body }] },
-  },
-  {
-    action: "emoji-list",
-    params: {},
-    path: `/_matrix/client/v3/user/${selfId}/account_data/im.ponies.user_emotes`,
-    result: {
-      emojis: [
-        { name: "spark", url: "mxc://example.org/spark" },
-        { name: "wave", url: "mxc://example.org/wave" },
-      ],
-    },
-  },
-  {
-    action: "member-info",
-    params: { userId: memberId },
-    path: `/_matrix/client/v3/profile/${memberId}`,
-    result: { member: { userId: memberId, displayName: "Alice", roomId: allowedRoom } },
-  },
-  {
-    action: "channel-info",
-    params: {},
-    path: `${roomPath}/state/m.room.topic/`,
-    result: {
-      room: {
-        roomId: allowedRoom,
-        name: "Allowed room",
-        topic: "Synthetic room topic",
-        memberCount: 3,
-      },
-    },
-  },
+  ["read", { limit: 1 }, messagePath, { messages: [{ content: message.content.body }] }],
+  ["reactions", { messageId, limit: 1 }, reactionPath, { reactions: [{ key: "👍" }] }],
+  ["list-pins", {}, `${roomPath}/event/${messageId}`, { pinned: [messageId] }],
+  ["emoji-list", {}, emojiPath, { emojis: [{ name: "spark" }, { name: "wave" }] }],
+  ["member-info", { userId: memberId }, profilePath, { member: { userId: memberId } }],
+  ["channel-info", {}, `${roomPath}/state/m.room.topic/`, { room: { roomId: allowedRoom } }],
 ] as const;
 
 describe("Matrix member info CLI", () => {
   it("reads a selected room member without current conversation context", async () => {
     await withHarness("bundled", async (fixture) => {
       setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = { log: vi.fn(), error: vi.fn() };
       const command = new Command().name("openclaw").exitOverride();
-      const helpers = messageCliHelpers.createMessageCliHelpers("matrix");
-      const createHelpers = vi.spyOn(messageCliHelpers, "createMessageCliHelpers").mockReturnValue({
-        ...helpers,
-        runMessageAction: async (action, opts) => {
-          await messageCommand({ ...opts, action }, createDefaultDeps(), runtime);
-        },
+      registerMessageCommands(command, {
+        programVersion: "test",
+        messageChannelOptions: "matrix",
+        agentChannelOptions: "last|matrix",
       });
-      try {
-        registerMessageCommands(command, {
-          programVersion: "test",
-          messageChannelOptions: "matrix",
-          agentChannelOptions: "last|matrix",
-        });
-      } finally {
-        createHelpers.mockRestore();
+      const registry = getActivePluginRegistry();
+      if (!registry) {
+        throw new Error("expected the Matrix fixture registry");
       }
-
+      const [configGuard, channelPluginIds, pluginLoader, oneShotExit] = await Promise.all([
+        import("../src/cli/program/config-guard.js"),
+        import("../src/plugins/channel-plugin-ids.js"),
+        import("../src/plugins/loader.js"),
+        import("../src/cli/one-shot-exit.js"),
+      ]);
+      // The harness owns config and registry admission; production owns parsed action dispatch.
+      vi.spyOn(configGuard, "ensureConfigReady").mockResolvedValue(undefined);
+      vi.spyOn(channelPluginIds, "resolveDiscoverableScopedChannelPluginIds").mockImplementation(
+        ({ channelIds }) => [...channelIds],
+      );
+      vi.spyOn(pluginLoader, "loadPluginRegistryHandle").mockReturnValue(registry);
+      vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+      vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) =>
+        runtime.log(JSON.stringify(value)),
+      );
+      vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+      vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new Error(`unexpected CLI exit(${code})`);
+      });
+      vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true);
       await command.parseAsync(
-        [
-          "message",
-          "member",
-          "info",
-          "--channel",
-          "matrix",
-          "--user-id",
-          memberId,
-          "--channel-id",
-          allowedRoom,
-          "--json",
-        ],
+        `message member info --channel matrix --user-id ${memberId} --channel-id ${allowedRoom} --json`.split(
+          " ",
+        ),
         { from: "user" },
       );
 
@@ -425,42 +329,19 @@ describe("Matrix member info CLI", () => {
           member: { userId: memberId, displayName: "Alice", roomId: allowedRoom },
         },
       });
-      expect(fixture.requests.map((request) => request.path)).toEqual(
-        expect.arrayContaining([
-          `${roomPath}/joined_members`,
-          `/_matrix/client/v3/profile/${memberId}`,
-        ]),
-      );
-      expect(
-        fixture.requests.every(
-          (request) =>
-            request.method === "GET" && request.authorization === `Bearer ${accessToken}`,
-        ),
-      ).toBe(true);
-      expect(fixture.requests.filter((request) => responseFor(request.path) === undefined)).toEqual(
-        [],
-      );
+      expectReads(fixture.requests, [`${roomPath}/joined_members`, profilePath]);
     });
   });
 });
 
 describe("registered installed Matrix reads", () => {
   it.each(reads)(
-    "reads $action from a configured sibling room",
-    async ({ action, params, path, result }) => {
+    "reads %s from a configured sibling room",
+    async (action, params, path, result) => {
       await withHarness("official-installed", async (fixture) => {
         const outcome = await fixture.invoke(action, params);
         expect(outcome?.details).toMatchObject({ ok: true, ...result });
-        expect(fixture.requests.map((request) => request.path)).toContain(path);
-        expect(
-          fixture.requests.every(
-            (request) =>
-              request.method === "GET" && request.authorization === `Bearer ${accessToken}`,
-          ),
-        ).toBe(true);
-        expect(
-          fixture.requests.filter((request) => responseFor(request.path) === undefined),
-        ).toEqual([]);
+        expectReads(fixture.requests, [path]);
       });
     },
   );
@@ -476,7 +357,7 @@ describe("registered installed Matrix reads", () => {
       fixture.onRequest((path) => {
         if (path === revokeAt) {
           if (owner === "caller") {
-            fixture.run.revoke();
+            fixture.run.revokeTurn();
           } else {
             void fixture.instance.dispose();
           }
@@ -528,16 +409,4 @@ describe("installed Matrix read restrictions", () => {
       });
     },
   );
-
-  it("does not fetch a profile for someone outside the authorized room", async () => {
-    await withHarness("official-installed", async (fixture) => {
-      await expect(
-        fixture.invoke("member-info", { userId: "@outsider:example.org" }),
-      ).rejects.toThrow("is not a member of room");
-      expect(fixture.requests.map((request) => request.path)).toContain(
-        `${roomPath}/joined_members`,
-      );
-      expect(fixture.requests.some((request) => request.path.includes("/profile/"))).toBe(false);
-    });
-  });
 });

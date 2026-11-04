@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
+import { readStateSchemaContentVersion } from "../../state/openclaw-state-db-schema-version.js";
 import { hasErrnoCode } from "../errno.js";
 import { parseGatewayLockPayload } from "../gateway-lock-payload.js";
 import {
@@ -13,43 +15,17 @@ import { captureGatewayStateOwner, resolveGatewayStateOwnerPath } from "../gatew
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
-import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
+import { prepareSqliteReadOnlyLocation } from "../sqlite-snapshot-source.js";
+import {
+  createDatabaseStoreDiagnostic,
+  type DatabaseStoreDiagnostic,
+} from "./diagnostic-record.js";
 import { readBackupEngineImage, type BackupEngine } from "./physical-store.js";
 import type { PortDescriptor } from "./port-types.js";
 import { readPostgresStoreMetadata, withPostgresConnection } from "./postgres-store-metadata.js";
-import type { DatabaseEngineId, DatabaseEngineInput } from "./types.js";
+import type { DatabaseEngineInput } from "./types.js";
 
-export type DatabaseStoreDiagnostic = {
-  family: string;
-  path: string | null;
-  configured: {
-    default: DatabaseEngineId;
-    override: DatabaseEngineId | null;
-    effective: DatabaseEngineId;
-    fixedLocal: boolean;
-  };
-  observed: DatabaseEngineId | "unknown";
-  mismatch: boolean | null;
-  schema: {
-    versioning: "versioned" | "unversioned" | "unknown";
-    version: number | null;
-    expectedVersion: number | null;
-    pending: number | null;
-  };
-  connectivity: "reachable" | "unreachable" | "unknown" | "local";
-  namespace: string | null;
-  storeId: string | null;
-  database: string | null;
-  extensions: string[] | null;
-  admittedExtensions: string[] | null;
-  degraded: string[] | null;
-  custody: "live-owner" | "none" | "unverifiable";
-  lease: "live-owner" | "none" | "unverifiable";
-  backup: { status: string } | null;
-  legacyMigrations: { state: "pending" | "none" | "unknown"; pending: string[] };
-  issues: string[];
-  nextSteps: string[];
-};
+export type { DatabaseStoreDiagnostic } from "./diagnostic-record.js";
 
 export type DatabaseStoreInspection = Pick<
   DatabaseStoreDiagnostic,
@@ -71,6 +47,9 @@ function observeLease(
       : lease.state === "live"
         ? "live-owner"
         : "unverifiable";
+  if (result.lease === "unverifiable") {
+    result.nextSteps.push("Inspect the recorded Gateway lease before offline maintenance.");
+  }
 }
 
 function observeVersion(result: DatabaseStoreDiagnostic, version: number) {
@@ -101,25 +80,34 @@ function inspectSqlite(
   const facts = getAdmittedSqliteSchemaFacts(db)!;
   result.connectivity = "local";
   result.extensions = [];
-  if (descriptor?.inspectSqliteSource) {
-    try {
+  let version = facts.userVersion;
+  try {
+    if (result.family === "state") {
+      // Unfenced updaters retain an older header after content migration. Health
+      // admission uses the state owner; porting still requires a published header.
+      version = readStateSchemaContentVersion(db);
+      assertOpenClawStateDatabaseForMaintenance(db, {
+        pathname: "shared-state diagnostic snapshot",
+      });
+      observeVersion(result, version);
+    } else if (descriptor?.inspectSqliteSource) {
       const source = descriptor.inspectSqliteSource(db);
       observeVersion(result, source.version);
-      if (source.migrationRequired) {
-        result.schema.pending = Math.max(1, result.schema.pending ?? 0);
-        result.issues.push("A store schema migration is pending.");
-        result.nextSteps.push("Run openclaw doctor --fix before porting this store.");
+      if (source.migrationRequired && source.version === result.schema.expectedVersion) {
+        // Port preparation includes same-version repairs; it is not a schema-version gap.
+        result.issues.push("Store preparation is required before porting.");
+        result.nextSteps.push("Database porting performs this preparation on a private copy.");
       }
-    } catch {
-      // Core state and agent stores keep their authoritative version in user_version.
-      if (result.family === "state" || result.family === "agent") {
-        observeVersion(result, facts.userVersion);
-      }
-      result.issues.push("The SQLite schema could not be admitted by its store owner.");
-      result.nextSteps.push("Run openclaw doctor --fix with the matching OpenClaw version.");
+    } else if (result.schema.versioning === "versioned") {
+      observeVersion(result, version);
     }
-  } else if (result.schema.versioning === "versioned") {
-    observeVersion(result, facts.userVersion);
+  } catch {
+    // Preserve decoded state content, or the physical header if decoding failed.
+    if (result.family === "state" || result.family === "agent") {
+      observeVersion(result, version);
+    }
+    result.issues.push("The SQLite schema could not be admitted by its store owner.");
+    result.nextSteps.push("Run openclaw doctor --fix with the matching OpenClaw version.");
   }
   if (result.family === "state") {
     try {
@@ -274,40 +262,22 @@ async function inspectPostgres(
 export async function inspectDatabaseStore(
   input: DatabaseStoreInspection,
 ): Promise<DatabaseStoreDiagnostic> {
-  const result: DatabaseStoreDiagnostic = {
+  const result = createDatabaseStoreDiagnostic({
     family: input.family,
     path: input.path,
     configured: input.configured,
-    observed: "unknown",
-    mismatch: null,
-    schema: {
-      versioning:
-        input.schemaVersion === null
-          ? "unversioned"
-          : input.descriptor || input.schemaVersion !== undefined
-            ? "versioned"
-            : "unknown",
-      version: null,
-      expectedVersion:
-        input.schemaVersion === null
-          ? null
-          : (input.schemaVersion ?? input.descriptor?.version ?? null),
-      pending: null,
-    },
-    connectivity: "unknown",
-    namespace: null,
-    storeId: null,
-    database: null,
-    extensions: null,
-    admittedExtensions: null,
-    degraded: null,
-    custody: "unverifiable",
-    lease: "unverifiable",
-    backup: null,
-    legacyMigrations: { state: input.configured.fixedLocal ? "none" : "unknown", pending: [] },
-    issues: [],
-    nextSteps: [],
-  };
+  });
+  result.schema.versioning =
+    input.schemaVersion === null
+      ? "unversioned"
+      : input.descriptor || input.schemaVersion !== undefined
+        ? "versioned"
+        : "unknown";
+  result.schema.expectedVersion =
+    input.schemaVersion === null
+      ? null
+      : (input.schemaVersion ?? input.descriptor?.version ?? null);
+  result.legacyMigrations.state = input.configured.fixedLocal ? "none" : "unknown";
   if (input.inspectionError === "unreadable-root") {
     result.issues.push("The physical store root could not be read; its contents are unknown.");
     result.nextSteps.push("Check store path permissions, then rerun openclaw doctor.");
@@ -353,11 +323,18 @@ export async function inspectDatabaseStore(
             (!recorded || isGatewayStateOwnerDefinitelyStale(recorded, ownerPath))
           ? "none"
           : "unverifiable";
+      if (recorded && result.custody === "unverifiable") {
+        result.nextSteps.push(
+          "Inspect the recorded store owner's custody before offline maintenance.",
+        );
+      }
     } catch {
       result.issues.push("Physical store custody could not be verified.");
       result.nextSteps.push("Check the Gateway owner and rerun openclaw doctor.");
     }
-    const prepared = prepareSqliteReadOnlyLocationSync(input.path);
+    const prepared = await prepareSqliteReadOnlyLocation(input.path, {
+      preserveSourceArtifacts: true,
+    });
     let engine: BackupEngine;
     try {
       engine = readBackupEngineImage(prepared.location, input.path);
@@ -378,7 +355,7 @@ export async function inspectDatabaseStore(
         inspectSqlite(result, db, input.descriptor);
       }
     } finally {
-      prepared.cleanup();
+      await prepared.cleanupAsync();
     }
     if (engine.engine === "postgres") {
       await inspectPostgres(result, engine, input.postgres);
@@ -389,19 +366,9 @@ export async function inspectDatabaseStore(
       "Run openclaw doctor --fix with the matching version, or restore this store's verified backup.",
     );
   }
-  if (result.custody === "unverifiable" || result.lease === "unverifiable") {
-    result.nextSteps.push(
-      "Inspect the store owner's custody and lease before offline maintenance.",
-    );
-  }
   if (result.observed === "postgres" && result.degraded === null) {
     result.nextSteps.push(
       "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-    );
-  }
-  if (result.backup === null) {
-    result.nextSteps.push(
-      "No matching backup outcome was observed; run openclaw backup create and verify its result.",
     );
   }
   if (result.schema.expectedVersion === null && result.schema.versioning !== "unversioned") {

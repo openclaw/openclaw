@@ -1,5 +1,5 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { notifyGatewayObservers } from "../../app/gateway-observers.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -19,10 +19,13 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
   let snapshot: LiveActivitySnapshot = { entries, revision: 0, error: null };
   const errors = new Map<string, string>();
   let eventLogRevision = gateway.eventLogRevision;
+  let presentationScope = gatewayPresentationScope(gateway);
   let disposed = false;
   let rows: readonly GatewaySessionRow[] = [];
   let client = gateway.snapshot.client;
   let visible = document.visibilityState !== "hidden";
+  let pendingEvents: NonNullable<ReturnType<typeof parseActivityEvent>>[] = [];
+  let scheduledFlush: ReturnType<typeof setTimeout> | undefined;
   const subscriptions = new Map<string, ReturnType<SessionCapability["subscribeMessages"]>>();
   const release = (key: string) => {
     const pending = subscriptions.get(key);
@@ -75,13 +78,14 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
     }
   };
   const handleVisibility = (event: Event) => {
+    flushPending();
     visible = event.type !== "pagehide" && document.visibilityState !== "hidden";
     syncSubscriptions();
   };
   const stopVisibility = listen(document, "visibilitychange", handleVisibility);
   const stopPageHide = listen(globalThis, "pagehide", handleVisibility);
   const stopPageShow = listen(globalThis, "pageshow", handleVisibility);
-  const listeners = new Set<(snapshot: LiveActivitySnapshot) => void>();
+  let render: ((snapshot: LiveActivitySnapshot) => void) | undefined;
 
   const publish = (next: ActivityEntry[], reset = false) => {
     const error = errors.values().next().value ?? null;
@@ -90,20 +94,45 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
     }
     entries = next;
     snapshot = { entries, revision: snapshot.revision + (reset ? 1 : 0), error };
-    notifyGatewayObservers(
-      listeners,
-      snapshot,
-      "activity",
-      (current) => !disposed && current === snapshot,
-    );
+    if (!disposed) {
+      try {
+        render?.(snapshot);
+      } catch (handlerError) {
+        console.error("[gateway] activity handler error:", handlerError);
+      }
+    }
+  };
+
+  const cancelFlush = () => {
+    if (scheduledFlush !== undefined) {
+      clearTimeout(scheduledFlush);
+      scheduledFlush = undefined;
+    }
+  };
+  const flushPending = () => {
+    cancelFlush();
+    if (pendingEvents.length === 0) {
+      return;
+    }
+    const batch = pendingEvents;
+    pendingEvents = [];
+    let next = entries;
+    for (const event of batch) {
+      next = updateToolActivity(next, event);
+    }
+    publish(next);
   };
 
   const retireChangedContext = () => {
     const revision = gateway.eventLogRevision;
-    if (revision === eventLogRevision) {
+    const nextPresentationScope = gatewayPresentationScope(gateway);
+    if (revision === eventLogRevision && nextPresentationScope === presentationScope) {
       return;
     }
     eventLogRevision = revision;
+    presentationScope = nextPresentationScope;
+    pendingEvents = [];
+    cancelFlush();
     rows = [];
     syncSubscriptions();
     publish([], true);
@@ -113,6 +142,7 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
   const stopGateway = gateway.subscribe(() => {
     if (!disposed) {
       retireChangedContext();
+      flushPending();
       syncSubscriptions();
     }
   });
@@ -122,10 +152,12 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
     }
     const eventClient = gateway.snapshot.client;
     const revision = gateway.eventLogRevision;
+    const eventPresentationScope = gatewayPresentationScope(gateway);
     retireChangedContext();
     if (
       disposed ||
       eventClient !== gateway.snapshot.client ||
+      eventPresentationScope !== gatewayPresentationScope(gateway) ||
       revision !== gateway.eventLogRevision
     ) {
       return;
@@ -137,22 +169,35 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
         currentWorkIdentity({ key: activityEvent.sessionKey, agentId: activityEvent.agentId }),
       )
     ) {
-      publish(updateToolActivity(entries, activityEvent));
+      // Admission stays synchronous and ordered. Only this feed's presentation
+      // work moves off transport delivery; chat/sidebar still receive every event.
+      // A task boundary yields without waiting an extra display frame in WebKit.
+      pendingEvents.push(activityEvent);
+      scheduledFlush ??= setTimeout(() => {
+        scheduledFlush = undefined;
+        retireChangedContext();
+        flushPending();
+      }, 0);
     }
   });
 
   return {
     get snapshot() {
+      // Plain owner callers retain synchronous mutate-then-read semantics.
+      flushPending();
       return snapshot;
     },
     subscribe(listener: (snapshot: LiveActivitySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      render = listener;
+      return () => {
+        render = undefined;
+      };
     },
     syncSessions(nextRows: readonly GatewaySessionRow[]) {
       if (rows === nextRows) {
         return;
       }
+      flushPending();
       rows = nextRows;
       syncSubscriptions();
     },
@@ -163,10 +208,14 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
       syncSubscriptions();
     },
     clear() {
+      pendingEvents = [];
+      cancelFlush();
       publish([], true);
     },
     dispose() {
       disposed = true;
+      pendingEvents = [];
+      cancelFlush();
       syncSubscriptions();
       stopVisibility();
       stopPageHide();
@@ -175,7 +224,7 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
       stopEvents();
       entries = [];
       snapshot = { entries, revision: snapshot.revision + 1, error: null };
-      listeners.clear();
+      render = undefined;
     },
   };
 }

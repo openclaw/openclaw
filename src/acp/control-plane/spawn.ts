@@ -1,4 +1,3 @@
-/** Cleanup helpers for failed ACP spawn flows. */
 import {
   callInProcessGatewayTool,
   getInProcessGatewayToolContext,

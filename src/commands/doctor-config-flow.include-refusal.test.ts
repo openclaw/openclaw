@@ -286,6 +286,7 @@ describe("doctor config persistence", () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { entries: { main: {} } },
             browser: { $include: "./browser.json" },
+            messages: { queue: { allowCollaborativeSteering: true } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },
@@ -373,6 +374,7 @@ describe("doctor config persistence", () => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { $include: "./agents.json5" },
+            messages: { queue: { allowCollaborativeSteering: true } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },
@@ -506,6 +508,7 @@ describe("doctor config persistence", () => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { entries: { main: { $include: "./config/main-parent.json5" } } },
+            messages: { queue: { allowCollaborativeSteering: true } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },
@@ -610,7 +613,7 @@ describe("doctor config persistence", () => {
                 }
               : {
                   gatway: { port: 12345 },
-                  agents: { defaults: { heartbeat: { every: 5 } } },
+                  agents: { defaults: { timeoutSeconds: "invalid" } },
                   plugins: { enabled: false },
                 },
           );
@@ -657,7 +660,7 @@ describe("doctor config persistence", () => {
             expect(warning?.[0]).toContain("the included file ./browser.json");
             await expect(fs.readFile(includePath, "utf8")).resolves.toBe(includeRaw);
           } else {
-            expect(warning?.[0]).toContain("agents.defaults.heartbeat.every");
+            expect(warning?.[0]).toContain("agents.defaults.timeoutSeconds");
           }
           await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
         });

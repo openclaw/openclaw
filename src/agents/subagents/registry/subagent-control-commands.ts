@@ -1,3 +1,4 @@
+import { throwIfSettledRejected } from "../../../infra/error-graph-internal.js";
 import { getRpcSourceIdentity } from "../../../sessions/session-controller.rpc-sources.js";
 import { captureExecRequestCancellation } from "../../bash-process-control.js";
 import type { SubagentKillSession } from "./subagent-control-session.js";
@@ -54,15 +55,7 @@ export function captureSubagentCommands(entry: SubagentRunRecord, session?: Suba
       const results = await Promise.allSettled(
         observations.map((observation) => observation.settle()),
       );
-      const errors: unknown[] = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Captured native command cleanup was incomplete");
-      }
+      throwIfSettledRejected(results, "Captured native command cleanup was incomplete");
     },
   };
 }

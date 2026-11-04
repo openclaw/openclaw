@@ -39,6 +39,7 @@ import {
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
@@ -62,6 +63,7 @@ import {
 } from "../message-action-turn-capability.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { holdProjectedChatDispatch } from "./chat-send-authority.test-support.js";
@@ -106,12 +108,7 @@ function createBindingClient(options: {
           },
         }
       : {}),
-    authenticatedUserProfile: {
-      profileId: options.profileId,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: gatewayProfile(options.profileId),
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -170,7 +167,7 @@ it.each(admissionScenarios)(
     const directDashboard = dashboard && scenario !== "dashboard-internal";
     const dashboardReadAllowed = directDashboard && scenario !== "dashboard-unattested";
     const membershipRequired = scenario === "dashboard-member-revoked";
-    const createsDashboardSession = dashboardReadAllowed && !membershipRequired;
+    const createsSession = (dashboardReadAllowed && !membershipRequired) || scenario === "queued";
     const closure =
       scenario === "narrow-first-send"
         ? "rotated"
@@ -304,7 +301,7 @@ it.each(admissionScenarios)(
           createdActor,
           ...(membershipRequired ? { visibility: "suggest" as const } : {}),
         };
-        if (createsDashboardSession) {
+        if (createsSession) {
           const creationScope = { ...scope, storePath: owned.session.storePath };
           const snapshot = await loadReplySessionInitializationSnapshot(creationScope);
           const bindCreation = options.replyOptions?.bindSessionCreation;
@@ -544,14 +541,19 @@ it.each(
         let token: string | undefined;
         let queuedReaction: ReturnType<typeof createQueueTestRun> | undefined;
         let probe: ReturnType<typeof sqliteWorkerOwnerProbe.admission> | undefined;
-        async function sendPrompt(runId: string, message: string) {
+        async function sendPrompt(runId: string, message: string, queueMode?: "steer") {
           const source: Source = {
             entered: createDeferred<DispatchOptions>(),
             release: createDeferred(),
             finished: createDeferred(),
           };
           sources.set(runId, source);
-          const params = { sessionKey, message, idempotencyKey: runId };
+          const params = {
+            sessionKey,
+            message,
+            idempotencyKey: runId,
+            ...(queueMode ? { queueMode } : {}),
+          };
           const request = await prepareBindingRequest(params, client, context);
           source.releaseAuthorization = request.sessionMutationAuthorization?.release;
           const { respond } = request;
@@ -578,6 +580,9 @@ it.each(
           promptSource?.assertCurrent();
           return { ...source, owned, options };
         }
+        const external = vi
+          .spyOn(messageActionRunner, "runMessageAction")
+          .mockRejectedValue(new Error("Unexpected external message action"));
         try {
           const initial = await sendPrompt("reaction-original-source", "Original prompt");
           const initialRecorder = initial.owned.userTurn.recorder;
@@ -627,7 +632,6 @@ it.each(
               opts: {
                 dashboardReadAdmission: initial.options.replyOptions?.dashboardReadAdmission,
               },
-              isHeartbeat: false,
             },
             executionRunId,
           );
@@ -641,7 +645,6 @@ it.each(
             agentId: "main",
             sessionKey,
           });
-          const external = vi.fn();
           const tool = createMessageTool({
             config,
             preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
@@ -651,7 +654,6 @@ it.each(
             runId: executionRunId,
             currentChannelProvider: "webchat",
             messageActionTurnCapability: token,
-            runMessageAction: external,
           });
           const react = (args: Record<string, unknown> = {}) =>
             withGatewayToolCallerIdentity(caller, () =>
@@ -659,7 +661,7 @@ it.each(
             );
           let prompt = initialRecorder;
           if (mode === "steered") {
-            const steering = await sendPrompt("reaction-steered-source", "Steered prompt");
+            const steering = await sendPrompt("reaction-steered-source", "Steered prompt", "steer");
             prompt = steering.owned.userTurn.recorder;
             expect(prompt.getAdmissionReceipt()).toBeUndefined();
             expect((await react({ dryRun: true })).details).toMatchObject({
@@ -794,6 +796,7 @@ it.each(
           }
           holdDispatch.mockRestore();
           observeDispatch.mockRestore();
+          external.mockRestore();
         }
       },
     );

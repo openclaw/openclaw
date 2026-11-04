@@ -16,6 +16,7 @@ export type SessionState = {
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
+  reasoningSuppressedModels?: Map<string, string>;
 };
 
 export type ToolCallRecord = {
@@ -44,6 +45,7 @@ export const diagnosticSessionStates = new Map<string, SessionState>();
 const SESSION_STATE_TTL_MS = 30 * 60 * 1000;
 const SESSION_STATE_PRUNE_INTERVAL_MS = 60 * 1000;
 const SESSION_STATE_MAX_ENTRIES = 2000;
+const MAX_REASONING_SUPPRESSED_MODELS = 16;
 
 let lastSessionPruneAt = 0;
 
@@ -154,6 +156,15 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
       }
     }
   }
+  if (source.reasoningSuppressedModels?.size) {
+    const models = (target.reasoningSuppressedModels ??= new Map());
+    for (const [key, model] of source.reasoningSuppressedModels) {
+      if (models.size >= MAX_REASONING_SUPPRESSED_MODELS) {
+        break;
+      }
+      models.set(key, model);
+    }
+  }
 }
 
 /** Gets or creates diagnostic state, merging aliases that share a session id. */
@@ -161,6 +172,9 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   pruneDiagnosticSessionStates();
   const key = resolveSessionKey(ref);
   const direct = diagnosticSessionStates.get(key);
+  if (ref.sessionId && direct?.sessionId && direct.sessionId !== ref.sessionId) {
+    direct.reasoningSuppressedModels = undefined;
+  }
   // This owner merges id aliases before assigning them; an exact direct hit is already canonical.
   const sessionIdEntry =
     ref.sessionId && direct?.sessionId !== ref.sessionId
@@ -201,8 +215,55 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   return created;
 }
 
+function formatModelReasoningWarning(subject: string): string {
+  return `${subject} emitted reasoning while configured reasoning: false; reasoning was hidden. Set reasoning: true on the model in models.providers.<provider>.models, or choose a non-thinking model.`;
+}
+
+/** Records presence only, with the same lifetime and bounds as other session diagnostics. */
+export function recordReasoningSuppressedDiagnostic(
+  ref: SessionRef,
+  provider: string,
+  model: string,
+): string | undefined {
+  const state = getDiagnosticSessionState(ref);
+  const models = (state.reasoningSuppressedModels ??= new Map());
+  const key = JSON.stringify([provider, model]);
+  if (models.has(key) || models.size >= MAX_REASONING_SUPPRESSED_MODELS) {
+    return undefined;
+  }
+  const label = JSON.stringify(`${provider}/${model}`.slice(0, 200));
+  models.set(key, label);
+  return formatModelReasoningWarning(`Model ${label}`);
+}
+
+export function readModelReasoningWarning(includeSensitive = true): string | undefined {
+  pruneDiagnosticSessionStates();
+  const models = new Set<string>();
+  for (const state of diagnosticSessionStates.values()) {
+    if (isIncognitoSessionKey(state.sessionKey)) {
+      continue;
+    }
+    for (const model of state.reasoningSuppressedModels?.values() ?? []) {
+      models.add(model);
+      if (models.size === 4) {
+        break;
+      }
+    }
+    if (models.size === 4) {
+      break;
+    }
+  }
+  return models.size
+    ? formatModelReasoningWarning(
+        includeSensitive
+          ? `Model${models.size > 1 ? "s" : ""} ${[...models].join(", ")}`
+          : "A model",
+      )
+    : undefined;
+}
+
 /** Looks up diagnostic state without creating a new entry. */
-function peekDiagnosticSessionState(ref: SessionRef): SessionState | undefined {
+export function peekDiagnosticSessionState(ref: SessionRef): SessionState | undefined {
   const key = resolveSessionKey(ref);
   return (
     diagnosticSessionStates.get(key) ??

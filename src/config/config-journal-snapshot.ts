@@ -180,7 +180,7 @@ export async function readLatestConfigSnapshotAuditRecordAsync(
     );
     context.admission.assertCurrent();
     assertCurrent?.();
-    return result?.ok && result.type === "config.snapshot.read" ? result.snapshot : null;
+    return result?.snapshot ?? null;
   } catch {
     assertCurrent?.();
     return null;

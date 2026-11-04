@@ -113,7 +113,7 @@ function createDiscordOriginTargetResolver() {
   });
 }
 
-function createDiscordApprovalCapability() {
+export function getDiscordApprovalCapability() {
   return createApproverRestrictedNativeApprovalCapabilityAsync({
     channel: "discord",
     channelLabel: "Discord",
@@ -151,11 +151,4 @@ function createDiscordApprovalCapability() {
         (await import("./approval-handler.runtime.js")).discordApprovalNativeRuntime,
     }),
   });
-}
-
-let cachedDiscordApprovalCapability: ReturnType<typeof createDiscordApprovalCapability> | undefined;
-
-export function getDiscordApprovalCapability() {
-  cachedDiscordApprovalCapability ??= createDiscordApprovalCapability();
-  return cachedDiscordApprovalCapability;
 }

@@ -16,7 +16,6 @@ import {
 } from "../../state/openclaw-state-worker-store.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { getCronJobsStoreRevision } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
 import type { CronSchedulerResult } from "../store/scheduler-actor.types.js";
 import { locked } from "./locked.js";
 import { registerCronSchedulerRefresh } from "./run-queue-wake.js";
@@ -39,6 +38,7 @@ type ActorConnection = {
   unregister: () => void;
   releaseRefresh: () => void;
   pending: Promise<void>;
+  refreshAfter?: Promise<unknown>;
 };
 
 const connections = new WeakMap<CronServiceState, ActorConnection>();
@@ -68,7 +68,7 @@ async function publish(
       nextRunAtMs: job.state.nextRunAtMs,
     });
   }
-  const publishedRevision = getCronJobsStoreRevision(state.deps.storePath);
+  const publishedRevision = getCronJobsStoreRevision(state.deps.storeKey);
   await runPostPersistCronNotifications(state, result.notifications);
   return publishedRevision;
 }
@@ -82,7 +82,7 @@ export async function startCronScheduler(
   }
   const channelName = `openclaw.cron.${randomUUID()}`;
   const generation = state.lifecycleGeneration;
-  const storeKey = cronStoreKey(state.deps.storePath);
+  const storeKey = state.deps.storeKey;
   const channel = new BroadcastChannel(channelName);
   channel.unref();
   const context = captureOpenClawStateWorkerContext();
@@ -162,7 +162,15 @@ export async function startCronScheduler(
     state.schedulerStarted = true;
     const publishedRevision = await publish(state, result, observedRevision);
     await locked(state, () => launchCronRunQueueResult(state, result, context, publishedRevision));
-    const completed = await Promise.allSettled(requests.map((request) => request.completion));
+    // Readiness observers keep queued custody without holding Gateway initialization.
+    const preparingReceiptIds = new Set(
+      result.preparing.map(({ runReceipt }) => runReceipt.receiptId),
+    );
+    const completed = await Promise.allSettled(
+      requests
+        .filter((request) => !preparingReceiptIds.has(request.runReceipt.receiptId))
+        .map((request) => request.completion),
+    );
     const failed = completed.find((completion) => completion.status === "rejected");
     if (failed?.status === "rejected") {
       throw failed.reason;
@@ -217,11 +225,11 @@ async function runCronSchedulerTick(
         return;
       }
       await runCronSchedulerMaintenance(state);
-      const observedRevision = getCronJobsStoreRevision(state.deps.storePath);
+      const observedRevision = getCronJobsStoreRevision(state.deps.storeKey);
       const result = await connection.lease.execute({
         type: "cron.schedulerTick",
         input: {
-          storeKey: cronStoreKey(state.deps.storePath),
+          storeKey: state.deps.storeKey,
           channelName: connection.channelName,
           paused: false,
           requests: getCronRunQueueRequests(state),
@@ -247,19 +255,28 @@ export function refreshCronScheduler(state: CronServiceState): void {
   if (!connection || state.stopped) {
     return;
   }
-  void state.op
+  const operation = state.op;
+  if (connection.refreshAfter === operation) {
+    return;
+  }
+  connection.refreshAfter = operation;
+  void operation
     .then(async () => {
+      // Share only notifications before capture, behind this same mutation boundary.
+      if (connection.refreshAfter === operation) {
+        connection.refreshAfter = undefined;
+      }
       if (connections.get(state) !== connection || state.stopped) {
         return;
       }
       const snapshot = await captureCronSchedulerSnapshot(state);
-      const observedRevision = getCronJobsStoreRevision(state.deps.storePath);
+      const observedRevision = getCronJobsStoreRevision(state.deps.storeKey);
       await publish(
         state,
         await connection.lease.execute({
           type: "cron.schedulerRefresh",
           input: {
-            storeKey: cronStoreKey(state.deps.storePath),
+            storeKey: state.deps.storeKey,
             snapshot,
             channelName: connection.channelName,
             paused: state.schedulingPaused,

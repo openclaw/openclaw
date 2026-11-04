@@ -11,9 +11,14 @@ import {
   type ManagedHandoffLease,
   type ManagedHandoffParent,
 } from "../../infra/update-managed-service-handoff-lease.js";
+import {
+  fenceLegacyGatewayCustody,
+  resolveLegacyGatewayManagedUpdateLeaseDatabasePath,
+} from "../../infra/update-managed-service-handoff-legacy-store.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { formatCliCommand } from "../command-format.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import {
   requestUpdateCommandExecutorCancellation,
@@ -26,7 +31,10 @@ import {
   releaseLegacyPackageUpdateParent,
   type LegacyUpdateExecutorParent,
 } from "./update-command-executor-legacy.js";
-import { runUpdateCommandExecutorOperation } from "./update-command-executor-operation.js";
+import {
+  prepareUpdateCommandExecutorTerminal,
+  runUpdateCommandExecutorOperation,
+} from "./update-command-executor-operation.js";
 import {
   resolveUpdateCommandRetainedRoot,
   type UpdateCommandExecutor,
@@ -39,6 +47,7 @@ import {
   slotReservations,
   occupiedSlotKey,
   childOwners,
+  terminalPreparations,
 } from "./update-command-executor-state.js";
 import { createUpdateIdentityWarningReporter } from "./update-command-identity-warning.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -137,6 +146,7 @@ export async function withUpdateCommandExecutor<T>(
         childOwners.delete(fence);
         slotReservations.delete(fence);
         admittedAuthorities.delete(fence);
+        terminalPreparations.delete(fence);
       };
       const children = createChildOwner({
         runId,
@@ -347,10 +357,34 @@ export async function withUpdateCommandExecutor<T>(
             borrowed = true;
             managedHandoff = true;
           } else {
-            const acquired = requireUpdateCommandAcquisition(
-              store.acquire(key, randomUUID(), { kind: "update" }),
-              "Another update executor owns this installation.",
+            // An earlier macOS Gateway's store still fences its unsettled custody.
+            const legacyFence = await fenceLegacyGatewayCustody(
+              key,
+              resolveLegacyGatewayManagedUpdateLeaseDatabasePath(),
             );
+            if ("refusal" in legacyFence) {
+              throw new UpdateCommandRecoveryPendingError(legacyFence.refusal);
+            }
+            const admissionStore = store;
+            let acquired: ReturnType<typeof requireUpdateCommandAcquisition>;
+            try {
+              activation.assertCurrent();
+              if (!active) {
+                throw new UpdateCommandRecoveryPendingError("Update executor admission is closed.");
+              }
+              acquired = requireUpdateCommandAcquisition(
+                store.acquire(key, randomUUID(), { kind: "update" }),
+                () => {
+                  const retained = admissionStore.read(key);
+                  // Only explicit repair settles a cancelled original after its updater exits.
+                  return retained.kind === "current" && retained.lease.version === 4
+                    ? `Another update executor owns this installation. It retains cancelled update custody (owner ${retained.lease.owner}, lease version 4, last activity ${new Date(retained.lease.updatedAt).toISOString()}). If that update has exited, run ${formatCliCommand("openclaw update repair")} to settle it.`
+                    : "Another update executor owns this installation.";
+                },
+              );
+            } finally {
+              legacyFence.release();
+            }
             lease = acquired.lease;
             if (acquired.originalDatabaseIdentity) {
               existingIdentity = acquired.originalDatabaseIdentity;
@@ -451,11 +485,16 @@ export async function withUpdateCommandExecutor<T>(
           return finishAdmission();
         },
       };
-      const operationOutcome = await runUpdateCommandExecutorOperation({
-        operation: () => operation(executor),
-        children,
-      });
+      const operationOutcome = await prepareUpdateCommandExecutorTerminal(
+        fence,
+        await runUpdateCommandExecutorOperation({
+          operation: () => operation(executor),
+          children,
+        }),
+      );
       identityWarnings.flush();
+      // Preparation awaits notifications/report IO. Cancellation can arrive there,
+      // so sample it only after that scope has joined, before retiring authority.
       const outcome = cancellation.cause
         ? {
             error:

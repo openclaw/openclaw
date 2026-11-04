@@ -14,7 +14,7 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
-import { payloadTextResult } from "../tools/common.js";
+import { payloadTextResult } from "../tools/tool-results.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
 import {
@@ -23,6 +23,7 @@ import {
   readCodexToolInput,
   readCodexToolResponse,
   readNativeHookRelayApprovalMode,
+  resolveCodexUpdatedToolInput,
 } from "./native-hook-relay-codec.js";
 import {
   runNativeHookRelayPermissionRequest,
@@ -47,7 +48,10 @@ function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_too
 type NativeHookRelayPolicy = Pick<
   ActiveNativeHookRelayRegistration,
   "preToolUseLoopDetection" | "requirePreToolUse" | "sessionKey" | "config" | "agentId"
-> & { executionAdmissionToolNames?: readonly string[] };
+> & {
+  executionAdmissionToolNames?: readonly string[];
+  postToolUseToolNames?: readonly string[];
+};
 
 /** Snapshot the same canonical native tool family for planning and receipt admission. */
 export function snapshotNativeHookRelayExecutionAdmission(
@@ -85,7 +89,11 @@ export function nativeHookRelayEventHasLocalWork(
     );
   }
   if (event === "post_tool_use") {
-    return hasGlobalHooks("after_tool_call") || listAgentToolResultMiddlewares("codex").length > 0;
+    return (
+      Boolean(registration.postToolUseToolNames?.length) ||
+      hasGlobalHooks("after_tool_call") ||
+      listAgentToolResultMiddlewares("codex").length > 0
+    );
   }
   if (event === "before_agent_finalize") {
     return hasGlobalHooks("before_agent_finalize");
@@ -116,6 +124,9 @@ export function nativeHookRelayEventToolMatcher(
     const scope = mergePluginToolMatcherScopes([
       getGlobalToolHookMatcherScope("after_tool_call"),
       getAgentToolResultMiddlewareMatcherScope("codex"),
+      registration.postToolUseToolNames?.length
+        ? { matchAll: false, toolNames: registration.postToolUseToolNames }
+        : undefined,
     ]);
     return scope?.matchAll ? undefined : scope?.toolNames;
   }
@@ -192,14 +203,28 @@ async function runNativeHookRelayPreToolUse(
         : undefined,
     );
   }
+  let updatedInput: ReturnType<typeof resolveCodexUpdatedToolInput>;
   if (
     !outcome.deferredApproval &&
     nativeHookRelayParamsWereRewritten(originalToolInputFingerprint, outcome.params)
   ) {
     // Native execution must not retain custody of rewritten inputs it will not use.
-    return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(
-      "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
-    );
+    if (approvalMode === "report") {
+      // Codex already fixed this command; an approval reply cannot replace it.
+      return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(
+        "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+      );
+    }
+    updatedInput = resolveCodexUpdatedToolInput({
+      rawPayload: params.invocation.rawPayload,
+      originalToolInputFingerprint,
+      candidate: outcome.params,
+    });
+    if (!updatedInput) {
+      return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(
+        "OpenClaw tool policy rewrote Codex native tool input that Codex cannot apply; refusing original request. Only `command` can change for Bash and apply_patch. MCP arguments must be a JSON object within plugin hook limits, and the rewrite must not contain a number that JavaScript parsing altered.",
+      );
+    }
   }
   try {
     if (params.executionAdmission?.toolNames.includes(toolName)) {
@@ -247,7 +272,9 @@ async function runNativeHookRelayPreToolUse(
       );
     }
   }
-  return codexNativeHookRelayResponseCodec.renderNoopResponse();
+  return updatedInput
+    ? codexNativeHookRelayResponseCodec.renderPreToolUseUpdatedInputResponse(updatedInput)
+    : codexNativeHookRelayResponseCodec.renderNoopResponse();
 }
 
 async function runNativeHookRelayPostToolUse(

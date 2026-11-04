@@ -82,6 +82,17 @@ describe("plugin gateway gauntlet helpers", () => {
     }
   }
 
+  async function writeQaRunner(body: string[]) {
+    await writeFixture("scripts/run-node.mjs", [
+      'import fs from "node:fs";',
+      'import path from "node:path";',
+      'const outputArgIndex = process.argv.indexOf("--output-dir");',
+      "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
+      "fs.mkdirSync(outputDir, { recursive: true });",
+      ...body,
+    ]);
+  }
+
   function measure(
     params: Pick<runner.GauntletMeasuredCommandParams, "args" | "label"> &
       Partial<runner.GauntletMeasuredCommandParams>,
@@ -150,14 +161,7 @@ describe("plugin gateway gauntlet helpers", () => {
       params.qaSummary === undefined
         ? 'console.log("fake QA completed without writing qa-suite-summary.json");'
         : `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(JSON.stringify(params.qaSummary))}, "utf8");`;
-    await writeFixture("scripts/run-node.mjs", [
-      'import fs from "node:fs";',
-      'import path from "node:path";',
-      'const outputArgIndex = process.argv.indexOf("--output-dir");',
-      "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
-      "fs.mkdirSync(outputDir, { recursive: true });",
-      summaryAction,
-    ]);
+    await writeQaRunner([summaryAction]);
 
     const result = runQaGauntlet(
       params.scenarioIds ?? ["channel-chat-baseline"],
@@ -181,21 +185,13 @@ describe("plugin gateway gauntlet helpers", () => {
       }),
     ]);
     if (params.rowAssertion) {
-      expect(summary.rows[0]).toEqual(
-        expect.objectContaining({
-          diagnosticFailure,
-          ...(params.rowAssertion === "metrics"
-            ? { qaMetrics: { gatewayCpuCoreRatio: 0, wallMs: 1 } }
-            : {
-                qaSummaryPath: path.join(
-                  outputDir,
-                  "qa-suite",
-                  "chunk-00",
-                  "qa-suite-summary.json",
-                ),
-              }),
-        }),
-      );
+      const evidence =
+        params.rowAssertion === "metrics"
+          ? { qaMetrics: { gatewayCpuCoreRatio: 0, wallMs: 1 } }
+          : {
+              qaSummaryPath: path.join(outputDir, "qa-suite", "chunk-00", "qa-suite-summary.json"),
+            };
+      expect(summary.rows[0]).toEqual(expect.objectContaining({ diagnosticFailure, ...evidence }));
     }
     expect(summary.isolatedRunRootPreserved).toBe(true);
     await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
@@ -276,31 +272,22 @@ describe("plugin gateway gauntlet helpers", () => {
   }
 
   it.each([
-    {
-      name: "stops parsing after the argument terminator",
-      args: ["--plugin", "telegram", "--", "--plugin", "discord"],
-      expected: { pluginIds: ["telegram"] },
+    [
+      "stops parsing after the argument terminator",
+      ["--plugin", "telegram", "--", "--plugin", "discord"],
+      { pluginIds: ["telegram"] },
+    ],
+    [
+      "accepts a leading package-manager separator",
+      ["--", "--plugin", "telegram", "--limit", "3", "--qa-scenario", "channel-chat-baseline"],
+      { limit: 3, pluginIds: ["telegram"], qaScenarios: ["channel-chat-baseline"] },
+    ],
+  ] satisfies Array<[string, string[], Partial<ReturnType<typeof runner.parseArgs>>]>)(
+    "%s",
+    (_name, args, expected) => {
+      expect(runner.parseArgs(args)).toMatchObject(expected);
     },
-    {
-      name: "accepts a leading package-manager separator",
-      args: [
-        "--",
-        "--plugin",
-        "telegram",
-        "--limit",
-        "3",
-        "--qa-scenario",
-        "channel-chat-baseline",
-      ],
-      expected: {
-        limit: 3,
-        pluginIds: ["telegram"],
-        qaScenarios: ["channel-chat-baseline"],
-      },
-    },
-  ])("$name", ({ args, expected }) => {
-    expect(runner.parseArgs(args)).toMatchObject(expected);
-  });
+  );
 
   it("rejects duplicate repeatable selectors", () => {
     expect(() => runner.parseArgs(["--plugin", "telegram", "--plugin", "telegram"])).toThrow(
@@ -1302,12 +1289,7 @@ try {
   it("carries required plugin build ids and enables dependencies in QA chunks", async () => {
     const qaSummaryJson = JSON.stringify(minimalQaSuiteSummary());
     await writeDependentPlugins();
-    await writeFixture("scripts/run-node.mjs", [
-      'import fs from "node:fs";',
-      'import path from "node:path";',
-      'const outputArgIndex = process.argv.indexOf("--output-dir");',
-      "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
-      "fs.mkdirSync(outputDir, { recursive: true });",
+    await writeQaRunner([
       'fs.writeFileSync(path.join(outputDir, "env.txt"), process.env.OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS ?? "", "utf8");',
       'fs.writeFileSync(path.join(outputDir, "args.txt"), process.argv.slice(2).join("\\n"), "utf8");',
       `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(qaSummaryJson)}, "utf8");`,

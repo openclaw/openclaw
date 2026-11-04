@@ -10,6 +10,7 @@ import {
   registerNativeHookRelay,
   registerOwnedNativeHookRelay,
 } from "../../agents/harness/native-hook-relay.js";
+import { observeSettlement } from "../../agents/promise-settlement.test-support.js";
 import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
 import * as mcpGrants from "../../infra/exec-approvals-mcp.js";
 import { ExecApprovalsMigrationRequiredError } from "../../infra/exec-approvals-migration-gate.js";
@@ -68,15 +69,6 @@ function expectSuccess(respond: ReturnType<typeof vi.fn>) {
 
 function withState(run: Parameters<typeof withOpenClawTestState>[1]) {
   return () => withOpenClawTestState({ label: "native-hook-relay" }, run);
-}
-
-function observeSettlement(promise: Promise<unknown>) {
-  let settled = false;
-  const settle = () => {
-    settled = true;
-  };
-  void promise.then(settle, settle);
-  return () => settled;
 }
 
 function allowStoredTool() {

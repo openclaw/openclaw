@@ -1,18 +1,19 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate as gate } from "../agents/entered-gate.test-support.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
 } from "../agents/run-termination.js";
+import { runWithSessionControllerCleanup } from "./session-controller.cleanup-context.js";
 import {
   beginSessionEffect as beginAdmission,
   captureSessionWorkRunInterruptions as captureRuns,
   collectSessionControllerTargets,
   consumeSessionEffectHandoff as consumeHandoff,
   getSessionControllerWorkCount,
-  getCompetingSessionWorkAdmissionRelease as getCompetingRelease,
   captureSessionControllerSettlement as getRelease,
-  interruptSessionControllerEffects as interrupt,
+  waitForSessionControllerSettlement,
   isCompetingSessionControllerWorkActive as competingActive,
   isSessionControllerWorkActive as workActive,
   observeSessionControllerProtectionReleases,
@@ -28,18 +29,6 @@ function makeTarget<T extends string[]>(scope: string, ...identities: T) {
 }
 function ownedTarget(scope: string, ...identities: string[]) {
   return { ...makeTarget(scope, ...identities), owner: Symbol(scope), serializeOwner: true };
-}
-function gate() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
 }
 function admissionOutcome(pending: ReturnType<typeof beginAdmission>) {
   return pending.then(
@@ -238,28 +227,63 @@ it("serializes pending owners in FIFO order without blocking other owners", asyn
   }
 });
 
-it("lets an inherited owner finish ahead of its queued successor", async ({ signal }) => {
+it("keeps nested work reentrant while independent successors retain FIFO and current authority", async ({
+  signal,
+}) => {
   const target = { ...ownedTarget("nested-owner.sqlite", "nested-owner-session"), signal };
   const outer = await admit(target);
-  const validateFollower = vi.fn();
-  const follower = admit({ ...target, assertAllowed: validateFollower });
+  const order: string[] = [];
+  const follower = admit({
+    ...target,
+    assertAllowed: () => {
+      order.push("follower");
+    },
+  });
+  let detached: ReturnType<typeof beginAdmission> | undefined;
+  let allowed = true;
   try {
     await withinTest(
       outer.run(async () => {
-        (await admit(target)).release();
+        detached = runWithSessionControllerCleanup(() =>
+          admit({
+            ...target,
+            assertAllowed: () => {
+              if (!allowed) {
+                throw new Error("successor authority revoked");
+              }
+              order.push("detached");
+            },
+          }),
+        );
+        void detached.catch(() => {});
+        const inner = await admit({
+          ...target,
+          assertAllowed: () => {
+            order.push("nested");
+          },
+        });
+        inner.release();
       }),
       signal,
     );
     expect(outer.isActive()).toBe(true);
-    expect(validateFollower).not.toHaveBeenCalled();
+    expect(order).toEqual(["nested"]);
+    outer.release();
+    const next = await withinTest(follower, signal);
+    expect(order).toEqual(["nested", "follower"]);
+    allowed = false;
+    next.release();
+    await expect(detached).rejects.toThrow("successor authority revoked");
+    expect(order).toEqual(["nested", "follower"]);
   } finally {
     outer.release();
-    await follower.then(
-      (lease) => lease.release(),
-      () => {},
-    );
+    for (const attempt of [follower, detached]) {
+      await attempt?.then(
+        (lease) => lease.release(),
+        () => {},
+      );
+    }
   }
-  expect(validateFollower).toHaveBeenCalled();
 });
 
 it.for(["caller abort", "Stop", "targeted Stop"])(
@@ -378,14 +402,13 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
     ).toBe(false);
     expect(competingActive(scope, identities)).toBe(false);
     expect(getRelease({ scope, identities })).toBeUndefined();
-    const competingRelease = getCompetingRelease({ scope, identities });
-    expect(competingRelease).toBeDefined();
     expect(collectSessionControllerTargets().get(scope)).toBeUndefined();
     expect(getSessionControllerWorkCount()).toBe(0);
     const reason = createAgentRunDirectAbortError();
-    expect(await interrupt({ scope, identities, reason, timeoutMs: 1000 })).toBe(true);
+    const { released } = startInterruption({ scope, identities, reason });
+    expect(await waitForSessionControllerSettlement(released, 1000)).toBe(true);
     expect(await pending).toBe(reason);
-    await expect(competingRelease).resolves.toBeUndefined();
+    await expect(released).resolves.toBeUndefined();
     expect(interrupted).toHaveBeenCalledExactlyOnceWith(reason);
     expect(validate).not.toHaveBeenCalled();
   } finally {

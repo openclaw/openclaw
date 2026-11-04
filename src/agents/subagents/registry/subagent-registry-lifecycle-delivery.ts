@@ -130,6 +130,7 @@ export const hasPriorRequesterDeliveryMirror = async (
   const isExpectedMirrorIdempotencyKey = (value: unknown): boolean =>
     typeof value === "string" &&
     (value === expectedIdempotencyKey ||
+      value.startsWith(`outbound-delivery:${expectedIdempotencyKey}:`) ||
       value.startsWith(`${expectedIdempotencyKey}:internal-source-reply:`) ||
       value.startsWith(`${expectedIdempotencyKey}:message-tool:internal-source-reply:`) ||
       value.startsWith(`${entry.runId}:message-tool:`) ||
@@ -144,6 +145,7 @@ export const hasPriorRequesterDeliveryMirror = async (
           method: "chat.history",
           params: {
             sessionKey: entry.requesterSessionKey,
+            agentId: entry.requesterAgentId,
             limit: 25,
             maxChars: DELIVERY_MIRROR_HISTORY_MAX_CHARS,
           },
@@ -169,7 +171,7 @@ export const hasPriorRequesterDeliveryMirror = async (
       return (
         record.role === "assistant" &&
         record.provider === "openclaw" &&
-        record.model === "delivery-mirror" &&
+        (record.model === "delivery-mirror" || record.model === "automation-result") &&
         text === expectedText
       );
     });

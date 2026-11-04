@@ -1,4 +1,3 @@
-// Public artifact contract tests keep metadata loading separate from runtime activation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import type { ProviderPlugin } from "../types.js";
@@ -8,68 +7,63 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("plugin contract registry public artifacts", () => {
-  it("uses provider public artifacts before falling back to the bundled runtime registry", async () => {
-    const loadBundledCapabilityRuntimeRegistry = vi.fn(() => {
-      throw new Error("provider contract public artifact should not hit bundled runtime registry");
-    });
-    const resolveBundledExplicitProviderContractsFromPublicArtifacts = vi.fn(() => [
-      {
-        pluginId: "openai",
-        provider: {
-          id: "openai",
-          label: "OpenAI",
-          docsPath: "/providers/openai",
-          auth: [
-            {
-              id: "api-key",
-              label: "API key",
-              kind: "api_key",
-              run: async () => ({ profiles: [] }),
-            },
-          ],
-        } as ProviderPlugin,
-      },
-      {
-        pluginId: "openai",
-        provider: {
-          id: "openai",
-          label: "OpenAI Codex",
-          docsPath: "/providers/openai",
-          auth: [
-            {
-              id: "oauth",
-              label: "OAuth",
-              kind: "oauth",
-              run: async () => ({ profiles: [] }),
-            },
-          ],
-        } as ProviderPlugin,
-      },
-    ]);
+function mockRuntimeFallback() {
+  const loadBundledCapabilityRuntimeRegistry = vi.fn(() => {
+    throw new Error("public artifact should not hit bundled runtime registry");
+  });
+  // mock-isolation: public-artifact lookup must never initialize bundled provider runtimes.
+  vi.doMock("../bundled-capability-runtime.js", () => ({ loadBundledCapabilityRuntimeRegistry }));
+  return loadBundledCapabilityRuntimeRegistry;
+}
 
-    vi.doMock("../bundled-capability-runtime.js", () => ({
-      loadBundledCapabilityRuntimeRegistry,
-    }));
+function makeProvider(label: string): ProviderPlugin {
+  return { id: "openai", label, auth: [] };
+}
+
+describe("plugin contract registry public artifacts", () => {
+  it("scopes provider load failures and prefers public artifacts over the runtime registry", async () => {
+    const loadBundledCapabilityRuntimeRegistry = mockRuntimeFallback();
+    let artifactsAvailable = false;
+    const resolveBundledExplicitProviderContractsFromPublicArtifacts = vi.fn(() =>
+      artifactsAvailable
+        ? [
+            { pluginId: "openai", provider: makeProvider("OpenAI") },
+            { pluginId: "openai", provider: makeProvider("OpenAI Codex") },
+          ]
+        : null,
+    );
+
     vi.doMock("../provider-contract-public-artifacts.js", () => ({
       resolveBundledExplicitProviderContractsFromPublicArtifacts,
     }));
 
-    const { resolveProviderContractProvidersForPluginIds } = await import("./registry.js");
+    const {
+      resolveProviderContractEntriesForPluginId,
+      resolveProviderContractProvidersForPluginIds,
+    } = await import("./registry.js");
+
+    expect(() => resolveProviderContractProvidersForPluginIds(["openai"])).toThrow(
+      "public artifact should not hit bundled runtime registry",
+    );
+    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
+
+    artifactsAvailable = true;
+    expect(
+      resolveProviderContractEntriesForPluginId("openai").map((entry) => entry.provider.label),
+    ).toEqual(["OpenAI", "OpenAI Codex"]);
 
     expect(
-      resolveProviderContractProvidersForPluginIds(["openai"]).map((provider) => provider.id),
-    ).toEqual(["openai"]);
-    expect(resolveBundledExplicitProviderContractsFromPublicArtifacts).toHaveBeenCalledTimes(1);
-    expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+      resolveProviderContractProvidersForPluginIds(["openai", "openai"]).map(({ id, label }) => ({
+        id,
+        label,
+      })),
+    ).toEqual([{ id: "openai", label: "OpenAI Codex" }]);
+    expect(resolveBundledExplicitProviderContractsFromPublicArtifacts).toHaveBeenCalledTimes(3);
+    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("uses web search public artifacts before falling back to the bundled runtime registry", async () => {
-    const loadBundledCapabilityRuntimeRegistry = vi.fn(() => {
-      throw new Error(
-        "web search contract public artifact should not hit bundled runtime registry",
-      );
-    });
+    const loadBundledCapabilityRuntimeRegistry = mockRuntimeFallback();
     const resolveBundledExplicitWebSearchProvidersFromPublicArtifacts = vi.fn(() => [
       {
         pluginId: "google",
@@ -92,9 +86,6 @@ describe("plugin contract registry public artifacts", () => {
       },
     ]);
 
-    vi.doMock("../bundled-capability-runtime.js", () => ({
-      loadBundledCapabilityRuntimeRegistry,
-    }));
     vi.doMock("../web-provider-public-artifacts.explicit.js", () => ({
       resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
     }));

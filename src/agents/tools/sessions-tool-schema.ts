@@ -26,7 +26,7 @@ const SESSION_ICON_GLYPH_DESCRIPTION = SESSION_ICON_GLYPH_IDS.join(", ");
 
 const SessionsToolSchema = Type.Object(
   {
-    user: requesterProfileSchema(),
+    user: requesterProfileSchema({ defaultToTurnOwner: true }),
     action: stringEnum(ACTIONS, { description: "Action" }),
     profileId: Type.Optional({
       ...SessionMoveProfileTargetSchema.properties.profileId,

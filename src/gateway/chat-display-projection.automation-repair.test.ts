@@ -5,6 +5,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { buildCronFailureRepairBrief } from "../cron/service/failure-repair-brief.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.message.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -23,18 +24,7 @@ it("keeps scheduler repair inputs in the model transcript, not pending, live, or
     };
     await replaceSessionEntry(scope, entry);
     const brief = buildCronFailureRepairBrief({
-      job: {
-        id: "queue-check",
-        name: "Check the queue",
-        enabled: true,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "Run the queue helper." },
-        state: {},
-      },
+      job: makeCronJob({ id: "queue-check" }),
       consecutiveErrors: 2,
       error: "The queue helper is unavailable.",
     });
@@ -54,8 +44,7 @@ it("keeps scheduler repair inputs in the model transcript, not pending, live, or
       timestamp: 3,
       __openclaw: { runId: "cron-failure-repair:repair-1" },
     };
-    // Quoting scheduler copy is still a human message, not an internal control input.
-    const quote = { role: "user", content: brief, timestamp: 4 };
+    const quote = { ...human, content: brief, timestamp: 4 };
     await appendTranscriptMessages(scope, {
       messages: [human, repair, answer, quote].map((message, index) => ({
         eventId: `message-${index}`,
@@ -64,10 +53,9 @@ it("keeps scheduler repair inputs in the model transcript, not pending, live, or
       })),
     });
     const history = await readChatHistoryPage({
+      ...scope,
       entry,
       provider: undefined,
-      sessionId: scope.sessionId,
-      storePath: scope.storePath,
       sessionAgentId: scope.agentId,
       canonicalKey: scope.sessionKey,
       max: 20,
@@ -77,29 +65,23 @@ it("keeps scheduler repair inputs in the model transcript, not pending, live, or
       messageId: undefined,
     });
     expect(history.messages).toMatchObject([human, answer, quote]);
-    expect(
-      projectSessionMessagePayload({ message: repair, sessionKey: scope.sessionKey }).payload,
-    ).toBeUndefined();
-    expect(
-      projectSessionMessagePayload({ message: answer, sessionKey: scope.sessionKey }).payload
-        ?.message,
-    ).toMatchObject(answer);
-    expect(
-      projectPendingInputMessage(
-        {
-          id: "repair-1",
-          runId: "cron-failure-repair:repair-1",
-          message: repair,
-          acceptedAt: 2,
-          state: "queued",
-        },
-        20_000,
-      ),
-    ).toBeUndefined();
-    expect(await loadTranscriptEvents(scope)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "message", message: expect.objectContaining(repair) }),
-      ]),
+    const live = (message: unknown) =>
+      projectSessionMessagePayload({ message, sessionKey: scope.sessionKey }).payload;
+    expect(live(repair)).toBeUndefined();
+    expect(live(answer)?.message).toMatchObject(answer);
+    const pending = projectPendingInputMessage(
+      {
+        id: "repair-1",
+        runId: "cron-failure-repair:repair-1",
+        message: repair,
+        acceptedAt: 2,
+        state: "queued",
+      },
+      20_000,
+    );
+    expect(pending).toBeUndefined();
+    expect(await loadTranscriptEvents(scope)).toContainEqual(
+      expect.objectContaining({ type: "message", message: expect.objectContaining(repair) }),
     );
     expect(repair).not.toHaveProperty("display");
   });

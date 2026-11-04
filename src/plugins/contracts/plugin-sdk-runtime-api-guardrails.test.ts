@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import { contractPluginPath, getBundledPluginRoots } from "./test-helpers/bundled-plugin-roots.js";
@@ -47,7 +47,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./src/monitor/threading.js";',
     'export { createDiscordGatewayPlugin, resolveDiscordGatewayIntents, waitForDiscordGatewayPluginRegistration } from "./src/monitor/gateway-plugin.js";',
     'export { clearGateways, getGateway, registerGateway, unregisterGateway } from "./src/monitor/gateway-registry.js";',
-    'export { clearPresences, getPresence, presenceCacheSize, setPresence } from "./src/monitor/presence-cache.js";',
+    'export { clearPresences, getPresence, setPresence } from "./src/monitor/presence-cache.js";',
     'export { DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS, DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS, DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS, DISCORD_DEFAULT_LISTENER_TIMEOUT_MS, isAbortError, normalizeDiscordInboundWorkerTimeoutMs, normalizeDiscordListenerTimeoutMs, runDiscordTaskWithTimeout } from "./src/monitor/timeouts.js";',
     'export { resolveDiscordOutboundSessionRoute, type ResolveDiscordOutboundSessionRouteParams } from "./src/outbound-session-route.js";',
     'export { addRoleDiscord, banMemberDiscord, createChannelDiscord, createScheduledEventDiscord, createThreadDiscord, deleteChannelDiscord, deleteMessageDiscord, DiscordSendError, editChannelDiscord, editMessageDiscord, fetchChannelInfoDiscord, fetchChannelPermissionsDiscord, fetchMemberGuildPermissionsDiscord, fetchMemberInfoDiscord, fetchMessageDiscord, fetchReactionsDiscord, fetchRoleInfoDiscord, fetchVoiceStatusDiscord, hasAllGuildPermissionsDiscord, hasAnyGuildPermissionDiscord, kickMemberDiscord, listGuildChannelsDiscord, listGuildEmojisDiscord, listPinsDiscord, listScheduledEventsDiscord, listThreadsDiscord, moveChannelDiscord, pinMessageDiscord, reactMessageDiscord, readMessagesDiscord, removeChannelPermissionDiscord, removeOwnReactionsDiscord, removeReactionDiscord, removeRoleDiscord, resolveEventCoverImage, searchMessagesDiscord, sendMessageDiscord, sendPollDiscord, sendStickerDiscord, sendTypingDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord, setChannelPermissionDiscord, timeoutMemberDiscord, unpinMessageDiscord, uploadEmojiDiscord, uploadStickerDiscord, type DiscordChannelCreate, type DiscordChannelEdit, type DiscordChannelMove, type DiscordChannelPermissionSet, type DiscordEmojiUpload, type DiscordMessageEdit, type DiscordMessageQuery, type DiscordModerationTarget, type DiscordPermissionsSummary, type DiscordReactionRuntimeContext, type DiscordReactionSummary, type DiscordReactionUser, type DiscordReactOpts, type DiscordRoleChange, type DiscordRuntimeAccountContext, type DiscordSearchQuery, type DiscordSendResult, type DiscordStickerUpload, type DiscordThreadCreate, type DiscordThreadList, type DiscordTimeoutTarget } from "./src/send.js";',
@@ -116,7 +116,6 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export type { GroupPolicy, GroupToolPolicyConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
     'export { GROUP_POLICY_BLOCKED_LABEL, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";',
     'export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";',
-    'export { deliverFormattedTextWithAttachments } from "openclaw/plugin-sdk/reply-payload";',
     'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
     'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";',
     'export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
@@ -190,10 +189,17 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { handleWhatsAppAction, whatsAppActionRuntime } from "./src/action-runtime.js";',
     'export { createWhatsAppLoginTool } from "./src/agent-tools-login.js";',
     'export { formatWhatsAppWebAuthStatusState, getWebAuthAgeMs, hasWebCredsSync, logWebSelfId, logoutWeb, pickWebChannel, readCredsJsonRaw, readWebAuthExistsBestEffort, readWebAuthExistsForDecision, readWebAuthSnapshot, readWebAuthSnapshotBestEffort, readWebAuthState, readWebSelfId, readWebSelfIdentity, readWebSelfIdentityForDecision, resolveDefaultWebAuthDir, resolveWebCredsBackupPath, resolveWebCredsPath, restoreCredsFromBackupIfNeeded, webAuthExists, WA_WEB_AUTH_DIR, WHATSAPP_AUTH_UNSTABLE_CODE, WhatsAppAuthUnstableError, type WhatsAppWebAuthState } from "./src/auth-store.js";',
-    'export { DEFAULT_WEB_MEDIA_BYTES, HEARTBEAT_PROMPT, HEARTBEAT_TOKEN, monitorWebChannel, SILENT_REPLY_TOKEN, stripHeartbeatToken, type WebChannelStatus, type WebMonitorTuning } from "./src/auto-reply.js";',
-    'export { extractContactContext, extractLocationData, extractText, monitorWebInbox, resetWebInboundDedupe, type WebInboundCallbackMessage, type WebInboundMessage, type WebListenerCloseReason, type WhatsAppInboundAdmission } from "./src/inbound.js";',
+    'export { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";',
+    'export { DEFAULT_WEB_MEDIA_BYTES } from "./src/auto-reply/constants.js";',
+    'export { monitorWebChannel } from "./src/auto-reply/monitor.js";',
+    'export type { WebChannelStatus, WebMonitorTuning } from "./src/auto-reply/types.js";',
+    'export { resetWebInboundDedupe } from "./src/inbound/dedupe.js";',
+    'export { extractContactContext, extractLocationData, extractText } from "./src/inbound/extract.js";',
+    'export { monitorWebInbox } from "./src/inbound/monitor.js";',
+    'export type { WhatsAppInboundAdmission } from "./src/inbound/admission.js";',
+    'export type { WebInboundCallbackMessage, WebInboundMessage, WebListenerCloseReason } from "./src/inbound/types.js";',
     'export { loginWeb } from "./src/login.js";',
-    'export { getDefaultLocalRoots, loadWebMedia, loadWebMediaRaw, LocalMediaAccessError, optimizeImageToJpeg, optimizeImageToPng, type LocalMediaAccessErrorCode, type WebMediaResult } from "./src/media.js";',
+    'export { getDefaultLocalRoots, loadWebMedia, loadWebMediaRaw, LocalMediaAccessError, optimizeImageToJpeg, optimizeImageToPng, type LocalMediaAccessErrorCode, type WebMediaResult } from "openclaw/plugin-sdk/web-media";',
     'export { sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp, sendTypingWhatsApp } from "./src/send.js";',
     'export { createWaSocket, formatError, getStatusCode, newConnectionId, waitForCredsSaveQueue, waitForCredsSaveQueueWithTimeout, waitForWaConnection, writeCredsJsonAtomically, type CredsQueueWaitResult } from "./src/session.js";',
     'export { setWhatsAppRuntime } from "./src/runtime.js";',

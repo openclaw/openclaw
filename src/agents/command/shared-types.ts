@@ -19,6 +19,7 @@ import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
+import type { RequesterOrigin } from "../requester-origin.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionManager } from "../sessions/index.js";
 import type { QueuedAgentRunParams } from "./queued-run-params.types.js";
@@ -59,7 +60,11 @@ export type AgentRunClientContext = Pick<
 
 export type AgentRunMessageContext = Pick<
   QueuedAgentRunParams,
-  "agentAccountId" | "senderIsOwner" | "sourceReplyDeliveryMode" | "taskSuggestionDeliveryMode"
+  | "agentAccountId"
+  | "senderIsOwner"
+  | "gitContributorProfileId"
+  | "sourceReplyDeliveryMode"
+  | "taskSuggestionDeliveryMode"
 > & {
   /** Opaque host-issued capability for current-turn channel message actions. */
   messageActionTurnCapability?: string;
@@ -88,6 +93,10 @@ export type AgentRunChannelContext = Pick<
   QueuedAgentRunParams,
   "messageProvider" | "chatType" | "channelContext" | "approvalReviewerDeviceId"
 > & {
+  requesterOrigin?: RequesterOrigin;
+  operatorProfileId?: string;
+  /** Original authenticated conversation, independent of destination routing. */
+  conversationId?: string | null;
   /** Canonical transport channel when it differs from the tool-policy provider. */
   messageChannel?: string;
   senderId?: string | null;
@@ -104,9 +113,14 @@ export type AgentRunChannelContext = Pick<
   spawnedBy?: string | null;
 };
 
-export type AgentRunModelOptions = Pick<
+type AgentRunModelOptions = Pick<
   QueuedAgentRunParams,
-  "authProfileId" | "thinkLevel" | "thinkingExplicit" | "fastMode" | "fastModeAutoOnSeconds"
+  | "authProfileId"
+  | "thinkLevel"
+  | "thinkingExplicit"
+  | "fastMode"
+  | "fastModeAutoOnSeconds"
+  | "cyberAccessProgram"
 > & {
   /** Vision capability resolved by the run owner from its prepared model catalog. */
   modelHasVision?: boolean;
@@ -122,7 +136,7 @@ export type AgentRunModelOptions = Pick<
   isFinalFallbackAttempt?: boolean;
 };
 
-export type AgentRunInputContext = Pick<
+type AgentRunInputContext = Pick<
   QueuedAgentRunParams,
   | "workspaceDir"
   | "cwd"
@@ -131,6 +145,7 @@ export type AgentRunInputContext = Pick<
   | "ownerNumbers"
   | "inputProvenance"
   | "extraSystemPrompt"
+  | "extraSystemPromptTurnContext"
 > & {
   /** Canonical agent workspace used for bootstrap files when execution runs elsewhere. */
   bootstrapWorkspaceDir?: string;
@@ -146,7 +161,6 @@ export type AgentRunInputContext = Pick<
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
   currentInboundEventKind?: InboundEventKind;
-  heartbeatEventQueueSessionKey?: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered facts represented by attachment text in the current prompt. */
@@ -174,7 +188,7 @@ export type AgentRunTranscriptContext = Pick<
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
 };
 
-export type AgentRunLifecycle = Pick<
+type AgentRunLifecycle = Pick<
   QueuedAgentRunParams,
   "providerReviewAcknowledgment" | "timeoutMs" | "runTimeoutOverrideMs" | "scheduledToolPolicy"
 > & {
@@ -207,3 +221,11 @@ export type AgentRunLifecycle = Pick<
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
 };
+
+export type AgentRunExecutionContext = AgentRunClientContext &
+  AgentRunMessageContext &
+  AgentRunChannelContext &
+  AgentRunModelOptions &
+  AgentRunInputContext &
+  AgentRunTranscriptContext &
+  AgentRunLifecycle;

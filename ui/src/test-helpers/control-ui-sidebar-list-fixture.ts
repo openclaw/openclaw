@@ -104,61 +104,31 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
           : undefined;
       const eligible = [...rows.values()]
         .filter((row) => {
-          if (query.agentId && row.agentId !== query.agentId) {
-            return false;
-          }
-          if (query.ownerId && row.owner?.actor.id !== query.ownerId) {
-            return false;
-          }
-          if (
-            query.involvingMe === true &&
-            (row.hiddenFromInvolvingMe === true ||
-              (!ownedBy(row, input.viewerProfileId) &&
-                !row.participants?.some(({ identity }) => identity.id === input.viewerProfileId)))
-          ) {
-            return false;
-          }
-          if (query.archived !== "all" && (row.archived === true) !== (query.archived === true)) {
-            return false;
-          }
-          if (query.pinned !== undefined && (row.pinned === true) !== query.pinned) {
-            return false;
-          }
-          if (query.hasBoard !== undefined && (row.hasBoard === true) !== query.hasBoard) {
-            return false;
-          }
-          if (query.boardFace !== undefined && row.boardFace !== query.boardFace) {
-            return false;
-          }
-          if (query.excludeDock !== false && row.isDock === true) {
-            return false;
-          }
-          if (query.excludeSubagents && isSubagentSessionRow(row.key, row)) {
-            return false;
-          }
-          if (query.excludeCron && isCronSessionDisplayKey(row.key)) {
-            return false;
-          }
-          if (query.excludeSystem && isSystemCreatedSessionRow(row)) {
-            return false;
-          }
-          if (query.includeGlobal === false && row.kind === "global") {
-            return false;
-          }
-          if (query.includeUnknown === false && row.kind === "unknown") {
-            return false;
-          }
-          if (
-            typeof query.spawnedBy === "string" &&
-            !(row.childOwnerSessionKeys ?? [row.controlOwnerSessionKey ?? row.spawnedBy]).includes(
-              query.spawnedBy,
-            )
-          ) {
-            return false;
-          }
           return (
-            typeof query.search !== "string" ||
-            `${row.label} ${row.displayName}`.toLowerCase().includes(query.search.toLowerCase())
+            (!query.agentId || row.agentId === query.agentId) &&
+            (!query.ownerId || row.owner?.actor.id === query.ownerId) &&
+            (query.involvingMe !== true ||
+              (row.hiddenFromInvolvingMe !== true &&
+                (ownedBy(row, input.viewerProfileId) ||
+                  row.participants?.some(
+                    ({ identity }) => identity.id === input.viewerProfileId,
+                  )))) &&
+            (query.archived === "all" || (row.archived === true) === (query.archived === true)) &&
+            (query.pinned === undefined || (row.pinned === true) === query.pinned) &&
+            (query.hasBoard === undefined || (row.hasBoard === true) === query.hasBoard) &&
+            (query.boardFace === undefined || row.boardFace === query.boardFace) &&
+            (query.excludeDock === false || row.isDock !== true) &&
+            (!query.excludeSubagents || !isSubagentSessionRow(row.key, row)) &&
+            (!query.excludeCron || !isCronSessionDisplayKey(row.key)) &&
+            (!query.excludeSystem || !isSystemCreatedSessionRow(row)) &&
+            (query.includeGlobal !== false || row.kind !== "global") &&
+            (query.includeUnknown !== false || row.kind !== "unknown") &&
+            (typeof query.spawnedBy !== "string" ||
+              (row.childOwnerSessionKeys ?? [row.controlOwnerSessionKey ?? row.spawnedBy]).includes(
+                query.spawnedBy,
+              )) &&
+            (typeof query.search !== "string" ||
+              `${row.label} ${row.displayName}`.toLowerCase().includes(query.search.toLowerCase()))
           );
         })
         .toSorted((a, b) =>
@@ -302,6 +272,7 @@ export function prepareTeamScaleSessionOwnership(
         id: owner.id,
         identity: { type: "profile", id: owner.id },
         label: owner.name,
+        avatarUrl: owner.avatarUrl,
       },
     };
     row.hiddenFromInvolvingMe = false;
@@ -317,15 +288,17 @@ export function prepareTeamScaleSessionOwnership(
 export function createTeamScaleSessionEvents(
   sessions: readonly GatewaySessionRow[],
   now: number,
+  options: { durationMs?: number; ancestorSessionKey?: string } = {},
 ): TeamScaleLiveEvent[] {
   const liveEvents: TeamScaleLiveEvent[] = [];
-  for (let index = 0; index < 240; index++) {
+  const durationMs = options.durationMs ?? 30_000;
+  for (let index = 0; index < durationMs / 125; index++) {
     const atMs = (index + 1) * 125;
     const row = {
       ...sessions[index % 24]!,
       updatedAt: now + atMs,
       snapshotAt: now + atMs,
-      lastMessagePreview: `Synthetic worker ${(index % 24) + 1}: completed checkpoint ${Math.floor(index / 24) + 1}.`,
+      lastMessagePreview: `Synthetic worker ${(index % 24) + 1}: completed checkpoint ${Math.floor((index % 240) / 24) + 1}.`,
     };
     liveEvents.push({
       atMs,
@@ -339,6 +312,90 @@ export function createTeamScaleSessionEvents(
         ts: row.updatedAt,
         session: row,
         ancestorSessions: [],
+      },
+    });
+  }
+  if (options.ancestorSessionKey) {
+    const source = sessions.find((row) => row.key === options.ancestorSessionKey);
+    const children = sessions.filter((row) => row.spawnedBy === options.ancestorSessionKey);
+    if (!source || !children.length) {
+      throw new Error("Ancestor-reference churn requires an existing parent and children");
+    }
+    const parent = { ...source, ancestorRevision: "team-scale-parent-v1" };
+    for (let index = 1; index < liveEvents.length; index += 2) {
+      const atMs = liveEvents[index]!.atMs;
+      const ts = now + atMs;
+      const row = {
+        ...children[Math.floor(index / 2) % children.length]!,
+        updatedAt: ts,
+        snapshotAt: ts,
+        lastMessagePreview: `Synthetic child checkpoint ${index}`,
+      };
+      const initial = index === 1;
+      liveEvents[index] = {
+        atMs,
+        kind: initial
+          ? "sessions.changed.child-parent-full"
+          : "sessions.changed.child-parent-reference",
+        event: "sessions.changed",
+        sessionMutation: { upsert: initial ? [row, parent] : [row] },
+        payload: {
+          ...row,
+          sessionKey: row.key,
+          reason: "agent.run.updated",
+          ts,
+          session: row,
+          ancestorSessions: initial
+            ? [{ key: parent.key, agentId: parent.agentId, version: 1, full: parent }]
+            : [],
+          ...(initial
+            ? {}
+            : {
+                ancestorSessionRefs: [
+                  {
+                    key: parent.key,
+                    agentId: parent.agentId,
+                    sessionId: parent.sessionId,
+                    revision: parent.ancestorRevision,
+                    snapshotAt: ts,
+                  },
+                ],
+              }),
+        },
+      };
+    }
+    // References must preserve raw version 1 so a later wire delta still decodes.
+    const atMs = durationMs + 125;
+    const ts = now + atMs;
+    const changed = {
+      label: "Synthetic ancestor baseline verified",
+      displayName: "Synthetic ancestor baseline verified",
+      derivedTitle: "Synthetic ancestor baseline verified",
+      updatedAt: ts,
+      snapshotAt: ts,
+      ancestorRevision: "team-scale-parent-v2",
+    };
+    liveEvents.push({
+      atMs,
+      kind: "sessions.changed.parent-raw-baseline-check",
+      event: "sessions.changed",
+      sessionMutation: { upsert: [{ ...parent, ...changed }] },
+      payload: {
+        sessionKey: parent.key,
+        agentId: parent.agentId,
+        sessionId: parent.sessionId,
+        reason: "patch",
+        ts,
+        updatedAt: ts,
+        ancestorSessions: [],
+        session: {
+          key: parent.key,
+          agentId: parent.agentId,
+          version: 2,
+          base: 1,
+          set: changed,
+          remove: [],
+        },
       },
     });
   }

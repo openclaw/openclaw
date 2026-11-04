@@ -13,6 +13,7 @@ import type {
   GatewayEventListener,
   GatewayHelloOk,
 } from "../api/gateway.ts";
+import type { PresenceEntry } from "../api/types.ts";
 import type { AuthenticatedUser } from "./user-profile.ts";
 
 export type ApplicationGatewayPhase =
@@ -29,6 +30,9 @@ export type ApplicationGatewaySnapshot = {
   /** The live transport/admission fact; retained hello metadata does not authorize dispatch. */
   phase: ApplicationGatewayPhase;
   offlineStable: boolean;
+  /** Memory-only desired-state changes waiting for the same admitted identity. */
+  deferredIntentCount?: number;
+  deferredIntentDraining?: boolean;
   restartPending?: boolean;
   suspensionPhase?: GatewaySuspension["phase"];
   /**
@@ -83,8 +87,20 @@ export type ApplicationGatewayOptions = {
   >;
 };
 
+export type ApplicationGatewayDeferredIntent = {
+  key: string;
+  /** Related intents that a terminal desired state may supersede. */
+  group?: string;
+  discardGroup?: boolean;
+  preservePosition?: boolean;
+  run: (client: GatewayBrowserClient) => Promise<void>;
+  discard?: () => void;
+};
+
 export type ApplicationGateway = {
   readonly snapshot: ApplicationGatewaySnapshot;
+  /** Full normalized roster; unresolved until this connection's first presence reset. */
+  readonly readPresence?: () => readonly PresenceEntry[] | undefined;
   readonly connection: ApplicationGatewayConnection;
   readonly connectionRevision: number;
   /** Raw history is captured only while subscribeEventLog has consumers. */
@@ -92,6 +108,7 @@ export type ApplicationGateway = {
   /** Advances when the connection or authentication context retires diagnostic history. */
   readonly eventLogRevision: number;
   connect: (connection?: ApplicationGatewayConnectOptions) => void;
+  defer: (intent: ApplicationGatewayDeferredIntent) => boolean;
   setSessionKey: (sessionKey: string) => void;
   start: () => void;
   stop: () => void;

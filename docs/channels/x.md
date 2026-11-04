@@ -80,6 +80,22 @@ For multiple bots, put account-specific values under
 `channels.x.accounts.<accountId>`. Root fields are shared defaults; the default
 account ID is `default`.
 
+## Requester identity and credit
+
+X polling and Activity streams obtain immutable `author_id` values from the
+authenticated X API. An allowlist entry admits work; it does not identify a
+Gateway person. An administrator must [link the channel sender](/concepts/user-model#channel-identity-links)
+to their existing profile with `users.linkChannelIdentity`, using `channelId: "x"`,
+the exact configured account ID, and that immutable sender ID. Handles and
+display names are not identity evidence.
+
+After linking, subsequent turns carry the host-verified requester profile. New
+visible work sessions default to that requester when the source has no different
+human owner. Their contribution is eligible for the profile's existing verified
+GitHub credit preference, including delegated work. Linking does not rewrite
+historical creators, reassign existing sessions, change sharing, or grant an
+operator role. Unlinked senders remain channel identities, not Gateway profiles.
+
 ## Public work sessions
 
 Set `channels.x.accounts.<accountId>.autoPublishWorkSessions: true` (or the
@@ -152,12 +168,16 @@ session visibility, or waive manual approval for X replies.
 
 ## Reply outcomes and failures
 
-Automatic replies to mentions are posted only when the agent declares success.
+Model replies to mentions are posted only when the agent declares success.
 The channel's delivery rules ask the agent to start each reply with
-`[[x_success]]` or `[[x_failure]]`; the tag is removed before posting. Replies
-tagged `[[x_failure]]`, untagged replies, and host error replies are withheld
+`[[x_success]]` or `[[x_failure]]`; the tag is removed before posting. Model replies
+tagged `[[x_failure]]`, untagged model replies, and host error replies are withheld
 from X. `NO_REPLY` and empty replies are dropped. If a model omits the tag on a
 successful answer, that answer is withheld rather than posted.
+
+Runtime queue acknowledgments and steering refusal notices are posted without a
+model success tag. These notices report the actual admission decision; they do
+not declare that the agent's work succeeded.
 
 Without a failure route, withheld replies are discarded and logged as
 `reply withheld post=<id> reason=<failure|error|unclassified> route=none`. With
@@ -188,14 +208,14 @@ media URL. Native attachments are preferable to sign-in-only proof links when th
 image or video helps explain the result. Work-session approval and origin restrictions
 still apply; guest replies remain text-only.
 
-The connector accepts up to four JPEG, PNG, or WebP images (5 MiB each), or one GIF
+The X plugin accepts up to four JPEG, PNG, or WebP images (5 MiB each), or one GIF
 (15 MiB) or MP4 video (100 MiB). It does not mix videos/GIFs with other attachments.
 The video cap bounds Gateway buffering; it is not X's account upload ceiling.
 Use H.264 video and AAC-LC audio; X validates the remaining encoding and account
 limits. See [X media requirements](https://docs.x.com/x-api/media/quickstart/best-practices).
 
 Local files use the host's approved media roots and file-reader policy; remote
-URLs use the shared guarded downloader. The connector uploads in chunks and waits
+URLs use the shared guarded downloader. The plugin uploads in chunks and waits
 for X processing before creating the reply. Attachments go on the first post if a
 long caption is split into a thread. A failed upload never falls back to a text-only
 post or a local-file link. A 403 on upload may require reconnecting the bot's OAuth
@@ -218,10 +238,10 @@ The page also shows this account's estimated X API spend for today and the
 current billing cycle against its limits. Select **Refresh** to update the
 read-only totals. The same spend snapshot is included in `x.allowlist.list`.
 
-A locally linked installation uses the [Custom plugin UI setting](/plugins/feature-plugins#enable-custom-plugin-ui).
-Enable **Settings → Labs → Custom plugin UI**, then use the Control UI served by
-the Gateway over HTTPS or trusted loopback. Bundled installations do not need
-that setting.
+A locally linked installation can use native UI by default once the plugin is
+enabled. Open the Control UI served by the Gateway over HTTPS or trusted
+loopback. An existing advanced native UI opt-out still applies to separately
+installed plugins; see [Custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui).
 
 The Gateway methods `x.allowlist.list`, `x.allowlist.add`, and
 `x.allowlist.remove` require `operator.admin`. Authorize senders by numeric ID,
@@ -483,7 +503,10 @@ keep-alives and intentionally ignored event types do not count toward this
 warning. It includes the event type and top-level keys, without post content.
 The next parseable mention event clears the warning.
 
-In `auto` mode, any subscription setup failure switches to polling. In `stream`
+Stopping or reloading an account cancels subscription setup and event reception
+cleanly, without reporting caller cancellation as a transport failure.
+
+In `auto` mode, subscription setup failures switch to polling. In `stream`
 mode, subscription HTTP `403` switches to polling; other setup errors stop the
 event source. A stream HTTP `401` or `403` switches either mode to polling. The
 channel status `message` includes the failed endpoint, HTTP status, and first X

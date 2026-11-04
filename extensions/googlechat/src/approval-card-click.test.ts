@@ -29,8 +29,9 @@ type Resolution = {
 };
 
 function resolveResult(params: Resolution): ApprovalResolveResult {
+  const { approvalId, approvalKind = "exec", applied, decision = "allow-once" } = params;
   const presentation =
-    (params.approvalKind ?? "exec") === "exec"
+    approvalKind === "exec"
       ? {
           kind: "exec" as const,
           commandText: `<tag> & &amp; "double" 'single'`,
@@ -45,22 +46,22 @@ function resolveResult(params: Resolution): ApprovalResolveResult {
           allowedDecisions: ["allow-once" as const, "deny" as const],
         };
   const common = {
-    id: params.approvalId,
-    urlPath: `/approve/${encodeURIComponent(params.approvalId)}`,
+    id: approvalId,
+    urlPath: `/approve/${encodeURIComponent(approvalId)}`,
     createdAtMs: 1,
     expiresAtMs: 10_000,
     resolvedAtMs: 2,
     reason: "user" as const,
     presentation,
   };
-  return params.decision === "deny"
+  return decision === "deny"
     ? {
-        applied: params.applied,
+        applied,
         approval: { ...common, status: "denied", decision: "deny" },
       }
     : {
-        applied: params.applied,
-        approval: { ...common, status: "allowed", decision: params.decision ?? "allow-once" },
+        applied,
+        approval: { ...common, status: "allowed", decision },
       };
 }
 
@@ -115,6 +116,24 @@ function registerCardBinding(
     ...overrides,
   });
 }
+
+it.each([
+  [{ status: "allowed", decision: "allow-once", reason: "user" }, "Allowed once"],
+  [{ status: "allowed", decision: "allow-always", reason: "user" }, "Allowed always"],
+  [{ status: "denied", decision: "deny", reason: "user" }, "Denied"],
+  [{ status: "expired", reason: "timeout" }, "Expired"],
+  [{ status: "cancelled", reason: "run-aborted" }, "Cancelled"],
+] as const)("renders canonical result %j as %s", async (outcome, title) => {
+  registerCardBinding("token-terminal", "approval-terminal");
+  const resolved = resolveResult({ applied: false, approvalId: "approval-terminal" });
+  resolveApprovalOverGateway.mockResolvedValueOnce({
+    ...resolved,
+    approval: { ...resolved.approval, ...outcome },
+  });
+  await expect(click("token-terminal")).resolves.toBe(true);
+  const cards = updateGoogleChatMessage.mock.calls[0]?.[0].cardsV2;
+  expect(cards[0]?.card.header?.title).toBe(`Exec Approval: ${title}`);
+});
 
 function click(event: GoogleChatEvent | string, target = createTarget()) {
   return maybeHandleGoogleChatApprovalCardClick({
@@ -184,11 +203,8 @@ it("does not consume the token when an unauthorized user clicks", async () => {
   });
 
   await expect(click(createCardClickEvent("token-2", "users/999"))).resolves.toBe(true);
-
   expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
-
   await expect(click("token-2")).resolves.toBe(true);
-
   expectResolved("plugin:approval-2", "deny", "plugin");
 });
 
@@ -204,14 +220,12 @@ it("consumes stale card tokens for approval-not-found gateway detail and ignores
   const event = createCardClickEvent(token);
 
   await expect(click(event, target)).resolves.toBe(true);
-
   expect(googleChatApprovalControls.get(token)).toBeNull();
   expect(target.runtime.log).toHaveBeenCalledWith(
     expect.stringContaining("approval expired or no longer exists"),
   );
 
   await expect(click(event, target)).resolves.toBe(true);
-
   expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
   expect(updateGoogleChatMessage).not.toHaveBeenCalled();
   expect(target.runtime.log).toHaveBeenCalledWith(

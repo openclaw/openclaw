@@ -90,8 +90,15 @@ export const devicePairingOperations = {
       return result;
     },
   ),
-  "devicePairing.verifyToken": devicePairingMutation(tokens.verifyDeviceTokenInWorker),
-  "devicePairing.ensureToken": devicePairingMutation(tokens.ensureDeviceTokenInWorker),
-  "devicePairing.rotateToken": devicePairingMutation(tokens.rotateDeviceTokenInWorker),
+  "devicePairing.verifyToken": devicePairingMutation(tokens.verifyDeviceTokenInWorker, {
+    pairedDeviceId: (input) => input.deviceId,
+  }),
+  "devicePairing.ensureToken": devicePairingMutation(tokens.ensureDeviceTokenInWorker, {
+    pairedDeviceId: (input) => input.deviceId,
+  }),
+  "devicePairing.rotateToken": devicePairingMutation(
+    (input: Parameters<typeof tokens.rotateDeviceTokenInWorker>[0], { recordRetiredNodeToken }) =>
+      tokens.rotateDeviceTokenInWorker(input, recordRetiredNodeToken),
+  ),
   "devicePairing.revokeToken": devicePairingMutation(tokens.revokeDeviceTokenInWorker),
 } satisfies WorkerOperationHandlers;

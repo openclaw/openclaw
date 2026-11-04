@@ -1,5 +1,5 @@
-import { Command } from "commander";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import type { Command } from "commander";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   itWithFish,
   itWithPowerShell,
@@ -7,9 +7,7 @@ import {
   runGeneratedBashCompletion,
   runGeneratedFishCompletion,
 } from "../../completion-cli.test-support.js";
-import { registerMessageCommands } from "../register.message.js";
-import * as messageCliHelpers from "./helpers.js";
-import type { MessageCliHelpers } from "./helpers.js";
+import { createMessageCliProgram, messageCliMocks } from "./command.test-support.js";
 
 const powerShellCompletion = new PowerShellCompletionRunner();
 afterAll(async () => {
@@ -17,30 +15,8 @@ afterAll(async () => {
 });
 
 function createReadProgram() {
-  const program = new Command().name("openclaw").exitOverride();
-  program.configureOutput({ writeErr: () => {} });
-  const runMessageAction = vi.fn(async () => undefined);
-  const helpers: MessageCliHelpers = {
-    withMessageBase: (command, target) => {
-      if (target === "required") {
-        command.requiredOption("-t, --target <target>");
-      }
-      return command.option("--channel <channel>");
-    },
-    runMessageAction,
-  };
-  const createHelpers = vi
-    .spyOn(messageCliHelpers, "createMessageCliHelpers")
-    .mockReturnValue(helpers);
-  try {
-    registerMessageCommands(program, {
-      programVersion: "test",
-      messageChannelOptions: "discord",
-      agentChannelOptions: "last|discord",
-    });
-  } finally {
-    createHelpers.mockRestore();
-  }
+  const program = createMessageCliProgram("discord");
+  const runMessageAction = messageCliMocks.command.mockClear();
   const message = program.commands.find((command) => command.name() === "message");
   if (!message) {
     throw new Error("Expected the message command");
@@ -56,12 +32,14 @@ describe("message read legacy option visibility", () => {
       { from: "user" },
     );
     expect(runMessageAction).toHaveBeenCalledWith(
-      "read",
       expect.objectContaining({
+        action: "read",
         target: "channel:123",
         around: "42",
         includeThread: true,
       }),
+      expect.anything(),
+      expect.anything(),
     );
   });
 

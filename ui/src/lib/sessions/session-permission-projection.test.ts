@@ -1,12 +1,10 @@
 // @vitest-environment node
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import {
-  createSessionCapabilityHarness,
-  sessionsResult,
-} from "./session-capability.test-support.ts";
+import { sessionsResult } from "./session-capability.test-support.ts";
+import type { SessionListScope } from "./session-capability.ts";
+import { sessionRpcHarness } from "./session-rpc.test-support.ts";
 
 const scope = {
   agentId: "main",
@@ -50,23 +48,19 @@ function harness(replies: Reply[]) {
   const pending = replies.filter(
     (reply): reply is PendingList => !(reply instanceof Error) && "promise" in reply,
   );
-  const request = vi.fn(async (method: string) => {
-    if (method !== "sessions.list") {
-      throw new Error(`Unexpected request: ${method}`);
-    }
-    const reply = replies.shift();
-    if (!reply) {
-      throw new Error("Unexpected additional session list request");
-    }
-    if (reply instanceof Error) {
-      throw reply;
-    }
-    return "promise" in reply ? reply.promise : reply;
+  const capability = sessionRpcHarness({
+    "sessions.list": () => {
+      const reply = replies.shift();
+      if (!reply) {
+        throw new Error("Unexpected additional session list request");
+      }
+      if (reply instanceof Error) {
+        throw reply;
+      }
+      return "promise" in reply ? reply.promise : reply;
+    },
   });
-  const capability = createSessionCapabilityHarness(
-    request as unknown as GatewayBrowserClient["request"],
-  );
-  const { sessions } = capability;
+  const { sessions, request } = capability;
   onTestFinished(async () => {
     pending.forEach((read) => read.resolve(read.fallback));
     await Promise.all(pending.flatMap((read) => read.operations));
@@ -76,7 +70,7 @@ function harness(replies: Reply[]) {
     sessions,
     request,
     rows: () => sessions.state.result?.sessions,
-    managed: (query = scope) => sessions.listSnapshot(query),
+    managed: (query: SessionListScope = scope) => sessions.listSnapshot(query),
     event: (session: GatewaySessionRow, agentId = "main") =>
       capability.emitEvent({
         type: "event",
@@ -93,6 +87,43 @@ function harness(replies: Reply[]) {
 }
 
 describe("permission projection across canonical session lists", () => {
+  it.each(["sidebar", "dashboard"] as const)(
+    "retains known permission after a %s list omits it and accepts a full-row clear",
+    async (rowMode) => {
+      const initial = row("agent:main:partial-permission");
+      const identity = {
+        key: initial.key,
+        sessionId: initial.sessionId,
+        kind: initial.kind,
+      };
+      const partial: GatewaySessionRow = {
+        ...identity,
+        rowMode,
+        updatedAt: 3,
+        label: "Updated list label",
+      };
+      const { sessions, rows, managed, event } = harness([
+        sessionsResult([initial], 1),
+        sessionsResult([partial], 3),
+        sessionsResult([{ ...identity, updatedAt: 4 }], 4),
+      ]);
+      await sessions.refresh(primary);
+      const selected = sessions.observeRow({ key: initial.key, agentId: "main" }, () => {});
+      onTestFinished(selected.dispose);
+      event({ ...initial, updatedAt: 2, permissionMode: "full" });
+      expect(selected.row?.permissionMode).toBe("full");
+
+      await sessions.refreshList({ ...scope, rowMode });
+      expect(managed({ ...scope, rowMode }).result?.sessions[0]?.label).toBe("Updated list label");
+      expect(rows()?.[0]?.permissionMode).toBe("full");
+      expect(selected.row?.permissionMode).toBe("full");
+
+      await sessions.refresh(primary);
+      expect(rows()?.[0]).not.toHaveProperty("permissionMode");
+      expect(selected.row).not.toHaveProperty("permissionMode");
+    },
+  );
+
   it.each([
     { name: "an explicit mode", permissionMode: "full" as const },
     { name: "the default mode", permissionMode: undefined },

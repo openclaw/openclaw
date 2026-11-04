@@ -1,17 +1,44 @@
-import { createUniqueId } from "solid-js";
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
+import { createMemo, createUniqueId, Errored, Loading } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { CronProps } from "./view-types.ts";
-export function ErrorBanner(props: { error: string | null }) {
+import type { CronJobActionProps, CronProps } from "./view-types.ts";
+
+registerCronEnglish();
+export function ErrorBanner(props: { error: string | null; reads?: CronProps["reads"] }) {
+  const modelRequest = createMemo(() => props.reads?.modelRequest());
   return (
     <>
       {props.error ? (
         <div class="cron-error-banner" role="alert">
           {props.error}
+        </div>
+      ) : props.reads ? (
+        <Loading on={modelRequest()}>
+          <Errored
+            fallback={(error) => (
+              <div class="cron-error-banner" role="alert">
+                {formatUiError(error())}
+              </div>
+            )}
+          >
+            {props.reads.models()}
+          </Errored>
+        </Loading>
+      ) : undefined}
+    </>
+  );
+}
+export function NoticeBanner(props: { notice: string | null }) {
+  return (
+    <>
+      {props.notice ? (
+        <div class="callout" role="status">
+          {props.notice}
         </div>
       ) : undefined}
     </>
@@ -33,18 +60,18 @@ export function AdminRequired(props: CronProps) {
 }
 // Run now and pause/resume are visible controls (rows and detail header);
 // the menu only carries the low-traffic actions.
-export function JobMenu(props: CronProps & { job: CronJob }) {
+export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
   const id = createUniqueId();
-  const systemOwned = () => isSystemMonitorDeclaration(props.job.declarationKey);
   const displayName = () => props.job.displayName ?? props.job.name;
   return (
     <Menu
+      lazy
       id={id}
       label={t("cron.actions.moreJob", { name: displayName() })}
       class="cron-job-menu"
       triggerClass="btn btn--sm btn--ghost cron-job-menu__trigger"
       triggerAttributes={{ title: t("cron.actions.moreJob", { name: displayName() }) }}
-      trigger={<Icon name="moreHorizontal" />}
+      trigger={sessionIcon("moreHorizontal", 16, 1.5)}
       placement="bottom-end"
       items={[
         ...(props.job.schedule.kind === "event"
@@ -54,29 +81,25 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
                 id: "run-if-due",
                 label: t("cron.actions.runIfDue"),
                 class: "cron-job-menu__item",
-                disabled: props.busy || !props.canManage,
+                disabled: props.busy || !props.connected || !props.canManage,
               },
             ]),
-        ...(systemOwned()
-          ? []
-          : [
-              {
-                id: "clone",
-                label: t("cron.actions.clone"),
-                class: "cron-job-menu__item",
-                disabled: props.busy || !props.canManage,
-              },
-              {
-                id: "remove",
-                label: t("cron.actions.remove"),
-                class: "cron-job-menu__item danger",
-                variant: "danger" as const,
-                disabled: props.busy || !props.canManage,
-              },
-            ]),
+        {
+          id: "clone",
+          label: t("cron.actions.clone"),
+          class: "cron-job-menu__item",
+          disabled: props.busy || !(props.canCreate ?? props.canManage),
+        },
+        {
+          id: "remove",
+          label: t("cron.actions.remove"),
+          class: "cron-job-menu__item danger",
+          variant: "danger",
+          disabled: props.busy || !props.connected || !props.canManage,
+        },
       ]}
       onSelect={(item) => {
-        if (!props.canManage) {
+        if (!props.canManage || (!props.connected && item.id !== "clone")) {
           return;
         }
         switch (item.id) {
@@ -84,14 +107,13 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
             props.onRun(props.job, "due");
             break;
           case "clone":
-            if (!systemOwned()) {
-              props.onClone(props.job);
+            if (!(props.canCreate ?? props.canManage)) {
+              return;
             }
+            props.onClone(props.job);
             break;
           case "remove":
-            if (!systemOwned()) {
-              void props.onRemove(props.job);
-            }
+            void props.onRemove(props.job);
             break;
         }
       }}
@@ -99,7 +121,7 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
   );
 }
 export function EnabledSwitch(
-  props: CronProps & {
+  props: CronJobActionProps & {
     job: CronJob;
     compact?: boolean;
   },
@@ -117,7 +139,12 @@ export function EnabledSwitch(
     >
       <SettingsToggle
         checked={props.job.enabled}
-        disabled={props.busy || !props.canManage}
+        saving={props.toggleSavingJobId === props.job.id}
+        disabled={
+          !props.connected ||
+          !props.canManage ||
+          (props.busy && props.toggleSavingJobId !== props.job.id)
+        }
         ariaLabel={props.compact ? actionLabel() : stateLabel()}
         onChange={(checked) => {
           if (props.canManage) {

@@ -1,4 +1,4 @@
-import { createEffect, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import type {
   ControlUiSettingsContext,
   ControlUiSettingsView,
@@ -40,7 +40,7 @@ function sameLifetime(a: ReturnType<typeof viewLifetime>, b: ReturnType<typeof v
 export function ControlUiSettingsPresentation(props: {
   application: ApplicationContext;
   placement: ControlUiSettingsView["placement"];
-  readSnapshot: () => ControlUiSettingsSnapshot;
+  readSnapshot: () => ControlUiSettingsSnapshot | null;
   subscribe: (listener: () => void) => () => void;
   navigate: ControlUiSettingsContext["navigate"];
   refreshAgents: () => void;
@@ -76,6 +76,10 @@ export function ControlUiSettingsPresentation(props: {
       return;
     }
     const snapshot = props.readSnapshot();
+    if (!snapshot) {
+      retire();
+      return;
+    }
     const identity = viewLifetime(props.application, snapshot);
     if (owner && sameLifetime(owner.identity, identity)) {
       try {
@@ -91,27 +95,30 @@ export function ControlUiSettingsPresentation(props: {
     owner = next;
     const current = () => {
       lifetime.throwIfAborted();
+      const currentSnapshot = props.readSnapshot();
       if (
+        !currentSnapshot ||
         !active ||
         owner !== next ||
-        !sameLifetime(identity, viewLifetime(props.application, props.readSnapshot()))
+        !sameLifetime(identity, viewLifetime(props.application, currentSnapshot))
       ) {
         throw new Error("This Settings presentation has ended.");
       }
+      return currentSnapshot;
     };
     void props.application.plugins
       .loadSettingsView(props.placement, next.abort.signal)
       .then((loaded) => {
         lifetime = loaded.signal;
-        current();
+        const loadedSnapshot = current();
         const context: ControlUiSettingsContext = {
-          props: props.readSnapshot(),
+          props: loadedSnapshot,
           signal: lifetime,
           components: createControlUiSettingsComponents(lifetime),
           async request<T>(method: string, params?: unknown) {
-            current();
+            const requestSnapshot = current();
             const gateway = props.application.gateway.snapshot;
-            const epoch = props.readSnapshot().connectionEpoch;
+            const epoch = requestSnapshot.connectionEpoch;
             if (
               !gateway.client ||
               gateway.phase !== "connected" ||
@@ -120,9 +127,8 @@ export function ControlUiSettingsPresentation(props: {
               throw new Error("The Gateway is offline or operator access is unavailable.");
             }
             const result = await gateway.client.request<T>(method, params);
-            current();
             // The view survives reconnects; replies from an earlier transport epoch do not.
-            if (props.readSnapshot().connectionEpoch !== epoch) {
+            if (current().connectionEpoch !== epoch) {
               throw new Error("The Gateway connection changed before this request completed.");
             }
             return result;
@@ -163,7 +169,7 @@ export function ControlUiSettingsPresentation(props: {
           { once: true },
         );
         next.update = mounted.update;
-        mounted.update(props.readSnapshot());
+        mounted.update(current());
       })
       .catch((error: unknown) => {
         if (owner === next && !next.abort.signal.aborted) {
@@ -171,10 +177,7 @@ export function ControlUiSettingsPresentation(props: {
         }
       });
   };
-  // The imperative plugin view receives live host props; transport owners also
-  // notify synchronously so a batched identity change retires old authority and a
-  // batched disconnect/reconnect still advances the view's transport epoch.
-  createEffect(props.readSnapshot, sync);
+  // Owner notifications retire authority synchronously and publish committed presentation facts.
   onSettled(() => {
     const stop = props.subscribe(sync);
     sync();

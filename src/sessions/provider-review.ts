@@ -51,6 +51,20 @@ const acknowledgments = resolveGlobalSingleton(
   () => new WeakMap<object, AcknowledgmentState>(),
 );
 
+/** Both continuation and terminal owners publish the same borrowed, immutable review facts. */
+export function snapshotSessionProviderReview(
+  review: SessionProviderReview,
+): Readonly<SessionProviderReview> {
+  const snapshot = structuredClone(review);
+  if (snapshot.review?.continuation) {
+    Object.freeze(snapshot.review.continuation);
+  }
+  if (snapshot.review) {
+    Object.freeze(snapshot.review);
+  }
+  return Object.freeze(snapshot);
+}
+
 export function createSessionProviderReview(params: {
   sessionId: string;
   refusal: Omit<SessionProviderReview, "id" | "sessionId">;
@@ -170,14 +184,7 @@ export async function issueProviderReviewAcknowledgment(params: {
   ) {
     throw new Error("Provider review changed or cannot be continued; refresh the findings");
   }
-  const snapshot = structuredClone(review);
-  if (snapshot.review?.continuation) {
-    Object.freeze(snapshot.review.continuation);
-  }
-  if (snapshot.review) {
-    Object.freeze(snapshot.review);
-  }
-  Object.freeze(snapshot);
+  const snapshot = snapshotSessionProviderReview(review);
   const acknowledgment: ProviderReviewAcknowledgment = Object.freeze({
     read: () => {
       const { review: currentReview, phase } = readProviderReviewAcknowledgment(acknowledgment);

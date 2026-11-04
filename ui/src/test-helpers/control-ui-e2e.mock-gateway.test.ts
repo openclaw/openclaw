@@ -5,6 +5,7 @@ import { expect, vi } from "vitest";
 import { ChannelsPairingListResultSchema } from "../../../packages/gateway-protocol/src/schema/channel-pairing.ts";
 import { ChannelsStatusResultSchema } from "../../../packages/gateway-protocol/src/schema/channels.ts";
 import { MigrationProtocolSchemas } from "../../../packages/gateway-protocol/src/schema/migrations.ts";
+import { SystemAgentChatHistoryResultSchema } from "../../../packages/gateway-protocol/src/schema/openclaw.ts";
 import {
   PluginsCatalogBrowseResultSchema,
   PluginsCatalogCategoriesResultSchema,
@@ -14,10 +15,24 @@ import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockRequestHandler,
 } from "./control-ui-e2e.ts";
+import { collectGarbageForTest } from "./garbage-collection.ts";
 import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
 const getGateway = (window: MockGatewayWindow) =>
   expectDefined(window.openclawControlUiE2eGateway, "Mock Gateway was not installed");
+
+it("serves protocol-valid empty Custodian history without method advertisement", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript({ featureMethods: ["openclaw.chat"] }));
+  const { request } = gatewayPage.connect();
+  await flushMockTimers();
+
+  const history = await request("custodian-history", "openclaw.chat.history", {});
+
+  expect(Compile(SystemAgentChatHistoryResultSchema).Check(history)).toBe(true);
+  expect(history.turns).toEqual([]);
+});
 
 it("serves protocol-valid empty channel status and pairing defaults", async ({ gatewayPage }) => {
   gatewayPage.execute(createControlUiMockGatewayInitScript());
@@ -137,6 +152,34 @@ it("takes existing mock sockets offline without closing their replacement", asyn
 
   controls.setOnline(true);
   expect(replacement?.readyState).toBe(window.WebSocket.OPEN);
+});
+
+it("releases closed transports while preserving their connection history", async ({
+  gatewayPage,
+}) => {
+  const { window, execute } = gatewayPage;
+  execute(createControlUiMockGatewayInitScript());
+  const retired = (() => {
+    const socket = new window.WebSocket("ws://mock-gateway/retired");
+    window.setTimeout(() => socket.close(), 0);
+    return new WeakRef(socket);
+  })();
+  await flushMockTimers();
+  const current = new window.WebSocket("ws://mock-gateway/current");
+  await flushMockTimers();
+  const gateway = getGateway(window);
+  expect(gateway.socketCount()).toBe(2);
+  expect(gateway.socketUrls()).toEqual(["ws://mock-gateway/retired", "ws://mock-gateway/current"]);
+  expect(gateway.socketStates()).toEqual([
+    { readyState: window.WebSocket.CLOSED, state: "closed", url: "ws://mock-gateway/retired" },
+    { readyState: window.WebSocket.OPEN, state: "open", url: "ws://mock-gateway/current" },
+  ]);
+
+  const control = new WeakRef({ unowned: true });
+  await collectGarbageForTest();
+  expect(control.deref()).toBeUndefined();
+  expect(retired.deref()).toBeUndefined();
+  expect(current.readyState).toBe(window.WebSocket.OPEN);
 });
 
 it.for(["absent", "null", "explicit"] as const)(
@@ -309,6 +352,33 @@ it("publishes a catalog adoption only after its deferred response succeeds", asy
       expect.objectContaining({ key: sessionKey }),
     ],
   });
+});
+
+it("keeps a same-session observer subscribed when another observer releases", async ({
+  gatewayPage,
+}) => {
+  gatewayPage.execute(createControlUiMockGatewayInitScript());
+  const gateway = getGateway(gatewayPage.window);
+  const { frames, request } = gatewayPage.connect();
+  await flushMockTimers();
+  await request("connect", "connect", { caps: ["session-scoped-events"] });
+  const key = "agent:main:shared-observers";
+  await request("first", "sessions.messages.subscribe", { key, subscriptionId: "first" });
+  await request("second", "sessions.messages.subscribe", { key, subscriptionId: "second" });
+  await request("release-first", "sessions.messages.unsubscribe", { key, subscriptionId: "first" });
+  const final = { sessionKey: key, runId: "shared-run", state: "final" };
+  gateway.emit("chat", final);
+  expect(frames.filter((frame) => frame.type === "event" && frame.event === "chat")).toEqual([
+    expect.objectContaining({ payload: final }),
+  ]);
+  await request("release-second", "sessions.messages.unsubscribe", {
+    key,
+    subscriptionId: "second",
+  });
+  gateway.emit("chat", final);
+  expect(frames.filter((frame) => frame.type === "event" && frame.event === "chat")).toHaveLength(
+    1,
+  );
 });
 
 it("keeps repeated events scoped after unsubscribe and reconnect without filtering roster messages", async ({

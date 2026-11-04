@@ -1,16 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildSkillLibraryMock } from "../../test-helpers/skill-library-fixtures.ts";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
-import { createProps, createSkill } from "./view.test-support.ts";
+import { createProps, createReport, createSkill } from "./view.test-support.ts";
 afterEach(cleanupSkillsViews);
 
 function renderDiscovery(
-  props: Parameters<typeof createProps>[0],
+  {
+    skill,
+    ...props
+  }: Parameters<typeof createProps>[0] & {
+    skill?: Parameters<typeof createSkill>[0];
+  },
   container = document.createElement("div"),
 ) {
-  renderSkills(createProps({ surface: "discovery", ...props }), container);
+  renderSkills(
+    createProps({ surface: "discovery", report: createReport([createSkill(skill)]), ...props }),
+    container,
+  );
   return container;
 }
+
+const remoteSkill = (owner = "alice", slug = "repo", displayName = "Repo") => ({
+  score: 1,
+  registry: "https://clawhub.ai",
+  slug,
+  installRef: `@${owner}/${slug}`,
+  displayName,
+});
 
 describe("unified skill discovery", () => {
   it("keeps cards visible without a loading label while loading", () => {
@@ -30,11 +46,7 @@ describe("unified skill discovery", () => {
     const container = renderDiscovery({
       libraryEntries: libraries,
       onLibraryOpen,
-      report: {
-        workspaceDir: "/tmp",
-        managedSkillsDir: "/tmp",
-        skills: [createSkill({ name: libraries[0]!.name, source: "openclaw-library" })],
-      },
+      skill: { name: libraries[0]!.name, source: "openclaw-library" },
     });
     expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(3);
     const cards = [...container.querySelectorAll(".plugin-catalog-card")];
@@ -45,25 +57,12 @@ describe("unified skill discovery", () => {
   });
 
   it("does not mistake an invalid namesake for a ClawHub install", () => {
-    const skill = createSkill({
-      name: "Repo",
-      clawhub: {
-        status: "invalid",
-        valid: false,
-        reason: "Origin does not match",
-      },
-    });
     const container = renderDiscovery({
-      report: { workspaceDir: "/tmp", managedSkillsDir: "/tmp", skills: [skill] },
-      clawhubResults: [
-        {
-          score: 1,
-          registry: "https://clawhub.ai",
-          slug: "repo",
-          installRef: "@alice/repo",
-          displayName: "Repo",
-        },
-      ],
+      skill: {
+        name: "Repo",
+        clawhub: { status: "invalid", valid: false, reason: "Origin does not match" },
+      },
+      clawhubResults: [remoteSkill()],
     });
     expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(2);
     expect(container.querySelectorAll(".plugin-catalog-card__install")).toHaveLength(1);
@@ -74,15 +73,7 @@ describe("unified skill discovery", () => {
     const onDetailOpen = vi.fn();
     const container = renderDiscovery({
       clawhubQuery: "repo",
-      clawhubResults: [
-        {
-          score: 1,
-          slug: "repo-helper",
-          registry: "https://clawhub.ai",
-          installRef: "@alice/repo-helper",
-          displayName: "Repo Helper",
-        },
-      ],
+      clawhubResults: [remoteSkill("alice", "repo-helper", "Repo Helper")],
       onClawHubQueryChange,
       onClawHubInstall,
       onDetailOpen,
@@ -109,30 +100,23 @@ describe("unified skill discovery", () => {
   });
 
   it("deduplicates verified registry identity without hiding namesakes or another publisher", () => {
-    const local = createSkill({
-      name: "Local name",
-      clawhub: {
-        status: "linked",
-        valid: true,
-        registry: "https://clawhub.ai",
-        slug: "repo",
-        ownerHandle: "alice",
-        installedVersion: "1.0.0",
-        installedAt: 1,
-        originPath: "/tmp/origin",
-        lockPath: "/tmp/lock",
-      },
-    });
     const container = renderDiscovery({
       clawhubQuery: "repo",
-      report: { workspaceDir: "/tmp", managedSkillsDir: "/tmp", skills: [local] },
-      clawhubResults: ["alice", "bob"].map((owner) => ({
-        score: 1,
-        registry: "https://clawhub.ai",
-        slug: "repo",
-        installRef: `@${owner}/repo`,
-        displayName: "Repo",
-      })),
+      skill: {
+        name: "Local name",
+        clawhub: {
+          status: "linked",
+          valid: true,
+          registry: "https://clawhub.ai",
+          slug: "repo",
+          ownerHandle: "alice",
+          installedVersion: "1.0.0",
+          installedAt: 1,
+          originPath: "/tmp/origin",
+          lockPath: "/tmp/lock",
+        },
+      },
+      clawhubResults: ["alice", "bob"].map((owner) => remoteSkill(owner)),
     });
     expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(2);
     expect(container.querySelector('[data-skill-id="local:repo-skill"]')).not.toBeNull();
@@ -141,14 +125,13 @@ describe("unified skill discovery", () => {
   });
 
   it("keeps local results usable during remote failure and explains missing setup in the dot", () => {
-    const skill = createSkill({
-      eligible: false,
-      missing: { bins: ["repo-cli"], anyBins: [], env: [], config: [], os: [] },
-    });
     const container = renderDiscovery({
       clawhubQuery: "repo",
       clawhubSearchError: "Registry unavailable",
-      report: { workspaceDir: "/tmp", managedSkillsDir: "/tmp", skills: [skill] },
+      skill: {
+        eligible: false,
+        missing: { bins: ["repo-cli"], anyBins: [], env: [], config: [], os: [] },
+      },
     });
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
       "Registry unavailable",

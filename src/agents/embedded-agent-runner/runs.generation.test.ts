@@ -19,6 +19,7 @@ import {
   type DiagnosticEmbeddedRunOwner,
 } from "../../logging/diagnostic-run-activity.js";
 import { getDiagnosticSessionState } from "../../logging/diagnostic-session-state.js";
+import { logMessageQueued } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
@@ -28,14 +29,12 @@ import {
 } from "../../sessions/session-controller.queries.js";
 import { assertSessionControllerOperation } from "../../sessions/session-controller.state.js";
 import { testing as replyRunTesting } from "../../sessions/session-controller.test-support.js";
-import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { getEmbeddedRunAttachment, type EmbeddedAgentQueueHandle } from "./run-state.js";
 import {
   detachActiveEmbeddedRun as retireActiveEmbeddedRun,
   prepareEmbeddedAgentRunCompletionClaim,
   getActiveEmbeddedRunSnapshot,
   updateActiveEmbeddedRunSnapshot,
-  resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunSessionIdBySessionFile as resolveRunByFile,
   resolveActiveEmbeddedRunOwnerByRunId,
   attachActiveEmbeddedRun as registerActiveEmbeddedRun,
@@ -317,43 +316,21 @@ describe("embedded run registry lifecycle generations", () => {
     successor.operation.complete();
   });
 
-  it("publishes backend completion authority and replaces two-argument claims", async () => {
-    const handle = createRunHandle({ runId: "claim-run" });
-    const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
-    let settled = false;
-    void prepared.registered.then(() => {
-      settled = true;
-    });
+  it("retires processing when a successor fails before native start without consuming queued work", () => {
+    const pendingRef = createIdentity("blocked-recovery");
+    const priorOperation = createReplyOperation({ ...pendingRef, resetTriggered: false });
+    const priorHandle = createRunHandle({ runId: "prior-native-run" });
+    const priorAttachment = attachOperation(priorOperation, priorHandle, pendingRef);
+    logMessageQueued({ ...pendingRef, source: "pending-followup" });
+    priorOperation.complete();
+    const successor = createReplyOperation({ ...pendingRef, resetTriggered: false });
+    retireDiagnosticRun({ handle: priorHandle, attachment: priorAttachment }, pendingRef);
+    successor.fail("run_failed", new Error("Session ended during restart recovery"));
+    successor.complete();
 
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        embeddedRunToolAuthorityBinding: () => ({
-          source: "reply",
-          project: () => "authority",
-          projectAsync: async () => "authority",
-          assertActive: () => {},
-        }),
-      },
-      () => setActiveEmbeddedRun("claim-session", handle, "agent:main:main"),
-    );
-
-    await expect(prepared.registered).resolves.toEqual({
-      toolAuthority: expect.objectContaining({ source: "reply" }),
-    });
-    clearActiveEmbeddedRun("claim-session", handle, "agent:main:main");
-    const replacement = prepareEmbeddedAgentRunCompletionClaim("claim-session", "next-run");
-    expect(prepared.claimCompletion()).toBe(false);
-    const nextHandle = createRunHandle({ runId: "next-run" });
-    setActiveEmbeddedRun("claim-session", nextHandle, "agent:main:main");
-    clearActiveEmbeddedRun("claim-session", nextHandle, "agent:main:main");
-    await expect(replacement.registered).resolves.toBeUndefined();
-    expect(replacement.claimCompletion()).toBe(true);
-    expect(replacement.claimCompletion()).toBe(false);
+    expect(listActiveSessionRunKeys()).not.toContain(pendingRef.sessionKey);
+    expect(resolveActiveEmbeddedRunOwnerByRunId("prior-native-run")).toBeUndefined();
+    expect(getDiagnosticSessionState(pendingRef)).toMatchObject({ state: "idle", queueDepth: 1 });
   });
 
   it.each(["completed", "unbound", "unpublished"] as const)(
@@ -415,38 +392,33 @@ describe("embedded run registry lifecycle generations", () => {
       expect(stale.queueMessage).not.toHaveBeenCalled();
       expect(stale.abort).toHaveBeenCalledWith("restart");
       expect(listActiveSessionRunIds()).not.toContain(staleId);
-      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:stale")).toBeUndefined();
     },
   );
 
-  it("retains a handle's original lifecycle fence after eviction and clear", () => {
-    const abort = vi.fn();
-    const staleHandle = createRunHandle({ abort, runId: "cleared-stale-run" });
-
-    setActiveEmbeddedRun("cleared-stale-session", staleHandle, "agent:main:cleared-stale");
-    rotateAgentEventLifecycleGeneration();
-    clearActiveEmbeddedRun("cleared-stale-session", staleHandle, "agent:main:cleared-stale");
-
-    setActiveEmbeddedRun("cleared-stale-session", staleHandle, "agent:main:cleared-stale");
-
-    expect(abort.mock.calls).toEqual([["restart"], ["restart"]]);
-    expect(listActiveSessionRunIds()).not.toContain("cleared-stale-session");
-  });
-
-  it("rejects a current-lifecycle handle after its diagnostic owner closes", () => {
-    const closedRef = createIdentity("closed");
-
-    const abort = vi.fn();
-    const diagnosticOwner = createDiagnosticEmbeddedRunOwner({ ...closedRef, runId: "closed-run" });
-    const handle = createRunHandle({ abort, diagnosticOwner, runId: "closed-run" });
-    setActiveEmbeddedRun(closedRef.sessionId, handle, closedRef.sessionKey);
-    clearActiveEmbeddedRun(closedRef.sessionId, handle, closedRef.sessionKey);
-
-    setActiveEmbeddedRun(closedRef.sessionId, handle, closedRef.sessionKey);
-
-    expect(abort).toHaveBeenCalledWith("restart");
-    expect(listActiveSessionRunIds()).not.toContain(closedRef.sessionId);
-  });
+  it.each(["lifecycle", "diagnostic owner"])(
+    "rejects a cleared handle with a retired %s",
+    (kind) => {
+      const identity = createIdentity("cleared");
+      const abort = vi.fn();
+      const runId = "cleared-run";
+      const diagnosticOwner =
+        kind === "diagnostic owner"
+          ? createDiagnosticEmbeddedRunOwner({ ...identity, runId })
+          : undefined;
+      const handle = createRunHandle({ abort, diagnosticOwner, runId });
+      const register = () => setActiveEmbeddedRun(identity.sessionId, handle, identity.sessionKey);
+      register();
+      if (kind === "lifecycle") {
+        rotateAgentEventLifecycleGeneration();
+      }
+      clearActiveEmbeddedRun(identity.sessionId, handle, identity.sessionKey);
+      register();
+      expect(abort.mock.calls).toEqual(
+        kind === "lifecycle" ? [["restart"], ["restart"]] : [["restart"]],
+      );
+      expect(listActiveSessionRunIds()).not.toContain(identity.sessionId);
+    },
+  );
 
   it("propagates failure to abort a delayed prior-lifecycle registration", () => {
     const priorLifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -488,8 +460,6 @@ describe("embedded run registry lifecycle generations", () => {
       await expectCurrentRun(current, "shared-session", "current survives");
       expect(stale.queueMessage).not.toHaveBeenCalled();
       expect(stale.abort).toHaveBeenCalledExactlyOnceWith("restart");
-      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:current")).toBe("shared-session");
-      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:stale")).toBeUndefined();
       expect(resolveRunByFile("/tmp/stale-session.jsonl")).toBeUndefined();
     },
   );

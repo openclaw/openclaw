@@ -181,6 +181,7 @@ it("refreshes exact managed queries by agent and retains appended dashboard wind
     ...requestDefaults,
     rowMode: "compact",
     source: "chat-pane",
+    ifRowsRevision: "",
     limit: 4,
     includeDerivedTitles: true,
     includeLastMessage: true,

@@ -4,16 +4,22 @@ import type {
   UserProfile,
   ProjectsCheckoutOptionsResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { ApprovalHistoryResult } from "../../../packages/gateway-protocol/src/schema/approvals.ts";
+import type { ExecApprovalGrantsListResult } from "../../../packages/gateway-protocol/src/schema/exec-approvals.ts";
+import type { SystemAgentChatHistoryResult } from "../../../packages/gateway-protocol/src/schema/openclaw.ts";
 import type {
   PluginsCatalogBrowseResult,
   PluginsCatalogCategoriesResult,
 } from "../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { BUILTIN_THEMES } from "../../../packages/gateway-protocol/src/theme.js";
 import type { DoctorMemoryStatusPayload } from "../../../src/gateway/server-methods/doctor.ts";
+import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
+import type { SessionsUsageResult } from "../../../src/shared/usage-types.ts";
 import type { ChannelsPairingListResult } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
 
 export const defaultControlUiFeatureMethods = [
+  "agents.create",
   "chat.abort",
   "chat.history",
   "chat.send",
@@ -36,6 +42,7 @@ export const defaultControlUiFeatureMethods = [
   "sessions.patchMany",
   "sessions.branches.switch",
   "sessions.compact",
+  "sessions.companion.state",
   "sessions.create",
   "sessions.delete",
   "sessions.dispatch",
@@ -53,6 +60,7 @@ export const defaultControlUiFeatureMethods = [
   "sessions.search",
   "system.info",
   "users.github.status",
+  "users.channelIdentity",
   "users.github.authorize.start",
   "users.github.authorize.poll",
   "users.github.authorize.cancel",
@@ -98,7 +106,29 @@ export function createControlUiDefaultResponses(scenario: {
     theme: BUILTIN_THEMES[0],
     current: { id: "claw", mode: "system", scope: "gateway", overrides: {} },
   };
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10);
   return {
+    "approval.history": { items: [] } satisfies ApprovalHistoryResult,
+    "exec.approval.grants.list": { grants: [] } satisfies ExecApprovalGrantsListResult,
+    "openclaw.chat.history": { turns: [] } satisfies SystemAgentChatHistoryResult,
+    "sessions.usage": {
+      updatedAt: now.getTime(),
+      startDate: date,
+      endDate: date,
+      sessions: [],
+      totals: createEmptyCostUsageTotals(),
+      aggregates: {
+        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+        byModel: [],
+        byProvider: [],
+        byAgent: [],
+        byChannel: [],
+        daily: [],
+        costDaily: [],
+      },
+    } satisfies SessionsUsageResult,
     "environments.list": {
       environments: [],
       profiles: [],
@@ -128,6 +158,7 @@ export function createControlUiDefaultResponses(scenario: {
     } satisfies ChannelsPairingListResult,
     "plugins.catalog.categories": { categories: [] } satisfies PluginsCatalogCategoriesResult,
     "plugins.catalog.browse": { items: [] } satisfies PluginsCatalogBrowseResult,
+    "users.channelIdentity": { status: "ready", accounts: [] },
     "users.self": profile
       ? { profile }
       : {

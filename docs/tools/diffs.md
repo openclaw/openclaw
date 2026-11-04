@@ -62,7 +62,7 @@ The [Control UI](/web/control-ui) already highlights inline tool diffs and sessi
 
 ## Disable built-in system guidance
 
-To keep the tool but drop the prepended system-prompt guidance, set `plugins.entries.diffs.hooks.allowPromptInjection` to `false`:
+To keep the tool but drop its system-prompt guidance, set `plugins.entries.diffs.hooks.allowPromptInjection` to `false`:
 
 ```json5
 {
@@ -79,7 +79,7 @@ To keep the tool but drop the prepended system-prompt guidance, set `plugins.ent
 }
 ```
 
-This blocks the plugin's `before_prompt_build` hook while keeping the tool and skill available. To disable both guidance and the tool, disable the plugin instead.
+This drops the system-prompt guidance registered with the `diffs` tool while keeping the tool and skill available. To disable both guidance and the tool, disable the plugin instead.
 
 ## Tool input reference
 
@@ -196,7 +196,7 @@ All successful results include `changed`: identical before/after input returns `
     - `fileBytes`
     - `fileFormat`
     - `fileQuality`
-    - `fileScale`
+    - `fileScale` (actual device scale used for PNG, including pixel-budget downscaling; configured scale for PDF)
     - `fileMaxWidth`
 
   </Accordion>

@@ -4,7 +4,6 @@ import {
   runSubagentStateWorkerOperation,
   useSubagentControlFixture,
 } from "./subagent-control.test-support.js";
-/** Explicit reset retires child work without erasing its durable conversations. */
 import { beforeEach, expect, it, vi } from "vitest";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "../../../auto-reply/reply/queue.js";
@@ -21,54 +20,132 @@ import {
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import { sessionMutationHandlers } from "../../../gateway/server-methods/sessions-mutations.js";
 import { registerInternalHook, unregisterInternalHook } from "../../../hooks/internal-hooks.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { killAllControlledSubagentRuns, killSessionSubagentRuns } from "./subagent-control-kill.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import { registerSubagentRun } from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import {
+  writeChildSession,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
-beforeEach(async () => {
-  await captureRuntimeConfigAsyncReader()();
-});
+beforeEach(async () => captureRuntimeConfigAsyncReader()());
 const parentKey = "agent:main:main";
 const controllerKey = "agent:main:telegram:default:direct:123";
 const childKey = (id: string) => "agent:main:subagent:" + id;
 
-it.each([false, true])(
-  "reset preserves a replacement child and retires only suppressed terminal work (suppressed=%s)",
-  async (suppressed) => {
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: parentKey,
-      defaultSessionId: "reset-parent",
-      lifecycleRevision: "reset-parent-revision",
-    });
+const writeSession = (sessionKey: string, defaultSessionId: string, lifecycleRevision?: string) =>
+  writeChildSession(fixture.stateDir, sessionKey, defaultSessionId, lifecycleRevision);
+const displayStatus = (id: string) => resolveSubagentDisplayStatus(subagentRuns.get(id)!);
+
+function sessions(storePath: string) {
+  return {
+    read: (sessionKey: string) => loadSessionEntry({ storePath, sessionKey }),
+    transcript: (sessionId: string) => loadTranscriptEvents({ storePath, sessionId }),
+    patch: (
+      sessionKey: string,
+      fields: Partial<NonNullable<ReturnType<typeof loadSessionEntry>>>,
+    ) => patchSessionEntryCore({ storePath, sessionKey }, (entry) => ({ ...entry, ...fields })),
+  };
+}
+
+function expectResetResponse(respond: ReturnType<typeof vi.fn>, ok: boolean) {
+  expect(respond).toHaveBeenCalledWith(
+    ok,
+    ok ? expect.objectContaining({ ok: true }) : undefined,
+    ok
+      ? undefined
+      : expect.objectContaining({ message: expect.stringContaining("Reset did not complete") }),
+  );
+}
+
+function resetRpc(
+  respond: Parameters<
+    NonNullable<(typeof sessionMutationHandlers)["sessions.reset"]>
+  >[0]["respond"],
+) {
+  return sessionMutationHandlers["sessions.reset"]!({
+    params: { key: parentKey },
+    context: createChatAbortContext({
+      getRuntimeConfig,
+      getSessionEventSubscriberConnIds: () => new Set(),
+    }) as never,
+    respond,
+    client: { connect: { scopes: ["operator.admin"] } } as never,
+    req: { type: "req", id: "reset", method: "sessions.reset" },
+    isWebchatConnect: () => false,
+  });
+}
+
+function resetChat() {
+  return initSessionState({
+    ctx: finalizeInboundContext({
+      Body: "/reset",
+      From: "telegram:123",
+      To: "telegram:123",
+      ChatType: "direct",
+      SessionKey: parentKey,
+      Provider: "telegram",
+    }),
+    cfg: getRuntimeConfig(),
+    commandAuthorized: true,
+  });
+}
+
+function registerChild(
+  runId: string,
+  sessionEntry: Parameters<typeof registerSubagentRun>[0]["sessionEntry"],
+  overrides: Partial<Parameters<typeof registerSubagentRun>[0]> = {},
+) {
+  return registerSubagentRun({
+    runId,
+    childSessionKey: childKey(runId),
+    childAgentId: "main",
+    sessionEntry,
+    requesterSessionKey: parentKey,
+    controllerSessionKey: controllerKey,
+    requesterAgentId: "main",
+    requesterDisplayKey: parentKey,
+    task: runId,
+    cleanup: "keep",
+    expectsCompletionMessage: true,
+    ...overrides,
+  });
+}
+
+it.each([
+  { suppressed: false, pendingWake: true, nested: false },
+  { suppressed: true, pendingWake: true, nested: false },
+  { suppressed: false, pendingWake: false, nested: false },
+  { suppressed: false, pendingWake: false, nested: true },
+])(
+  "reset preserves a replacement child (suppressed=$suppressed, pendingWake=$pendingWake, nested=$nested)",
+  async ({ suppressed, pendingWake, nested }) => {
+    const storePath = await writeSession(parentKey, "reset-parent", "reset-parent-revision");
+    const { read, patch } = sessions(storePath);
+    if (nested) {
+      await writeSession(childKey("active-parent"), "active-parent");
+      await registerChild("active-parent", read(childKey("active-parent")), {
+        controllerSessionKey: parentKey,
+      });
+      await pauseRun("active-parent");
+    }
     const key = childKey("replaced");
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: key,
-      defaultSessionId: "original-child",
-      lifecycleRevision: "original-revision",
-    });
-    await registerSubagentRun({
-      runId: "original-run",
+    await writeSession(key, "original-child", "original-revision");
+    await registerChild("original-run", read(key), {
       childSessionKey: key,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: key }),
-      requesterSessionKey: parentKey,
-      requesterAgentId: "main",
-      requesterDisplayKey: parentKey,
+      controllerSessionKey: undefined,
+      requesterSessionKey: nested ? childKey("active-parent") : parentKey,
       task: "old retained assignment",
-      cleanup: "keep",
       expectsCompletionMessage: false,
     });
     await updateRun("original-run", (entry) => {
@@ -79,14 +156,14 @@ it.each([false, true])(
         suppressSessionEffects: suppressed ? true : undefined,
       };
       entry.completion = { required: false, capturedAt: 1_000, resultText: "stopped" };
-      entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      if (pendingWake) {
+        entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      } else {
+        delete entry.requesterSettleWake;
+      }
     });
-    await patchSessionEntryCore({ storePath, sessionKey: key }, (entry) => ({
-      ...entry,
-      sessionId: "replacement-child",
-      lifecycleRevision: "replacement-revision",
-    }));
-    const replacement = loadSessionEntry({ storePath, sessionKey: key });
+    await patch(key, { sessionId: "replacement-child", lifecycleRevision: "replacement-revision" });
+    const replacement = read(key);
     const interruptReplacement = vi.fn();
     const replacementAdmission = await beginSessionEffect({
       scope: storePath,
@@ -96,39 +173,23 @@ it.each([false, true])(
     });
     const respond = vi.fn();
     try {
-      await sessionMutationHandlers["sessions.reset"]!({
-        params: { key: parentKey },
-        context: createChatAbortContext({
-          getRuntimeConfig,
-          getSessionEventSubscriberConnIds: () => new Set(),
-        }) as never,
-        respond,
-        client: { connect: { scopes: ["operator.admin"] } } as never,
-        req: { type: "req", id: "reset-replaced-child", method: "sessions.reset" },
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledWith(
-        suppressed,
-        suppressed ? expect.objectContaining({ ok: true }) : undefined,
-        suppressed
-          ? undefined
-          : expect.objectContaining({ message: expect.stringContaining("Reset did not complete") }),
-      );
-      const parent = loadSessionEntry({ storePath, sessionKey: parentKey });
-      if (suppressed) {
+      await resetRpc(respond);
+      expectResetResponse(respond, suppressed || !pendingWake);
+      const parent = read(parentKey);
+      if (suppressed || !pendingWake) {
         expect(parent?.lifecycleRevision).not.toBe("reset-parent-revision");
         expect(subagentRuns.get("original-run")).toMatchObject({
           execution: {
             outcome: { status: "error", error: "original session incarnation changed" },
           },
-          suppressCompletionDelivery: true,
+          ...(suppressed ? { suppressCompletionDelivery: true } : {}),
         });
         expect(subagentRuns.get("original-run")?.requesterSettleWake).toBeUndefined();
       } else {
         expect(parent?.lifecycleRevision).toBe("reset-parent-revision");
         expect(subagentRuns.get("original-run")?.requesterSettleWake).toBeDefined();
       }
-      expect(loadSessionEntry({ storePath, sessionKey: key })).toEqual(replacement);
+      expect(read(key)).toEqual(replacement);
       expect(interruptReplacement).not.toHaveBeenCalled();
     } finally {
       replacementAdmission.release();
@@ -150,12 +211,44 @@ async function updateRun(runId: string, update: (draft: SubagentRunRecord) => vo
 
 function expectUnfinishedYieldedRun(runId: string) {
   const entry = subagentRuns.get(runId);
-  expect(entry?.pauseReason, runId).toBe("sessions_yield");
+  expect(displayStatus(runId), runId).toBe("waiting for external continuation");
+  expect(entry, runId).toMatchObject({
+    pauseReason: "sessions_yield",
+    execution: { status: "terminal" },
+  });
   expect(entry?.endedReason, runId).toBeUndefined();
-  expect(entry?.execution.status, runId).toBe("terminal");
   expect(entry?.execution.outcome, runId).toBeUndefined();
   expect(entry?.completion?.capturedAt, runId).toBeUndefined();
 }
+
+const pauseRun = (id: string) =>
+  updateRun(id, (entry) => {
+    expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
+  });
+
+it("RPC reset cancels live descendants beneath a completed child", async () => {
+  const storePath = await writeSession(parentKey, "parent", "before-reset");
+  const { read } = sessions(storePath);
+  for (const id of ["completed-parent", "live-descendant"]) {
+    await writeSession(childKey(id), id);
+    await registerChild(id, read(childKey(id)), {
+      controllerSessionKey: id === "completed-parent" ? parentKey : childKey("completed-parent"),
+      requesterSessionKey: id === "completed-parent" ? parentKey : childKey("completed-parent"),
+      expectsCompletionMessage: false,
+    });
+  }
+  await updateRun("completed-parent", (entry) => {
+    entry.execution = { status: "terminal", endedAt: 1_000, outcome: { status: "ok" } };
+    delete entry.requesterSettleWake;
+  });
+  await pauseRun("live-descendant");
+  const respond = vi.fn();
+  await resetRpc(respond);
+  expectResetResponse(respond, true);
+  expect(read(parentKey)?.lifecycleRevision).not.toBe("before-reset");
+  expect(displayStatus("live-descendant")).toBe("killed");
+  expect(subagentRuns.get("completed-parent")?.execution.outcome).toEqual({ status: "ok" });
+});
 
 it.each(
   (["chat", "rpc"] as const).flatMap((boundary) =>
@@ -165,20 +258,13 @@ it.each(
   "$boundary reset accounts for requester/controller-owned children (failed=$failed)",
   async ({ boundary, failed }) => {
     fixture.announce.mockResolvedValue("delivered");
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: parentKey,
-      defaultSessionId: "reset-parent-session",
-    });
+    const storePath = await writeSession(parentKey, "reset-parent-session");
+    const { read, transcript } = sessions(storePath);
     await appendTranscriptMessage(
       { storePath, sessionKey: parentKey, sessionId: "reset-parent-session" },
       { message: { role: "user", content: "conversation before reset" } },
     );
-    const previousTranscript = await loadTranscriptEvents({
-      storePath,
-      sessionId: "reset-parent-session",
-    });
+    const previousTranscript = await transcript("reset-parent-session");
     const childTranscripts = new Map<string, Awaited<ReturnType<typeof loadTranscriptEvents>>>();
     for (const [id, requesterSessionKey, controllerSessionKey] of [
       ["requester-child", parentKey, controllerKey],
@@ -186,29 +272,16 @@ it.each(
       ["queued-child", parentKey, controllerKey],
       ["unrelated-child", "agent:main:other-requester", controllerKey],
     ] as const) {
-      await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey: childKey(id),
-        defaultSessionId: id,
-      });
+      await writeSession(childKey(id), id);
       await appendTranscriptMessage(
         { storePath, sessionKey: childKey(id), sessionId: id },
         { message: { role: "user", content: "child conversation " + id } },
       );
-      childTranscripts.set(id, await loadTranscriptEvents({ storePath, sessionId: id }));
-      await registerSubagentRun({
-        runId: id,
-        childSessionKey: childKey(id),
-        childAgentId: "main",
-        sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey(id) }),
+      childTranscripts.set(id, await transcript(id));
+      await registerChild(id, read(childKey(id)), {
         requesterSessionKey,
         controllerSessionKey,
-        requesterAgentId: "main",
         requesterDisplayKey: requesterSessionKey,
-        task: id,
-        cleanup: "keep",
-        expectsCompletionMessage: true,
       });
       await updateRun(id, (entry) => {
         if (id === "queued-child") {
@@ -218,51 +291,27 @@ it.each(
         }
       });
     }
-    const previousRevision = loadSessionEntry({
-      storePath,
-      sessionKey: parentKey,
-    })?.lifecycleRevision;
+    const previousRevision = read(parentKey)?.lifecycleRevision;
     if (failed) {
-      fixture.worker.mockImplementation((context, operation, options) =>
-        runSubagentStateWorkerOperation(
-          context,
-          (scope) =>
-            operation({
-              execute: async (...args) => {
-                const command = args[0];
-                if (
-                  isSubagentRegistryWriteCommand(command) &&
-                  command.input.values.some(
-                    (row) =>
-                      row.run_id === "requester-child" &&
-                      row.payload_json?.includes('"killIntent":{'),
-                  )
-                ) {
-                  throw new Error("termination persistence refused");
-                }
-                return scope.execute(...args);
-              },
-            }),
-          options,
-        ),
+      probe.command(
+        stateWorker,
+        async (command, options, scope) => {
+          if (
+            isSubagentRegistryWriteCommand(command) &&
+            command.input.values.some(
+              (row) =>
+                row.run_id === "requester-child" && row.payload_json?.includes('"killIntent":{'),
+            )
+          ) {
+            throw new Error("termination persistence refused");
+          }
+          return scope.execute(command, options);
+        },
+        { original: runSubagentStateWorkerOperation },
       );
     }
     if (boundary === "chat") {
-      const reset = initSessionState({
-        ctx: finalizeInboundContext({
-          Body: "/reset",
-          RawBody: "/reset",
-          CommandBody: "/reset",
-          From: "telegram:123",
-          To: "telegram:123",
-          ChatType: "direct",
-          SessionKey: parentKey,
-          Provider: "telegram",
-          Surface: "telegram",
-        }),
-        cfg: getRuntimeConfig(),
-        commandAuthorized: true,
-      });
+      const reset = resetChat();
       if (failed) {
         await expect(reset).rejects.toThrow("Reset did not complete");
       } else {
@@ -270,54 +319,25 @@ it.each(
       }
     } else {
       const respond = vi.fn();
-      await sessionMutationHandlers["sessions.reset"]!({
-        params: { key: parentKey },
-        context: createChatAbortContext({
-          getRuntimeConfig,
-          getSessionEventSubscriberConnIds: () => new Set(),
-        }) as never,
-        respond,
-        client: { connect: { scopes: ["operator.admin"] } } as never,
-        req: { type: "req", id: "reset", method: "sessions.reset" },
-        isWebchatConnect: () => false,
-      });
-      if (failed) {
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ message: expect.stringContaining("Reset did not complete") }),
-        );
-      } else {
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ ok: true }),
-          undefined,
-        );
-      }
+      await resetRpc(respond);
+      expectResetResponse(respond, !failed);
     }
     for (const id of ["requester-child", "controller-child", "queued-child"]) {
       expect
-        .soft(resolveSubagentDisplayStatus(subagentRuns.get(id)!), id)
+        .soft(displayStatus(id), id)
         .toBe(failed && id === "requester-child" ? "waiting for external continuation" : "killed");
       if (failed && id === "requester-child") {
         expectUnfinishedYieldedRun(id);
       }
-      expect(loadSessionEntry({ storePath, sessionKey: childKey(id) })?.sessionId).toBe(id);
+      expect(read(childKey(id))?.sessionId).toBe(id);
     }
-    expect(resolveSubagentDisplayStatus(subagentRuns.get("unrelated-child")!)).toBe(
-      "waiting for external continuation",
-    );
     expectUnfinishedYieldedRun("unrelated-child");
-    for (const [sessionId, transcript] of childTranscripts) {
-      expect(await loadTranscriptEvents({ storePath, sessionId })).toEqual(transcript);
+    for (const [sessionId, previous] of childTranscripts) {
+      expect(await transcript(sessionId)).toEqual(previous);
     }
     if (failed) {
-      expect(await loadTranscriptEvents({ storePath, sessionId: "reset-parent-session" })).toEqual(
-        previousTranscript,
-      );
-      expect(loadSessionEntry({ storePath, sessionKey: parentKey })?.lifecycleRevision).toBe(
-        previousRevision,
-      );
+      expect(await transcript("reset-parent-session")).toEqual(previousTranscript);
+      expect(read(parentKey)?.lifecycleRevision).toBe(previousRevision);
     }
   },
 );
@@ -327,32 +347,10 @@ it.each(
 it.each(["chat", "rpc"] as const)(
   "%s reset drains parent then child admissions before committing the boundary",
   async (boundary) => {
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: parentKey,
-      defaultSessionId: "parent",
-      lifecycleRevision: "before-reset",
-    });
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: childKey("draining"),
-      defaultSessionId: "draining",
-    });
-    await registerSubagentRun({
-      runId: "draining",
-      childSessionKey: childKey("draining"),
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey("draining") }),
-      requesterSessionKey: parentKey,
-      controllerSessionKey: controllerKey,
-      requesterAgentId: "main",
-      requesterDisplayKey: parentKey,
-      task: "draining",
-      cleanup: "keep",
-      expectsCompletionMessage: true,
-    });
+    const storePath = await writeSession(parentKey, "parent", "before-reset");
+    const { read, patch } = sessions(storePath);
+    await writeSession(childKey("draining"), "draining");
+    await registerChild("draining", read(childKey("draining")));
     const parentInterrupted = createDeferredCore();
     const childInterrupted = createDeferredCore();
     const interruptChild = vi.fn(() => childInterrupted.resolve());
@@ -375,63 +373,25 @@ it.each(["chat", "rpc"] as const)(
       onInterrupt: interruptChild,
     });
     const respond = vi.fn();
-    const reset =
-      boundary !== "rpc"
-        ? initSessionState({
-            ctx: finalizeInboundContext({
-              Body: "/reset",
-              RawBody: "/reset",
-              CommandBody: "/reset",
-              From: "telegram:123",
-              To: "telegram:123",
-              ChatType: "direct",
-              SessionKey: parentKey,
-              Provider: "telegram",
-              Surface: "telegram",
-            }),
-            cfg: getRuntimeConfig(),
-            commandAuthorized: true,
-          })
-        : sessionMutationHandlers["sessions.reset"]!({
-            params: { key: parentKey },
-            context: createChatAbortContext({
-              getRuntimeConfig,
-              getSessionEventSubscriberConnIds: () => new Set(),
-            }) as never,
-            respond,
-            client: { connect: { scopes: ["operator.admin"] } } as never,
-            req: { type: "req", id: "reset", method: "sessions.reset" },
-            isWebchatConnect: () => false,
-          });
+    const reset = boundary !== "rpc" ? resetChat() : resetRpc(respond);
     try {
       await parentInterrupted.promise;
       expect(interruptChild).not.toHaveBeenCalled();
       expect(subagentRuns.get("draining")?.killIntent).toBeUndefined();
       parentAdmission.release();
       await childInterrupted.promise;
-      expect(loadSessionEntry({ storePath, sessionKey: parentKey })?.lifecycleRevision).toBe(
-        "before-reset",
-      );
+      expect(read(parentKey)?.lifecycleRevision).toBe("before-reset");
       // A child finalizer writes through the same store lane before releasing.
       // Running cleanup inside that lane would deadlock this real write.
-      await patchSessionEntryCore({ storePath, sessionKey: childKey("draining") }, (entry) => ({
-        ...entry,
-        displayName: "finalized before reset",
-      }));
+      await patch(childKey("draining"), { displayName: "finalized before reset" });
       childAdmission.release();
       await reset;
       if (boundary === "rpc") {
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ ok: true }),
-          undefined,
-        );
+        expectResetResponse(respond, true);
       }
-      expect(resolveSubagentDisplayStatus(subagentRuns.get("draining")!)).toBe("killed");
-      expect(loadSessionEntry({ storePath, sessionKey: parentKey })?.lifecycleRevision).not.toBe(
-        "before-reset",
-      );
-      expect(loadSessionEntry({ storePath, sessionKey: childKey("draining") })).toMatchObject({
+      expect(displayStatus("draining")).toBe("killed");
+      expect(read(parentKey)?.lifecycleRevision).not.toBe("before-reset");
+      expect(read(childKey("draining"))).toMatchObject({
         sessionId: "draining",
         displayName: "finalized before reset",
       });
@@ -452,22 +412,19 @@ it("lifecycle requester cleanup respects agent ownership without granting ordina
       sessionKey: "agent:" + agentId + ":subagent:global-child",
       defaultSessionId: agentId,
     });
-    await registerSubagentRun({
-      runId: agentId,
-      childSessionKey: "agent:" + agentId + ":subagent:global-child",
-      childAgentId: agentId,
-      sessionEntry: { sessionId: agentId },
-      requesterSessionKey: "global",
-      controllerSessionKey: "agent:" + agentId + ":other-controller",
-      requesterAgentId: agentId,
-      requesterDisplayKey: "global",
-      task: agentId,
-      cleanup: "keep",
-      expectsCompletionMessage: true,
-    });
-    await updateRun(agentId, (entry) => {
-      expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
-    });
+    await registerChild(
+      agentId,
+      { sessionId: agentId },
+      {
+        childSessionKey: "agent:" + agentId + ":subagent:global-child",
+        childAgentId: agentId,
+        requesterSessionKey: "global",
+        controllerSessionKey: "agent:" + agentId + ":other-controller",
+        requesterAgentId: agentId,
+        requesterDisplayKey: "global",
+      },
+    );
+    await pauseRun(agentId);
   }
   const ordinary = await killAllControlledSubagentRuns({
     cfg,
@@ -481,38 +438,21 @@ it("lifecycle requester cleanup respects agent ownership without granting ordina
     runs: [...subagentRuns.values()],
   });
   expect(ordinary).toMatchObject({ status: "ok", killed: 0 });
-  expect(resolveSubagentDisplayStatus(subagentRuns.get("main")!)).toBe(
-    "waiting for external continuation",
-  );
   expectUnfinishedYieldedRun("main");
   expect(
     await killSessionSubagentRuns({ cfg, sessionKey: "global", agentId: "main" }),
-  ).toMatchObject({
-    status: "ok",
-    killed: 1,
-  });
-  expect(resolveSubagentDisplayStatus(subagentRuns.get("main")!)).toBe("killed");
-  expect(resolveSubagentDisplayStatus(subagentRuns.get("work")!)).toBe(
-    "waiting for external continuation",
-  );
+  ).toMatchObject({ status: "ok", killed: 1 });
+  expect(displayStatus("main")).toBe("killed");
   expectUnfinishedYieldedRun("work");
 });
 
 it.each(["sessionId", "lifecycleRevision"] as const)(
   "RPC reset preserves runtime and children of a replacement parent after a hook changes %s",
   async (field) => {
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: parentKey,
-      defaultSessionId: "parent",
-      lifecycleRevision: "original",
-    });
+    const storePath = await writeSession(parentKey, "parent", "original");
+    const { read, patch } = sessions(storePath);
     const replaceParent = async () => {
-      await patchSessionEntryCore({ storePath, sessionKey: parentKey }, (entry) => ({
-        ...entry,
-        [field]: "replacement",
-      }));
+      await patch(parentKey, { [field]: "replacement" });
       enqueueFollowupRun(
         parentKey,
         createQueueTestRun({ prompt: "replacement follow-up" }),
@@ -521,49 +461,26 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
         undefined,
         false,
       );
-      await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey: childKey("replacement-child"),
-        defaultSessionId: "replacement-child",
-      });
-      await registerSubagentRun({
-        runId: "replacement-child",
-        childSessionKey: childKey("replacement-child"),
-        childAgentId: "main",
-        sessionEntry: { sessionId: "replacement-child" },
-        requesterSessionKey: "agent:main:other-requester",
-        controllerSessionKey: parentKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: "other requester",
-        task: "replacement work",
-        cleanup: "keep",
-        expectsCompletionMessage: true,
-      });
-      await updateRun("replacement-child", (entry) => {
-        expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
-      });
+      await writeSession(childKey("replacement-child"), "replacement-child");
+      await registerChild(
+        "replacement-child",
+        { sessionId: "replacement-child" },
+        {
+          requesterSessionKey: "agent:main:other-requester",
+          controllerSessionKey: parentKey,
+          requesterDisplayKey: "other requester",
+          task: "replacement work",
+        },
+      );
+      await pauseRun("replacement-child");
     };
     registerInternalHook("command:reset", replaceParent);
     const respond = vi.fn();
     try {
-      await sessionMutationHandlers["sessions.reset"]!({
-        params: { key: parentKey },
-        context: createChatAbortContext({
-          getRuntimeConfig,
-          getSessionEventSubscriberConnIds: () => new Set(),
-        }) as never,
-        respond,
-        client: { connect: { scopes: ["operator.admin"] } } as never,
-        req: { type: "req", id: "reset", method: "sessions.reset" },
-        isWebchatConnect: () => false,
-      });
-      expect(resolveSubagentDisplayStatus(subagentRuns.get("replacement-child")!)).toBe(
-        "waiting for external continuation",
-      );
+      await resetRpc(respond);
       expectUnfinishedYieldedRun("replacement-child");
       expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
-      expect(loadSessionEntry({ storePath, sessionKey: parentKey })?.[field]).toBe("replacement");
+      expect(read(parentKey)?.[field]).toBe("replacement");
       expect(getFollowupQueueDepth(parentKey)).toBe(1);
     } finally {
       clearSessionQueues([parentKey]);

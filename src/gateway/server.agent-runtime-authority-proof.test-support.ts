@@ -3,12 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expect, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { createMessageReceiptFromOutboundResults } from "../channels/message/receipt.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
@@ -38,80 +39,6 @@ export type Response = Awaited<ReturnType<typeof dispatchGatewayMethodInProcessR
 export const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
 
-type ProofPhase =
-  | "reset-adopted"
-  | "reset-adopted-retry"
-  | "strict-delivery-failure"
-  | "strict-delivery-retry"
-  | "early-rpc"
-  | "authority-close"
-  | "caller-admitted"
-  | "media-transcript"
-  | "media-setup"
-  | "reset"
-  | "reset-committed"
-  | "reset-after-close"
-  | "reset-retry"
-  | "pending-input"
-  | "accepted-custody"
-  | "pending-retry"
-  | "media"
-  | "delivery-setup"
-  | "delivery"
-  | "delivery-retry";
-type ProofObservation = Partial<ReturnType<typeof rpcObservation>> & {
-  mode?:
-    | "live"
-    | "revoked"
-    | "accepted custody"
-    | "replaced after reset"
-    | "stopped"
-    | "replaced"
-    | "strict"
-    | "best effort"
-    | "ambiguous";
-  followUpPending?: boolean;
-  deliveryAttempts?: number;
-  resetCalls?: number;
-  registryLive?: boolean;
-  gatewayLive?: boolean;
-  admittedLive?: boolean;
-  closureCount?: number;
-  imageCapable?: boolean;
-  rowChanged?: boolean;
-  sessionPreserved?: boolean;
-  transcriptChanged?: boolean;
-  pendingCount?: number;
-  inputRecorded?: boolean;
-  executionCalls?: number;
-  mediaExists?: boolean;
-  mediaBytesMatch?: boolean;
-  deliveryCount?: number;
-  recordingAdapterRetained?: boolean;
-};
-
-// Fixed keys and primitive observations only: never serialize RPC payloads,
-// errors, identities, file paths, media bytes, or transcript content.
-function observe(phase: ProofPhase, fields: ProofObservation): void {
-  console.log(JSON.stringify({ proof: "agent-runtime-authority", version: 1, phase, ...fields }));
-}
-function rpcObservation(response: Response) {
-  const { payload, error } = response;
-  const status =
-    payload !== null && typeof payload === "object" && "status" in payload
-      ? payload.status
-      : undefined;
-  return {
-    rpcOk: response.ok,
-    rpcAccepted: status === "accepted",
-    rpcInFlight: status === "in_flight",
-    rpcInvalidRequest: error?.code === "INVALID_REQUEST",
-    imageUnsupported:
-      error?.message?.includes("active model does not accept image inputs") === true,
-    rpcCached: response.meta?.cached === true,
-    authorityError: error?.message?.includes("authority is no longer active") === true,
-  };
-}
 export async function readEffectFile(file: string): Promise<Buffer | undefined> {
   try {
     return await fs.readFile(file);
@@ -123,23 +50,14 @@ export async function readEffectFile(file: string): Promise<Buffer | undefined> 
   }
 }
 
-export async function reach<T>(boundary: Promise<T>, request: Promise<Response>): Promise<T> {
-  const first = await Promise.race([
-    boundary.then((value) => ({ boundary: value })),
-    request.then((response) => ({ response })),
-  ]);
-  if ("response" in first) {
-    observe("early-rpc", rpcObservation(first.response));
-    throw new Error("RPC ended before proof boundary; see bounded observation");
-  }
-  return first.boundary;
+export function reach<T>(boundary: Promise<T>, request: Promise<Response>) {
+  return awaitGateBeforeSettlement(boundary, request, "RPC ended before proof boundary");
 }
 
-export function installAuthorityProofGateway() {
+export function installAuthorityProofKernel() {
   let harness: GatewayServerHarness;
-  let context: Awaited<
-    ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>
-  >["gatewayRequestContext"];
+  let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
+  let acquisition: Promise<GatewayServerHarness> | undefined;
   installGatewayTestHooks({
     scope: "suite",
     setup: async () => {
@@ -148,19 +66,23 @@ export function installAuthorityProofGateway() {
       const capture = vi
         .spyOn(module, "createGatewayKernel")
         .mockImplementation(async (...args) => {
-          const kernel = await create(...args);
-          context = kernel.gatewayRequestContext;
+          kernel = await create(...args);
           return kernel;
         });
-      try {
-        harness = await startGatewayServerHarness();
-      } finally {
-        capture.mockRestore();
-      }
+      acquisition = startGatewayServerHarness();
+      harness = await acquisition.finally(() => capture.mockRestore());
     },
-    cleanup: () => harness?.close(),
+    cleanup: async () => {
+      const ready = await acquisition?.catch(() => undefined);
+      await ready?.close();
+    },
   });
-  return () => context;
+  return { kernel: () => kernel, harness: () => harness };
+}
+
+export function installAuthorityProofGateway() {
+  const { kernel } = installAuthorityProofKernel();
+  return () => kernel().gatewayRequestContext;
 }
 
 export function installAgentAuthorityProofFixture() {
@@ -199,13 +121,12 @@ export function installAgentAuthorityProofFixture() {
         closed.push(value.claimId);
       }
     });
-    const observation = (): ProofObservation => ({
+    const observation = () => ({
       registryLive: validateAgentRunDelegatedAuthority(authority),
       gatewayLive: context.validateAgentRuntimeApprovalAuthority?.(identity),
       admittedLive: getAdmittedRunDelegatedAuthority(admitted) !== undefined,
       closureCount: closed.length,
     });
-    observe("caller-admitted", observation());
     expect(observation()).toMatchObject({ registryLive: true, gatewayLive: true });
     return {
       identity,
@@ -213,7 +134,6 @@ export function installAgentAuthorityProofFixture() {
       observation,
       revoke: () => {
         admission.close();
-        observe("authority-close", observation());
         expect(closed).toEqual([authority.claimId]);
         expect(observation()).toMatchObject({
           admittedLive: false,
@@ -244,15 +164,12 @@ export function installAgentAuthorityProofFixture() {
       const anthropic: ModelProviderConfig = {
         baseUrl: "https://anthropic.example.test/v1",
         models: [
-          {
-            id: "claude-opus-4-6",
+          modelDefinition("claude-opus-4-6", {
             name: "Proof image fixture",
             input: ["text", "image"],
             reasoning: false,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 128_000,
-            maxTokens: 8_192,
-          },
+          }),
         ],
       };
       await config.writeConfigFile({ models: { providers: { anthropic } } });
@@ -270,7 +187,6 @@ export function installAgentAuthorityProofFixture() {
         provider: "anthropic",
         model: "claude-opus-4-6",
       });
-      observe("media-setup", { imageCapable });
       expect(imageCapable).toBe(true);
     }
     const runId = randomUUID();
@@ -343,7 +259,7 @@ export function installAgentAuthorityProofFixture() {
         void pending.catch(() => {});
         return pending;
       },
-      effects: async (): Promise<ProofObservation> => ({
+      effects: async () => ({
         ...owner.observation(),
         pendingCount: (await listSessionPendingInputs(scope)).total,
         transcriptChanged: !isDeepStrictEqual(
@@ -386,11 +302,18 @@ export async function holdExecution(signal: AbortSignal) {
   return {
     entered: entered.promise,
     observer,
+    resume: async () => {
+      release.resolve();
+      await execution;
+    },
     cleanup: async () => {
       release.resolve();
-      await Promise.allSettled([execution]);
-      observer.mockRestore();
-      signal.removeEventListener("abort", releaseWait);
+      try {
+        await execution;
+      } finally {
+        observer.mockRestore();
+        signal.removeEventListener("abort", releaseWait);
+      }
     },
   };
 }

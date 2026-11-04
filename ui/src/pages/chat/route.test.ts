@@ -1,15 +1,19 @@
 // @vitest-environment node
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createApplicationRouter } from "../../app-routes.ts";
-import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { loadRoute, routeLocation as locationFor } from "./route-loading.test-support.ts";
+import {
+  createSessionRouteContext,
+  createSessionRouteRow,
+} from "./route-resolution.test-support.ts";
 import { pages } from "./route.ts";
 import type { SessionChatRouteData } from "./session-route-data.ts";
 
@@ -25,14 +29,7 @@ const sessionData = (key: string | undefined, fields: Partial<SessionChatRouteDa
 });
 
 function row(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
-  return {
-    key: sessionKey,
-    kind: "direct",
-    updatedAt: 1,
-    displayName: "Deploy Monitor",
-    sessionId: "fedcba98-7654-3210-fedc-ba9876543210",
-    ...overrides,
-  };
+  return createSessionRouteRow({ key: sessionKey, displayName: "Deploy Monitor", ...overrides });
 }
 const resolvedRow = (key = sessionKey): SessionsResolveResult => ({
   ok: true,
@@ -41,28 +38,7 @@ const resolvedRow = (key = sessionKey): SessionsResolveResult => ({
 });
 
 function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey = "main") {
-  const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
-    if (method === "sessions.resolve") {
-      return resolution;
-    }
-    throw new Error(`Unexpected gateway request: ${method}`);
-  });
-  const client = { request };
-  const context = {
-    basePath: "",
-    chatSubmissions: createChatSubmissions(),
-    placementStartup: { get: vi.fn(() => null) },
-    router: { getState: () => ({ matches: [], pendingMatches: [] }), subscribe: () => () => {} },
-    gateway: {
-      snapshot: { phase: "connected", client, hello: null },
-      subscribe: vi.fn(() => () => undefined),
-      subscribeEvents: vi.fn(() => () => undefined),
-    },
-    agents: { state: { agentsList: { mainKey } } },
-  } as unknown as ApplicationContext;
-  const sessions = createChatPageSessions(context.gateway);
-  const list = vi.spyOn(sessions, "list");
-  return { context: { ...context, sessions }, list, request };
+  return createSessionRouteContext(resolution, [], { agentId: "main", mainKey });
 }
 
 function coldContext() {
@@ -130,9 +106,12 @@ describe("loadChatRoute", () => {
       } else {
         context.gateway.snapshot.selfUser = { id: "second" };
       }
-      request.mockImplementation(async (_method, params) =>
-        params.shortId ? resolvedRow(replacementKey) : { ok: false },
-      );
+      request.mockImplementation(async (_method, params) => {
+        if (!isRecord(params)) {
+          throw new Error("Missing resolution parameters");
+        }
+        return params.shortId ? resolvedRow(replacementKey) : { ok: false };
+      });
       const loaded = await route.loader!(scopedContext, {
         location,
         deps: route.loaderDeps!(scopedContext, location),
@@ -171,14 +150,17 @@ describe("loadChatRoute", () => {
     async (reference) => {
       const { request, router, scopedContext } = await mountedSession(reference);
       expect(router.getState().matches[0]?.data).toMatchObject({ sessionKey });
-      request.mockImplementation(async (_method, params) =>
-        params.reference &&
-        typeof params.reference === "object" &&
-        "key" in params.reference &&
-        params.reference.key === sessionKey
+      request.mockImplementation(async (_method, params) => {
+        if (!isRecord(params)) {
+          throw new Error("Missing resolution parameters");
+        }
+        return params.reference &&
+          typeof params.reference === "object" &&
+          "key" in params.reference &&
+          params.reference.key === sessionKey
           ? { ok: false }
-          : resolvedRow(replacementKey),
-      );
+          : resolvedRow(replacementKey);
+      });
       await router.revalidate(scopedContext, "chat");
       expect(router.getState().matches[0]?.data).toMatchObject({ kind: "missing-session" });
       expect(request).toHaveBeenLastCalledWith(
@@ -208,15 +190,19 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it("builds distinct working links for ambiguous prefixes", async () => {
-    const rows = [
-      row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" }),
-      row({
-        key: "agent:work:dashboard:12345678-0bbb-4000-8000-000000000002",
-        displayName: "Deploy Monitor Two",
-      }),
-    ];
-    const { context, request } = contextFor({
+  it.each(["slug", "prefix"] as const)("builds working links for ambiguous %s", async (kind) => {
+    const slug = kind === "slug";
+    const face = slug ? "chat" : "dashboard";
+    const agents = slug ? ["roboclaw", "research"] : ["main", "work"];
+    const name = slug ? "Default mode with rare surprises" : "Deploy Monitor";
+    const rows = ["0aaa-4000-8000-000000000001", "0bbb-4000-8000-000000000002"].map(
+      (suffix, index) =>
+        row({
+          key: `agent:${agents[index]}:${slug ? "thread" : "dashboard"}:12345678-${suffix}`,
+          displayName: !slug && index === 1 ? "Deploy Monitor Two" : name,
+        }),
+    );
+    const { context, request, list } = contextFor({
       ok: false,
       candidates: rows.map(({ key, displayName }) => ({
         key,
@@ -226,26 +212,47 @@ describe("loadChatRoute", () => {
     });
     const ambiguous = await loadRoute(
       context,
-      "/dashboard/ignored/deploy-12345678",
-      "?draft=ship&__openclawComposerFocus=1",
-      "dashboard",
+      slug
+        ? "/chat/roboclaw/default-mode-with-rare-surprises"
+        : "/dashboard/ignored/deploy-12345678",
+      slug ? "" : "?draft=ship&__openclawComposerFocus=1",
+      face,
     );
-    expect(ambiguous).toMatchObject({ kind: "ambiguous", truncated: false });
+    expect(ambiguous).toMatchObject({
+      kind: "ambiguous",
+      truncated: false,
+      ...(slug
+        ? {
+            shortId: "default-mode-with-rare-surprises",
+            candidates: [{ agentId: "roboclaw" }, { agentId: "research" }],
+          }
+        : {}),
+    });
     if (!("kind" in ambiguous) || ambiguous.kind !== "ambiguous") {
-      throw new Error("expected an ambiguous route");
+      throw new Error("expected ambiguous route");
     }
-    expect(ambiguous.candidates.map((candidate) => candidate.href)).toEqual([
-      "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1",
-      "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1",
-    ]);
-
-    for (const [candidate, expectedRow] of ambiguous.candidates.map(
-      (entry, index) => [entry, rows[index]] as const,
-    )) {
-      request.mockResolvedValueOnce({ ok: true, ...expectedRow!, agentId: candidate.agentId });
+    expect(ambiguous.candidates.map((candidate) => candidate.href)).toEqual(
+      slug
+        ? [
+            "/chat/roboclaw/default-mode-with-rare-surprises-123456780a",
+            "/chat/research/default-mode-with-rare-surprises-123456780b",
+          ]
+        : [
+            "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1",
+            "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1",
+          ],
+    );
+    expect(request).toHaveBeenCalledOnce();
+    expect(list).not.toHaveBeenCalled();
+    if (slug) {
+      return;
+    }
+    for (const [index, candidate] of ambiguous.candidates.entries()) {
+      const expectedRow = rows[index]!;
+      request.mockResolvedValueOnce({ ok: true, ...expectedRow, agentId: candidate.agentId });
       const url = new URL(candidate.href, "https://control.test");
       await expect(loadRoute(context, url.pathname, url.search, "dashboard")).resolves.toEqual(
-        sessionData(expectedRow?.key, {
+        sessionData(expectedRow.key, {
           routeLoadingSkeleton: true,
           agentId: candidate.agentId,
           draft: "ship",

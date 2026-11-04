@@ -39,17 +39,15 @@ type TerminalExitInfo = {
   error?: string;
 };
 
-type TerminalReplay = {
-  data: string;
-  newlyObservedFrom: number;
-  mode: "initial" | "recovery" | "resume";
-  signal: AbortSignal;
-};
-
 type SessionSink = {
   onData: (data: string) => void;
   /** Replays a ring snapshot into a fresh sink or replaces a gapped live sink. */
-  onReplay: (replay: TerminalReplay) => void | Promise<void>;
+  onReplay: (replay: {
+    data: string;
+    newlyObservedFrom: number;
+    mode: "initial" | "recovery" | "resume";
+    signal: AbortSignal;
+  }) => void | Promise<void>;
   onExit: (info: TerminalExitInfo) => void;
 };
 

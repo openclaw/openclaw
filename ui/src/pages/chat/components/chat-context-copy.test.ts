@@ -1,10 +1,15 @@
-/* @vitest-environment jsdom */
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
-import {
-  prepareChatMessageRender,
-  resolveMessageActionDetails,
-} from "./chat-message-markdown-view.tsx";
+/* @vitest-environment jsdom */
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { AttachmentStateCard, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
+import type { AttachmentCardHeaderOptions } from "./chat-attachment-card.ts";
+import { CompactAttachmentFile } from "./chat-attachment-file.tsx";
+import { AttachmentPreviewChip } from "./chat-attachment-preview-chip.tsx";
+import { AssistantAttachmentStatusCard } from "./chat-message-attachment-status-solid.tsx";
+import { resolveMessageActionDetails } from "./chat-message-markdown-view.tsx";
 import {
   handleTranscriptContextMenu,
   resetThreadPresentation,
@@ -24,6 +29,7 @@ describe("chat content context copy", () => {
     document.body.append(owner);
   });
   afterEach(() => {
+    cleanupSolid();
     window.getSelection()?.removeAllRanges();
     resetThreadPresentation("copy-test");
     owner.remove();
@@ -94,21 +100,136 @@ describe("chat content context copy", () => {
     await copy("Copy", "selected output");
   });
 
-  it("copies the card download link, not playback state", async () => {
-    owner.innerHTML = `<div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
-      <span class="chat-assistant-attachment-card__title">report</span>
-      <a class="chat-assistant-attachment-card__download" href="https://example.test/report">Download</a>
-      <video src="blob:temporary-playback"></video>
-    </div>`;
-    open(owner.querySelector("span")!);
-    await copy("Copy link", "https://example.test/report");
+  function renderCard(props: AttachmentCardHeaderOptions) {
+    mountSolid(() => createComponent(CompactAttachmentCard, props), { container: owner });
+    return owner.firstElementChild!;
+  }
+
+  it("copies the admitted card link from the card surface, not playback state", async () => {
+    const card = renderCard({
+      kind: "video",
+      label: "report",
+      downloadHref: "/report",
+    });
+    const video = document.createElement("video");
+    video.src = "blob:temporary-playback";
+    card.append(video);
+    open(card);
+    await copy("Copy link", new URL("/report", document.baseURI).href);
   });
 
-  it("copies a file name without inventing a link for a pending attachment", async () => {
-    owner.innerHTML =
-      '<div class="chat-assistant-attachment-card"><span class="chat-assistant-attachment-card__title">report.pdf</span><a class="chat-assistant-attachment-card__download" aria-disabled="true">Download</a></div>';
-    open(owner.querySelector("span")!);
+  it("reads current name and admitted href after a pending card updates", async () => {
+    type Card = { name: string; href: string; pending: boolean };
+    let update = (_next: Card) => {};
+    mountSolid(
+      () => {
+        const [card, setCard] = createSignal<Card>({
+          name: "report.pdf",
+          href: "/not-admitted-yet",
+          pending: true,
+        });
+        update = (next) => setCard(next);
+        return createComponent(CompactAttachmentCard, {
+          kind: "document",
+          get label() {
+            return card().name;
+          },
+          get downloadHref() {
+            return card().href;
+          },
+          get downloadPending() {
+            return card().pending;
+          },
+        });
+      },
+      { container: owner },
+    );
+    const card = owner.firstElementChild!;
+    open(card);
     await copy("Copy file name", "report.pdf");
+
+    update({ name: "renamed.pdf", href: "/current-ticket", pending: true });
+    flush();
+    open(card);
+    await copy("Copy file name", "renamed.pdf");
+
+    update({ name: "renamed.pdf", href: "/current-ticket", pending: false });
+    flush();
+    expect(owner.firstElementChild).toBe(card);
+    open(card);
+    await copy("Copy link", new URL("/current-ticket", document.baseURI).href);
+  });
+
+  it.each([false, true])("keeps callback downloads name-only while pending=%s", async (pending) => {
+    const card = renderCard({
+      kind: "document",
+      label: "report.pdf",
+      downloadHref: "/unused-link",
+      downloadPending: pending,
+      onDownload: vi.fn(),
+    });
+    open(card);
+    await copy("Copy file name", "report.pdf");
+  });
+
+  it.each([false, true])("copies sidebar image state with pending=%s", async (pending) => {
+    mountSolid(
+      () =>
+        createComponent(AttachmentStateCard, {
+          kind: "image",
+          label: "diagram.png",
+          imagePreview: true,
+          downloadHref: "/diagram.png",
+          downloadPending: pending,
+        }),
+      { container: owner },
+    );
+    open(owner.firstElementChild!);
+    await copy(
+      pending ? "Copy file name" : "Copy link",
+      pending ? "diagram.png" : new URL("/diagram.png", document.baseURI).href,
+    );
+  });
+
+  it("copies an unavailable card's displayed name", async () => {
+    mountSolid(
+      () =>
+        createComponent(AssistantAttachmentStatusCard, {
+          label: "report.pdf",
+          badge: "Unavailable",
+          reason: "Retry later",
+          path: "/private/source/report.pdf",
+        }),
+      { container: owner },
+    );
+    open(owner.firstElementChild!);
+    await copy("Copy file name", "report.pdf");
+  });
+
+  it("copies a compact file's displayed label", async () => {
+    mountSolid(
+      () =>
+        createComponent(CompactAttachmentFile, {
+          attachment: { id: "copy-file", mimeType: "text/plain", fileName: "original.txt" },
+          label: "Displayed excerpt",
+        }),
+      { container: owner },
+    );
+    open(owner.querySelector(".chat-attachment-file")!);
+    await copy("Copy file name", "Displayed excerpt");
+  });
+
+  it("leaves preview chips without a copy payload", () => {
+    mountSolid(
+      () =>
+        createComponent(AttachmentPreviewChip, {
+          label: "Preview excerpt",
+          icon: undefined,
+        }),
+      { container: owner },
+    );
+    expect(open(owner.querySelector(".chat-attachment-file")!).defaultPrevented).toBe(false);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
   });
 
   it.each([

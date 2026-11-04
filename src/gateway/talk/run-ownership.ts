@@ -138,7 +138,7 @@ export function resolveOwnedActiveTalkRunTarget(params: {
         entry.adapter.kind !== "agent" &&
         (!reply ||
           (replyOwner?.key === canonicalKey &&
-            (!replyAttachment || getAttachedBackend(reply) === replyAttachment.backend))) &&
+            (!replyAttachment || getAttachedBackend(reply) === replyAttachment.backend?.handle))) &&
         (resolvedSessionId === undefined ||
           (currentIdentity.sessionId === resolvedSessionId &&
             (replyOwner

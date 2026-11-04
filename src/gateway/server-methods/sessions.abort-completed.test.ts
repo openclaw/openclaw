@@ -10,14 +10,12 @@ import {
   addSessionMemberInWorker,
   recordSessionParticipantInWorker,
 } from "../../config/sessions/session-sharing-store.async.js";
-import type {
-  SqliteWorkerOperations,
-  SqliteWorkerStore,
-} from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerOperations } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import * as agentWorkers from "../../state/openclaw-agent-worker-store.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -55,7 +53,6 @@ it.each([
   const publicationEntered = createDeferred();
   const publish = createDeferred();
   let updating: Promise<unknown> | undefined;
-  const publications: Array<{ mockRestore(): void }> = [];
   let deliverPublication: (() => void) | undefined;
   const settlePublication = () => {
     const deliver = deliverPublication;
@@ -74,14 +71,10 @@ it.each([
       await resume.promise;
       return snapshot;
     });
+  const publications: Array<{ mockRestore(): void }> = [metadata];
   const respond = vi.fn();
   const stopping = handleGatewayRequest({
-    req: {
-      type: "req",
-      id: "native-stop",
-      method: "sessions.abort",
-      params: { key: sessionKey, runId: "run" },
-    },
+    req: gatewayRequest("native-stop", "sessions.abort", { key: sessionKey, runId: "run" }),
     context,
     client: {
       ...sharingPolicyClient({ deviceId: "same-device", scopes: ["operator.write"] }),
@@ -90,10 +83,7 @@ it.each([
     respond,
     isWebchatConnect: () => false,
     extraHandlers: sessionAbortHandlers,
-  }).then(
-    () => undefined,
-    (error: unknown) => error,
-  );
+  }).catch((error: unknown) => error);
   try {
     await awaitGateBeforeSettlement(entered.promise, stopping, "Stop skipped metadata read");
     if (change === "metadata" || pending || changedSession) {
@@ -117,78 +107,66 @@ it.each([
             ),
         );
         const open = agentWorkers.openOpenClawAgentSqliteWorkerStore;
+        const holdPublication = async <Operations extends SqliteWorkerOperations>(
+          ...args: Parameters<typeof open>
+        ) => {
+          const worker = await open<Operations>(...args);
+          const execute: typeof worker.execute = async (command, assertCurrent, options) => {
+            const result = await worker.execute(command, assertCurrent, options);
+            if (command.type === "participant" || command.type === "add") {
+              await publish.promise;
+              settlePublication();
+            }
+            return result;
+          };
+          return { ...worker, execute };
+        };
         publications.push(
           vi
             .spyOn(agentWorkers, "openOpenClawAgentSqliteWorkerStore")
-            .mockImplementation(
-              async <Operations extends SqliteWorkerOperations>(
-                ...args: Parameters<typeof open>
-              ) => {
-                const worker = await open<Operations>(...args);
-                return {
-                  ...worker,
-                  async execute<Key extends keyof Operations>(
-                    command: { type: Key; input: Operations[Key]["input"] },
-                    assertCurrent: () => void,
-                    options?: { signal?: AbortSignal },
-                  ) {
-                    const result = await worker.execute(command, assertCurrent, options);
-                    if (command.type === "participant" || command.type === "add") {
-                      await publish.promise;
-                      settlePublication();
-                    }
-                    return result;
-                  },
-                };
-              },
-            ),
+            .mockImplementation(holdPublication),
         );
       } else if (pending) {
         const run = workerStore.runSqliteWorkerStoreOperation;
         let held = false;
+        const holdSettlement: typeof run = (
+          target,
+          operation,
+          stateContext,
+          assertCurrent,
+          createAdmission,
+        ) => {
+          let replacing = false;
+          return run(
+            target,
+            (worker) =>
+              operation({
+                execute: (command, options) => {
+                  replacing = command.type === "session.entry.patch.commit";
+                  return worker.execute(command, options);
+                },
+              }),
+            stateContext,
+            assertCurrent,
+            createAdmission &&
+              ((retained) => {
+                if (!replacing || held) {
+                  return createAdmission(retained);
+                }
+                held = true;
+                return createAdmission({
+                  settled: retained.settled.then(async (outcome) => {
+                    expect(outcome.kind).toBe("completed");
+                    publicationEntered.resolve();
+                    await publish.promise;
+                    return outcome;
+                  }),
+                });
+              }),
+          );
+        };
         publications.push(
-          vi
-            .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-            .mockImplementation(
-              <Operations extends SqliteWorkerOperations, T>(
-                target: SqliteWorkerStore<Operations>,
-                operation: (
-                  scope: Pick<SqliteWorkerStore<Operations>, "execute">,
-                ) => T | Promise<T>,
-                stateContext?: Parameters<typeof run>[2],
-                assertCurrent?: Parameters<typeof run>[3],
-                createAdmission?: Parameters<typeof run>[4],
-              ) => {
-                let replacing = false;
-                return run(
-                  target,
-                  (worker) =>
-                    operation({
-                      execute: (command, options) => {
-                        replacing = command.type === "session.entry.patch.commit";
-                        return worker.execute(command, options);
-                      },
-                    }),
-                  stateContext,
-                  assertCurrent,
-                  createAdmission &&
-                    ((retained) => {
-                      if (!replacing || held) {
-                        return createAdmission(retained);
-                      }
-                      held = true;
-                      return createAdmission({
-                        settled: retained.settled.then(async (outcome) => {
-                          expect(outcome.kind).toBe("completed");
-                          publicationEntered.resolve();
-                          await publish.promise;
-                          return outcome;
-                        }),
-                      });
-                    }),
-                );
-              },
-            ),
+          vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(holdSettlement),
         );
       }
       updating =
@@ -270,7 +248,6 @@ it.each([
       for (const publication of publications.toReversed()) {
         publication.mockRestore();
       }
-      metadata.mockRestore();
     }
   }
 });

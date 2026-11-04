@@ -236,13 +236,16 @@ export async function resetNoRealConversationTokenSnapshot(params: {
 
 /** Best-effort identity lookup retains the agent that owns an unqualified stored key. */
 async function backfillSessionIdentity(
-  params: Pick<RunEmbeddedAgentParams, "config" | "sessionId" | "sessionKey" | "agentId">,
+  params: Pick<
+    RunEmbeddedAgentParams,
+    "config" | "sessionId" | "sessionKey" | "agentId" | "sessionPersistence"
+  >,
 ): Promise<Pick<RunEmbeddedAgentInternalParams, "agentId" | "sessionKey">> {
   const trimmed = normalizeOptionalString(params.sessionKey);
   if (trimmed) {
     return { sessionKey: trimmed };
   }
-  if (!params.config || !params.sessionId) {
+  if (params.sessionPersistence === "detached" || !params.config || !params.sessionId) {
     return {};
   }
   try {
@@ -559,7 +562,7 @@ async function claimPersistedAgentSessionWriter(
   }
 
   const previousWriterRunId = normalizeOptionalString(snapshot.entry.activeWriterRunId);
-  const claimed: InternalSessionEntry | null = await applySessionEntryOperation(
+  const claimed = await applySessionEntryOperation(
     {
       ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
       sessionKey: snapshot.sessionKey,

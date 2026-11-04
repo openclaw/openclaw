@@ -23,6 +23,20 @@ vi.mock("./update-runner-git-preflight.js", async (original) => ({
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+async function runWorker(args: string[], verify: () => Promise<void>) {
+  const argv = process.argv;
+  const exitCode = process.exitCode;
+  process.argv = [process.execPath, "worker", ...args];
+  try {
+    vi.resetModules();
+    await import("./update-immutable-build.worker.js");
+    await verify();
+  } finally {
+    process.argv = argv;
+    process.exitCode = exitCode;
+  }
+}
+
 it("reuses release objects for consecutive preparations and keeps independent generations", async () => {
   const { runCommandWithTimeout: run } =
     await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
@@ -44,25 +58,26 @@ it("reuses release objects for consecutive preparations and keeps independent ge
     expect(result.code, result.stderr).toBe(0);
     return result.stdout.trim();
   };
+  const commit = async (message: string, files: Record<string, string | Buffer> = {}) => {
+    for (const [name, content] of Object.entries(files)) {
+      await fs.writeFile(path.join(remote, name), content);
+    }
+    await git(remote, "add", "-A");
+    await git(remote, "commit", "-m", message);
+    return git(remote, "rev-parse", "HEAD");
+  };
   await git(remote, "init", "-b", "main");
-  await fs.writeFile(path.join(remote, "old-download"), randomBytes(1024 * 1024));
-  await git(remote, "add", ".");
-  await git(remote, "commit", "-m", "history");
+  await commit("history", { "old-download": randomBytes(1024 * 1024) });
   await fs.rm(path.join(remote, "old-download"));
-  await fs.writeFile(path.join(remote, "source"), "installed");
-  await git(remote, "add", "-A");
-  await git(remote, "commit", "-m", "installed release");
-  const installed = await git(remote, "rev-parse", "HEAD");
+  const installed = await commit("installed release", { source: "installed" });
   await git(remote, "checkout", "--orphan", "unrelated");
-  await git(remote, "commit", "-am", "unrelated history");
-  const unrelated = await git(remote, "rev-parse", "HEAD");
+  const unrelated = await commit("unrelated history");
   await git(remote, "checkout", "main");
   await git(root, "clone", "--no-hardlinks", remote, current);
-  await fs.writeFile(path.join(remote, "source"), "next release");
-  await fs.writeFile(path.join(remote, "new-download"), randomBytes(64 * 1024));
-  await git(remote, "add", ".");
-  await git(remote, "commit", "-m", "next release");
-  const target = await git(remote, "rev-parse", "HEAD");
+  const target = await commit("next release", {
+    source: "next release",
+    "new-download": randomBytes(64 * 1024),
+  });
   const drop = path.join(root, "drop-once");
   const uploadPack = path.join(root, "upload-pack");
   await fs.writeFile(
@@ -145,25 +160,12 @@ child.on('close', code => { process.exitCode = interrupt ? 1 : code; });
       }
       return true;
     });
-    const argv = process.argv;
-    const exitCode = process.exitCode;
-    process.argv = [
-      process.execPath,
-      "worker",
-      stage,
-      sha,
-      "10000",
-      "0",
-      seed,
-      await git(seed, "rev-parse", "HEAD"),
-    ];
     try {
-      vi.resetModules();
-      await import("./update-immutable-build.worker.js");
-      await completed.promise;
+      await runWorker(
+        [stage, sha, "10000", "0", seed, await git(seed, "rev-parse", "HEAD")],
+        () => completed.promise,
+      );
     } finally {
-      process.argv = argv;
-      process.exitCode = exitCode;
       vi.restoreAllMocks();
     }
     const bytes = (await fs.stat(trace).catch(() => ({ size: 0 }))).size;
@@ -181,14 +183,12 @@ child.on('close', code => { process.exitCode = interrupt ? 1 : code; });
     expect(await git(generation, "rev-parse", "HEAD")).toBe(sha);
     await fs.rm(path.join(stage, "source"), { recursive: true });
     expect(await git(generation, "fsck", "--full")).not.toContain("missing");
-    console.log(`preparation ${index}: ${bytes} transferred bytes`);
     return generation;
   };
 
   await fs.writeFile(drop, "drop first fetch");
   const generation = await prepare(current, target, 1);
-  await fs.writeFile(path.join(remote, "source"), "new main after target");
-  await git(remote, "commit", "-am", "advance main");
+  await commit("advance main", { source: "new main after target" });
   // Older official targets remain valid; the previous generation supplies the objects.
   const second = await prepare(generation, installed, 2);
   await expect(prepare(current, unrelated, 3)).rejects.toThrow(
@@ -204,26 +204,12 @@ it("refuses root before acquiring source or running candidate scripts", async ()
   mocks.preflight.mockClear();
   vi.spyOn(process, "geteuid").mockReturnValue(0);
   const reported = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-  const argv = process.argv;
-  const exitCode = process.exitCode;
-  process.argv = [
-    process.execPath,
-    "worker",
-    "/private-stage",
-    "b".repeat(40),
-    "1000",
-    "0",
-    "/current",
-    "a".repeat(40),
-  ];
-  try {
-    vi.resetModules();
-    await import("./update-immutable-build.worker.js");
-    expect(reported).toHaveBeenCalledWith(expect.stringContaining("non-root"));
-    expect(mocks.command).not.toHaveBeenCalled();
-    expect(mocks.preflight).not.toHaveBeenCalled();
-  } finally {
-    process.argv = argv;
-    process.exitCode = exitCode;
-  }
+  await runWorker(
+    ["/private-stage", "b".repeat(40), "1000", "0", "/current", "a".repeat(40)],
+    async () => {
+      expect(reported).toHaveBeenCalledWith(expect.stringContaining("non-root"));
+      expect(mocks.command).not.toHaveBeenCalled();
+      expect(mocks.preflight).not.toHaveBeenCalled();
+    },
+  );
 });

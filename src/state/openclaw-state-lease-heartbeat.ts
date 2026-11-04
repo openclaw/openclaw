@@ -1,23 +1,38 @@
+import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import {
   collectNestedErrorCandidates,
   extractErrorCode,
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { captureStateDatabaseAccess } from "../infra/gateway-state-owner.js";
+import {
+  createPostgresPoolEndpoints,
+  postgresPoolTransferList,
+} from "../infra/postgres-sync/pool.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
 } from "../infra/runtime-worker-url.js";
 import { trackSqliteDatabaseAdmissionWorker } from "../infra/sqlite-database-admission.js";
-import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
+import {
+  formatSqliteErrorCodeSuffix,
+  isSqliteLockError,
+} from "../infra/sqlite-error-diagnostics.js";
 import { retainSqliteWriteAdmissionService } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createSqliteDatabaseAdmissionRelay } from "../infra/sqlite-worker-operation-admission.js";
 import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
+import {
+  createOpenClawStateLeaseLostError,
+  formatLeaseRenewalError,
+  OpenClawStateLeaseError,
+} from "./openclaw-state-lease-error.js";
 import {
   acquireLeaseHeartbeatCarrier,
   type LeaseHeartbeatCarrier,
@@ -30,6 +45,7 @@ import {
   leaseHeartbeatState as state,
   leaseHeartbeatStartupPhase,
   LEASE_HEARTBEAT_START_TIMEOUT_MS,
+  LEASE_CONTENTION_RETRY_MS,
   type LeaseHeartbeatLoss,
   type LeaseHeartbeatRenewalFailure,
   type LeaseHeartbeatRequest,
@@ -44,10 +60,13 @@ import {
 export type { LeaseHeartbeatCleanup } from "./openclaw-state-lease-heartbeat-cleanup.js";
 
 const MIN_WORKER_OPERATION_TIMEOUT_MS = 1_000;
+const leaseLog = createSubsystemLogger("state/lease");
 
 /** Parent-scheduled renewal; the lease owner retains each actor operation and its settlement. */
 export function startOpenClawStateLeaseTimer(params: {
+  identity: { scope: string; key: string };
   observation: BigInt64Array<SharedArrayBuffer>;
+  leaseMs: number;
   heartbeatMs: number;
   renew(): Promise<unknown>;
   onRenewError(error: unknown): void;
@@ -55,15 +74,33 @@ export function startOpenClawStateLeaseTimer(params: {
 }) {
   let stopped = false;
   let expiryClosed = false;
-  let renewal: Promise<void> | undefined;
+  let renewal: Promise<unknown> | undefined;
   let cancelExpiry: (() => void) | undefined;
-  let heartbeat: ReturnType<typeof setInterval> | undefined = setInterval(() => {
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const clearTimers = () => {
+    clearInterval(heartbeat);
+    clearTimeout(retry);
+    retry = undefined;
+    heartbeat = undefined;
+  };
+  let attempts = 0;
+  let failures = 0;
+  let attemptStartedAt = 0;
+  let attemptExpiry = 0;
+  let lastFailure: string | undefined;
+  const label = `scope=${JSON.stringify(params.identity.scope)}, key=${JSON.stringify(params.identity.key)}`;
+  const renew = () => {
     if (stopped || renewal) {
       return;
     }
-    const pending = (async () => {
-      await params.renew();
-    })();
+    clearTimeout(retry);
+    retry = undefined;
+    attempts++;
+    attemptStartedAt = Date.now();
+    attemptExpiry = Number(Atomics.load(params.observation, state.expiresAt));
+    lastFailure = undefined;
+    const pending = (async () => params.renew())();
     renewal = pending;
     void pending.then(
       () => {
@@ -71,10 +108,25 @@ export function startOpenClawStateLeaseTimer(params: {
       },
       (error: unknown) => {
         renewal = undefined;
+        lastFailure = formatLeaseRenewalError(error);
+        if (extractErrorCode(error) !== "OPENCLAW_STATE_LEASE_LOST") {
+          failures++;
+          if (failures === 1) {
+            leaseLog.warn(
+              `state lease renewal failed (${label}, attempt=${attempts}, ${lastFailure})`,
+            );
+          }
+        }
         params.onRenewError(error);
+        if (!stopped && isSqliteLockError(error)) {
+          // Waiting for the next normal tick can leave no retry before durable expiry.
+          retry = setTimeout(renew, LEASE_CONTENTION_RETRY_MS);
+          retry.unref?.();
+        }
       },
     );
-  }, params.heartbeatMs);
+  };
+  heartbeat = setInterval(renew, params.heartbeatMs);
   heartbeat.unref?.();
   const checkExpiry = () => {
     cancelExpiry = undefined;
@@ -86,9 +138,16 @@ export function startOpenClawStateLeaseTimer(params: {
     if (expiresAt <= Date.now()) {
       stopped = true;
       expiryClosed = true;
-      clearInterval(heartbeat);
-      heartbeat = undefined;
-      params.onLost(new Error("state lease expired"));
+      clearTimers();
+      // Durable publication can outlive its reply or supersede an earlier failure.
+      const detail = renewal
+        ? `renewal pending, attempt=${attempts}, pendingSince=${new Date(attemptStartedAt).toISOString()}, pendingMs=${Date.now() - attemptStartedAt}`
+        : lastFailure && attemptExpiry === expiresAt
+          ? `last renewal failed, attempt=${attempts}, ${lastFailure}`
+          : `no renewal attempted since last commit, lastSuccessAgeMs=${Date.now() - (expiresAt - params.leaseMs)}`;
+      const message = `state lease expired (${label}, ${detail}, renewalFailures=${failures})`;
+      leaseLog.warn(message);
+      params.onLost(new Error(message));
       return;
     }
     cancelExpiry = scheduleAbsoluteDeadline(expiresAt, checkExpiry, undefined, { unref: true });
@@ -96,14 +155,13 @@ export function startOpenClawStateLeaseTimer(params: {
   try {
     checkExpiry();
   } catch (error) {
-    clearInterval(heartbeat);
+    clearTimers();
     cancelExpiry?.();
     throw error;
   }
   const stopRenewal = async () => {
     stopped = true;
-    clearInterval(heartbeat);
-    heartbeat = undefined;
+    clearTimers();
     if (renewal) {
       // The lease owner handles the error; stopping must still join native settlement.
       await Promise.allSettled([renewal]);
@@ -114,6 +172,11 @@ export function startOpenClawStateLeaseTimer(params: {
     stopRenewal,
     async close() {
       await stopRenewal();
+      if (!expiryClosed && failures > 0) {
+        leaseLog.warn(
+          `state lease released (${label}, attempts=${attempts}, renewalFailures=${failures})`,
+        );
+      }
       expiryClosed = true;
       cancelExpiry?.();
       cancelExpiry = undefined;
@@ -123,6 +186,7 @@ export function startOpenClawStateLeaseTimer(params: {
 
 type PendingHeartbeatRequest = {
   deferred: ReturnType<typeof createDeferredCore<number>>;
+  assertCurrent?: () => void;
   operation: LeaseHeartbeatRequest["operation"];
   budget: {
     remainingMs(): number;
@@ -144,8 +208,10 @@ export function startOpenClawStateLeaseHeartbeat(
     | "expectedIdentity"
     | "deferActivation"
     | "databaseAdmissionPort"
+    | "lossPort"
     | "databaseEngineSelection"
   > & {
+    identity: Parameters<typeof createOpenClawStateLeaseLostError>[0];
     /** The caller retains its shared-state actor through startup and failure teardown. */
     startupContext?: OpenClawStateWorkerContext;
     retainCleanup?: (cleanup: LeaseHeartbeatCleanup) => void;
@@ -205,27 +271,53 @@ export function startOpenClawStateLeaseHeartbeat(
     rejectPending(error);
   };
   const lifecycle = createLeaseHeartbeatCleanup({ cancel: close });
-  const assertRunning = () => {
-    // Local lifetime only; protected effects still check durable ownership.
-    if (Atomics.load(shared, state.status) !== state.ready) {
-      throw new Error("state lease heartbeat is not running");
-    }
-  };
   let lossReported = false;
   let workerLoss: LeaseHeartbeatLoss | undefined;
-  const lossDetail = () =>
-    workerLoss ? ` (lossPath=${workerLoss.path}, lossOutcome=${workerLoss.outcome})` : "";
-  const fail = (error: Error) => {
+  const { port1: lossPort, port2: workerLossPort } = new MessageChannel();
+  lossPort
+    .on("message", (loss: LeaseHeartbeatLoss) => {
+      workerLoss ??= loss;
+    })
+    .unref();
+  const readWorkerLoss = () => {
+    // This private port can be drained without yielding to queued parent callbacks.
+    workerLoss ??= receiveMessageOnPort(lossPort)?.message;
+    return workerLoss;
+  };
+  const lossDetail = () => {
+    const loss = readWorkerLoss();
+    return loss ? ` (lossPath=${loss.path}, lossOutcome=${loss.outcome})` : "";
+  };
+  const lost = (cause: Error, loss = readWorkerLoss()?.leaseLoss) => {
+    // Bounded reports need identity first; keep the original heartbeat diagnostics too.
+    const error = createOpenClawStateLeaseLostError(params.identity, cause, loss);
+    error.message += `: ${cause.message}`;
+    return error;
+  };
+  const fail = (cause: Error) => {
     if (lossReported || Atomics.load(shared, state.status) === state.closed) {
       return;
     }
     lossReported = true;
+    const loss = readWorkerLoss()?.leaseLoss;
+    const error =
+      loss && !(cause instanceof OpenClawStateLeaseError && cause.loss) ? lost(cause, loss) : cause;
+    // Shared-state checks can win before worker events; decorate the first loss here.
+    error.message += lossDetail();
     Atomics.store(shared, state.status, state.lost);
     clearStartupTimers();
     cancelExpiry?.();
     ready.reject(error);
     rejectPending(error);
     params.onLost(error);
+  };
+  const assertRunning = () => {
+    // Shared loss can precede carrier notification; publish it before returning to the owner.
+    if (Atomics.load(shared, state.status) !== state.ready) {
+      const error = lost(new Error("state lease heartbeat is not running"));
+      fail(error);
+      throw error;
+    }
   };
   const remainingLeaseMs = () => Number(Atomics.load(shared, state.expiresAt)) - Date.now();
   const operationBudget = () => {
@@ -412,7 +504,13 @@ export function startOpenClawStateLeaseHeartbeat(
   const finishAdmission = () => {
     databaseAdmission.finish();
     releaseAdmissionService();
+    lossPort.close();
+    workerLossPort.close();
   };
+  const stateAccess = captureStateDatabaseAccess(databasePath);
+  void stateAccess.catch((error: unknown) =>
+    fail(toErrorObject(error, "State lease heartbeat ownership capture failed")),
+  );
   try {
     params.retainCleanup?.(lifecycle.cleanup);
     const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stateLeaseHeartbeat);
@@ -421,10 +519,13 @@ export function startOpenClawStateLeaseHeartbeat(
     // Keep the lease worker isolated from every other ambient environment setting.
     const sourceTsconfig = execArgv.length > 0 ? process.env.TSX_TSCONFIG_PATH : undefined;
     startupContext?.admission.assertCurrent();
+    const databaseEngineSelection =
+      startupContext?.databaseEngineSelection ?? getDatabaseEngineSelection();
     const data = {
-      databaseEngineSelection:
-        startupContext?.databaseEngineSelection ?? getDatabaseEngineSelection(),
+      databaseEngineSelection,
       databaseAdmissionPort: databaseAdmission.port,
+      lossPort: workerLossPort,
+      postgresPool: createPostgresPoolEndpoints(databaseEngineSelection),
       path: databasePath,
       expectedIdentity,
       ...(startupContext ? { deferActivation: true as const } : {}),
@@ -448,7 +549,11 @@ export function startOpenClawStateLeaseHeartbeat(
           runInDetachedAsyncContext(() => {
             const native = createCpuTrackedWorker(url, {
               workerData: data,
-              transferList: [databaseAdmission.port],
+              transferList: [
+                databaseAdmission.port,
+                workerLossPort,
+                ...postgresPoolTransferList(data.postgresPool),
+              ],
               env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
               execArgv,
               stdout: true,
@@ -476,7 +581,7 @@ export function startOpenClawStateLeaseHeartbeat(
         ? ": lease expired or ownership lost"
         : "";
     return new Error(
-      `state lease heartbeat exited${detail} (exitCode=${exitCode ?? "unknown"}, acquiredAt=${params.acquiredAt}, lastRenewedAt=${lastRenewedAt || "never"})${lossDetail()}`,
+      `state lease heartbeat exited${detail} (exitCode=${exitCode ?? "unknown"}, acquiredAt=${params.acquiredAt}, lastRenewedAt=${lastRenewedAt || "never"})`,
       renewalFailure
         ? { cause: Object.assign(new Error(renewalFailure.message), renewalFailure) }
         : undefined,
@@ -487,9 +592,7 @@ export function startOpenClawStateLeaseHeartbeat(
       fail(exitError(exitCode));
       return;
     }
-    const failure = toErrorObject(error, "state lease heartbeat worker failed");
-    failure.message += lossDetail();
-    fail(failure);
+    fail(toErrorObject(error, "state lease heartbeat worker failed"));
   });
   worker.onMessage((reply) => {
     if (reply === null) {
@@ -501,11 +604,6 @@ export function startOpenClawStateLeaseHeartbeat(
       return;
     }
     if ("closed" in reply) {
-      return;
-    }
-    if ("loss" in reply) {
-      // Diagnostic delivery never changes readiness, authority, or failure timing.
-      workerLoss ??= reply.loss;
       return;
     }
     if ("attempt" in reply) {
@@ -545,6 +643,7 @@ export function startOpenClawStateLeaseHeartbeat(
     }
     try {
       assertRunning();
+      request.assertCurrent?.();
       deferred.resolve(reply.expiresAt);
     } catch (error) {
       deferred.reject(error);
@@ -570,14 +669,34 @@ export function startOpenClawStateLeaseHeartbeat(
       }
     };
     checkDeadline();
-    try {
+    const dispatch = async () => {
+      const access = await stateAccess;
+      if (pending.get(id) !== awaiting) {
+        return;
+      }
+      const owner = access.processOwner;
+      owner?.assertCurrent();
+      // A retained heartbeat cannot adopt a successor process owner between requests.
+      const assertAccess = owner ? await access.prepareAccess(startupContext) : undefined;
+      if (pending.get(id) !== awaiting) {
+        return;
+      }
+      awaiting.assertCurrent = () => {
+        owner?.assertCurrent();
+        assertAccess?.();
+      };
+      awaiting.assertCurrent();
       assertRunning();
       worker.postMessage({ id, operation } satisfies LeaseHeartbeatRequest, []);
-    } catch (error) {
+    };
+    void dispatch().catch((error: unknown) => {
+      if (pending.get(id) !== awaiting) {
+        return;
+      }
       pending.delete(id);
       clearTimeout(awaiting.timer);
       deferred.reject(error);
-    }
+    });
     return deferred.promise;
   };
   return {

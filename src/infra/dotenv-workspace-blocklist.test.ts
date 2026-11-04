@@ -3,16 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  makeEmptyPluginMetadataOwners,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata.test-support.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { loadDotEnv, loadDotEnvAsync, loadWorkspaceDotEnvFile } from "./dotenv.js";
@@ -63,7 +58,7 @@ async function expectWorkspaceEnv(
         .join("\n"),
     );
     clearEnv(Object.keys(entries));
-    loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+    loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"));
     for (const key of Object.keys(blocked)) {
       expect(process.env[key], `${key} should be blocked by workspace .env`).toBeUndefined();
     }
@@ -71,44 +66,6 @@ async function expectWorkspaceEnv(
       expect(process.env[key], key).toBe(value);
     }
   });
-}
-
-function createManifestBackedProviderSnapshot(
-  plugin: PluginManifestRecord,
-): PluginMetadataSnapshot {
-  const policyHash = resolveInstalledPluginIndexPolicyHash({});
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash,
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  };
-  return {
-    policyHash,
-    index,
-    registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: { plugins: [plugin], diagnostics: [] },
-    plugins: [plugin],
-    diagnostics: [],
-    byPluginId: new Map([[plugin.id, plugin]]),
-    normalizePluginId: (pluginId: string) => pluginId,
-    declaredProviderOwners: buildDeclaredProviderOwnerIndex([plugin]),
-    owners: { ...makeEmptyPluginMetadataOwners(), ...buildPluginMetadataProviderFacts([plugin]) },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: 1,
-    },
-  };
 }
 
 describe("workspace .env blocklist completeness", () => {
@@ -140,9 +97,9 @@ describe("workspace .env blocklist completeness", () => {
           vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
           if (mode === "async") {
-            await loadDotEnvAsync({ env, cwd: cwdDir, quiet: true });
+            await loadDotEnvAsync({ env, cwd: cwdDir });
           } else {
-            loadDotEnv({ env, quiet: true });
+            loadDotEnv({ env });
           }
 
           expect(env.OCM_SELF).toBe("global-executable");
@@ -178,13 +135,16 @@ describe("workspace .env blocklist completeness", () => {
 
       delete process.env.RUNTIME_CLOUD_API_KEY;
       vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-      setCurrentPluginMetadataSnapshot(createManifestBackedProviderSnapshot(plugin), {
-        config: {},
-        env: process.env,
-      });
+      setCurrentPluginMetadataSnapshot(
+        createPluginMetadataSnapshotFixture(
+          { plugins: [plugin] },
+          resolveInstalledPluginIndexPolicyHash({}),
+        ),
+        { config: {}, env: process.env },
+      );
 
       try {
-        loadDotEnv({ quiet: true });
+        loadDotEnv();
 
         expect(process.env.RUNTIME_CLOUD_API_KEY).toBe("global-plugin-key");
       } finally {
@@ -208,7 +168,7 @@ describe("workspace .env blocklist completeness", () => {
       clearEnv(providerAuthKeys);
       vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
-      loadDotEnv({ quiet: true });
+      loadDotEnv();
 
       for (const key of providerAuthKeys) {
         expect(process.env[key], `${key} should come from trusted global .env`).toBe(

@@ -91,10 +91,14 @@ const checkpointAdmission = createStateSchemaAdmission("state.startup-checkpoint
   value === true ? true : undefined,
 );
 
-export function isUninitializedNativeStartupDatabase(db: DatabaseSync): boolean {
+export function isUninitializedNativeStartupDatabase(
+  db: DatabaseSync,
+  physicalUserVersion?: number,
+): boolean {
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (
-    (getStateSchemaVersionAdmission(db)?.userVersion ??
+    (physicalUserVersion ??
+      getStateSchemaVersionAdmission(db)?.userVersion ??
       schema?.userVersion ??
       readSqliteUserVersion(db)) !== 0
   ) {
@@ -241,8 +245,8 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
           return { value: callback(db) };
         }
         assertStateDatabaseIntegrityOnce(db, pathname);
-        assertSupportedStateSchemaVersion(db, pathname);
-        const initialize = isUninitializedNativeStartupDatabase(db);
+        const userVersion = assertSupportedStateSchemaVersion(db, pathname);
+        const initialize = isUninitializedNativeStartupDatabase(db, userVersion);
         const needsSchema = initialize || !hasStartupMigrationCheckpointSchema(db);
         if (needsSchema && !schemaOwned) {
           return undefined;

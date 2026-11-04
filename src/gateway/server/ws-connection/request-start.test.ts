@@ -1,23 +1,44 @@
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WebSocket } from "ws";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
-import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
-import { prepareGatewayReceiverHandoff, raiseGatewayReceiverPayloadLimit } from "../ws-receiver.js";
 import { GatewayRequestStartTimeoutError, scheduleGatewayRequestStart } from "./request-start.js";
 
 const permissions: Promise<void>[] = [];
+const releases: (() => void)[] = [];
+function heldCompletion() {
+  const completion = createDeferredCore();
+  releases.push(completion.resolve);
+  return completion;
+}
 const workRequest = { method: "chat.send" };
 const subscribeRequest = { method: "sessions.messages.subscribe", params: { key: "session" } };
+const independentReads = [
+  "chat.history",
+  "board.get",
+  "sessions.resolve",
+  "sessions.list",
+  "sessions.catalog.list",
+  "cron.list",
+  "push.web.vapidPublicKey",
+  "sessions.github.options",
+  "workboard.cards.list",
+  "github.preview",
+  "sessions.describe",
+  "users.list",
+  "agents.list",
+  "agent.identity.get",
+  "plugins.controlUi.list",
+  "workboard.boards.list",
+];
 function requestStart(
   bytes = 1,
-  request = workRequest,
+  request: Parameters<typeof scheduleGatewayRequestStart>[1] = workRequest,
   connId = "connection",
   settled = Promise.resolve(),
+  signal?: AbortSignal,
 ): Promise<void> {
-  const permission = scheduleGatewayRequestStart(bytes, request, connId, settled);
+  const permission = scheduleGatewayRequestStart(bytes, request, connId, settled, signal);
   if (!permission) {
     throw new Error("expected start capacity");
   }
@@ -25,7 +46,35 @@ function requestStart(
   return permission;
 }
 
+function holdPreparations(
+  request: Parameters<typeof scheduleGatewayRequestStart>[1] = { method: "models.list" },
+) {
+  const held = Array.from({ length: 4 }, heldCompletion);
+  return {
+    held,
+    start: () =>
+      Promise.all(
+        held.map((completion, index) =>
+          requestStart(100, request, `held-${index}`, completion.promise),
+        ),
+      ),
+  };
+}
+
+function recordStarts(label = (method: string, _connId: string) => method) {
+  const starts: string[] = [];
+  const start = (method: string, connId = "viewer", params: unknown = {}) =>
+    requestStart(100, { method, params }, connId).then(() => {
+      starts.push(label(method, connId));
+    });
+  return { starts, start };
+}
+
 afterEach(async () => {
+  for (const release of releases.splice(0)) {
+    release();
+  }
+  vi.useRealTimers();
   await Promise.all(permissions.splice(0));
   vi.restoreAllMocks();
 });
@@ -33,269 +82,213 @@ afterEach(async () => {
 describe("Gateway request start fairness", () => {
   it("bounds concurrent reconnect preparations through settlement and yields before each start", async () => {
     const methods = [
-      { method: "sessions.subscribe" },
+      { method: "sessions.subscribe", params: { limit: 100 } },
       { method: "models.list" },
       { method: "sessions.messages.subscribe", params: { includeApprovals: true } },
+      { method: "sessions.messages.subscribe", params: { initialHistory: {} } },
     ];
-    const completions = Array.from({ length: 8 }, () => createDeferredCore());
+    const completions = Array.from({ length: 8 }, heldCompletion);
     const full = createDeferredCore();
     const fifth = createDeferredCore();
     const events: string[] = [];
-    const callers = completions.map((completion, index) => {
-      const permission = scheduleGatewayRequestStart(
+    completions.forEach((completion, index) => {
+      const permission = requestStart(
         100,
         methods[index % methods.length]!,
         `reconnect-${index}`,
         completion.promise,
       );
-      if (!permission) {
-        throw new Error("expected reconnect capacity");
-      }
-      return permission.then(() => {
-        events.push(`start-${index}`);
-        if (index === 0) {
-          void nextTurn().then(() => events.push("socket I/O"));
-        }
-        if (index === 3) {
-          void nextTurn().then(full.resolve);
-        }
-        if (index === 4) {
-          fifth.resolve();
-        }
-      });
+      permissions.push(
+        permission.then(() => {
+          events.push(`start-${index}`);
+          if (index === 0) {
+            void nextTurn().then(() => events.push("socket I/O"));
+          }
+          if (index === 3) {
+            void nextTurn().then(full.resolve);
+          }
+          if (index === 4) {
+            fifth.resolve();
+          }
+        }),
+      );
     });
-    try {
-      await full.promise;
-      expect(events).toEqual(["start-0", "socket I/O", "start-1", "start-2", "start-3"]);
-      completions[0]!.resolve();
-      await fifth.promise;
-      expect(events.at(-1)).toBe("start-4");
-    } finally {
-      for (const completion of completions) {
-        completion.resolve();
-      }
-      await Promise.all(callers);
-    }
+    await full.promise;
+    expect(events).toEqual(["start-0", "socket I/O", "start-1", "start-2", "start-3"]);
+    completions[0]!.resolve();
+    await fifth.promise;
+    expect(events.at(-1)).toBe("start-4");
   });
 
   it("parks preparations without blocking reads or reordering connection mutations", async () => {
-    const held = Array.from({ length: 4 }, () => createDeferredCore());
-    const starts: string[] = [];
-    const start = (method: string, connId: string, params = {}) => {
-      const permission = scheduleGatewayRequestStart(
-        100,
-        { method, params },
-        connId,
-        Promise.resolve(),
-      );
-      if (!permission) {
-        throw new Error("expected waiting capacity");
-      }
-      const started = permission.then(() => {
-        starts.push(method);
-      });
-      permissions.push(started);
-      return started;
-    };
-    try {
-      await Promise.all(
-        held.map((completion, index) =>
-          requestStart(100, { method: "models.list" }, `held-${index}`, completion.promise),
-        ),
-      );
-      const subscription = start("sessions.messages.subscribe", "viewer", {
-        key: "main",
-        includeApprovals: true,
-      });
-      const unsubscribe = start("sessions.messages.unsubscribe", "viewer", { key: "main" });
-      const mutation = start("chat.send", "viewer");
-      void start("chat.history", "viewer");
-      void start("sessions.list", "viewer");
-      void start("cron.list", "viewer");
-      void start("push.web.vapidPublicKey", "viewer");
-      void start("sessions.github.options", "viewer");
-      void start("workboard.cards.list", "viewer");
-      void start("github.preview", "viewer");
-      void start("sessions.create", "another-viewer");
-      await nextTurn();
-      expect([...starts]).toEqual([
-        "chat.history",
-        "sessions.list",
-        "cron.list",
-        "push.web.vapidPublicKey",
-        "sessions.github.options",
-        "workboard.cards.list",
-        "github.preview",
-        "sessions.create",
-      ]);
-      held[0]!.resolve();
-      await Promise.all([subscription, unsubscribe, mutation]);
-      expect(starts.slice(8)).toEqual([
-        "sessions.messages.subscribe",
-        "sessions.messages.unsubscribe",
-        "chat.send",
-      ]);
-    } finally {
-      for (const completion of held) {
-        completion.resolve();
-      }
-      await Promise.all(permissions);
+    const { held, start: startHeld } = holdPreparations();
+    const { starts, start } = recordStarts();
+    await startHeld();
+    const subscription = start("sessions.messages.subscribe", "viewer", {
+      key: "main",
+      includeApprovals: true,
+    });
+    const unsubscribe = start("sessions.messages.unsubscribe", "viewer", { key: "main" });
+    const mutation = start("chat.send", "viewer");
+    for (const method of independentReads) {
+      void start(method, "viewer");
     }
+    void start("sessions.create", "another-viewer");
+    await nextTurn();
+    expect(starts).toEqual([...independentReads, "sessions.create"]);
+    held[0]!.resolve();
+    await Promise.all([subscription, unsubscribe, mutation]);
+    expect(starts.slice(independentReads.length + 1)).toEqual([
+      "sessions.messages.subscribe",
+      "sessions.messages.unsubscribe",
+      "chat.send",
+    ]);
+  });
+
+  it("starts event-only roster subscriptions while snapshot preparation is saturated", async () => {
+    const { held, start } = holdPreparations();
+    await start();
+    const { starts, start: record } = recordStarts((_method, connId) => connId);
+    const eventOnly = record("sessions.subscribe", "events");
+    const messageBodies = record("sessions.subscribe", "bodies", { includeMessageBodies: true });
+    const snapshot = record("sessions.subscribe", "snapshot", { limit: 100 });
+    await nextTurn();
+    expect(starts).toEqual(["events", "bodies"]);
+    held[0]!.resolve();
+    await Promise.all([eventOnly, messageBodies, snapshot]);
+    expect(starts.at(-1)).toBe("snapshot");
+  });
+
+  it("keeps a parked catalog read from blocking later connection work", async () => {
+    const { held, start } = holdPreparations();
+    await start();
+    const { starts, start: record } = recordStarts();
+    const requests = [
+      { method: "models.list" },
+      { method: "sessions.subscribe", params: {} },
+      subscribeRequest,
+      { method: "sessions.messages.unsubscribe", params: { key: "session" } },
+      workRequest,
+    ].map((request) => record(request.method, "viewer", "params" in request ? request.params : {}));
+    await nextTurn();
+    expect(starts).toEqual([
+      "sessions.subscribe",
+      "sessions.messages.subscribe",
+      "sessions.messages.unsubscribe",
+      "chat.send",
+    ]);
+    held[0]!.resolve();
+    await Promise.all(requests);
+    expect(starts.at(-1)).toBe("models.list");
   });
 
   it("prioritizes lifecycle starts while preserving same-connection mutation order", async () => {
-    const held = Array.from({ length: 4 }, () => createDeferredCore());
+    const { held, start: startHeld } = holdPreparations();
     const events: string[] = [];
-    const start = (method: string, connId: string) =>
-      requestStart(100, { method }, connId).then(() => events.push(`${connId}:${method}`));
-    try {
-      await Promise.all(
-        held.map((completion, index) =>
-          requestStart(100, { method: "models.list" }, `held-${index}`, completion.promise),
-        ),
-      );
-      // The parked preparation wakes the queue, but unrelated lifecycle starts
-      // must reach their handlers before the ordinary backlog resumes.
-      const parked = start("models.list", "blocked");
-      const mutation = start("chat.send", "blocked");
-      const resume = start("gateway.suspend.resume", "blocked");
-      const ordinary = start("chat.send", "ordinary");
-      const status = start("gateway.suspend.status", "blocked");
-      const update = start("update.status", "operator");
-      const handoff = start("gateway.suspend.handoff", "operator");
-      await nextTurn();
-      expect(events).toEqual([
-        "blocked:gateway.suspend.status",
-        "operator:update.status",
-        "operator:gateway.suspend.handoff",
-        "ordinary:chat.send",
-      ]);
-      held[0]!.resolve();
-      await Promise.all([parked, mutation, resume, status, update, handoff, ordinary]);
-      expect(events.slice(4)).toEqual([
-        "blocked:models.list",
-        "blocked:chat.send",
-        "blocked:gateway.suspend.resume",
-      ]);
-    } finally {
-      held.forEach((completion) => completion.resolve());
-      await Promise.all(permissions);
-    }
+    const start = (method: string, connId: string, params = {}) =>
+      requestStart(100, { method, params }, connId).then(() => events.push(`${connId}:${method}`));
+    await startHeld();
+    // The parked preparation wakes the queue, but unrelated lifecycle starts
+    // must reach their handlers before the ordinary backlog resumes.
+    const parked = start("sessions.subscribe", "blocked", { limit: 100 });
+    const mutation = start("chat.send", "blocked");
+    const resume = start("gateway.suspend.resume", "blocked");
+    const ordinary = start("chat.send", "ordinary");
+    const status = start("gateway.suspend.status", "blocked");
+    const update = start("update.status", "operator");
+    const handoff = start("gateway.suspend.handoff", "operator");
+    await nextTurn();
+    expect(events).toEqual([
+      "blocked:gateway.suspend.status",
+      "operator:update.status",
+      "operator:gateway.suspend.handoff",
+      "ordinary:chat.send",
+    ]);
+    held[0]!.resolve();
+    await Promise.all([parked, mutation, resume, status, update, handoff, ordinary]);
+    expect(events.slice(4)).toEqual([
+      "blocked:sessions.subscribe",
+      "blocked:chat.send",
+      "blocked:gateway.suspend.resume",
+    ]);
   });
 
   it("releases a cancelled preparation waiter while earlier requests still own capacity", async () => {
-    const settled = Array.from({ length: 4 }, () => createDeferredCore());
-    const request = { method: "sessions.subscribe" };
-    const held = settled.map((completion, index) => {
-      const permission = scheduleGatewayRequestStart(
-        100,
-        request,
-        `held-${index}`,
-        completion.promise,
-      );
-      if (!permission) {
-        throw new Error("expected reconnect capacity");
-      }
-      return permission;
+    const { held, start } = holdPreparations({
+      method: "sessions.subscribe",
+      params: { limit: 100 },
     });
+    const started = start();
     const controller = new AbortController();
     const cancelled = scheduleGatewayRequestStart(
       100,
-      request,
+      { method: "sessions.subscribe", params: { limit: 100 } },
       "cancelled",
       Promise.resolve(),
       controller.signal,
     );
-    try {
-      await Promise.all(held);
-      controller.abort();
-      await expect(cancelled).resolves.toBeUndefined();
-    } finally {
-      for (const completion of settled) {
-        completion.resolve();
-      }
-      await Promise.all(held);
-    }
+    await started;
+    controller.abort();
+    await expect(cancelled).resolves.toBeUndefined();
+    held.forEach((completion) => completion.resolve());
+    await started;
     await expect(requestStart()).resolves.toBeUndefined();
   });
 
   it("expires a parked start without releasing active preparation capacity", async () => {
-    const held = Array.from({ length: 4 }, () => createDeferredCore());
+    const { held, start } = holdPreparations();
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const request = { method: "models.list" };
-    try {
-      await Promise.all(
-        held.map((completion, index) =>
-          requestStart(100, request, `held-${index}`, completion.promise),
-        ),
-      );
-      const waiting = scheduleGatewayRequestStart(100, request, "waiting", Promise.resolve());
-      const rejected = expect(waiting).rejects.toBeInstanceOf(GatewayRequestStartTimeoutError);
-      await nextTurn();
-      now = 30_000;
-      await vi.advanceTimersByTimeAsync(30_000);
-      await rejected;
-      const later = requestStart(100, request, "later");
-      let started = false;
-      void later.then(() => {
-        started = true;
-      });
-      await nextTurn();
-      expect(started).toBe(false);
-      held[0]!.resolve();
-      await later;
-    } finally {
-      for (const completion of held) {
-        completion.resolve();
-      }
-      vi.useRealTimers();
-    }
+    await start();
+    const waiting = scheduleGatewayRequestStart(100, request, "waiting", Promise.resolve());
+    const rejected = expect(waiting).rejects.toBeInstanceOf(GatewayRequestStartTimeoutError);
+    await nextTurn();
+    now = 30_000;
+    await vi.advanceTimersByTimeAsync(30_000);
+    await rejected;
+    const later = requestStart(100, request, "later");
+    let started = false;
+    void later.then(() => {
+      started = true;
+    });
+    await nextTurn();
+    expect(started).toBe(false);
+    held[0]!.resolve();
+    await later;
   });
 
   it.each(["settled", "cancelled"] as const)(
     "bounds settlement listeners while sibling requests are %s",
     async (outcome) => {
-      const held = createDeferredCore();
+      const held = heldCompletion();
       const observeSettlement = vi.spyOn(held.promise, "then");
-      const siblings = Array.from({ length: 3 }, () => createDeferredCore());
+      const siblings = Array.from({ length: 3 }, heldCompletion);
       const request = { method: "models.list" };
       const start = (settled: Promise<void>, signal?: AbortSignal) => {
-        const permission = scheduleGatewayRequestStart(100, request, "client", settled, signal);
-        if (!permission) {
-          throw new Error("expected preparation capacity");
-        }
-        permissions.push(permission);
-        return permission;
+        return requestStart(100, request, "client", settled, signal);
       };
-      try {
-        await Promise.all([
-          start(held.promise),
-          ...siblings.map((sibling) => start(sibling.promise)),
-        ]);
-        for (let index = 0; index < 32; index++) {
-          const completion = createDeferredCore();
-          const controller = new AbortController();
-          const permission = start(completion.promise, controller.signal);
-          await nextTurn();
-          if (outcome === "cancelled") {
-            controller.abort();
-            completion.resolve();
-          } else {
-            const slot = index % siblings.length;
-            siblings[slot]!.resolve();
-            siblings[slot] = completion;
-          }
-          await permission;
+      await Promise.all([
+        start(held.promise),
+        ...siblings.map((sibling) => start(sibling.promise)),
+      ]);
+      for (let index = 0; index < 32; index++) {
+        const completion = heldCompletion();
+        const controller = new AbortController();
+        const permission = start(completion.promise, controller.signal);
+        await nextTurn();
+        if (outcome === "cancelled") {
+          controller.abort();
+          completion.resolve();
+        } else {
+          const slot = index % siblings.length;
+          siblings[slot]!.resolve();
+          siblings[slot] = completion;
         }
-        expect(observeSettlement.mock.calls.length).toBeLessThanOrEqual(4);
-      } finally {
-        held.resolve();
-        for (const sibling of siblings) {
-          sibling.resolve();
-        }
+        await permission;
       }
+      expect(observeSettlement.mock.calls.length).toBeLessThanOrEqual(4);
     },
   );
 
@@ -417,51 +410,6 @@ describe("Gateway request start fairness", () => {
       const other = requestStart(1, request === subscribeRequest ? workRequest : subscribeRequest);
       await Promise.all([active, other, ...queued]);
       await expect(requestStart(bytes, request, "overflow")).resolves.toBeUndefined();
-    },
-  );
-});
-
-function receiverSocket(readonly = false): WebSocket {
-  return {
-    _receiver: Object.defineProperty({ _allowSynchronousEvents: false }, "_maxPayload", {
-      value: MAX_PREAUTH_PAYLOAD_BYTES,
-      writable: !readonly,
-    }),
-  } as unknown as WebSocket;
-}
-
-function payloadLimit(socket: WebSocket): number {
-  const receiver = (
-    socket as unknown as {
-      _receiver: {
-        _maxPayload: number;
-      };
-    }
-  )["_receiver"];
-  return receiver["_maxPayload"];
-}
-
-describe("authenticated receiver payload limits", () => {
-  it.each([false, true])(
-    "respects receiver mutability during handoff and worker admission (readonly: %s)",
-    (readonly) => {
-      const socket = receiverSocket(readonly);
-      const handoff = prepareGatewayReceiverHandoff(socket, "operator");
-      expect(payloadLimit(socket)).toBe(MAX_PREAUTH_PAYLOAD_BYTES);
-      if (readonly) {
-        expect(handoff).toMatchObject({
-          ok: false,
-          error: { cause: "unsupported-websocket-receiver" },
-        });
-      } else {
-        expect(handoff.ok).toBe(true);
-        if (handoff.ok) {
-          handoff.value();
-        }
-        expect(payloadLimit(socket)).toBe(MAX_PAYLOAD_BYTES);
-      }
-      expect(raiseGatewayReceiverPayloadLimit(socket, 1_024)).toBe(!readonly);
-      expect(payloadLimit(socket)).toBe(readonly ? MAX_PREAUTH_PAYLOAD_BYTES : 1_024);
     },
   );
 });

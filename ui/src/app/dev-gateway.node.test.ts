@@ -285,10 +285,10 @@ describe("configured UI development Gateway", () => {
         for (const error of events.filter(({ event }) => event.endsWith("-error"))) {
           expect(events.indexOf(error), JSON.stringify(events)).toBeGreaterThan(termination);
           expect(error.phase, JSON.stringify(events)).toBe("upstream-abort");
-          // Closing the transport can cancel queued client writes on macOS.
+          // Closing the transport can cancel queued client writes or destroy their stream.
           const expectedCodes =
             error.event === "client-write-error"
-              ? ["EPIPE", "ECONNRESET", "ECANCELED"]
+              ? ["EPIPE", "ECONNRESET", "ECANCELED", "ERR_STREAM_DESTROYED"]
               : ["EPIPE", "ECONNRESET"];
           expect(expectedCodes, JSON.stringify(events)).toContain(error.code);
         }

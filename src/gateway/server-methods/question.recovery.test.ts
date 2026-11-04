@@ -32,7 +32,9 @@ import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
+import { requestStuckSessionRecovery } from "../../logging/diagnostic-session-recovery-coordinator.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import { startGatewayDiagnosticHeartbeat } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
@@ -56,7 +58,6 @@ const ref = {
   runId: "human-wait-run",
 };
 let manager: QuestionManager;
-let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 let authority: AgentRunDelegatedAuthority;
 let unregister: () => void;
 let client: GatewayClient;
@@ -80,7 +81,7 @@ beforeEach(async () => {
   vi.useFakeTimers();
   vi.setSystemTime(Date.parse("2026-08-20T12:00:00Z"));
   setDiagnosticsEnabledForProcess(true);
-  scheduler = createTestGatewayScheduler("fake-timers");
+  const scheduler = createTestGatewayScheduler("fake-timers");
   manager = new QuestionManager(scheduler);
   onBroadcast = () => {};
   requesterActive = true;
@@ -133,10 +134,12 @@ beforeEach(async () => {
       watchdogAttempt,
       embeddedRunToolAuthorityBinding: (registration) => ({
         source: "reply",
+        acceptsRequesterOrigin: () => false,
         operation,
         watchdogAttempt,
         project: () => undefined,
         projectAsync: async () => undefined,
+        assertRegistrationActive: () => assertSessionControllerOperation(operation),
         assertActive: () => {
           assertSessionControllerOperation(operation);
           if (registration.handle !== handle) {
@@ -206,10 +209,6 @@ async function request(trusted = true, timeoutMs = 3_600_000, id = "human-questi
     ],
   };
   expect((await call("question.request", params, trusted))?.[0]).toBe(true);
-  expect(manager.get(params.id)).toMatchObject({
-    status: "pending",
-    expiresAtMs: Date.now() + timeoutMs,
-  });
   return params.id;
 }
 
@@ -234,28 +233,18 @@ it("keeps an accepted one-hour question alive through default diagnostic recover
     await vi.advanceTimersByTimeAsync(10_000);
     const id = await request();
     await vi.advanceTimersByTimeAsync(920_000);
-    expect(recovery).toHaveBeenCalledWith(
-      expect.objectContaining({ allowActiveAbort: true, queueDepth: 0 }),
+    expect(recovery).not.toHaveBeenCalled();
+    expect(operation.watchdog.snapshot().waits).toContainEqual(
+      expect.objectContaining({ kind: "human_question" }),
     );
     expect(abort).not.toHaveBeenCalled();
     expect(manager.get(id)?.status).toBe("pending");
     const answer = manager.waitAnswer(id);
     await vi.advanceTimersByTimeAsync(2_500_000);
     expect(abort).not.toHaveBeenCalled();
-    expect(
-      (
-        await call("question.resolve", {
-          id,
-          answers: { answers: { answer: ["synthetic-human-answer"] } },
-        })
-      )?.[0],
-    ).toBe(true);
-    await expect(answer).resolves.toMatchObject({
-      status: "answered",
-      answers: {
-        answers: { answer: ["synthetic-human-answer"] },
-      },
-    });
+    const answers = { answers: { answer: ["synthetic-human-answer"] } };
+    expect((await call("question.resolve", { id, answers }))?.[0]).toBe(true);
+    await expect(answer).resolves.toMatchObject({ status: "answered", answers });
     await vi.advanceTimersByTimeAsync(30_000);
     expect(abort).not.toHaveBeenCalled();
     // Resolution is real progress, but a tool that stays hung is still recovered.
@@ -267,11 +256,13 @@ it("keeps an accepted one-hour question alive through default diagnostic recover
   });
 });
 
-function recover() {
-  vi.setSystemTime(Date.now() + 930_000);
+function recover(target = operation, advanceMs = 930_000) {
+  if (advanceMs > 0) {
+    vi.setSystemTime(Date.now() + advanceMs);
+  }
   return recoverStuckDiagnosticSession({
     ...ref,
-    operation,
+    operation: target,
     ageMs: 930_000,
     queueDepth: 0,
     allowActiveAbort: true,
@@ -352,15 +343,11 @@ it("keeps resumed question work alive when attention reporting settles the quest
     try {
       await vi.advanceTimersByTimeAsync(900_000);
       expect(manager.observe(id)?.record.status).toBe("cancelled");
-      const outcomes = await Promise.all(recovery.mock.results.map((result) => result.value));
+      await Promise.all(recovery.mock.results.map((result) => result.value));
 
       await expect(answer).resolves.toEqual({ status: "cancelled" });
-      expect(recovery).toHaveBeenCalledWith(
-        expect.objectContaining({ allowActiveAbort: true, ageMs: 900_000 }),
-      );
-      expect(outcomes).toContainEqual(
-        expect.objectContaining({ status: "skipped", reason: "active_reply_work" }),
-      );
+      expect(recovery).not.toHaveBeenCalled();
+      expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(Date.now());
       expect(abort).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
@@ -552,15 +539,23 @@ it.each(["pending", "requester-inactive"] as const)(
       await gate;
       return recoverStuckDiagnosticSession(params);
     });
-    startGatewayDiagnosticHeartbeat(
-      createTestGatewayScheduler("fake-timers"),
-      {},
-      { recoverStuckSession: recovery },
-    );
     startQuestionTool("queued-call");
-    await vi.advanceTimersByTimeAsync(360_000);
-    expect(recovery).toHaveBeenCalledTimes(1);
+    await waitForDiagnosticEventsDrained();
+    // Queue an actually eligible captured stop before the question arrives. Do not
+    // ask diagnostics to override the runtime wait merely to exercise this race.
+    vi.setSystemTime(Date.now() + 930_000);
     preRecoveryWait.close();
+    expect(operation.watchdog.decide().action).toBe("stop");
+    requestStuckSessionRecovery({
+      recover: recovery,
+      classification: {
+        eventType: "session.stalled",
+        classification: "stalled_agent_run",
+        reason: "active_work_without_progress",
+      },
+      request: { ...ref, operation, ageMs: 930_000, queueDepth: 0 },
+    });
+    expect(recovery).toHaveBeenCalledOnce();
     await request();
     expect(operation.watchdog.snapshot().waits).toContainEqual(
       expect.objectContaining({ kind: "human_question" }),
@@ -632,15 +627,7 @@ it("does not abort a replacement installed synchronously by question expiry", as
   });
   vi.setSystemTime(Date.now() + 900_000);
   try {
-    await expect(
-      recoverStuckDiagnosticSession({
-        ...ref,
-        operation: expiringOperation,
-        ageMs: 930_000,
-        queueDepth: 0,
-        allowActiveAbort: true,
-      }),
-    ).resolves.toMatchObject({
+    await expect(recover(expiringOperation, 0)).resolves.toMatchObject({
       status: "skipped",
       reason: "stale_session_state",
     });

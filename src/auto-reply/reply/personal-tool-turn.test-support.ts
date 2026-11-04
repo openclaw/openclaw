@@ -18,6 +18,7 @@ import {
   withGatewayToolCallerIdentity,
   withGatewayPersonalToolUser,
 } from "../../agents/tools/gateway-caller-context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { GatewayClient, GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
@@ -117,7 +118,7 @@ type Person = {
   senderId: string;
   name: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  readCurrentRoleAssignment?: () => string | null;
+  readCurrentRoleFacts?: AdmittedRunOperatorAuthority["readCurrentRoleFacts"];
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
 };
 type PreparedRun = Pick<EmbeddedAgentQueueHandle, "toolAuthorityFingerprint">;
@@ -125,11 +126,13 @@ type PreparedRun = Pick<EmbeddedAgentQueueHandle, "toolAuthorityFingerprint">;
 export async function withPersonalToolTurn<T>(
   params: {
     owner: Person;
+    config?: OpenClawConfig;
     backendKind?: "embedded" | "cli";
     hiddenQuestion?: boolean;
     sessionKey?: string;
     sessionId?: string;
     runId?: string;
+    allowCollaborativeSteering?: boolean;
     admittedRunContext?: AdmittedRunContext;
     gatewayContextResolver?: GatewayContextResolver;
     controllerInput?: SessionControllerInput;
@@ -161,7 +164,7 @@ export async function withPersonalToolTurn<T>(
       scopes,
       gatewayAccessGrant: null,
       modelPolicy,
-      readCurrentRoleAssignment: person.readCurrentRoleAssignment,
+      readCurrentRoleFacts: person.readCurrentRoleFacts,
       assertCurrent() {
         if (revoked.has(person.profileId)) {
           throw new Error("Profile access revoked");
@@ -186,6 +189,12 @@ export async function withPersonalToolTurn<T>(
     senderIsOwner: true,
     clientCaps: ["ui-commands"],
     gatewayUiCommandTarget: params.owner.gatewayUiCommandTarget,
+    ...(params.allowCollaborativeSteering
+      ? {
+          messageProvider: "webchat",
+          conversationId: params.sessionKey ?? "agent:main:personal-tools",
+        }
+      : {}),
   });
   const mailboxClaim = params.controllerInput
     ? tryClaimSessionControllerTask(params.controllerInput)
@@ -203,7 +212,7 @@ export async function withPersonalToolTurn<T>(
   const admission = params.admittedRunContext
     ? undefined
     : prepareSystemAgentRunAdmission(
-        {},
+        params.config ?? {},
         runId,
         "main",
         "personal-tool-test",
@@ -213,7 +222,7 @@ export async function withPersonalToolTurn<T>(
   let reject = false;
   let registeredHandle: EmbeddedAgentQueueHandle | undefined;
   const completionRequested = createDeferred();
-  let testOutcome: Promise<PromiseSettledResult<T>> | undefined;
+  let testOutcome: Promise<T> | undefined;
   // Post-turn assertions retain the fixture registration after native execution and custody end.
   const producer = Promise.resolve().then(async () => {
     try {
@@ -260,14 +269,19 @@ export async function withPersonalToolTurn<T>(
             return !reject;
           };
         }
-        const backend = { ...handle, kind: params.backendKind ?? "embedded", cancel() {} };
+        const backend = {
+          ...handle,
+          ...(params.backendKind === "cli"
+            ? { kind: "cli" as const }
+            : { kind: "embedded" as const }),
+          cancel() {},
+        };
         operation.attachBackend(backend);
         if (backend.kind === "embedded") {
-          const embeddedBackend = { ...backend, kind: "embedded" as const };
-          registeredHandle = embeddedBackend;
+          registeredHandle = backend;
           setActiveEmbeddedRun(
             queued.sessionId,
-            embeddedBackend,
+            backend,
             queued.sessionKey,
             queued.sessionFile,
             "main",
@@ -298,7 +312,15 @@ export async function withPersonalToolTurn<T>(
             reject = options?.reject === true;
             return await queueCurrentReplyRunMessage(queued.sessionId, "Change my view", {
               isInboundUserMessage: true,
+              allowCollaborativeSteering: params.allowCollaborativeSteering,
               toolAuthorityOverlay: {
+                sessionKey: queued.sessionKey,
+                ...(params.allowCollaborativeSteering
+                  ? {
+                      messageProvider: queued.messageProvider,
+                      conversationId: queued.conversationId ?? undefined,
+                    }
+                  : {}),
                 operatorAuthority: authority(person, options?.scopes),
                 senderId: person.senderId,
                 senderName: person.name,
@@ -310,16 +332,14 @@ export async function withPersonalToolTurn<T>(
               },
             });
           },
-        }).then(
-          (value) => ({ status: "fulfilled", value }),
-          (reason: unknown) => ({ status: "rejected", reason }),
-        );
+        });
         await Promise.race([testOutcome, completionRequested.promise]);
       };
       await withGatewayToolCallerIdentity(
         {
           ...caller,
           operatorAuthority: run.operatorAuthority,
+          executionIdentityToken: admittedRunContext.executionIdentityToken,
           gatewayContextResolver: params.gatewayContextResolver,
           receiptAuthority: () => {
             if (getAdmittedRunDelegatedAuthority(admittedRunContext) !== delegatedAuthority) {
@@ -346,18 +366,11 @@ export async function withPersonalToolTurn<T>(
     }
   });
   try {
-    const [producerOutcome] = await Promise.allSettled([producer]);
-    const outcome = await testOutcome;
-    if (producerOutcome.status === "rejected") {
-      throw producerOutcome.reason;
-    }
-    if (!outcome) {
+    await producer;
+    if (!testOutcome) {
       throw new Error("The personal tool producer did not start its test");
     }
-    if (outcome.status === "rejected") {
-      throw outcome.reason;
-    }
-    return outcome.value;
+    return await testOutcome;
   } finally {
     if (registeredHandle) {
       clearActiveEmbeddedRun(queued.sessionId, registeredHandle, queued.sessionKey);
@@ -367,4 +380,13 @@ export async function withPersonalToolTurn<T>(
     }
     admission?.close();
   }
+}
+
+export function createPersonalToolParticipant(profileId: string, name: string) {
+  return {
+    profileId,
+    name,
+    senderId: `${profileId}-sender`,
+    gatewayUiCommandTarget: { connId: `${profileId}-tab`, profileId },
+  };
 }

@@ -17,6 +17,7 @@ Write the acceptance rule in the PR **before** the first run: flow, workload, me
 | Gateway startup / restart       | `scripts/bench-gateway-startup.ts`, `scripts/bench-gateway-restart.ts`, `scripts/perf/post-restart-burst-measure.ts` |
 | Chat turn, frames per turn      | `scripts/bench-channel-turn.mts`, `scripts/perf/transcript-broadcast-measure.ts`                                     |
 | Control UI cold load            | `scripts/bench-control-ui-cold-load.ts`, `pnpm ui:check-performance` (`:base` compares)                              |
+| Control UI older-history paging | `scripts/bench-control-ui-history-depth.ts`                                                                          |
 | Session list, multi-agent shape | `scripts/perf/team-shape-fixture.ts`, `src/gateway/session-list-viewers.perf.test.ts`                                |
 | Concurrency, SQLite state       | `scripts/bench-gateway-concurrency.ts`, `pnpm test:sqlite:perf`                                                      |
 
@@ -61,7 +62,8 @@ Done when the waste is gone from the counts, or the PR says which step stopped a
 
 - Rerun the step 1 workload on baseline and candidate under the same rule.
 - **Every user-facing metric holds or improves:** latency, p95/p99, frames, cold start, CPU, memory, counts. A worse metric needs the owner's explicit acceptance in the PR. A 20% move in one cell is a stop, never "within spread": five of six reverted performance PRs showed their regression in their own body.
-- Revert changes without a measurable gain. Add or extend a work-count test so the waste stays gone.
+- Revert changes without a measurable gain.
+- **Proof lives in the PR**, not in new tests: the before/after counts are the evidence. Extend a flow's existing work-count test only when this waste has come back before; [test-audit](../test-audit/SKILL.md) owns test value.
 - PR evidence: workload command, acceptance rule, before/after table (counts and times, median and p95, samples), waste removed, and any metric that moved the wrong way.
 
 Done when the table meets the rule written in step 1.

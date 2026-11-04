@@ -1,6 +1,5 @@
 import type { TUI } from "@earendil-works/pi-tui";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
@@ -106,6 +105,7 @@ export function createSessionActions(context: SessionActionContext) {
       return false;
     }
 
+    client.cancelPendingRequests?.(captureTuiSessionSelection(state));
     // Retire the previous session's runs before history can adopt a new
     // in-flight owner; otherwise its completion can promote an old run.
     invalidateRunOwnership?.();
@@ -173,21 +173,19 @@ export function createSessionActions(context: SessionActionContext) {
     updateFooter();
   };
 
-  const refreshAgents = async (
-    ownsRefresh: () => boolean = () => true,
-  ): Promise<Result<void, string>> => {
+  const refreshAgents = async (ownsRefresh: () => boolean = () => true): Promise<boolean> => {
     try {
       const result = await client.listAgents();
       if (ownsRefresh()) {
         applyAgentsResult(result);
       }
-      return ok(undefined);
+      return true;
     } catch (error) {
       const message = formatTuiErrorMessage(error);
       if (ownsRefresh()) {
         chatLog.addSystem(`agents list failed: ${message}`);
       }
-      return resultError(message);
+      return false;
     }
   };
 

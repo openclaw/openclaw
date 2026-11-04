@@ -2,7 +2,6 @@
  * OpenClaw stdio transport wrapper for MCP server subprocesses.
  */
 import fs from "node:fs/promises";
-import process from "node:process";
 import { PassThrough } from "node:stream";
 import {
   STDIO_DEFAULT_MAX_BUFFER_SIZE,
@@ -11,6 +10,7 @@ import {
   type JSONRPCMessage,
 } from "@modelcontextprotocol/client";
 import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
+import { materializeErrorStack, throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -41,17 +41,16 @@ type OpenClawStdioServerParameters = {
   decoder?: McpStdioDecoder;
   cwd?: string;
   prepareDataDir?: string;
-  stderr?: "pipe" | "overlapped" | "inherit" | "ignore";
 };
 
-export class OpenClawStdioClientTransport implements Transport {
+export class OpenClawStdioClientTransport extends EventTarget implements Transport {
   onclose?: () => void;
   onerror?: (error: Error) => void;
   onmessage?: (message: JSONRPCMessage) => void;
   onexit?: (exit: McpStdioExit) => void;
 
   private readonly readBuffer: McpStdioDecoder;
-  private readonly stderrStream: PassThrough | null = null;
+  private readonly stderrStream = new PassThrough();
   private process?: OwnedStdioProcess;
   private starting?: Promise<void>;
   private closing?: Promise<void>;
@@ -65,12 +64,10 @@ export class OpenClawStdioClientTransport implements Transport {
   >;
 
   constructor(private readonly serverParams: OpenClawStdioServerParameters) {
+    super();
     // Keep malformed-frame errors visible; the v2 SDK buffer silently drops invalid JSON.
     this.readBuffer =
       serverParams.decoder ?? new McpStdioFrameDecoder(STDIO_DEFAULT_MAX_BUFFER_SIZE, "transport");
-    if (serverParams.stderr === "pipe" || serverParams.stderr === "overlapped") {
-      this.stderrStream = new PassThrough();
-    }
   }
 
   async start(): Promise<void> {
@@ -89,16 +86,20 @@ export class OpenClawStdioClientTransport implements Transport {
       try {
         await fs.mkdir(prepareDataDir, { recursive: true });
       } catch (error) {
-        throw new Error(
+        const failure = new Error(
           `unable to prepare PLUGIN_DATA directory "${prepareDataDir}": ${formatErrorMessage(error)}`,
           { cause: error },
         );
+        materializeErrorStack(failure);
+        throw failure;
       }
     }
 
     // Directory preparation may finish after shutdown has retired this launch.
     if (this.startupAbort.signal.aborted) {
-      throw new Error("MCP stdio transport is closed");
+      const failure = new Error("MCP stdio transport is closed");
+      materializeErrorStack(failure);
+      throw failure;
     }
 
     try {
@@ -129,11 +130,10 @@ export class OpenClawStdioClientTransport implements Transport {
         ...(this.docker
           ? { assertCurrent: this.docker.assertCurrent }
           : { abortSignal: this.startupAbort.signal }),
-        stderrDestination:
-          this.stderrStream ?? (this.serverParams.stderr === "ignore" ? undefined : process.stderr),
+        stderrDestination: this.stderrStream,
       });
       this.process = child;
-      child.onError((error) => this.onerror?.(error));
+      child.onError((error) => this.notifyError(error));
       const receive = (chunk: Buffer) => {
         if (this.closing) {
           return;
@@ -142,7 +142,7 @@ export class OpenClawStdioClientTransport implements Transport {
           this.readBuffer.append(chunk);
           this.processReadBuffer();
         } catch (error) {
-          this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+          this.notifyError(error instanceof Error ? error : new Error(String(error)));
           void this.close().catch(() => {});
         }
       };
@@ -151,29 +151,28 @@ export class OpenClawStdioClientTransport implements Transport {
           receive(Buffer.from(text));
         }
       }, receive);
-      if (this.serverParams.stderr === "ignore") {
-        child.onStderr(() => {});
-      }
       // Root closure retires the connection immediately; the retained owner still
       // joins descendants before disposal can certify completed cleanup.
       void child.wait().then(
         (exit) => {
           try {
+            this.dispatchEvent(new Event("exit"));
             this.onexit?.(exit);
           } catch (error) {
-            this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+            this.notifyError(error instanceof Error ? error : new Error(String(error)));
           } finally {
             void this.close().catch(() => {});
             this.notifyClosed();
           }
         },
         (error: unknown) => {
-          this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+          this.notifyError(error instanceof Error ? error : new Error(String(error)));
           void this.close().catch(() => {});
           this.notifyClosed();
         },
       );
     } catch (error) {
+      materializeErrorStack(error);
       if (error instanceof OwnedStdioCleanupError) {
         this.startupCleanupError = error;
         recordAgentCleanupFailure();
@@ -185,7 +184,7 @@ export class OpenClawStdioClientTransport implements Transport {
           .close(this.startupCleanupError ? undefined : Promise.resolve())
           .catch((cleanupError: unknown) => {
             recordAgentCleanupFailure();
-            this.onerror?.(
+            this.notifyError(
               cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)),
             );
           });
@@ -193,7 +192,7 @@ export class OpenClawStdioClientTransport implements Transport {
           await cleanup;
         }
       }
-      this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+      this.notifyError(error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
@@ -208,6 +207,12 @@ export class OpenClawStdioClientTransport implements Transport {
 
   get cleanupResult() {
     return this.cleanup;
+  }
+
+  private notifyError(error: Error): void {
+    // Observe failures before SDK callbacks can request cleanup or replace handlers.
+    this.dispatchEvent(new Event("error"));
+    this.onerror?.(error);
   }
 
   private notifyClosed(): void {
@@ -227,7 +232,7 @@ export class OpenClawStdioClientTransport implements Transport {
         }
         this.onmessage?.(message);
       } catch (error) {
-        this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+        this.notifyError(error instanceof Error ? error : new Error(String(error)));
       }
     }
   }
@@ -262,19 +267,15 @@ export class OpenClawStdioClientTransport implements Transport {
             failures.push(error);
           }
         }
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "MCP container and host-process cleanup failed");
-        }
+        throwCollectedErrors(failures, "MCP container and host-process cleanup failed");
       } catch (error) {
+        materializeErrorStack(error);
         recordAgentCleanupFailure();
         throw error;
       } finally {
         this.process = undefined;
         this.readBuffer.clear();
-        this.stderrStream?.end();
+        this.stderrStream.end();
         this.notifyClosed();
       }
     })();

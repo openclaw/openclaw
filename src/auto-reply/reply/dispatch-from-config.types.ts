@@ -35,6 +35,7 @@ export type DispatchFromConfigResult = {
   noVisibleReplyFallbackDelivered?: boolean;
   deliberateSilentTerminalReply?: true;
   beforeAgentRunBlocked?: boolean;
+  collaborativeSteeringRefused?: true;
   sessionMetadataChanges?: CommandSessionMetadataChange[];
 };
 

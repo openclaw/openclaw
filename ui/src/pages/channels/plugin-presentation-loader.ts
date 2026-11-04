@@ -1,37 +1,38 @@
-import { createMemo, onCleanup } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
 import {
   createChannelSettingsPresentation,
   type ChannelSettingsHooks,
 } from "./channel-settings-presentation.tsx";
-import { resolveChannelIconOwner } from "./plugin-presentation.ts";
 
-type PluginPresentationHooks = ChannelSettingsHooks & {
-  getContext: () => ApplicationContext;
-  getChannelIds: () => readonly string[];
-  isConnected: () => boolean;
-};
+function resolveChannelIconOwner(
+  plugins: Readonly<PluginListResult["plugins"]>,
+  channelId: string,
+) {
+  return (
+    plugins.find((plugin) => plugin.hasIcon && plugin.id === channelId) ??
+    plugins.find((plugin) => plugin.hasIcon && plugin.channelIds?.includes(channelId))
+  );
+}
 
-export function createChannelPluginPresentation(hooks: PluginPresentationHooks) {
+export function createChannelPluginPresentation(
+  hooks: ChannelSettingsHooks & {
+    getContext: () => ApplicationContext;
+    getChannelIds: () => readonly string[];
+    isConnected: () => boolean;
+  },
+) {
   const details = createChannelSettingsPresentation(hooks);
   let catalog: PluginListResult | null = null;
   let iconUrls: Record<string, string> = {};
   let publish = () => {};
-  const presentation = projectSource(hooks, {
-    read: () => ({ catalog, iconUrls }),
-    subscribe: (_source, notify) => {
-      publish = notify;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const presentation = projectMutableSource(hooks, () => ({ catalog, iconUrls }));
+  publish = presentation.publish;
   let request: { client: GatewayBrowserClient; controller: AbortController } | null = null;
   let disposed = false;
   const icons = new PluginIconOwner({
@@ -120,7 +121,7 @@ export function createChannelPluginPresentation(hooks: PluginPresentationHooks) 
     catalog = null;
     icons.reset();
   }
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     reset();
   });

@@ -5,9 +5,12 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import { SYSTEM_AGENT_AUDIT_SCOPE } from "../system-agent/audit.js";
+import { engineStringPosition } from "./database-engine/scalar.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
-import type { SqlConnection } from "./sql-connection.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   detectLegacyAuditLogs,
   legacyAuditSourceGenerationKey,
@@ -52,15 +55,25 @@ export class LegacyAuditBackupStateChangedError extends Error {
 
 const LEGACY_AUDIT_RAW_CHECKPOINT_SCOPE = "migration.legacy-audit-raw";
 
-export function createLegacyAuditDatabaseWitness(database: SqlConnection): string {
-  const rows = database // sqlite-allow-raw -- Exact snapshot rows define the cross-store witness.
-    .prepare(
-      `SELECT scope, event_key, payload_json, created_at, sequence
-       FROM diagnostic_events
-       WHERE (scope IN (?, ?) AND event_key GLOB 'legacy:*') OR scope = ?
-       ORDER BY scope, event_key, sequence`,
-    )
-    .all(CONFIG_AUDIT_SCOPE, SYSTEM_AGENT_AUDIT_SCOPE, LEGACY_AUDIT_RAW_CHECKPOINT_SCOPE);
+export function createLegacyAuditDatabaseWitness(database: EngineConnection): string {
+  const rows = executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<Pick<DB, "diagnostic_events">>(database)
+      .selectFrom("diagnostic_events")
+      .select(["scope", "event_key", "payload_json", "created_at", "sequence"])
+      .where((eb) =>
+        eb.or([
+          eb.and([
+            eb("scope", "in", [CONFIG_AUDIT_SCOPE, SYSTEM_AGENT_AUDIT_SCOPE]),
+            eb(engineStringPosition(database, eb.ref("event_key"), eb.val("legacy:")), "=", 1),
+          ]),
+          eb("scope", "=", LEGACY_AUDIT_RAW_CHECKPOINT_SCOPE),
+        ]),
+      )
+      .orderBy("scope")
+      .orderBy("event_key")
+      .orderBy("sequence"),
+  ).rows;
   return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
 }
 

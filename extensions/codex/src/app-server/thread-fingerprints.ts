@@ -1,6 +1,10 @@
 import * as crypto from "node:crypto";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import {
+  resolveCodexThreadFingerprintConfig,
+  type CodexThreadFingerprintInference,
+} from "./inference-provider-config.js";
+import {
   isJsonObject,
   type CodexTurn,
   type CodexTurnEnvironmentParams,
@@ -27,7 +31,8 @@ export function areCodexDynamicToolFingerprintsCompatible(params: {
 export function codexLegacyDynamicToolsFingerprint(dynamicTools: readonly JsonValue[]): string {
   // Codex persists the complete model-visible schema at thread/start; resume
   // cannot refresh changed tool or nested input descriptions.
-  return JSON.stringify(dynamicTools.map(stabilizeJsonValue).toSorted(compareJsonFingerprint));
+  const tools = dynamicTools.map((tool) => JSON.stringify(stabilizeJsonValue(tool)));
+  return `[${tools.toSorted((left, right) => left.localeCompare(right)).join(",")}]`;
 }
 
 export function legacyFingerprintUserMcpServersConfigPatch(
@@ -66,6 +71,7 @@ export function fingerprintCodexThreadConfig(
     modelProvider?: string | null;
     preserveNativeModel?: boolean;
   },
+  inference?: CodexThreadFingerprintInference,
 ): string {
   let { model, requestedModel, modelProvider, requestedModelProvider } = initialRequest;
   if (selection) {
@@ -103,7 +109,10 @@ export function fingerprintCodexThreadConfig(
       permissions: initialRequest.permissions ?? null,
       baseInstructions: initialRequest.baseInstructions ?? null,
       developerInstructions: initialRequest.developerInstructions ?? null,
-      config: initialRequest.config ?? {},
+      config: resolveCodexThreadFingerprintConfig(
+        isJsonObject(initialRequest.config) ? initialRequest.config : {},
+        inference,
+      ),
     }),
   );
 }
@@ -124,6 +133,7 @@ export function fingerprintRestrictedThreadConfig(
   },
   hostSystemAgentActive: boolean,
   selection?: Parameters<typeof fingerprintCodexThreadConfig>[3],
+  inference?: CodexThreadFingerprintInference,
 ): string {
   return hashCodexAppServerBindingFingerprint(
     fingerprintJsonObject({
@@ -137,6 +147,7 @@ export function fingerprintRestrictedThreadConfig(
         authProfileId,
         dynamicToolsFingerprint,
         selection,
+        inference,
       ),
       hostSystemAgentActive,
       toolsAllow:
@@ -234,8 +245,4 @@ export function shouldStartTransientNoToolThread(params: {
     params.previous !== LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT &&
     !params.nextHasDynamicTools,
   );
-}
-
-function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
-  return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }

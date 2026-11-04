@@ -5,11 +5,10 @@ import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js
 export function measureAgentStartup<T>(
   stage: string,
   run: () => Promise<T> | T,
-  options: AgentStartupTimingOptions = {},
+  options: Pick<AgentStartupTimingOptions, "config"> = {},
 ): Promise<T> {
   return measureDiagnosticsTimelineSpan("agent.startup", run, {
     config: options.config,
-    env: options.env,
     phase: "agent.startup",
     attributes: { stage },
   });

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { executeTsdownBuildPlan, type prepareTsdownBuildExecution } from "../tsdown-build.mts";
 import {
   listCacheFiles,
