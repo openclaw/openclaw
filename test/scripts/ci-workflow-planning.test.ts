@@ -5696,6 +5696,7 @@ describe("ci workflow guards", () => {
       headRepository: "openclaw/openclaw",
       runnerBackend: "boat" as const,
       preflightResult: "failure",
+      runAttempt: 1,
       preflightOutputs: {
         effective_runner_backend: "",
         placement_runner_backend: "",

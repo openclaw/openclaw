@@ -66,7 +66,7 @@ it("maps final Boat plans without changing hybrid groups, packing, or timings", 
     "blacksmith-16vcpu-ubuntu-2404": ["boat-large", 4],
     "blacksmith-32vcpu-ubuntu-2404": ["boat-xlarge", 8],
   };
-  const expectedJob = (job: NodeTestShard) => {
+  const expectedJob = <T extends Pick<NodeTestShard, "runner" | "checkName">>(job: T) => {
     const capacity = expectedCapacity[job.runner];
     const promoted =
       job.runner === "blacksmith-8vcpu-ubuntu-2404" &&

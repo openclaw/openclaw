@@ -124,7 +124,9 @@ export function resolveBoatNodeTestCapacity(runner: string, checkName?: string) 
 }
 
 // Map only final jobs: group runners remain logical placement/timing identities.
-export function routeBoatNodeTestJobs<T extends NodeTestShard>(jobs: T[]): T[] {
+export function routeBoatNodeTestJobs<T extends Pick<NodeTestShard, "runner" | "checkName">>(
+  jobs: T[],
+): T[] {
   return jobs.map((job) => {
     const capacity = resolveBoatNodeTestCapacity(job.runner, job.checkName);
     return capacity ? { ...job, ...capacity } : job;
