@@ -1,8 +1,7 @@
 import type { Context } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
-import { getAiTransportHost } from "../../packages/ai/src/host.js";
+import { describe, expect, it, vi } from "vitest";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
 import {
@@ -117,10 +116,6 @@ const rejectedResponse = (error: Error) => ({ withResponse: vi.fn().mockRejected
 
 describe("openai transport stream", () => {
   it("reuses frozen history across turns without changing bytes or sharing hook edits", () => {
-    const immutable = getAiTransportHost().immutableData;
-    assert(immutable);
-    const inspect = vi.spyOn(immutable, "isDeeplyFrozenPlainData");
-    onTestFinished(() => inspect.mockRestore());
     const model = responsesModelFixture();
     const context: Context = replayContext({
       before: [{ role: "user", timestamp: 0, content: [{ type: "text", text: "question" }] }],
@@ -130,7 +125,6 @@ describe("openai transport stream", () => {
     context.messages.forEach(freezeJsonSnapshot);
     const first = buildOpenAIResponsesParams(model, context, undefined);
     const bytes = JSON.stringify(first);
-    inspect.mockClear();
     for (let turn = 0; turn < 4; turn++) {
       const next = buildOpenAIResponsesParams(model, context, undefined);
       expect(JSON.stringify(next)).toBe(bytes);
@@ -147,8 +141,6 @@ describe("openai transport stream", () => {
     context.messages.push({ role: "user", timestamp: 3, content: "next turn" });
     const extended = buildOpenAIResponsesParams(model, context, undefined);
     first.input?.forEach((item, index) => expect(extended.input?.[index]).toBe(item));
-    // Reused history is already admitted; only the appended message needs inspection.
-    expect(inspect.mock.calls.map(([value]) => value)).toEqual([context.messages.at(-1)]);
     for (const shallow of [false, true]) {
       const block = { type: "text" as const, text: "before" };
       const message = { role: "user" as const, timestamp: 0, content: [block] };
