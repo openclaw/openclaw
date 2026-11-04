@@ -265,6 +265,33 @@ describe("Tool Search input schemas", () => {
     expect(readTool.execute).toHaveBeenCalledOnce();
   });
 
+  it("validates a Gemini stringified literal against the canonical contract", async () => {
+    const literalTool = fakeTool(
+      "literal_flag",
+      Type.Object({
+        path: Type.String(),
+        optional: Type.Optional(Type.Literal(true)),
+      }),
+    );
+    const finalized = finalizeAgentTools({
+      tools: [literalTool],
+      hookContext: { sessionId: "gemini-literal" },
+      modelProvider: "google",
+      modelId: "gemini-4-argon",
+      wrapBeforeToolCallHook: false,
+      registerRunCleanup: vi.fn(),
+    });
+    const wrapped = finalized.map((tool) => copyAgentToolMetadata(tool, { ...tool }));
+    const { catalogRef, runtime } = createRuntime(wrapped);
+    const advertised = catalogRef.current?.entries[0]?.parameters;
+    expect(advertised).toHaveProperty("properties.optional.enum", ["true"]);
+
+    await expect(
+      runtime.call("literal_flag", { path: "notes.txt", optional: true }),
+    ).resolves.toBeDefined();
+    expect(literalTool.execute).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["10", '"10" (string)'],
     [false, "false (boolean)"],
