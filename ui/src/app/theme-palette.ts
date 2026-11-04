@@ -2,8 +2,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   requireSafeCssValue,
   requireSafeFontFamilyValue,
+  ThemeValidationError,
   type ImportedCustomTheme,
 } from "./custom-theme.ts";
+
+export class MissingThemeTokenError extends ThemeValidationError {}
 
 const DEFAULT_FONT_BODY =
   '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
@@ -24,7 +27,7 @@ function requireSafeExternalColorValue(value: unknown, label: string) {
   ) {
     return normalized;
   }
-  throw new Error(`Unsupported tweakcn token: ${label}`);
+  throw new ThemeValidationError(label);
 }
 
 function resolveModeVar(
@@ -44,7 +47,7 @@ function resolveModeVar(
       ? requireSafeFontFamilyValue(fallback, key)
       : requireSafeCssValue(fallback, key);
   }
-  throw new Error(`tweakcn theme is missing required token: ${key}`);
+  throw new MissingThemeTokenError(key);
 }
 
 export function normalizeThemePalette(
