@@ -75,6 +75,7 @@ const entityNames = ["OpenClawSessionEntity", "OpenClawRunEntity"];
 const enumName = "OpenClawNativeSessionOperation";
 const entity = (typeName, optional = false) => ({ kind: "entity", typeName, optional });
 const string = (optional = false) => ({ kind: "string", optional });
+const boolean = (optional = false) => ({ kind: "boolean", optional });
 const contracts = {
   OpenSessionIntent: {
     target: entity("OpenClawSessionEntity"),
@@ -82,7 +83,9 @@ const contracts = {
     draft: string(true),
   },
   OpenComposeIntent: { target: entity("OpenClawSessionEntity"), draft: string(true) },
-  OpenRunIntent: { target: entity("OpenClawRunEntity") },
+  OpenRunIntent: {
+    target: entity("OpenClawRunEntity"), automatic: boolean(true), presentationID: string(true),
+  },
   SendMessageIntent: { session: entity("OpenClawSessionEntity"), message: string() },
   AskOpenClawIntent: { session: entity("OpenClawSessionEntity"), question: string() },
   CheckSessionStatusIntent: { session: entity("OpenClawSessionEntity") },
@@ -150,7 +153,9 @@ function validate(file, expectShortcuts) {
           `Wrong enum parameter type for ${label}`,
         );
       } else {
-        assert.equal(parameter.valueType.primitive?.wrapper.typeIdentifier, 0, `Expected String for ${label}`);
+        // Xcode 26.6 extraction: String = 0, Bool = 1.
+        const primitive = expected.kind === "boolean" ? 1 : 0;
+        assert.equal(parameter.valueType.primitive?.wrapper.typeIdentifier, primitive, `Wrong primitive for ${label}`);
       }
     }
     actions[name] = action;

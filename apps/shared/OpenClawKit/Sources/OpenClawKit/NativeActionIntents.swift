@@ -151,8 +151,11 @@ public enum OpenClawNativeSessionOperation: String, AppEnum {
     #endif
 }
 
-/// App Intents metadata permits one OpenIntent per entity; session variants
-/// share this declaration while named Shortcuts delegate to its perform method.
+// App Intents metadata permits one OpenIntent per entity; session variants
+// share this declaration while named Shortcuts delegate to its perform method.
+#if DEBUG && SIRI_AI_PREVIEW
+@AppIntent(.tool)
+#endif
 public struct OpenSessionIntent: OpenIntent {
     public static let title: LocalizedStringResource = "Open Session"
     public static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
@@ -263,8 +266,13 @@ struct OpenRunIntent: OpenIntent {
 }
 
 #if os(iOS)
+#if DEBUG && SIRI_AI_PREVIEW
+@AppIntent(.tool)
+#endif
 public struct OpenLiveVoiceIntent: AppIntent {
     public static let title: LocalizedStringResource = "Open Session Voice"
+    public static let description: IntentDescription? = IntentDescription(
+        "Open the selected session and start live voice using its Gateway account.")
     public static let openAppWhenRun = true
     @available(iOS 26.0, *)
     public static var supportedModes: IntentModes {
@@ -335,6 +343,9 @@ public struct SendMessageIntent: AppIntent {
     }
 }
 
+#if DEBUG && SIRI_AI_PREVIEW
+@AppIntent(.tool)
+#endif
 public struct AskOpenClawIntent: AppIntent {
     public static let title: LocalizedStringResource = "Ask OpenClaw"
     public static let description: IntentDescription? = IntentDescription(
@@ -361,7 +372,10 @@ public struct AskOpenClawIntent: AppIntent {
     }
 }
 
-/// Reads the selected session without sending a message or changing the visible chat.
+// Reads the selected session without sending a message or changing the visible chat.
+#if DEBUG && SIRI_AI_PREVIEW
+@AppIntent(.tool)
+#endif
 public struct CheckSessionStatusIntent: AppIntent {
     public static let title: LocalizedStringResource = "Check OpenClaw Status"
     public static let description: IntentDescription? = IntentDescription(
