@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-test-mock-exports.mts";
 import { scanClosedMockFactories } from "../../scripts/lib/mock-factory-scan.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+import {
+  buildCmdExeCommandLine,
+  resolveWindowsCmdExePath,
+} from "../../scripts/windows-cmd-helpers.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
@@ -65,12 +69,15 @@ describe("first-party mock export ratchet", () => {
     ]) {
       delete env[key];
     }
-    const run = (...args: string[]) =>
-      spawnSync("pnpm", ["run", "check:test-mock-exports", "--base", "HEAD", ...args], {
-        cwd: root,
-        env,
-        encoding: "utf8",
-      });
+    const run = (...forwarded: string[]) => {
+      const args = ["run", "check:test-mock-exports", "--base", "HEAD", ...forwarded];
+      const windows = process.platform === "win32";
+      return spawnSync(
+        windows ? resolveWindowsCmdExePath(env) : "pnpm",
+        windows ? ["/d", "/s", "/c", buildCmdExeCommandLine("pnpm.cmd", args)] : args,
+        { cwd: root, env, encoding: "utf8", windowsVerbatimArguments: windows },
+      );
+    };
     const initialized = run("--prune");
     expect(initialized, initialized.stderr).toMatchObject({ status: 0 });
     const baseline = path.join(root, "config/test-mock-exports-baseline.txt");
