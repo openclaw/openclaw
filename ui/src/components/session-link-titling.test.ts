@@ -247,7 +247,7 @@ describe("SessionLinkTitler", () => {
     { kind: "short", count: 1, title: "Derived plan" },
     { kind: "full", count: 100, title: "Peter's plan" },
     { kind: "full", count: 101, title: "Peter's plan" },
-  ])(
+  ] as const)(
     "shares $count active $kind references through busy expiry",
     async ({ kind, count, title }) => {
       const pending = Promise.withResolvers<unknown>();
