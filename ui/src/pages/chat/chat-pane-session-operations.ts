@@ -108,7 +108,7 @@ export async function runHeaderSessionOperation(
     );
     const resolvedRow = currentRow ?? (session.sessionId ? row : null);
     if (!resolvedRow && notify) {
-      showToast({ message: t("common.refresh") });
+      showToast({ severity: undefined, message: t("common.refresh") });
     }
     return resolvedRow ? toActionSession(resolvedRow) : null;
   };
@@ -257,8 +257,7 @@ export async function runHeaderSessionOperation(
       await assignSessionOwner(host, session, action.owner, scope);
       break;
     case "fork":
-      await forkSession(host, session, scope);
-      break;
+      return forkSession(host, session, scope, { title: action.title });
     case "move-to-top-level":
       await promoteSession(host, session, scope);
       break;

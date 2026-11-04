@@ -5,13 +5,13 @@ import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Picker } from "../../components/select-picker.ts";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
-import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import { SettingsSectionHelp } from "../../components/solid/settings-section-help.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
+  SettingsLoadingSkeleton,
   SettingsRow,
   SettingsSection,
-  SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
@@ -29,87 +29,63 @@ function gatewayEndpoint(gatewayUrl: string): string {
   return url ? `${url.origin}${url.pathname}` : t("profilePage.modelAccounts.gatewayUnavailable");
 }
 
-function AccountRow(
+// Not a valid auth profile id: profile ids always carry a provider prefix.
+const GATEWAY_DEFAULT_OPTION = "gateway-default";
+// The shared width of lone value controls in settings rows, so these read as one column.
+const PICKER_WIDTH = "width:340px;max-width:100%;min-width:0";
+
+function ProviderRow(
   props: StateProps & {
     pending: boolean;
-    row:
-      | { kind: "linked"; link: { provider: string; authProfileId: string } }
-      | { kind: "saved"; account: UserModelAccount };
+    provider: string;
+    accounts: readonly UserModelAccount[];
+    linkedId: string | undefined;
   },
 ) {
   const state = () => props.readState();
-  const accounts = createMemo(() => state().accounts);
-  const linked = () => props.row.kind === "linked";
-  const reference = () => (props.row.kind === "linked" ? props.row.link : props.row.account);
-  const account = createMemo(() =>
-    props.row.kind === "linked"
-      ? accounts().find((candidate) => candidate.authProfileId === reference().authProfileId)
-      : props.row.account,
-  );
-  const label = () => account()?.label ?? t("profilePage.modelAccounts.gatewayAccount");
-  const duplicateLabel = createMemo(
-    () =>
-      account() &&
-      accounts().some(
-        (candidate) =>
-          candidate.authProfileId !== reference().authProfileId &&
-          candidate.provider === reference().provider &&
-          candidate.label === label(),
-      ),
-  );
-  const provider = () => providerDisplayLabel(reference().provider);
-  const action = () =>
-    t(
-      linked()
-        ? "profilePage.modelAccounts.unlinkAction"
-        : "profilePage.modelAccounts.selectAction",
-    );
+  const name = () => providerDisplayLabel(props.provider);
+  const options = createMemo(() => {
+    const labels = props.accounts.map((account) => account.label);
+    return [
+      ...props.accounts.map((account) => {
+        const kind = t(`profilePage.modelAccounts.authTypes.${account.authType}`);
+        return {
+          value: account.authProfileId,
+          label: account.label,
+          // Only identical labels need the stored profile id to tell them apart.
+          description:
+            labels.indexOf(account.label) === labels.lastIndexOf(account.label)
+              ? kind
+              : `${kind} · ${account.authProfileId}`,
+        };
+      }),
+      // A selected account can sit on an inventory page that has not loaded yet.
+      ...(props.linkedId &&
+      !props.accounts.some((account) => account.authProfileId === props.linkedId)
+        ? [{ value: props.linkedId, label: t("profilePage.modelAccounts.gatewayAccount") }]
+        : []),
+      { value: GATEWAY_DEFAULT_OPTION, label: t("profilePage.modelAccounts.unlinkAction") },
+    ];
+  });
   return (
     <SettingsRow
-      title={
-        <>
-          <span class="model-accounts__id">{label()}</span>{" "}
-          <span class="model-accounts__provider">{provider()}</span>
-        </>
-      }
-      description={
-        <>
-          {props.row.kind === "linked"
-            ? t("profilePage.modelAccounts.linkedDescription")
-            : t(`profilePage.modelAccounts.authTypes.${props.row.account.authType}`)}
-          <Show when={duplicateLabel()}>
-            {" "}
-            <code>{reference().authProfileId}</code>
-          </Show>
-        </>
-      }
+      title={name()}
       control={
-        <>
-          <Show when={linked()}>
-            <SettingsStatus kind="ok" label={t("profilePage.modelAccounts.linkedStatus")} />
-          </Show>
-          <button
-            type="button"
-            class={[
-              "btn btn--sm",
-              { "profile-auth-link-unlink": linked(), "profile-auth-account-select": !linked() },
-            ]}
-            data-auth-profile-id={linked() ? undefined : reference().authProfileId}
-            aria-label={
-              linked()
-                ? `${action()}: ${provider()} · ${account()?.label ?? reference().authProfileId}`
-                : `${action()}: ${provider()} · ${label()} (${reference().authProfileId})`
-            }
-            disabled={props.pending || props.actions.saving() || state().busy}
-            onClick={() => {
-              void (linked()
-                ? props.actions.updateAccount("unlink", reference().provider)
-                : props.actions.updateAccount("select", reference().authProfileId));
-            }}
-          >
-            {action()}
-          </button>
-        </>
+        <Picker
+          style={PICKER_WIDTH}
+          params={{
+            label: `${name()}: ${t("profilePage.modelAccounts.linkedStatus")}`,
+            className: "profile-auth-account-picker",
+            value: props.linkedId ?? GATEWAY_DEFAULT_OPTION,
+            options: options(),
+            disabled: props.pending || props.actions.saving() || state().busy,
+            onChange: (value) => {
+              void (value === GATEWAY_DEFAULT_OPTION
+                ? props.actions.updateAccount("unlink", props.provider)
+                : props.actions.updateAccount("select", value));
+            },
+          }}
+        />
       }
     />
   );
@@ -121,53 +97,69 @@ function SignInChoice(props: StateProps & { pending: boolean; cancel: JSX.Elemen
   const provider = () => choice()?.providers.find((entry) => entry.id === choice()?.provider);
   return (
     <div class="model-accounts-choice">
-      <Picker
-        params={{
-          label: t("profilePage.modelAccounts.provider"),
-          className: "profile-auth-provider",
-          value: choice()?.provider || null,
-          options:
-            choice()?.providers.map((entry) => ({
-              value: entry.id,
-              label: entry.label,
-            })) ?? [],
-          disabled: props.pending || state().busy,
-          renderLeading: (entry) => <ProviderBrandIcon provider={entry.value} />,
-          onChange: (value) => state().selectProvider(value),
-        }}
+      <SettingsRow
+        title={t("profilePage.modelAccounts.provider")}
+        stackedOnNarrow
+        control={
+          <Picker
+            style={PICKER_WIDTH}
+            params={{
+              label: t("profilePage.modelAccounts.provider"),
+              className: "profile-auth-provider",
+              value: choice()?.provider || null,
+              options:
+                choice()?.providers.map((entry) => ({
+                  value: entry.id,
+                  label: entry.label,
+                })) ?? [],
+              disabled: props.pending || state().busy,
+              renderLeading: (entry) => <ProviderBrandIcon provider={entry.value} />,
+              onChange: (value) => state().selectProvider(value),
+            }}
+          />
+        }
       />
       <Show when={provider()}>
-        <Picker
-          params={{
-            label: t("profilePage.modelAccounts.method"),
-            className: "profile-auth-method",
-            value: choice()?.method || null,
-            options:
-              provider()?.methods.map((method) => ({
-                value: method.id,
-                label: method.label,
-                description: method.hint,
-              })) ?? [],
-            disabled: props.pending || state().busy,
-            onChange: (value) => state().selectMethod(value),
-          }}
+        <SettingsRow
+          title={t("profilePage.modelAccounts.method")}
+          stackedOnNarrow
+          control={
+            <Picker
+              style={PICKER_WIDTH}
+              params={{
+                label: t("profilePage.modelAccounts.method"),
+                className: "profile-auth-method",
+                value: choice()?.method || null,
+                options:
+                  provider()?.methods.map((method) => ({
+                    value: method.id,
+                    label: method.label,
+                    description: method.hint,
+                  })) ?? [],
+                disabled: props.pending || state().busy,
+                onChange: (value) => state().selectMethod(value),
+              }}
+            />
+          }
         />
       </Show>
       <Show
         when={!props.pending && !state().busy && !state().error && choice()?.providers.length === 0}
       >
-        <span>{t("profilePage.modelAccounts.noMethods")}</span>
+        <SettingsRow title={t("profilePage.modelAccounts.noMethods")} />
       </Show>
-      <div class="wizard-step__actions">
-        {props.cancel}
-        <button
-          type="button"
-          class="btn btn--sm primary profile-auth-connect-start"
-          disabled={props.pending || state().busy || !choice()?.method}
-          onClick={() => void props.actions.startConnect()}
-        >
-          {t("profilePage.modelAccounts.connectAction")}
-        </button>
+      <div class="settings-row settings-row--actions">
+        <div class="settings-row__control">
+          {props.cancel}
+          <button
+            type="button"
+            class="btn btn--sm primary profile-auth-connect-start"
+            disabled={props.pending || state().busy || !choice()?.method}
+            onClick={() => void props.actions.startConnect()}
+          >
+            {t("profilePage.modelAccounts.connectAction")}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -186,6 +178,38 @@ function StatusCheck(props: StateProps & { pending: boolean; onCheck: () => void
         {t("profilePage.modelAccounts.checkStatusAction")}
       </button>
     </Show>
+  );
+}
+
+/** Where a sign-in lands: only worth reading while signing in or diagnosing why it can't. */
+function SignInContext(props: { readState: () => ModelAccountsState }) {
+  const state = () => props.readState();
+  const snapshot = () => state().props.target.read().gateway;
+  const person = () =>
+    snapshot().selfUser?.id === state().props.target.read().identityId ? snapshot().selfUser : null;
+  const personLabel = () =>
+    person() || state().target
+      ? state().props.personLabel ||
+        person()?.name ||
+        person()?.email ||
+        t("profilePage.modelAccounts.currentPerson")
+      : null;
+  return (
+    <>
+      <SettingsRow
+        title={t("profilePage.modelAccounts.gateway")}
+        control={
+          <SettingsValue
+            mono
+            value={gatewayEndpoint((state().target?.client ?? snapshot().client!).gatewayUrl)}
+          />
+        }
+      />
+      <SettingsRow
+        title={t("profilePage.modelAccounts.person")}
+        control={<SettingsValue value={personLabel() ?? t("profilePage.modelAccounts.noPerson")} />}
+      />
+    </>
   );
 }
 
@@ -236,50 +260,53 @@ function SignIn(props: StateProps) {
   );
   return (
     <Show when={choice()}>
-      <SettingsRow
-        stacked
-        title={
-          flow()
-            ? (flow()?.step?.title ??
-              provider()?.label ??
-              t("profilePage.modelAccounts.connectAction"))
-            : t("profilePage.modelAccounts.addAccount")
-        }
-        control={
-          <Show
-            when={flow()}
-            fallback={
-              <Errored
-                fallback={() => (
+      <Show
+        when={flow()}
+        fallback={
+          <>
+            <SettingsRow
+              title={t("profilePage.modelAccounts.addAccount")}
+              description={t("profilePage.modelAccounts.personalDescription")}
+            />
+            <SignInContext readState={props.readState} />
+            <Errored
+              fallback={() => (
+                <SignInChoice
+                  readState={props.readState}
+                  actions={props.actions}
+                  pending={false}
+                  cancel={cancel()}
+                />
+              )}
+            >
+              <Loading
+                fallback={
                   <SignInChoice
                     readState={props.readState}
                     actions={props.actions}
-                    pending={false}
+                    pending
                     cancel={cancel()}
                   />
-                )}
+                }
               >
-                <Loading
-                  fallback={
-                    <SignInChoice
-                      readState={props.readState}
-                      actions={props.actions}
-                      pending
-                      cancel={cancel()}
-                    />
-                  }
-                >
-                  {readCatalog()}
-                  <SignInChoice
-                    readState={props.readState}
-                    actions={props.actions}
-                    pending={isPending(catalogRead)}
-                    cancel={cancel()}
-                  />
-                </Loading>
-              </Errored>
-            }
-          >
+                {readCatalog()}
+                <SignInChoice
+                  readState={props.readState}
+                  actions={props.actions}
+                  pending={isPending(catalogRead)}
+                  cancel={cancel()}
+                />
+              </Loading>
+            </Errored>
+          </>
+        }
+      >
+        <SettingsRow
+          stacked
+          title={
+            flow()?.step?.title ?? provider()?.label ?? t("profilePage.modelAccounts.connectAction")
+          }
+          control={
             <div class="model-accounts-flow">
               <Show
                 when={flow()?.step}
@@ -335,9 +362,9 @@ function SignIn(props: StateProps) {
                 </Loading>
               </Errored>
             </div>
-          </Show>
-        }
-      />
+          }
+        />
+      </Show>
     </Show>
   );
 }
@@ -345,39 +372,44 @@ function SignIn(props: StateProps) {
 export function ModelAccountInventory(props: StateProps & { pending: boolean }) {
   const state = () => props.readState();
   const accounts = createMemo(() => state().accounts);
-  const savedAccounts = createMemo(() =>
-    accounts().filter(
-      (account) =>
-        !props.actions.links().some((link) => link.authProfileId === account.authProfileId),
-    ),
+  // Group once: status publications must not rescan the inventory per row.
+  const accountsByProvider = createMemo(() => Map.groupBy(accounts(), (entry) => entry.provider));
+  const linkedByProvider = createMemo(
+    () => new Map(props.actions.links().map((link) => [link.provider, link.authProfileId])),
   );
+  // One row per provider, in inventory order so choosing a default never reorders the list.
+  const providers = createMemo(() => [
+    ...new Set([...accountsByProvider().keys(), ...linkedByProvider().keys()]),
+  ]);
   return (
     <>
       <Show
-        when={props.actions.links().length}
-        fallback={<SettingsEmpty message={t("profilePage.modelAccounts.empty")} />}
+        when={providers().length}
+        fallback={
+          <Show
+            when={!props.pending && !state().inventoryLoading}
+            fallback={<SettingsLoadingSkeleton label={t("common.loading")} rows={2} />}
+          >
+            {/* A failed read says so below; it must not also claim there is nothing selected. */}
+            <Show when={!state().inventoryError}>
+              <SettingsEmpty message={t("profilePage.modelAccounts.empty")} />
+            </Show>
+          </Show>
+        }
       >
-        <For each={props.actions.links()} keyed={(link) => link.authProfileId}>
-          {(link) => (
-            <AccountRow
+        <For each={providers()} keyed={(provider) => provider}>
+          {(provider) => (
+            <ProviderRow
               readState={props.readState}
               actions={props.actions}
               pending={props.pending}
-              row={{ kind: "linked", link: link() }}
+              provider={provider()}
+              accounts={accountsByProvider().get(provider()) ?? []}
+              linkedId={linkedByProvider().get(provider())}
             />
           )}
         </For>
       </Show>
-      <For each={savedAccounts()} keyed={(account) => account.authProfileId}>
-        {(account) => (
-          <AccountRow
-            readState={props.readState}
-            actions={props.actions}
-            pending={props.pending}
-            row={{ kind: "saved", account: account() }}
-          />
-        )}
-      </For>
       <Show when={Boolean(state().nextCursor)}>
         <SettingsRow
           title={t("profilePage.modelAccounts.savedAccounts")}
@@ -402,7 +434,7 @@ function ModelAccountActions(props: StateProps) {
   return (
     <>
       <SignIn readState={props.readState} actions={props.actions} />
-      <Show when={state().target?.canAdmin}>
+      <Show when={state().signIn && state().target?.canAdmin}>
         <SettingsRow
           title={t("profilePage.modelAccounts.inputLabel")}
           description={t("profilePage.modelAccounts.inputDescription")}
@@ -449,7 +481,9 @@ function ModelAccountActions(props: StateProps) {
       </Show>
       <Show when={state().inventoryError}>
         <div class="settings-row model-accounts-error" role="alert">
-          {t("profilePage.modelAccounts.inventoryFailed")} {state().inventoryError}
+          <span class="settings-row__desc">
+            {t("profilePage.modelAccounts.inventoryFailed")} {state().inventoryError}
+          </span>
         </div>
       </Show>
     </>
@@ -461,26 +495,21 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
   const snapshot = () => state().props.target.read().gateway;
   const person = () =>
     snapshot().selfUser?.id === state().props.target.read().identityId ? snapshot().selfUser : null;
-  const personLabel = () =>
-    person() || state().target
-      ? state().props.personLabel ||
-        person()?.name ||
-        person()?.email ||
-        t("profilePage.modelAccounts.currentPerson")
-      : null;
   const unavailableReason = () =>
-    !person()
-      ? "identity"
-      : hasOperatorWriteAccess(snapshot().hello?.auth ?? null)
-        ? "profile"
-        : "write";
+    snapshot().phase !== "connected"
+      ? "disconnected"
+      : !person()
+        ? "identity"
+        : hasOperatorWriteAccess(snapshot().hello?.auth ?? null)
+          ? "profile"
+          : "write";
   return (
     <SettingsSection
       title={t("profilePage.modelAccounts.title")}
       description={t("profilePage.modelAccounts.description")}
       actions={
-        <Show when={state().target}>
-          <Show when={!state().signIn}>
+        <>
+          <Show when={state().target && !state().signIn}>
             <button
               type="button"
               class="btn btn--sm primary profile-auth-add-account"
@@ -490,56 +519,44 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
               {t("profilePage.modelAccounts.addAccount")}
             </button>
           </Show>
-          <RefreshButton
-            class="profile-auth-accounts-refresh"
-            label={t("common.refresh")}
-            busy={state().inventoryLoading}
-            disabled={!state().connected}
-            onClick={() => void state().loadAccounts()}
-          />
-        </Show>
+          <SettingsSectionHelp
+            id="settings-profile-model-accounts-help"
+            section={t("profilePage.modelAccounts.title")}
+          >
+            <p>{t("profilePage.modelAccounts.descriptionMore")}</p>
+          </SettingsSectionHelp>
+        </>
       }
     >
-      <SettingsRow
-        title={t("profilePage.modelAccounts.gateway")}
-        stackedOnNarrow
-        control={
-          <SettingsValue
-            mono
-            value={gatewayEndpoint((state().target?.client ?? snapshot().client!).gatewayUrl)}
-          />
-        }
-      />
-      <SettingsRow
-        title={t("profilePage.modelAccounts.person")}
-        stackedOnNarrow
-        control={<SettingsValue value={personLabel() ?? t("profilePage.modelAccounts.noPerson")} />}
-      />
-      <SettingsRow
-        title={t("profilePage.modelAccounts.scope")}
-        description={t("profilePage.modelAccounts.personalDescription")}
-        control={<SettingsValue value={t("profilePage.modelAccounts.personal")} />}
-      />
+      <Show when={state().target && snapshot().phase !== "connected"}>
+        <SettingsRow
+          title={t("profilePage.modelAccounts.signInUnavailable")}
+          description={t("profilePage.modelAccounts.unavailable.disconnected")}
+        />
+      </Show>
       <Show
         when={state().target}
         fallback={
-          <SettingsRow
-            title={t("profilePage.modelAccounts.signInUnavailable")}
-            description={t(`profilePage.modelAccounts.unavailable.${unavailableReason()}`)}
-            stacked
-            control={
-              <>
-                <button
-                  type="button"
-                  class="btn btn--sm"
-                  onClick={() => state().context.navigate("connection")}
-                >
-                  {t("profilePage.modelAccounts.connectionSettings")}
-                </button>
-                <LearnMoreLink url="https://docs.openclaw.ai/concepts/multi-user#per-person-model-accounts" />
-              </>
-            }
-          />
+          <>
+            <SignInContext readState={props.readState} />
+            <SettingsRow
+              title={t("profilePage.modelAccounts.signInUnavailable")}
+              description={t(`profilePage.modelAccounts.unavailable.${unavailableReason()}`)}
+              stacked
+              control={
+                <>
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    onClick={() => state().context.navigate("connection")}
+                  >
+                    {t("profilePage.modelAccounts.connectionSettings")}
+                  </button>
+                  <LearnMoreLink url="https://docs.openclaw.ai/concepts/multi-user#per-person-model-accounts" />
+                </>
+              }
+            />
+          </>
         }
       >
         {props.inventory}

@@ -80,6 +80,6 @@ export async function dismissSessionFailures(
     });
   } else if (rejectionToast && results.length > 0) {
     rejectionToast = undefined;
-    showToast({ message: t("sessionsView.markFailureReadDone") });
+    showToast({ severity: undefined, message: t("sessionsView.markFailureReadDone") });
   }
 }

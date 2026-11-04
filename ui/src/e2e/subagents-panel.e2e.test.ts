@@ -190,7 +190,7 @@ suite.define(() => {
         const stopManaged = managed.getByRole("button", { name: `Stop ${child.label}` });
         await openManaged.waitFor();
         await stopManaged.waitFor();
-        const native = panel.getByRole("region", { name: "Live native agents", exact: true });
+        const native = panel.getByRole("region", { name: "Live subagents", exact: true });
         const nativeRow = native.getByRole("listitem").filter({ hasText: nativeLabel });
         // The suite allocates one retained artifact directory per test attempt.
         const directory = suite.artifactDir;

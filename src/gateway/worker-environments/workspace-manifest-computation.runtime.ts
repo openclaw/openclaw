@@ -109,7 +109,10 @@ export async function executeWorkspaceManifestComputation(
       if (
         records?.has("") &&
         snapshot.row.tree_root_digest &&
-        (action.kind === "scan" || action.kind === "probe" || action.kind === "materialize")
+        (action.kind === "scan" ||
+          action.kind === "probe" ||
+          action.kind === "materialize" ||
+          action.kind === "archive")
       ) {
         // A scan consumes this map. Its actual root may still await acceptance;
         // the next authoritative header must match it before any reuse.

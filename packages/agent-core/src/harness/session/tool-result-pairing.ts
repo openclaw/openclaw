@@ -248,9 +248,10 @@ export function classifyToolUseResultPairing(
     }
   }
 
+  const pending = createToolCallOccurrenceQueue<ToolCallOccurrence>();
   for (const frame of frameRecords) {
     const { occurrences } = frame;
-    const pending = createToolCallOccurrenceQueue<ToolCallOccurrence>();
+    pending.clear();
     for (const occurrence of occurrences) {
       pending.add(occurrence.id, occurrence);
     }

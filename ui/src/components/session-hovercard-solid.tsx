@@ -8,8 +8,8 @@ import type {
 } from "../../../src/gateway/control-ui-contract.js";
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
 import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
+import { formatNumber } from "../lib/reactive/format.ts";
 import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { sessionOwnerInitials } from "../lib/session-owner.ts";
 import {
   displaySessionPullRequests,
@@ -23,12 +23,7 @@ import { personActivityLink, type PersonActivityRouting } from "./person-activit
 import { createHovercardControlRef, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 import { SessionGitDiff } from "./session-git-diff.tsx";
 import { SessionHovercardError } from "./session-hovercard-error.tsx";
-import {
-  participantLabel,
-  formatSessionAge,
-  sessionAttribution,
-  writeHovercardExcerpt,
-} from "./session-hovercard.ts";
+import { participantLabel, formatSessionAge, sessionAttribution } from "./session-hovercard.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import { progressCardHeadsUp } from "./session-progress-card.ts";
 import { ChannelAvatar } from "./solid/channel-avatar.tsx";
@@ -446,8 +441,8 @@ function PullRequestRow(props: { request: SessionDisplayPullRequest }) {
     [
       state(),
       checks(),
-      props.request.additions === undefined ? null : `+${props.request.additions.toLocaleString()}`,
-      props.request.deletions === undefined ? null : `−${props.request.deletions.toLocaleString()}`,
+      props.request.additions === undefined ? null : `+${formatNumber(props.request.additions)}`,
+      props.request.deletions === undefined ? null : `−${formatNumber(props.request.deletions)}`,
       props.request.sourceSessionKey
         ? t("sessionHovercard.taskBranch", { branch: props.request.branch })
         : null,
@@ -531,24 +526,6 @@ function PullRequestDetails(props: { snapshot?: ControlUiSessionPullRequestSnaps
   );
 }
 
-function HovercardExcerpt(props: { text: string }) {
-  let element!: HTMLDivElement;
-  createLayoutMeasurement(
-    () => props.text,
-    (text) => () => writeHovercardExcerpt(element, text!),
-    { targets: () => [element], fonts: true, changeTiming: "sync" },
-  );
-  return (
-    <div
-      class="session-hovercard__excerpt"
-      dir="auto"
-      ref={(node) => {
-        element = node;
-      }}
-    />
-  );
-}
-
 export function SessionHovercard(props: SessionHovercardInput) {
   const controls = useContext(HovercardControlsContext);
   const headsUp = createMemo(() =>
@@ -576,8 +553,6 @@ export function SessionHovercard(props: SessionHovercardInput) {
       (props.row?.placementProviderId && props.row?.placementProfileId),
     );
   const commentary = () => props.progressCard?.markdown?.trim() || undefined;
-  const preview = () =>
-    props.progressCard ? undefined : props.row?.lastMessagePreview?.trim() || undefined;
   return (
     <Show
       when={Boolean(props.row || hasContext() || hasPullRequestSection() || props.progressCard)}
@@ -621,11 +596,6 @@ export function SessionHovercard(props: SessionHovercardInput) {
               </div>
             </Show>
             <ProgressHeadsUp headsUp={headsUp()} />
-          </section>
-        </Show>
-        <Show when={preview()}>
-          <section class="session-hovercard__section session-hovercard__task">
-            <HovercardExcerpt text={preview()!} />
           </section>
         </Show>
         <Show when={hasPullRequestSection()}>
