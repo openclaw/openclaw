@@ -398,6 +398,7 @@ export default definePluginEntry({
           agentId,
           prompt: event.prompt,
           assertCurrent: invocation.assertActive,
+          // Match the native chat identity the intent tool stores as its conversation scope.
           ...((ctx.chatId ?? ctx.channelId)
             ? { channel: (ctx.chatId ?? ctx.channelId) as string }
             : {}),
