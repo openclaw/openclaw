@@ -15,6 +15,7 @@ import { loadPendingSessionDeliveries } from "../../infra/session-delivery-queue
 import { drainSystemEventEntries, peekSystemEvents } from "../../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -50,6 +51,8 @@ const world = vi.hoisted(() => ({
   order: [] as string[],
   /** The Gateway dies inside the next turn, after its effect and before anything else. */
   dieAfterEffect: false,
+  /** The next turn is silent, and the Gateway starts draining while it runs. */
+  drainDuringTurn: false,
   wakes: [] as Array<{ sessionKey: string; deliveryIds: readonly string[] }>,
 }));
 // The reply owner is the boundary where a wake's turn runs: the run reports its start, commits the
@@ -65,6 +68,11 @@ vi.mock("../reply/get-reply.js", async (importOriginal) => ({
       return await new Promise<never>(() => {});
     }
     opts?.onAgentRunTerminalOutcome?.("completed");
+    if (world.drainDuringTurn) {
+      world.drainDuringTurn = false;
+      (await import("../../process/gateway-work-admission.js")).markGatewayRestartDraining();
+      return undefined;
+    }
     return { text: "continued" };
   },
 }));
@@ -126,6 +134,7 @@ afterEach(() => {
   resetTerminalNoticeRetriesForTests();
   resetContinuationCustodyProjection();
   resetPluginRuntimeStateForTest();
+  resetGatewayWorkAdmission();
   closeOpenClawAgentDatabasesForTest();
   drainSystemEventEntries(KEY);
   vi.useRealTimers();
@@ -134,6 +143,7 @@ afterEach(() => {
   world.order.length = 0;
   world.wakes.length = 0;
   world.dieAfterEffect = false;
+  world.drainDuringTurn = false;
   droppedNoticeEvents = 0;
 });
 
@@ -197,6 +207,7 @@ function restart(at: number) {
   ).length;
   resetContinuationWorkDispatchForTests();
   resetTerminalNoticeRetriesForTests();
+  resetGatewayWorkAdmission();
   world.dieAfterEffect = false;
   delete workDispatchCustodyHooks.diesBefore;
   vi.setSystemTime(at);
@@ -385,6 +396,43 @@ describe("a wake whose turn started but whose delivery was never confirmed", () 
 
       expect(contenders).toBe(2);
       await expectInterruptedOnce(recordId);
+    });
+  });
+});
+
+// In process, too: once the run reported its start, the claim is never requeued.
+describe("a run that started in a live Gateway", () => {
+  it("is never requeued when its delivered mark fails; recovery interrupts it once", async () => {
+    await withSession(async () => {
+      const { recordId, dueAt } = await elect();
+      let markFails = true;
+      workDispatchCustodyHooks.beforeUpdate = (updates) => {
+        if (
+          markFails &&
+          updates.some((u) => describeWorkTransition(u) === "delivered-mark-committed")
+        ) {
+          markFails = false;
+          throw new Error("state database busy");
+        }
+      };
+      vi.setSystemTime(dueAt + 1);
+      await dispatchPendingContinuationWork({ sessionKey: KEY });
+      // The hedge the dispatch armed for its running claim, once the claim is stale.
+      await advanceTimers(RUNNING_RECOVERY_STALE_MS);
+      await expectInterruptedOnce(recordId);
+    });
+  });
+
+  it("is granted when silent and completed as the Gateway starts draining", async () => {
+    await withSession(async () => {
+      const { recordId, dueAt } = await elect();
+      world.drainDuringTurn = true;
+      vi.setSystemTime(dueAt + 1);
+      await dispatchPendingContinuationWork({ sessionKey: KEY });
+
+      await restartAndBoot(Date.now() + RUNNING_RECOVERY_STALE_MS + 1);
+      expect(wakeTurns()).toHaveLength(1);
+      expect(await readWork(recordId)).toMatchObject({ status: "succeeded" });
     });
   });
 });
