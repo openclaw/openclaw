@@ -408,7 +408,6 @@ const startupEnglish = {
     undo: "Undo",
     probe: "Check connection",
     call: "Call",
-    confirm: "Confirm",
     dontAskAgain: "Don't ask me again",
     cancel: "Cancel",
     close: "Close",
