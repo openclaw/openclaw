@@ -103,6 +103,22 @@ final class ChatZoomableImageScrollView: UIScrollView, UIScrollViewDelegate {
     }
 
     private var fittedBoundsSize: CGSize = .zero
+    private var resizeAnchor: CGPoint?
+
+    override var frame: CGRect {
+        willSet { self.captureResizeAnchor(from: self.frame.size, to: newValue.size) }
+    }
+
+    override var bounds: CGRect {
+        willSet { self.captureResizeAnchor(from: self.bounds.size, to: newValue.size) }
+    }
+
+    /// UIKit can clamp the old offset inside either size setter, before layout runs.
+    /// Retain the first pre-resize point across nested setters or queued size changes.
+    private func captureResizeAnchor(from oldSize: CGSize, to newSize: CGSize) {
+        guard oldSize != newSize, self.resizeAnchor == nil, self.fittedBoundsSize != .zero else { return }
+        self.resizeAnchor = self.convert(CGPoint(x: self.bounds.midX, y: self.bounds.midY), to: self.imageView)
+    }
 
     init(image: UIImage) {
         self.imageView = UIImageView(image: image)
@@ -129,8 +145,7 @@ final class ChatZoomableImageScrollView: UIScrollView, UIScrollViewDelegate {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        guard self.bounds.size != self.fittedBoundsSize else { return }
-        self.fittedBoundsSize = self.bounds.size
+        guard self.bounds.size != self.fittedBoundsSize || self.resizeAnchor != nil else { return }
         self.fitImage()
     }
 
@@ -141,7 +156,11 @@ final class ChatZoomableImageScrollView: UIScrollView, UIScrollViewDelegate {
             imageSize: self.imageView.bounds.size,
             boundsSize: self.bounds.inset(by: self.viewportInsets).size)
         let relativeZoom = self.zoomScale / self.minimumZoomScale
-        let anchor = self.convert(CGPoint(x: self.bounds.midX, y: self.bounds.midY), to: self.imageView)
+        let anchor = self.resizeAnchor ?? self.convert(
+            CGPoint(x: self.bounds.midX, y: self.bounds.midY), to: self.imageView)
+        // Consume before zoom/inset callbacks; same-size refits must use the current pan.
+        self.resizeAnchor = nil
+        self.fittedBoundsSize = self.bounds.size
         // Raise the ceiling before the floor so min never exceeds max.
         self.maximumZoomScale = max(self.maximumZoomScale, fit * ChatImagePreviewLayout.maximumZoomMultiplier)
         self.minimumZoomScale = fit
