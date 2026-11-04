@@ -34,23 +34,16 @@ function readPositiveOtlpTimeout(name: string): number | undefined {
   return undefined;
 }
 
-export function resolveOtlpExporterTimeouts(
-  signal: "LOGS" | "METRICS" | "TRACES",
-  shutdownFallbackTimeoutMs?: number,
-) {
+export function resolveOtlpMetricExporterTimeouts(shutdownFallbackTimeoutMs?: number) {
   const configuredTimeout =
-    readPositiveOtlpTimeout(`OTEL_EXPORTER_OTLP_${signal}_TIMEOUT`) ??
+    readPositiveOtlpTimeout("OTEL_EXPORTER_OTLP_METRICS_TIMEOUT") ??
     readPositiveOtlpTimeout("OTEL_EXPORTER_OTLP_TIMEOUT");
-  const defaultShutdownTimeout =
-    signal === "METRICS"
-      ? DEFAULT_OTLP_METRIC_SHUTDOWN_EXPORTER_TIMEOUT_MS
-      : DEFAULT_OTLP_EXPORTER_TIMEOUT_MS;
   return {
     normal: configuredTimeout ?? DEFAULT_OTLP_EXPORTER_TIMEOUT_MS,
     shutdown:
       configuredTimeout ??
       Math.min(
-        shutdownFallbackTimeoutMs ?? defaultShutdownTimeout,
+        shutdownFallbackTimeoutMs ?? DEFAULT_OTLP_METRIC_SHUTDOWN_EXPORTER_TIMEOUT_MS,
         DEFAULT_OTLP_EXPORTER_TIMEOUT_MS,
       ),
   };

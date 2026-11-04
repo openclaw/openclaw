@@ -694,21 +694,11 @@ function assertConfigSurvived() {
         endpoint: "http://127.0.0.1:4318",
         serviceName: "upgrade-survivor",
         traces: false,
-        metrics: false,
+        metrics: true,
         logs: false,
         flushIntervalMs: 15000,
       },
       "diagnostics.otel settings changed",
-    );
-    assertStrict.deepEqual(
-      [
-        process.env.OTEL_METRIC_EXPORT_TIMEOUT,
-        process.env.OTEL_EXPORTER_OTLP_TIMEOUT,
-        process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT,
-        process.env.OTEL_EXPORTER_OTLP_LOGS_TIMEOUT,
-      ],
-      ["2000", "7000", "6000", "5000"],
-      "explicit OTEL timeout overrides changed",
     );
   }
 }

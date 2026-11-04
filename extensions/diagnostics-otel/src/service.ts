@@ -34,7 +34,7 @@ import {
   findOtlpExporterError,
   formatError,
   readErrorCode,
-  resolveOtlpExporterTimeouts,
+  resolveOtlpMetricExporterTimeouts,
   resolveOtelHttpAgentOptions,
   resolveSignalOtelUrl,
 } from "./service-exporter.js";
@@ -419,7 +419,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               : undefined;
           const metricExporter = metricsToOtlp
             ? (() => {
-                const timeouts = resolveOtlpExporterTimeouts("METRICS", shutdownMetricTimeout);
+                const timeouts = resolveOtlpMetricExporterTimeouts(shutdownMetricTimeout);
                 const createExporter = (timeoutMillis: number) =>
                   observeOtlpExporterHealth(
                     new OTLPMetricExporter({
@@ -459,29 +459,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             });
           }
           const traceExporter = tracesToOtlp
-            ? (() => {
-                const timeouts = resolveOtlpExporterTimeouts("TRACES");
-                const createExporter = (timeoutMillis: number) =>
-                  observeOtlpExporterHealth(
-                    new OTLPTraceExporter({
-                      timeoutMillis,
-                      ...(traceUrl ? { url: traceUrl } : {}),
-                      ...(headers ? { headers } : {}),
-                      ...(traceHttpAgentOptions ? { httpAgentOptions: traceHttpAgentOptions } : {}),
-                    }),
-                    { emitExporterEvent, signal: "traces" },
-                  );
-                const normalExporter = createExporter(timeouts.normal);
-                const shutdownExporter =
-                  timeouts.shutdown === timeouts.normal
-                    ? normalExporter
-                    : createExporter(timeouts.shutdown);
-                return createShutdownAwareOtlpExporter(
-                  normalExporter,
-                  shutdownExporter,
-                  () => exporterShutdownStarted,
-                );
-              })()
+            ? observeOtlpExporterHealth(
+                new OTLPTraceExporter({
+                  ...(traceUrl ? { url: traceUrl } : {}),
+                  ...(headers ? { headers } : {}),
+                  ...(traceHttpAgentOptions ? { httpAgentOptions: traceHttpAgentOptions } : {}),
+                }),
+                { emitExporterEvent, signal: "traces" },
+              )
             : undefined;
           if (traceExporter) {
             const maxQueueSize = readPositiveOtelNumber("OTEL_BSP_MAX_QUEUE_SIZE", 2048);
@@ -565,7 +550,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         emitExporterEvent,
         flushIntervalMs: otel.flushIntervalMs,
         headers,
-        isShuttingDown: () => exporterShutdownStarted,
         logger: ctx.logger,
         logsToOtlp,
         logsToStdout,

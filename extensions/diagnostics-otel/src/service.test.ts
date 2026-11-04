@@ -1803,7 +1803,6 @@ describe("diagnostics-otel service", () => {
     const diagnosticsLogs = createDiagnosticsLogExporter({
       captureContent: false,
       emitExporterEvent: createExporterHealthEventEmitter((event) => events.push(event)),
-      isShuttingDown: () => false,
       logger,
       logsToOtlp: true,
       logsToStdout: false,
