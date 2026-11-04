@@ -12,7 +12,11 @@ import {
   listenLoopback,
   respondJson,
 } from "../../test/helpers/gateway-integration-fixtures.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { createScheduledMessageReadModel } from "../../test/helpers/scheduled-message-read-model.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -39,7 +43,8 @@ import {
 } from "../state/openclaw-state-db.js";
 
 // Attached devices are outside these scheduled message journeys.
-vi.mock("../agents/node-exec-availability.js", () => ({
+vi.mock("../agents/node-exec-availability.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/node-exec-availability.js")>()),
   loadNodeExecAvailability: async () => ({ cacheKey: "no-nodes", isAvailable: () => false }),
 }));
 
@@ -67,13 +72,14 @@ const discordRequest = (method: string, suffix = "") => ({
   path: `${channelPath}${suffix}`,
   authorizationMatches: true,
 });
-const waitFor = <T>(promise: PromiseLike<T>, timeout = 180_000) =>
-  withTestTimeout(promise, timeout, "Scheduled message fixture timed out");
 
 describe("scheduled message actions", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  async function runScenario(mode: "success" | "scoped-removed" | "active-revocation") {
+  async function runScenario(
+    mode: "success" | "scoped-removed" | "active-revocation",
+    signal: AbortSignal,
+  ) {
     const evidenceDir = process.env.ACCEPTANCE_EVIDENCE_DIR;
     if (evidenceDir) {
       mkdirSync(evidenceDir, { recursive: true });
@@ -418,13 +424,13 @@ describe("scheduled message actions", () => {
         ).toMatchObject({ ok: true, enqueued: true });
         if (mode === "active-revocation") {
           try {
-            await waitFor(
-              Promise.race([
+            await withinTest(
+              awaitGateBeforeSettlement(
                 heldRead.entered.promise,
-                finished.promise.then((c) => {
-                  throw new Error("Completed before read barrier: " + JSON.stringify(c));
-                }),
-              ]),
+                finished.promise,
+                "Completed before read barrier",
+              ),
+              signal,
             );
             record({ kind: "revoke-requested", at: Date.now() });
             expect(
@@ -438,7 +444,7 @@ describe("scheduled message actions", () => {
             heldRead.release.resolve();
           }
         }
-        const completion = await waitFor(finished.promise);
+        const completion = await withinTest(finished.promise, signal);
         record({
           kind: "finished",
           at: Date.now(),
@@ -512,9 +518,9 @@ describe("scheduled message actions", () => {
       () => vi.unstubAllEnvs(),
     );
   }
-  it.each(["success", "scoped-removed", "active-revocation"] as const)(
+  it.for(["success", "scoped-removed", "active-revocation"] as const)(
     "real scoped scheduled %s",
     { timeout: 300_000 },
-    runScenario,
+    (mode, { signal }) => runScenario(mode, signal),
   );
 });
