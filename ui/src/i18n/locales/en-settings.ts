@@ -446,7 +446,7 @@ const enSettings = {
     defaultValue: en.configForm.defaultValue,
     useDefaultValue: "Use default ({value})",
     defaultOption: "{value} (default)",
-    select: "Select...",
+    select: "Select…",
     required: "Required",
     enumOn: "On",
     enumOff: "Off",
@@ -454,7 +454,7 @@ const enSettings = {
     nullValue: "null",
     jsonValue: "JSON value",
     invalidJson: "Enter valid JSON before leaving this field.",
-    invalidString: "Enter a value that matches this setting's constraints.",
+    invalidString: "Enter a value that matches this setting’s constraints.",
     invalidNumber: "Enter a value within the allowed range and step.",
     draftRejected: "This setting could not be saved. Your draft is still here.",
     unsupportedArray: "Unsupported array schema. Use Raw mode.",
@@ -474,7 +474,7 @@ const enSettings = {
     secretDroppedOnConnectionChange: "{field} wasn't saved because the connection changed",
     secretReview: "Review",
     renameDuplicateKey: "This key is already in use.",
-    renameInvalidKey: "Choose a key that matches this setting's constraints.",
+    renameInvalidKey: "Choose a key that matches this setting’s constraints.",
     renameChangeRejected:
       "The containing setting did not accept this rename. Review its documentation and constraints before trying another name.",
     renameRedactedBlocked:
@@ -483,10 +483,10 @@ const enSettings = {
     unsupportedSchema: "Unsupported schema. Use Raw.",
     unsupportedNode: "Unsupported schema node. Use Raw mode.",
     noSettingsMatch: "No settings match your search.",
-    noSettingsInSection: "No settings in this section",
+    noSettingsInSection: "No settings in this section.",
     sections: {
       env: {
-        label: "Environment Variables",
+        label: "Environment variables",
         description: "Environment variables passed to the gateway process",
       },
       update: {
@@ -611,7 +611,7 @@ const enSettings = {
     pluginSource: "Plugin",
     channelSource: "Channel: {id}",
     channel: "Channel",
-    builtIn: "Built-In",
+    builtIn: "Built-in",
     plugin: "Plugin: {id}",
     optional: "Optional",
     inPreview: "Included in preview",
@@ -637,7 +637,7 @@ const enSettings = {
     globalAllowlist:
       "Global tools.allow is set. Agent overrides cannot enable tools that are globally blocked.",
     loadingCatalog: "Loading runtime tool catalog…",
-    catalogFallback: "Could not load runtime tool catalog. Showing built-in fallback list instead.",
+    catalogFallback: "Couldn’t load the tool catalog. Showing the built-in list instead.",
     previewTitle: "Tool preview",
     previewSubtitle:
       "Based on saved session settings and discovered tools. Availability is checked when a run starts, and additional tools may become available then. Changes may take time to appear here; unsaved edits are not included. Session:",
@@ -647,7 +647,7 @@ const enSettings = {
     previewUnavailable: "Unavailable",
     previewNotLoaded: "Not loaded",
     loadingPreview: "Loading tool preview…",
-    previewError: "Could not load the tool preview for this session.",
+    previewError: "Couldn’t load the tool preview for this session. Try again.",
     emptyPreview:
       "No tools are listed in this preview. Run-specific tools may still become available.",
     morePreviewTitle: "{count} more tools are listed in the groups below.",
@@ -665,10 +665,10 @@ const enSettings = {
     more: "+{count} more",
     toolsOne: "{count} tool",
     tools: "{count} tools",
-    enabledToolsOne: "{count} Enabled Tool",
-    enabledTools: "{count} Enabled Tools",
-    listedToolsOne: "{count} Listed Tool",
-    listedTools: "{count} Listed Tools",
+    enabledToolsOne: "{count} enabled tool",
+    enabledTools: "{count} enabled tools",
+    listedToolsOne: "{count} listed tool",
+    listedTools: "{count} listed tools",
     access: "Agent setting",
     disableNamed: "Disable {name}",
     enableNamed: "Enable {name}",
