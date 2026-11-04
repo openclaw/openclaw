@@ -39,6 +39,14 @@ function buildFixture(
 }
 
 describe("Control UI build chunking", () => {
+  it("labels function-named chunk groups for timing reports", () => {
+    for (const group of controlUiCodeSplitting.groups) {
+      if (typeof group.name === "function") {
+        expect(group).toHaveProperty("debugName", expect.stringMatching(/\S/));
+      }
+    }
+  });
+
   it("consolidates lazy Settings helpers while keeping validation behind the editor", async () => {
     const page = modulePath("../pages/config/config-page.tsx");
     const editor = modulePath("../components/config-form.render.tsx");

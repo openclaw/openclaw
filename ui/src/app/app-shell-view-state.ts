@@ -1,4 +1,8 @@
-import { isSettingsNavigationRoute, isSettingsTakeover, titleForRoute } from "../app-navigation.ts";
+import {
+  isSettingsNavigationRoute,
+  isSettingsTakeover,
+  pageTitleForRoute,
+} from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
@@ -280,8 +284,11 @@ export function readShellView(host: ShellViewHost) {
       : 0,
     onRetry: callbacks.retryGateway,
   };
+  // The floating refresh notice takes the badge's place below the phone header.
   const mobileGatewayStatus = () =>
-    mobileNavLayout && !navDrawerOpen() && !nativeEmbed ? gatewayStatus : null;
+    mobileNavLayout && !navDrawerOpen() && !nativeEmbed && !controlUiRefreshRequired
+      ? gatewayStatus
+      : null;
   const floatingUpdateCard = {
     get navigationSurfaceHidden() {
       return navigationSurfaceHidden();
@@ -355,7 +362,7 @@ export function readShellView(host: ShellViewHost) {
       // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
       return activeRoute === "custodian"
         ? currentThemeBranding().brandName
-        : titleForRoute(activeRoute);
+        : pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot);
     },
     get navCollapsed() {
       return navCollapsed();

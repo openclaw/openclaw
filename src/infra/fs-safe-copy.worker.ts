@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
@@ -102,6 +102,10 @@ if (parentPort) {
     // SAFETY: The host sends its typed write command only after the live input guard succeeds.
     const command = JSON.parse(readFileSync(0, "utf8")) as FsSafeCopyWrite;
     switch (command.type) {
+      case "remove":
+        // Node's synchronous remover walks natively, outside the Gateway's JS heap.
+        rmSync(command.destination, { recursive: true, force: true });
+        break;
       case "create":
         await createCloneSource(command.destination, { signal: controller.signal });
         break;

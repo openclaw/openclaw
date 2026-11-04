@@ -5,6 +5,7 @@ import { it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -31,7 +32,7 @@ async function assertDeviceCodeCopy(page: Page, userCode: string) {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await copyCode.click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(userCode);
-  await expect(page.getByRole("button", { name: "Copied!", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
 }
 const disconnected = {
   state: "disconnected",
@@ -135,17 +136,31 @@ suite.define(() => {
           const models = page.locator("openclaw-model-accounts");
           const identity = page.locator("#settings-profile-identity");
           await expect(identity).toContainText("@synthetic-person");
-          await expect(identity).toContainText("Verified from your GitHub-backed sign-in");
-          await expect(
-            identity.getByRole("switch", { name: "Git co-author credit", exact: true }),
-          ).toBeEnabled();
+          await expect(identity.getByText("GitHub sign-in", { exact: true })).toBeVisible();
+          await expect(identity.getByText("Verified", { exact: true })).toBeVisible();
+          const coauthor = page.getByRole("switch", { name: "Git co-author credit", exact: true });
+          await expect(coauthor).toBeEnabled();
+          const coauthorPreference = await coauthor.isChecked();
           await expect(github).toContainText("@personal-octocat");
+          const personalConnection = github.locator('[data-github-connection="personal"]');
           await expect(
-            github.getByRole("button", { name: "Change My GitHub", exact: true }),
-          ).toBeDisabled();
+            personalConnection.getByRole("button", { name: "Manage connections", exact: true }),
+          ).toBeEnabled();
           await expect(github.getByRole("button", { name: "Verify", exact: true })).toBeEnabled();
+          await personalConnection
+            .getByRole("button", { name: "Manage connections", exact: true })
+            .click();
+          const setup = personalConnection.locator("[data-github-setup]");
+          await expect(setup).toBeVisible();
+          await expect(setup).toContainText("Access required");
           await expect(
-            github.getByRole("button", { name: "Disconnect My GitHub", exact: true }),
+            setup.getByRole("button", { name: "Continue with GitHub", exact: true }),
+          ).toHaveCount(0);
+          await expect(
+            personalConnection.getByRole("button", { name: "Change My GitHub", exact: true }),
+          ).toHaveCount(0);
+          await expect(
+            setup.getByRole("button", { name: "Disconnect", exact: true }),
           ).toBeEnabled();
           const proofDir =
             process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
@@ -165,8 +180,8 @@ suite.define(() => {
           };
           if (canWrite) {
             await expect(models.locator(".profile-auth-add-account")).toBeDisabled();
-            await expect(models.locator(".profile-auth-account-select")).toBeEnabled();
-            await expect(models.locator(".profile-auth-link-unlink")).toBeEnabled();
+            const accountPicker = models.locator(".profile-auth-account-picker");
+            await expect(accountPicker.locator(".picker-select__trigger")).toBeEnabled();
             await capture(models, "after-provider-saved-accounts.png");
             await gateway.setMethodResponse("users.selectModelAccount", {
               links: [{ provider: "openai", authProfileId: saved[1].authProfileId, updatedAt: 2 }],
@@ -179,15 +194,30 @@ suite.define(() => {
               })),
               links: [{ provider: "openai", authProfileId: saved[1].authProfileId, updatedAt: 2 }],
             });
-            await models.locator(".profile-auth-account-select").click();
+            await selectPickerValue(accountPicker, saved[1].authProfileId);
             expect((await gateway.waitForRequest("users.selectModelAccount")).params).toEqual({
               profileId: profile.id,
               authProfileId: saved[1].authProfileId,
             });
-            await expect(models.locator(".profile-auth-link-unlink")).toHaveAttribute(
-              "aria-label",
-              /Work workspace/,
-            );
+            await expect.poll(() => pickerValue(accountPicker)).toBe(saved[1].authProfileId);
+            await gateway.setMethodResponse("users.unlinkAuthProfile", { links: [] });
+            await gateway.setMethodResponse("users.listModelAccounts", {
+              profileId: profile.id,
+              accounts: saved.map((account) => Object.assign({}, account, { selected: false })),
+              links: [],
+            });
+            await selectPickerValue(accountPicker, "gateway-default");
+            expect((await gateway.waitForRequest("users.unlinkAuthProfile")).params).toEqual({
+              profileId: profile.id,
+              provider: "openai",
+            });
+            await expect.poll(() => pickerValue(accountPicker)).toBe("gateway-default");
+          } else {
+            await expect(models).toBeVisible();
+            await expect(models).toContainText("Sign-in unavailable");
+            await expect(models.locator(".profile-auth-account-picker")).toHaveCount(0);
+            expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
+            expect(await gateway.getRequests("users.unlinkAuthProfile")).toHaveLength(0);
           }
           await capture(github, "after-github-connected.png");
           await capture(identity, "after-verified-profile-identity.png");
@@ -195,11 +225,12 @@ suite.define(() => {
             personal: disconnected,
             system,
           });
-          await github.getByRole("button", { name: "Disconnect My GitHub", exact: true }).click();
-          await gateway.waitForRequest("users.github.disconnect");
-          await expect(github.locator('[data-github-connection="personal"]')).toContainText(
-            "Not connected",
-          );
+          await setup.getByRole("button", { name: "Disconnect", exact: true }).click();
+          expect((await gateway.waitForRequest("users.github.disconnect")).params).toEqual({});
+          await expect(personalConnection).toContainText("Not connected");
+          await expect(identity).toContainText("@synthetic-person");
+          await expect(identity.getByText("Verified", { exact: true })).toBeVisible();
+          await expect.poll(() => coauthor.isChecked()).toBe(coauthorPreference);
           for (const method of [
             "users.authConnect.start",
             "users.authConnect.answer",

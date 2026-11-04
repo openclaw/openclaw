@@ -24,6 +24,16 @@
     outline-offset: 2px;
   }
 
+  &[data-stopping] {
+    .chat-details-processes__badge {
+      visibility: hidden;
+    }
+
+    .chat-details-processes__stop {
+      background: none;
+    }
+  }
+
   &:is(:hover, :focus-within, [data-stopping]) {
     &[data-actionable] .chat-details-processes__name {
       mask-image: linear-gradient(to right, black calc(100% - 42px), transparent calc(100% - 26px));
@@ -100,6 +110,10 @@
   @media (prefers-reduced-motion: reduce) {
     animation: none;
   }
+}
+
+.chat-details-processes__stop .chat-details-processes__spinner {
+  color: var(--muted);
 }
 
 .chat-details-processes__name {
