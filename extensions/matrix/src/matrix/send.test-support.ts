@@ -134,9 +134,9 @@ export function registerMatrixMediaTests(context: {
 }) {
   describe("sendMessageMatrix media", () => {
     it("propagates initial room preparation failure before loading or reporting dispatch", async () => {
-      const { client, uploadContent, sendMessage } = makeClient();
+      const { client, uploadContent, sendMessage, prepareRoomForMessageSend } = makeClient();
       const failure = new Error("room preparation failed");
-      vi.mocked(client.prepareRoomForMessageSend).mockRejectedValue(failure);
+      prepareRoomForMessageSend.mockRejectedValue(failure);
       const onPlatformSendDispatch = vi.fn();
       await expect(
         context.send("secret", {
@@ -155,16 +155,15 @@ export function registerMatrixMediaTests(context: {
       "rechecks room preparation after media loading (crypto=%s)",
       async (crypto) => {
         const failure = new Error("room preparation failed after media loading");
-        const { client, uploadContent, sendMessage } = crypto
+        const { client, uploadContent, sendMessage, prepareRoomForMessageSend } = crypto
           ? makeEncryptedMediaClient()
           : makeClient();
-        vi.mocked(client.prepareRoomForMessageSend).mockResolvedValue("m.room.message");
+        prepareRoomForMessageSend.mockResolvedValue("m.room.message");
         context.loadOutboundMediaFromUrlMock.mockImplementationOnce(async () => {
-          const preparation = vi.mocked(client.prepareRoomForMessageSend);
           if (crypto) {
-            preparation.mockResolvedValue("m.room.encrypted");
+            prepareRoomForMessageSend.mockResolvedValue("m.room.encrypted");
           } else {
-            preparation.mockRejectedValue(failure);
+            prepareRoomForMessageSend.mockRejectedValue(failure);
           }
           return {
             buffer: Buffer.from("secret media"),

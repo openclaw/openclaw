@@ -493,6 +493,7 @@ describe("sendMessageMatrix media", () => {
   );
 
   it("rejects mixed attachments when a room becomes encrypted while an image is resized", async () => {
+    const preparation = vi.spyOn(client, "prepareRoomForMessageSend");
     const failure = new Error("assembled media rejected");
     const onPlatformSendDispatch = vi.fn();
     (client as { crypto?: object }).crypto = {
@@ -502,16 +503,14 @@ describe("sendMessageMatrix media", () => {
       .mockResolvedValueOnce({ width: 1600, height: 1200 })
       .mockResolvedValueOnce({ width: 800, height: 600 });
     resizeToJpegMock.mockImplementationOnce(async () => {
-      vi.mocked(client.prepareRoomForMessageSend)
-        .mockResolvedValueOnce("m.room.encrypted")
-        .mockRejectedValueOnce(failure);
+      preparation.mockResolvedValueOnce("m.room.encrypted").mockRejectedValueOnce(failure);
       return Buffer.from("secret thumbnail");
     });
 
     await expect(
       send("caption", { mediaUrl: "file:///tmp/photo.png", onPlatformSendDispatch }),
     ).rejects.toBe(failure);
-    expect(client.prepareRoomForMessageSend).toHaveBeenLastCalledWith(
+    expect(preparation).toHaveBeenLastCalledWith(
       "!room:example",
       expect.objectContaining({
         msgtype: "m.image",
