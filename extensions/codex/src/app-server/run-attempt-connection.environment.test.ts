@@ -203,7 +203,7 @@ describe("Codex local tool environment placement", () => {
   );
 });
 
-it.each(["api-key", "subscription"] as const)(
+it.each(["api-key", "subscription", "native-command"] as const)(
   "keeps worker %s route constraints through actual client startup without local login",
   async (authRequirement) => {
     provisionWorker();
@@ -291,7 +291,11 @@ it.each(["api-key", "subscription"] as const)(
           },
           (error: unknown) => error,
         );
-      expect(outcome).toMatchObject({ status: 401 });
+      if (authRequirement === "native-command") {
+        expect(outcome).toBeUndefined();
+      } else {
+        expect(outcome).toMatchObject({ status: 401 });
+      }
       expect(connection.effectiveWorkspace).toBe(sandbox.containerWorkdir);
       expect(open).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -302,7 +306,9 @@ it.each(["api-key", "subscription"] as const)(
       expect(connection.startupAuthRequirement).toBe(authRequirement);
       expect(connection.startupClientAuthProfileId).toBeNull();
       expect(connection.startupPreparedAuth).toBeUndefined();
-      expect(methods).toContain("account/read");
+      if (authRequirement !== "native-command") {
+        expect(methods).toContain("account/read");
+      }
       expect(methods).not.toContain("account/login/start");
       await closed.promise;
     } finally {
@@ -313,7 +319,7 @@ it.each(["api-key", "subscription"] as const)(
   },
 );
 
-it.each(["explicit-profile", "forwarded-profile", "supervision"] as const)(
+it.each(["explicit-profile", "forwarded-profile", "supervision", "resolved-api-key"] as const)(
   "rejects worker hosting instead of silently replacing %s ownership",
   async (ownership) => {
     const params = createParams(path.join(tempDir, "owned.jsonl"), path.join(tempDir, "owned"));
@@ -325,7 +331,9 @@ it.each(["explicit-profile", "forwarded-profile", "supervision"] as const)(
       placementNodeId: "worker-node",
     };
     params.sandbox = sandbox;
-    if (ownership === "explicit-profile") {
+    if (ownership === "resolved-api-key") {
+      params.resolvedApiKey = "synthetic-gateway-key";
+    } else if (ownership === "explicit-profile") {
       params.authProfileId = "openai:chosen";
     } else if (ownership === "forwarded-profile") {
       const plan = createCodexRuntimePlanFixture();
@@ -368,7 +376,7 @@ it.each(["explicit-profile", "forwarded-profile", "supervision"] as const)(
     );
     expect(outcome).toBeInstanceOf(Error);
     expect(outcome).toMatchObject({
-      message: expect.stringContaining("worker-owned authentication"),
+      message: expect.stringContaining("detach supervision; clear Gateway auth profile/API key"),
     });
   },
 );
@@ -405,7 +413,7 @@ it("keeps non-node remote placements confined when worker hosting is configured"
   ).rejects.toThrow("requires an enrolled node");
 });
 
-it.each(["ordinary", "ordinary-profile", "worker"] as const)(
+it.each(["ordinary", "ordinary-profile"] as const)(
   "keeps native-command auth within its admitted %s placement boundary",
   async (placement) => {
     const params = createParams(
@@ -438,15 +446,6 @@ it.each(["ordinary", "ordinary-profile", "worker"] as const)(
         return readHostProfiles();
       },
     };
-    if (placement === "worker") {
-      const sandbox = {
-        ...createSandboxContext({}),
-        backendId: "node",
-        placementExecutionMode: "remote-exec",
-        placementNodeId: "worker-node",
-      };
-      params.sandbox = sandbox;
-    }
     if (placement === "ordinary-profile") {
       params.authProfileId = "openai:chosen";
     }

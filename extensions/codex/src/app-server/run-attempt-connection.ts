@@ -315,10 +315,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     params.runtimePlan?.auth.forwardedAuthProfileId ??
     params.authProfileId ??
     startupBinding?.authProfileId;
-  if (workerHostedCloud && (usesSupervisionConnection || selectedAuthProfileId)) {
-    throw new Error(
-      "Worker-hosted Codex requires worker-owned authentication; detach native supervision and clear the selected Gateway auth profile before retrying.",
-    );
+  const gatewayAuthSelected =
+    usesSupervisionConnection || selectedAuthProfileId || params.resolvedApiKey;
+  if (workerHostedCloud && gatewayAuthSelected) {
+    throw new Error("Use worker auth: detach supervision; clear Gateway auth profile/API key.");
   }
   if (usesSupervisionConnection && isCodexResponsesOAuthRun(params)) {
     throw new Error(
@@ -380,9 +380,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
             agentDir,
             config: params.config,
           });
-  // Native-command selection still uses its handoff owner, including remote-exec refusal.
+  // Worker hosting keeps all authentication on the worker. Other native-command
+  // placements still use the handoff owner, including its remote-exec refusal.
   const authHandoff =
-    usesSupervisionConnection || (workerHostedCloud && !nativeCommandAuth)
+    usesSupervisionConnection || workerHostedCloud
       ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
       : await resolveCodexAppServerPreparedAuthHandoff({
           authRequirement: startupAuthRequirement,
