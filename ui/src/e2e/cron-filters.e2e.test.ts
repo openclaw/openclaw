@@ -262,7 +262,7 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}cron`);
       await jobTitle(page, readOnlyJob.name).waitFor({ timeout: 10_000 });
-      await page.getByRole("note").filter({ hasText: "Browsing only" }).waitFor();
+      await page.getByRole("note").filter({ hasText: "owner with automation access" }).waitFor();
       expect(
         await page.locator(`[data-test-id="cron-row-description-${readOnlyJob.id}"]`).textContent(),
       ).toContain(readOnlyJob.description);
@@ -325,11 +325,11 @@ suite.define(() => {
       await statusFilter.locator('[data-value="option:error"]').click();
       await button(page, "Status Error").waitFor();
       await statusFilter.locator('[data-value="option:ok"]').click();
-      await button(page, "Status OK, Error").waitFor();
-      expect(await statusTrigger.textContent()).toContain("OK, Error");
+      await button(page, "Status Completed, Error").waitFor();
+      expect(await statusTrigger.textContent()).toContain("Completed, Error");
       await statusFilter.locator('[data-value="option:skipped"]').click();
-      await button(page, "Status OK +2 (OK, Error, and Skipped)").waitFor();
-      expect(await statusTrigger.textContent()).toContain("OK +2");
+      await button(page, "Status Completed +2 (Completed, Error, and Skipped)").waitFor();
+      expect(await statusTrigger.textContent()).toContain("Completed +2");
       await expectRunRequest(gateway, initialRequestCount, (params) =>
         containsAll(params.statuses, statuses),
       );
@@ -379,7 +379,7 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}cron`);
       await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("de");
-      await page.getByRole("tab", { name: "Ausführungsverlauf", exact: true }).click();
+      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
 
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
@@ -394,11 +394,11 @@ suite.define(() => {
       await pressKeys(page, "ArrowDown", "Enter");
       await button(page, "Status Fehler").waitFor();
       await pressKeys(page, "Home", "Enter");
-      await button(page, "Status OK, Fehler").waitFor();
-      expect(await statusTrigger.textContent()).toContain("OK, Fehler");
+      await button(page, "Status Completed, Fehler").waitFor();
+      expect(await statusTrigger.textContent()).toContain("Completed, Fehler");
       await pressKeys(page, "ArrowDown", "ArrowDown", "Enter");
-      await button(page, "Status OK +2 (OK, Fehler und Übersprungen)").waitFor();
-      expect(await statusTrigger.textContent()).toContain("OK +2");
+      await button(page, "Status Completed +2 (Completed, Fehler und Übersprungen)").waitFor();
+      expect(await statusTrigger.textContent()).toContain("Completed +2");
 
       await dismissDropdownToNextTrigger(page, statusTrigger, deliveryTrigger);
       await page.keyboard.press("Enter");

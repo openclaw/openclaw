@@ -3149,8 +3149,8 @@ describe("ci workflow guards", () => {
       expect(ordinary.outputs.split_pr_guards).toBe("true");
       expect(qualification.outputs.split_pr_guards).toBe("false");
       expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
-        // Qualification retains native rows; ordinary PRs add one parallel guard row.
-        Number(ordinary.outputs.hybrid_hosted_base_rows) + 2 + 3 + 2 + 1 - 1,
+        // Qualification retains platform rows; ordinary PRs add one parallel guard row.
+        Number(ordinary.outputs.hybrid_hosted_base_rows) + 2 + 3 + 2 + 1 + 5 - 1,
       );
       expect(Number(qualification.outputs.hybrid_hosted_total_rows)).toBe(actual.length);
     });
@@ -3244,11 +3244,19 @@ describe("ci workflow guards", () => {
       const scopeEnv = { OPENCLAW_CI_RUN_ANDROID: String(androidSelected) };
       const baseline = manifestWithHostedNodeRows(0, { scopeEnv });
       expect(baseline.status, baseline.output).toBe(0);
-      const originalBase = emittedHostedRows({
+      const baselineRows = emittedHostedRows({
         ...baseline.outputs,
         hybrid_hosted_offload: "false",
-      }).length;
+      });
+      const originalBase = baselineRows.length;
+      expect(baselineRows.filter((name) => name === "checks-windows")).toHaveLength(5);
       expect(Number(baseline.outputs.hybrid_hosted_base_rows)).toBe(originalBase);
+      const withoutWindows = manifestWithHostedNodeRows(0, {
+        scopeEnv: { ...scopeEnv, OPENCLAW_CI_RUN_WINDOWS: "false" },
+      });
+      expect(withoutWindows.status, withoutWindows.output).toBe(0);
+      expect(emittedHostedRows(withoutWindows.outputs)).not.toContain("checks-windows");
+      expect(Number(withoutWindows.outputs.hybrid_hosted_base_rows)).toBe(originalBase - 5);
       for (const baseRows of [40, 41, 45, 46]) {
         const manifest = manifestWithHostedNodeRows(baseRows - originalBase, { scopeEnv });
         expect(manifest.status, manifest.output).toBe(0);
@@ -4181,10 +4189,44 @@ describe("ci workflow guards", () => {
 
   it("uses target-owned Windows shards on every runner backend and preserves frozen plans", () => {
     const workflow = readCiWorkflow();
+    const job = workflow.jobs["checks-windows"];
     const runStep = requiredWorkflowStep(
-      workflow.jobs["checks-windows"].steps,
+      job.steps,
       "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
+    for (const runnerBackend of ["", "blacksmith", "github", "hybrid", "runson"] as const) {
+      for (const eventName of ["push", "schedule", "workflow_dispatch"] as const) {
+        for (const runAttempt of [1, 2]) {
+          expect(evaluateWorkflow(job["runs-on"], { runnerBackend, eventName, runAttempt })).toBe(
+            "windows-2025",
+          );
+        }
+      }
+      const qualification = {
+        eventName: "workflow_dispatch" as const,
+        runnerBackend,
+        preflightOutputs: {
+          ci_qualification: "true",
+          qualification_runner_backend: runnerBackend,
+        },
+        releaseRunnerGroup: "test-group",
+      };
+      expect(evaluateWorkflow(job["runs-on"], qualification)).toBe("windows-2025");
+      expect(
+        evaluateWorkflow(job["runs-on"], {
+          ...qualification,
+          dispatchId: "full-release-validation-test",
+        }),
+      ).toEqual({ group: "test-group", labels: "windows-2025" });
+    }
+    for (const [runnerEnvironment, workers] of [
+      ["github-hosted", 1],
+      ["self-hosted", 4],
+    ] as const) {
+      expect(evaluateWorkflow(runStep.env.OPENCLAW_VITEST_MAX_WORKERS, { runnerEnvironment })).toBe(
+        workers,
+      );
+    }
     const blacksmith = runCiManifestFixture({
       bundledPlanner: true,
       eventName: "push",
@@ -5583,6 +5625,74 @@ describe("ci workflow guards", () => {
     ).not.toBe(0);
   });
 
+  it.each([1, 2])("keeps Boat artifact consumers and build budget on attempt %s", (runAttempt) => {
+    const admitted = runRunnerProfileFixture({
+      configuredProfile: "hybrid",
+      eventName: "workflow_dispatch",
+      requestedProfile: "boat",
+      ciShape: "main",
+      qualificationDispatch: true,
+      targetSupportsContract: true,
+      runAttempt,
+    });
+    expect(admitted.status, admitted.output).toBe(0);
+    const workflow = readCiWorkflow();
+    const manifest = requiredWorkflowStep(workflow.jobs.preflight.steps, "Build CI manifest");
+    const context = {
+      eventName: "workflow_dispatch" as const,
+      repository: "openclaw/openclaw",
+      runnerBackend: "hybrid" as const,
+      requestedRunnerBackend: "boat" as const,
+      ciShape: "main" as const,
+      releaseGate: true,
+      runAttempt,
+      preflightOutputs: admitted.outputs,
+      steps: {
+        qualification_dispatch: { outputs: { eligible: "true" } },
+        changed_scope: { outputs: { run_macos: "false" } },
+      },
+    };
+    const appleScope = evaluateWorkflowExpression(manifest.env.OPENCLAW_CI_RUN_MACOS, context);
+    expect(appleScope).toBe("true");
+    expect(
+      evaluateWorkflowExpression(workflow.jobs["build-artifacts"]["timeout-minutes"], context),
+    ).toBe(35);
+    for (const control of [
+      { requestedRunnerBackend: "hybrid" as const },
+      { ciShape: "default" as const },
+      { steps: { ...context.steps, qualification_dispatch: { outputs: { eligible: "false" } } } },
+    ]) {
+      expect(
+        evaluateWorkflowExpression(manifest.env.OPENCLAW_CI_RUN_MACOS, { ...context, ...control }),
+      ).toBe("false");
+    }
+    const backend = runAttempt === 1 ? "hybrid" : "github";
+    expect(admitted.outputs.runner_profile).toBe(backend);
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "workflow_dispatch",
+      releaseGate: true,
+      runnerBackend: backend,
+      nodeRunnerBackend: backend,
+      changedPaths: [".github/workflows/ci.yml"],
+      targetFiles: ["apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift"],
+      publishedDriverUpdateCapability: true,
+      scopeEnv: {
+        OPENCLAW_CI_QUALIFICATION: "true",
+        OPENCLAW_CI_SHAPE: "main",
+        OPENCLAW_CI_RUN_MACOS: String(appleScope),
+        GITHUB_RUN_ATTEMPT: String(runAttempt),
+      },
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs).toMatchObject({
+      run_build_artifacts: "true",
+      run_macos_swift: "true",
+      run_published_driver_update: "true",
+    });
+  });
+
   it("resolves admitted main qualification profiles without changing ordinary main routing", () => {
     for (const [configuredProfile, backend] of (
       ["", "github", "blacksmith", "hybrid"] as const
@@ -6010,7 +6120,6 @@ describe("ci workflow guards", () => {
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
     const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
-    const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const plannerRunner = workflow.jobs["check-plan"]["runs-on"];
     const plannerContext = {
       eventName: "pull_request" as const,
@@ -6138,7 +6247,7 @@ describe("ci workflow guards", () => {
       }
     }
     expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
-      "${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
+      "${{ (needs.preflight.outputs.boat_build_qualification == 'true' || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))) && 35 || 20 }}",
     );
     // PR events validate the artifact build on hosted runners (landing gate
     // stays satisfiable during Blacksmith outages); Testbox leases are
@@ -6207,9 +6316,6 @@ describe("ci workflow guards", () => {
       group: "sqlite-session-schema-baseline",
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
-    // The Windows matrix carries no per-row runner: both parts share one class.
-    expect(workflow.jobs["checks-windows"]["runs-on"]).not.toContain("matrix.runner");
-    expect(source).toContain("blacksmith-16vcpu-windows-2025");
   });
 
   it.each(["restore-main", "save-main", "publish-run", "restore-run"])(
