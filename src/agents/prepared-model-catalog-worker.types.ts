@@ -1,10 +1,10 @@
-import type { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import type { serializeConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { Model } from "../llm/types.js";
 import type { ActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import type { AuthProfileCredentialReceipts } from "../state/user-model-account-authority.js";
+import type { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import type { AuthProfileStore, SharedAuthStoreOwnership } from "./auth-profiles/types.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -53,7 +53,7 @@ export type PreparedModelWorkerCommand =
 export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
   Readonly<{
     syntheticAuth: PreparedSyntheticAuthFacts;
-    clawInstallSchemaVersions: ReturnType<typeof captureClawInstallSchemaVersionFacts>;
+    templateInstallSchemaVersions: ReturnType<typeof captureTemplateInstallSchemaVersionFacts>;
     /** Codex client version decided by the parent; absent means the bundled pin. */
     codexClientVersion?: string;
   }>;

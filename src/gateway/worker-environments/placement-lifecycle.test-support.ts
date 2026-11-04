@@ -17,12 +17,6 @@ export const WORKER_PROTOCOL_FEATURES = [
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
 ] as const;
-export const workerBundle = (
-  artifact: typeof import("./service.test-support.js").BUNDLE_ARTIFACT,
-) => ({
-  ...artifact,
-  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-});
 
 export function makeClaimInput(
   active: Parameters<typeof placementTurnOwner>[0],

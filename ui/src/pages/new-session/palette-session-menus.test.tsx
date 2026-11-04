@@ -57,14 +57,23 @@ it("keeps agent navigation and Escape inside the nested menu", async () => {
   trigger.click();
   const menu = get(host, ".agent-select__menu");
   await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
-  const first = get(menu, '[data-value="option:main"]');
-  const last = get(menu, '[data-value="option:other"]');
-  expectArrow(workspace, "ArrowUp", last);
-  pressKey(last, "ArrowDown");
-  await waitForSolid(() => expect(document.activeElement).toBe(first));
+  const list = get(menu, '[role="listbox"]');
+  const first = get(menu, '[data-value="main"]');
+  const last = get(menu, '[data-value="other"]');
+  await waitForSolid(() => {
+    expect(document.activeElement).toBe(list);
+    expect(list.getAttribute("aria-activedescendant")).toBe(first.id);
+  });
+  pressKey(list, "ArrowUp");
+  await waitForSolid(() => expect(list.getAttribute("aria-activedescendant")).toBe(last.id));
+  pressKey(list, "ArrowDown");
+  await waitForSolid(() => {
+    expect(document.activeElement).toBe(list);
+    expect(list.getAttribute("aria-activedescendant")).toBe(first.id);
+  });
   expect(menu.matches(":popover-open")).toBe(true);
   expect(settings.matches(":popover-open")).toBe(true);
-  pressKey(first, "Escape");
+  pressKey(list, "Escape");
   await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
   expect(settings.matches(":popover-open")).toBe(true);
   expect(document.activeElement).toBe(trigger);
@@ -156,7 +165,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
         ? {
             projects: [
               { id: "alpha", displayName: "Alpha", repoRoot: "/alpha", source: "registered" },
-              { id: "beta", displayName: "Beta", repoRoot: "/beta", source: "registered" },
+              { id: "beta", displayName: "Be\u0301ta", repoRoot: "/beta", source: "registered" },
             ],
           }
         : {},
@@ -178,6 +187,10 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   );
   const content = get(host, ".palette-session-settings__content");
   const back = get(content, ".palette-session-settings__back");
+  get(content, ".header-search__toggle").click();
+  await waitForSolid(() =>
+    expect(content.querySelector(".palette-session-settings__search")).not.toBeNull(),
+  );
   const search = expectDefined(
     content.querySelector<HTMLInputElement>(".palette-session-settings__search"),
     "settings search",
@@ -197,7 +210,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   expectArrow(connect, "ArrowDown", retry);
   expectArrow(retry, "ArrowDown", back);
 
-  search.value = "Beta";
+  search.value = "BÉTA";
   search.dispatchEvent(new Event("input", { bubbles: true }));
   await host.updateComplete;
   expectArrow(search, "ArrowDown", beta);
@@ -231,6 +244,8 @@ it("retains focused place choices through a quiet cloud catalog refresh failure"
   const draft = expectDefined(host.draft.settingsView(), "palette settings").options.draft;
   await draft.gateway.refreshCloudProfiles();
   get(host, ".palette-session-settings__workspace").click();
+  await waitForSolid(() => expect(host.querySelector(".header-search__toggle")).not.toBeNull());
+  get(host, ".header-search__toggle").click();
   await waitForSolid(() =>
     expect(host.querySelector(".palette-session-settings__search")).not.toBeNull(),
   );

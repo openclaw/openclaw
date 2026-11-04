@@ -1,11 +1,13 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareModelPricingContext } from "../model-catalog/pricing.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   captureModelCostPricing,
   resolveModelCostConfigFingerprint,
   type CapturedModelCostPricing,
 } from "../utils/usage-format.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   applyUsageCostEstimate,
   needsUsageCostEstimate,
@@ -26,7 +28,13 @@ export async function prepareUsageCostPricing(
   config?: OpenClawConfig,
   agentDir?: string,
 ): Promise<CapturedModelCostPricing> {
-  await prepareModelPricingContext(config);
+  // Catalog preparation can be shared and outlive this refresh; shutdown must
+  // release its usage lock without waiting for optional pricing metadata.
+  await racePromiseWithAbortSignal(
+    () => prepareModelPricingContext(config),
+    getAsyncWorkSignal(),
+    (aborted) => aborted.reason,
+  );
   return captureModelCostPricing(config, agentDir);
 }
 

@@ -1,3 +1,4 @@
+import type { MessageEntity } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { chunkByParagraph, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
@@ -25,6 +26,8 @@ export type TelegramTextDeliveryPage = {
   sourceTextMode: "html" | "markdown";
   fullSourceText?: string;
   htmlText?: string;
+  /** A code-only page must remain inert even when formatted delivery is rejected. */
+  literalOnly?: true;
   richMessage?: TelegramInputRichMessage;
   degradationReasons?: readonly TelegramRichBlocksDegradationReason[];
 };
@@ -54,7 +57,17 @@ function htmlPage(
   htmlText: string,
   plainText = telegramHtmlToPlainTextFallback(htmlText),
 ): TelegramTextDeliveryPage {
-  return { htmlText, plainText, sourceText: htmlText, sourceTextMode: "html" };
+  const literalOnly =
+    /^<pre><code(?: class="language-[^"]*")?>[^<]*<\/code><\/pre>$|^<(pre|code)>[^<]*<\/\1>$/u.test(
+      htmlText,
+    );
+  return {
+    htmlText,
+    plainText,
+    sourceText: htmlText,
+    sourceTextMode: "html",
+    ...(literalOnly ? { literalOnly: true } : {}),
+  };
 }
 
 export function planTelegramTextDeliveryPages(
@@ -79,6 +92,9 @@ export function planTelegramTextDeliveryPages(
       (chunk, index) => {
         const page = plainPage(chunk.plainText);
         page.richMessage = chunk.richMessage;
+        if (chunk.richMessage.blocks.every((block) => block.type === "pre")) {
+          page.literalOnly = true;
+        }
         page.degradationReasons = params.richMessage
           ? index === 0
             ? params.degradationReasons
@@ -151,6 +167,7 @@ type TelegramTextPageSender<TPlain, THtml, TRich> = {
       text: string,
       fallback?: { index: number; count: number },
       label?: string,
+      entities?: MessageEntity[],
     ) => Promise<TPlain>;
     sendHtml: (html: string) => Promise<THtml>;
     sendRich: (richMessage: TelegramInputRichMessage) => Promise<TRich>;
@@ -206,11 +223,15 @@ export async function* sendTelegramTextPageParts<TPlain, THtml, TRich>(
         text,
         page.richMessage ? { index, count: delivery.chunks.length } : undefined,
         delivery.label,
+        page.literalOnly ? [{ type: "pre", offset: 0, length: text.length }] : undefined,
       ),
       page: {
         plainText: text,
-        sourceText: escapeTelegramHtml(text),
+        sourceText: page.literalOnly
+          ? `<pre><code>${escapeTelegramHtml(text)}</code></pre>`
+          : escapeTelegramHtml(text),
         sourceTextMode: "html",
+        ...(page.literalOnly ? { literalOnly: true } : {}),
       },
     };
   }

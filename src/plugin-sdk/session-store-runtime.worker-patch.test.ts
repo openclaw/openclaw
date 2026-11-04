@@ -56,11 +56,16 @@ it("commits a public conditional patch in the worker and rejects a replaced gene
         skipMaintenance: true,
         ...options,
       });
+    const skillsSnapshot = { prompt: "Synthetic instructions", skills: [{ name: "synthetic" }] };
+    await patch("warm", { patch: { skillsSnapshot }, preserveActivity: true });
     const updated = await patch("worker patch", { preserveActivity: true });
     const expected = { sessionId: original.sessionId, label: "worker patch" };
     expect(updated).toMatchObject(expected);
     expect(fixture.read()).toMatchObject({ ...expected, updatedAt: original.updatedAt });
-    expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
+    expect(delivery.commands).toEqual(["session.entry.patch.commit", "session.entry.patch.commit"]);
+    updated!.skillsSnapshot!.prompt = "Plugin-owned instructions";
+    updated!.skillsSnapshot!.skills.push({ name: "plugin-owned" });
+    expect(fixture.read()?.skillsSnapshot).toEqual(skillsSnapshot);
 
     const fallbackEntry = { sessionId: "missing", updatedAt: 1 };
     const missingPatch = (label: string, condition: { sessionId: string } | null) =>

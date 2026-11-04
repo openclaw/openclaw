@@ -16,8 +16,8 @@ const userTextMessage = (text: string, seq = 1) => ({
   content: [{ type: "text", text }],
   __openclaw: { seq },
 });
-const internalMessage = (text: string, sourceTool: string) => ({
-  ...userTextMessage(text),
+const internalMessage = (text: string, sourceTool: string, seq = 1) => ({
+  ...userTextMessage(text, seq),
   provenance: { kind: "internal_system", sourceTool },
 });
 const mediaMessage = (text: string, seq: number, url: string) => ({
@@ -161,6 +161,38 @@ it.each([
   expect(completion).toEqual(original);
 });
 
+it.each([
+  ["heartbeat", { role: "user", content: [{ type: "text", text: HEARTBEAT_PROMPT }] }],
+  ["exec completion", internalMessage("Exec completed (amber-ri, code 0) :: output", "exec", 2)],
+])("keeps a %s boundary on a tool-shaped user row", (_name, hidden) => {
+  const toolResult = {
+    role: "user",
+    content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done" }],
+    __openclaw: { seq: 3 },
+  };
+  const toolEnvelope = { ...userTextMessage("done", 5), toolCallId: "tool-1" };
+  const answer = assistantTextMessage("Disk usage crossed 95 percent.", 4);
+  for (const toolRow of [toolResult, toolEnvelope]) {
+    expectProjection(
+      [hidden, toolRow, answer],
+      [{ ...toolRow, __openclaw: { ...toolRow["__openclaw"], turnBoundary: true } }, answer],
+    );
+  }
+});
+
+it("starts a new turn after a hidden exec completion so the earlier answer stays its own reply", () => {
+  const earlier = assistantTextMessage("long final answer", 2);
+  const completion = {
+    ...internalMessage("Exec completed (amber-ri, code 0) :: output", "exec", 3),
+    timestamp: 100,
+  };
+  const followUp = assistantTextMessage("should I fix points 1-4?", 4);
+  expectProjection(
+    [earlier, completion, followUp],
+    [earlier, { ...followUp, __openclaw: { seq: 4, turnBoundary: true } }],
+  );
+});
+
 it.each(["no_r", "NO_R", "No_Repl"])("keeps ordinary %s replies visible", (text) => {
   const messages = [
     assistantTextMessage(text, 1),
@@ -201,6 +233,29 @@ it("hides heartbeat prompt and ok acknowledgements from visible history", () => 
       answer,
     ],
     [{ ...answer, __openclaw: { seq: 4, turnBoundary: true } }],
+  );
+});
+
+it.each([false, true])("preserves separate reasoning items after a heartbeat: %s", (heartbeat) => {
+  const reasoning = ["first-item", "second-item"].map((itemId, index) => ({
+    role: "assistant",
+    content: [{ type: "thinking", thinking: "Checking the next step." }],
+    stopReason: "stop",
+    __openclaw: { id: itemId, seq: index + 2, runId: "run-1" },
+  }));
+  const answer = assistantTextMessage("Finished.", 4);
+  expectProjection(
+    [...(heartbeat ? [userTextMessage(HEARTBEAT_PROMPT)] : []), ...reasoning, answer],
+    [
+      heartbeat
+        ? {
+            ...reasoning[0],
+            __openclaw: { id: "first-item", seq: 2, runId: "run-1", turnBoundary: true },
+          }
+        : reasoning[0],
+      reasoning[1],
+      answer,
+    ],
   );
 });
 

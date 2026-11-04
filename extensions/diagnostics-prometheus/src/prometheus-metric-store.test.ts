@@ -119,7 +119,10 @@ it("keeps earlier scrape bytes stable across value changes, gauge removal, and r
   const escaped = 'z="雪\\"\\\\\\n"';
   const bucket = (le: number) => `${duration}_bucket{a="first",le="${le}",${escaped}}`;
   const suffix = `{a="first",le="replaced",${escaped}}`;
-  store.histogram(duration, "Duration.", labels, 0.5, [1, 10]);
+  const buckets = [1, 10];
+  const upperBucket = vi.fn(() => 10);
+  store.histogram(duration, "Duration.", labels, 0.5, buckets);
+  Object.defineProperty(buckets, 1, { get: upperBucket });
   store.counterValue(runs, "Runs.", {}, 2);
   store.gauge(depth, "Depth.", {}, 3);
   const first = store.render();
@@ -143,10 +146,17 @@ it("keeps earlier scrape bytes stable across value changes, gauge removal, and r
     expectLines(rendered.toString(), `${depth} ${value}`);
     rendered.buffer.transfer(0);
   }
+  upperBucket.mockClear();
   for (let index = 0; index < 8; index++) {
     store.histogram(duration, "Duration.", labels, 1, [1, 10]);
   }
-  expectLines(store.render().toString(), `${duration}_count${suffix} 10`);
+  expect(upperBucket).not.toHaveBeenCalled();
+  expectLines(
+    store.render().toString(),
+    `${bucket(1)} 9`,
+    `${bucket(10)} 10`,
+    `${duration}_count${suffix} 10`,
+  );
   const largeLabel = "雪😀".repeat(1024);
   store.gauge(depth, "Depth.", { label: largeLabel }, 7);
   expectLines(store.render().toString(), `${depth}{label="${largeLabel}"} 7`);

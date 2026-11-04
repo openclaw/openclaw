@@ -30,6 +30,10 @@ import {
   withUpdateStateInspectionWork,
 } from "./update-candidate-state.process.js";
 import {
+  createUpdateStateResultPath,
+  readUpdateStateResult,
+} from "./update-candidate-state.result.js";
+import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
@@ -41,7 +45,9 @@ import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture
 const WORKER_STARTUP_PHASES = new Map<unknown, string>([
   ["versions", "schema inspection startup"],
   ["database-generations", "database generation verification"],
+  ["sqlite-generations", "SQLite generation verification"],
   ["database-backup", "database backup"],
+  ["migration-filesystem-backup", "migration filesystem backup and verification"],
   ["database-restore-preparation", "database restore preparation"],
   ["runtime-retention", "runtime dependency inventory"],
 ]);
@@ -94,6 +100,7 @@ export async function runUpdateStateInspectionWorker(params: {
     retryAdvice: params.retryAdvice,
     onProgress: params.onProgress,
   });
+  const resultPath = createUpdateStateResultPath(params.stagingRoot);
   try {
     const timeoutMs = Math.max(
       params.timeoutMs ?? 0,
@@ -114,6 +121,7 @@ export async function runUpdateStateInspectionWorker(params: {
             ? undefined
             : JSON.stringify({
                 ...params.input,
+                resultPath,
                 includeLocalStoreVersions: true,
                 includeClientCredentialStoreVersion: true,
                 env: {
@@ -127,6 +135,9 @@ export async function runUpdateStateInspectionWorker(params: {
           baseEnv: params.sourceEnv,
           env: {
             XDG_CACHE_HOME: params.stagingRoot,
+            // Managed update snapshot selection prefers TMPDIR over XDG_CACHE_HOME.
+            // Keep native migration images inside the parent-owned cleanup tree.
+            ...(params.input.mode === "sqlite-generations" ? { TMPDIR: params.stagingRoot } : {}),
             ...(sourceTsconfigPath ? { TSX_TSCONFIG_PATH: sourceTsconfigPath } : {}),
           },
           killGraceMs: 500,
@@ -165,7 +176,18 @@ export async function runUpdateStateInspectionWorker(params: {
       });
     });
     const result = await work;
-    return { ...result, stderr: inspection.stderr(), inspection };
+    return {
+      ...result,
+      stdout:
+        !params.readOnlySource &&
+        result.code === 0 &&
+        result.termination === "exit" &&
+        !result.outputLimitExceeded
+          ? await readUpdateStateResult(result.stdout, resultPath)
+          : result.stdout,
+      stderr: inspection.stderr(),
+      inspection,
+    };
   } catch (error) {
     if (!hasCommandProcessCleanupError(error)) {
       params.signal?.throwIfAborted();
@@ -220,10 +242,19 @@ export async function readUpdateDatabaseGenerationPairIsolated(
   return inspectUpdateDatabaseGenerations(paths, options, true);
 }
 
+/** Native migration custody already owns SQLite selection; inspect its image without catalog classification. */
+export async function readUpdateSqliteDatabaseGenerationPairIsolated(
+  paths: readonly string[],
+  options: UpdateDatabaseGenerationReadOptions = {},
+): Promise<import("./update-database-generations.js").UpdateDatabaseGenerationPair> {
+  return inspectUpdateDatabaseGenerations(paths, options, true, "sqlite");
+}
+
 async function inspectUpdateDatabaseGenerations(
   paths: readonly string[],
   options: UpdateDatabaseGenerationReadOptions,
   paired: boolean,
+  engine: "physical" | "sqlite" = "physical",
 ): Promise<import("./update-database-generations.js").UpdateDatabaseGenerationPair> {
   const scope = getOpenClawDatabaseMaintenanceScope();
   const maintenanceOwner =
@@ -248,7 +279,7 @@ async function inspectUpdateDatabaseGenerations(
         sources: paths,
         ...(maintenanceOwner ? { ioBudget: "deadline" as const } : {}),
         input: {
-          mode: "database-generations",
+          mode: engine === "sqlite" ? "sqlite-generations" : "database-generations",
           generationFormat: paired ? "paired" : "committed",
           paths,
           ...(options.pluginOwners ? { pluginOwners: options.pluginOwners } : {}),

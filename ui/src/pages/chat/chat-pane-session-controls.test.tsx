@@ -352,7 +352,7 @@ describe("chat pane composer controls", () => {
         permissionContainer
           .querySelector('[data-chat-permission-select="true"]')
           ?.getAttribute("aria-label"),
-      ).toContain("Default (Guarded)");
+      ).toContain("Default (Ask me)");
       container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
       expect(onModelSetup).toHaveBeenCalledTimes(error ? 0 : 1);
     },
@@ -402,7 +402,7 @@ describe("chat pane composer controls", () => {
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
 
     const heading = container.querySelector<HTMLElement>(".chat-controls__permission-heading");
-    expect(heading?.textContent?.trim()).toBe("Execution permissions");
+    expect(heading?.textContent?.trim()).toBe("Permissions");
     expect(heading?.closest('[role="menuitem"]')).toBeNull();
     const docsLink = container.querySelector<HTMLElement>("a.chat-controls__permission-learn-more");
     expect(docsLink?.textContent?.trim()).toBe("Learn more");
@@ -417,19 +417,19 @@ describe("chat pane composer controls", () => {
     const defaultOption = container.querySelector<HTMLElement>(
       '[data-chat-permission-option="default"]',
     );
-    expect(defaultOption?.textContent).toContain("The agent's configured permissions.");
+    expect(defaultOption?.textContent).toContain("Uses this agent's settings.");
     expect(
       container.querySelector('[data-chat-permission-option="guarded"]')?.textContent,
     ).toContain("Default");
     expect(
       container.querySelector('[data-chat-permission-select="true"]')?.getAttribute("aria-label"),
-    ).toBe("Execution permissions: Full Access");
+    ).toBe("Permissions: Full access");
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");
     expect(full?.querySelector(".chat-controls__permission-shortcut")).toBeNull();
     expect(full?.querySelector(".chat-controls__permission-lock")).not.toBeNull();
     expect(full?.querySelector(".chat-controls__inline-select-check")).toBeNull();
-    expect(full?.getAttribute("aria-label")).toContain("operator.admin");
+    expect(full?.getAttribute("aria-label")).toContain("Only admins can turn on Full access.");
 
     menu.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
     await vi.waitFor(() =>
@@ -479,7 +479,7 @@ describe("chat pane composer controls", () => {
     flush();
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
     expect(trigger.getAttribute("aria-busy")).toBe("true");
-    expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Workspace");
+    expect(trigger.getAttribute("aria-label")).toBe("Permissions: Auto-review");
     await vi.waitFor(() =>
       expect(patch).toHaveBeenCalledWith(
         key,
@@ -497,7 +497,7 @@ describe("chat pane composer controls", () => {
 
     expect(state.chatError).toBeNull();
     expect(trigger.disabled).toBe(false);
-    expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Workspace");
+    expect(trigger.getAttribute("aria-label")).toBe("Permissions: Auto-review");
   });
 
   it.each([

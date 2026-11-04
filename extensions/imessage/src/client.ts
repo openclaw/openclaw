@@ -16,7 +16,10 @@ import { recoverIMessageBridge } from "./bridge-recovery.js";
 import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
-import { normalizeIMessageFullDiskAccessError } from "./process-diagnostics.js";
+import {
+  describeIMessageAutomationFailure,
+  normalizeIMessageFullDiskAccessError,
+} from "./process-diagnostics.js";
 
 // Match only the documented Contacts reconciliation diagnostic; other Apple
 // framework messages must keep their error level.
@@ -153,6 +156,7 @@ export class IMessageRpcClient {
   // the expanded one silently misses for any `~`-relative cliPath.
   private readonly configuredCliPath: string;
   private readonly dbPath?: string;
+  private readonly remoteHost?: string;
   private readonly runtime?: RuntimeEnv;
   private readonly onNotification?: (msg: IMessageRpcNotification) => void;
   private readonly pending = new Map<string, PendingRequest>();
@@ -171,9 +175,10 @@ export class IMessageRpcClient {
     this.configuredCliPath = opts.cliPath?.trim() || "imsg";
     this.cliPath = expandIMessageUserPath(this.configuredCliPath);
     const dbPath = opts.dbPath?.trim();
+    this.remoteHost = opts.remoteHost?.trim();
     // An explicitly remote database belongs to the Messages Mac. Only local
     // database paths are relative to the Gateway user's home directory.
-    this.dbPath = dbPath ? (opts.remoteHost?.trim() ? dbPath : resolveUserPath(dbPath)) : undefined;
+    this.dbPath = dbPath ? (this.remoteHost ? dbPath : resolveUserPath(dbPath)) : undefined;
     this.runtime = opts.runtime;
     this.onNotification = opts.onNotification;
     this.terminal = new Promise((resolve) => {
@@ -447,8 +452,13 @@ export class IMessageRpcClient {
           }
         }
         const msg = suffixes.length > 0 ? `${baseMessage}: ${suffixes.join(" ")}` : baseMessage;
+        const guidance = describeIMessageAutomationFailure(details, this.remoteHost);
         pending.reject(
-          new IMessageRpcRequestError(msg, typeof code === "number" ? code : undefined, details),
+          new IMessageRpcRequestError(
+            guidance ? `${msg} ${guidance}` : msg,
+            typeof code === "number" ? code : undefined,
+            details,
+          ),
         );
         return;
       }
