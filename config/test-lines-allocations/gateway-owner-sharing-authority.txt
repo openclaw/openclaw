@@ -1,0 +1,3 @@
+# Real CLI-owner readiness, live authority and scope boundaries, and interleaved list/presence caches.
+# Reuses the existing readiness fixture; includes its extraction without duplicating setup.
+357
