@@ -2,6 +2,7 @@
 //   OPENCLAW_CONTINUATION_FOREST_LOAD=1 node scripts/run-vitest.mjs run \
 //     --config test/vitest/vitest.agents-support.config.ts --maxWorkers=1 \
 //     src/agents/subagents/registry/continuation-forest.load.benchmark.test.ts
+// Long runs also need OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS above the longest silent step.
 // Knobs: OPENCLAW_CONTINUATION_FOREST_LOAD_SIZES (rooms, default 10,1000,100000),
 // OPENCLAW_CONTINUATION_FOREST_SEED (replays a storm), OPENCLAW_CONTINUATION_FOREST_LOAD_BUDGET_MS
 // (wall time per run, default 30 minutes), OPENCLAW_CONTINUATION_FOREST_HELD (returns held while
@@ -15,6 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   contention,
   loadShape,
+  progress,
   measureMarkPasses,
   planStorm,
   releaseHeldReturns,
@@ -77,6 +79,7 @@ describe.runIf(LOAD)("the burning annex under load", () => {
         process.env.OPENCLAW_CONTINUATION_FOREST_SEED ?? Math.floor(Math.random() * 2 ** 31),
       );
       const forest = await annex.build(loadShape(size));
+      progress(forest, `built storm ${size} seed ${seed}`);
       const events = planStorm(forest, seed);
       const started = realNowMs();
       const outcome = await runStorm(forest, events, BUDGET_MS);
@@ -116,12 +119,14 @@ describe.runIf(LOAD)("the burning annex under load", () => {
       const children = size - 1;
       const forest = await annex.build({ trees: 1, depth: 2, fanOut: children, alarmTrees: 0 });
       const nexus = forest.princes[0]!;
+      progress(forest, `built nexus ${size}`);
       const passes = measureMarkPasses();
       const swapsMs: number[] = [];
       for (let swap = 0; swap < 2; swap += 1) {
         const started = realNowMs();
         await forest.changesClothes(nexus);
         swapsMs.push(Math.round(realNowMs() - started));
+        progress(forest, `nexus swap ${swap + 1} took ${swapsMs.at(-1)}ms`);
       }
       const held = Math.min(children, Number(HELD ?? children));
       const release = await releaseHeldReturns(forest, nexus, held, BUDGET_MS);

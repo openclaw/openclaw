@@ -21,6 +21,14 @@ import { continuationForestSeams } from "./continuation-forest.seams.test-suppor
 import type { ContinuationForest } from "./continuation-forest.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 
+/** One progress line on stderr: where the run is, and what the forest holds so far. */
+export function progress(forest: ContinuationForest, label: string): void {
+  const clock = forest.t0 ? `${Date.now() - forest.t0}ms` : "unlit";
+  process.stderr.write(
+    `[annex] ${label} clock=${clock} rooms=${forest.rooms.size} reports=${forest.reports.size} adoptions=${forest.adoptions.length} rss=${Math.round(process.memoryUsage().rss / 1_048_576)}MB\n`,
+  );
+}
+
 /** Forest shapes for the load sizes (rooms, princes included). */
 export const LOAD_SHAPES: Readonly<Record<number, AnnexShape>> = {
   10: { trees: 2, depth: 2, fanOut: 4 },
@@ -97,6 +105,7 @@ export async function runStorm(
 ): Promise<{ finished: boolean; eventsRun: number }> {
   const started = realNowMs();
   const overBudget = () => realNowMs() - started > budgetMs;
+  progress(forest, "lighting");
   await forest.light();
   let eventsRun = 0;
   for (const event of events) {
@@ -106,6 +115,7 @@ export async function runStorm(
     if (forest.t0 + event.atMs > Date.now()) {
       await forest.advanceTo(event.atMs);
     }
+    progress(forest, `event ${eventsRun + 1}/${events.length} ${event.kind} ${event.nodeId ?? ""}`);
     const node = event.nodeId ? forest.node(event.nodeId) : undefined;
     if (event.kind === "new") {
       await forest.changesClothes(node!);
@@ -122,6 +132,7 @@ export async function runStorm(
     if (overBudget()) {
       return { finished: false, eventsRun };
     }
+    progress(forest, `advancing to ${atMs}ms`);
     if (forest.t0 + atMs > Date.now()) {
       await forest.advanceTo(atMs, atMs > ATTIC_DELAY_MS + 1_000 ? 5_000 : undefined);
     }
@@ -208,8 +219,11 @@ export async function releaseHeldReturns(
   });
   const produceStarted = realNowMs();
   await retention.stopSubagents({ assertCurrent: () => {} }, async () => {
-    for (const child of children) {
+    for (const [index, child] of children.entries()) {
       await reportElection(forest, forest.electionOf(child));
+      if ((index + 1) % 5_000 === 0) {
+        progress(forest, `held ${index + 1}/${children.length} returns`);
+      }
     }
   });
   const produceMs = realNowMs() - produceStarted;
@@ -238,6 +252,9 @@ export async function releaseHeldReturns(
   while (adoptedCount() < children.length && realNowMs() - adoptStarted < budgetMs) {
     await forest.advance(1_000);
     fakeMs += 1_000;
+    if (fakeMs % 60_000 === 0) {
+      progress(forest, `released ${adoptedCount()}/${children.length} adopted`);
+    }
   }
   const adopted = adoptedCount();
   const duplicates = children.filter(
