@@ -13,6 +13,7 @@ import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type {
+  ChatGoalAction,
   ChatGoalDraft,
   ChatGoalMutationAction,
   ChatGoalRecovery,
@@ -375,28 +376,19 @@ export async function submitChatGoalDraft(
   );
 }
 
-const blockedResumeNotes = new Map<string, string>();
-
-export function stageBlockedResumeNote(goalId: string, note: string): void {
-  const trimmed = note.trim();
-  if (trimmed) {
-    blockedResumeNotes.set(goalId, trimmed);
-  }
+function resumeNote(action: ChatGoalMutationAction): string | undefined {
+  const note = action.action === "resume" ? action.note?.trim() : undefined;
+  return note || undefined;
 }
 
-function blockedResumeNote(action: ChatGoalMutationAction): string | undefined {
-  if (action.action !== "resume") {
-    return undefined;
-  }
-  return action.note?.trim() || blockedResumeNotes.get(action.goalId);
-}
-
-function resumeNoteParam(action: ChatGoalMutationAction): { note?: string } {
-  const note = blockedResumeNote(action);
-  if (action.action === "resume") {
-    blockedResumeNotes.delete(action.goalId);
-  }
-  return note ? { note } : {};
+export function chatGoalPaneCallbacks(state: ChatHost) {
+  return {
+    goalRecovery: chatGoalRecovery(state),
+    onGoalAction: (goalId: string, action: ChatGoalAction, note?: string) => {
+      const trimmed = note?.trim();
+      void mutateChatGoal(state, trimmed ? { goalId, action, note: trimmed } : { goalId, action });
+    },
+  };
 }
 
 export async function mutateChatGoal(
@@ -454,7 +446,7 @@ export async function mutateChatGoal(
       ((action.action === "edit" || action.action === "replace") &&
         (!("objective" in params) || params.objective !== action.objective)) ||
       (action.action === "resume" &&
-        ("note" in params ? params.note : undefined) !== blockedResumeNote(action)) ||
+        ("note" in params ? params.note : undefined) !== resumeNote(action)) ||
       (action.action === "replace" &&
         (!("action" in params) ||
           params.action !== "replace" ||
@@ -463,9 +455,6 @@ export async function mutateChatGoal(
     ) {
       return rejectGoalOperation(host, t("chat.goals.outcomeUnknown"));
     }
-  }
-  if (operation && action?.action === "resume") {
-    blockedResumeNotes.delete(action.goalId);
   }
   if (!operation) {
     if (!action) {
@@ -505,7 +494,7 @@ export async function mutateChatGoal(
                 ? {
                     ...identity,
                     action: "resume",
-                    ...resumeNoteParam(action),
+                    ...(resumeNote(action) ? { note: resumeNote(action) } : {}),
                   }
                 : { ...identity, action: action.action },
       pending: false,

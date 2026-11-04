@@ -531,7 +531,7 @@ it.each([
     note.value = "CI passed";
     note.dispatchEvent(new Event("input", { bubbles: true }));
     await userEvent.click(query(`.agent-chat__goal-${action}`, commands));
-    expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(goal.id, "resume");
+    expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(goal.id, "resume", "CI passed");
   } else {
     expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(goal.id, action);
   }

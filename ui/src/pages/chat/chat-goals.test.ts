@@ -22,7 +22,6 @@ import {
   chatGoalPresentation,
   chatGoalRecovery,
   mutateChatGoal,
-  stageBlockedResumeNote,
 } from "./chat-goals.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -83,10 +82,11 @@ function goalHost(requestHandlers: Record<string, unknown> = { "sessions.goal.up
 }
 
 describe("Goal control requests", () => {
-  it("sends a staged resume note", async () => {
+  it("sends the resume note on the goal update", async () => {
     const host = goalHost({ "sessions.goal.update": { status: "updated", goalId: goal.id, goal } });
-    stageBlockedResumeNote(goal.id, "  CI passed  ");
-    expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(true);
+    expect(
+      await mutateChatGoal(host, { action: "resume", goalId: goal.id, note: "  CI passed  " }),
+    ).toBe(true);
     expect(host.request.mock.calls[0]?.[1]).toMatchObject({ action: "resume", note: "CI passed" });
   });
 

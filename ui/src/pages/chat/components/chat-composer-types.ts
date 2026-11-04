@@ -254,7 +254,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onClearReply?: () => void;
   goalRecovery?: ChatGoalRecovery;
   goalResumeBusy?: boolean;
-  onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
+  onGoalAction?: (goalId: string, action: ChatGoalAction, note?: string) => void;
   onGoalSubmit?: (draft: ChatGoalDraft, submissionAction?: Event) => Promise<boolean>;
   goalDraftMode?: ChatGoalDraftMode | null;
   onGoalDraftModeChange?: (mode: ChatGoalDraftMode | null) => void;
