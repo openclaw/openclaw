@@ -1010,10 +1010,7 @@ suite.define(() => {
       if (!refused) {
         await expectBrowser(notice).toBeVisible();
       }
-      await expectBrowser(page.locator(".new-session-page__draft-toggle")).toHaveAttribute(
-        "aria-checked",
-        "true",
-      );
+      await expectBrowser(draftToggle).toHaveAttribute("aria-checked", "true");
       await expectBrowser(message).toHaveValue("Keep this private plan");
       await expectBrowser(composer.locator(".chat-attachment-file__name")).toHaveText("plan.txt");
       await message.press("Enter");
