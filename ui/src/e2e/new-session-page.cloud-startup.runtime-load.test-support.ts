@@ -223,7 +223,8 @@ async function recoverStartup(
     // blocks document replacement. Manual reload must still stop at the guard.
     const probesBeforeManualReload = documentProbes;
     await reload.click();
-    const toast = page.locator(".app-toast__message");
+    // Two-sentence copy renders as a title plus description; read both.
+    const toast = page.locator(".app-toast__body");
     await expect.poll(() => toast.textContent()).toContain(warning);
 
     expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);

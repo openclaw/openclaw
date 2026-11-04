@@ -1110,7 +1110,7 @@ const postgresConformancePaths = [
   "packages/memory-host-sdk/src/memory-entry-origins.ts",
   "src/config/zod-schema.database.ts",
   "scripts/test-database-conformance*.mjs",
-  "scripts/lib/weighted-test-shards.mts",
+  "scripts/lib/postgres-conformance-shards.mts",
   "config/postgres-conformance-timings.json",
 ];
 const runPostgresConformance =

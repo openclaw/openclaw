@@ -81,7 +81,7 @@ const REVIEWED_CRITICAL_FINDING_CONTENT_SHA256 = new Map<string, string>([
   ],
   [
     "setup:@openclaw/openshell-sandbox:dangerous-exec:dist/.setup/worker-cli-<hash>.mjs",
-    "799a34cf8a82fed6725a5ac5322242becb394804b1ba6ea62d189aa8a1fa5f02",
+    "c5050d4065ef0365ffd611b558809a848994584f1f11c08854fe7ae3cf7072d7",
   ],
 ]);
 
