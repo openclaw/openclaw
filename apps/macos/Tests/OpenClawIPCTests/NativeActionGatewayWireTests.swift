@@ -228,13 +228,23 @@ struct NativeActionGatewayWireTests {
         }
         func allowed(_ id: String, profileID: String? = nil) async throws -> OpenClawNativeRunRef {
             let prepared = try await prepare(id, profileID: profileID)
-            let run = try await prepared.submit()
+            let run: OpenClawNativeRunRef
+            if id == "allowed" {
+                let reply = try await prepared.submitAndWaitForReply()
+                let marker = try #require(descriptor.cases[id]?.marker)
+                try #require(reply.outcome == .answer(marker))
+                run = reply.run
+            } else {
+                run = try await prepared.submit()
+            }
             try #require(!run.runID.isEmpty)
             try await control.verify(id, run: run)
             if id == "allowed" {
-                let replay = try await prepared.submit()
-                try #require(replay == run)
-                try await control.verify(id, run: replay)
+                let replay = try await prepared.submitAndWaitForReply()
+                try #require(replay.run == run)
+                let marker = try #require(descriptor.cases[id]?.marker)
+                try #require(replay.outcome == .answer(marker))
+                try await control.verify(id, run: replay.run)
             }
             try await control.complete(id)
             return run

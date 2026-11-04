@@ -211,7 +211,7 @@ public struct OpenClawChatNativeActionGateway: Sendable {
             lease: lease,
             accountIsCurrent: accountIsCurrent,
             presentationIsCurrent: presentationIsCurrent)
-        return OpenClawNativePreparedSend(session: session, message: invocation.message) {
+        let submit: @MainActor () async throws -> OpenClawNativeRunRef = {
             // Confirmation can outlive the connection, account, or visible chat.
             // Revalidate the captured owner; never acquire a successor lease.
             let verification: Result<Void, any Error>
@@ -232,6 +232,34 @@ public struct OpenClawChatNativeActionGateway: Sendable {
             case .cancelled:
                 throw CancellationError()
             }
+        }
+        return OpenClawNativePreparedSend(session: session, message: invocation.message, submit: submit) {
+            let run = try await submit()
+            return try await self.waitForReply(run)
+        }
+    }
+
+    public func waitForReply(_ run: OpenClawNativeRunRef) async throws -> OpenClawNativeRunReply {
+        try Task.checkCancellation()
+        guard run.session.owner.gatewayID.utf8.elementsEqual(self.gatewayID.utf8) else {
+            return .init(run: run, outcome: .unavailable)
+        }
+        let available = await self.isCurrent()
+        try Task.checkCancellation()
+        guard available else { return .init(run: run, outcome: .unavailable) }
+        do {
+            // agent.wait owns recorded completion, including a reply that arrived
+            // before the send ACK. A deadline stops observing; it never aborts or resends.
+            let data = try await request(
+                OpenClawChatGatewayRequests.agentWait(runID: run.runID, timeoutMs: 25000),
+                run.session.owner.profileID)
+            let current = await self.isCurrent()
+            try Task.checkCancellation()
+            guard current else { return .init(run: run, outcome: .unavailable) }
+            return try OpenClawChatGatewayPayloadCodec.decodeNativeRunReply(data, run: run)
+        } catch {
+            try Task.checkCancellation()
+            return .init(run: run, outcome: .unavailable)
         }
     }
 }

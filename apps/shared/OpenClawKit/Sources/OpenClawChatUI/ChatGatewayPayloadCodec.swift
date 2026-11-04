@@ -74,6 +74,13 @@ public enum OpenClawChatGatewayPayloadCodec {
     }
 
     private struct AgentWaitResponse: Decodable {
+        struct TerminalReply: Decodable {
+            var disposition: String
+            var text: String?
+        }
+
+        var runId: String?
+        var terminalReply: TerminalReply?
         var status: String?
         var endedAt: Double?
         var error: String?
@@ -84,21 +91,52 @@ public enum OpenClawChatGatewayPayloadCodec {
         var timeoutPhase: String?
         var providerStarted: Bool?
         var aborted: Bool?
+
+        var observation: OpenClawChatRunObservation {
+            OpenClawChatRunObservation.fromWaitResponse(
+                status: self.status,
+                endedAt: self.endedAt,
+                error: self.error,
+                stopReason: self.stopReason,
+                livenessState: self.livenessState,
+                yielded: self.yielded,
+                pendingError: self.pendingError,
+                timeoutPhase: self.timeoutPhase,
+                providerStarted: self.providerStarted,
+                aborted: self.aborted)
+        }
     }
 
     public static func decodeAgentWaitObservation(_ data: Data) throws -> OpenClawChatRunObservation {
         let decoded = try JSONDecoder().decode(AgentWaitResponse.self, from: data)
-        return OpenClawChatRunObservation.fromWaitResponse(
-            status: decoded.status,
-            endedAt: decoded.endedAt,
-            error: decoded.error,
-            stopReason: decoded.stopReason,
-            livenessState: decoded.livenessState,
-            yielded: decoded.yielded,
-            pendingError: decoded.pendingError,
-            timeoutPhase: decoded.timeoutPhase,
-            providerStarted: decoded.providerStarted,
-            aborted: decoded.aborted)
+        return decoded.observation
+    }
+
+    public static func decodeNativeRunReply(_ data: Data, run: OpenClawNativeRunRef) throws -> OpenClawNativeRunReply {
+        let decoded = try JSONDecoder().decode(AgentWaitResponse.self, from: data)
+        guard decoded.runId?.utf8.elementsEqual(run.runID.utf8) == true else {
+            return .init(run: run, outcome: .unavailable)
+        }
+        let outcome: OpenClawNativeRunReply.Outcome = switch decoded.observation {
+        case .terminal(.completed):
+            switch decoded.terminalReply?.disposition {
+            case "visible":
+                // The terminal-reply owner records a 4096 UTF-16-unit preview,
+                // not the full transcript or a file payload.
+                if let text = decoded.terminalReply?.text, !text.isEmpty, text.utf16.count <= 4096 {
+                    .answer(text)
+                } else {
+                    .unavailable
+                }
+            case "silent": .silent
+            case "empty": .empty
+            default: .unavailable
+            }
+        case let .terminal(.failed(message)): .failed(message)
+        case .checkAgain: .pending
+        case .unavailable: .unavailable
+        }
+        return .init(run: run, outcome: outcome)
     }
 
     public static func decodeModelChoices(_ data: Data) throws -> [OpenClawChatModelChoice] {

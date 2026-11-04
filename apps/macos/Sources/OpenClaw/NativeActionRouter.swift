@@ -12,6 +12,11 @@ extension OpenClawApp: AppIntentsPackage {
 struct OpenClawShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
+            intent: AskOpenClawIntent(),
+            phrases: ["Ask \(.applicationName)"],
+            shortTitle: "Ask OpenClaw",
+            systemImageName: "text.bubble")
+        AppShortcut(
             intent: OpenSessionIntent(),
             phrases: ["Open a session in \(.applicationName)"],
             shortTitle: "Open Session",

@@ -289,6 +289,25 @@ public struct OpenLiveVoiceIntent: AppIntent {
 }
 #endif
 
+extension AppIntent {
+    @MainActor
+    fileprivate func prepareConfirmedSend(to session: OpenClawNativeSessionRef, message: String) async throws
+        -> (send: OpenClawNativePreparedSend, presentationContinuationID: UUID)
+    {
+        let (prepared, presentationID) = try await OpenClawNativeActionServices.host().prepareSend(
+            to: session, message: message)
+        try await self.requestConfirmation(
+            actionName: .send,
+            dialog: """
+            Send to \(prepared.session.sessionKey) with \(prepared.session.agentID) \
+            as \(prepared.session.owner.profileID) on \(prepared.session.owner.gatewayID)?
+
+            \(prepared.message)
+            """)
+        return (prepared, presentationID)
+    }
+}
+
 public struct SendMessageIntent: AppIntent {
     public static let title: LocalizedStringResource = "Send Message"
     public static let openAppWhenRun = true
@@ -306,22 +325,39 @@ public struct SendMessageIntent: AppIntent {
     OpensIntent {
         // perform has no OS invocation identifier. Each intentional execution
         // prepares one object; static intent identifiers must never deduplicate sends.
-        let (prepared, presentationID) = try await OpenClawNativeActionServices.host().prepareSend(
-            to: self.session.session,
-            message: self.message)
-        try await self.requestConfirmation(
-            actionName: .send,
-            dialog: """
-            Send to \(prepared.session.sessionKey) with \(prepared.session.agentID) \
-            as \(prepared.session.owner.profileID) on \(prepared.session.owner.gatewayID)?
-
-            \(prepared.message)
-            """)
+        let (prepared, presentationID) = try await self.prepareConfirmedSend(
+            to: self.session.session, message: self.message)
         let run = try await prepared.submit()
         return try .result(
             value: OpenClawRunEntity(run: run),
             opensIntent: OpenRunIntent(target: OpenClawRunEntity(run: run), continuing: presentationID),
             dialog: "Accepted. Open the selected chat to follow the run.")
+    }
+}
+
+public struct AskOpenClawIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Ask OpenClaw"
+    public static let description: IntentDescription? = IntentDescription(
+        "Ask in a conversation and return a recorded reply preview or run status. Open the chat for full results.")
+    public static let openAppWhenRun = true
+    public static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
+    @Parameter(title: "Session") public var session: OpenClawSessionEntity
+    @Parameter(title: "Question") public var question: String
+    public static var parameterSummary: some ParameterSummary {
+        Summary("Ask \(\.$question) in \(\.$session)")
+    }
+
+    public init() {}
+
+    @MainActor
+    public func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog & OpensIntent {
+        let (prepared, presentationID) = try await self.prepareConfirmedSend(
+            to: self.session.session, message: self.question)
+        let reply = try await prepared.submitAndWaitForReply()
+        return try .result(
+            value: reply.text,
+            opensIntent: OpenRunIntent(target: OpenClawRunEntity(run: reply.run), continuing: presentationID),
+            dialog: "\(reply.dialog)")
     }
 }
 

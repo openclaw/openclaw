@@ -84,9 +84,10 @@ const contracts = {
   OpenComposeIntent: { target: entity("OpenClawSessionEntity"), draft: string(true) },
   OpenRunIntent: { target: entity("OpenClawRunEntity") },
   SendMessageIntent: { session: entity("OpenClawSessionEntity"), message: string() },
+  AskOpenClawIntent: { session: entity("OpenClawSessionEntity"), question: string() },
   InspectRunIntent: { run: entity("OpenClawRunEntity") },
 };
-const shortcutNames = ["OpenSessionIntent", "OpenComposeIntent", "SendMessageIntent", "InspectRunIntent"];
+const shortcutNames = ["OpenSessionIntent", "OpenComposeIntent", "SendMessageIntent", "AskOpenClawIntent", "InspectRunIntent"];
 const select = (values, name) => {
   const matches = Object.values(values).filter(
     (value) => value.fullyQualifiedTypeName === `OpenClawKit.${name}`,
@@ -153,6 +154,18 @@ function validate(file, expectShortcuts) {
     }
     actions[name] = action;
   }
+  const ask = actions.AskOpenClawIntent;
+  assert.equal(ask.outputType.primitive?.wrapper.typeIdentifier, 0, "Ask must return String");
+  // Xcode 26.6 emits 2 for requiresLocalDeviceAuthentication. Check the
+  // protocol witness, not merely a similarly named Swift property.
+  assert.equal(ask.authenticationPolicy, 2, "Ask must require local device authentication");
+  assert.equal(ask.isAuthPolExplicit, true, "Ask authentication must be explicit");
+  assert.equal(ask.openAppWhenRun, true, "Ask must start its app host");
+  assert.equal(
+    ask.descriptionMetadata?.descriptionText?.key,
+    "Ask in a conversation and return a recorded reply preview or run status. Open the chat for full results.",
+    "Ask description must reach extracted metadata",
+  );
   if (expectShortcuts) {
     assert.ok(Array.isArray(metadata.autoShortcuts), "Missing app Shortcut declarations");
     for (const name of shortcutNames) {
@@ -179,6 +192,12 @@ function validate(file, expectShortcuts) {
     entities: entityNames,
     enumeration: { name: enumName, cases: operation.cases.map((value) => value.identifier).sort() },
     shortcuts: expectShortcuts ? shortcutNames : [],
+    ask: {
+      output: "String",
+      authentication: "requiresLocalDeviceAuthentication",
+      opensApp: ask.openAppWhenRun,
+      description: ask.descriptionMetadata.descriptionText.key,
+    },
   };
 }
 const report = {
@@ -192,5 +211,5 @@ const report = {
   installedDiscoveryVerified: false,
 };
 fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-console.log("App Intents metadata passed: 5 intents, 2 entities/queries, 1 enum, 4 app Shortcuts.");
+console.log("App Intents metadata passed: 6 intents, 2 entities/queries, 1 enum, 5 app Shortcuts.");
 NODE

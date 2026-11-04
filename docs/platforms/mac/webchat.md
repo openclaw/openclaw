@@ -260,6 +260,8 @@ connect the intended Gateway and account, then choose an action in
 - **Compose Message** opens the selected chat with an optional unsent draft.
 - **Send Message** confirms the destination before sending supplied text and
   returns a **Run** with a continuation to that exact chat.
+- **Ask OpenClaw** sends a question and returns its recorded reply preview as
+  text, with a spoken summary and a continuation to the exact run's chat.
 - **Inspect Run** reads matching Gateway facts for that run and opens its chat.
 
 The saved selection carries the canonical account ID, not authorization.
@@ -272,6 +274,12 @@ approvals. Quick Chat retains its separate behavior described above.
 run's chat. Inspection only reports active or terminal status backed by facts
 for the exact run; a receipt or reply alone does not prove completion. Bounded
 history can leave an older run unobserved or its status unknown.
+
+**Ask OpenClaw** waits up to 25 seconds for a completed reply. Its text is a
+preview capped by the Gateway at 4,096 UTF-16 characters; open the returned chat
+for the full response. Longer tasks, silent replies, missing output, and failures
+return an explicit status instead. A wait deadline or cancelled shortcut does
+not abort the accepted run or send the question again.
 
 Native sends do **not** use the durable offline outbox and never automatically
 repeat an uncertain send. The same in-flight submission is one-shot. An

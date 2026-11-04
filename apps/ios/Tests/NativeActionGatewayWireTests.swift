@@ -327,12 +327,15 @@ struct NativeActionGatewayWireTests {
             // The unchanged fixture's final one-admission/provider/sentinel count
             // proves this retired confirmation added no work before the fresh send.
             let prepared = try await presentation.prepare("allowed")
-            let accepted = try await prepared.submit()
+            let reply = try await prepared.submitAndWaitForReply()
+            let accepted = reply.run
+            let marker = try #require(fixture.cases["allowed"]?.marker)
+            try #require(reply.outcome == .answer(marker))
             try await fixture.verify("allowed", runID: accepted.runID, complete: false)
-            let replay = try await prepared.submit()
-            try #require(replay == accepted)
-            try await fixture.verify("allowed", runID: replay.runID)
-            try await presentation.requireSettled(accepted, before: "distinct")
+            let replay = try await prepared.submitAndWaitForReply()
+            try #require(replay == reply)
+            try await fixture.verify("allowed", runID: replay.run.runID)
+            try await presentation.requireSettled(reply.run, before: "distinct")
 
             let distinct = try await presentation.prepare("distinct").submit()
             try #require(distinct.runID != accepted.runID)

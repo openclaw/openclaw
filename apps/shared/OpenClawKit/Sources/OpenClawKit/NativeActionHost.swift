@@ -79,6 +79,41 @@ public struct OpenClawNativeRunInspection: Equatable, Sendable {
     }
 }
 
+public struct OpenClawNativeRunReply: Equatable, Sendable {
+    public enum Outcome: Equatable, Sendable {
+        case answer(String)
+        case silent
+        case empty
+        case pending
+        case failed(String)
+        case unavailable
+    }
+
+    public let run: OpenClawNativeRunRef
+    public let outcome: Outcome
+
+    public init(run: OpenClawNativeRunRef, outcome: Outcome) {
+        self.run = run
+        self.outcome = outcome
+    }
+
+    public var text: String {
+        switch self.outcome {
+        case let .answer(text): text
+        case .silent: "The run completed with an intentional silent response."
+        case .empty: "The run completed without a recorded text reply. Open its chat for details."
+        case .pending: "No completed reply yet. Open the accepted run's chat to follow it."
+        case let .failed(message): "The run failed: \(String(message.prefix(500))). Open its chat for details."
+        case .unavailable: "The message was accepted, but its reply is unavailable. Open its chat before sending again."
+        }
+    }
+
+    public var dialog: String {
+        let text = self.text
+        return text.count > 800 ? "\(text.prefix(800))… Open the chat for the rest." : text
+    }
+}
+
 /// Prepared by the app before system confirmation. The closure retains one
 /// invocation object and one physical connection; it must not reacquire either.
 @MainActor
@@ -86,15 +121,18 @@ public struct OpenClawNativePreparedSend {
     public let session: OpenClawNativeSessionRef
     public let message: String
     public let submit: @MainActor () async throws -> OpenClawNativeRunRef
+    public let submitAndWaitForReply: @MainActor () async throws -> OpenClawNativeRunReply
 
     public init(
         session: OpenClawNativeSessionRef,
         message: String,
-        submit: @escaping @MainActor () async throws -> OpenClawNativeRunRef)
+        submit: @escaping @MainActor () async throws -> OpenClawNativeRunRef,
+        submitAndWaitForReply: @escaping @MainActor () async throws -> OpenClawNativeRunReply)
     {
         self.session = session
         self.message = message
         self.submit = submit
+        self.submitAndWaitForReply = submitAndWaitForReply
     }
 }
 
