@@ -422,7 +422,11 @@ while IFS= read -r -d '' runtime_kind && IFS= read -r -d '' runtime_file; do
     sign_item "$runtime_file" "$ENT_TMP_BUN"
   elif [[ "$runtime_kind" == "executable" && (
     "$runtime_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude ||
-    "$runtime_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/claude
+    "$runtime_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/claude ||
+    "/$runtime_relative" == */node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex-code-mode-host ||
+    "/$runtime_relative" == */node_modules/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/codex/codex-code-mode-host ||
+    "/$runtime_relative" == */node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex-code-mode-host ||
+    "/$runtime_relative" == */node_modules/@openai/codex/vendor/x86_64-apple-darwin/codex/codex-code-mode-host
   ) ]]; then
     sign_item "$runtime_file" "$ENT_TMP_JIT"
   else
