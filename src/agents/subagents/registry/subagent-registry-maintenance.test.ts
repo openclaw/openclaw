@@ -4,6 +4,10 @@ import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  createContinuationRecord,
+  newContinuationRecordId,
+} from "../../../auto-reply/continuation/custody/custody-store.js";
 import { prepareSessionMaintenancePreservation } from "../../../config/sessions/store-maintenance-preserve.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import {
@@ -115,6 +119,28 @@ describe("subagent maintenance protection", () => {
     subagentRuns.set(run.runId, run);
     expect(await protectedKeys()).toEqual([run.childSessionKey]);
     expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
+  });
+
+  it("keeps one preparation's captures equal while custody changes; the next one keeps the elector", async () => {
+    openOpenClawStateDatabase();
+    const elector = "agent:main:subagent:elector";
+    const prepared = await prepareSessionMaintenancePreservation(storePath);
+    try {
+      const before = prepared.capture().providerKeys;
+      await createContinuationRecord({
+        recordId: newContinuationRecordId(),
+        kind: "delegate",
+        ownerSessionKey: elector,
+        status: "queued",
+        createdAt: Date.now(),
+        stateJson: "{}",
+      });
+      // A replacement commits only while its captures are deep-equal.
+      expect(prepared.capture().providerKeys).toEqual(before);
+    } finally {
+      prepared.dispose();
+    }
+    expect(await protectedKeys()).toEqual([elector]);
   });
 
   it("loads protection once without decoding retained task and reply text", async () => {
