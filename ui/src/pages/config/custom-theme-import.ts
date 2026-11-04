@@ -97,7 +97,7 @@ export async function importCustomThemeFromUrl(input: string): Promise<ImportedC
       }
     }
     if (!response.ok) {
-      throw new Error(t("configView.appearance.importErrors.http", { status: response.status }));
+      throw new Error(t("configView.appearance.importErrors.http", { status: String(response.status) }));
     }
     const text = await readResponseTextWithLimit(response, {
       maxBytes: MAX_TWEAKCN_THEME_BYTES,
