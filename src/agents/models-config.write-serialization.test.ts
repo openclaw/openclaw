@@ -245,6 +245,8 @@ it("refreshes prices only for the published agent", async ({ home }) => {
 it("publishes live catalog refreshes without retaining their configurations", async ({
   agentDir,
 }) => {
+  // A running Gateway can retain full-string keys across an in-place runtime update.
+  MODELS_JSON_STATE.readyCache.set("old/models.json\0serialized configuration", Promise.resolve());
   const options = {
     pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
     onProviderCatalogOutcome: vi.fn(),
@@ -271,6 +273,30 @@ it("publishes live catalog refreshes without retaining their configurations", as
   expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(3);
   expect(await fs.readFile(path.join(agentDir, "models.json"), "utf8")).toBe(emptyModelsJson);
   expect(MODELS_JSON_STATE.readyCache.size).toBe(0);
+});
+
+it("bounds readiness history and key size while preserving cache hits", async ({ agentDir }) => {
+  const readyCache = MODELS_JSON_STATE.readyCache;
+  for (let generation = 0; generation < 128; generation++) {
+    readyCache.set(`past-${generation}`, Promise.resolve());
+  }
+  const config = modelConfig("fixture", "https://fixture.invalid/v1", {
+    models: [modelDefinition("model", { name: "Large model description ".repeat(100) })],
+  });
+  const options = { pluginMetadataSnapshot: createPluginMetadataSnapshotFixture() };
+  planCatalog("fixture", catalog({}));
+
+  await ensureOpenClawModelsJson(config, agentDir, options);
+  await ensureOpenClawModelsJson(config, agentDir, options);
+
+  expect(planOpenClawModelsJsonMock).toHaveBeenCalledOnce();
+  expect(readyCache.size).toBe(128);
+  expect(readyCache.has("past-0")).toBe(false);
+  const admittedKeys = [...readyCache.keys()].filter((key) => !key.startsWith("past-"));
+  expect(admittedKeys).toHaveLength(1);
+  expect(Buffer.byteLength(expectDefined(admittedKeys[0], "Missing readiness key"))).toBeLessThan(
+    128,
+  );
 });
 
 it("reuses alternating configurations while keeping cached models private and current", async ({
