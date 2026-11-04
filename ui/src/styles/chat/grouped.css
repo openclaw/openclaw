@@ -1295,7 +1295,7 @@ button.chat-reply-attribution__target:focus-visible {
 }
 
 button.chat-reply-attribution__target:disabled {
-  cursor: var(--cursor-default);
+  cursor: default;
 }
 
 .chat-reply-attribution__excerpt {

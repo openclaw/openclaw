@@ -16,12 +16,12 @@ describe("sidebar agent creation access", () => {
     {
       name: "read-only browser",
       hello: gatewayHelloForMethods(["agents.create"], ["operator.read"]),
-      reason: "You need operator.admin to perform this action",
+      reason: "You need admin access to create an agent.",
     },
     {
       name: "missing method",
       hello: gatewayHelloForMethods([]),
-      reason: "This Gateway does not support agent creation",
+      reason: "This Gateway doesn’t support agent creation.",
     },
     {
       name: "disconnected browser with a previous handshake",

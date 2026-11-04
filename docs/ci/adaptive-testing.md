@@ -157,8 +157,12 @@ additional token permissions. Each bundle binds the current workflow run,
 attempt and actual checkout commit/tree; the reporter also freezes the bundle
 hash. Preflight obtains the exact prior-to-current comparison from GitHub once
 per prior revision, including removed paths and both ends of renames. It verifies
-the prior is an ancestor and rejects comparisons with 300 or more files because
-GitHub caps the returned file list. The native inventory callback consumes this
+the prior is an ancestor. When GitHub's comparison reaches its 300-file cap,
+preflight compares one recursive prior tree with the checked-out current tree.
+The tree response must be complete and fit within 32 MiB; comparisons with 600 or
+more changed paths remain ineligible. This uses the same ten-second restore
+deadline and includes removed paths, rename endpoints, and file-mode changes.
+The native inventory callback consumes this
 bound comparison; it does not substitute the launch record's comparison base.
 
 Exact configuration, lock, environment and runtime identities must match. The
@@ -256,6 +260,28 @@ The caller owns inventory completeness, diff construction, provenance, and any
 external model invocation. The command does not call a model or send source to a
 service. Historical graphs cannot prove dynamic filesystem or generated-input
 coverage; full-run comparison remains necessary before enabling actual skips.
+
+## Evaluate recorded decisions
+
+Compare an exported capture's frozen graph and model scores with its later
+outcomes:
+
+```bash
+node scripts/ci-adaptive-evaluate.mjs \
+  --input observations.json \
+  --output evaluation.json
+```
+
+This command performs no inference or test execution. It joins files by their
+project, pool and path, including when ranking rows have a different order.
+Missing predictions remain unavailable, and incomplete files remain unknown.
+The report identifies failed files proposed for omission, recorded score
+buckets and summed complete-file durations. Failures remain unattributed;
+they are not automatically causal regression labels or independent episodes.
+
+The evaluator rejects inconsistent source/inventory identities and recording
+times. The caller must independently verify source and prior artifact
+provenance. Summed file durations are not elapsed time, CPU time or savings.
 
 ## Estimate cost and compute savings
 

@@ -255,20 +255,16 @@ suite.define(() => {
             await page.locator("#personal-instructions-content:enabled").waitFor();
             await capture("promoted-profile.png", "#settings-profile-access");
             await access.getByRole("button", { name: "Request admin", exact: true }).click();
-            await access.getByText(/Approve this browser by running/u).waitFor();
+            await access.getByText(/Ask an admin to approve this browser/u).waitFor();
             const pending = (await listPairing()).pending;
             expect(pending).toHaveLength(1);
             expect(pending[0]?.scopes).toContain("operator.admin");
             expect((await auth()).scopes).not.toContain("operator.admin");
             await adminClient.request("device.pair.approve", { requestId: pending[0]!.requestId });
-            await access
-              .getByText("You have permission to manage this server.", { exact: true })
-              .waitFor();
+            await access.getByText("You have admin access.", { exact: true }).waitFor();
             expect((await auth()).scopes).toContain("operator.admin");
             await page.reload();
-            await access
-              .getByText("You have permission to manage this server.", { exact: true })
-              .waitFor();
+            await access.getByText("You have admin access.", { exact: true }).waitFor();
             const reloadedAuth = await auth();
             expect(reloadedAuth.scopes).toContain("operator.admin");
             expect(

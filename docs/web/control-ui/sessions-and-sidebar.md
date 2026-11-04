@@ -410,17 +410,17 @@ groups by agent. Reset leaves those hidden preferences unchanged. It also preser
 a saved Person grouping while owner data temporarily makes that choice unavailable.
 
 In **Show all agents**, compact agent rows show a muted preview of the agent's
-most recent available assistant reply across its visible, non-archived sessions.
+most recent available agent reply across its visible, non-archived sessions.
 A newer user message does not replace that preview. Agents without an available
-assistant reply keep a name-only row. The top-level roster does not show the
+agent reply keep a name-only row. The top-level roster does not show the
 session list's empty-filter hint.
 
 Choose **Pin** in an agent's options menu to move it into the icon section above
 the roster. Hover or focus its avatar to read the full name and a short preview
-of its latest assistant reply. Select the avatar to open its main chat, or use
-**Sessions** in its options menu to browse its conversations. The menu also
+of its latest agent reply. Select the avatar to open its main session, or use
+**Sessions** in its options menu to browse its sessions. The menu also
 offers **Settings** and a confirmed **Delete** action when permitted. Create a
-new conversation from the Sessions page. **Unpin** returns
+new session from the Sessions page. **Unpin** returns
 the agent to the roster. Agent pins are saved in this browser profile.
 
 Switching to the all-agents roster or another navigation view, or closing

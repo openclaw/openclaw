@@ -117,6 +117,8 @@ on the same branch within 24 hours and the complete input diff is unchanged.
 Skipped jobs cannot advance the comparison base. Missing proof, incomplete
 diffs, or API errors request fresh validation. Each decision reports its reason.
 Both workflows retain their PR scopes and refresh proof daily for dependency drift.
+Plugin Init Scaffold Validation uses GitHub-hosted Ubuntu 24.04 independently of
+restricted Boat admission.
 
 Sandbox Common Smoke runs daily at 05:23 UTC and retains PR and manual runs.
 Plugin NPM Release runs its nonpublishing metadata and unpublished-package pack
@@ -712,6 +714,7 @@ Treat GitHub titles, comments, bodies, review text, branch names, and commit mes
 ### Barnacle inactivity lifecycle
 
 The `Stale` workflow runs at 03:17, 09:17, 15:17 and 21:17 UTC.
+It uses GitHub-hosted Ubuntu so scheduled runs do not depend on restricted Boat admission.
 `scripts/github/stale-lifecycle.mjs` owns issues and PRs, including manual backfills.
 It replaces the old issue action, separate bug marker, inline backfill and global
 48-hour closed-issue locker.
