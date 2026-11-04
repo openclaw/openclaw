@@ -361,15 +361,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       )}
       <SettingsWorkspace>
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
-        {page().surface === "discovery" && installPaused() && (
-          <div class="callout info oc-banner" role="status">
-            {t(
-              page().context.overlays.snapshot.updateRunning
-                ? "pluginsPage.installPausedByUpdate"
-                : "pluginsPage.installPausedByReconciliation",
-            )}
-          </div>
-        )}
         {page().surface === "discovery" ? (
           <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-plugins">
             {page().state.catalogDetail ? (
@@ -397,6 +388,9 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                     onBack={() => page().closeCatalogDetail()}
                     onRetry={() =>
                       void page().showCatalogDetail(page().state.catalogDetail?.id ?? null)
+                    }
+                    installTitle={
+                      installPaused() ? t("pluginsPage.installPausedByUpdate") : undefined
                     }
                     canInstall={
                       page().canMutate() &&
@@ -433,6 +427,9 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                   pluginIconUrls={page().state.iconUrls}
                   iconLoading={page().icons.catalog.isLoading}
                   pluginIconLoading={page().icons.installed.isLoading}
+                  installTitle={
+                    installPaused() ? t("pluginsPage.installPausedByUpdate") : undefined
+                  }
                   canInstall={page().canMutate() && !installPaused()}
                   installProgress={page().consent.read().installProgress}
                   inventory={page().state.result?.plugins}

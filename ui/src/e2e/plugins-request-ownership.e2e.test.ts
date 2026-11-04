@@ -242,7 +242,7 @@ suite.define(() => {
   });
 
   it.each([false, true])(
-    "blocks plugin installation with visible feedback throughout update reconciliation (touch detail: %s)",
+    "disables plugin installation with a tooltip throughout update reconciliation (touch detail: %s)",
     async (touch) => {
       await suite.withPage(
         {
@@ -286,11 +286,11 @@ suite.define(() => {
             void context.overlays.runUpdate();
           });
           await gateway.waitForRequest("update.run");
-          await captureSettled(
-            page,
-            touch ? "plugin-update-in-progress-touch" : "plugin-update-in-progress",
-          );
           await expect.poll(() => install.isDisabled()).toBe(true);
+          await expect
+            .poll(() => install.getAttribute("title"))
+            .toBe("Paused while OpenClaw updates");
+          expect(await page.locator(".oc-banner[role=status]").count()).toBe(0);
           if (touch) {
             const bounds = await install.boundingBox();
             expect(bounds).not.toBeNull();
@@ -299,17 +299,24 @@ suite.define(() => {
               bounds!.y + bounds!.height / 2,
             );
           }
+          if (!touch) {
+            await install.hover({ force: true });
+            await expect
+              .poll(() =>
+                page
+                  .getByRole("tooltip")
+                  .filter({ hasText: "Paused while OpenClaw updates" })
+                  .isVisible(),
+              )
+              .toBe(true);
+            await install.evaluate((button: HTMLButtonElement) => button.click());
+          }
+          await captureSettled(
+            page,
+            touch ? "plugin-update-in-progress-touch" : "plugin-update-in-progress",
+          );
+          await page.mouse.move(0, 0);
           expect(await gateway.getRequests("plugins.install")).toHaveLength(0);
-          await expect
-            .poll(() =>
-              page
-                .getByRole("status")
-                .filter({
-                  hasText: "Plugin installation is paused while OpenClaw updates. Please wait.",
-                })
-                .isVisible(),
-            )
-            .toBe(true);
           await gateway.resolveDeferred("update.run", { ok: true, runId: run.runId });
           await gateway.waitForRequest("update.runs.get");
           await gateway.rejectDeferred("update.runs.get", {
@@ -317,16 +324,8 @@ suite.define(() => {
             message: "Synthetic update status temporarily unavailable",
           });
           await expect
-            .poll(() =>
-              page
-                .getByRole("status")
-                .filter({
-                  hasText:
-                    "Plugin installation is paused while OpenClaw checks the update status. Please wait.",
-                })
-                .isVisible(),
-            )
-            .toBe(true);
+            .poll(() => install.getAttribute("title"))
+            .toBe("Paused while OpenClaw updates");
           await captureSettled(
             page,
             touch ? "plugin-update-reconciliation-touch" : "plugin-update-reconciliation",
@@ -341,11 +340,7 @@ suite.define(() => {
             context.overlays.refreshUpdateStatus("completion"),
           );
           await expect.poll(() => install.isEnabled()).toBe(true);
-          await expect
-            .poll(() =>
-              page.getByRole("status").filter({ hasText: "Plugin installation is paused" }).count(),
-            )
-            .toBe(0);
+          expect(await install.getAttribute("title")).toBeNull();
           await install.click();
           await gateway.waitForRequest("plugins.install");
           expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
