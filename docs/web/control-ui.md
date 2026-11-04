@@ -114,6 +114,17 @@ Session-only connections receive the same read-safe repository identity for
 projects they can already discover, without repository URLs, credentials, or host
 checkout paths. This label does not grant access to private repository content.
 
+## Create a nested session
+
+Right-click a session in the sidebar and choose **New Nested Session** to open an
+empty, persistent child beneath it. The parent expands to show the new session,
+and the Control UI opens the child conversation.
+
+This does not copy the parent conversation or start an agent run. Use
+**Advanced → Fork conversation** when you want a child with copied history. The
+Gateway checks your write access to the parent before creating either kind of
+child.
+
 ## Automatic session names
 
 New Dashboard conversations receive a title from their opening task. Later messages

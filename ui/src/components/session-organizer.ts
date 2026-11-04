@@ -32,6 +32,10 @@ export type { SessionOrganizerDependencies } from "./session-organizer-types.ts"
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
 
 export class SessionOrganizer {
+  private readonly creatingNestedSessions = new WeakMap<
+    SidebarSessionMutationScope["client"],
+    Set<string>
+  >();
   readonly sectionHeaders = new Map<string, HTMLElement>();
   collapsedSessionSections = loadStoredCollapsedSessionSections();
   draggingSessionKey: string | null = null;
@@ -108,6 +112,34 @@ export class SessionOrganizer {
         ),
       true,
     );
+  }
+
+  isCreatingNestedSession(
+    client: SidebarSessionMutationScope["client"] | null | undefined,
+    sessionKey: string,
+  ): boolean {
+    return Boolean(client && this.creatingNestedSessions.get(client)?.has(sessionKey));
+  }
+
+  createNestedSession(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation(async (operations, scope) => {
+      let pending = this.creatingNestedSessions.get(scope.client);
+      if (!pending) {
+        pending = new Set();
+        this.creatingNestedSessions.set(scope.client, pending);
+      }
+      if (pending.has(session.key)) {
+        return;
+      }
+      pending.add(session.key);
+      this.notify();
+      try {
+        await operations.createChildSession(this.deps, session, scope, { fork: false });
+      } finally {
+        pending.delete(session.key);
+        this.notify();
+      }
+    });
   }
 
   promoteSession(session: SidebarRecentSession): Promise<void> {

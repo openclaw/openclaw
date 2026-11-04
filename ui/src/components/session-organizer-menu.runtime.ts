@@ -78,7 +78,7 @@ export async function runSessionAction(
             case "assign-owner":
               return operations.assignSessionOwner(organizer.deps, session, action.owner, scope);
             case "fork":
-              return operations.forkSession(organizer.deps, session, scope);
+              return operations.createChildSession(organizer.deps, session, scope, { fork: true });
             case "snooze":
               return operations.snoozeSessionWithUndo(organizer.deps, session, action, scope);
             case "stop-cloud-worker":

@@ -461,11 +461,11 @@ export async function assignSessionCategory(
   );
 }
 
-export async function forkSession(
+export async function createChildSession(
   deps: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
-  options: { title?: string } = {},
+  options: { fork: boolean; title?: string },
 ): Promise<SidebarSessionMutationResult> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
@@ -474,9 +474,13 @@ export async function forkSession(
   const createParams = {
     parentSessionKey: session.key,
     ...(options.title?.trim() ? { label: options.title.trim() } : {}),
-    fork: true,
-    ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
-      ? { forkFrom: "last-completed" as const }
+    ...(options.fork
+      ? {
+          fork: true,
+          ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
+            ? { forkFrom: "last-completed" as const }
+            : {}),
+        }
       : {}),
     agentId,
   };
