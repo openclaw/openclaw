@@ -58,15 +58,18 @@ Use the phase-specific hooks for new plugins:
   `prependSystemContext`, `appendSystemContext`, or `toolsAllow`. `toolsAllow`
   can only narrow the host-resolved tool surface for the current turn; `[]`
   submits no optional tools, while omitting it leaves the existing surface unchanged.
-  Restrictions returned by multiple hooks are intersected. The embedded runner
-  and Copilot harness apply this field to their turn-scoped submitted tool
-  surfaces, and the CLI runner enforces it on backends with exact tool
-  availability (rejecting the run otherwise). ACPX rejects any `toolsAllow`
-  restriction, and the Codex app-server harness rejects restrictive values
-  because its dynamic tools are thread-scoped and Codex `turn/start` has no
-  tool-surface override. The Agents API harness treats `toolsAllow` as advisory
-  only without narrowing native or declared tools; use a runtime that enforces
-  turn-scoped tool restrictions when a plugin requires this policy.
+  Restrictions returned by multiple hooks are intersected. The embedded runner,
+  worker turns, and the Copilot harness apply this field to their turn-scoped
+  submitted tool surfaces. The CLI runner filters the OpenClaw tools it exposes
+  and rejects a restrictive value when the backend's native tools cannot be
+  limited exactly (`always-on`, or `selectable` without declared exact
+  tool-availability enforcement). The Codex app-server harness rejects any
+  value without `"*"` because its dynamic tools are thread-scoped and Codex
+  `turn/start` has no tool-surface override. ACPX rejects every returned
+  `toolsAllow`, including `["*"]`. The Agents API harness ignores the field: it
+  neither narrows native or declared tools nor rejects the run. Use a runtime
+  that enforces turn-scoped tool restrictions when a plugin requires this
+  policy.
 - `before_prompt_build` with `{ requiresToolAuthority: true }`: runs in a
   second, post-policy phase. Use it when prompt enrichment reads data through
   a tool-backed capability and the same turn must be allowed to call that
@@ -74,8 +77,11 @@ Use the phase-specific hooks for new plugins:
   enrichment](/plugins/hooks/prompt-and-session#authorized-prompt-enrichment).
 - `heartbeat_prompt_contribution`: retains its public name for receipt-owned
   proactive automation jobs, receives `{ sessionKey?, agentId?, heartbeatName? }`,
-  and returns `prependContext` or `appendContext` (each capped at 1,000
-  characters). It adds monitoring context without changing user-initiated turns.
+  and returns `prependContext` or `appendContext`. Contributions from all
+  handlers are joined in priority order, then the combined `prependContext` and
+  `appendContext` are each truncated to a 1,000-character budget measured with
+  OpenClaw's CJK-weighted estimate, so lower-priority text is cut first. It adds
+  monitoring context without changing user-initiated turns.
   It does not run as a generic prompt-preparation hook or create a separate
   heartbeat turn.
 
@@ -219,11 +225,13 @@ installs or updates. Do not publish a package that uses this option while
 claiming compatibility with an older plugin API; an older host may otherwise
 treat an unknown option as an ordinary pre-policy hook.
 
-On the embedded and CLI runners—and at Gateway admission for OpenClaw worker
-turns (see [Choose a hook](/plugins/hooks#choose-a-hook))—`before_agent_run`
-runs after prompt construction and before model submission, including
-`llm_input` observation. On the embedded path it also precedes prompt-local
-image loading. It receives the current user input as `prompt`, loaded session
+On the embedded and CLI runners, `before_agent_run` runs after prompt
+construction and before model submission, including `llm_input` observation.
+On the embedded path it also precedes prompt-local image loading. OpenClaw
+worker turns run it at Gateway admission instead (see
+[Choose a hook](/plugins/hooks#choose-a-hook)). It receives the current turn's
+model-bound prompt as `prompt` (the user input plus any context that prompt
+hooks or the runtime added), loaded session
 history in `messages`, optional `systemPrompt`, and optional `accountId`,
 `channelId`, `senderId`, and `senderIsOwner`. Return `void` or
 `{ outcome: "pass" }` to allow the run, or
@@ -288,14 +296,17 @@ When sender identity is available, agent hook contexts also include:
 - `ctx.senderId` - channel-scoped sender ID (e.g. Feishu `open_id`, Discord
   user ID). Populated when the run originates from a user message with known
   sender metadata.
-- `ctx.chatId` - transport-native conversation identifier (e.g. Feishu
-  `chat_id`, Telegram `chat_id`) when provided on a user-triggered run;
-  otherwise mirrors `ctx.channelId` as a compatibility fallback when available.
+- `ctx.chatId` - conversation identifier. On user-triggered runs, embedded hooks
+  and CLI hooks other than `before_prompt_build` receive the transport-native ID
+  (e.g. Feishu `chat_id`, Telegram `chat_id`) when the originating channel
+  provides one. Elsewhere, including the Codex, Copilot, and Agents API
+  harnesses, it can mirror `ctx.channelId` as a compatibility fallback, so do
+  not assume it is native.
 - `ctx.channelContext.sender.id` - the same sender ID as `ctx.senderId`, under
   a channel-owned object plugins can extend with channel-specific fields.
-- `ctx.channelContext.chat.id` - the native conversation ID when provided by the
-  originating channel, under a channel-owned object plugins can extend with
-  channel-specific fields.
+- `ctx.channelContext.chat.id` - the conversation ID under a channel-owned
+  object plugins can extend with channel-specific fields. When the host sets
+  `ctx.chatId` for a user-triggered run, it sets this to the same value.
 
 Core only defines the nested `id` fields. Channel plugins that pass richer
 sender or chat metadata through the inbound helper can augment
@@ -390,16 +401,17 @@ Codex native `Stop` hook invocations are relayed into `before_agent_finalize`,
 and the resulting OpenClaw decision is translated back into the native Codex
 `Stop` response.
 
-When returning `action: "revise"`, plugins can include `retry` metadata
-(`PluginHookBeforeAgentFinalizeResult["retry"]`) to bound repeated revision
-requests within a run:
+When returning `action: "revise"`, plugins can include a `retry` object to
+bound repeated revision requests within a run. The SDK types it through
+`api.on("before_agent_finalize", ...)`; its shape is:
 
 ```typescript
+// Shape of the `retry` field on a before_agent_finalize result.
 type FinalizeRetry = {
   instruction: string;
   idempotencyKey?: string;
   maxAttempts?: number;
-}; // matches NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>
+};
 ```
 
 `instruction` is appended to the revision reason sent to the harness.
