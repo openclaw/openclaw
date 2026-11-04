@@ -6,6 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -402,7 +403,7 @@ describe("Control UI plugin and catalog icon routes", () => {
           mode: "strict",
         }),
       );
-      const options = mocks.fetchWithSsrFGuard.mock.calls[0][0];
+      const [options] = expectDefined(mocks.fetchWithSsrFGuard.mock.calls[0], "metadata fetch");
       expect(() => options.resolveDispatcherPolicy(new URL("http://docs.example/"))).toThrow();
       expect(() => options.resolveDispatcherPolicy(new URL("https://127.0.0.1/"))).toThrow();
       expect(release).toHaveBeenCalledOnce();
