@@ -6,10 +6,18 @@ import {
   withCodexAppServerGitConfig,
 } from "./transport-stdio.js";
 
-const spawnMock = vi.hoisted(() => vi.fn(() => ({ pid: 1234 })));
+const spawnMock = vi.hoisted(() =>
+  vi.fn<(command: string, args: string[], options: unknown) => { pid: number }>(() => ({
+    pid: 1234,
+  })),
+);
 const prepareRegistration = vi.hoisted(() => vi.fn(async () => async () => {}));
 
-vi.mock("node:child_process", () => ({ spawn: spawnMock }));
+// mock-isolation: launch-option unit tests use a synthetic child, not a native worker.
+vi.mock("./stdio-worker.js", () => ({
+  spawnCodexStdio: (command: string, args: string[], options: unknown) =>
+    spawnMock(command, args, options),
+}));
 vi.mock("./transport-process-registration.js", () => ({
   prepareCodexAppServerProcessRegistration: prepareRegistration,
 }));
