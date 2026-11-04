@@ -11,7 +11,7 @@ import { createAbortError } from "../infra/abort-signal.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isCodeModeControlTool } from "./code-mode-control-tools.js";
-import { registerTrustedToolNoStartError } from "./tool-result-error.js";
+import { markToolExecutionNotStarted as registerTrustedToolNoStartError } from "./tool-effect-receipt.js";
 
 function throwAbortError(): never {
   throw registerTrustedToolNoStartError(createAbortError("Aborted"));

@@ -39,6 +39,11 @@ it.each([
     const { view, setRows, openChild, openCollection } = mountSubagents(initial, mobile);
     const buttons = view.getAllByRole("button");
     expect(buttons).toHaveLength(limit);
+    expect(buttons[0]!.getAttribute("aria-label")).toBe("Review Working");
+    expect(buttons[0]!.querySelector(".chat-details-subagents__status")?.classList).toContain(
+      "sr-only",
+    );
+    expect(buttons[0]!.querySelector(".chat-details-subagents__spinner")).not.toBeNull();
     buttons[0]!.click();
     expect(openChild).toHaveBeenLastCalledWith("child-1");
     buttons[1]!.click();
@@ -88,11 +93,11 @@ it("folds failed runs into Done without changing child outcomes", () => {
     { key: "f", label: "F", status: "stopped" },
   ];
   const { view, setRows, openChild } = mountSubagents(initial);
-  expect(
-    view.getByRole("button", {
-      name: "All subagents. 1 Working, 1 Waiting on subagents, 1 Queued, 2 Done, 1 Stopped",
-    }),
-  ).toBeTruthy();
+  view.getByRole("button", {
+    name: "All subagents. 1 Working, 1 Waiting on subagents, 1 Queued, 2 Done, 1 Stopped",
+  });
+  const shimmering = view.container.querySelectorAll(".chat-details-subagents__count.text-shimmer");
+  expect([...shimmering].map((count) => count.getAttribute("data-status"))).toEqual(["running"]);
   setRows([initial[4]!]);
   flush();
   view.getByRole("button", { name: "E Failed" }).click();

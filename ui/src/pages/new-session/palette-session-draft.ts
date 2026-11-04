@@ -202,7 +202,7 @@ export class PaletteSessionDraft {
     this.synchronizePresentationScope();
     const props = this.attachmentProps();
     if (this.read().open && !this.messageLocked && props) {
-      handleChatAttachmentPaste(event, props, { imagesOnly: true });
+      handleChatAttachmentPaste(event, props);
     }
   };
 
@@ -562,7 +562,6 @@ export class PaletteSessionDraft {
       }
     };
     showToast({
-      fifo: true,
       message: `${resolveSessionDisplayName(result.key, row)}: ${status}`,
       actionLabel: t("sessionsView.openSession"),
       onAction: openSession,

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import * as outputFiles from "./output-files.js";
 import { observeOutputWriteSettlement } from "./output-files.test-support.js";
 import {
@@ -32,6 +32,7 @@ function makeCapture({
   const saveAs = vi.fn(download.saveAs ?? (async () => {}));
   const cancel = vi.fn(download.cancel ?? (async () => {}));
   const capture = createDownloadCaptureForPage(page, state, timeout, options);
+  onTestFinished(capture.cancel);
   const outcome = capture.promise.catch((error: unknown) => error);
   return {
     capture,
@@ -45,35 +46,40 @@ function makeCapture({
         saveAs,
         cancel,
       }),
+    close: () => page.emit("close"),
     expectReleased: () => {
       expect(state.downloadWaiterDepth).toBe(0);
       expect(page.listenerCount("download")).toBe(0);
+      expect(page.listenerCount("close")).toBe(0);
     },
   };
 }
 
 describe("Playwright download capture cancellation", () => {
-  it("awaits cancellation when owned download admission rejects", async () => {
+  it.each([false, true])("joins policy rejection or pending page close=%s", async (closed) => {
     const rejection = new Error("download destination blocked by policy");
     const cancelGate = Promise.withResolvers<void>();
     const f = makeCapture({
-      mode: "explicit",
-      beforeSave: async () => {
-        throw rejection;
-      },
+      beforeSave: () => Promise.reject(rejection),
       cancelOnBeforeSaveError: () => true,
       download: {
-        url: "http://169.254.169.254/latest/meta-data/",
-        filename: "metadata.bin",
         cancel: async () => await cancelGate.promise,
       },
     });
-    f.emit();
-    await vi.waitFor(() => expect(f.cancel).toHaveBeenCalledOnce());
-    await expect(pendingOr(f.outcome)).resolves.toBe("pending");
-    cancelGate.resolve();
-
-    await expect(f.outcome).resolves.toBe(rejection);
+    if (closed) {
+      f.close();
+      await Promise.resolve();
+      await expect(pendingOr(f.outcome)).resolves.toMatchObject({
+        message: "Page closed before download started.",
+      });
+      expect(f.cancel).not.toHaveBeenCalled();
+    } else {
+      f.emit();
+      await vi.waitFor(() => expect(f.cancel).toHaveBeenCalledOnce());
+      await expect(pendingOr(f.outcome)).resolves.toBe("pending");
+      cancelGate.resolve();
+      await expect(f.outcome).resolves.toBe(rejection);
+    }
     expect(f.saveAs).not.toHaveBeenCalled();
     f.expectReleased();
   });
@@ -94,10 +100,7 @@ describe("Playwright download capture cancellation", () => {
       const validating = stage === "validation";
       const publishing = stage === "publishing";
       const fakeClock = deadline || publishing;
-      const timeoutMessage =
-        mode === "passive"
-          ? "Timeout waiting for navigation download"
-          : "Timeout waiting for download";
+      const timeoutMessage = mode === "passive" ? "passive download timeout" : "download timeout";
       const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-"));
       const outputPath = path.join(outputRoot, "download.bin");
       const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
@@ -110,10 +113,8 @@ describe("Playwright download capture cancellation", () => {
       const originalRename = fs.rename.bind(fs);
       const rename = publishing
         ? vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-            if (String(destination).endsWith(`${path.sep}download.bin`)) {
-              started.resolve("");
-              await release.promise;
-            }
+            started.resolve("");
+            await release.promise;
             await originalRename(source, destination);
           })
         : undefined;
@@ -129,8 +130,6 @@ describe("Playwright download capture cancellation", () => {
         signal: controller.signal,
         timeout: deadline ? 25 : 1_000,
         download: {
-          filename: "download.bin",
-          url: "https://example.com/download.bin",
           saveAs: async (tempPath) => {
             await fs.writeFile(tempPath, "download contents", "utf8");
             if (!publishing) {
@@ -151,6 +150,7 @@ describe("Playwright download capture cancellation", () => {
           expect(beforeSave).toHaveBeenCalledOnce();
         }
         const partialPath = await withinTest(started.promise, signal);
+        f.close();
         if (stage === "saving") {
           await expect(fs.readFile(partialPath, "utf8")).resolves.toBe("download contents");
         }

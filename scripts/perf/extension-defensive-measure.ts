@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { RegistrySnapshot } from "../../extensions/knowledge/src/store-registry.js";
 import { parsePolicy, storesRevision } from "../../extensions/knowledge/src/stores-config.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [mode = "timing", rawIterations = "4000", sourceRoot = process.cwd()] = process.argv.slice(2);
 const { Stores }: typeof import("../../extensions/knowledge/src/stores.js") = await import(
@@ -130,12 +131,7 @@ for (const [workload, run] of Object.entries(workloads)) {
     }
   });
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else {
     observer.observe({ entryTypes: ["gc"] });
   }

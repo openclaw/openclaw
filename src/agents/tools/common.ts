@@ -13,7 +13,6 @@ import type {
 } from "../../../packages/agent-core/src/types.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { ToolAuthorizationError, ToolInputError } from "../tool-input-error.js";
-import { textResult } from "./tool-results.js";
 
 export { ToolAuthorizationError, ToolInputError };
 export { asNonArrayRecord as asToolParamsRecord } from "@openclaw/normalization-core/record-coerce";
@@ -319,32 +318,6 @@ export function readReactionParams(
     throw new ToolInputError(options.removeErrorMessage);
   }
   return { emoji, remove, isEmpty: !emoji };
-}
-
-function stringifyToolPayload(payload: unknown): string {
-  if (typeof payload === "string") {
-    return payload;
-  }
-  try {
-    const encoded = JSON.stringify(payload, null, 2);
-    if (typeof encoded === "string") {
-      return encoded;
-    }
-  } catch {
-    // Fall through to String(payload) for non-serializable values.
-  }
-  return String(payload);
-}
-
-export function failedTextResult<TDetails extends { status: "failed" }>(
-  text: string,
-  details: TDetails,
-): AgentToolResult<TDetails> {
-  return textResult(text, details);
-}
-
-export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<TDetails> {
-  return textResult(stringifyToolPayload(payload), payload);
 }
 
 type PublicToolProgress = Pick<AgentToolProgress, "text" | "id">;

@@ -432,7 +432,7 @@ it("reports completed compression work before build completion at a bounded cade
           this.emitFile({
             type: "asset",
             fileName: `assets/x/${index}.txt`,
-            source: "fixture".repeat(1024),
+            source: "fixture".repeat(3 * 1024),
           });
         }
       },

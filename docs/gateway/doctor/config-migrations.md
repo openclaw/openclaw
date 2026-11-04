@@ -61,6 +61,18 @@ including when the update was started by an older installed update driver.
 Stored A2UI rows do not prevent the update. Runtime readers accept only the
 current widget formats; they do not retain a compatibility renderer.
 
+## Skill library tool split
+
+Personal-library authoring moved from `skill_workshop` to its own `skill_library` tool.
+For a config without `meta.migrations.skillLibraryToolSplit: true`, Doctor (also during
+`openclaw update`) adds `skill_library` wherever a tool policy list named `skill_workshop`
+without covering `skill_library`. Where `tools.gatewayPolicy` allowed `skill_workshop`, it
+allows `skill_library` with the intersection of the `skill_workshop` actions and the
+personal-library actions; it grants nothing a missing or Workshop-only action list did not.
+Doctor then records the marker. A config write records the marker too, extending only
+policy unchanged since the previous file. Once the marker exists, tool policy is never
+changed for the split again.
+
 ## Skill Workshop plugin policy
 
 Skill Workshop ships as the bundled `skill-workshop` plugin, enabled by default.
@@ -1360,6 +1372,7 @@ against the current SQLite owners before the import can rename profiles.
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
     | `diagnostics.memoryPressureSnapshot`, legacy `diagnostics.memoryPressureBundle`                  | removed (automatic critical-memory snapshots were retired; no replacement automatic capture) |
     | `skills.workshop.autonomous.enabled`, `skills.workshop.approvalPolicy`, `skills.workshop.maxPending` | `autonomous.mode` (`true` → `"propose"`, `false` → `"off"`); proposal queue settings removed |
+    | `skills.workshop` (`autonomous.mode`, `autonomous.channelNotices`, `maxSkillBytes`)                 | `plugins.entries.skill-workshop.config`; existing plugin settings win |
 
     Doctor renames `gateway.controlUi.experimental.claws` to `templates`, preserving the boolean. If both keys exist, `templates` wins and `claws` is removed. Candidate update admission previews this repair without changing the config; the update-time Doctor pass persists it with the normal backup. External deployments that only run `openclaw config validate` must run the candidate's `openclaw doctor --fix` through their maintenance workflow before validation.
 

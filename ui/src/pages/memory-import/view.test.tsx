@@ -209,7 +209,7 @@ describe("renderMemoryImport", () => {
     });
 
     const buttons = [
-      ...container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
+      ...container.querySelectorAll<HTMLButtonElement>("openclaw-modal-actions button"),
     ];
     expect(buttons).toMatchObject([{ disabled: true }, { disabled: true }]);
     buttons[0]?.click();
@@ -220,7 +220,7 @@ describe("renderMemoryImport", () => {
     expect(onCancelImport).not.toHaveBeenCalled();
 
     const refresh = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Refresh",
+      (button) => button.getAttribute("aria-label") === "Refresh",
     );
     expect(refresh?.disabled).toBe(true);
     for (const selector of [
