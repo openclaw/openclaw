@@ -263,6 +263,10 @@
       "destination": "/tools/grok-search"
     },
     {
+      "source": "/keenable-search",
+      "destination": "/tools/keenable-search"
+    },
+    {
       "source": "/kimi-search",
       "destination": "/tools/kimi-search"
     },
@@ -2117,6 +2121,7 @@
                       "tools/exa-search",
                       "tools/gemini-search",
                       "tools/grok-search",
+                      "tools/keenable-search",
                       "tools/kimi-search",
                       "tools/minimax-search",
                       "tools/ollama-search",
