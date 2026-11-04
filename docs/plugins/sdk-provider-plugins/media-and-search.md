@@ -230,6 +230,15 @@ merging a nested value such as voice settings.
     empty buffers are candidate failures, except that a video asset with a
     usable URL ignores an empty buffer and continues with the URL.
 
+    `VideoGenerationRequest.signal` is the caller's optional `AbortSignal`.
+    Pass it through provider requests and response reads. The host stops
+    candidate fallback when that caller cancels. Providers with a possibly paid
+    creation attempt can mark its actual error with `recordModelFallbackStop`
+    from `openclaw/plugin-sdk/video-generation` before throwing. The existing
+    marker stops automatic provider replay; it does not establish termination,
+    usage, settlement, or a refund. Proven pre-dispatch failures may still use
+    normal configured fallback.
+
     `capabilities` is required on both provider types; `edit` and the
     video transform blocks (`imageToVideo`, `videoToVideo`) always need an
     explicit `enabled` flag.

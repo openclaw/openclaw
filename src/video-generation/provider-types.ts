@@ -29,6 +29,7 @@ export type VideoGenerationRequest = {
   agentDir?: string;
   authStore?: AuthProfileStore;
   timeoutMs?: number;
+  signal?: AbortSignal;
   size?: string;
   aspectRatio?: string;
   resolution?: VideoGenerationResolution;

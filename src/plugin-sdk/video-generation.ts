@@ -11,6 +11,7 @@ import type {
   VideoGenerationProviderConfiguredContext,
 } from "../video-generation/provider-types.js";
 import type { VideoGenerationResult } from "../video-generation/types.js";
+export { recordModelFallbackStop } from "../agents/model-fallback-stop.js";
 import { resolveApiKeyForProvider } from "./provider-auth-runtime.js";
 import { isProviderApiKeyConfigured, isProviderApiKeyConfiguredAsync } from "./provider-auth.js";
 import {

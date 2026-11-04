@@ -26,6 +26,7 @@
     "mediaUnderstandingProviders": ["clawrouter"],
     "imageGenerationProviders": ["clawrouter"],
     "musicGenerationProviders": ["clawrouter"],
+    "videoGenerationProviders": ["clawrouter"],
     "speechProviders": ["clawrouter"],
     "usageProviders": [
       "clawrouter"

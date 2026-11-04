@@ -25,6 +25,8 @@ export type ClawRouterCapabilityOffer = {
   requestFormat: string;
   responseFormat: string;
   model?: Record<string, unknown>;
+  /** Same-provider declarations, not eligible offers or authority to control a job. */
+  declaredRoutes?: readonly Record<string, unknown>[];
 };
 
 // A declared format only enables routes whose wire contract the consumer implements.
@@ -72,6 +74,7 @@ export function resolveClawRouterCapabilityHttpContext(
 export function readClawRouterCapabilityOffers(
   payload: unknown,
   baseUrl: string,
+  includeDeclaredRoutes = false,
 ): ClawRouterCapabilityOffer[] {
   const catalog = asOptionalRecord(payload);
   if (catalog?.version !== "clawrouter.client-catalog.v1" || !Array.isArray(catalog.providers)) {
@@ -171,6 +174,13 @@ export function readClawRouterCapabilityOffers(
         requestFormat,
         responseFormat,
         ...(model ? { model } : {}),
+        ...(includeDeclaredRoutes
+          ? {
+              declaredRoutes: provider.routes
+                .map(asOptionalRecord)
+                .filter((row): row is Record<string, unknown> => row !== undefined),
+            }
+          : {}),
       });
     }
   }
@@ -184,6 +194,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
   ssrfPolicy?: SsrFPolicy;
   /** Require a recent proxy-key observation for consumers without model-scoped grants. */
   requireFreshProxyCatalog?: boolean;
+  includeDeclaredRoutes?: boolean;
 }): Promise<ClawRouterCapabilityOffer[]> {
   params.signal?.throwIfAborted();
   const remaining = createProviderOperationTimeoutResolver({
@@ -238,7 +249,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
     }
     remaining();
     params.signal?.throwIfAborted();
-    return readClawRouterCapabilityOffers(body, context.baseUrl);
+    return readClawRouterCapabilityOffers(body, context.baseUrl, params.includeDeclaredRoutes);
   } finally {
     void response.body?.cancel().catch(() => undefined);
     await release();
