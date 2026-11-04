@@ -434,6 +434,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/matrix/src/matrix/sdk/live-room-readiness.test.ts",
   "extensions/matrix/src/matrix/sdk/recovery-key-store.test.ts",
   "extensions/matrix/src/matrix/thread-bindings.test.ts",
+  "extensions/mattermost/src/mattermost/thread-bindings.test.ts",
   "extensions/mattermost/src/mattermost/thread-participation.test.ts",
   "extensions/memory-lancedb/index.test.ts",
   "extensions/memory-wiki/doctor-contract-api.test.ts",

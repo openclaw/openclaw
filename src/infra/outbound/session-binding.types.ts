@@ -56,6 +56,11 @@ export type SessionBindingBindInput = {
   targetKind: BindingTargetKind;
   conversation: ConversationRef;
   placement?: SessionBindingPlacement;
+  /**
+   * Inbound message that requested a `child` placement. Channels whose threads
+   * grow from a message (Mattermost) may open the child thread under it.
+   */
+  sourceMessageId?: string;
   metadata?: Record<string, unknown>;
   ttlMs?: number;
   /** Host admission authority; current-placement adapters recheck before committing a binding. */

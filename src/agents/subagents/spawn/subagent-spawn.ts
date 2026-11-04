@@ -295,6 +295,7 @@ export async function spawnSubagentDirect(
             to: childSessionOrigin?.to,
             threadId: childSessionOrigin?.threadId,
           },
+          sourceMessageId: ctx.currentMessageId,
         }),
       );
       if (bindResult.status === "error") {

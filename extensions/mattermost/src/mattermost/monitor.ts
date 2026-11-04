@@ -39,6 +39,10 @@ import {
 } from "./runtime-api.js";
 import { cleanupSlashCommands } from "./slash-commands.js";
 import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";
+import {
+  createMattermostThreadBindingManager,
+  type MattermostThreadBindingManager,
+} from "./thread-bindings.js";
 
 type MonitorMattermostOpts = {
   botToken?: string;
@@ -379,7 +383,20 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
   let connectionFailure: { error: unknown } | undefined;
   let shutdownFailures: unknown[] = [];
+  let threadBindings: MattermostThreadBindingManager | undefined;
   try {
+    // Thread-bound spawns are optional: without the binding store the channel still
+    // serves posts, and `thread: true` spawns are rejected as before.
+    threadBindings = await createMattermostThreadBindingManager({
+      cfg,
+      accountId: account.accountId,
+      botUserId,
+      client,
+      logVerboseMessage,
+    }).catch((error: unknown) => {
+      runtime.error?.(`mattermost: thread bindings unavailable: ${String(error)}`);
+      return undefined;
+    });
     await runWithReconnect(connectOnce, {
       abortSignal: opts.abortSignal,
       onError: (err) => {
@@ -393,6 +410,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   } catch (error) {
     connectionFailure = { error };
   } finally {
+    threadBindings?.stop();
     shutdown.abort();
     const pendingKeys = new Set([...pendingPosts].map(buildDebounceKey));
     for (const key of pendingKeys) {

@@ -391,6 +391,7 @@ export async function spawnAcpDirect(
       to: requesterState.origin?.to,
       threadId: requesterState.origin?.threadId,
       groupId: ctx.agentGroupId,
+      sourceMessageId: ctx.currentMessageId,
     });
     ctx.assertActive?.();
     if (!prepared.ok) {

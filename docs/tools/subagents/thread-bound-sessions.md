@@ -23,7 +23,11 @@ conversation headers do not authorize a thread binding.
 
 `sessions_spawn` with `thread: true` always opens a new child thread; it never
 hands the current conversation to the worker. Bundled channels that can open
-one: **Discord** and **Matrix**. On channels that would bind the current
+one: **Discord**, **Matrix**, and **Mattermost**. Mattermost opens the thread
+under the post that asked for the work, or posts a new root post when that
+thread is already the current conversation (see
+[Mattermost thread-bound sub-agent sessions](/channels/mattermost#thread-bound-sub-agent-sessions)).
+On channels that would bind the current
 conversation instead (for example Telegram, iMessage, Feishu, and LINE),
 `thread: true` is rejected; spawn with `mode: "run"` and the result is
 announced back to the conversation. Use the per-channel `threadBindings` config

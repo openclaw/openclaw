@@ -19,6 +19,7 @@ export async function bindThreadForSubagentSpawn(params: {
   mode: SpawnSubagentMode;
   requesterSessionKey?: string;
   requester: DeliveryContext;
+  sourceMessageId?: string | number;
 }): Promise<
   | { status: "ok"; deliveryOrigin?: DeliveryContext }
   | {
@@ -40,6 +41,7 @@ export async function bindThreadForSubagentSpawn(params: {
       accountId: params.requester.accountId,
       to: params.requester.to,
       threadId: params.requester.threadId,
+      sourceMessageId: params.sourceMessageId,
     });
     if (!prepared.ok) {
       return {

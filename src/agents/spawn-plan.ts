@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveInboundConversationResolution,
@@ -37,6 +38,8 @@ export type PreparedSpawnThreadBinding = {
   placement: "child";
   conversationId: string;
   parentConversationId?: string;
+  /** Requester's inbound message; adapters may open the child thread under it. */
+  sourceMessageId?: string;
 };
 
 type SessionBindingService = Pick<
@@ -155,6 +158,7 @@ export async function prepareSpawnThreadBinding(params: {
   to?: string;
   threadId?: string | number;
   groupId?: string;
+  sourceMessageId?: string | number;
 }): Promise<{ ok: true; binding: PreparedSpawnThreadBinding } | { ok: false; error: string }> {
   const channel = normalizeOptionalLowercaseString(params.channel);
   if (!channel) {
@@ -243,6 +247,7 @@ export async function prepareSpawnThreadBinding(params: {
       error: `Could not resolve a ${policy.channel} conversation for ${params.kind} thread spawn.`,
     };
   }
+  const sourceMessageId = normalizeOptionalStringifiedId(params.sourceMessageId);
   return {
     ok: true,
     binding: {
@@ -253,6 +258,7 @@ export async function prepareSpawnThreadBinding(params: {
       ...(conversation.parentConversationId
         ? { parentConversationId: conversation.parentConversationId }
         : {}),
+      ...(sourceMessageId ? { sourceMessageId } : {}),
     },
   };
 }

@@ -291,15 +291,16 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       : { triggered: false, stripped: rawText };
     const oncharTriggered = oncharResult.triggered;
     const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
-    // Threads the bot already replied in auto-engage: follow-ups resume without
-    // a re-mention even under requireMention. Keyed by the thread root id.
+    // Threads the bot already replied in, or bound to a session, auto-engage:
+    // follow-ups resume without a re-mention even under requireMention.
     const threadAlreadyEngaged =
       kind !== "direct" && effectiveReplyToId
-        ? await hasMattermostThreadParticipationWithPersistence({
+        ? eventPlan.boundThread ||
+          (await hasMattermostThreadParticipationWithPersistence({
             accountId: account.accountId,
             channelId,
             threadRootId: effectiveReplyToId,
-          })
+          }))
         : false;
     const shouldRequireMention =
       kind !== "direct" &&

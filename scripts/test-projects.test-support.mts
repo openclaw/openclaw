@@ -739,6 +739,7 @@ const CHANNEL_PLUGIN_SHAPE_PARITY_WIRING_PATHS = new Set([
   "extensions/slack/src/channel-actions.ts",
   "extensions/slack/src/channel.ts",
   "extensions/mattermost/gateway-auth-api.ts",
+  "extensions/mattermost/thread-binding-api.ts",
   "extensions/mattermost/src/channel.ts",
   "extensions/feishu/session-key-api.ts",
   "extensions/feishu/src/channel.ts",

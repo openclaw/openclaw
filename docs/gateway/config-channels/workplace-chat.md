@@ -219,6 +219,7 @@ When Mattermost native commands are enabled:
 - `channels.mattermost.configWrites`: allow or deny Mattermost-initiated config writes.
 - `channels.mattermost.requireMention`: require `@mention` before replying in channels.
 - `channels.mattermost.groups.<channelId>.requireMention`: per-channel mention-gating override (`"*"` for default).
+- `channels.mattermost.threadBindings` (and per-account `accounts.<id>.threadBindings`): `enabled`, `idleHours`, `maxAgeHours`, `spawnSessions`, and `defaultSpawnContext` for [thread-bound sub-agent sessions](/channels/mattermost#thread-bound-sub-agent-sessions).
 - Optional `channels.mattermost.defaultAccount` overrides default account selection when it matches a configured account id.
 
 ## Microsoft Teams

@@ -4,6 +4,7 @@ import {
   ChannelPreviewStreamingConfigSchema,
   ChannelStreamingPreviewSchema,
   ChannelStreamingProgressSchema,
+  ChannelThreadBindingsSchema,
   ContextVisibilityModeSchema,
   DmPolicySchema,
   GroupPolicySchema,
@@ -119,6 +120,8 @@ export const MattermostAccountSchemaBase = z
     streaming: MattermostStreamingSchema.optional(),
     replyToMode: MattermostReplyToModeSchema.optional(),
     replyToModeByChatType: MattermostReplyToModeByChatTypeSchema.optional(),
+    /** Thread-bound sub-agent sessions (`sessions_spawn` with `thread: true`). */
+    threadBindings: ChannelThreadBindingsSchema.optional(),
     responsePrefix: z.string().optional(),
     actions: z
       .object({

@@ -1,4 +1,6 @@
+import { resolveRuntimeConversationBindingRouteAsync } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMattermostReplyToMode } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";
 import { resolveMattermostTrustedChatKind } from "./monitor-auth.js";
@@ -39,7 +41,7 @@ export async function buildMattermostEventPlan(
   const channelName = params.channelName ?? channelInfo?.name ?? "";
   const channelDisplay = params.channelDisplay ?? channelInfo?.display_name ?? channelName;
   const roomLabel = channelName ? `#${channelName}` : channelDisplay || `#${params.channelId}`;
-  const route = monitor.core.channel.routing.resolveAgentRoute({
+  const baseRoute = monitor.core.channel.routing.resolveAgentRoute({
     cfg: monitor.cfg,
     channel: "mattermost",
     accountId: monitor.account.accountId,
@@ -49,13 +51,36 @@ export async function buildMattermostEventPlan(
       id: kind === "direct" ? params.senderId : params.channelId,
     },
   });
-  const thread = resolveMattermostThreadSessionContext({
-    baseSessionKey: route.sessionKey,
-    kind,
-    postId: params.postId,
-    replyToMode: resolveMattermostReplyToMode(monitor.account, kind),
-    threadRootId: params.threadRootId,
-  });
+  // A thread bound to a session (thread-bound sub-agent spawn) routes every
+  // event in it to that session, keyed by the thread's root post id.
+  const threadRootId = normalizeOptionalString(params.threadRootId);
+  const binding = threadRootId
+    ? await resolveRuntimeConversationBindingRouteAsync({
+        route: baseRoute,
+        conversation: {
+          channel: "mattermost",
+          accountId: monitor.account.accountId,
+          conversationId: threadRootId,
+          parentConversationId: params.channelId,
+        },
+      })
+    : undefined;
+  const boundThreadRootId = binding?.boundSessionKey ? threadRootId : undefined;
+  const route = boundThreadRootId && binding ? binding.route : baseRoute;
+  if (boundThreadRootId) {
+    monitor.logVerboseMessage(
+      `mattermost: routing thread ${boundThreadRootId} to bound session ${route.sessionKey}`,
+    );
+  }
+  const thread = boundThreadRootId
+    ? { effectiveReplyToId: boundThreadRootId, sessionKey: route.sessionKey }
+    : resolveMattermostThreadSessionContext({
+        baseSessionKey: route.sessionKey,
+        kind,
+        postId: params.postId,
+        replyToMode: resolveMattermostReplyToMode(monitor.account, kind),
+        threadRootId: params.threadRootId,
+      });
   const to = kind === "direct" ? `user:${params.senderId}` : `channel:${params.channelId}`;
   const from =
     kind === "direct"
@@ -74,6 +99,7 @@ export async function buildMattermostEventPlan(
     roomLabel,
     route,
     thread,
+    boundThread: Boolean(boundThreadRootId),
     to,
     from,
     finalizeContext: <T extends Record<string, unknown>>(context: T) =>
