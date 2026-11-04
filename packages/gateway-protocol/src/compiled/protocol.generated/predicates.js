@@ -1779,7 +1779,7 @@ var External = [
     /(^outcome$|^baseLeafId$)/u,
     /(^outcome$)/u,
     /(^type$|^id$|^ok$|^payload$)/u,
-    /(^content$|^details$|^isError$|^terminate$|^progress$|^mcpGuestResult$)/u,
+    /(^content$|^details$|^isError$|^terminate$|^progress$|^mcpGuestResult$|^mcpBlockedReason$)/u,
     /(^type$|^id$|^ok$|^payload$)/u,
     /(^type$|^id$|^ok$|^payload$)/u,
     /(^receivedAtMs$|^status$|^ownerEpoch$|^github$)/u,
@@ -22086,7 +22086,10 @@ var External = [
     (value.progress === void 0 || !("progress" in value) || check_322(value.progress)) &&
     (value.mcpGuestResult === void 0 ||
       !("mcpGuestResult" in value) ||
-      check_321(value.mcpGuestResult)),
+      check_321(value.mcpGuestResult)) &&
+    (value.mcpBlockedReason === void 0 ||
+      !("mcpBlockedReason" in value) ||
+      check_317(value.mcpBlockedReason)),
   check_3338 = (value) => check_3339(value),
   check_3339 = (value) => check_3340(value) || check_3298(value),
   check_3340 = (value) =>

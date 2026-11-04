@@ -53,12 +53,14 @@ export async function executeWorkerSessionToolWithReplay<T>(
   }
 }
 
+const MAX_WORKER_TOOL_ERROR_LENGTH = 1_024;
+
 export function workerSessionToolErrorResult(error: unknown) {
   const message = error instanceof Error ? error.message : "Worker session operation failed";
   return {
     ...jsonResult({
       status: "error",
-      error: truncateUtf16Safe(message, 1_024),
+      error: truncateUtf16Safe(message, MAX_WORKER_TOOL_ERROR_LENGTH),
     }),
     isError: true,
   };
@@ -78,6 +80,21 @@ function fitsWorkerToolResponse(result: WorkerGatewayToolInvokeResult): boolean 
     },
     result,
   );
+}
+
+export function boundWorkerMcpRefusal(
+  result: unknown,
+  reason: string,
+): WorkerGatewayToolInvokeResult {
+  const mcpBlockedReason = truncateUtf16Safe(reason, MAX_WORKER_TOOL_ERROR_LENGTH);
+  if (Value.Check(WorkerGatewayToolResultSchema, result)) {
+    const denied = { ...result, mcpBlockedReason };
+    if (fitsWorkerToolResponse(denied)) {
+      return denied;
+    }
+  }
+  // Even a large hook receipt must convey the trusted denial to the guest.
+  return { ...workerSessionToolErrorResult(new Error(mcpBlockedReason)), mcpBlockedReason };
 }
 
 export function boundWorkerToolResult(

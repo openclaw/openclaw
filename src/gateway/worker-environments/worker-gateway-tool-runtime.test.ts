@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import {
   isWorkerGatewayToolFrameWithinBudget,
   WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
@@ -12,7 +12,10 @@ import {
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { validateWorkerGatewayToolResponseFrame } from "../../../packages/gateway-protocol/src/worker-response-validators.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
-import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
+import {
+  buildBlockedToolResult,
+  wrapToolWithBeforeToolCallHook,
+} from "../../agents/agent-tools.before-tool-call.js";
 import {
   createCatalogCodeModeHarness,
   mcpTool,
@@ -181,16 +184,17 @@ const mcpIdentity = {
   ],
 };
 
-it("delivers the Gateway's owned MCP result to the worker Code Mode namespace", async () => {
-  onTestFinished(resetCodeModeTestState);
-  const { runtime, raw, execute } = gatewayMcpTool("YXVkaW8=");
+async function gatewayMcpProxy(
+  runtime: ReturnType<typeof createWorkerGatewayToolRuntime>,
+  inspectWire?: (wire: string) => void,
+) {
   const surface = await runtime.getSurface(mcpIdentity);
   const [proxy] = createWorkerGatewayToolProxies(surface, {
     invokeGatewayTool: async (params) => {
       const payload = await runtime.invoke(mcpIdentity, params, sink);
       // Cross the serialization and validation boundary used by the worker WebSocket.
       const wire = JSON.stringify({ type: "res", id: "r1", ok: true, payload });
-      expect(wire).not.toContain(raw._meta.privateNote);
+      inspectWire?.(wire);
       const frame: unknown = JSON.parse(wire);
       if (!validateWorkerGatewayToolResponseFrame(frame)) {
         throw new Error("Invalid Gateway tool response");
@@ -199,6 +203,16 @@ it("delivers the Gateway's owned MCP result to the worker Code Mode namespace", 
     },
     cancelGatewayTool: vi.fn(),
   });
+  assert.isDefined(proxy);
+  return proxy;
+}
+
+it("delivers the Gateway's owned MCP result to the worker Code Mode namespace", async () => {
+  onTestFinished(resetCodeModeTestState);
+  const { runtime, raw, execute } = gatewayMcpTool("YXVkaW8=");
+  const proxy = await gatewayMcpProxy(runtime, (wire) =>
+    expect(wire).not.toContain(raw._meta.privateNote),
+  );
   const workerExecute = vi.spyOn(proxy, "execute");
   const result = await createCatalogCodeModeHarness([proxy]).complete(
     "return await MCP.docs.create();",
@@ -212,6 +226,60 @@ it("delivers the Gateway's owned MCP result to the worker Code Mode namespace", 
   expect(await workerExecute.mock.results[0]?.value).not.toHaveProperty("mcpGuestResult");
   expect(execute).toHaveBeenCalledTimes(1);
 });
+
+it("returns the Gateway action denial to Code Mode before the MCP tool executes", async () => {
+  onTestFinished(resetCodeModeTestState);
+  const execute = vi.fn<AnyAgentTool["execute"]>();
+  const source = mcpTool({
+    name: "remote",
+    serverName: "docs",
+    toolName: "write",
+    execute,
+    parameters: Type.Object({ action: stringEnum(["list", "patch"]) }),
+  });
+  bindAgentToolExecutionLocation(source, { kind: "gateway" });
+  const config = { tools: { gatewayPolicy: { allow: ["remote"], actions: { remote: ["list"] } } } };
+  const { runtime } = fixture([wrapToolWithBeforeToolCallHook(source, { config })]);
+  const proxy = await gatewayMcpProxy(runtime);
+  const { value } = await createCatalogCodeModeHarness([proxy]).complete(
+    'return await MCP.docs.write({ action: "patch" });',
+  );
+  expect(value).toMatchObject({
+    isError: true,
+    content: [
+      { type: "text", text: expect.stringContaining("Gateway tool policy denies remote action") },
+    ],
+  });
+  expect(execute).not.toHaveBeenCalled();
+});
+
+it.each(["marked", "oversized", "unmarked"])(
+  "handles a %s MCP resource refusal",
+  async (scenario) => {
+    onTestFinished(resetCodeModeTestState);
+    const prefix = "Workspace policy blocked resource access";
+    const reason =
+      scenario === "oversized" ? prefix + "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) : prefix;
+    const source = mcpTool({
+      name: "docs__resources_list",
+      serverName: "docs",
+      toolName: "resources_list",
+      operation: "resources_list",
+      execute: async () => {
+        const blocked = buildBlockedToolResult({ reason });
+        return scenario === "unmarked" ? { ...blocked } : blocked;
+      },
+    });
+    bindAgentToolExecutionLocation(source, { kind: "gateway" });
+    const proxy = await gatewayMcpProxy(fixture([source]).runtime);
+    const { value } = await createCatalogCodeModeHarness([proxy]).complete(
+      "try { await MCP.docs.resources.list(); } catch (error) { return error.message; }",
+    );
+    expect(value).toContain(
+      scenario === "unmarked" ? "missing its owned guest projection" : prefix,
+    );
+  },
+);
 
 it.each(["legacy worker", "oversized guest result"])(
   "keeps the ordinary MCP receipt for a %s",

@@ -14,6 +14,7 @@ import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runn
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../agents/harness/tool-surface-bridge.js";
 import { consumeMcpCodeModeGuestResult } from "../../agents/mcp-content.js";
 import { projectAgentToolDefinition } from "../../agents/prepared-tool-surface.js";
+import { readToolExecutionRefusal } from "../../agents/tool-effect-receipt.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -22,6 +23,7 @@ import type {
   WorkerGatewayToolSink,
 } from "./worker-gateway-tool-contract.js";
 import {
+  boundWorkerMcpRefusal,
   boundWorkerToolResult as bounded,
   workerSessionToolErrorResult,
 } from "./worker-session-tool-result.js";
@@ -218,8 +220,13 @@ export function createWorkerGatewayToolRuntime(params: {
       let seq = 0;
       const execute = async () => {
         assertCurrent(callSignal);
+        const includeMcp =
+          getPluginToolMeta(tool)?.mcp &&
+          identity.protocolFeatures.includes(WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE);
+        let result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
+        let refusal: ReturnType<typeof readToolExecutionRefusal>;
         try {
-          const result = await tool.execute(
+          result = await tool.execute(
             request.toolCallId,
             request.arguments,
             callSignal,
@@ -246,13 +253,18 @@ export function createWorkerGatewayToolRuntime(params: {
               }
             },
           );
-          const includeGuest =
-            getPluginToolMeta(tool)?.mcp &&
-            identity.protocolFeatures.includes(WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE);
-          return bounded(result, includeGuest ? consumeMcpCodeModeGuestResult(result) : undefined);
+          refusal = readToolExecutionRefusal(result);
         } catch (error) {
-          return workerSessionToolErrorResult(error);
+          result = workerSessionToolErrorResult(error);
+          refusal = readToolExecutionRefusal(error);
         }
+        if (!includeMcp) {
+          return bounded(result);
+        }
+        if (refusal?.kind === "blocked") {
+          return boundWorkerMcpRefusal(result, refusal.reason);
+        }
+        return bounded(result, consumeMcpCodeModeGuestResult(result));
       };
       const predecessor =
         tool.executionMode === "parallel"

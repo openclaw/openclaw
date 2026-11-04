@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { bindBeforeToolCallMetadata } from "../agents/before-tool-call-metadata.js";
 import { setMcpCodeModeGuestResult } from "../agents/mcp-content.js";
+import { markToolExecutionRefused } from "../agents/tool-effect-receipt.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { WorkerConnection } from "./worker-connection.js";
@@ -52,9 +53,15 @@ export function createWorkerGatewayToolProxies(
           if (!response.ok) {
             throw new Error(response.error.message);
           }
-          const { mcpGuestResult, ...payload } = response.payload;
+          const { mcpGuestResult, mcpBlockedReason, ...payload } = response.payload;
           const result = { ...payload, details: payload.details };
-          return entry.plugin?.mcp && mcpGuestResult !== undefined
+          if (!entry.plugin?.mcp) {
+            return result;
+          }
+          if (mcpBlockedReason !== undefined) {
+            return markToolExecutionRefused(result, { kind: "blocked", reason: mcpBlockedReason });
+          }
+          return mcpGuestResult !== undefined
             ? setMcpCodeModeGuestResult(result, mcpGuestResult)
             : result;
         } finally {

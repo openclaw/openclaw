@@ -169,6 +169,7 @@ export const WorkerGatewayToolCancelResultSchema = closedObject({ cancelled: Typ
 const WorkerGatewayToolInvokeResultSchema = closedObject({
   ...WorkerGatewayToolResultSchema.properties,
   mcpGuestResult: Type.Optional(Type.Unknown()),
+  mcpBlockedReason: Type.Optional(LiveTextSchema),
 });
 export const WorkerGatewayToolResponseFrameSchema = workerResponseSchema(
   WorkerGatewayToolInvokeResultSchema,
