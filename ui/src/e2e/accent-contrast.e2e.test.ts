@@ -54,6 +54,7 @@ suite.define(() => {
       expect(microphoneColors.actual, accent + " microphone ink").toEqual(
         microphoneColors.expected,
       );
+      let restingForeground: RenderedColor | undefined;
       for (const state of ["normal", "hover", "active"]) {
         await page.mouse.move(0, 0);
         if (state !== "normal") {
@@ -67,6 +68,12 @@ suite.define(() => {
           return { background: style.backgroundColor, foreground: style.color };
         });
         const colors = await page.evaluate(resolveRenderedColors, raw);
+        if (state === "normal") {
+          restingForeground = colors.foreground;
+        }
+        expect(colors.foreground, `${accent} ${state} keeps resting ink`).toEqual(
+          restingForeground,
+        );
         const [low, high] = [luminance(colors.background!), luminance(colors.foreground!)].toSorted(
           (a, b) => a - b,
         );

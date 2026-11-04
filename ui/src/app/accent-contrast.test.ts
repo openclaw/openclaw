@@ -53,3 +53,17 @@ it("keeps the ring visible on both the page and an elevated control surface", ()
   expect(contrast(ring, "#ffffff")).toBeGreaterThanOrEqual(3);
   expect(contrast(ring, "#707070")).toBeGreaterThanOrEqual(3);
 });
+
+it.each(["#707070", "#ffff00", "#080808", "#fafafa"])(
+  "keeps resting ink through hover and pressed states for %s",
+  (accent) => {
+    const style = document.documentElement.style;
+    style.setProperty("--bg", "#ffffff");
+    applyControlUiAccent(accent);
+    for (const family of ["accent", "primary"]) {
+      const foreground = style.getPropertyValue(`--${family}-foreground`);
+      expect(style.getPropertyValue(`--${family}-hover-foreground`)).toBe(foreground);
+      expect(style.getPropertyValue(`--${family}-active-foreground`)).toBe(foreground);
+    }
+  },
+);
