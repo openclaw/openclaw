@@ -4,12 +4,12 @@
  * tool-runtime imports so CLI-runner prepare paths can build server configs
  * without loading the server.
  */
-import fs from "node:fs";
-import { createRequire } from "node:module";
-import path from "node:path";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import type { SystemAgentToolOptions } from "../agents/tools/system-agent-tool.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import type { BundleMcpConfig } from "../plugins/bundle-mcp.js";
+import { resolvePackageRuntimeProcessEntrypointUrl } from "../infra/runtime-process-package-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import type { BundleMcpConfig } from "../plugins/bundle-mcp.types.js";
 
 export const OPENCLAW_TOOLS_MCP_TOOLS_ENV = "OPENCLAW_TOOLS_MCP_TOOLS";
 export const OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV =
@@ -37,10 +37,7 @@ export function resolveOpenClawToolsMcpToolSelection(
   if (!raw) {
     return ["cron"];
   }
-  const entries = raw
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const entries = normalizeCsvOrLooseStringList(raw);
   const selection = entries.filter(isOpenClawToolsMcpToolId);
   if (selection.length === 0 || selection.length !== entries.length) {
     throw new Error(
@@ -84,14 +81,6 @@ export function resolveOpenClawToolsMcpSystemAgentApproval(env: NodeJS.ProcessEn
   };
 }
 
-function resolveTsxImportSpecifier(): string {
-  try {
-    return createRequire(import.meta.url).resolve("tsx");
-  } catch {
-    return "tsx";
-  }
-}
-
 function resolveOpenClawToolsServeCommand(): { command: string; args: string[] } {
   const packageRoot = resolveOpenClawPackageRootSync({
     argv1: process.argv[1],
@@ -101,21 +90,11 @@ function resolveOpenClawToolsServeCommand(): { command: string; args: string[] }
   if (!packageRoot) {
     throw new Error("openclaw-tools MCP: could not resolve the OpenClaw package root");
   }
-  const distEntry = path.join(packageRoot, "dist", "mcp", "openclaw-tools-serve.js");
-  if (fs.existsSync(distEntry)) {
-    return { command: process.execPath, args: [distEntry] };
-  }
-  const sourceEntry = path.join(packageRoot, "src", "mcp", "openclaw-tools-serve.ts");
-  if (!fs.existsSync(sourceEntry)) {
-    throw new Error(`openclaw-tools MCP: no serve entry under ${packageRoot}`);
-  }
-  // Bun executes TypeScript entries directly; Node source checkouts need tsx.
-  if (process.versions.bun) {
-    return { command: process.execPath, args: [sourceEntry] };
-  }
   return {
     command: process.execPath,
-    args: ["--import", resolveTsxImportSpecifier(), sourceEntry],
+    args: resolveRuntimeWorkerArgv(
+      resolvePackageRuntimeProcessEntrypointUrl("openclawToolsServe", packageRoot),
+    ),
   };
 }
 

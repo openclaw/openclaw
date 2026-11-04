@@ -10,8 +10,6 @@ export type ReleasePublishPreflightOptions = {
   npmDistTag: string;
   pluginPublishScope: "selected" | "all-publishable";
   plugins?: string;
-  stableSoakWaiver?: string;
-  laneWaiver?: string;
   workflowRef: string;
   workflowSha?: string;
   releaseProfile?: string;
@@ -28,6 +26,11 @@ function quote(value: string): string {
   return /^[a-zA-Z0-9_./:@=-]+$/u.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+/** Regular final releases published to npm `latest` activate GitHub before Docker. */
+function isStableLatestPublication(tag: string, npmDistTag: string | undefined): boolean {
+  return npmDistTag === "latest" && /^v\d{4}\.\d{1,2}\.\d+(?:-\d+)?$/u.test(tag);
+}
+
 export function buildReleasePublishDispatchCommand(
   options: ReleasePublishPreflightOptions,
   attempt: string,
@@ -42,8 +45,6 @@ export function buildReleasePublishDispatchCommand(
     npm_dist_tag: options.npmDistTag,
     plugin_publish_scope: options.pluginPublishScope,
     plugins: options.plugins,
-    stable_soak_waiver: options.stableSoakWaiver,
-    lane_waiver: options.laneWaiver,
     release_profile: options.releaseProfile ?? "from-validation",
     publish_openclaw_npm: String(options.publishOpenclawNpm !== false),
     openclaw_npm_resume_run_id: resume,
@@ -51,6 +52,12 @@ export function buildReleasePublishDispatchCommand(
     windows_node_tag: options.windowsNodeTag,
     windows_node_installer_digests: options.windowsNodeInstallerDigests,
     npm_telegram_run_id: options.npmTelegramRunId,
+    // Stable policy: GitHub goes Latest right after npm verification, before Docker.
+    finalize_release_before_docker:
+      options.publishOpenclawNpm !== false &&
+      isStableLatestPublication(options.tag, options.npmDistTag)
+        ? "true"
+        : undefined,
   };
   return [
     `gh workflow run openclaw-release-publish.yml --repo ${quote(options.repo)} --ref ${quote(workflowRef)}`,
@@ -87,13 +94,12 @@ export function parsePublishPreflightArgs(argv: string[]) {
     "repo",
     "tag",
     "full-release-validation-run-id",
+    "full-release-run",
     "full-release-validation-run-attempt",
     "preflight-run-id",
     "npm-dist-tag",
     "plugin-publish-scope",
     "plugins",
-    "stable-soak-waiver",
-    "lane-waiver",
     "workflow-ref",
     "workflow-sha",
     "release-profile",
@@ -119,6 +125,11 @@ export function parsePublishPreflightArgs(argv: string[]) {
     return undefined;
   }
   const value = (key: string, fallback = "") => String(parsed.values[key] ?? fallback);
+  if (value("full-release-validation-run-id") && value("full-release-run")) {
+    throw new Error(
+      "Use --full-release-validation-run-id; do not combine it with the deprecated --full-release-run alias.",
+    );
+  }
   if (!value("tag") || Boolean(value("workflow-ref")) === Boolean(value("workflow-sha"))) {
     throw new Error("--tag and exactly one of --workflow-ref or --workflow-sha are required.");
   }
@@ -135,14 +146,13 @@ export function parsePublishPreflightArgs(argv: string[]) {
   const options: ReleasePublishPreflightOptions = {
     repo: value("repo", "openclaw/openclaw"),
     tag: value("tag"),
-    fullReleaseValidationRunId: value("full-release-validation-run-id"),
+    fullReleaseValidationRunId:
+      value("full-release-validation-run-id") || value("full-release-run"),
     fullReleaseValidationRunAttempt: value("full-release-validation-run-attempt"),
     preflightRunId: value("preflight-run-id") || undefined,
     npmDistTag: value("npm-dist-tag", "beta"),
     pluginPublishScope: scope,
     plugins: value("plugins"),
-    stableSoakWaiver: value("stable-soak-waiver"),
-    laneWaiver: value("lane-waiver"),
     workflowRef: value("workflow-ref"),
     workflowSha: value("workflow-sha") || undefined,
     releaseProfile: value("release-profile", "from-validation"),

@@ -1,6 +1,3 @@
-/**
- * Runtime SDK subpath for approval handler adapters and approval view text helpers.
- */
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeApprovalRequest } from "../infra/approval-types.js";
 import type { ApprovalRequestInput } from "../infra/approval-types.js";
@@ -15,7 +12,6 @@ import {
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
 import type { SystemAgentApprovalResolved } from "../infra/system-agent-approvals.js";
-import { buildApprovalResolvedReplyPayload } from "./approval-renderers.js";
 import {
   buildSystemAgentApprovalResolvedText,
   SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT,
@@ -23,6 +19,7 @@ import {
 export {
   createChannelApprovalHandler,
   createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   createChannelApprovalHandlerFromCapability,
   createLazyChannelApprovalNativeRuntimeAdapter,
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
@@ -74,12 +71,7 @@ export function buildChannelApprovalResolvedText(params: {
   const resolvedByText = params.resolved.resolvedBy
     ? ` Resolved by ${params.resolved.resolvedBy}.`
     : "";
-  const payload = buildApprovalResolvedReplyPayload({
-    approvalId: params.request.id,
-    approvalSlug: params.request.id.slice(0, 8),
-    text: `✅ Exec approval ${params.resolved.decision}.${resolvedByText} ID: ${params.request.id}`,
-  });
-  return payload.text ?? "";
+  return `✅ Exec approval ${params.resolved.decision}.${resolvedByText} ID: ${params.request.id}`;
 }
 
 /** Builds channel-visible expiration text for exec and plugin approvals. */

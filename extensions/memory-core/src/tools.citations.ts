@@ -11,11 +11,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 export type MemorySearchToolResult = MemorySearchResult | MemoryCorpusSearchResult;
 
 export function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
-  const mode = cfg.memory?.citations;
-  if (mode === "on" || mode === "off" || mode === "auto") {
-    return mode;
-  }
-  return "auto";
+  return cfg.memory?.citations ?? "auto";
 }
 
 export function buildMemorySearchPresentation(
@@ -56,20 +52,10 @@ export function shouldIncludeCitations(params: {
   if (params.mode === "off") {
     return false;
   }
-  return deriveChatTypeFromSessionKey(params.sessionKey) === "direct";
-}
-
-function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" | "channel" {
-  const parsed = parseAgentSessionKey(sessionKey);
+  const parsed = parseAgentSessionKey(params.sessionKey);
   if (!parsed?.rest) {
-    return "direct";
+    return true;
   }
   const tokens = new Set(normalizeLowercaseStringOrEmpty(parsed.rest).split(":").filter(Boolean));
-  if (tokens.has("channel")) {
-    return "channel";
-  }
-  if (tokens.has("group")) {
-    return "group";
-  }
-  return "direct";
+  return !tokens.has("channel") && !tokens.has("group");
 }

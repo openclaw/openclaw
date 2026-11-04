@@ -1,9 +1,16 @@
 import { vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
-import type { MSTeamsPollStore } from "./polls.js";
 
-export function createConfig(port: number): OpenClawConfig {
+// mock-isolation: Keep conversation state outside the monitor lifecycle and SSO fixtures.
+vi.mock("./conversation-store-state.js", () => ({
+  createMSTeamsConversationStoreState: () => ({}),
+}));
+vi.mock("./polls.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./polls.js")>()),
+  createMSTeamsPollStoreState: vi.fn(() => ({})),
+}));
+
+export function createConfig(): OpenClawConfig {
   return {
     channels: {
       msteams: {
@@ -11,8 +18,8 @@ export function createConfig(port: number): OpenClawConfig {
         appId: "app-id",
         appPassword: "app-password", // pragma: allowlist secret
         tenantId: "tenant-id",
+        legacyWebhook: false,
         webhook: {
-          port,
           path: "/api/messages",
         },
       },
@@ -41,12 +48,5 @@ export function createRuntime(): RuntimeEnv {
     exit: (code: number): never => {
       throw new Error(`exit ${code}`);
     },
-  };
-}
-
-export function createStores() {
-  return {
-    conversationStore: {} as MSTeamsConversationStore,
-    pollStore: {} as MSTeamsPollStore,
   };
 }

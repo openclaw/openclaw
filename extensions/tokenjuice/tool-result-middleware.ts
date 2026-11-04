@@ -1,4 +1,3 @@
-// Tokenjuice plugin module implements tool result middleware behavior.
 import process from "node:process";
 import type {
   AgentToolResultMiddleware,
@@ -7,6 +6,9 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createTokenjuiceOpenClawEmbeddedExtension } from "./runtime-api.js";
+
+// Tokenjuice's process-wide rule cache has one entry per cwd and no eviction.
+const retainedRuleScopes = new Set<string>();
 
 type TokenjuiceToolResultHandler = (
   event: {
@@ -57,41 +59,56 @@ function normalizeDetails(
 }
 
 export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMiddleware {
-  const handlers: TokenjuiceToolResultHandler[] = [];
+  let handler: TokenjuiceToolResultHandler | undefined;
   createTokenjuiceOpenClawEmbeddedExtension()({
-    on(event, handler) {
+    on(event, registeredHandler) {
       if (event === "tool_result") {
-        handlers.push(handler as TokenjuiceToolResultHandler);
+        handler = registeredHandler as TokenjuiceToolResultHandler;
       }
     },
   });
 
   return async (event) => {
-    let current = event.result;
+    const current = event.result;
     const workdir = event.args.workdir;
     const cwd = event.cwd?.trim()
       ? event.cwd
       : typeof workdir === "string" && workdir.trim()
         ? workdir
         : process.cwd();
-    for (const handler of handlers) {
-      const next = await handler(
+    const details = normalizeDetails(event, current);
+    // Include every cwd source the dependency may choose without changing its precedence.
+    const ruleScope = JSON.stringify([
+      typeof workdir === "string" ? workdir : undefined,
+      isRecord(details) && typeof details.cwd === "string" ? details.cwd : undefined,
+      cwd,
+    ]);
+    try {
+      const next = await handler?.(
         {
           toolName: event.toolName,
           input: event.args,
           content: current.content,
-          details: normalizeDetails(event, current),
+          details,
           isError: event.isError,
         },
         { cwd },
       );
-      if (next) {
-        current = Object.assign({}, current, {
-          content: next.content ?? current.content,
-          details: next.details ?? current.details,
-        });
+      return next
+        ? {
+            result: Object.assign({}, current, {
+              content: next.content ?? current.content,
+              details: next.details ?? current.details,
+            }),
+          }
+        : undefined;
+    } finally {
+      retainedRuleScopes.add(ruleScope);
+      if (retainedRuleScopes.size >= 128) {
+        const { clearRuleCache } = await import("tokenjuice");
+        clearRuleCache();
+        retainedRuleScopes.clear();
       }
     }
-    return current === event.result ? undefined : { result: current };
   };
 }

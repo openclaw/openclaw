@@ -2,20 +2,21 @@ import { describe, expect, it } from "vitest";
 import { resolveMockSubagentTurn } from "./mock-openai-input.js";
 
 const kickoff = { role: "user", content: "Subagent terminal reply QA check: fallback." };
-const settled = "[Subagent Context] Every subagent spawned from this session has now settled";
+const settled =
+  "[Subagent Context] Every subagent in this batch has now settled, including its descendants.";
 
 describe("terminal requester input", () => {
-  it.each(["", "[Wed 2026-09-23 06:54 UTC] "])(
-    "recognizes the current all-settled wake with prefix %j",
-    (prefix) => {
-      expect(
-        resolveMockSubagentTurn([kickoff, { role: "user", content: `${prefix}${settled}` }]),
-      ).toMatchObject({
-        kind: "settled",
-        caseName: "fallback",
-      });
-    },
-  );
+  it("recognizes the timestamped all-settled wake", () => {
+    expect(
+      resolveMockSubagentTurn([
+        kickoff,
+        { role: "user", content: `[Wed 2026-09-23 06:54 UTC] ${settled}` },
+      ]),
+    ).toMatchObject({
+      kind: "settled",
+      caseName: "fallback",
+    });
+  });
 
   it("does not treat quoted settled history as the current turn", () => {
     expect(

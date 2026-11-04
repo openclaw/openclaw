@@ -4,12 +4,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const PARTIAL_FAILURE_RECOVERY_SCENARIO = "telegram-partial-failure-recovery";
-const SETTLED_EMPTY_RESPONSE_SCENARIO = "telegram-empty-response-after-write-recovery";
-const PROGRESS_TOOL_VISIBILITY_SCENARIO = "telegram-progress-tool-visibility";
-const PROVIDER_FAILURE_BEFORE_OUTPUT_SCENARIO = "telegram-provider-failure-before-output";
-const QUEUE_INVALID_MODE_SCENARIO = "telegram-queue-invalid-mode";
-const RICH_INLINE_COMPOSITION_SCENARIO = "telegram-rich-inline-composition";
-const POLICY_HOT_RELOAD_SCENARIOS = [
+const SOURCE_GATED_SCENARIOS = [
+  "telegram-empty-response-after-write-recovery",
+  "telegram-prepared-delivery-recovery",
+  "telegram-progress-tool-visibility",
+  "telegram-provider-failure-before-output",
+  "telegram-queue-invalid-mode",
+  "telegram-rich-inline-composition",
   "telegram-policy-hot-reload",
   "telegram-group-policy-hot-reload",
 ];
@@ -66,53 +67,10 @@ function isPrePartialFailureRecoveryTarget(sourceRoot: string): boolean {
   );
 }
 
-function isPreSettledEmptyResponseTarget(sourceRoot: string): boolean {
-  return (
-    readSource(
-      sourceRoot,
-      "qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml",
-    ) === undefined
-  );
-}
-
-function isPreProgressToolVisibilityTarget(sourceRoot: string): boolean {
-  return (
-    readSource(sourceRoot, "qa/scenarios/channels/telegram-progress-tool-visibility.yaml") ===
-    undefined
-  );
-}
-
-function isPreProviderFailureBeforeOutputTarget(sourceRoot: string): boolean {
-  return (
-    readSource(sourceRoot, "qa/scenarios/channels/telegram-provider-failure-before-output.yaml") ===
-    undefined
-  );
-}
-
-function isPreQueueInvalidModeTarget(sourceRoot: string): boolean {
-  return (
-    readSource(sourceRoot, "qa/scenarios/channels/telegram-queue-invalid-mode.yaml") === undefined
-  );
-}
-
-function isPreRichInlineCompositionTarget(sourceRoot: string): boolean {
-  return (
-    readSource(sourceRoot, "qa/scenarios/channels/telegram-rich-inline-composition.yaml") ===
-    undefined
-  );
-}
-
 export function resolveFrozenTelegramScenarioOmissions(sourceRoot: string): string[] {
   return [
     ...(isPrePartialFailureRecoveryTarget(sourceRoot) ? [PARTIAL_FAILURE_RECOVERY_SCENARIO] : []),
-    ...(isPreSettledEmptyResponseTarget(sourceRoot) ? [SETTLED_EMPTY_RESPONSE_SCENARIO] : []),
-    ...(isPreProgressToolVisibilityTarget(sourceRoot) ? [PROGRESS_TOOL_VISIBILITY_SCENARIO] : []),
-    ...(isPreProviderFailureBeforeOutputTarget(sourceRoot)
-      ? [PROVIDER_FAILURE_BEFORE_OUTPUT_SCENARIO]
-      : []),
-    ...(isPreQueueInvalidModeTarget(sourceRoot) ? [QUEUE_INVALID_MODE_SCENARIO] : []),
-    ...(isPreRichInlineCompositionTarget(sourceRoot) ? [RICH_INLINE_COMPOSITION_SCENARIO] : []),
-    ...POLICY_HOT_RELOAD_SCENARIOS.filter(
+    ...SOURCE_GATED_SCENARIOS.filter(
       (scenario) => readSource(sourceRoot, `qa/scenarios/channels/${scenario}.yaml`) === undefined,
     ),
   ];

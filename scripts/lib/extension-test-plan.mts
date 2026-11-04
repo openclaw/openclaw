@@ -32,10 +32,16 @@ import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-what
 import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
 import { isSharedVitestExcludedPath } from "../../test/vitest/vitest.pattern-file.ts";
 import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
+import { isGitWorktreeRoot } from "../check-file-utils.ts";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
-import { listAvailableExtensionIds } from "./changed-extensions.mts";
+import { hasExtensionMetadata, listAvailableExtensionIds } from "./changed-extensions.mts";
+import { isRuntimePlacementIncludePatterns } from "./ci-test-timings-schema.mts";
+import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./list-test-files.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
+import { splitTestTargetChunks } from "./test-target-chunks.mts";
+import { resolveVitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
+import { createCompactSplitTimingGeneration } from "./vitest-shard-metadata.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const TRACKED_EXTENSION_TEST_PATHSPECS = [
@@ -181,6 +187,9 @@ function isSkippedTrackedTestFile(relativePath: string) {
 
 let trackedRepoTestFiles: string[] | null | undefined;
 export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
+  if (!isGitWorktreeRoot(cwd)) {
+    return null;
+  }
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
   const result = spawnSync("git", ["ls-files", "-z", "--", ...pathspecs], {
@@ -281,17 +290,7 @@ function splitTargetsByFileLimit(targets: string[], maxFilesPerChunk: number) {
     return [orderedTargets];
   }
 
-  const chunkCount = Math.ceil(orderedTargets.length / maxFilesPerChunk);
-  const baseSize = Math.floor(orderedTargets.length / chunkCount);
-  const remainder = orderedTargets.length % chunkCount;
-  const chunks = [];
-  let offset = 0;
-  for (let index = 0; index < chunkCount; index += 1) {
-    const chunkSize = baseSize + (index < remainder ? 1 : 0);
-    chunks.push(orderedTargets.slice(offset, offset + chunkSize));
-    offset += chunkSize;
-  }
-  return chunks;
+  return splitTestTargetChunks(orderedTargets, Math.ceil(orderedTargets.length / maxFilesPerChunk));
 }
 
 export const DATABASE_WORKER_CONFIG = "test/vitest/vitest.extension-database-workers.config.ts";
@@ -345,6 +344,24 @@ export function splitExtensionTestProcessTargets(config: string, targets: string
         maxFilesPerProcess,
       )
     : [uniqueSortedTargets(targets)];
+}
+
+/** Only the qualified Telegram native-worker cohort may overlap singleton processes. */
+export function canOverlapTelegramSingletonProcesses(
+  config: string,
+  files: readonly string[] | null | undefined,
+): boolean {
+  if (
+    config !== DATABASE_WORKER_CONFIG ||
+    !isRuntimePlacementIncludePatterns(files) ||
+    files.length < 2 ||
+    !files.every((file) => file.startsWith("extensions/telegram/")) ||
+    resolveVitestPretestBuildMode([{ configs: [config], includePatterns: files }]) !== undefined
+  ) {
+    return false;
+  }
+  const processes = splitExtensionTestProcessTargets(config, [...files]);
+  return processes.length === files.length && processes.every((process) => process.length === 1);
 }
 
 /** Split an extension config's test files into CI envelopes without changing process lifetime. */
@@ -418,11 +435,52 @@ function countTestFiles(rootPath: string) {
   return listFilesystemTestFiles(rootPath).length;
 }
 
+/** Exact envelope identity survives ordinal renumbering without crossing worker policies. */
+export function createExtensionTestTimingKey(
+  config: string,
+  files: readonly string[],
+  env: Readonly<Record<string, string>> = { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+  kind: "envelope" | "singleton-invocation" | "wrapper-overhead" = "envelope",
+): string | undefined {
+  if (
+    !/^test\/vitest\/vitest\.extensions?(?:-[^/]+)?\.config\.ts$/u.test(config) ||
+    (kind === "wrapper-overhead"
+      ? files.length !== 0
+      : !isRuntimePlacementIncludePatterns(files) ||
+        (kind === "singleton-invocation" && files.length !== 1)) ||
+    !/^[1-9]\d*$/u.test(env.OPENCLAW_VITEST_MAX_WORKERS ?? "")
+  ) {
+    return undefined;
+  }
+  const timingEnv: Record<string, string> = { ...env };
+  if (timingEnv.OPENCLAW_TEST_PROJECTS_PARALLEL === "1") {
+    delete timingEnv.OPENCLAW_TEST_PROJECTS_PARALLEL;
+  }
+  return createCompactSplitTimingGeneration({
+    configs: [config],
+    env: timingEnv,
+    parentShardName: `extension-test:${config}#workers-${env.OPENCLAW_VITEST_MAX_WORKERS}${kind === "envelope" ? "" : `#${kind}`}`,
+    stripes: [files],
+  }).timingKeys[0];
+}
+
 export function estimateExtensionTestCost(
   config: string,
   testFileCount: number,
   files: readonly string[] = [],
+  env: Readonly<Record<string, string>> = { OPENCLAW_VITEST_MAX_WORKERS: "2" },
 ) {
+  if (env.OPENCLAW_TEST_PROJECTS_PARALLEL === "2") {
+    const key =
+      files.length === testFileCount ? createExtensionTestTimingKey(config, files, env) : undefined;
+    const measured = key ? readCompactGroupTimings("blacksmith")[key] : undefined;
+    if (measured !== undefined) {
+      return Math.max(1, Math.ceil(measured));
+    }
+    // Retain the serial estimate until this policy has an exact measurement.
+    const { OPENCLAW_TEST_PROJECTS_PARALLEL: _parallel, ...serialEnv } = env;
+    return estimateExtensionTestCost(config, testFileCount, files, serialEnv);
+  }
   const serialReference = EXTENSION_TEST_SERIAL_REFERENCE_COST_MULTIPLIERS[config];
   const multiplier =
     serialReference !== undefined && testFileCount <= 1
@@ -438,7 +496,36 @@ export function estimateExtensionTestCost(
     config === DATABASE_WORKER_CONFIG
       ? files.filter((file) => file.startsWith("extensions/codex/src/app-server/")).length
       : 0;
-  return Math.max(1, Math.ceil(testFileCount * multiplier + appServerFiles * (17.31 - multiplier)));
+  const key =
+    files.length === testFileCount ? createExtensionTestTimingKey(config, files, env) : undefined;
+  const timings = readCompactGroupTimings("blacksmith");
+  const measured = key ? timings[key] : undefined;
+  const processes = key ? splitExtensionTestProcessTargets(config, [...files]) : [];
+  let singletonSeconds = 0;
+  if (processes.length === files.length && processes.every((process) => process.length === 1)) {
+    let observed = false;
+    for (const file of files) {
+      const fileKey = createExtensionTestTimingKey(config, [file], env, "singleton-invocation")!;
+      const fileSeconds = timings[fileKey];
+      observed ||= fileSeconds !== undefined;
+      singletonSeconds += Math.max(
+        fileSeconds ?? 0,
+        config === DATABASE_WORKER_CONFIG && file.startsWith("extensions/codex/src/app-server/")
+          ? 17.31
+          : multiplier,
+      );
+    }
+    const overheadKey = createExtensionTestTimingKey(config, [], env, "wrapper-overhead");
+    singletonSeconds = observed
+      ? singletonSeconds + (overheadKey ? (timings[overheadKey] ?? 0) : 0)
+      : 0;
+  }
+  return Math.max(
+    1,
+    measured ?? 0,
+    Math.ceil(singletonSeconds),
+    Math.ceil(testFileCount * multiplier + appServerFiles * (17.31 - multiplier)),
+  );
 }
 
 /** Resolve the dedicated Vitest config for an extension root or test file. */
@@ -460,12 +547,12 @@ export function resolveExtensionTestConfig(target: string) {
 function resolveExtensionDirectory(targetArg: string | undefined, cwd = process.cwd()) {
   if (targetArg) {
     const asGiven = path.resolve(cwd, targetArg);
-    if (fs.existsSync(path.join(asGiven, "package.json"))) {
+    if (hasExtensionMetadata(asGiven)) {
       return asGiven;
     }
 
     const byName = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, targetArg);
-    if (fs.existsSync(path.join(byName, "package.json"))) {
+    if (hasExtensionMetadata(byName)) {
       return byName;
     }
 
@@ -478,7 +565,7 @@ function resolveExtensionDirectory(targetArg: string | undefined, cwd = process.
   while (true) {
     if (
       normalizeRelative(path.relative(repoRoot, current)).startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
-      fs.existsSync(path.join(current, "package.json"))
+      hasExtensionMetadata(current)
     ) {
       return current;
     }

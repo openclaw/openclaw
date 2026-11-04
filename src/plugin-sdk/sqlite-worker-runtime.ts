@@ -15,10 +15,27 @@ export {
   resolveExistingSqliteFileUri,
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
+export type { SqlConnection } from "../infra/sql-connection.js";
+export { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
+export {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  readSqliteDatabasePendingScopedWriteToken,
+  readSqliteDatabasePendingWriteToken,
+  readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabaseWriteRevision,
+  readSqliteDatabaseWriteTokenForPath,
+  withSqliteDatabaseWriteScope,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
+export { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+export { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 export {
   assertTransactionUsable,
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
+  runSqliteReadSnapshotSync,
+  runSqliteSingleStatementSync,
 } from "../infra/sqlite-transaction.js";
 export type {
   SqliteWorkerBackend,
@@ -26,4 +43,8 @@ export type {
   SqliteWorkerOperations,
 } from "../infra/sqlite-worker-contract.js";
 export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-export { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+export { bindSqliteWorkerDatabase } from "../infra/sqlite-worker-binding.js";
+export { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
+export { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
+export { ensureOpenClawAgentStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";
+export { stageOpenClawAgentDatabaseSchemaExtension } from "../state/openclaw-agent-db-schema-extension.worker.js";

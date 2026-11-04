@@ -1,4 +1,3 @@
-// Private QA runtime support for the Microsoft Teams live transport adapter.
 import type { ClientOptions, RequestContext } from "@microsoft/teams.common";
 import {
   fetchWithSsrFGuard,
@@ -81,13 +80,6 @@ function createPrivateQaClientOptions(connectorUrl: string, nonce: string): Clie
   };
 }
 
-type MSTeamsPrivateQaRuntime = {
-  client: ClientOptions;
-  listenHost: "127.0.0.1";
-  skipAuth: true;
-  token: () => Promise<string>;
-};
-
 export function resolveMSTeamsPrivateQaRuntime(
   env: PrivateQaEnv = process.env,
   bootstrap: PrivateQaBootstrap | undefined = (
@@ -95,7 +87,7 @@ export function resolveMSTeamsPrivateQaRuntime(
       [PRIVATE_QA_RUNTIME_SYMBOL]?: PrivateQaBootstrap;
     }
   )[PRIVATE_QA_RUNTIME_SYMBOL],
-): MSTeamsPrivateQaRuntime | undefined {
+) {
   if (!bootstrap) {
     return undefined;
   }
@@ -120,8 +112,7 @@ export function resolveMSTeamsPrivateQaRuntime(
   const client = createPrivateQaClientOptions(parsedConnectorUrl.toString(), nonce);
   return {
     client,
-    listenHost: "127.0.0.1",
-    skipAuth: true,
+    skipAuth: true as const,
     token: async () => botToken,
   };
 }

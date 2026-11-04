@@ -7,6 +7,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { transformSync } from "esbuild";
+import { resolveRuntimeProcessEntrypointUrl } from "../../src/infra/runtime-process-url.ts";
+import { resolveRuntimeWorkerThreadExecArgv } from "../../src/infra/runtime-worker-url.ts";
 
 export async function createDiskSwap(sourceRoot, base) {
   const require = createRequire(path.join(sourceRoot, "package.json"));
@@ -18,7 +20,7 @@ export async function createDiskSwap(sourceRoot, base) {
   assert.equal(installed, expected, "filesystem dependency must match the candidate manifest");
   const atomic = await import(pathToFileURL(require.resolve("@openclaw/fs-safe/atomic")).href);
   const fsSafe = new Map();
-  for (const subpath of ["errors", "root"]) {
+  for (const subpath of ["errors", "path", "root"]) {
     const specifier = `@openclaw/fs-safe/${subpath}`;
     fsSafe.set(specifier, await import(pathToFileURL(require.resolve(specifier)).href));
   }
@@ -37,6 +39,8 @@ export async function createDiskSwap(sourceRoot, base) {
     MAX_TIMER_TIMEOUT_MS: 2_147_483_647,
     movePathWithCopyFallback: atomic.movePathWithCopyFallback,
     createUpdateFailureFact: (value) => value,
+    resolveRuntimeProcessEntrypointUrl,
+    resolveRuntimeWorkerThreadExecArgv,
   };
   const context = vm.createContext({
     // Model an unowned npm prefix; OS package-manager ownership is a separate contract.
@@ -45,22 +49,28 @@ export async function createDiskSwap(sourceRoot, base) {
     Date,
     Error,
     AggregateError,
+    AbortController,
     Buffer,
     performance,
     setTimeout,
     clearTimeout,
   });
   const files = [
+    "infra/errno",
+    "infra/fs-safe-remove",
+    "infra/mutation-authority",
+    "infra/package-update-backup-paths",
     "infra/package-update-swap",
+    "infra/package-update-swap-results",
+    "infra/package-update-swap-target",
+    "infra/package-update-swap-retirement",
     "infra/package-update-filesystem",
     "infra/package-update-integrity",
+    "infra/package-update-integrity-hasher",
     "infra/package-update-npm-root",
     "infra/package-update-local-overrides",
     "infra/package-update-swap-contract",
     "infra/update-npm-prefix",
-    "infra/mutation-authority",
-    "infra/fs-safe-remove",
-    "infra/errno",
     "utils/absolute-deadline",
   ];
   const modules = new Map(),

@@ -2,6 +2,7 @@ import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { ConnectOverCDPTransport } from "playwright-core";
 import { z } from "zod";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import { authenticateRelayOwner } from "./owner-auth-client.js";
 import {
   RELAY_OWNER_LIMIT,
@@ -12,7 +13,6 @@ import {
   relayOwnerStreamClosed,
   type RelayOwnerStatus,
 } from "./owner-protocol.js";
-import { parseStrictJsonObject } from "./strict-json.js";
 
 const nullableIdResult = z.string().nullable();
 const streamIdResult = z.number().int().positive();
@@ -43,14 +43,12 @@ export class RelayOwnerClient {
   private profileAdmission: () => void = () => {};
   private sequence = 0;
   private closed = false;
-  private retirementAcknowledged = false;
   private closing: Promise<void> | undefined;
 
   private constructor(private readonly ws: WebSocket) {
     ws.on("message", (raw) => {
       const parsed = parseStrictJsonObject(rawDataToString(raw));
       if (relayOwnerRetired.safeParse(parsed).success) {
-        this.retirementAcknowledged = true;
         this.invalidate("Relay owner retired");
         return;
       }
@@ -284,7 +282,8 @@ export class RelayOwnerClient {
   }
 
   close(): Promise<void> {
-    if (this.retirementAcknowledged) {
+    // The daemon owns cleanup after socket loss; this dead lease cannot acknowledge it.
+    if (this.closed || this.ws.readyState !== 1) {
       return Promise.resolve();
     }
     return (this.closing ??= this.request("close").then(() => {

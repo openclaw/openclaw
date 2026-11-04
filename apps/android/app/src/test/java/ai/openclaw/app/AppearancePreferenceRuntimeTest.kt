@@ -274,7 +274,7 @@ class AppearancePreferenceRuntimeTest {
           prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Tide)
           prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
           config = """{"ui":{"prefs":{"theme":"dash","themeMode":"light","accent":"#14B8A6"}}}"""
-          val unsupportedMethods = if (catalogOmitsMethod) setOf("config.get") else null
+          val unsupportedMethods = if (catalogOmitsMethod) setOf("agents.list", "config.get") else null
           val unsupportedPreferences: suspend (AppearanceRpcRequest) -> String? = { request ->
             if (request.method == "users.prefs.get") {
               throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unknown method: users.prefs.get"))
@@ -1083,6 +1083,10 @@ private class AppearanceGatewayFixture(
         """{"config":$config}"""
       }
 
+      "agents.list" -> {
+        """{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}"""
+      }
+
       "users.prefs.get" -> {
         if (request.profileId == null) {
           """{"status":"no_durable_identity"}"""
@@ -1134,6 +1138,6 @@ private class AppearanceGatewayFixture(
   }
 
   companion object {
-    private val appearanceMethods = setOf("config.get", "users.self", "users.prefs.get", "users.prefs.set")
+    private val appearanceMethods = setOf("agents.list", "config.get", "users.self", "users.prefs.get", "users.prefs.set")
   }
 }

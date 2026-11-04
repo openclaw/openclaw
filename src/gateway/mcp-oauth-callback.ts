@@ -4,7 +4,6 @@ import { requesterMcpOAuthStoreKeyPrefix } from "../agents/mcp-oauth-identity.js
 import { readMcpOAuthPendingAuthorization, readMcpOAuthStore } from "../agents/mcp-oauth-store.js";
 import { completeOAuthCallback } from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { OAUTH_PAGE_CSP } from "../infra/oauth-page-csp.js";
@@ -39,14 +38,6 @@ function respondHtml(res: ServerResponse, status: number, body: string): void {
   res.end(body);
 }
 
-function readPendingState(lastAuthorizationUrl: string): string | undefined {
-  try {
-    return new URL(lastAuthorizationUrl).searchParams.get("state")?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function isPerRequesterServer(server: Record<string, unknown>): boolean {
   const oauth = isRecord(server.oauth) ? server.oauth : undefined;
   return server.enabled !== false && server.auth === "oauth" && oauth?.identity === "per-requester";
@@ -66,9 +57,7 @@ export async function handleMcpOAuthCallback(
   if (url.pathname !== MCP_OAUTH_CALLBACK_PATH) {
     return false;
   }
-  const configuredServers = Object.entries(
-    normalizeConfiguredMcpServers(params.config.mcp?.servers),
-  )
+  const configuredServers = Object.entries(params.config.mcp?.servers ?? {})
     .toSorted(([left], [right]) => left.localeCompare(right))
     .flatMap(([serverName, rawServer]) => {
       if (!isPerRequesterServer(rawServer)) {
@@ -91,7 +80,13 @@ export async function handleMcpOAuthCallback(
   const context = captureOpenClawStateWorkerContext();
   const storeKey = state ? await readMcpOAuthPendingAuthorization(state, context) : undefined;
   const pending = storeKey ? await readMcpOAuthStore(storeKey, context) : undefined;
-  if (!storeKey || !state || readPendingState(pending?.lastAuthorizationUrl ?? "") !== state) {
+  if (
+    !storeKey ||
+    !state ||
+    (URL.parse(pending?.lastAuthorizationUrl ?? "")
+      ?.searchParams.get("state")
+      ?.trim() || undefined) !== state
+  ) {
     respondHtml(res, 404, EXPIRED_HTML);
     return true;
   }
@@ -108,11 +103,12 @@ export async function handleMcpOAuthCallback(
     return true;
   }
   const code = url.searchParams.get("code")?.trim();
-  if (!code) {
+  if (!code || url.searchParams.getAll("iss").length > 1) {
     respondHtml(res, 400, RETRY_HTML);
     return true;
   }
 
+  const iss = url.searchParams.get("iss");
   try {
     const result = await completeOAuthCallback(
       {
@@ -122,7 +118,7 @@ export async function handleMcpOAuthCallback(
         serverUrl: configuredServer.resolved.url,
       },
       configuredServer.resolved,
-      { code, state },
+      { code, state, ...(iss === null ? {} : { iss }) },
       undefined,
       context,
     );

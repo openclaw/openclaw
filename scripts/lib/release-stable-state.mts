@@ -11,10 +11,11 @@ export const RELEASE_PHASES = [
   "cut",
   "validate",
   "publish",
-  "sync-beta",
   "flip-github",
-  "macos",
+  "sync-beta",
+  // Closeout records pending apps; macOS retries must preserve its independent receipt.
   "closeout",
+  "macos",
 ] as const;
 export type ReleasePhase = (typeof RELEASE_PHASES)[number];
 const phaseSchema = z.enum(RELEASE_PHASES);
@@ -47,8 +48,7 @@ const releaseStateSchema = z.strictObject({
     .strictObject({
       parentSyncsBetaDistTag: z.boolean(),
       parentSweepsStaleChildren: z.boolean().optional(),
-      parentApprovalReceipt: z.boolean(),
-      closeoutResolvesWaivers: z.boolean(),
+      childNpmPublishEnvironment: z.boolean().optional(),
       probedAt: timestamp,
       toolingSha: sha,
     })
@@ -69,9 +69,6 @@ const releaseStateSchema = z.strictObject({
     requestFile: z.string().optional(),
     runId: id.optional(),
     runAttempt: z.number().int().positive().optional(),
-    continues: z.number().int().min(0),
-    stableSoakWaiver: z.string().optional(),
-    laneWaiver: z.string().optional(),
   }),
   publish: z.strictObject({
     candidateDir: z.string().optional(),
@@ -94,6 +91,7 @@ const releaseStateSchema = z.strictObject({
     appcastVerifiedAt: timestamp.optional(),
   }),
   closeout: z.strictObject({
+    websiteRunId: id.optional(),
     publishRunConclusion: z.string().optional(),
     runId: id.optional(),
     verifiedAt: timestamp.optional(),
@@ -101,6 +99,27 @@ const releaseStateSchema = z.strictObject({
   history: z.array(
     z.strictObject({ at: timestamp, phase: phaseSchema, event: z.string(), detail: z.string() }),
   ),
+});
+// Older writers recorded retry and tooling-capability metadata even for waiver-free
+// releases. Discard only that bookkeeping; actual waiver fields still fail parsing.
+const releaseStateReadSchema = releaseStateSchema.extend({
+  capabilities: releaseStateSchema.shape.capabilities
+    .unwrap()
+    .extend({
+      closeoutResolvesWaivers: z.boolean().optional(),
+      parentApprovalReceipt: z.boolean().optional(),
+    })
+    .transform(
+      ({
+        closeoutResolvesWaivers: _closeoutResolvesWaivers,
+        parentApprovalReceipt: _parentApprovalReceipt,
+        ...capabilities
+      }) => capabilities,
+    )
+    .optional(),
+  validate: releaseStateSchema.shape.validate
+    .extend({ continues: z.number().int().min(0).optional() })
+    .transform(({ continues: _continues, ...validation }) => validation),
 });
 export type ReleaseState = z.infer<typeof releaseStateSchema>;
 export type ReleaseOptions = {
@@ -112,12 +131,15 @@ export type ReleaseOptions = {
   from?: ReleasePhase;
   dryRun: boolean;
   status: boolean;
+  watch: boolean;
+  watchOnce: boolean;
+  watchJson: boolean;
+  watchPollSeconds: number;
+  watchTimeoutSeconds: number;
   approvePublication: boolean;
   cutSha?: string;
   confirmCutSha?: string;
   toolingSha?: string;
-  stableSoakWaiver?: string;
-  laneWaiver?: string;
   pluginSdkApiAcknowledgement?: string;
   macosPreflightRunId?: string;
   macosValidateRunId?: string;
@@ -243,8 +265,6 @@ export function resumeCommand(
     ["cut-sha", options.cutSha],
     ["confirm-cut-sha", options.confirmCutSha],
     ["tooling-sha", options.toolingSha],
-    ["stable-soak-waiver", options.stableSoakWaiver],
-    ["lane-waiver", options.laneWaiver],
     ["plugin-sdk-api-acknowledgement", options.pluginSdkApiAcknowledgement],
     ["macos-preflight-run-id", phase === "macos" ? options.macosPreflightRunId : undefined],
     ["macos-validate-run-id", phase === "macos" ? options.macosValidateRunId : undefined],
@@ -286,7 +306,7 @@ function createReleaseState(options: ReleaseOptions): ReleaseState {
       closeout: pending(),
     },
     cut: {},
-    validate: { continues: 0 },
+    validate: {},
     publish: { approvedGates: [] },
     syncBeta: {},
     flipGithub: {},
@@ -301,7 +321,7 @@ export function loadReleaseState(options: ReleaseOptions): ReleaseState {
     return createReleaseState(options);
   }
   try {
-    const state = releaseStateSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+    const state = releaseStateReadSchema.parse(JSON.parse(readFileSync(path, "utf8")));
     if (
       state.release !== options.release ||
       state.tag !== `v${options.release}` ||
@@ -333,8 +353,8 @@ export function saveReleaseState(options: ReleaseOptions, state: ReleaseState): 
     rmSync(temporary, { force: true });
   }
 }
-export function resetReleasePhases(state: ReleaseState, from: ReleasePhase): void {
-  const data = {
+export function getReleasePhaseData(state: ReleaseState) {
+  return {
     cut: state.cut,
     validate: state.validate,
     publish: state.publish,
@@ -343,7 +363,12 @@ export function resetReleasePhases(state: ReleaseState, from: ReleasePhase): voi
     macos: state.macos,
     closeout: state.closeout,
   };
-  for (const phase of RELEASE_PHASES.slice(RELEASE_PHASES.indexOf(from))) {
+}
+export function resetReleasePhases(state: ReleaseState, from: ReleasePhase): void {
+  const data = getReleasePhaseData(state);
+  // Closeout and app publication have independent receipts and can restart separately.
+  const phases = from === "closeout" ? [from] : RELEASE_PHASES.slice(RELEASE_PHASES.indexOf(from));
+  for (const phase of phases) {
     state.history.push({
       at: new Date().toISOString(),
       phase,
@@ -354,7 +379,7 @@ export function resetReleasePhases(state: ReleaseState, from: ReleasePhase): voi
   }
 }
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
-type RunOptions = { allowFailure?: boolean; dryRunStdout?: string };
+type RunOptions = { allowFailure?: boolean; dryRunStdout?: string; timeoutMs?: number };
 export type ReleaseRunner = (
   bin: string,
   args: string[],
@@ -368,6 +393,12 @@ export type ReleaseContext = {
   log: (phase: ReleasePhase, message: string) => void;
   resume: (phase?: ReleasePhase, extra?: string[]) => string;
 };
+export function requireReleaseValue(value: string | undefined, name: string): string {
+  if (!value) {
+    throw new Error(`Missing ${name}; complete the preceding release phase.`);
+  }
+  return value;
+}
 function durationFromEnv(name: string, fallback: number): number {
   const value = process.env[name];
   if (value === undefined) {
@@ -378,11 +409,28 @@ function durationFromEnv(name: string, fallback: number): number {
   }
   return Number(value);
 }
-function spawnCommand(bin: string, args: string[]): Promise<CommandResult> {
+function spawnCommand(
+  bin: string,
+  args: string[],
+  options: RunOptions = {},
+): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    const timer =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGKILL");
+          }, options.timeoutMs);
+    const clear = () => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -391,8 +439,18 @@ function spawnCommand(bin: string, args: string[]): Promise<CommandResult> {
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ stdout, stderr, exitCode: code ?? 1 }));
+    child.on("error", (error) => {
+      clear();
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clear();
+      resolve({
+        stdout,
+        stderr: timedOut ? `command timed out after ${options.timeoutMs}ms` : stderr,
+        exitCode: timedOut ? 1 : (code ?? 1),
+      });
+    });
   });
 }
 function isGhGet(bin: string, args: string[]): boolean {
@@ -422,15 +480,30 @@ export function createReleaseRunner(
   execute: ReleaseRunner = spawnCommand,
 ): ReleaseRunner {
   return async (bin, args, options = {}) => {
+    if (
+      options.timeoutMs !== undefined &&
+      (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)
+    ) {
+      throw new Error("Release command timeout must be a positive integer.");
+    }
     if (dryRun) {
       console.log(`+ ${shellCommand(bin, args)}`);
       return { stdout: options.dryRunStdout ?? "", stderr: "", exitCode: 0 };
     }
     const attempts = isGhGet(bin, args) ? 4 : 1;
+    const deadline = options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs;
     let result: CommandResult = { stdout: "", stderr: "", exitCode: 1 };
     for (let attempt = 0; attempt < attempts; attempt++) {
+      const remaining = deadline === undefined ? undefined : deadline - Date.now();
+      if (remaining !== undefined && remaining <= 0) {
+        result = { stdout: "", stderr: "release command deadline exceeded", exitCode: 1 };
+        break;
+      }
       try {
-        result = await execute(bin, args);
+        result = await execute(bin, args, {
+          ...options,
+          timeoutMs: remaining === undefined ? undefined : Math.max(1, remaining),
+        });
       } catch (error) {
         result = {
           stdout: "",
@@ -438,11 +511,23 @@ export function createReleaseRunner(
           exitCode: 1,
         };
       }
-      if (result.exitCode === 0) {
+      if (result.exitCode === 0 && (deadline === undefined || Date.now() <= deadline)) {
         return result;
       }
+      if (result.exitCode === 0) {
+        result = { stdout: "", stderr: "release command deadline exceeded", exitCode: 1 };
+      }
       if (attempt + 1 < attempts) {
-        await delay(durationFromEnv("OPENCLAW_RELEASE_STABLE_BACKOFF_MS", 2000) * 2 ** attempt);
+        let backoff = durationFromEnv("OPENCLAW_RELEASE_STABLE_BACKOFF_MS", 2000) * 2 ** attempt;
+        if (deadline !== undefined) {
+          backoff = Math.min(backoff, Math.max(0, deadline - Date.now()));
+        }
+        if (deadline !== undefined && deadline <= Date.now()) {
+          break;
+        }
+        if (backoff > 0) {
+          await delay(backoff);
+        }
       }
     }
     if (!options.allowFailure) {
@@ -478,7 +563,8 @@ export async function probeCapabilities(ctx: ReleaseContext, toolingSha: string)
   if (
     !ctx.options.dryRun &&
     ctx.state.capabilities?.toolingSha === toolingSha &&
-    ctx.state.capabilities.parentSweepsStaleChildren !== undefined
+    ctx.state.capabilities.parentSweepsStaleChildren !== undefined &&
+    ctx.state.capabilities.childNpmPublishEnvironment !== undefined
   ) {
     return;
   }
@@ -487,14 +573,14 @@ export async function probeCapabilities(ctx: ReleaseContext, toolingSha: string)
     ["show", `${toolingSha}:.github/workflows/openclaw-release-publish.yml`],
     { allowFailure: true },
   );
-  const closeout = await ctx.run(
-    "git",
-    ["show", "origin/main:.github/workflows/openclaw-stable-main-closeout.yml"],
-    { allowFailure: true },
-  );
   const children = await ctx.run(
     "git",
     ["show", `${toolingSha}:scripts/lib/release-publish-children.sh`],
+    { allowFailure: true },
+  );
+  const npmPublisher = await ctx.run(
+    "git",
+    ["show", `${toolingSha}:.github/workflows/openclaw-npm-release.yml`],
     { allowFailure: true },
   );
   ctx.state.capabilities = {
@@ -506,14 +592,10 @@ export async function probeCapabilities(ctx: ReleaseContext, toolingSha: string)
       !ctx.options.dryRun &&
       ((publisher.exitCode === 0 && publisher.stdout.includes("sync_beta_to_stable")) ||
         (children.exitCode === 0 && children.stdout.includes("sync_beta_to_stable"))),
-    parentApprovalReceipt:
-      publisher.exitCode === 0 &&
+    childNpmPublishEnvironment:
       !ctx.options.dryRun &&
-      publisher.stdout.includes("release-approval-receipt"),
-    closeoutResolvesWaivers:
-      !ctx.options.dryRun &&
-      closeout.exitCode === 0 &&
-      closeout.stdout.includes("published_stable_soak_waiver"),
+      npmPublisher.exitCode === 0 &&
+      npmPublisher.stdout.includes("environment: npm-publish"),
     probedAt: new Date().toISOString(),
     toolingSha,
   };

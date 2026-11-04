@@ -14,7 +14,7 @@ openclaw onboard
 CLI onboarding is the recommended terminal setup path on macOS, Linux, and
 Windows (native or WSL2). On a fresh install, **Quick start** detects available AI
 access, waits for you to choose a connection, verifies your choice with a real
-completion, and opens the web dashboard with a foreground Gateway. **Custom setup** preserves the full
+completion, asks whether to keep OpenClaw running in the background, and opens the web dashboard. **Custom setup** preserves the full
 guided flow. `openclaw setup` runs the same flow ([Setup](/cli/setup) covers
 the `--baseline` config-only variant). Windows desktop users can also start
 from [Windows Hub](/platforms/windows).
@@ -24,7 +24,9 @@ and AI chat. Detected connections and supported providers share the same picker;
 failure or cancellation never automatically selects another provider. In local
 onboarding, **Skip for now** prepares the named agent's workspace and local Gateway
 configuration, then exits without starting either. Interrupted baseline setup
-resumes on the next run.
+resumes on the next run. The **Local setup** summary confirms workspace and Gateway
+configuration, not a working AI connection; **Inference ready** appears only after
+the selected connection passes verification.
 
 The classic wizard remains available for remote Gateway setup, channel pairing,
 daemon controls, skills, and imports. Run it explicitly
@@ -53,6 +55,16 @@ On a fresh install, run `npx openclaw@latest` and choose **Quick start** for the
 browser dashboard. Reopen it later with `openclaw dashboard`.
 Docs: [Dashboard](/web/dashboard).
 </Info>
+
+## Memory embeddings
+
+After a local AI connection is verified, guided onboarding offers a skippable
+memory embedding step. The classic wizard offers the same step. Choose a cloud
+provider or a local Ollama/LM Studio server and verify a synthetic embedding before saving; no memory files
+are sent by this check. Existing OAuth access is tested rather than assumed.
+Skipping does not disable memory or change an existing selection. You can return
+later with `openclaw configure --section memory`. See
+[Memory configuration](/reference/memory-config) for keyword-only and local options.
 
 ## Locale
 
@@ -121,14 +133,19 @@ Quick start follows this path:
    saving the provider or replacing the active model.
    Choose **Skip for now** to prepare the local baseline and exit without starting
    the Gateway or AI chat. Choosing a provider through its manual setup keeps the
-   Quick start defaults: agent name `main`, full access, telemetry consent unset,
-   and a foreground Gateway after verification.
-5. Save the verified route, prepare the agent workspace, and persist Gateway
+   Quick start defaults: agent name `main`, full access, and telemetry consent
+   unset.
+5. Answer **Keep OpenClaw running in the background?** (default yes). Yes
+   installs the background service, so the Gateway keeps running after the
+   terminal closes. No starts the Gateway in the foreground instead:
+   **Ctrl+C** stops it, config persists, and `openclaw gateway install` enables
+   background operation later. A temporary run such as `npx`, or a host where
+   OpenClaw can't manage the service, skips the question. If the service fails
+   to start, setup reports why and continues in setup chat.
+6. Save the verified route, prepare the agent workspace, and persist Gateway
    settings.
-6. Start the Gateway in the foreground and open the browser dashboard. Press
-   **Ctrl+C** to stop it; config persists. Use `openclaw gateway install` later
-   for background operation, `openclaw` for the TUI, or `openclaw dashboard` to
-   reopen the web UI.
+7. Open the browser dashboard. Use `openclaw` for the TUI or
+   `openclaw dashboard` to reopen the web UI.
 
 The Quick start choice is not offered for configured installs, remote Gateway
 chat setup, non-interactive runs, or runs with `--skip-ui` or `--tui`.
@@ -289,7 +306,9 @@ Local mode (default) walks through these steps:
    install with guidance. If both `gateway.auth.token` and
    `gateway.auth.password` are set while `gateway.auth.mode` is unset, install
    is blocked until you set the mode explicitly.
-8. **Health check** - starts the Gateway and verifies it is reachable.
+8. **Health check** - waits for a managed or temporary session Gateway startup and verifies it is reachable.
+   If onboarding did not start a Gateway, it checks current reachability and explains
+   how to start one without waiting for a service that onboarding did not start.
 
 <Note>
 Re-running onboarding does **not** wipe anything unless you pass `--reset`.

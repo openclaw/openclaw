@@ -25,7 +25,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
-internal enum class WorkedToolOutcome { Failed, Blocked, Unknown }
+internal enum class WorkedToolOutcome { Failed, Blocked, Skipped, Unknown }
 
 internal data class PreparedChatWorkSpan(
   val start: Int,
@@ -281,6 +281,7 @@ private fun workedToolOutcomes(
       when (activity.status) {
         "failed" -> WorkedToolOutcome.Failed
         "blocked" -> WorkedToolOutcome.Blocked
+        "skipped" -> WorkedToolOutcome.Skipped
         null -> WorkedToolOutcome.Unknown
         else -> null
       }
@@ -295,6 +296,7 @@ private fun workedToolOutcomeLabel(
   when (outcome) {
     WorkedToolOutcome.Failed -> if (count == 1) nativeString("1 tool failed") else nativeString("\$count tools failed", count)
     WorkedToolOutcome.Blocked -> if (count == 1) nativeString("1 tool blocked") else nativeString("\$count tools blocked", count)
+    WorkedToolOutcome.Skipped -> if (count == 1) nativeString("1 tool skipped") else nativeString("\$count tools skipped", count)
     WorkedToolOutcome.Unknown -> if (count == 1) nativeString("1 tool outcome unknown") else nativeString("\$count tool outcomes unknown", count)
   }
 

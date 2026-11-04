@@ -9,18 +9,21 @@ import {
 } from "../../config/future-version-guard.js";
 // Gateway-specific future-config actions shared by pre-bootstrap and runtime startup.
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.js";
+import {
+  isUpdateRehearsalReadOnlyPath,
+  resolveUpdateRehearsalRoot,
+} from "../../infra/update-rehearsal-paths.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { GatewayRunOpts } from "./run-options.js";
 
 export type GatewayRunPreBootstrapOptions = Pick<GatewayRunOpts, "force" | "reset">;
 
-type GatewayRunFutureConfigGuardParams = {
+export function enforceGatewayRunFutureConfigGuard(params: {
   opts: GatewayRunPreBootstrapOptions;
   snapshot?: ConfigFileSnapshot | null;
   config?: Pick<OpenClawConfig, "env" | "meta"> | null;
-};
-
-function resolveGatewayRunFutureConfigBlock(params: GatewayRunFutureConfigGuardParams) {
+  runtime: RuntimeEnv;
+}): boolean {
   const processServiceMode = Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
   const candidateConfig =
     params.config ??
@@ -33,14 +36,14 @@ function resolveGatewayRunFutureConfigBlock(params: GatewayRunFutureConfigGuardP
         : undefined,
     );
   const serviceMode = processServiceMode || candidateServiceMode;
-  // Reset runs before service/force startup, while ordinary startup now runs state migrations.
+  // Reset precedes service startup, port cleanup, and ordinary state preparation.
   const futureAction = params.opts.reset
     ? { action: "reset the dev gateway state", exitCode: 1 }
     : serviceMode
       ? { action: "start the gateway service", exitCode: 78 }
       : params.opts.force
         ? { action: "force-kill gateway port listeners", exitCode: 1 }
-        : { action: "run automatic gateway startup migrations", exitCode: 1 };
+        : { action: "run gateway state preparation", exitCode: 1 };
   const guardEnv = serviceMode ? cloneEnvWithPlatformSemantics(process.env) : process.env;
   if (serviceMode) {
     delete guardEnv[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV];
@@ -50,21 +53,27 @@ function resolveGatewayRunFutureConfigBlock(params: GatewayRunFutureConfigGuardP
     snapshot: params.snapshot,
     config: params.config,
     env: guardEnv,
+    serviceMode,
   });
-  return block ? { block, exitCode: futureAction.exitCode, serviceMode } : null;
-}
-
-export function enforceGatewayRunFutureConfigGuard(
-  params: GatewayRunFutureConfigGuardParams & { runtime: RuntimeEnv },
-): boolean {
-  const resolved = resolveGatewayRunFutureConfigBlock(params);
-  if (!resolved) {
+  if (!block) {
     return true;
   }
-  if (resolved.serviceMode) {
+  if (
+    !serviceMode &&
+    !params.opts.reset &&
+    !params.opts.force &&
+    params.snapshot?.valid &&
+    resolveUpdateRehearsalRoot(process.env) &&
+    !isUpdateRehearsalReadOnlyPath(params.snapshot.path, process.env)
+  ) {
+    // Rehearsal preserves writer stamps for shipped-driver capture comparisons.
+    // The target's live finalizer restamps validated downgrade config before restart.
+    return true;
+  }
+  if (serviceMode) {
     delete process.env[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV];
   }
-  params.runtime.error(formatFutureConfigActionBlock(resolved.block));
-  params.runtime.exit(resolved.exitCode);
+  params.runtime.error(formatFutureConfigActionBlock(block));
+  params.runtime.exit(futureAction.exitCode);
   return false;
 }

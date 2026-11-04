@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
@@ -21,13 +22,7 @@ type GuildIconEntry = {
 function setBoundedEntry<T>(map: Map<string, T>, key: string, value: T): void {
   map.delete(key);
   map.set(key, value);
-  while (map.size > DISCORD_AVATAR_CACHE_MAX_ENTRIES) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    map.delete(oldest);
-  }
+  pruneMapToMaxSize(map, DISCORD_AVATAR_CACHE_MAX_ENTRIES);
 }
 
 function discordAvatarUrl(owner: "avatars" | "icons", id: string, hash: string): string {
@@ -97,7 +92,7 @@ export function createDiscordAvatarResolver() {
       .then((guild) => {
         const hash = guild.icon ?? null;
         setBoundedEntry(guildIcons, guildId, {
-          expiresAt: Date.now() + DISCORD_GUILD_ICON_TTL_MS,
+          expiresAt: performance.now() + DISCORD_GUILD_ICON_TTL_MS,
           hash,
         });
         if (hash) {
@@ -135,7 +130,7 @@ export function createDiscordAvatarResolver() {
           : undefined;
       }
       const guildIcon = guildIcons.get(params.guildId);
-      if (!guildIcon || guildIcon.expiresAt <= Date.now()) {
+      if (!guildIcon || guildIcon.expiresAt <= performance.now()) {
         refreshGuildIcon(params.client, params.guildId, params.conversationId, endpointRuntime);
       }
       return guildIcon?.hash

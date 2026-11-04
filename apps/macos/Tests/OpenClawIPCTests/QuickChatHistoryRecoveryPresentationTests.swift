@@ -44,9 +44,10 @@ extension QuickChatCatalogPresentationTests {
             window.orderFront(nil)
 
             // The production view's onAppear owns the initial history load.
-            try #require(await Self.waitForHistoryPresentation {
+            try await TestWait.observed("initial history presentation") {
                 !model.isLoading && model.messages.count == 1 && model.healthOK
-            })
+            }
+            try #require(!model.isLoading && model.messages.count == 1 && model.healthOK)
             let initialRequests = await transport.historyRequests
             try #require(initialRequests == ["global"])
             try #require(model.currentSessionTarget.agentID == "main")
@@ -56,10 +57,13 @@ extension QuickChatCatalogPresentationTests {
 
             // The reply was persisted, but live delivery was replaced by invalidation.
             await transport.publishMissingReply()
-            let recovered = try await Self.waitForHistoryPresentation {
+            try await TestWait.observed("recovered history reply") {
                 model.messages.contains { message in
                     message.content.contains { $0.text == HistoryRecoveryPresentationTransport.reply }
                 }
+            }
+            let recovered = model.messages.contains { message in
+                message.content.contains { $0.text == HistoryRecoveryPresentationTransport.reply }
             }
             let requests = await transport.historyRequests
             let deliveredEvents = await transport.deliveredEvents
@@ -79,15 +83,6 @@ extension QuickChatCatalogPresentationTests {
             #expect(model.currentSessionTarget.agentID == "main")
             #expect(model.errorText == nil)
         }
-    }
-
-    private static func waitForHistoryPresentation(_ condition: @MainActor () -> Bool) async throws -> Bool {
-        let deadline = ContinuousClock.now + .seconds(5)
-        repeat {
-            if condition() { return true }
-            try await Task.sleep(for: .milliseconds(20))
-        } while ContinuousClock.now < deadline
-        return condition()
     }
 
     private static func captureHistoryPresentation(
@@ -189,8 +184,8 @@ private actor HistoryRecoveryPresentationTransport: OpenClawChatTransport {
         false
     }
 
-    func listAgents() async throws -> OpenClawChatAgentsListResponse? {
-        .init(defaultId: "main", agents: [.init(id: "main", name: "Assistant", emoji: "🦞")])
+    func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws {
+        await onUpdate(.init(defaultId: "main", agents: [.init(id: "main", name: "Assistant", emoji: "🦞")]))
     }
 
     func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {

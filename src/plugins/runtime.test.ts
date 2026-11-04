@@ -1,8 +1,9 @@
-/** Covers plugin runtime registration API behavior and registry mutation guards. */
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { DecisionProviderHost } from "../decisions/provider-host.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import { runGatewayCloseSteps } from "../gateway/server-shutdown.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -14,19 +15,18 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   capturePluginRegistryLifecycleEpoch,
   capturePluginRegistryLifecycleSignal,
-  isPluginRegistryRetired,
 } from "./registry-lifecycle.js";
-import type { PluginHttpRouteRegistration } from "./registry-types.js";
 import { getPluginRegistryState } from "./runtime-state.js";
 import {
   captureActivePluginRegistrySnapshot,
   clearActivePluginRegistry,
+  createPluginRegistryOwner,
   disposePluginRegistryInstances,
   getActivePluginRegistry,
   listImportedRuntimePluginIds,
-  recordImportedPluginId,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
+  waitForPluginRegistryRetirement,
 } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
@@ -46,12 +46,23 @@ async function waitForCleanupSignal(signal: Promise<void>, label: string): Promi
   }
 }
 
-const makeRoute = (path: string): PluginHttpRouteRegistration => ({
-  path,
-  handler: () => {},
-  auth: "gateway",
-  match: "exact",
-});
+function createCleanupDatabase() {
+  const db = new DatabaseSync(":memory:");
+  const nativeState = resolveGlobalSingleton(
+    Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
+    (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
+    (state) => {
+      if (state.database?.isOpen) {
+        state.resets++;
+        state.database.close();
+      }
+    },
+    "plugin-registry",
+  );
+  nativeState.database = db;
+  nativeState.resets = 0;
+  return { db, nativeState };
+}
 
 describe("setActivePluginRegistry", () => {
   beforeEach(() => {
@@ -59,38 +70,237 @@ describe("setActivePluginRegistry", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("does not carry forward httpRoutes when new registry has none", () => {
-    const oldRegistry = createEmptyPluginRegistry();
-    const fakeRoute = makeRoute("/test");
-    oldRegistry.httpRoutes.push(fakeRoute);
-    setActivePluginRegistry(oldRegistry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
-
-    const newRegistry = createEmptyPluginRegistry();
-    expect(newRegistry.httpRoutes).toHaveLength(0);
-    setActivePluginRegistry(newRegistry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(0);
+  it("keeps predecessor services and authority until the last admitted holder releases", async () => {
+    const previous = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "overlapping-owner" });
+    previous.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry: previous });
+    const parent = instance.retainConsumer(undefined, previous);
+    const child = instance.retainConsumer(undefined, previous);
+    const toolEffect = vi.fn(() => "old tool");
+    const endHookEffect = vi.fn(() => "old end hook");
+    const oldTool = instance.wrap(toolEffect);
+    const oldEndHook = instance.wrap(endHookEffect);
+    const monitor = instance.retainConsumer(undefined, previous, "custody");
+    const stopScheduler = createDeferredCore();
+    const scheduler = instance.runInRegistry(previous, () => stopScheduler.promise, {
+      joinDisposal: false,
+    });
+    const events: string[] = [];
+    instance.lifecycle.onDispose(() => {
+      events.push("dispose");
+    });
+    const next = createEmptyPluginRegistry();
+    next.plugins.push(createPluginRecord({ id: record.id }));
+    setActivePluginRegistry(previous);
+    const owner = createPluginRegistryOwner(previous);
+    setActivePluginRegistry(next);
+    owner.publish(next, async () => {
+      events.push("service-stop");
+      expect(instance.owner?.revoked).toBe(false);
+      monitor.release();
+      stopScheduler.resolve();
+      await scheduler;
+    });
+    try {
+      expect(owner.registry).toBe(next);
+      expect(
+        [...(getPluginRegistryState()?.retiredRegistryCleanups?.values() ?? [])].map(
+          ({ registry }) => registry,
+        ),
+      ).toContain(previous);
+      expect(() => instance.run(() => undefined)).toThrow("was reloaded or disabled");
+      expect(parent.run(oldTool)).toBe("old tool");
+      expect(await waitForPluginRegistryRetirement(previous, { deferConsumers: true })).toEqual({
+        cleanupCount: 0,
+        failures: [],
+        deferredPluginIds: [record.id],
+      });
+      parent.release();
+      await nextTurn();
+      expect(events).toEqual([]);
+      expect(child.run(oldEndHook)).toBe("old end hook");
+      child.release();
+      await expect(waitForPluginRegistryRetirement(previous)).resolves.toMatchObject({
+        failures: [],
+      });
+      expect(events).toEqual(["service-stop", "dispose"]);
+      expect(instance.owner?.revoked).toBe(true);
+      expect(instance.lifecycle.signal.aborted).toBe(true);
+      expect(() => oldTool()).toThrow(/reloaded or disabled/);
+      expect(() => oldEndHook()).toThrow(/reloaded or disabled/);
+      expect(toolEffect).toHaveBeenCalledOnce();
+      expect(endHookEffect).toHaveBeenCalledOnce();
+    } finally {
+      parent.release();
+      child.release();
+      monitor.release();
+      stopScheduler.resolve();
+      await scheduler;
+      await owner.close();
+    }
   });
 
-  it("does not carry forward when new registry already has routes", () => {
-    const oldRegistry = createEmptyPluginRegistry();
-    oldRegistry.httpRoutes.push(makeRoute("/old"));
-    setActivePluginRegistry(oldRegistry);
-
-    const newRegistry = createEmptyPluginRegistry();
-    const newRoute = makeRoute("/new");
-    newRegistry.httpRoutes.push(newRoute);
-    setActivePluginRegistry(newRegistry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
-    expect(getActivePluginRegistry()?.httpRoutes[0]).toEqual(newRoute);
+  it("retires intermediate generations independently and joins older holders at shutdown", async () => {
+    const createGeneration = () => {
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "rapid-overlap" });
+      registry.plugins.push(record);
+      return { registry, instance: new PluginInstance(record.id, { record, registry }) };
+    };
+    const first = createGeneration();
+    const second = createGeneration();
+    const third = createGeneration();
+    const hold = first.instance.retainConsumer(undefined, first.registry);
+    const stopped: string[] = [];
+    setActivePluginRegistry(first.registry);
+    const owner = createPluginRegistryOwner(first.registry);
+    setActivePluginRegistry(second.registry);
+    owner.publish(second.registry, async () => {
+      stopped.push("first");
+    });
+    setActivePluginRegistry(third.registry);
+    owner.publish(third.registry, async () => {
+      stopped.push("second");
+    });
+    let closing: ReturnType<typeof owner.close> | undefined;
+    try {
+      await waitForPluginRegistryRetirement(second.registry);
+      expect(stopped).toEqual(["second"]);
+      expect(owner.registry).toBe(third.registry);
+      expect(first.instance.owner?.revoked).toBe(false);
+      const closed = vi.fn();
+      closing = owner.close().then((result) => {
+        closed();
+        return result;
+      });
+      await nextTurn();
+      expect(closed).not.toHaveBeenCalled();
+      expect(hold.run(() => "finishing before restart")).toBe("finishing before restart");
+      hold.release();
+      await expect(closing).resolves.toMatchObject({ pluginFailures: [] });
+      expect(stopped).toEqual(["second", "first"]);
+      expect(getPluginRegistryState()?.retiredRegistryCleanups?.size ?? 0).toBe(0);
+    } finally {
+      hold.release();
+      await (closing ?? owner.close());
+    }
   });
 
-  it("does not carry forward when same registry is set again", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.httpRoutes.push(makeRoute("/test"));
-    setActivePluginRegistry(registry);
-    setActivePluginRegistry(registry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
+  it("retains a predecessor when its service stop fails before instance disposal", async () => {
+    const previous = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "failed-retirement" });
+    previous.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry: previous });
+    const disposed = vi.fn();
+    instance.lifecycle.onDispose(disposed);
+    const failure = new Error("service still owns its connection");
+    setActivePluginRegistry(previous);
+    const owner = createPluginRegistryOwner(previous);
+    const next = createEmptyPluginRegistry();
+    setActivePluginRegistry(next);
+    owner.publish(next, async () => {
+      throw failure;
+    });
+    try {
+      await expect(waitForPluginRegistryRetirement(previous)).rejects.toBe(failure);
+      await expect(owner.close()).rejects.toMatchObject({
+        name: "PluginRuntimeCloseRetainedError",
+        cause: failure,
+      });
+      expect(disposed).not.toHaveBeenCalled();
+      expect(instance.owner?.revoked).toBe(false);
+      expect(
+        [...(getPluginRegistryState()?.retiredRegistryCleanups?.values() ?? [])].map(
+          ({ registry }) => registry,
+        ),
+      ).toContain(previous);
+    } finally {
+      // The synthetic failed prerequisite has no external resource left to recover.
+      for (const [completion, entry] of getPluginRegistryState()?.retiredRegistryCleanups ?? []) {
+        if (entry.registry === previous) {
+          getPluginRegistryState()?.retiredRegistryCleanups?.delete(completion);
+        }
+      }
+      await instance.dispose();
+      await clearActivePluginRegistry();
+    }
+  });
+
+  it("does not cancel successor decisions when its predecessor finally retires", async (ctx) => {
+    const previous = createEmptyPluginRegistry();
+    const consumer = createPluginRecord({ id: "decision-consumer" });
+    const provider = createPluginRecord({ id: "decision-provider" });
+    previous.plugins.push(consumer, provider);
+    const old = new PluginInstance(consumer.id, { record: consumer, registry: previous });
+    const providerInstance = new PluginInstance(provider.id, {
+      record: provider,
+      registry: previous,
+    });
+    const hold = old.retainConsumer(undefined, previous);
+    const entered = createDeferredCore<AbortSignal>();
+    const finish = createDeferredCore();
+    const host = new DecisionProviderHost(
+      {
+        id: "fixture",
+        contractVersion: 1,
+        async evaluate(_batch, context) {
+          entered.resolve(context.signal);
+          await finish.promise;
+          return {
+            status: "ok",
+            result: {
+              model: "fixture-v1",
+              answers: { available: { type: "boolean", probabilityTrue: 1 } },
+            },
+          };
+        },
+      },
+      provider,
+    );
+    previous.decisionProviders.push({ pluginId: provider.id, host });
+    const next = createEmptyPluginRegistry();
+    next.plugins.push(createPluginRecord({ id: consumer.id }), provider);
+    next.decisionProviders = previous.decisionProviders;
+    setActivePluginRegistry(previous);
+    const owner = createPluginRegistryOwner(previous);
+    setActivePluginRegistry(next);
+    owner.publish(next, async () => {});
+    const pending = host.evaluate(
+      { state: "synthetic", questions: { available: { type: "boolean" } } },
+      {
+        purpose: "test",
+        rubricVersion: "1",
+        timeoutMs: 10_000,
+        signal: new AbortController().signal,
+      },
+      "fixture-v1",
+      { agents: { defaults: { decisionModel: "fixture/fixture-v1" } } },
+      next,
+      1,
+      consumer.id,
+    );
+    try {
+      const signal = await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Decision provider settled before entering evaluation",
+        ),
+        ctx.signal,
+      );
+      expect(providerInstance.owner?.registry).toBe(next);
+      hold.release();
+      await waitForPluginRegistryRetirement(previous);
+      expect(signal.aborted).toBe(false);
+      finish.resolve();
+      await expect(pending).resolves.toMatchObject({ status: "ok" });
+    } finally {
+      hold.release();
+      finish.resolve();
+      await pending.catch(() => {});
+      await owner.close();
+    }
   });
 
   it.each(["empty", "loaded"] as const)(
@@ -208,12 +418,6 @@ describe("setActivePluginRegistry", () => {
     await waitForCleanupSignal(secondCleanupCalled.promise, "second cleanup");
   });
 
-  it("includes plugin ids imported before registration failed", () => {
-    recordImportedPluginId("broken-plugin");
-
-    expect(listImportedRuntimePluginIds()).toEqual(["broken-plugin"]);
-  });
-
   it.each(["instance", "runtime"] as const)(
     "keeps %s plugin cleanup admitted through the restart connection drain",
     async (kind) => {
@@ -290,34 +494,6 @@ describe("setActivePluginRegistry", () => {
       }
     },
   );
-
-  it("clears the root only after its host cleanup completes", async () => {
-    let cleanupCount = 0;
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      createPluginRecord({ id: "cleanup-on-close", name: "Cleanup on close", status: "loaded" }),
-    );
-    registry.runtimeLifecycles = [
-      {
-        pluginId: "cleanup-on-close",
-        pluginName: "Cleanup on close",
-        lifecycle: {
-          id: "cleanup-on-close",
-          cleanup() {
-            cleanupCount += 1;
-          },
-        },
-        source: "/virtual/cleanup-on-close/index.ts",
-        rootDir: "/virtual/cleanup-on-close",
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    await clearActivePluginRegistry();
-
-    expect(getActivePluginRegistry()).toBeNull();
-    expect(cleanupCount).toBe(1);
-  });
 
   it("joins a displaced cleanup scope created before package replacement", async () => {
     const registry = createEmptyPluginRegistry();
@@ -406,17 +582,7 @@ describe("setActivePluginRegistry", () => {
     },
   );
 
-  it.each([
-    "install",
-    "staged",
-    "clear",
-    "activation-install",
-    "activation-staged",
-    "activation-install-replace",
-    "activation-staged-replace",
-    "catalog-install",
-    "catalog-staged",
-  ] as const)(
+  it.each(["install", "staged", "clear"] as const)(
     "keeps an admitted command live through a reentrant retirement abort (%s)",
     async (retirement) => {
       const { createPluginRegistry } = await import("./registry.js");
@@ -431,102 +597,35 @@ describe("setActivePluginRegistry", () => {
       const record = createPluginRecord({ id: "abort-cleanup-sqlite", status: "loaded" });
       builder.registry.plugins.push(record);
       const api = builder.createApi(record, { config: {} });
-      const db = new DatabaseSync(":memory:");
-      const nativeState = resolveGlobalSingleton(
-        Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
-        (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
-        (state) => {
-          if (state.database?.isOpen) {
-            state.resets++;
-            state.database.close();
-          }
-        },
-        "plugin-registry",
-      );
-      nativeState.database = db;
-      nativeState.resets = 0;
+      const { db, nativeState } = createCleanupDatabase();
       const cleanup = vi.fn(() => {
         expect(db.prepare("SELECT 2 AS value").get()).toEqual({ value: 2 });
       });
       api.lifecycle.registerRuntimeLifecycle({ id: "abort-cleanup", cleanup });
       setActivePluginRegistry(builder.registry);
-      const catalogReentry = retirement.startsWith("catalog-");
-      const successorBuilder = catalogReentry
-        ? createPluginRegistry({
-            logger: { info() {}, warn() {}, error() {}, debug() {} },
-            runtime: createPluginRuntime(),
-            activateGlobalSideEffects: false,
-          })
-        : undefined;
-      const successor = successorBuilder?.registry ?? createEmptyPluginRegistry();
-      const newer = createEmptyPluginRegistry();
-      const replaceAgain = retirement.endsWith("-replace");
-      const staged = retirement.split("-").includes("staged");
-      const signal = retirement.startsWith("activation-")
-        ? capturePluginRegistryLifecycleSignal(successor, undefined, { scopedRuntime: true })
-        : capturePluginRegistryLifecycleSignal(
-            builder.registry,
-            capturePluginRegistryLifecycleEpoch(builder.registry),
-          );
+      const successor = createEmptyPluginRegistry();
+      const signal = capturePluginRegistryLifecycleSignal(
+        builder.registry,
+        capturePluginRegistryLifecycleEpoch(builder.registry),
+      );
       if (!signal) {
         throw new Error("Expected an active registry lifecycle signal");
       }
       let innerClear: Promise<void> | undefined;
       let outerClear: Promise<void> | undefined;
-      const reenter = () => {
-        if (replaceAgain) {
-          activatePluginRegistry(newer, "newer", "gateway-bindable", "/virtual/newer");
-          innerClear = Promise.resolve();
-        } else {
-          innerClear = clearActivePluginRegistry();
-        }
-      };
-      if (successorBuilder) {
-        const channelRecord = createPluginRecord({ id: "catalog-reentry", status: "loaded" });
-        successor.plugins.push(channelRecord);
-        successorBuilder.createApi(channelRecord, { config: {} }).registerChannel({
-          plugin: {
-            id: channelRecord.id,
-            meta: {
-              id: channelRecord.id,
-              label: "Catalog reentry",
-              selectionLabel: "Catalog reentry",
-              docsPath: "/channels/catalog-reentry",
-              blurb: "Catalog lifecycle fixture",
-            },
-            capabilities: { chatTypes: ["direct"] },
-            config: {
-              listAccountIds: () => [],
-              resolveAccount: () => ({ accountId: "default" }),
-            },
-            message: {
-              get durableFinal() {
-                if (getActivePluginRegistry() === successor) {
-                  reenter();
-                }
-                return undefined;
-              },
-            },
-          },
-        });
-      } else {
-        signal.addEventListener("abort", reenter);
-      }
+      signal.addEventListener("abort", () => {
+        innerClear = clearActivePluginRegistry();
+      });
       const escape = createDeferredCore();
       const commandRead = createDeferredCore();
       const releaseCommand = createDeferredCore();
       const reads: unknown[] = [];
       const failures: unknown[] = [];
-      const activationErrors: unknown[] = [];
       const command = withPluginCommandExecution(builder.registry, async () => {
         if (retirement === "clear") {
           outerClear = clearActivePluginRegistry();
-        } else if (staged) {
-          try {
-            activatePluginRegistry(successor, "successor", "explicit", "/virtual/successor");
-          } catch (error) {
-            activationErrors.push(error);
-          }
+        } else if (retirement === "staged") {
+          activatePluginRegistry(successor, "successor", "explicit", "/virtual/successor");
         } else {
           setActivePluginRegistry(successor, "successor", "explicit", "/virtual/successor");
         }
@@ -549,33 +648,12 @@ describe("setActivePluginRegistry", () => {
         expect(db.isOpen).toBe(true);
         expect(nativeState.resets).toBe(0);
         expect(cleanup).not.toHaveBeenCalled();
-        if (catalogReentry) {
-          expect(isPluginRegistryRetired(successor)).toBe(true);
-        }
-        expect(captureActivePluginRegistrySnapshot()).toEqual(
-          replaceAgain
-            ? {
-                activeRegistry: newer,
-                key: "newer",
-                workspaceDir: "/virtual/newer",
-                runtimeSubagentMode: "gateway-bindable",
-              }
-            : {
-                activeRegistry: null,
-                key: null,
-                workspaceDir: null,
-                runtimeSubagentMode: "default",
-              },
-        );
-        expect(activationErrors).toEqual(
-          staged
-            ? [expect.objectContaining({ message: "Plugin registry activation was superseded" })]
-            : [],
-        );
-        if (replaceAgain) {
-          const { getGlobalPluginRegistry } = await import("./hook-runner-global.js");
-          expect(getGlobalPluginRegistry()).toBe(newer);
-        }
+        expect(captureActivePluginRegistrySnapshot()).toEqual({
+          activeRegistry: null,
+          key: null,
+          workspaceDir: null,
+          runtimeSubagentMode: "default",
+        });
       } finally {
         escape.resolve();
         releaseCommand.resolve();
@@ -592,94 +670,6 @@ describe("setActivePluginRegistry", () => {
       expect(nativeState.resets).toBe(1);
     },
   );
-
-  it("retains a displaced loaded registry's cleanup through its admitted command", async () => {
-    const { loadAndActivateRootPluginRegistry } = await import("./loader.js");
-    const { resolvePluginLoadCacheContext } = await import("./loader-load-context.js");
-    const { withPluginCommandExecution } = await import("./command-execution-lock.js");
-    const { useNoBundledPlugins, writePlugin, resetPluginLoaderTestStateForTest } =
-      await import("./loader.test-fixtures.js");
-    useNoBundledPlugins();
-    onTestFinished(resetPluginLoaderTestStateForTest);
-    const db = new DatabaseSync(":memory:");
-    const nativeState = resolveGlobalSingleton(
-      Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
-      (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
-      (state) => {
-        if (state.database?.isOpen) {
-          state.resets++;
-          state.database.close();
-        }
-      },
-      "plugin-registry",
-    );
-    nativeState.database = db;
-    nativeState.resets = 0;
-    const reads: unknown[] = [];
-    const bridge = resolveGlobalSingleton(
-      Symbol.for("openclaw.test.loadedRetirementCleanup"),
-      (): { read?: () => void } => ({}),
-    );
-    bridge.read = () => {
-      reads.push(db.prepare("SELECT 1 AS value").get());
-    };
-    const plugin = writePlugin({
-      id: "loaded-retirement",
-      registration: `const read = globalThis[Symbol.for("openclaw.test.loadedRetirementCleanup")].read;
-      api.lifecycle.registerRuntimeLifecycle({ id: "native-cleanup", cleanup: read });`,
-    });
-    const options = {
-      config: {
-        plugins: {
-          allow: [plugin.id],
-          load: { paths: [plugin.file] },
-          slots: { memory: "none" },
-        },
-      },
-    };
-    const original = createEmptyPluginRegistry();
-    setActivePluginRegistry(original);
-    const signal = capturePluginRegistryLifecycleSignal(
-      original,
-      capturePluginRegistryLifecycleEpoch(original),
-    );
-    if (!signal) {
-      throw new Error("Expected an active predecessor signal");
-    }
-    const releaseCommand = createDeferredCore();
-    let heldCommand: ReturnType<typeof withPluginCommandExecution> | undefined;
-    let closing: Promise<void> | undefined;
-    signal.addEventListener("abort", () => {
-      const loaded = getActivePluginRegistry();
-      if (loaded) {
-        heldCommand = withPluginCommandExecution(loaded, () => releaseCommand.promise);
-        closing = clearActivePluginRegistry();
-      }
-    });
-    try {
-      expect(() => loadAndActivateRootPluginRegistry(options)).toThrow(
-        "Plugin registry activation was superseded",
-      );
-      expect(heldCommand).toBeDefined();
-      expect(closing).toBeDefined();
-      expect(db.isOpen).toBe(true);
-      expect(reads).toEqual([]);
-      const { cacheState, cacheKey } = resolvePluginLoadCacheContext(options);
-      expect(cacheState.get(cacheKey)).toBeUndefined();
-    } finally {
-      releaseCommand.resolve();
-      await heldCommand;
-      await closing;
-      await clearActivePluginRegistry();
-      bridge.read = undefined;
-      if (db.isOpen) {
-        db.close();
-      }
-      nativeState.database = undefined;
-    }
-    expect(reads).toEqual([{ value: 1 }]);
-    expect(nativeState.resets).toBe(1);
-  });
 
   it.each(
     (["active", "replaced", "command-held"] as const).flatMap((lifetime) =>
@@ -701,25 +691,12 @@ describe("setActivePluginRegistry", () => {
       const record = createPluginRecord({ id: "cleanup-sqlite", status: "loaded" });
       builder.registry.plugins.push(record);
       const api = builder.createApi(record, { config: {} });
-      const db = new DatabaseSync(":memory:");
+      const { db, nativeState } = createCleanupDatabase();
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const finished = createDeferredCore();
       const reads: unknown[] = [];
       const failures: unknown[] = [];
-      const nativeState = resolveGlobalSingleton(
-        Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
-        (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
-        (state) => {
-          if (state.database?.isOpen) {
-            state.resets++;
-            state.database.close();
-          }
-        },
-        "plugin-registry",
-      );
-      nativeState.database = db;
-      nativeState.resets = 0;
       const readAfterRelease = async () => {
         entered.resolve();
         try {

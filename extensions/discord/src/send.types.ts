@@ -1,24 +1,17 @@
-// Discord type declarations define plugin contracts.
 import type { APIAllowedMentions } from "discord-api-types/v10";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "openclaw/plugin-sdk/media-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
-import type { RequestClient } from "./internal/discord.js";
+import type { RequestClient } from "./internal/rest.js";
 
 export class DiscordSendError extends Error {
-  kind?: "missing-permissions" | "dm-blocked";
-  channelId?: string;
-  missingPermissions?: string[];
-  discordCode?: number;
   status?: number;
 
   constructor(message: string, opts?: Partial<DiscordSendError>) {
     super(message);
     this.name = "DiscordSendError";
-    if (opts) {
-      Object.assign(this, opts);
-    }
+    Object.assign(this, opts);
   }
 
   override toString() {
@@ -58,11 +51,16 @@ export type DiscordReactOpts = {
   rest?: RequestClient;
   verbose?: boolean;
   retry?: RetryConfig;
+  /** Client/account lifetime; aborting it also stops an issued request's transport. */
   signal?: AbortSignal;
+  /**
+   * Originating invocation cancellation. Drops queued REST work that was never
+   * issued and stops retry waits; already-dispatched requests settle normally.
+   */
+  callerSignal?: AbortSignal;
   timeoutMs?: number;
 };
 
-/** Guild asset upload options: client access plus the sender-scoped media read policy. */
 export type DiscordAssetUploadOpts = DiscordReactOpts & DiscordOutboundMediaOpts;
 
 export type DiscordReactionRuntimeContext = DiscordRuntimeAccountContext & {

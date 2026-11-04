@@ -1,8 +1,7 @@
-// Googlechat plugin module implements auth behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   getGoogleAuthTransport,
@@ -33,18 +32,14 @@ let cachedCerts: { fetchedAt: number; certs: Record<string, string> } | null = n
 let verifyClientPromise: Promise<OAuth2ClientInstance> | null = null;
 
 async function getVerifyClient(): Promise<OAuth2ClientInstance> {
-  if (!verifyClientPromise) {
-    verifyClientPromise = (async () => {
-      try {
-        const { OAuth2Client } = await loadGoogleAuthRuntime();
-        const transporter = await getGoogleAuthTransport();
-        return new OAuth2Client({ transporter });
-      } catch (error) {
-        verifyClientPromise = null;
-        throw error;
-      }
-    })();
-  }
+  verifyClientPromise ??= (async () => {
+    const { OAuth2Client } = await loadGoogleAuthRuntime();
+    const transporter = await getGoogleAuthTransport();
+    return new OAuth2Client({ transporter });
+  })().catch((error: unknown) => {
+    verifyClientPromise = null;
+    throw error;
+  });
   return await verifyClientPromise;
 }
 
@@ -136,9 +131,12 @@ export async function verifyGoogleChatRequest(params: {
   }
   const audienceType = params.audienceType ?? null;
 
-  if (audienceType === "app-url") {
-    try {
-      const verifyClient = await getVerifyClient();
+  if (audienceType !== "app-url" && audienceType !== "project-number") {
+    return { ok: false, reason: "unsupported audience type" };
+  }
+  try {
+    const verifyClient = await getVerifyClient();
+    if (audienceType === "app-url") {
       const ticket = await verifyClient.verifyIdToken({
         idToken: bearer,
         audience,
@@ -168,21 +166,11 @@ export async function verifyGoogleChatRequest(params: {
         };
       }
       return { ok: true };
-    } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
     }
+    const certs = await fetchChatCerts();
+    await verifyClient.verifySignedJwtWithCertsAsync(bearer, certs, audience, [CHAT_ISSUER]);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
   }
-
-  if (audienceType === "project-number") {
-    try {
-      const verifyClient = await getVerifyClient();
-      const certs = await fetchChatCerts();
-      await verifyClient.verifySignedJwtWithCertsAsync(bearer, certs, audience, [CHAT_ISSUER]);
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
-    }
-  }
-
-  return { ok: false, reason: "unsupported audience type" };
 }

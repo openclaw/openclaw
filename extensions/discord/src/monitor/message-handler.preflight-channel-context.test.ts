@@ -7,13 +7,15 @@ describe("resolveDiscordPreflightChannelContext", () => {
     const context = resolveDiscordPreflightChannelContext({
       isGuildMessage: true,
       messageChannelId: "channel-1",
-      channelName: "\uC2E4\uD5D8",
+      channelName: "baseline-\uC2E4\uD5D8",
       guildName: "Guild",
-      guildInfo: null,
+      guildInfo: {
+        channels: { baseline: { enabled: true }, "baseline-\uC2E4\uD5D8": { enabled: false } },
+      },
       threadChannel: null,
     });
 
-    expect(context.configChannelSlug).toBe("");
-    expect(context.displayChannelSlug).toBe("\uC2E4\uD5D8");
+    expect(context.channelConfig).toMatchObject({ allowed: true, matchKey: "baseline" });
+    expect(context.displayChannelSlug).toBe("baseline-\uC2E4\uD5D8");
   });
 });

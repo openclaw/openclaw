@@ -1,4 +1,3 @@
-// Googlechat plugin module implements monitor routing behavior.
 import {
   createFixedWindowRateLimiter,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
@@ -12,11 +11,7 @@ import type { GoogleChatEvent } from "./types.js";
 type ProcessGoogleChatEvent = (event: GoogleChatEvent, target: WebhookTarget) => Promise<void>;
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
-const webhookRateLimiter = createFixedWindowRateLimiter({
-  windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
-  maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
-  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
-});
+const webhookRateLimiter = createFixedWindowRateLimiter(WEBHOOK_RATE_LIMIT_DEFAULTS);
 const webhookInFlightLimiter = createWebhookInFlightLimiter();
 
 let processGoogleChatEvent: ProcessGoogleChatEvent = async () => {};

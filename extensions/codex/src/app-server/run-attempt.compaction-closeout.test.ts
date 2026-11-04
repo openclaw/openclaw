@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
   createTestParams,
@@ -12,10 +13,6 @@ setupRunAttemptTestHooks();
 
 type TestParams = ReturnType<typeof createTestParams>;
 
-function makeTestParams(overrides: Partial<TestParams> = {}): TestParams {
-  return { ...createTestParams(), ...overrides };
-}
-
 describe("runCodexAppServerAttempt compaction closeout", () => {
   it("closes visible compaction after client loss without making observed work replayable", async () => {
     const started = createDeferred<void>();
@@ -25,7 +22,7 @@ describe("runCodexAppServerAttempt compaction closeout", () => {
       }
     });
     const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(makeTestParams({ onAgentEvent }));
+    const run = runCodexAppServerAttempt({ ...createTestParams(), onAgentEvent });
     try {
       await run.waitForTurnAccepted();
       await harness.notify(
@@ -37,11 +34,22 @@ describe("runCodexAppServerAttempt compaction closeout", () => {
           throw new Error("Attempt ended before compaction progress started");
         }),
       ]);
-      harness.close();
+      const transportError =
+        'codex app-server exited: code=137 signal=SIGKILL stderr="worker exhausted"';
+      harness.close(new Error(transportError));
       const result = await run;
+      expect(readAttemptTerminal(result)).toMatchObject({
+        promptError: "codex app-server client closed before turn completed",
+        aborted: false,
+        timedOut: false,
+      });
 
       expect(result.codexAppServerFailure).toMatchObject({
         kind: "client_closed_before_turn_completed",
+        transport: "stdio",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        diagnostics: { transportError },
         replaySafe: false,
         replayBlockedReason: "active_item",
       });

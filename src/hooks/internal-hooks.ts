@@ -1,10 +1,4 @@
-/**
- * Hook system for OpenClaw agent events
- *
- * Provides an extensible event-driven hook system for agent events
- * like command processing, session lifecycle, etc.
- */
-
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
@@ -13,10 +7,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  clearLegacyPluginInternalHooks,
-  listLegacyPluginInternalHookEventKeys,
-  listLegacyPluginInternalHooks,
-} from "../plugins/legacy-internal-hook-state.js";
+  getActivePluginRegistry,
+  getPluginRegistrationContext,
+  requireActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   InternalHookEvent,
@@ -53,22 +47,15 @@ export type GatewayStartupHookEvent = InternalHookEvent & {
   context: GatewayStartupHookContext;
 };
 
-// ============================================================================
-// Message Hook Events
-// ============================================================================
-
 export type MessageReceivedHookContext = {
   /** Sender identifier (e.g., phone number, user ID) */
   from: string;
-  /** Message content */
   content: string;
   /** Unix timestamp when the message was received */
   timestamp?: number;
-  /** Channel identifier (for example "chat" or "support-chat") */
   channelId: string;
   /** Provider account ID for multi-account setups */
   accountId?: string;
-  /** Conversation/chat ID */
   conversationId?: string;
   /** Message ID from the provider */
   messageId?: string;
@@ -86,15 +73,10 @@ export type MessageSentHookContext = Pick<
   MessageReceivedHookContext,
   "content" | "channelId" | "accountId" | "conversationId" | "messageId"
 > & {
-  /** Recipient identifier */
   to: string;
-  /** Whether the message was sent successfully */
   success: boolean;
-  /** Error message if sending failed */
   error?: string;
-  /** Whether this message was sent in a group/channel context */
   isGroup?: boolean;
-  /** Group or channel identifier, if applicable */
   groupId?: string;
 };
 
@@ -110,21 +92,15 @@ type MessageEnrichedBodyHookContext = Pick<
 > & {
   /** Sender identifier (e.g., phone number, user ID) */
   from?: string;
-  /** Recipient identifier */
   to?: string;
   /** Original raw message body (e.g., "🎤 [Audio]") */
   body?: string;
   /** Enriched body shown to the agent, including transcript */
   bodyForAgent?: string;
-  /** Sender user ID */
   senderId?: string;
-  /** Sender display name */
   senderName?: string;
-  /** Sender username */
   senderUsername?: string;
-  /** Provider name */
   provider?: string;
-  /** Surface name */
   surface?: string;
   /** @deprecated Use `media?.[0]?.path`. */
   mediaPath?: string;
@@ -133,16 +109,12 @@ type MessageEnrichedBodyHookContext = Pick<
 };
 
 export type MessageTranscribedHookContext = MessageEnrichedBodyHookContext & {
-  /** The transcribed text from audio */
   transcript: string;
 };
 
 export type MessagePreprocessedHookContext = MessageEnrichedBodyHookContext & {
-  /** Transcribed audio text, if the message contained audio */
   transcript?: string;
-  /** Whether this message was sent in a group/channel context */
   isGroup?: boolean;
-  /** Group or channel identifier, if applicable */
   groupId?: string;
 };
 
@@ -158,16 +130,7 @@ export type SessionPatchHookEvent = InternalHookEvent & {
   context: SessionPatchHookContext;
 };
 
-/**
- * Registry of hook handlers by event key.
- *
- * Uses a globalThis singleton so that registerInternalHook and
- * triggerInternalHook always share the same Map even when the bundler
- * emits multiple copies of this module into separate chunks (bundle
- * splitting). Without the singleton, handlers registered in one chunk
- * are invisible to triggerInternalHook in another chunk, causing hooks
- * to silently fire with zero handlers.
- */
+// Share registrations across copies of this module emitted into separate bundle chunks.
 const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
 const handlers = resolveGlobalSingleton<Map<string, InternalHookHandler[]>>(
   INTERNAL_HOOK_HANDLERS_KEY,
@@ -180,25 +143,22 @@ const internalHooksEnabledState = resolveGlobalSingleton<{ enabled: boolean }>(
 );
 const log = createSubsystemLogger("internal-hooks");
 
-/**
- * Register a hook handler for a specific event type or event:action combination
- *
- * @param eventKey - Event type (e.g., 'command') or specific action (e.g., 'command:new')
- * @param handler - Function to call when the event is triggered
- *
- * @example
- * ```ts
- * // Listen to all command events
- * registerInternalHook('command', async (event) => {
- *   console.log('Command:', event.action);
- * });
- *
- * // Listen only to /new commands
- * registerInternalHook('command:new', async (event) => {
- *   await saveSessionToMemory(event);
- * });
- * ```
- */
+function listActiveRegistrations() {
+  return getActivePluginRegistry()?.legacyInternalHooks ?? [];
+}
+
+function listLegacyPluginInternalHooks(event: string): InternalHookHandler[] {
+  return listActiveRegistrations()
+    .filter((registration) => registration.event === event)
+    .map((registration) => registration.handler);
+}
+
+function clearLegacyPluginInternalHooks(): void {
+  const context = getPluginRegistrationContext();
+  (context?.registry ?? requireActivePluginRegistry()).legacyInternalHooks.length = 0;
+}
+
+/** Register for a family (e.g. "command") or an exact action (e.g. "command:new"). */
 export function registerInternalHook(eventKey: string, handler: InternalHookHandler): void {
   if (!handlers.has(eventKey)) {
     handlers.set(eventKey, []);
@@ -206,12 +166,6 @@ export function registerInternalHook(eventKey: string, handler: InternalHookHand
   handlers.get(eventKey)!.push(handler);
 }
 
-/**
- * Unregister a specific hook handler
- *
- * @param eventKey - Event key the handler was registered for
- * @param handler - The handler function to remove
- */
 export function unregisterInternalHook(eventKey: string, handler: InternalHookHandler): void {
   const eventHandlers = handlers.get(eventKey);
   if (!eventHandlers) {
@@ -223,15 +177,11 @@ export function unregisterInternalHook(eventKey: string, handler: InternalHookHa
     eventHandlers.splice(index, 1);
   }
 
-  // Clean up empty handler arrays
   if (eventHandlers.length === 0) {
     handlers.delete(eventKey);
   }
 }
 
-/**
- * Clear all registered hooks (useful for testing)
- */
 export function clearInternalHooks(): void {
   handlers.clear();
   clearLegacyPluginInternalHooks();
@@ -239,13 +189,6 @@ export function clearInternalHooks(): void {
 
 export function setInternalHooksEnabled(enabled: boolean): void {
   internalHooksEnabledState.enabled = enabled;
-}
-
-/**
- * Get all registered event keys (useful for debugging)
- */
-export function getRegisteredEventKeys(): string[] {
-  return [...new Set([...handlers.keys(), ...listLegacyPluginInternalHookEventKeys()])];
 }
 
 export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
@@ -257,18 +200,7 @@ export function hasInternalHookListeners(type: InternalHookEventType, action: st
   );
 }
 
-/**
- * Trigger a hook event
- *
- * Calls all handlers registered for:
- * 1. The general event type (e.g., 'command')
- * 2. The specific event:action combination (e.g., 'command:new')
- *
- * Handlers are called in registration order. Errors are caught and logged
- * but don't prevent other handlers from running.
- *
- * @param event - The event to trigger
- */
+/** Dispatch family handlers before exact-action handlers, in registration order; isolate errors. */
 export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
   if (!internalHooksEnabledState.enabled) {
     return;
@@ -292,14 +224,6 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
   }
 }
 
-/**
- * Create a hook event with common fields filled in
- *
- * @param type - The event type
- * @param action - The action within that type
- * @param sessionKey - The session key
- * @param context - Additional context
- */
 export function createInternalHookEvent(
   type: InternalHookEventType,
   action: string,
@@ -310,10 +234,33 @@ export function createInternalHookEvent(
     type,
     action,
     sessionKey,
-    context,
+    context:
+      "sessionEntry" in context || "previousSessionEntry" in context
+        ? omitHookContextOperatorSources(context)
+        : context,
     timestamp: new Date(),
     messages: [],
   };
+}
+
+/** Hook listeners receive session entries, never their recorded authentication sources. */
+export function omitHookSessionOperatorSources<T>(entry: T): T {
+  if (!isRecord(entry) || !Object.hasOwn(entry, "operatorSources")) {
+    return entry;
+  }
+  const { operatorSources: _private, ...rest } = entry;
+  // SAFETY: removing one private key keeps every other field of the caller's entry shape.
+  return rest as T;
+}
+
+function omitHookContextOperatorSources(context: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...context };
+  for (const key of ["sessionEntry", "previousSessionEntry"]) {
+    if (key in next) {
+      next[key] = omitHookSessionOperatorSources(next[key]);
+    }
+  }
+  return next;
 }
 
 function hasHookEventContext(
@@ -339,19 +286,4 @@ export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentB
 
 export function isGatewayStartupEvent(event: InternalHookEvent): event is GatewayStartupHookEvent {
   return hasHookEventContext(event, "gateway", "startup");
-}
-
-export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {
-  if (!hasHookEventContext(event, "session", "patch")) {
-    return false;
-  }
-  const context = event.context;
-  return (
-    typeof context.patch === "object" &&
-    context.patch !== null &&
-    typeof context.cfg === "object" &&
-    context.cfg !== null &&
-    typeof context.sessionEntry === "object" &&
-    context.sessionEntry !== null
-  );
 }

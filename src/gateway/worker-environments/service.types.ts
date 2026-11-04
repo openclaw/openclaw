@@ -1,21 +1,25 @@
+import type { AnyAgentTool } from "../../agents/tools/common.js";
+import type { CloudWorkerSetupMutationAdmission } from "../../infra/device-bootstrap.worker-types.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js";
+import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerEnvironmentNodeTunnel } from "./environment-access.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
-import type { WorkerInferenceExecutor } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
-import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
+import type { PreparedPoolPresenceOptions } from "./prepared-pool-presence.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentSessionAttachmentOptions } from "./session-attachment-service.js";
 import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
-import type { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
 export type WorkerEnvironmentCreateRequest = {
   profileId: string;
   idempotencyKey: string;
+  /** Immutable admitted acquisition policy; unselected profiles and reserves stay fixed-lease. */
+  retainedPolicy?: import("../../plugins/worker-retention.types.js").WorkerRetentionPolicy;
   machineClass?: string;
   executionMode?: WorkerExecutionMode;
   projectPath?: string;
@@ -24,24 +28,14 @@ export type WorkerEnvironmentCreateRequest = {
   runSetupScript?: boolean;
   inheritedProfile?: { providerId: string; profileSnapshot: WorkerProfile };
   admittedIntent?: WorkerProviderPreparedIntent;
+  /** Revalidate caller authority after preparation, immediately before provider effects. */
+  beforeProvision?: () => void;
 };
 
-export type WorkerEnvironmentServiceErrorCode =
-  | "profile_not_found"
-  | "provider_not_found"
-  | "environment_not_found"
-  | "invalid_profile"
-  | "invalid_project"
-  | "capacity"
-  | "invalid_state"
-  | "desktop_app_not_found"
-  | "unsupported_platform"
-  | "launcher_failure"
-  | "provider_failure"
-  | "bootstrap_failure";
-
 export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &
+  Pick<PreparedPoolPresenceOptions, "resolveHumanPresenceDemand" | "presenceDemandStore"> &
   WorkerEnvironmentSessionAttachmentOptions & {
+    resolveGatewayContext?: import("../server-methods/types.js").GatewayContextResolver;
     prepareComputer?: (
       claim: import("./placement-store.js").WorkerSessionTurnClaim,
     ) => Promise<import("./computer-transport.js").PreparedWorkerComputer | undefined>;
@@ -53,31 +47,29 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
     nodePortalCarrier?: WorkerNodePortalCarrier;
     closeWorkerPortals?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
     stopNodeEnrollmentWaits?: () => void;
+    admitsNodeSetupCompletion?: (setup: CloudWorkerSetupMutationAdmission) => boolean;
     closeNodeBootstrapArtifacts?: () => Promise<void>;
-    stopNodeWorkerBundleTransfers?: () => void;
+    stopNodeWorkerBundleTransfers?: () => void | Promise<void>;
     maintainProviders?: (signal: AbortSignal) => Promise<void>;
+    scheduler: GatewayScheduler;
     reconcileIntervalMs?: number;
     bootstrapCallTimeoutMs?: number;
     workerCredentialTtlMs?: number;
     generateWorkerCredential?: (bytes: number) => string;
-    now?: () => number;
     logger?: { warn: (message: string) => void };
     applyTranscriptCommit?: WorkerTranscriptCommitApplication;
     liveEvents?: Pick<
       WorkerLiveEventReceiver,
       "apply" | "clear" | "clearEnvironment" | "rotateCredential"
     >;
-    executeInference: WorkerInferenceExecutor;
     inferenceStore?: WorkerInferenceStore;
-    placementStore?: WorkerSessionPlacementGate;
-    executeSessionTool?: Parameters<typeof createWorkerTurnRpc>[0]["executeSessionTool"];
+    createGatewayTools?: (params: {
+      identity: WorkerConnectionIdentity;
+      inheritedToolPolicySource?: "sender";
+      inheritedToolDenylist?: string[];
+      delegatedToolPolicyActive?: boolean;
+      skillLibrary?: AnyAgentTool;
+      portalAvailable?: boolean;
+      prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
+    }) => Promise<AnyAgentTool[]>;
   };
-
-export type WorkerEnvironmentReconcileCore = (
-  signal?: AbortSignal,
-  retainProviderSettlement?: (settled: Promise<void>) => void,
-) => Promise<void>;
-export type WorkerEnvironmentReconcileGuard = (
-  environmentId: string,
-  reconcileCore: WorkerEnvironmentReconcileCore,
-) => Promise<void>;

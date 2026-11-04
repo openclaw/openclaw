@@ -12,11 +12,7 @@ export const CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE = "openclaw-plugin-frame-auth-
 
 /** Extracts the same-origin route pathname from a tab descriptor URL. */
 export function resolveControlUiPluginTabPathname(path: string): string | undefined {
-  try {
-    const baseUrl = new URL("http://openclaw.invalid");
-    const tabUrl = new URL(path, baseUrl);
-    return tabUrl.origin === baseUrl.origin ? tabUrl.pathname : undefined;
-  } catch {
-    return undefined;
-  }
+  const baseUrl = "http://openclaw.invalid";
+  const tabUrl = URL.parse(path, baseUrl);
+  return tabUrl?.origin === baseUrl ? tabUrl.pathname : undefined;
 }

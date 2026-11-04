@@ -50,6 +50,29 @@ export function implicitMentionKindWhen(
   return enabled ? [kind] : [];
 }
 
+export function resolveBotThreadMentionPolicy(params: {
+  isBotOwnedThread: boolean;
+  requireMentionInBotThreads?: boolean;
+  requireMention: boolean;
+  implicitMentionKinds?: readonly InboundImplicitMentionKind[];
+}): {
+  requireMention: boolean;
+  implicitMentionKinds: readonly InboundImplicitMentionKind[] | undefined;
+} {
+  if (!params.isBotOwnedThread || params.requireMentionInBotThreads === undefined) {
+    return {
+      requireMention: params.requireMention,
+      implicitMentionKinds: params.implicitMentionKinds,
+    };
+  }
+  return {
+    requireMention: params.requireMentionInBotThreads,
+    implicitMentionKinds: params.requireMentionInBotThreads
+      ? params.implicitMentionKinds?.filter((kind) => kind === "native")
+      : params.implicitMentionKinds,
+  };
+}
+
 /** Translates positive implicit-mention policy into the evaluator's kind allowlist. */
 export function allowedImplicitMentionKindsFromConfig(
   config: ChannelImplicitMentionsConfig,

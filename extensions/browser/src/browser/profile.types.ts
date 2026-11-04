@@ -1,6 +1,7 @@
 import type { BrowserProfileConfig } from "openclaw/plugin-sdk/config-contracts";
 
-/** Runtime browser profile settings resolved from global and profile config. */
+export type ManagedBrowserHeadlessSource = "request" | "env" | "profile" | "config" | "default";
+
 export type ResolvedBrowserProfile = {
   name: string;
   /** Omitted only by legacy callers; defaults to Chromium. */

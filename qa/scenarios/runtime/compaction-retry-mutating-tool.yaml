@@ -147,6 +147,7 @@ flow:
           args:
             - ref: env
             - ref: sessionKey
+            - includeCodeModeControl: true
         - set: successfulWriteTranscriptEvents
           value:
             expr: "(transcript.successfulToolCallEvents ?? []).filter((event) => event.toolCallId === writeTranscriptToolCallId && event.name === writeWireToolName)"

@@ -6,6 +6,7 @@ export function createAutoReplyTopLevelVitestConfig(env?: Record<string, string 
   return createScopedVitestConfig([...autoReplyTopLevelReplyTestInclude], {
     dir: "src/auto-reply",
     env,
+    intersectIncludeFile: true,
     name: "auto-reply-top-level",
   });
 }

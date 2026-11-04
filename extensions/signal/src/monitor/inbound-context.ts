@@ -1,4 +1,3 @@
-// Signal plugin module implements inbound context behavior.
 import {
   filterChannelInboundQuoteContext,
   resolveInboundSupplementalSenderAllowed,
@@ -12,20 +11,13 @@ import {
 } from "../identity.js";
 import type { SignalDataMessage } from "./event-handler.types.js";
 
-type SignalQuoteContext = {
-  contextVisibilityMode: ReturnType<typeof resolveChannelContextVisibilityMode>;
-  quoteSenderAllowed: boolean;
-  visibleQuoteText: string;
-  visibleQuoteSender?: string;
-};
-
 export function resolveSignalQuoteContext(params: {
   cfg: Parameters<typeof resolveChannelContextVisibilityMode>[0]["cfg"];
   accountId: string;
   isGroup: boolean;
   dataMessage?: SignalDataMessage | null;
   effectiveGroupAllow: string[];
-}): SignalQuoteContext {
+}) {
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg: params.cfg,
     channel: "signal",

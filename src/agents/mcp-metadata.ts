@@ -1,6 +1,8 @@
-import type { ClientCapabilities, ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
+import type { ClientCapabilities, ServerCapabilities, Tool } from "@modelcontextprotocol/client";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { McpCatalogTool } from "./agent-bundle-mcp-catalog.types.js";
 
 const MCP_METADATA_TEXT_LIMIT = 1_200;
 const MCP_APPS_CLIENT_EXTENSION = "io.modelcontextprotocol/ui";
@@ -9,14 +11,16 @@ const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 export function buildMcpClientCapabilities(mcpAppsEnabled: boolean): ClientCapabilities {
   return mcpAppsEnabled
     ? {
+        elicitation: { form: {}, url: {} },
         extensions: {
+          "openai/elicitation": { form: {} },
           [MCP_APPS_CLIENT_EXTENSION]: { mimeTypes: [MCP_APP_RESOURCE_MIME_TYPE] },
         },
       }
     : {};
 }
 
-export function normalizeToolUiVisibility(value: unknown): Array<"app" | "model"> | undefined {
+function normalizeToolUiVisibility(value: unknown): Array<"app" | "model"> | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
@@ -24,6 +28,22 @@ export function normalizeToolUiVisibility(value: unknown): Array<"app" | "model"
     (entry): entry is "app" | "model" => entry === "app" || entry === "model",
   );
   return [...new Set(normalized)].toSorted();
+}
+
+export function readMcpToolUiMetadata(
+  tool: Tool,
+): Pick<McpCatalogTool, "uiVisibility" | "uiResourceUri"> {
+  const ui = asOptionalRecord(tool._meta?.ui);
+  const uri = ui?.resourceUri ?? tool._meta?.["ui/resourceUri"];
+  const uiVisibility = normalizeToolUiVisibility(ui?.visibility);
+  return {
+    ...(typeof uri === "string" && uri.startsWith("ui://") ? { uiResourceUri: uri } : {}),
+    ...(uiVisibility ? { uiVisibility } : {}),
+  };
+}
+
+export function isAppOnlyMcpTool({ uiVisibility }: Pick<McpCatalogTool, "uiVisibility">): boolean {
+  return uiVisibility !== undefined && !uiVisibility.includes("model");
 }
 
 export function summarizeServerCapabilities(capabilities: ServerCapabilities | undefined) {
@@ -48,11 +68,7 @@ export function sanitizeMcpMetadataText(value: string | undefined): string | und
   }
   const scrubbed = normalized
     .replace(
-      /ignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/gi,
-      "[redacted MCP metadata instruction]",
-    )
-    .replace(
-      /disregard\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/gi,
+      /(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/gi,
       "[redacted MCP metadata instruction]",
     )
     .replace(/system\s+prompt/gi, "system prompt");

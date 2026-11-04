@@ -41,7 +41,6 @@ type VoiceCommandContext = {
   discordConfig: DiscordAccountConfig;
   accountId: string;
   groupPolicy: "open" | "disabled" | "allowlist";
-  useAccessGroups: boolean;
   getManager: () => DiscordVoiceManager | null;
   ephemeralDefault: boolean;
 };
@@ -52,16 +51,11 @@ type VoiceCommandChannelOverride = {
   parentId?: string;
 };
 
-type VoiceCommandRuntimeContext = {
-  guildId: string;
-  manager: DiscordVoiceManager;
-};
-
 async function authorizeVoiceCommand(
   interaction: CommandInteraction,
   params: VoiceCommandContext,
   options?: { channelOverride?: VoiceCommandChannelOverride },
-): Promise<{ ok: boolean; message?: string; guildId?: string }> {
+): Promise<{ ok: true; guildId: string } | { ok: false; message: string }> {
   const channelOverride = options?.channelOverride;
   const channel = channelOverride ? undefined : interaction.channel;
   if (!interaction.guild) {
@@ -81,7 +75,7 @@ async function authorizeVoiceCommand(
   const channelName = channelOverride?.name ?? channelContext.channelName;
 
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
+    ? interaction.rawData.member.roles.slice()
     : [];
   const sender = resolveDiscordSenderIdentity({ author: user, member: interaction.rawData.member });
   const policy = await params.readPolicy?.();
@@ -95,7 +89,6 @@ async function authorizeVoiceCommand(
     discordConfig: currentParams.discordConfig,
     accountId: currentParams.accountId,
     groupPolicy: currentParams.groupPolicy,
-    useAccessGroups: currentParams.useAccessGroups,
     guild: interaction.guild,
     guildId: interaction.guild.id,
     channelId,
@@ -121,29 +114,6 @@ async function authorizeVoiceCommand(
   return { ok: true, guildId: interaction.guild.id };
 }
 
-async function resolveVoiceCommandRuntimeContext(
-  interaction: CommandInteraction,
-  params: Pick<VoiceCommandContext, "getManager">,
-): Promise<VoiceCommandRuntimeContext | null> {
-  const guildId = interaction.guild?.id;
-  if (!guildId) {
-    await interaction.reply({
-      content: "Unable to resolve guild for this command.",
-      ephemeral: true,
-    });
-    return null;
-  }
-  const manager = params.getManager();
-  if (!manager) {
-    await interaction.reply({
-      content: "Voice manager is not available yet.",
-      ephemeral: true,
-    });
-    return null;
-  }
-  return { guildId, manager };
-}
-
 export function createDiscordVoiceCommand(
   startupParams: VoiceCommandContext,
 ): CommandWithSubcommands {
@@ -160,11 +130,21 @@ export function createDiscordVoiceCommand(
         },
       }),
   };
-  class JoinCommand extends Command {
-    override name = "join";
-    override description = "Join a voice channel";
+  abstract class VoiceCommand extends Command {
     override defer = true;
     override ephemeral = params.ephemeralDefault;
+
+    protected abstract execute(interaction: CommandInteraction): Promise<string>;
+
+    async run(interaction: CommandInteraction) {
+      const content = await this.execute(interaction);
+      await interaction.reply({ content, ephemeral: true });
+    }
+  }
+
+  class JoinCommand extends VoiceCommand {
+    override name = "join";
+    override description = "Join a voice channel";
     override options: CommandOptions = [
       {
         name: "channel",
@@ -175,11 +155,10 @@ export function createDiscordVoiceCommand(
       },
     ];
 
-    async run(interaction: CommandInteraction) {
+    protected async execute(interaction: CommandInteraction): Promise<string> {
       const channel = await interaction.options.getChannel("channel", true);
       if (!channel || !("id" in channel)) {
-        await interaction.reply({ content: "Voice channel not found.", ephemeral: true });
-        return;
+        return "Voice channel not found.";
       }
 
       const access = await authorizeVoiceCommand(interaction, params, {
@@ -189,39 +168,21 @@ export function createDiscordVoiceCommand(
         },
       });
       if (!access.ok) {
-        await interaction.reply({ content: access.message ?? "Not authorized.", ephemeral: true });
-        return;
+        return access.message;
       }
       if (!isVoiceChannel(channel.type)) {
-        await interaction.reply({ content: "That is not a voice channel.", ephemeral: true });
-        return;
+        return "That is not a voice channel.";
       }
-      const guildId = access.guildId ?? ("guildId" in channel ? channel.guildId : undefined);
-      if (!guildId) {
-        await interaction.reply({
-          content: "Unable to resolve guild for this voice channel.",
-          ephemeral: true,
-        });
-        return;
-      }
-
       const manager = params.getManager();
       if (!manager) {
-        await interaction.reply({
-          content: "Voice manager is not available yet.",
-          ephemeral: true,
-        });
-        return;
+        return "Voice manager is not available yet.";
       }
 
-      const result = await manager.join({ guildId, channelId: channel.id });
-      await interaction.reply({ content: result.message, ephemeral: true });
+      return (await manager.join({ guildId: access.guildId, channelId: channel.id })).message;
     }
   }
 
-  class SessionCommand extends Command {
-    override defer = true;
-    override ephemeral = params.ephemeralDefault;
+  class SessionCommand extends VoiceCommand {
     override description: string;
 
     constructor(override name: "leave" | "status") {
@@ -230,36 +191,34 @@ export function createDiscordVoiceCommand(
         name === "leave" ? "Leave the current voice channel" : "Show active voice sessions";
     }
 
-    async run(interaction: CommandInteraction) {
-      const runtimeContext = await resolveVoiceCommandRuntimeContext(interaction, params);
-      if (!runtimeContext) {
-        return;
+    protected async execute(interaction: CommandInteraction): Promise<string> {
+      const guildId = interaction.guild?.id;
+      if (!guildId) {
+        return "Unable to resolve guild for this command.";
       }
-      const sessions = runtimeContext.manager
-        .status()
-        .filter((entry) => entry.guildId === runtimeContext.guildId);
+      const manager = params.getManager();
+      if (!manager) {
+        return "Voice manager is not available yet.";
+      }
+      const sessions = manager.status().filter((entry) => entry.guildId === guildId);
       const sessionChannelId = sessions[0]?.channelId;
       const access = await authorizeVoiceCommand(interaction, params, {
         channelOverride: sessionChannelId ? { id: sessionChannelId } : undefined,
       });
       if (!access.ok) {
-        await interaction.reply({ content: access.message ?? "Not authorized.", ephemeral: true });
-        return;
+        return access.message;
       }
       if (this.name === "leave") {
-        const result = await runtimeContext.manager.leave({ guildId: runtimeContext.guildId });
-        await interaction.reply({ content: result.message, ephemeral: true });
-        return;
+        return (await manager.leave({ guildId })).message;
       }
       if (sessions.length === 0) {
-        await interaction.reply({ content: "No active voice sessions.", ephemeral: true });
-        return;
+        return "No active voice sessions.";
       }
       const lines = sessions.map(
         (entry) =>
           `• ${formatMention({ channelId: entry.channelId })} (guild ${entry.guildId})${entry.warning ? `\n${entry.warning}` : ""}`,
       );
-      await interaction.reply({ content: lines.join("\n"), ephemeral: true });
+      return lines.join("\n");
     }
   }
 

@@ -1,6 +1,5 @@
-import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
-import { html } from "lit";
-import { routePageSpec } from "../../app-route-paths.ts";
+import type { RouteLoaderOptions } from "@openclaw/uirouter";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ModelProvidersData } from "./load.ts";
 
@@ -31,6 +30,7 @@ async function loadModelProvidersRouteData(
   const gatewaySnapshot = gateway.snapshot;
   const selection = context.settingsAgentSelection;
   const selectionIntentRevision = selection.intentRevision;
+  const owner = { gateway, gatewaySnapshot, selectionIntentRevision, connect, provider };
   let agentId = selection.state.selectedId;
   const { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } = await import("./load.ts");
   const client = gatewaySnapshot.phase === "connected" ? gatewaySnapshot.client : null;
@@ -47,58 +47,38 @@ async function loadModelProvidersRouteData(
       selection.state.selectedId === agentId
     );
   };
-  if (!client || !isCurrent()) {
-    return {
-      gateway,
-      gatewaySnapshot,
-      data: EMPTY_MODEL_PROVIDERS_DATA,
-      client: null,
-      agentId,
-      selectionIntentRevision,
-      connect,
-      provider,
-    };
-  }
-  if (!agentId) {
-    await context.agents.ensureList();
-    // The selection owner validates pending cold-link intent against the roster.
-    agentId = selection.state.selectedId;
-  }
-  if (!agentId || !isCurrent()) {
-    return {
-      gateway,
-      gatewaySnapshot,
-      data: EMPTY_MODEL_PROVIDERS_DATA,
-      client: null,
-      agentId,
-      selectionIntentRevision,
-      connect,
-      provider,
-    };
+  if (client && isCurrent()) {
+    if (!agentId) {
+      await context.agents.ensureList();
+      // The selection owner validates pending cold-link intent against the roster.
+      agentId = selection.state.selectedId;
+    }
+    if (agentId && isCurrent()) {
+      return {
+        ...owner,
+        data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
+        client,
+        agentId,
+      };
+    }
   }
   return {
-    gateway,
-    gatewaySnapshot,
-    connect,
-    provider,
-    data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
-    client,
+    ...owner,
+    data: EMPTY_MODEL_PROVIDERS_DATA,
+    client: null,
     agentId,
-    selectionIntentRevision,
   };
 }
 
-export const page = definePage({
-  ...routePageSpec("model-providers"),
-  loaderDeps: (_context, location) => location.search,
-  loader: loadModelProvidersRouteData,
-  component: () =>
-    import("./model-providers-page.ts").then(() => ({
-      header: true,
-      render: (data: ModelProvidersRouteData | undefined, loaderPending = false) =>
-        html`<openclaw-model-providers-page
-          .routeData=${data}
-          .loaderPending=${loaderPending}
-        ></openclaw-model-providers-page>`,
-    })),
-});
+export const page = defineSolidPage<
+  "model-providers",
+  Parameters<typeof loadModelProvidersRouteData>[0],
+  ModelProvidersRouteData
+>(
+  "model-providers",
+  () => import("./model-providers-page.tsx").then((module) => module.ModelProvidersPage),
+  {
+    loaderDeps: (_context, location) => location.search,
+    loader: loadModelProvidersRouteData,
+  },
+);

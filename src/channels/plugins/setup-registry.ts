@@ -1,48 +1,21 @@
-/**
- * Channel setup plugin registry.
- *
- * Resolves loaded or bundled setup plugins for onboarding flows.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   getActivePluginChannelRegistry,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
+import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 import { listBundledChannelSetupPlugins } from "./bundled.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import { compareChannelPlugins } from "./registry-loaded.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
-function dedupeSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
-  const seen = new Set<string>();
-  const resolved: ChannelPlugin[] = [];
-  for (const plugin of plugins) {
-    const id = normalizeOptionalString(plugin.id) ?? "";
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    resolved.push(plugin);
-  }
-  return resolved;
-}
-
 function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
-  return dedupeSetupPlugins(plugins).toSorted((a, b) => {
-    const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
-    const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
-    // Keep setup screens in explicit plugin order, then known built-in order,
-    // then stable extension id order.
-    const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
-    const orderB = b.meta.order ?? (indexB === -1 ? 999 : indexB);
-    if (orderA !== orderB) {
-      return orderA - orderB;
-    }
-    return a.id.localeCompare(b.id);
-  });
+  const byId = indexFirstByKey(plugins, (plugin) => normalizeOptionalString(plugin.id) ?? "");
+  byId.delete("");
+  return [...byId.values()].toSorted(compareChannelPlugins);
 }
 
-function resolveChannelSetupPlugins(): ChannelPlugin[] {
+export function listChannelSetupPlugins(): ChannelPlugin[] {
   const registry = requireActivePluginRegistry();
 
   const registryPlugins = (registry.channelSetups ?? []).map((entry) => entry.plugin);
@@ -54,13 +27,6 @@ function resolveChannelSetupPlugins(): ChannelPlugin[] {
 }
 
 /**
- * Lists setup-capable channel plugins, falling back to bundled setup metadata.
- */
-export function listChannelSetupPlugins(): ChannelPlugin[] {
-  return resolveChannelSetupPlugins();
-}
-
-/**
  * Lists setup plugins from the active channel registry only.
  */
 export function listActiveChannelSetupPlugins(): ChannelPlugin[] {
@@ -68,13 +34,10 @@ export function listActiveChannelSetupPlugins(): ChannelPlugin[] {
   return sortChannelSetupPlugins((registry?.channelSetups ?? []).map((entry) => entry.plugin));
 }
 
-/**
- * Returns one setup-capable channel plugin by id.
- */
 export function getChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
   }
-  return resolveChannelSetupPlugins().find((plugin) => plugin.id === resolvedId);
+  return listChannelSetupPlugins().find((plugin) => plugin.id === resolvedId);
 }

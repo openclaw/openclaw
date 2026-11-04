@@ -4,6 +4,7 @@ import Testing
 @testable import OpenClaw
 
 #if canImport(Darwin)
+@Suite(.testWaitLimit)
 struct ManagedProcessTests {
     @Test func `cancelled startup wait throws without crashing or consuming the process`() async throws {
         let process = try await self.start(executable: "/bin/sh", arguments: ["-c", "sleep 30"])
@@ -110,10 +111,7 @@ struct ManagedProcessTests {
             let process = try await self.start(executable: "/usr/bin/true")
             defer { process.requestTermination() }
 
-            let deadline = ContinuousClock.now + .seconds(1)
-            while process.isRunning, ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(1))
-            }
+            try await TestWait.state("instant process exit") { !process.isRunning }
             #expect(!process.isRunning)
             await process.terminate()
         }
@@ -136,9 +134,7 @@ struct ManagedProcessTests {
             ],
             environment: ["CHILD_PID_FILE": childPIDFile.path])
         defer { process.requestTermination() }
-        let childPID = try await TestProcessSupport.waitForPID(
-            in: childPIDFile,
-            timeout: .seconds(1))
+        let childPID = try await TestProcessSupport.waitForPID(in: childPIDFile)
 
         let startedAt = ContinuousClock.now
         await process.terminate()

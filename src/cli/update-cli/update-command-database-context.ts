@@ -1,4 +1,6 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import { resolveConfigPath } from "../../config/paths.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -10,6 +12,7 @@ import {
   isCandidateAdmissionContextCovered,
 } from "./schema-preflight.js";
 import { UpdatePreMutationError } from "./shared.js";
+import { readUpdateChannelConfig } from "./update-command-config.js";
 import {
   formatUpdateAncestryBlockMessage,
   resolveForegroundUpdateAdmission,
@@ -17,13 +20,14 @@ import {
 import {
   captureOwnedManagedUpdatePreflightContext,
   resolveOwnedManagedUpdatePreflightEnv,
-  revalidateUpdateDatabaseContext,
 } from "./update-command-managed-context.js";
-import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
+  collectServiceInspectionFailureFacts,
   GatewayServiceUpdateOwnershipError,
-  type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
+import { assertUnavailableGatewayPackageConsumerStopped } from "./update-command-service-revalidation.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   type PreManagedServiceStop,
@@ -32,6 +36,7 @@ import {
 type UpdateManagedServiceInspectionParams = {
   roots: readonly string[];
   updateInstallKind: "package" | "git";
+  packageAlreadyCurrent?: boolean;
   shouldRestart: boolean;
   jsonMode: boolean;
   timeoutMs: number;
@@ -40,10 +45,16 @@ type UpdateManagedServiceInspectionParams = {
   managedServiceRoot?: string;
   expectedServices?: ReadonlyMap<string, PreManagedServiceStop>;
   expectedForeground?: true;
+  assertCurrent?: () => void;
   handoffFromGateway?: Parameters<
     typeof maybeStopManagedServiceBeforeMutableUpdate
   >[0]["handoffFromGateway"];
 };
+
+function managedServicePreflightError(code: Parameters<typeof createUpdatePreflightFailure>[0]) {
+  const failure = createUpdatePreflightFailure(code, undefined, "managed-service-preflight");
+  return new UpdatePreMutationError("managed-service-preflight", failure.message, failure);
+}
 
 /** The installed process owns ancestry and coordination inspection before candidate code runs. */
 export async function inspectUpdateManagedServices(params: UpdateManagedServiceInspectionParams) {
@@ -68,6 +79,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       timeoutMs: params.timeoutMs,
       phase: "inspect",
       expectedService: params.expectedServices?.get(root),
+      assertCurrent: params.assertCurrent,
       handoffFromGateway: params.handoffFromGateway,
     }).catch((error: unknown) => {
       if (hasCommandProcessCleanupError(error)) {
@@ -84,8 +96,25 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       throw new UpdatePreMutationError(
         "managed-service-preflight",
         formatUpdateAncestryBlockMessage(inspected.blockMessage),
-        { failureFacts: collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) },
+        {
+          failureFacts:
+            inspected.blockFailureFacts ??
+            collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict),
+        },
       );
+    }
+    if (
+      params.updateInstallKind === "package" &&
+      !params.packageAlreadyCurrent &&
+      inspected.serviceUpdateVerdict?.kind === "unavailable"
+    ) {
+      await assertUnavailableGatewayPackageConsumerStopped({
+        roots: params.roots,
+        env: process.env,
+        timeoutMs: params.timeoutMs,
+        assertCurrent: params.assertCurrent ?? (() => {}),
+        verdict: inspected.serviceUpdateVerdict,
+      });
     }
     if (
       foreground &&
@@ -93,21 +122,14 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
         inspected.serviceUpdateVerdict?.kind === "unresolved") &&
       inspected.offline !== true
     ) {
-      throw new UpdatePreMutationError(
-        "managed-service-preflight",
-        "Another Gateway service uses this installation and is not verified offline. Stop it through its service owner before updating the foreground Gateway.",
-        { failureFacts: collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) },
-      );
+      throw managedServicePreflightError("service-not-offline");
     }
     if (
       params.managedServiceRoot &&
       (inspected.serviceUpdateVerdict?.kind !== "owned" ||
         !inspected.serviceUpdateVerdict.refreshDefinition)
     ) {
-      throw new UpdatePreMutationError(
-        "managed-service-preflight",
-        "The Gateway cannot be rebound from its current installation: its owned service definition must be writable before this update can align it with the CLI.",
-      );
+      throw managedServicePreflightError("service-definition-not-writable");
     }
     services.set(root, inspected);
     if (inspected.serviceUpdateVerdict?.kind === "owned") {
@@ -121,10 +143,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
     invocationCwd: params.invocationCwd,
   });
   if ((params.managedServiceRootRedirect || params.managedServiceRoot) && !managedEnv) {
-    throw new UpdatePreMutationError(
-      "managed-service-preflight",
-      "The managed Gateway service changed before database admission. Retry so its package root and state can be inspected together.",
-    );
+    throw managedServicePreflightError("service-context-changed");
   }
   return {
     service,
@@ -137,6 +156,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
 export async function inspectUpdateDatabaseContexts(
   params: UpdateManagedServiceInspectionParams & {
     legacyConfigPlan?: LegacyConfigUpdatePlan;
+    callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
     candidateAdmissionChecks?: readonly string[];
   },
 ) {
@@ -145,11 +165,21 @@ export async function inspectUpdateDatabaseContexts(
     const configValidation = params.candidateAdmissionChecks?.includes("config")
       ? ("candidate" as const)
       : undefined;
+    // Already-current updates skip candidate admission. Preview Doctor's repair for
+    // the selected config so maintenance can persist it through the normal writer.
+    const legacyConfigPlan =
+      params.legacyConfigPlan ??
+      (params.packageAlreadyCurrent
+        ? await withOwnedManagedUpdateEnv(
+            inspected.managedEnv ?? process.env,
+            async () => (await readUpdateChannelConfig(true)).legacyConfigPlan,
+          )
+        : undefined);
     const managed = await captureOwnedManagedUpdatePreflightContext({
       stopState: inspected.service,
       processEnv: process.env,
       invocationCwd: params.invocationCwd,
-      legacyConfigPlan: params.legacyConfigPlan,
+      legacyConfigPlan,
       configValidation,
     });
     // Redirected package replacement does not own the invoking installation's stores.
@@ -157,7 +187,10 @@ export async function inspectUpdateDatabaseContexts(
       ? []
       : [
           await captureTargetDatabaseSchemaContext(process.env, {
-            legacyConfigPlan: params.legacyConfigPlan,
+            legacyConfigPlan:
+              params.callerLegacyConfigPlan?.snapshot.path === resolveConfigPath()
+                ? params.callerLegacyConfigPlan
+                : legacyConfigPlan,
             configValidation,
           }),
         ];
@@ -172,7 +205,7 @@ export async function inspectUpdateDatabaseContexts(
   });
 }
 
-/** Recheck the admitted service and stores together before mutable update work. */
+/** Check target schema support; native service effects validate their own authority. */
 export async function revalidateUpdateDatabaseContexts(
   params: Omit<Parameters<typeof inspectUpdateDatabaseContexts>[0], "roots" | "expectedServices">,
   admission: Awaited<ReturnType<typeof inspectUpdateDatabaseContexts>> | undefined,
@@ -184,13 +217,6 @@ export async function revalidateUpdateDatabaseContexts(
       "Database admission was not inspected.",
     );
   }
-  await inspectUpdateDatabaseContexts({
-    ...params,
-    roots: [...admission.services.keys()],
-    expectedServices: admission.services,
-    expectedForeground: admission.foreground,
-  });
-  admission.contexts = await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
   const installedContexts = params.candidateAdmissionChecks?.includes("database-schema")
     ? admission.contexts.filter((context) => !isCandidateAdmissionContextCovered(context.env))
     : admission.contexts;

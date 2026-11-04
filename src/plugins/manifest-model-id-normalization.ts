@@ -3,7 +3,6 @@ import {
   collectManifestModelIdNormalizationPolicies,
   type ManifestModelIdNormalizationProvider,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 // Snapshot reads go through the registration-slot bridge so this module stays
 // off the control-plane/kysely graph; doctor closures cold-load it via
@@ -17,13 +16,14 @@ import { getActivePluginRegistryWorkspaceDirFromStateCore } from "./runtime-work
 
 /** Caller-owned declarations or facts from an already selected metadata snapshot. */
 export type ManifestModelIdNormalizationSource =
-  | readonly Pick<PluginManifestRecord, "modelIdNormalization">[]
-  | { owners: Pick<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies"> };
+  | readonly (Pick<PluginManifestRecord, "modelIdNormalization"> &
+      Partial<Pick<PluginManifestRecord, "providers">>)[]
+  | {
+      owners: Pick<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies"> &
+        Partial<Pick<PluginMetadataSnapshot["owners"], "providers">>;
+    };
 
 type ManifestModelIdNormalizationLookupParams = {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   plugins?: ManifestModelIdNormalizationSource;
 };
 
@@ -36,21 +36,19 @@ export function resolveManifestModelIdNormalizationPolicies(
       ? params.plugins.owners.modelIdNormalizationPolicies
       : collectManifestModelIdNormalizationPolicies(params.plugins);
   }
-  const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromStateCore();
-  if (params.config === undefined) {
-    const currentSnapshot = getCurrentPluginMetadataSnapshotRuntime({
-      env,
-      workspaceDir,
-      allowWorkspaceScopedSnapshot: true,
-      requireDefaultDiscoveryContext: true,
-    });
-    if (currentSnapshot) {
-      return currentSnapshot.owners.modelIdNormalizationPolicies;
-    }
+  const env = process.env;
+  const workspaceDir = getActivePluginRegistryWorkspaceDirFromStateCore();
+  const currentSnapshot = getCurrentPluginMetadataSnapshotRuntime({
+    env,
+    workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+    requireDefaultDiscoveryContext: true,
+  });
+  if (currentSnapshot) {
+    return currentSnapshot.owners.modelIdNormalizationPolicies;
   }
   const snapshot = resolvePluginMetadataSnapshotRuntime({
-    config: params.config ?? {},
+    config: {},
     env,
     workspaceDir,
     allowWorkspaceScopedCurrent: true,

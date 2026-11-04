@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Runs local workflow sanity checks.
 // Uses qualified installed tools, otherwise falls back to pinned hooks where
 // possible, then runs repo-specific workflow guards.
 import { spawnSync } from "node:child_process";
@@ -8,8 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ACTIONLINT_REVISION = "011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7";
-const PRE_COMMIT_VERSION = "4.6.2";
-// pre-commit 4.6.2 declares requires-python >=3.10, so an older interpreter only
+const PRE_COMMIT_VERSION = "4.7.0";
+// pre-commit 4.7.0 declares requires-python >=3.10, so an older interpreter only
 // fails after a venv build and a network pip install.
 const PRE_COMMIT_PYTHON_FLOOR = "3.10";
 const WORKFLOW_DIR = ".github/workflows";
@@ -56,13 +55,9 @@ function isBelowPythonFloor(version: string, floor: string): boolean {
 }
 
 function run(command: string, args: readonly string[]): void {
-  const result = spawnSync(command, args, { stdio: "inherit" });
-  if (result.error) {
-    console.error(`[check-workflows] failed to run ${command}: ${result.error.message}`);
-    process.exit(1);
-  }
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
+  const failure = runChecked(command, args);
+  if (failure) {
+    exitWithFailure(failure);
   }
 }
 
@@ -150,23 +145,13 @@ function runPreCommitFromTempVenv(hookArgs: string[]): boolean {
       return false;
     }
     postVenvFailure = runChecked(python, ["-m", "pre_commit", ...hookArgs]);
-    if (postVenvFailure) {
-      return false;
-    }
-    return true;
+    return !postVenvFailure;
   } finally {
     rmSync(venvDir, { force: true, recursive: true });
     if (postVenvFailure) {
       exitWithFailure(postVenvFailure);
     }
   }
-}
-
-function workflowFiles(): string[] {
-  return readdirSync(WORKFLOW_DIR)
-    .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"))
-    .toSorted()
-    .map((file) => join(WORKFLOW_DIR, file));
 }
 
 function runPreCommitHook(hook: string, files: string[]): void {
@@ -189,7 +174,10 @@ function runPreCommitHook(hook: string, files: string[]): void {
   process.exit(1);
 }
 
-const workflows = workflowFiles();
+const workflows = readdirSync(WORKFLOW_DIR)
+  .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"))
+  .toSorted()
+  .map((file) => join(WORKFLOW_DIR, file));
 
 if (hasPinnedActionlint()) {
   run("actionlint", workflows);

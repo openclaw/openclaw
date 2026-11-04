@@ -6,6 +6,9 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatToolActivity
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -27,6 +30,48 @@ class ChatUnifiedToolActivityTest {
     calls: List<ChatPendingToolCall>,
     runs: Int = 1,
   ): ChatTimeline = prepareChatHistory(messages, "agent:main:dashboard:tools", "agent:main:main").buildTimeline(runs, calls, null)
+
+  @Test fun dispatcherLiveRowsUnwrapWithoutRewritingPendingCallsOrKeys() {
+    val args = Json.parseToJsonElement("""{"id":"web_search","args":{"query":"OpenClaw release notes October 2026"}}""").jsonObject
+    val call = first.copy(name = "tool_call", args = args)
+    val group = timeline(listOf(user), listOf(call)).items.filterIsInstance<ChatTimelineItem.ToolActivity>().single()
+    val tool = group.tools.single()
+    assertEquals("web_search", tool.name)
+    assertEquals("Web Search", completedToolDisplayName(tool.name))
+    assertEquals(args["args"], tool.arguments)
+    assertEquals(call.toolCallId, tool.toolCallId)
+    assertEquals(listOf("run:read"), group.toolKeys)
+    assertEquals(call, group.liveTools.values.single())
+    assertEquals("tool_call", call.name)
+    assertEquals(args, call.args)
+  }
+
+  @Test fun liveDispatcherArgumentsFillMissingHistoryArguments() {
+    val args = Json.parseToJsonElement("""{"id":"client:client:exec","args":{"command":"printf ready"}}""").jsonObject
+    val call = first.copy(name = "tool_call", args = args)
+    val history = result("read").copy(content = listOf(ChatMessageContent(type = "toolResult", toolActivity = ChatToolActivity("read", "exec", null, "ready", false))))
+    val group = timeline(listOf(user, history), listOf(call)).items.filterIsInstance<ChatTimelineItem.ToolActivity>().single()
+    val tool = group.tools.single()
+    assertEquals(args["args"], tool.arguments)
+    assertEquals("printf ready", completedCommandText(tool))
+    assertEquals("ready", tool.result)
+    assertEquals(call.copy(isComplete = true), group.liveTools.values.single())
+  }
+
+  @Test fun liveDispatcherDiscardsNonObjectInnerArguments() {
+    for (inner in listOf("", ",\"args\":null", ",\"args\":[]", ",\"args\":\"input\"", ",\"args\":3")) {
+      val call = first.copy(name = "tool_call", args = Json.parseToJsonElement("""{"id":"web_search"$inner}""").jsonObject)
+      val tool =
+        timeline(listOf(user), listOf(call))
+          .items
+          .filterIsInstance<ChatTimelineItem.ToolActivity>()
+          .single()
+          .tools
+          .single()
+      assertEquals("web_search", tool.name)
+      assertEquals(JsonObject(emptyMap()), tool.arguments)
+    }
+  }
 
   @Test fun liveAndPartialHistoryHaveOneStableDisclosureWithDurableOutputAndLiveDiff() {
     val live = timeline(listOf(user), listOf(first, second)).items.filterIsInstance<ChatTimelineItem.ToolActivity>().single()
@@ -147,18 +192,18 @@ class ChatUnifiedToolActivityTest {
     assertEquals(listOf("output"), rows.single().tools.map { it.result })
   }
 
-  @Test fun lateBlockedActivityRemainsVisibleOutsideFoldedCompletedWork() {
+  @Test fun latePreparedOutcomeControlsVisibilityOutsideFoldedCompletedWork() {
     val answer = ChatMessage("answer", "assistant", listOf(ChatMessageContent(text = "Done")), 4, runId = "run")
-    val blocked = ChatAgentActivity("tool:read", "tool", "end", "Read project", toolCallId = "read", status = "blocked")
-    val rows = timeline(listOf(user.copy(runId = "run"), result("read"), answer), listOf(first.copy(activity = blocked, isComplete = true)), runs = 0).items
-    assertEquals(1, rows.filterIsInstance<ChatTimelineItem.WorkedSummary>().size)
-    val tool =
-      rows
-        .filterIsInstance<ChatTimelineItem.ToolActivity>()
-        .single()
-        .tools
-        .single()
-    assertEquals("blocked", tool.activity?.status)
-    assertEquals("output", tool.result)
+    for ((status, visible) in listOf("blocked" to true, "failed" to true, "skipped" to false, "completed" to false, null to false)) {
+      val activity = ChatAgentActivity("tool:read", "tool", "end", "Read project", toolCallId = "read", status = status)
+      val rows = timeline(listOf(user.copy(runId = "run"), result("read"), answer), listOf(first.copy(activity = activity, isError = true, isComplete = true)), runs = 0).items
+      assertEquals(1, rows.filterIsInstance<ChatTimelineItem.WorkedSummary>().size)
+      val tools = rows.filterIsInstance<ChatTimelineItem.ToolActivity>().flatMap { it.tools }
+      assertEquals("status=$status", if (visible) 1 else 0, tools.size)
+      if (visible) {
+        assertEquals(status, tools.single().activity?.status)
+        assertEquals("output", tools.single().result)
+      }
+    }
   }
 }

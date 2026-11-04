@@ -1,4 +1,3 @@
-// Clack prompter adapts wizard prompt requests to Clack terminal prompts.
 import {
   autocomplete,
   autocompleteMultiselect,
@@ -68,43 +67,16 @@ function resolveNavigationDirection(
   return undefined;
 }
 
-function hasPromptNavigation(navigation: WizardPromptNavigation | undefined): boolean {
-  return navigation?.canGoBack === true || navigation?.canGoForward === true;
-}
-
-async function withHorizontalCursorActionsDisabled<T>(
-  disabled: boolean,
-  work: () => Promise<T>,
-): Promise<T> {
-  if (!disabled) {
-    return await work();
-  }
-
-  const hadLeft = settings.actions.has("left");
-  const hadRight = settings.actions.has("right");
-  settings.actions.delete("left");
-  settings.actions.delete("right");
-  try {
-    return await work();
-  } finally {
-    if (hadLeft) {
-      settings.actions.add("left");
-    }
-    if (hadRight) {
-      settings.actions.add("right");
-    }
-  }
-}
-
 async function runPromptWithNavigation<T>(
   navigation: WizardPromptNavigation | undefined,
   work: (signal: AbortSignal | undefined) => Promise<T | symbol>,
   output: NodeJS.WriteStream,
   externalSignal?: AbortSignal,
 ): Promise<T> {
-  // Restore cursor actions after cancellation handling and stdin cleanup, so
-  // Clack cannot consume navigation keys during prompt finalization.
-  return await withHorizontalCursorActionsDisabled(hasPromptNavigation(navigation), async () => {
+  const navigationEnabled = navigation?.canGoBack === true || navigation?.canGoForward === true;
+  const hadLeft = navigationEnabled && settings.actions.delete("left");
+  const hadRight = navigationEnabled && settings.actions.delete("right");
+  try {
     const controller = new AbortController();
     const signal = externalSignal
       ? AbortSignal.any([controller.signal, externalSignal])
@@ -125,7 +97,6 @@ async function runPromptWithNavigation<T>(
         }
       });
     };
-    const onStdinEnd = () => queueCancellation();
     const onKeypress = (input: string | undefined, key: KeypressInfo | undefined) => {
       if (input === "\x04" || (key?.ctrl === true && key.name === "d")) {
         queueCancellation();
@@ -140,7 +111,7 @@ async function runPromptWithNavigation<T>(
     };
 
     try {
-      process.stdin.once("end", onStdinEnd);
+      process.stdin.once("end", queueCancellation);
       if (process.stdin.readableEnded) {
         queueCancellation();
       }
@@ -157,36 +128,34 @@ async function runPromptWithNavigation<T>(
         clearImmediate(cancellationImmediate);
         cancellationImmediate = undefined;
       }
-      process.stdin.off("end", onStdinEnd);
+      process.stdin.off("end", queueCancellation);
       process.stdin.off("keypress", onKeypress);
     }
-  });
-}
-
-function normalizeSearchTokens(search: string): string[] {
-  return normalizeLowercaseStringOrEmpty(search)
-    .split(/\s+/)
-    .filter((token) => token.length > 0);
-}
-
-function buildOptionSearchText<T>(option: Option<T>): string {
-  const label = stripAnsi(option.label ?? "");
-  const hint = stripAnsi(option.hint ?? "");
-  const value = String(option.value ?? "");
-  return normalizeLowercaseStringOrEmpty(`${label} ${hint} ${value}`);
+  } finally {
+    // Restore after cancellation handling and stdin cleanup, not during prompt finalization.
+    if (hadLeft) {
+      settings.actions.add("left");
+    }
+    if (hadRight) {
+      settings.actions.add("right");
+    }
+  }
 }
 
 export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
-  const tokens = normalizeSearchTokens(search);
+  const tokens = normalizeLowercaseStringOrEmpty(search)
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
   if (tokens.length === 0) {
     return true;
   }
-  const haystack = buildOptionSearchText(option);
+  const label = stripAnsi(option.label ?? "");
+  const hint = stripAnsi(option.hint ?? "");
+  const value = String(option.value ?? "");
+  const haystack = normalizeLowercaseStringOrEmpty(`${label} ${hint} ${value}`);
   return tokens.every((token) => haystack.includes(token));
 }
 
-// Public factory used by setup/onboard commands. Keep side effects inside method
-// calls so tests can import the module without starting prompts.
 export function createClackPrompter(
   output: NodeJS.WriteStream = process.stdout,
   signal?: AbortSignal,
@@ -218,7 +187,7 @@ export function createClackPrompter(
             : params.navigation
               ? selectWithNavigationFooter
               : select;
-          return await prompt({
+          return await prompt<(typeof params.options)[number]["value"]>({
             message,
             options,
             initialValue: params.initialValue,

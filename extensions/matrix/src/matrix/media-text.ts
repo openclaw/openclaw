@@ -142,19 +142,3 @@ export function formatMatrixMessageText(params: {
   }
   return `${body}\n\n${marker}`;
 }
-
-export function formatMatrixMediaUnavailableText(params: {
-  body?: string;
-  filename?: string;
-  msgtype?: string;
-}): string {
-  return formatMatrixMessageText({ ...params, unavailable: true }) ?? "";
-}
-
-export function formatMatrixMediaTooLargeText(params: {
-  body?: string;
-  filename?: string;
-  msgtype?: string;
-}): string {
-  return formatMatrixMessageText({ ...params, tooLarge: true }) ?? "";
-}

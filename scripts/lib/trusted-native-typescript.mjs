@@ -12,7 +12,10 @@ export async function createTrustedNativeTypeScriptParser(toolingRoot) {
   }
   const manifest = JSON.parse(readFileSync(join(tooling, "package.json"), "utf8"));
   const pin = manifest.devDependencies?.typescript;
-  if (typeof pin !== "string" || !/^\d+\.\d+\.\d+$/.test(pin)) {
+  if (
+    typeof pin !== "string" ||
+    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(pin)
+  ) {
     throw new Error("parser is not pinned");
   }
   const lock = readFileSync(join(tooling, "pnpm-lock.yaml"), "utf8");
@@ -82,9 +85,9 @@ export async function createTrustedNativeTypeScriptParser(toolingRoot) {
     throw new Error("parser package is outside trusted tooling: typescript");
   }
   const entries = [
-    ["typescript/unstable/sync", "dist/api/sync/api.js"],
-    ["typescript/unstable/fs", "dist/api/fs.js"],
-    ["typescript/unstable/ast", "dist/ast/index.js"],
+    ["typescript/sync", "dist/api/sync/api.js"],
+    ["typescript/fs", "dist/api/fs.js"],
+    ["typescript/ast", "dist/ast/index.js"],
   ];
   for (const [specifier, relativePath] of entries) {
     if (

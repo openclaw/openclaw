@@ -24,7 +24,6 @@ import {
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
 import { readWhatsAppAccountLinkState } from "./channel-runtime-loader.js";
-import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import { whatsappDoctor } from "./doctor.js";
 import { resolveWhatsAppConfigPath } from "./group-config-path.js";
@@ -33,6 +32,7 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
 import { resolveLegacyGroupSessionKey } from "./group-session-contract.js";
+import { normalizeWhatsAppAllowFromEntries } from "./normalize-target.js";
 import {
   collectUnsupportedSecretRefConfigCandidates,
   unsupportedSecretRefSurfacePatterns,
@@ -55,7 +55,7 @@ const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppA
   clearBaseFields: [],
   allowTopLevel: false,
   resolveAllowFrom: (account) => account.allowFrom,
-  formatAllowFrom: (allowFrom) => formatWhatsAppConfigAllowFromEntries(allowFrom),
+  formatAllowFrom: normalizeWhatsAppAllowFromEntries,
   resolveDefaultTo: (account) => account.defaultTo,
 });
 
@@ -64,7 +64,7 @@ const whatsappResolveDmPolicy = createScopedDmSecurityResolver<ResolvedWhatsAppA
   resolvePolicy: (account) => account.dmPolicy,
   resolveAllowFrom: (account) => account.allowFrom,
   policyPathSuffix: "dmPolicy",
-  normalizeEntry: (raw) => normalizeE164(raw),
+  normalizeEntry: normalizeE164,
   inheritSharedDefaultsFromDefaultAccount: true,
 });
 
@@ -150,6 +150,7 @@ export function createWhatsAppPluginBase() {
       chatTypes: ["direct", "group", "channel"],
       polls: true,
       reactions: true,
+      reactionSlots: "single",
       media: true,
       tts: {
         voice: {
@@ -212,8 +213,7 @@ export function createWhatsAppPluginBase() {
       deriveLegacySessionChatType,
       resolveLegacyGroupSessionKey,
       isLegacyGroupSessionKey,
-      canonicalizeLegacySessionKey: (paramsLocal) =>
-        canonicalizeLegacySessionKey({ key: paramsLocal.key, agentId: paramsLocal.agentId }),
+      canonicalizeLegacySessionKey,
     },
     secrets: {
       unsupportedSecretRefSurfacePatterns,

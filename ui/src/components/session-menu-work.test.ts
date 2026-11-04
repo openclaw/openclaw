@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
-import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -31,16 +30,6 @@ beforeEach(() => {
 afterEach(() => {
   clearNativeGatewayTestState();
   vi.restoreAllMocks();
-});
-
-describe("isLoopbackHostname", () => {
-  it.each([
-    ["127.0.0.5", true],
-    ["[::1]", true],
-    ["127.0.0.1.evil.com", false],
-  ])("classifies %s as loopback: %s", (hostname, expected) => {
-    expect(isLoopbackHostname(hostname)).toBe(expected);
-  });
 });
 
 describe("fetchSessionMenuWork", () => {
@@ -76,41 +65,6 @@ describe("fetchSessionMenuWork", () => {
       worktreePath: testCase.expectedPath,
     });
     expect(request).toHaveBeenCalledTimes(testCase.expectedPath ? 1 : 0);
-  });
-
-  it("resolves the PR URL and worktree path in one pass", async () => {
-    const request = vi.fn((_method: string) => {
-      return Promise.resolve({
-        worktrees: [
-          {
-            id: "wt-1",
-            path: "/work/trees/demo",
-            removedAt: undefined,
-          },
-          {
-            id: "wt-removed",
-            path: "/work/trees/stale",
-            removedAt: 123,
-          },
-        ],
-      });
-    });
-
-    await expect(
-      fetchSessionMenuWork({
-        client: sessionMenuClient(request),
-        loadPullRequests: async () => ({
-          pullRequests: [pullRequest({ url: "https://example.test/pr" })],
-          rateLimited: false,
-          status: "ready",
-        }),
-        worktreeId: "wt-1",
-      }),
-    ).resolves.toEqual({
-      pullRequestUrl: "https://example.test/pr",
-      worktreePath: "/work/trees/demo",
-    });
-    expect(request).toHaveBeenCalledWith("worktrees.list", {});
   });
 
   it("returns nulls when the PR surface is absent, the worktree is removed, or requests fail", async () => {

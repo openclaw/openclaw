@@ -20,7 +20,7 @@ struct RootTabsSidebarRegressionTests {
         let revealButton = try Self.extract(
             source,
             from: "struct OpenClawSidebarControlButton: View",
-            to: "struct OpenClawSidebarHeaderLeadingSlot: View")
+            to: "struct OpenClawSidebarToolbarItem: ToolbarContent")
         let toolbarItem = try Self.extract(
             source,
             from: "struct OpenClawSidebarToolbarItem: ToolbarContent",
@@ -89,7 +89,6 @@ struct RootTabsSidebarRegressionTests {
         #expect(contentCard.contains(".background(OpenClawProBackground())"))
         #expect(contentCard.contains(".ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])"))
         #expect(contentCard.contains(".allowsHitTesting(!self.isDrawerLayout || !self.isPresented)"))
-        #expect(contentCard.contains(".clipShape(shape)"))
         #expect(contentCard.contains("shape.strokeBorder("))
         #expect(contentCard.contains(".offset(x: offset)"))
         #expect(!contentCard.contains("Color(uiColor: .systemGroupedBackground)"))

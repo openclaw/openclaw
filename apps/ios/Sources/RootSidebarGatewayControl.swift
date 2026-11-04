@@ -182,12 +182,7 @@ struct RootSidebarGatewayControl: View {
     }
 
     private func refreshRegistry() {
-        // Demo/capture screens must not expose the installed user's saved hosts.
-        guard !self.appModel.isAppleReviewDemoModeEnabled, !self.appModel.isScreenshotFixtureModeEnabled else {
-            self.registry = .empty
-            return
-        }
-        self.registry = GatewaySettingsStore.loadGatewayRegistry()
+        self.registry = self.appModel.loadDisplayedGatewayRegistry()
     }
 
     private func switchGateway(_ stableID: String) {

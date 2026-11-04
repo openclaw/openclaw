@@ -1,10 +1,24 @@
-import { createRequire } from "node:module";
 import type { DOMWindow } from "jsdom";
 import type { Environment } from "vitest/runtime";
 
-const require = createRequire(import.meta.url);
+// VM tests must use the jsdom instance that created their native window.
+const require = process.getBuiltinModule("module").createRequire(import.meta.url);
 const adapterInstalled = Symbol.for("openclaw.vitest.jsdom-adapter");
 export type JsdomCustomElementDefinition = { name: string };
+
+const VITEST_SPY_FRAME = /[\\/]node_modules[\\/]vitest[\\/]dist[\\/]chunks[\\/]spy\.[^\\/]+\.js:/u;
+
+// Conservative on an unreadable stack: retaining source resources can cost a stale generation;
+// dropping dependency resources would break every later file.
+export function isRepoOwnedRegistrationStack(stack: string | undefined): boolean {
+  const frames = (stack ?? "").split("\n").slice(2);
+  // A Vitest spy on registration forwards here, possibly through a fixture's mock
+  // implementation. Neither owns the registered resource; whoever called the spy does.
+  const spyFrame = frames.findIndex((frame) => VITEST_SPY_FRAME.test(frame));
+  const callerFrame =
+    frames.slice(spyFrame + 1).find((frame) => !VITEST_SPY_FRAME.test(frame)) ?? "";
+  return callerFrame.trim() !== "" && !/[\\/]node_modules[\\/]/u.test(callerFrame);
+}
 
 function bindings() {
   // The package entry initializes the mutually dependent generated interfaces.
@@ -39,14 +53,37 @@ function bindings() {
       _customElementDefinitions: JsdomCustomElementDefinition[];
     };
   } = require("jsdom/lib/generated/idl/CustomElementRegistry.js");
-  return { utils, eventTarget, blob, formData, registry };
+  const document: {
+    convert(
+      window: object,
+      value: Document,
+    ): {
+      _lastFocusedElement: object | null;
+      _clearDOMSelector(): void;
+    };
+  } = require("jsdom/lib/generated/idl/Document.js");
+  return { utils, eventTarget, blob, formData, registry, document };
+}
+
+export function clearJsdomViewportFocus(document: Document): void {
+  const impl = bindings().document.convert(globalThis, document);
+  // blur() focuses the viewport in jsdom 30.1.1; preserve element focus and clear only that viewport.
+  // oxlint-disable-next-line eslint/no-underscore-dangle -- jsdom owns this implementation member name.
+  if (impl._lastFocusedElement === impl) {
+    // oxlint-disable-next-line eslint/no-underscore-dangle -- jsdom owns this implementation member name.
+    impl._lastFocusedElement = null;
+    // oxlint-disable-next-line eslint/no-underscore-dangle -- jsdom owns this implementation member name.
+    impl._clearDOMSelector();
+  }
 }
 
 export function jsdomCustomElementDefinitions(registry: object) {
   const native = bindings().registry;
-  return native.is(registry)
-    ? native.convert(globalThis, registry)._customElementDefinitions
-    : undefined;
+  if (!native.is(registry)) {
+    return undefined;
+  }
+  // oxlint-disable-next-line eslint/no-underscore-dangle -- jsdom owns this implementation member name.
+  return native.convert(globalThis, registry)._customElementDefinitions;
 }
 
 function installJsdomWindowAdapter(): void {
@@ -60,8 +97,10 @@ function installJsdomWindowAdapter(): void {
     const result = setup(wrapper, window, ...args);
     // Window initializes its EventTarget with itself as the global object.
     // Register Bun's distinct proxy here so iframe windows receive the same repair.
+    // oxlint-disable-next-line eslint/no-underscore-dangle -- jsdom owns this implementation member name.
     if (wrapper === window && utils.implForWrapper(window._globalProxy) === null) {
       utils.registerWrapper(
+        // oxlint-disable-next-line eslint/no-underscore-dangle -- jsdom owns this implementation member name.
         window._globalProxy,
         utils.implForWrapper(window),
         eventTarget.interfaceDescriptor,
@@ -72,9 +111,10 @@ function installJsdomWindowAdapter(): void {
 }
 
 export function installJsdomEnvironmentAdapter(environment: Environment): void {
-  if (Object.hasOwn(environment, adapterInstalled)) return;
+  if (Object.hasOwn(environment, adapterInstalled)) {
+    return;
+  }
   Object.defineProperty(environment, adapterInstalled, { value: true });
-  installJsdomWindowAdapter();
   const NativeBlob = globalThis.Blob;
   const NativeFile = globalThis.File;
   const NativeURL = globalThis.URL;
@@ -86,6 +126,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
   function installWebApis(target: object, window: DOMWindow) {
     const { blob, formData } = bindings();
     const toNativeBlob = (value: Blob) =>
+      // oxlint-disable-next-line eslint/no-underscore-dangle -- jsdom owns this implementation member name.
       new NativeBlob([blob.convert(window, value)._bytes], { type: value.type });
     const toNativeBody = (value: BodyInit): BodyInit => {
       if (blob.is(value)) {
@@ -100,6 +141,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
             // The filename overload would rebuild this through jsdom's global File.
             result.append(
               name,
+              // oxlint-disable-next-line eslint/no-underscore-dangle -- jsdom owns this implementation member name.
               new NativeFile([blob.convert(window, entry)._bytes], entry.name, {
                 type: entry.type,
                 lastModified: entry.lastModified,
@@ -133,6 +175,8 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
   }
 
   environment.setup = async (global, options) => {
+    // Node-environment workers register the adapter too; keep DOM bindings lazy.
+    installJsdomWindowAdapter();
     const originals = new Map(
       ["URL", "Request"].map((key) => [key, Object.getOwnPropertyDescriptor(global, key)]),
     );
@@ -144,8 +188,11 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
           await result.teardown(target);
         } finally {
           for (const [key, descriptor] of originals) {
-            if (descriptor) Object.defineProperty(target, key, descriptor);
-            else Reflect.deleteProperty(target, key);
+            if (descriptor) {
+              Object.defineProperty(target, key, descriptor);
+            } else {
+              Reflect.deleteProperty(target, key);
+            }
           }
         }
       },
@@ -153,6 +200,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
   };
   if (setupVM) {
     environment.setupVM = async (options) => {
+      installJsdomWindowAdapter();
       const result = await setupVM(options);
       const context = result.getVmContext();
       installWebApis(context, context.jsdom.window);

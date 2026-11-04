@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
@@ -33,6 +34,8 @@ import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.wear.compose.material3.AppScaffold
+import androidx.wear.compose.material3.TimeSource
+import androidx.wear.compose.material3.TimeText
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -67,6 +70,12 @@ class WearVoiceLayoutTest {
   private val scenario = mutableStateOf(Scenario("idle"))
   private var liveClicks = 0
   private var recoveryClicks = 0
+  private val timeSource =
+    object : TimeSource {
+      // Wall-clock minutes must not change screenshot pixels between runs.
+      @Composable
+      override fun currentTime(): String = "10:09"
+    }
 
   private data class Scenario(
     val name: String,
@@ -472,7 +481,7 @@ class WearVoiceLayoutTest {
       CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale.value)) {
         OpenClawWearTheme(themeMode = WearThemeMode.Dark) {
           val value = scenario.value
-          AppScaffold {
+          AppScaffold(timeText = { TimeText(timeSource = timeSource) }) {
             OpenClawWearScreens(
               snapshot =
                 WearConversationSnapshot(

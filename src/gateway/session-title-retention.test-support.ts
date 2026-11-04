@@ -4,8 +4,8 @@ const currentModuleUrl = import.meta.url;
 export const sessionTitleRetentionEntrypoints = {
   titleReader: {
     currentModuleUrl,
-    sourceWorkerName: "session-transcript-title-reader",
-    distWorkerPath: "gateway/session-transcript-title-reader.js",
+    sourceWorkerName: "session-transcript-title-reader.worker",
+    distWorkerPath: "gateway/session-transcript-title-reader.worker.js",
   },
   sessionUtils: {
     currentModuleUrl,
