@@ -361,7 +361,7 @@ const enSettings = {
       review: "Review",
       conflict: "Settings changed elsewhere: {fields}",
       saveInterrupted: "Disconnected while saving. Reconnect to check your changes.",
-      saveNotSaved: "Couldn’t save your changes. Reconnect to try again.",
+      saveNotSaved: "Couldn’t save your changes. Save again.",
     },
     generic: {
       subtitle: "Channel status and settings.",
