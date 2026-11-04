@@ -51,7 +51,7 @@ const enLinkReader = {
     checkFailure: "Failed",
     checkPending: "In progress",
     checkNeutral: "Neutral",
-    checksTruncated: "Some checks could not be shown.",
+    checksTruncated: "Couldn’t show all checks. Open the original to see them.",
     checksSourceExternal: "View all checks on {provider}",
     checksSource: "View all checks",
     checksCommit: "Checks for commit {commit}",
@@ -65,9 +65,8 @@ const enLinkReader = {
     diffLabel: "Diff for {filename}",
     partial: "This view is incomplete. Open the original for the full item.",
     bodyTruncated: "This text was shortened.",
-    commentsTruncated:
-      "Some comments could not be shown. Open the original for the full conversation.",
-    filesTruncated: "Some files could not be shown. Open the original for the full changes.",
+    commentsTruncated: "Couldn’t show all comments. Open the original for the full conversation.",
+    filesTruncated: "Couldn’t show all files. Open the original for the full changes.",
     patchTruncated: "This diff was shortened. Open the original for the full patch.",
     patchUnavailable:
       "No text diff available in this view. Open the original to inspect this file.",
