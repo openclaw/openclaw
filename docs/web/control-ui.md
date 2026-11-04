@@ -55,6 +55,9 @@ other participants who can compose keep their session's command menu.
 When the Gateway starts with `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`,
 its Control UI shows **Gateway configuration is read-only.** You can inspect the
 configuration there. OpenClaw refuses changes to `openclaw.json` through the Gateway.
+Use **Dismiss** to hide the banner in this browser for this Gateway. The choice
+survives page reloads. A changed notice appears again. Dismissing the banner does
+not enable configuration changes.
 
 By default, the banner tells operators to update the configuration file or
 deployment settings for this Gateway. To direct them to your own workflow, set
@@ -62,6 +65,20 @@ deployment settings for this Gateway. To direct them to your own workflow, set
 text replaces the instructions after the read-only heading. End the notice with
 a space and an absolute HTTP or HTTPS URL to add a **Learn more** link. For
 example, `Edit the deployment manifest and redeploy. https://example.org/gateway`.
+
+## Edit a failed message
+
+If a model rejects a message (for example, because it contains too many images),
+choose **Edit message** on the latest failed reply. Confirm the rewind to return
+that message and its attachments to the composer, remove or change attachments,
+and send again. The rejected turn remains in a saved conversation branch, but is
+excluded from the active model context.
+
+Send or clear any existing composer draft first; recovery never replaces it.
+Editing requires permission to rewind the conversation and is unavailable while
+a run is active. **Try again** still continues the existing conversation without
+replaying the original message, because earlier actions may already have run.
+Rewinding does not undo external actions.
 
 ## Command palette file attachments
 
@@ -176,6 +193,10 @@ GitHub item URLs and repository-qualified references such as `owner/repo#126` re
 
 GitHub polling uses conditional requests when GitHub supplies an ETag. Unchanged responses reuse parsed metadata without downloading the body again. Reuse is bounded and isolated by API endpoint and credential; every refresh still checks GitHub and the current access rules. Authenticated `304 Not Modified` responses do not consume GitHub’s primary REST rate limit.
 
+The Gateway measures link-preview and CI check-detail cache freshness using
+elapsed time. Adjusting the host's wall clock does not shorten or extend those
+cache windows; existing connection, credential, and session access scopes still apply.
+
 The cached transcript also preserves its conversation title and selected model label when the conversation is outside the saved sidebar page. You can type in the restored draft while the Gateway reconnects. The saved model control shows “Refreshing models…” and stays disabled until live catalog data arrives. Live session metadata replaces that display projection when it arrives. Reloading a full-UUID chat link can show that scoped cache while the Gateway confirms the route. Sending and restored queued messages wait for confirmation; a deleted or moved conversation replaces the cached view with the Gateway's result.
 
 An authenticated same-origin reload includes shared display settings and your profile’s appearance and sidebar preferences in the document. Chat uses this display projection while connecting, without loading the full editable configuration. Preference changes from other tabs refresh through the Gateway’s existing notifications; settings pages and configuration writes still load the full snapshot.
@@ -242,7 +263,7 @@ When a checkout is too large or its Git layout cannot be validated cheaply, summ
 
 Nested repositories remain separate from the parent checkout's file contents. Untracked repositories appear as directory entries, while tracked submodules report Git's change status. Unchanged results can be reused in both cases, including when the checkout uses an external `core.excludesFile`; editing that ignore file refreshes which files appear.
 
-In the chat’s **Changes** panel, gutter chevrons fold complete functions, classes, and other language-supported multiline blocks within a file. Everything starts expanded, including edits. A folded placeholder shows the hidden line count and additions/deletions; click it to expand. Split and unified views share the same folds. The file menu offers **Collapse Code**, **Collapse Functions and Classes**, and **Expand Code**, separately from collapsing whole files. Incomplete source, omitted gaps, unsupported languages, and oversized previews stay expanded. Changing the patch resets code folds.
+In the chat’s **Changes** panel, gutter chevrons fold complete functions, classes, and other language-supported multiline blocks within a file. Everything starts expanded, including edits. A folded placeholder shows the hidden line count and additions/deletions; click it to expand. Split and unified views share the same folds. The file menu offers **Collapse code**, **Collapse functions and classes**, and **Expand code**, separately from collapsing whole files. Incomplete source, omitted gaps, unsupported languages, and oversized previews stay expanded. Changing the patch resets code folds.
 
 Session-start baselines omit SQLite databases and their WAL, SHM, and journal files, as well as hardlinked files. These files remain visible in checkout diffs even when unchanged since the session began; baseline capture never opens them in the Gateway process, preserving live database locks.
 
@@ -262,7 +283,7 @@ In **My sessions**, choosing an agent from the switcher resumes that agent's new
 
 The sidebar’s **Unsent draft** pencil covers saved text, attachments, replies, and goals, including drafts saved in another tab or before a reload, without reopening the conversation. A newer edit or clear always replaces an older saved draft. Incognito conversations never show a saved-draft pencil. Outbox attention badges also count queued messages with attachments that need review once the connection finishes restoring.
 
-If this browser has saved drafts or messages that could not be restored to a chat, a **saved drafts** or **saved messages to review** notice shows their content and attachment names. Empty records are not counted. The original chat is named only when it can be identified from your available conversations. Choose **Review in this chat** in a non-Incognito chat with an empty message box and no pending messages; confirmation restores the saved copy without sending it. Messages with unconfirmed delivery stay paused—check the original chat before retrying. **Delete saved copy** asks for confirmation and removes only the saved draft, messages, and attachments shown together, not messages already sent to a chat.
+If this browser has saved drafts or messages that could not be restored to a chat, a **saved drafts** or **saved messages to review** notice shows their content and attachment names. Empty records are not counted. The original chat is named only when it can be identified from your available conversations. Choose **Review in this session** in a non-Incognito session with an empty message box and no pending messages; confirmation restores the saved copy without sending it. Messages with unconfirmed delivery stay paused—check the original chat before retrying. **Delete saved copy** asks for confirmation and removes only the saved draft, messages, and attachments shown together, not messages already sent to a chat.
 
 With sidebar previews enabled, running sessions show a small, static tool icon beside the progress text on the second row beneath the session name. The title row stays unchanged, and the tool name is available only in the icon’s tooltip and accessible label rather than repeated as visible text. The compact one-row sidebar and team roster add no tool icon or tool text, so tool changes do not shift the list. Tool progress uses only explicitly public progress text from the Gateway, never argument-derived metadata or raw command output. If a call’s progress becomes hidden, its displayed progress is withdrawn. Pending questions and other critical status keep their existing priority. The existing session indicator remains the only activity animation, and tool state clears when its live subscription ends.
 
@@ -506,7 +527,7 @@ file tree** to browse another file, or **Show in Files** to reveal the current f
 in its folder with the **All** filter.
 
 The **Review** file menu offers **Edit file** when the file reader confirms editing
-is available. Readable files keep **Open File** and their supported Markdown and
+is available. Readable files keep **Open file** and their supported Markdown and
 source views when editing is unavailable; downloads remain available from the preview.
 
 If the **Files** panel shows a listing error, select **Retry** to load the current
@@ -526,6 +547,9 @@ Detected PDFs opened from chat file links or the Files panel use the same
 browser-native preview as PDF attachments, up to 16 MiB. Preview failures and
 larger PDFs retain **Download file**. Rendering depends on your browser's PDF
 support; the generic text and image inline-preview limit is unchanged.
+Refreshing unchanged file metadata keeps the PDF reader's page and scroll
+position. The preview still reads fresh bytes and checks file access; changed
+contents reload the document, and selecting a different source replaces it.
 
 Downloads use the session's existing file-read access, including managed repository
 workspaces. Provider-backed node workspaces whose bridge only supports whole-file
@@ -606,7 +630,7 @@ When a plugin such as [MCP Relay](/plugins/mcp-relay) embeds the Control UI thro
 
 An embedder that supplies linked Gateways adds them to the identity menu's **Gateway** section. Select a Gateway to switch the embedded page, choose **Set as primary** when available, or open **Gateway settings…** in the host. The host owns the list, primary choice, and navigation. Native window actions, native Gateway keyboard shortcuts, and native reconnect actions are unavailable in embedded mode.
 
-If you paste a setup code from **Devices → Pair device → Copy setup code** into **Gateway secret**, the UI shows an inline hint before you connect. Paste that code into **Settings → Gateway** in the OpenClaw mobile app. For the Control UI, run `openclaw gateway auth-token --show` in an interactive terminal on the Gateway host and paste the shared token instead. If a connection with a setup code is rejected for a token or password mismatch, the login screen repeats this guidance.
+If you paste a setup code from **Devices → Connect a device → Copy setup code** into **Gateway secret**, the UI shows an inline hint before you connect. Paste that code into **Settings → Gateway** in the OpenClaw mobile app. For the Control UI, run `openclaw gateway auth-token --show` in an interactive terminal on the Gateway host and paste the shared token instead. If a connection with a setup code is rejected for a token or password mismatch, the login screen repeats this guidance.
 
 Local onboarding generates a Gateway secret in token mode by default, without a token/password picker, and preserves existing password mode. Use `--gateway-auth password` or `--gateway-password <value>` for explicit password setup; Tailscale Funnel requires password mode. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into **Gateway secret**. If Windows PowerShell reports that running scripts is disabled, start those commands through [npm's `openclaw.cmd`](/platforms/windows#powershell-execution-policy) instead of changing the execution policy.
 
@@ -636,7 +660,7 @@ their agent's avatar as the icon.
 Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
-The accented rail **+** below the workspace mark, labeled **New conversation**, opens the New session composer directly with your last-selected agent.
+The accented rail **+** below the workspace mark, labeled **New session**, opens the New session composer directly with your last-selected agent.
 The selection is remembered in this browser for each Gateway; you can choose a
 different agent inside the composer.
 Each group's **+** opens a composer for that specific agent, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
@@ -789,7 +813,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="side-panel-keyboard-shortcuts" />[Side panel keyboard shortcuts](/web/control-ui/settings#side-panel-keyboard-shortcuts)
 - <a id="this-mac-(macos-app)" />[This device (macOS and iOS apps)](/web/control-ui/settings#this-mac-macos-app)
 - <a id="custom-plugin-ui" />[Custom plugin UI](/web/control-ui/settings#custom-plugin-ui)
-- <a id="import-assistant-memory" />[Import assistant memory](/web/control-ui/settings#import-assistant-memory)
+- <a id="import-assistant-memory" />[Import agent memory](/web/control-ui/settings#import-assistant-memory)
 - <a id="mcp-page" />[MCP page](/web/control-ui/settings#mcp-page)
 - <a id="activity-tab" />[Activity tab](/web/control-ui/settings#activity-tab)
 - <a id="meetings-page" />[Meetings page](/web/control-ui/settings#meetings-page)

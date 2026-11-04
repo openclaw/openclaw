@@ -510,6 +510,10 @@ does **not** inject those OpenRouter-specific headers or prompt-cache markers.
     without a scalar effort. Omitting a thinking request leaves their native
     reasoning default unchanged; configured reasoning budgets are preserved.
 
+    Streamed `reasoning.summary` details count as hidden thinking progress during
+    compaction, just like `reasoning.text`. They do not become visible summary
+    text or change the silence timeout, cancellation, or overall deadline.
+
   </Accordion>
 
   <Accordion title="DeepSeek V4 reasoning replay">

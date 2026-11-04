@@ -16,9 +16,19 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         await page.clock.install();
         await pauseVirtualClock(page);
-        await page.route("**/healthz", (route) =>
-          route.fulfill({ status: 200, json: { ok: true, status: "live" } }),
-        );
+        await page.addInitScript(() => {
+          const fetch = window.fetch.bind(window);
+          window.fetch = (input, init) => {
+            const url = new URL(
+              input instanceof Request ? input.url : String(input),
+              location.href,
+            );
+            // Keep continuously live health out of real HTTP while retries use the virtual clock.
+            return url.origin === location.origin && url.pathname === "/healthz"
+              ? Promise.resolve(Response.json({ ok: true, status: "live" }))
+              : fetch(input, init);
+          };
+        });
         const denied = failure === "denied";
         const gateway = await installMockGateway(page, {
           methodResponses: {
@@ -34,15 +44,17 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl);
-        // Mock socket timers and WebCrypto must settle without a wall-time boot window.
+        const gate = page.locator(".login-gate");
+        // Request receipt precedes the queued response and lazy gate rendering.
         await expect
           .poll(async () => {
             await page.clock.runFor(1);
-            return (await gateway.getRequests("connect")).length;
+            return {
+              attempts: (await gateway.getRequests("connect")).length,
+              visible: await gate.isVisible(),
+            };
           })
-          .toBe(1);
-        const gate = page.locator(".login-gate");
-        await gate.waitFor();
+          .toEqual({ attempts: 1, visible: true });
         const initialAttempts = (await gateway.getRequests("connect")).length;
         for (let second = 0; second < 60; second++) {
           await page.clock.runFor(1_000);
@@ -50,11 +62,12 @@ suite.define(() => {
           await expect
             .poll(async () => {
               await page.clock.runFor(1);
-              return page.evaluate(() =>
+              const socketsClosed = await page.evaluate(() =>
                 (window as MockGatewayWindow)
                   .openclawControlUiE2eGateway!.socketStates()
                   .every((socket) => socket.readyState === WebSocket.CLOSED),
               );
+              return socketsClosed;
             })
             .toBe(true);
         }

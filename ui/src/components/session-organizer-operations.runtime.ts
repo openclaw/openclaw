@@ -88,7 +88,7 @@ function sessionDeleteSkipPreference(
 // Delete always confirms; bound automations add an unskippable pause warning.
 function confirmSessionDelete(
   sessions: readonly SessionActionRow[],
-  options: { message: string; skipPreference?: ConfirmDialogSkipPreference },
+  options: { title: string; message: string; skipPreference?: ConfirmDialogSkipPreference },
   scope: SidebarSessionMutationScope,
 ): Promise<boolean> {
   const dialog = {
@@ -122,7 +122,8 @@ export async function deleteSessionsBatch(
   const confirmed = await confirmSessionDelete(
     rows,
     {
-      message: t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }),
+      title: t("sessionsView.deleteSessionsTitle", { count: String(rows.length) }),
+      message: t("sessionsView.deleteSessionsConfirm"),
       skipPreference: sessionDeleteSkipPreference(scope),
     },
     scope,
@@ -133,7 +134,10 @@ export async function deleteSessionsBatch(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.deleteSessionsStale", { count: String(rows.length) }) });
+    showToast({
+      severity: "error",
+      message: t("sessionsView.deleteSessionsStale", { count: String(rows.length) }),
+    });
     return;
   }
   if (!confirmed) {
@@ -462,13 +466,15 @@ export async function forkSession(
   deps: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
-) {
+  options: { title?: string } = {},
+): Promise<SidebarSessionMutationResult> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return;
+    return "stale";
   }
   const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
   const createParams = {
     parentSessionKey: session.key,
+    ...(options.title?.trim() ? { label: options.title.trim() } : {}),
     fork: true,
     ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
       ? { forkFrom: "last-completed" as const }
@@ -483,24 +489,25 @@ export async function forkSession(
       session,
     })
   ) {
-    return;
+    return "failed";
   }
   try {
     const key = await scope.sessions.create(createParams, { signal: scope.signal });
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
+      return "stale";
     }
     if (key) {
       deps.selectSession(key);
-    } else {
-      deps.sessionData.publishSessionMutationError(
-        scope,
-        scope.sessions.state.error ?? t("newSession.createFailed"),
-      );
+      return "completed";
     }
+    deps.sessionData.publishSessionMutationError(
+      scope,
+      scope.sessions.state.error ?? t("newSession.createFailed"),
+    );
   } catch (error) {
     deps.sessionData.publishSessionMutationError(scope, error);
   }
+  return "failed";
 }
 
 export async function stopCloudWorker(
@@ -514,7 +521,9 @@ export async function stopCloudWorker(
     return;
   }
   const confirmed = await showConfirmDialog({
-    message: t("sessionsView.stopCloudWorkerConfirm", { session: session.label }),
+    title: t(`${stopAction.copyKey}Confirm`, { session: session.label }),
+    message: t(`${stopAction.copyKey}Description`),
+    details: t("sessionsView.stopCloudWorkerTarget", { session: session.label }),
     confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
     danger: true,
     signal: scope.signal,
@@ -523,7 +532,10 @@ export async function stopCloudWorker(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.stopCloudWorkerStale", { session: session.label }) });
+    showToast({
+      severity: "error",
+      message: t("sessionsView.stopCloudWorkerStale", { session: session.label }),
+    });
     return;
   }
   if (!confirmed) {
@@ -565,7 +577,8 @@ export async function deleteSession(
   const confirmed = await confirmSessionDelete(
     [session],
     {
-      message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
+      title: t("sessionsView.deleteSessionTitle", { session: session.label }),
+      message: t("sessionsView.deleteSessionConfirm"),
       ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
     },
     scope,
@@ -574,7 +587,10 @@ export async function deleteSession(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.deleteSessionStale", { session: session.label }) });
+    showToast({
+      severity: "error",
+      message: t("sessionsView.deleteSessionStale", { session: session.label }),
+    });
     return;
   }
   if (!confirmed) {
@@ -629,6 +645,7 @@ export async function deleteSession(
         window.alert(formatPreservedWorktreesNotice([preserved]));
       } else {
         const removeWorktree = await showConfirmDialog({
+          title: t("sessionsView.removePreservedWorktreeTitle", { branch: preserved.branch }),
           message: formatPreservedWorktreeConfirmation(preserved),
           confirmLabel: t("common.remove"),
           danger: true,
