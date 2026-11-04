@@ -1,5 +1,9 @@
-import { ServiceFileInspectionError, scanSystemdDir } from "./inspect-files.js";
-import type { ExtraGatewayService, ScannedGatewayService } from "./inspect-files.js";
+import {
+  scanSystemdDir,
+  type ExtraGatewayService,
+  type ScannedGatewayService,
+  type ServiceFileInspectionError,
+} from "./inspect-files.js";
 import { DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS } from "./systemd-unit-load-paths.js";
 
 function projectService({
