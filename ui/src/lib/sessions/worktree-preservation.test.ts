@@ -23,7 +23,7 @@ describe("preserved session worktree presentation", () => {
       "Session needs attention: OpenClaw could not create a safety snapshot.",
     );
     expect(formatPreservedWorktreesNotice([busy, snapshot])).toBe(
-      "Managed Worktrees:\nopenclaw/busy-task — live run or cleanup active\nopenclaw/snapshot-task — OpenClaw could not create a safety snapshot",
+      "Managed worktrees:\nopenclaw/busy-task — live run or cleanup active\nopenclaw/snapshot-task — OpenClaw could not create a safety snapshot",
     );
   });
 });
