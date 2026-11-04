@@ -1071,6 +1071,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["rw", ["Z", ["Z"], null, "BA1.A2.", ["A1.A2."], 1, "BA1.A2.C"], ["Z", "BA1.A2.", "BA1.A2.C"]],
     ["two throws", ["X.", ["X."], 3, "X. X.", ["X."], 3, "X. X. D."], ["X.", "X.", "X. D."]],
     ["next message", [["X."], 2, 3, "X. Y.", ["X."], 3, "X. Y. Z."], ["X.", "X. Y.", "X. Y. Z."]],
+    ["fence", ["~~~py\nx", null, "~~~py\nx y\n~~~\nD."], ["~~~py\nx", "~~~py\ny\n~~~\nD."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1589,7 +1590,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const fallbackText = String(firstMockArg(sendMessageFeishuMock, "message send params").text);
     expect(fallbackText).toBe("spoken reply\n\nMedia upload failed. Please try again.");
   });
-
   const code = "```ts\ncode\n```";
   it.each([
     {

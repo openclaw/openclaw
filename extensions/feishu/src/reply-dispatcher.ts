@@ -329,12 +329,34 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
+  // The opener line of a fenced block that text leaves open, using core's fence rules.
+  const openFence = (text: string) => {
+    let open: { line: string; char: string; size: number } | undefined;
+    for (const line of text.split("\n")) {
+      const [, marker = "", info = ""] = /^ {0,3}(`{3,}|~{3,})(.*?)\r?$/u.exec(line) ?? [];
+      const char = marker.charAt(0);
+      if (open && char === open.char && marker.length >= open.size && !/[^ \t]/u.test(info)) {
+        open = undefined;
+      } else if (!open && marker && !(char === "`" && info.includes("`"))) {
+        open = { line: line.replace(/\r$/u, ""), char, size: marker.length };
+      }
+    }
+    return open?.line;
+  };
+
   // A closed card keeps its preview; the next card continues the same message. Only the
   // separator after the closed text is dropped, never indentation or the first snapshot.
-  const continuedPreview = (text: string, from = closedPreviewText) =>
-    from && text.startsWith(from)
-      ? text.slice(from.length).replace(from.endsWith("\n") ? /^\s*\n/u : /^\s*\n|^[^\S\n]+/u, "")
-      : text;
+  // A card cut inside a fenced block reopens it, so the continuation stays code.
+  const continuedPreview = (text: string, from = closedPreviewText) => {
+    if (!from || !text.startsWith(from)) {
+      return text;
+    }
+    const rest = text
+      .slice(from.length)
+      .replace(from.endsWith("\n") ? /^\s*\n/u : /^\s*\n|^[^\S\n]+/u, "");
+    const opener = rest && openFence(from);
+    return opener ? `${opener}\n${rest}` : rest;
+  };
 
   const setClosedPreview = (next: string, epoch = previewEpoch) => {
     // A new assistant message restarts the preview; late settlements belong to the old one.
