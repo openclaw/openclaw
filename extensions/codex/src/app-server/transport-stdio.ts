@@ -161,7 +161,6 @@ export async function createStdioTransport(
         // Child environment overrides cannot change the Gateway's containment boundary.
         detached: process.platform !== "win32" && !isHostedGateway,
         shell: invocation.shell,
-        stdio: ["pipe", "pipe", "pipe"],
         windowsHide: invocation.windowsHide,
       },
       assertCurrent,
