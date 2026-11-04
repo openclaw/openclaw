@@ -168,7 +168,7 @@ describe("refreshSlashCommands", () => {
   });
 
   it("resolves localized UI command metadata", () => {
-    expect(getSlashCommandDescription(commandByName("clear")!)).toBe("Clear chat history");
+    expect(getSlashCommandDescription(commandByName("clear")!)).toBe("Clear this conversation");
     expect(getSlashCommandCategoryLabel("tools")).toBe("Tools");
   });
 

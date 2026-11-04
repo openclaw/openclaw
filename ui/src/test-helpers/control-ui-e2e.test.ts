@@ -406,10 +406,10 @@ describe("shared proof capture", () => {
 
   it.each([
     ["none", "Send message", "snapshot", "5", "6"],
-    ["none", "Loading chat", "none", undefined, undefined],
+    ["none", "Loading conversation…", "none", undefined, undefined],
     ["evaluation", "Send message", "list", undefined, undefined],
     ["screenshot", "private-label", "list", undefined, undefined],
-    ["storage", "Sending message...", "list", undefined, undefined],
+    ["storage", "Sending message…", "list", undefined, undefined],
   ] as const)(
     "retains safe failure state despite %s failure (%s; %s catalog; %s/%s)",
     async (failure, sendLabel, catalogSource, shardIndex, shardCount) => {
@@ -460,7 +460,7 @@ describe("shared proof capture", () => {
       });
       const storageFailed = failure === "storage";
       const screenshotFailed = failure === "screenshot";
-      const sendDisabled = failure !== "none" || sendLabel === "Loading chat";
+      const sendDisabled = failure !== "none" || sendLabel === "Loading conversation…";
       const badgeText = failure === "none" ? "Ready" : "private-badge";
       const fileText = "private-file-content";
       const dom = document.createElement("div");
@@ -707,7 +707,7 @@ describe("shared proof capture", () => {
                     send: {
                       label: sendLabel === "private-label" ? "unknown" : sendLabel,
                       labelLength: sendLabel.length,
-                      disabled: failure !== "none" || sendLabel === "Loading chat",
+                      disabled: failure !== "none" || sendLabel === "Loading conversation…",
                       busy: failure === "storage",
                     },
                   },

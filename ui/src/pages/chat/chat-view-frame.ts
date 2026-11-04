@@ -105,6 +105,7 @@ export type ChatProps = Omit<
     // Resolve after the first pane frame prepares the Solid owner's permission facts.
     readProviderReview?: () => ChatProviderReviewOwner | undefined;
     error: string | null;
+    errorDetail?: unknown;
     diskSpace?: SessionPlacementDiskSpace;
     workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
     inlineApproval?: ExecApprovalRequest | null;

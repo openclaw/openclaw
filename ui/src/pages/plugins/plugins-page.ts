@@ -347,13 +347,9 @@ export function createPluginsPage(options: {
       event.stopPropagation();
       return;
     }
-    if (state.detail) {
+    // Settings details bubble to the shell's shared, location-aware parent navigation.
+    if (state.detail && surface === "discovery") {
       setState({ detail: null });
-      if (surface === "settings") {
-        context.replace("plugin-settings", {
-          pathname: pathForRoute("plugin-settings", context.basePath),
-        });
-      }
       event.stopPropagation();
     }
   };
@@ -573,6 +569,8 @@ export function createPluginsPage(options: {
     return pluginMutationBlockedReason({
       connected,
       hasAdminAccess: hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
+      actorKind:
+        context.gateway.snapshot.hello?.auth.roleAllowsAdmin === false ? "member" : "browser",
       mutationAllowed,
     });
   }

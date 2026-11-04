@@ -276,7 +276,9 @@ suite.define(() => {
       await gateway.rejectDeferred("config.set", rejection);
 
       const status = page.locator("openclaw-settings-save-indicator").getByRole("status");
-      await expect.poll(() => status.textContent()).toContain("Settings not applied");
+      await expect
+        .poll(() => status.textContent())
+        .toContain("Couldn’t apply settings. Review your changes.");
       // The reason is in view; clicking it blurs the edited field without resubmitting it.
       await status
         .getByText(

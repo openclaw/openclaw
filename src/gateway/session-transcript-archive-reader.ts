@@ -158,7 +158,7 @@ export class ArchivedTranscriptReader {
     if (this.scope.exactArchivePath) {
       const exactPath = this.scope.exactArchivePath;
       if ((await fs.promises.stat(exactPath).catch(() => null))?.isFile()) {
-        return materializeSessionArchiveForRead(exactPath);
+        return await materializeSessionArchiveForRead(exactPath);
       }
       return null;
     }
@@ -173,7 +173,7 @@ export class ArchivedTranscriptReader {
         continue;
       }
       try {
-        return materializeSessionArchiveForRead(archivePath);
+        return await materializeSessionArchiveForRead(archivePath);
       } catch (error) {
         if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
           throw error;
@@ -430,7 +430,7 @@ export class ArchivedTranscriptReader {
     for (const archivePath of candidates) {
       let filePath: string;
       try {
-        filePath = materializeSessionArchiveForRead(archivePath);
+        filePath = await materializeSessionArchiveForRead(archivePath);
       } catch (error) {
         if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
           throw error;
