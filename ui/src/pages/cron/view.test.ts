@@ -143,7 +143,7 @@ describe("cron view list pane", () => {
       [{ loading: true }, "No automations yet"],
       [{ jobsQuery: "zzz" }, "No automations match the current filters."],
       [{ loading: true, jobs: [createJob("refresh-me")], jobsTotal: 1 }, "Daily ping"],
-      [{ error: "Run history unavailable." }, "No automations yet"],
+      [{ error: "Activity history unavailable." }, "No automations yet"],
     ];
     for (const [props, message] of states) {
       const container = await renderView(props);
@@ -151,7 +151,9 @@ describe("cron view list pane", () => {
       expect(text(container, props.jobs ? ".cron-table" : ".cron-empty-state")).toContain(message);
       expect(attribute(container, ".cron-table", "aria-busy")).toBe(props.loading ? "true" : null);
       if (message === "No automations yet") {
-        expect(text(container, ".cron-empty-state")).toContain("Describe what OpenClaw should do");
+        expect(text(container, ".cron-empty-state")).toContain(
+          "Create an automation to schedule work for an agent.",
+        );
       }
       if (props.error) {
         expect(text(container, '.cron-error-banner[role="alert"]')).toContain(props.error);
