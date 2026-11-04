@@ -79,7 +79,7 @@
   pointer-events: none;
 }
 
-.subagents-desktop__row:not(:last-child)::after {
+.subagents-desktop__row:has(+ .subagents-desktop__row[data-depth="0"])::after {
   position: absolute;
   right: 8px;
   bottom: 0;

@@ -559,6 +559,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         key === "sessionKey" ||
         key === "agentId" ||
         key === "presented" ||
+        key === "mobile" ||
         key === "showRequest"
       ) {
         syncSessionPanelInputs(host);

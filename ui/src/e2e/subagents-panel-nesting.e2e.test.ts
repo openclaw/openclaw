@@ -153,6 +153,12 @@ suite.define(() => {
         console.log("Nested reviewer evidence:", directory);
 
         await expect.poll(() => reviewerRow.count()).toBe(1);
+        expect(await childRow.evaluate((row) => getComputedStyle(row, "::after").content)).toBe(
+          "none",
+        );
+        expect(await reviewerRow.evaluate((row) => getComputedStyle(row, "::before").content)).toBe(
+          '""',
+        );
         const childBounds = await childRow.locator(".subagents-desktop__name").boundingBox();
         const reviewerBounds = await reviewerRow.locator(".subagents-desktop__name").boundingBox();
         expect(childBounds).not.toBeNull();
