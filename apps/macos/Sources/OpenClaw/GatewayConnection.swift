@@ -87,6 +87,17 @@ actor GatewayConnection: Observable {
             self.revision = revision
             self.browserSession = browserSession
         }
+
+        fileprivate func matchesConnectionIdentity(as endpoint: EndpointSnapshot) -> Bool {
+            self.config.url == endpoint.config.url &&
+                self.config.token == endpoint.config.token &&
+                self.config.password == endpoint.config.password &&
+                self.browserSession == endpoint.browserSession &&
+                self.enablesPrimaryPersonalIdentity == endpoint.enablesPrimaryPersonalIdentity &&
+                GatewayTLSRoute.hasSameConnectionIdentity(self.tls, endpoint.tls) &&
+                self.deviceAuthGatewayID == endpoint.deviceAuthGatewayID &&
+                self.routeAuthority == endpoint.routeAuthority
+        }
     }
 
     typealias EndpointProvider = @Sendable () async throws -> EndpointSnapshot
@@ -246,16 +257,17 @@ actor GatewayConnection: Observable {
         let activationBindingKey: SymmetricKey?
 
         func matches(endpoint: EndpointSnapshot, shutdownGeneration: UInt64) -> Bool {
-            self.endpoint.config.url == endpoint.config.url &&
-                self.endpoint.config.token == endpoint.config.token &&
-                self.endpoint.config.password == endpoint.config.password &&
-                self.endpoint.browserSession == endpoint.browserSession &&
-                self.endpoint.enablesPrimaryPersonalIdentity == endpoint.enablesPrimaryPersonalIdentity &&
-                GatewayTLSRoute.hasSameConnectionIdentity(self.endpoint.tls, endpoint.tls) &&
-                self.endpoint.deviceAuthGatewayID == endpoint.deviceAuthGatewayID &&
-                self.endpoint.routeAuthority == endpoint.routeAuthority &&
+            self.endpoint.matchesConnectionIdentity(as: endpoint) &&
                 self.shutdownGeneration == shutdownGeneration
         }
+    }
+
+    private struct PendingPersonalConfiguration {
+        let id: UUID
+        let endpoint: EndpointSnapshot
+        let shutdownGeneration: UInt64
+        let routeGeneration: UInt64
+        let task: Task<GatewayChannelActor, Error>
     }
 
     private nonisolated let connectionPublication = LockIsolated<ConnectionPublication?>(nil)
@@ -268,6 +280,7 @@ actor GatewayConnection: Observable {
     /// Unbound operations capture this before their first suspension. Shutdown
     /// advances it so delayed config and retry work cannot recreate a route.
     private var shutdownGeneration: UInt64 = 0
+    private var pendingPersonalConfiguration: PendingPersonalConfiguration?
     /// Callback work keeps the physical socket epoch that decoded it. Retiring
     /// that epoch prevents delayed pushes from entering a replacement socket.
     private(set) var socketGenerationState = GatewaySocketGenerationState()
@@ -1012,6 +1025,13 @@ extension GatewayConnection {
         guard ifCurrent() else { return }
         let client = self.retireConfiguredConnection(disconnection: .disconnected(nil))
         self.shutdownGeneration &+= 1
+        if let pending = self.pendingPersonalConfiguration {
+            pending.task.cancel()
+            _ = try? await pending.task.value
+            if self.pendingPersonalConfiguration?.id == pending.id {
+                self.pendingPersonalConfiguration = nil
+            }
+        }
         if let client {
             await self.clientShutdown(client)
         }
@@ -1031,8 +1051,113 @@ extension GatewayConnection {
         {
             return client
         }
-        let previousClient = self.retireConfiguredConnection()
-        let configuredRouteGeneration = self.routeGeneration
+        if endpoint.enablesPrimaryPersonalIdentity {
+            while let pending = self.pendingPersonalConfiguration {
+                if pending.shutdownGeneration == shutdownGeneration,
+                   pending.routeGeneration == self.routeGeneration,
+                   pending.endpoint.matchesConnectionIdentity(as: endpoint)
+                {
+                    let client = try await pending.task.value
+                    try Task.checkCancellation()
+                    try self.requireCurrentShutdownGeneration(shutdownGeneration)
+                    guard self.routeGeneration == pending.routeGeneration,
+                          self.configuredConnection?.client === client,
+                          let current = configuredClient(
+                              endpoint: endpoint,
+                              shutdownGeneration: shutdownGeneration),
+                          current === client
+                    else { throw CancellationError() }
+                    return client
+                }
+                try await self.drainPendingPersonalConfiguration(pending)
+                try Task.checkCancellation()
+                try self.requireCurrentShutdownGeneration(shutdownGeneration)
+                try self.acceptEndpointRevision(endpoint.revision)
+                if let client = configuredClient(
+                    endpoint: endpoint,
+                    shutdownGeneration: shutdownGeneration)
+                {
+                    return client
+                }
+            }
+
+            let previousClient = self.retireConfiguredConnection()
+            let configuredRouteGeneration = self.routeGeneration
+            let id = UUID()
+            let task = Task { [weak self] () throws -> GatewayChannelActor in
+                guard let self else { throw CancellationError() }
+                defer {
+                    if self.pendingPersonalConfiguration?.id == id {
+                        self.pendingPersonalConfiguration = nil
+                    }
+                }
+                return try await self.configureUnretired(
+                    endpoint: endpoint,
+                    shutdownGeneration: shutdownGeneration,
+                    configuredRouteGeneration: configuredRouteGeneration,
+                    previousClient: previousClient)
+            }
+            self.pendingPersonalConfiguration = PendingPersonalConfiguration(
+                id: id,
+                endpoint: endpoint,
+                shutdownGeneration: shutdownGeneration,
+                routeGeneration: configuredRouteGeneration,
+                task: task)
+            let client = try await task.value
+            try Task.checkCancellation()
+            try self.requireCurrentShutdownGeneration(shutdownGeneration)
+            guard self.routeGeneration == configuredRouteGeneration,
+                  self.configuredConnection?.client === client,
+                  let current = configuredClient(
+                      endpoint: endpoint,
+                      shutdownGeneration: shutdownGeneration),
+                  current === client
+            else { throw CancellationError() }
+            return client
+        }
+
+        while let pending = self.pendingPersonalConfiguration {
+            try await self.drainPendingPersonalConfiguration(pending)
+            try Task.checkCancellation()
+            try self.requireCurrentShutdownGeneration(shutdownGeneration)
+            try self.acceptEndpointRevision(endpoint.revision)
+        }
+        return try await self.configureUnretired(
+            endpoint: endpoint,
+            shutdownGeneration: shutdownGeneration)
+    }
+
+    private func drainPendingPersonalConfiguration(
+        _ pending: PendingPersonalConfiguration) async throws
+    {
+        if self.routeGeneration == pending.routeGeneration {
+            self.routeGeneration &+= 1
+        }
+        pending.task.cancel()
+        _ = try? await pending.task.value
+        if self.pendingPersonalConfiguration?.id == pending.id {
+            self.pendingPersonalConfiguration = nil
+        }
+    }
+
+    private func configureUnretired(
+        endpoint: EndpointSnapshot,
+        shutdownGeneration: UInt64,
+        configuredRouteGeneration reservedRouteGeneration: UInt64? = nil,
+        previousClient reservedPreviousClient: GatewayChannelActor? = nil) async throws -> GatewayChannelActor
+    {
+        try self.requireCurrentShutdownGeneration(shutdownGeneration)
+        let config = endpoint.config
+        let browserSession = endpoint.browserSession
+        try browserSession?.validate(for: config.url)
+        if let client = configuredClient(
+            endpoint: endpoint,
+            shutdownGeneration: shutdownGeneration)
+        {
+            return client
+        }
+        let previousClient = reservedRouteGeneration == nil ? self.retireConfiguredConnection() : reservedPreviousClient
+        let configuredRouteGeneration = reservedRouteGeneration ?? self.routeGeneration
         if let previousClient {
             await self.clientShutdown(previousClient)
         }
@@ -1051,6 +1176,9 @@ extension GatewayConnection {
         let personalIdentityTLSRoute: GatewayTLSRoute?
         if endpoint.enablesPrimaryPersonalIdentity {
             let binding = try await self.bindPrimaryPersonalIdentity(endpoint: endpoint)
+            try self.requireCurrentShutdownGeneration(shutdownGeneration)
+            try Task.checkCancellation()
+            guard self.routeGeneration == configuredRouteGeneration else { throw CancellationError() }
             guard let localTLSRoute = Self.primaryPersonalIdentityTLSRoute(
                 url: config.url,
                 gatewayFingerprint: binding.tlsFingerprint)
