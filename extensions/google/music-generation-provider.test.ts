@@ -230,15 +230,14 @@ it.each(["text-only", "audio"])(
   "honors cancellation without retrying a late %s response",
   async (mode) => {
     const controller = new AbortController();
+    const reason = new Error("caller stopped music");
     generateContentMock.mockImplementation(async () => {
-      controller.abort(new Error("caller stopped music"));
+      controller.abort(reason);
       return mode === "audio"
         ? googleMusicAudioResponse()
         : googleMusicResponse([{ text: "late lyrics" }], "STOP");
     });
-    await expect(generateMusic({ signal: controller.signal })).rejects.toBe(
-      controller.signal.reason,
-    );
+    await expect(generateMusic({ signal: controller.signal })).rejects.toBe(reason);
     expect(generateContentMock).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         config: { responseModalities: ["AUDIO", "TEXT"], abortSignal: controller.signal },
