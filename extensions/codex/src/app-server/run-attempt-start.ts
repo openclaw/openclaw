@@ -90,6 +90,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       attemptClientFactory,
       callerOwnedAttemptClient,
       bindingStore,
+      replacementPredecessor: connection.mutable.replacementPredecessor,
       runtime: connection.options.runtime,
       appServer: pluginAppServer,
       pluginConfig,

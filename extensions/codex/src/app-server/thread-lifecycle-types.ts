@@ -68,6 +68,8 @@ export type CodexStartOrResumeThreadParams = Omit<
   abandonClient?: () => Promise<void>;
   reserveResumeThread?: (threadId: string) => { release: () => void };
   bindingStore: CodexAppServerBindingStore;
+  /** Durable predecessor retained while token-pressure rotation prepares its successor. */
+  replacementPredecessor?: CodexAppServerThreadBinding;
   params: AgentHarnessSessionRuntimeParamsV1;
   authority?: CodexBindingAuthority;
   /** Caller liveness; durable lineage is owned by authority. */
