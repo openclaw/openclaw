@@ -44,7 +44,16 @@ function dependencyDockerConfig(cfg: SandboxConfig, image: string): SandboxDocke
     ...cfg.docker,
     image,
     containerPrefix: CONTAINER_PREFIX,
-    env: { CI: "1" },
+    // Builder state must be writable even with a missing image HOME, and never staged.
+    tmpfs: [...cfg.docker.tmpfs, "/tmp/openclaw-deps:mode=1777"],
+    env: {
+      CI: "1",
+      HOME: "/tmp/openclaw-deps",
+      XDG_CONFIG_HOME: "/tmp/openclaw-deps/config",
+      XDG_DATA_HOME: "/tmp/openclaw-deps/data",
+      XDG_STATE_HOME: "/tmp/openclaw-deps/state",
+      XDG_CACHE_HOME: "/tmp/openclaw-deps/cache",
+    },
     setupCommand: undefined,
     binds: undefined,
   };
@@ -306,9 +315,7 @@ export async function prepareSandboxDependencyTemplate(params: {
             containerId,
             "/bin/sh",
             "-c",
-            docker.network === "none"
-              ? "exec pnpm install --offline --frozen-lockfile"
-              : "exec pnpm install --frozen-lockfile",
+            `exec pnpm install ${docker.network === "none" ? "--offline " : ""}--frozen-lockfile --store-dir "$XDG_DATA_HOME/pnpm/store"`,
           ],
           {
             allowFailure: true,
