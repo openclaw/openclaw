@@ -381,11 +381,25 @@ describe("SessionsCard", () => {
       expect(value()).toBe(englishValue);
       setDisplay({ ...base.display, chartMode: "cost" });
       flush();
-      expect(value()).toBe("$0.00");
+      expect(value()).toBe(
+        new Intl.NumberFormat(i18n.getLocale(), {
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(0),
+      );
       await i18n.setLocale("en");
       flush();
       expect(container.querySelector(".session-bar-row")).toBe(row);
-      expect(value()).toBe("$0.00");
+      expect(value()).toBe(
+        new Intl.NumberFormat(i18n.getLocale(), {
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(0),
+      );
       expect(average()).toBe("$0.00 avg");
     } finally {
       await restoreI18n();

@@ -5,6 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { doctorConfigRuntimeEntrypoints } from "../commands/doctor-config-runtime.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { storageProcessTestEntrypoints } from "../infra/storage-process-runtime.test-support.js";
+import { cliMessageExitEntrypoints } from "./cli-entrypoint.test-support.js";
 
 it("retires a real retained SQLite snapshot before a one-shot command exits", async ({
   expect,
@@ -23,10 +27,10 @@ it("retires a real retained SQLite snapshot before a one-shot command exits", as
     const script = `
       import fs from "node:fs";
       import { DatabaseSync } from "node:sqlite";
-      import { startSqliteReadOnlyLocationAsync } from ${JSON.stringify(new URL("../infra/sqlite-snapshot-source.ts", import.meta.url).href)};
-      import { closeCliResources } from ${JSON.stringify(new URL("./runtime-cleanup.ts", import.meta.url).href)};
-      import { runCliWithExitFinalization } from ${JSON.stringify(new URL("./one-shot-exit.ts", import.meta.url).href)};
-      import { defaultRuntime } from ${JSON.stringify(new URL("../runtime.ts", import.meta.url).href)};
+      import { startSqliteReadOnlyLocationAsync } from ${JSON.stringify(resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.sqliteSnapshotSource).href)};
+      import { closeCliResources } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.cleanup).href)};
+      import { runCliWithExitFinalization } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit).href)};
+      import { defaultRuntime } from ${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.runtime).href)};
 
       await runCliWithExitFinalization({
         run: async () => {
@@ -47,17 +51,14 @@ it("retires a real retained SQLite snapshot before a one-shot command exits", as
     `;
     const result = await fixture.track(
       runNodeScript(
-        ["--import=tsx", "--input-type=module", "--eval", script],
+        ["--input-type=module", "--eval", script],
         {
           PATH: process.env.PATH,
           SystemRoot: process.env.SystemRoot,
           HOME: directory,
           USERPROFILE: directory,
-          XDG_CACHE_HOME: path.join(directory, "cache"),
           OPENCLAW_STATE_DIR: path.join(directory, "state"),
           TERM: "dumb",
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          TSX_DISABLE_CACHE: "1",
         },
         20_000,
         { signal, maxBuffer: 1024 * 1024 },
@@ -91,9 +92,9 @@ it.concurrent.for([
     import fs from "node:fs";
     import { DatabaseSync } from "node:sqlite";
     import { setTimeout as delay } from "node:timers/promises";
-    import { runCliDisposer } from ${JSON.stringify(new URL("./runtime-cleanup.ts", import.meta.url).href)};
-    import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(new URL("./one-shot-exit.ts", import.meta.url).href)};
-    import { defaultRuntime, ExitError } from ${JSON.stringify(new URL("../runtime.ts", import.meta.url).href)};
+    import { runCliDisposer } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.cleanup).href)};
+    import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit).href)};
+    import { defaultRuntime, ExitError } from ${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.runtime).href)};
 
     const mode = ${JSON.stringify(mode)};
     const database = new DatabaseSync(${JSON.stringify(databasePath)});
@@ -132,15 +133,13 @@ it.concurrent.for([
 
       const result = await fixture.track(
         runNodeScript(
-          ["--import=tsx", "--input-type=module", "--eval", script],
+          ["--input-type=module", "--eval", script],
           {
             PATH: process.env.PATH,
             SystemRoot: process.env.SystemRoot,
             HOME: directory,
             USERPROFILE: directory,
             TERM: "dumb",
-            NODE_DISABLE_COMPILE_CACHE: "1",
-            TSX_DISABLE_CACHE: "1",
           },
           20_000,
           { signal, maxBuffer: 1024 * 1024 },
@@ -178,7 +177,7 @@ it.for([
     const script = `
       import { createServer } from "node:net";
       import { setTimeout as delay } from "node:timers/promises";
-      import { requestSettledExitWatchdog, runCliWithExitFinalization } from ${JSON.stringify(new URL("./one-shot-exit.ts", import.meta.url).href)};
+      import { requestSettledExitWatchdog, runCliWithExitFinalization } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit).href)};
       process.on("SIGTERM", () => {});
       if (${leak}) {
         const server = createServer().listen(0, "127.0.0.1");
@@ -198,17 +197,12 @@ it.for([
         onError: (error) => { throw error; },
       });
     `;
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-        env: { ...process.env, VITEST: undefined },
-        killSignal: "SIGKILL",
-        timeout: 5_000,
-      },
-    );
+    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+      encoding: "utf8",
+      env: { ...process.env, VITEST: undefined },
+      killSignal: "SIGKILL",
+      timeout: 5_000,
+    });
     const diagnostics = JSON.stringify(result);
     expect(result.error, diagnostics).toBeUndefined();
     expect(result.stdout, diagnostics).toContain("finalized");

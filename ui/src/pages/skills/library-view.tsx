@@ -8,6 +8,7 @@ import { SettingsDisclosure } from "../../components/solid/settings-disclosure.t
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
+  SettingsLoadingSkeleton,
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
@@ -146,10 +147,7 @@ export function SkillLibrary(props: {
         </div>
         {/* A stable list host keeps async replacement from reparenting the focused search field. */}
         <div>
-          <Loading
-            on={acceptedList() ? null : completion()}
-            fallback={<p role="status">{t("common.loading")}</p>}
-          >
+          <Loading on={acceptedList() ? null : completion()} fallback={<SettingsLoadingSkeleton />}>
             <Errored fallback={() => null}>{readError()}</Errored>
             <Entries />
           </Loading>
@@ -311,7 +309,14 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
                 !draft().content.trim()
               }
             >
-              {busy() ? t("common.loading") : t("skillLibrary.save")}
+              {busy() ? (
+                <>
+                  <span class="btn__spinner" aria-hidden="true" />
+                  {t("common.saving")}
+                </>
+              ) : (
+                t("skillLibrary.save")
+              )}
             </button>
           </openclaw-modal-actions>
         </Show>
@@ -436,13 +441,14 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
           />
         </label>
       </Show>
-      <Show when={!disabled()}>
+      <Show when={props.library.canEdit()}>
         <div class="plugins-toolbar">
           <label class="field" style={{ flex: "1", "min-width": "0" }}>
             <span>{t("skillLibrary.newFile")}</span>
             <input
               class="settings-input"
               name="library-file-path"
+              disabled={disabled()}
               value={props.library.local.newFilePath}
               onInput={(event) =>
                 props.library.setLocal((state) => {
@@ -454,7 +460,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
           <button
             type="button"
             class="btn"
-            disabled={!props.library.local.newFilePath.trim()}
+            disabled={disabled() || !props.library.local.newFilePath.trim()}
             onClick={() => {
               const path = props.library.local.newFilePath.trim();
               const exists =
@@ -547,7 +553,14 @@ function LibraryImport(props: { library: SkillLibraryModel }) {
                 (!props.library.uploadsEnabled() || current().importSelection.length === 0))
             }
           >
-            {busy() ? t("common.loading") : t("skillLibrary.import")}
+            {busy() ? (
+              <>
+                <span class="btn__spinner" aria-hidden="true" />
+                {t("common.importing")}
+              </>
+            ) : (
+              t("skillLibrary.import")
+            )}
           </button>
         </openclaw-modal-actions>
       }

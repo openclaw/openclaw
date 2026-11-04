@@ -678,7 +678,7 @@ export async function requestCloseSessionWorkspacePreview(
       } catch (error) {
         if (current()) {
           reveal();
-          showToast({ message: formatUiError(error) });
+          showToast({ severity: "error", message: formatUiError(error) });
         }
         return false;
       }

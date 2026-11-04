@@ -24,10 +24,7 @@ import {
   readWorkspaceSupportFile,
   restoreWorkspaceSkillMutation,
 } from "../skills/lifecycle/workspace-skill-write.js";
-import {
-  resolveWorkshopDraftsDir,
-  resolveWorkshopSkillsDir,
-} from "../skills/workshop/skills-root.js";
+import { resolveAgentSkillsRoot } from "../skills/loading/skill-paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { dropRetiredSkillWorkshopProposalTables } from "../state/openclaw-state-db-table-retirements.js";
@@ -35,6 +32,24 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+
+// The skill-workshop plugin's manifest `agentSkillsDir`, and the drafts folder inside it that
+// proposal-era exports retire into. This migration runs even while the plugin is disabled.
+function resolveWorkshopSkillsDir(
+  config: OpenClawConfig,
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return resolveAgentSkillsRoot({ config, agentId, dirName: "workshop-skills", env });
+}
+
+function resolveWorkshopDraftsDir(
+  config: OpenClawConfig,
+  agentId: string,
+  env?: NodeJS.ProcessEnv,
+): string {
+  return path.join(resolveWorkshopSkillsDir(config, agentId, env), ".drafts");
+}
 
 // Retired proposal storage: `<state>/skill-workshop/proposals/<id>/[generations/<uuid>/]PROPOSAL.md`
 // plus support files beside the draft; pre-SQLite bundles also carry `proposal.json`.

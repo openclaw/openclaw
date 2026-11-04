@@ -3,11 +3,16 @@ import {
   isSessionsHubRoute,
   isSettingsNavigationRoute,
   normalizeSidebarEntries,
+  pageTitleForRoute,
   visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability as Device } from "./app/native-device-settings.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
-import { settingsNavigationOwnerRoute, settingsParentRoute } from "./lib/settings-navigation.ts";
+import {
+  settingsBackTarget,
+  settingsNavigationOwnerRoute,
+  settingsParentRoute,
+} from "./lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
 import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {
@@ -15,6 +20,15 @@ import {
   createNativeDeviceSettingsSnapshot,
   createTauriDeviceSettingsSnapshot,
 } from "./test-helpers/native-device-settings.ts";
+
+it("titles the device route after the actual device, as its page does", () => {
+  expect(pageTitleForRoute("device")).toBe("This device");
+  expect(pageTitleForRoute("device", createNativeDeviceSettingsSnapshot())).toBe("This Mac");
+  expect(pageTitleForRoute("device", createTauriDeviceSettingsSnapshot("windows"))).toBe(
+    "This computer",
+  );
+  expect(pageTitleForRoute("about")).toBe("About");
+});
 
 it.each([true, false])("shows device settings only with the capability, admin=%s", (canAdmin) => {
   const capability: Device = {
@@ -117,6 +131,36 @@ it("keeps model setup as a settings subpage without a sidebar entry", () => {
   expect(isSettingsNavigationRoute("templates")).toBe(false);
   expect(isSettingsNavigationRoute("model-setup")).toBe(true);
   expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
+});
+
+it("sends the phone Back one level up from settings subpages", () => {
+  const at = (pathname: string, search = "") => ({ pathname, search });
+  const target = (routeId: string, pathname: string, search = "") => ({
+    routeId,
+    pathname,
+    search,
+    hash: "",
+  });
+  expect(settingsBackTarget("appearance", at("/settings/appearance"))).toBeNull();
+  expect(settingsBackTarget("plugin-settings", at("/settings/plugins"))).toBeNull();
+  expect(settingsBackTarget("ai-agents", at("/settings/ai-agents"))).toEqual(
+    target("agents", "/settings/agents"),
+  );
+  expect(settingsBackTarget("lobsterdex", at("/ui/settings/lobsterdex"), "/ui")).toEqual(
+    target("appearance", "/ui/settings/appearance"),
+  );
+  expect(settingsBackTarget("plugin-settings", at("/settings/plugins/fixture"))).toEqual(
+    target("plugin-settings", "/settings/plugins"),
+  );
+  expect(
+    settingsBackTarget(
+      "plugin-settings",
+      at("/settings/plugins/fixture", "?view=settings&from=plugins"),
+    ),
+  ).toEqual(target("plugin-settings", "/settings/plugins/fixture", "?from=plugins"));
+  expect(
+    settingsBackTarget("plugin-settings", at("/settings/plugins/fixture", "?from=plugins")),
+  ).toEqual(target("plugins", "/plugins"));
 });
 
 it("gives each settings subpage one level up and top-level sections none", () => {

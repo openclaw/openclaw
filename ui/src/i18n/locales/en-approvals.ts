@@ -112,15 +112,10 @@ const enApprovals = {
     revoke: "Revoke",
     revoking: "Revoking…",
     columns: {
-      automation: "Automation",
-      command: "Command",
       uses: "Uses",
-      state: "State",
     },
   },
   approvalHistory: {
-    description:
-      "Terminal exec, plugin, and system-agent approvals recorded by this gateway, newest first.",
     loading: "Loading approval history…",
     loadingMore: "Loading…",
     loadMore: "Load more",

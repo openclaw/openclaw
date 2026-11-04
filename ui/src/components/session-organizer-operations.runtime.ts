@@ -134,7 +134,10 @@ export async function deleteSessionsBatch(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.deleteSessionsStale", { count: String(rows.length) }) });
+    showToast({
+      severity: "error",
+      message: t("sessionsView.deleteSessionsStale", { count: String(rows.length) }),
+    });
     return;
   }
   if (!confirmed) {
@@ -528,7 +531,10 @@ export async function stopCloudWorker(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.stopCloudWorkerStale", { session: session.label }) });
+    showToast({
+      severity: "error",
+      message: t("sessionsView.stopCloudWorkerStale", { session: session.label }),
+    });
     return;
   }
   if (!confirmed) {
@@ -580,7 +586,10 @@ export async function deleteSession(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.deleteSessionStale", { session: session.label }) });
+    showToast({
+      severity: "error",
+      message: t("sessionsView.deleteSessionStale", { session: session.label }),
+    });
     return;
   }
   if (!confirmed) {

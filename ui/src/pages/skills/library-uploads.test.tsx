@@ -197,7 +197,7 @@ it.each(["files", "clawhub"])(
         : library.importClawHub("imported-skill", "@fixture/calendar");
     await waitForFast(() => {
       expect(submit.disabled).toBe(true);
-      expect(submit.textContent).toContain("Loading");
+      expect(submit.textContent).toContain("Importing");
     });
     if (kind === "files") {
       reading.resolve(new TextEncoder().encode("# Imported skill").buffer);
@@ -252,7 +252,10 @@ it.each(["detail", "list"] as const)(
       detail
         ? { ...existingSkill(), content: text }
         : { ...libraryList(false), entries: [libraryEntry({ description: text })] };
-    const item = () => view.container.querySelector(detail ? "textarea" : ".settings-row");
+    const item = () =>
+      view.container.querySelector(
+        detail ? "textarea" : ".settings-row:not(.settings-loading-skeleton__row)",
+      );
     const locked = () =>
       detail
         ? view.container.querySelector<HTMLTextAreaElement>("textarea")?.readOnly
@@ -272,7 +275,9 @@ it.each(["detail", "list"] as const)(
       await run();
       expect(request).toHaveBeenCalledTimes(1);
     } else {
-      expect(view.container.querySelector('[role="status"]')?.textContent).toContain("Loading");
+      expect(view.container.querySelector('[role="status"]')?.getAttribute("aria-label")).toContain(
+        "Loading",
+      );
       library.create();
       expect(library.state.draft).toBeNull();
       view.container.querySelector<HTMLInputElement>('input[name="library-search"]')!.focus();
