@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import "../components/modal-dialog.tsx";
 import { setToastInNavDrawer } from "../app/navigation-surface.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { showToast } from "./toast.ts";
+import { showToast, type ToastOptions } from "./toast.ts";
 import "./toast-host.tsx";
 
 // Dismissed and timed-out toasts fade out before they report.
@@ -39,6 +39,11 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+it("requires an explicit severity, including neutral outcomes", () => {
+  expectTypeOf<{ message: string }>().not.toMatchTypeOf<ToastOptions>();
+  expectTypeOf<{ message: string; severity: undefined }>().toMatchTypeOf<ToastOptions>();
 });
 
 describe("shared toast", () => {
