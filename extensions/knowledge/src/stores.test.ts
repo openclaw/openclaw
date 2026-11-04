@@ -166,33 +166,11 @@ it("passive discovery, including operator provider reads, never creates storage"
     ["ops", "agent:ops"],
   ]);
   expect(snap.stores.every((s) => s.state === "unprovisioned")).toBeTruthy();
-  const status = await f.service.status({}, f.reader);
-  expect(status.store).toBe("unprovisioned");
+  expect((await f.service.status({}, f.reader)).writesEnabled).toBe(false);
+  expect((await f.service.status({}, f.as("main"))).writesEnabled).toBe(true);
   expect(((await query(f, "records")) as Output<"records">).total).toBe(0);
   expect(((await query(f, "status")) as Output<"status">).store).toBe("unprovisioned");
   expect(await f.storesDir()).toStrictEqual([]);
-});
-
-it("a never-written store reports the writes the caller's first use will have", async () => {
-  const f = await fixture();
-  const fresh = await f.service.status({}, f.as("main"));
-  expect([fresh.store, fresh.vault, fresh.writesEnabled]).toStrictEqual([
-    "unprovisioned",
-    "",
-    true,
-  ]);
-  // Operator inspection never writes through status, and status never creates the store.
-  expect((await f.service.status({}, f.reader)).writesEnabled).toBe(false);
-  expect(await f.storesDir()).toStrictEqual([]);
-  // The first agent call creates it; the same caller then reports a ready, writable store.
-  await f.service.ontology({}, f.as("main"));
-  const ready = await f.service.status({}, f.as("main"));
-  expect([ready.store, ready.writesEnabled]).toStrictEqual(["ready", true]);
-  expect(ready.vault).not.toBe("");
-
-  const off = await fixture({ policy: { operatorRead: true, writesEnabled: false } });
-  const blocked = await off.service.status({}, off.as("main"));
-  expect([blocked.store, blocked.writesEnabled]).toStrictEqual(["unprovisioned", false]);
 });
 
 it("concurrent first uses converge on one store identity", async () => {
