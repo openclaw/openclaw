@@ -95,7 +95,6 @@ vi.mock("./work-recipient-authority.js", async (importOriginal) =>
 await prewarmConfigDrivenReplyRuntime();
 
 const FOLLOWUP_DEBOUNCE_MS = 500;
-const CLOCK_STEP_MS = 100;
 const REFUSED = "Retryable continuation skip: admission-refused";
 const REQUEUED = "Requeued same-session continuation wake";
 // Worker replies arrive as real macrotasks that the injected clock never advances.
@@ -219,11 +218,8 @@ const wakeEnteredSession = () =>
 const pendingFollowups = () =>
   (getExistingFollowupQueue(key)?.items ?? []).map((item) => world.label(item.prompt));
 
-/**
- * Yield real macrotasks until `done` holds, letting `stepMs` of injected time pass between checks.
- * With no step, only due timers fire.
- */
-async function until(done: () => boolean | Promise<boolean>, stepMs = 0) {
+/** Yield real macrotasks until `done` holds; injected time stands still, so only due timers fire. */
+async function until(done: () => boolean | Promise<boolean>) {
   const deadline = realNow() + 30_000;
   while (!(await done())) {
     if (realNow() > deadline) {
@@ -233,7 +229,7 @@ async function until(done: () => boolean | Promise<boolean>, stepMs = 0) {
       realSetImmediate(resolve);
     });
     await settleWorkDispatchCustody();
-    await vi.advanceTimersByTimeAsync(stepMs);
+    await vi.advanceTimersByTimeAsync(0);
   }
   await settleWorkDispatchCustody();
 }
@@ -242,11 +238,16 @@ const ran =
   (...labels: string[]) =>
   () =>
     labels.every((label) => world.effects.includes(label));
-/** Every queued turn has run and none is running. */
-const drained = () =>
-  ran("user-3")() && !hasPendingFollowupQueueWork([key]) && !isSessionRunActiveForKey(key);
+/** No turn is queued or running. */
+const idle = () => !hasPendingFollowupQueueWork([key]) && !isSessionRunActiveForKey(key);
+const drained = () => ran("user-3")() && idle();
 const readWork = async (recordId: string) =>
   (await listContinuationRecords({ recordIds: [recordId] }))[0]!;
+/** Injected time reaches the requeued claim's retry, whose timer fires. */
+async function advanceToRetry(recordId: string) {
+  const { dueAt } = await readWork(recordId);
+  await vi.advanceTimersByTimeAsync(Math.max(0, (dueAt ?? 0) - Date.now()));
+}
 /** The wake's turn ran and its delivery was recorded. */
 const delivered = (recordId: string) => async () =>
   world.effects.includes("wake") && (await readWork(recordId)).status === "succeeded";
@@ -278,7 +279,10 @@ describe("a due continue_work wake with follow-ups pending and no active run", (
       expect(await readWork(recordId)).toMatchObject({ status: "queued", failureReason: REFUSED });
       expect(await workState(recordId)).not.toHaveProperty("turnStart");
 
-      await until(delivered(recordId), CLOCK_STEP_MS);
+      await vi.advanceTimersByTimeAsync(FOLLOWUP_DEBOUNCE_MS);
+      await until(drained);
+      await advanceToRetry(recordId);
+      await until(delivered(recordId));
       await expectRanOnceAfterFollowups(recordId);
     });
   });
@@ -300,7 +304,8 @@ describe("a due continue_work wake with follow-ups pending and no active run", (
         armedAt: Date.now(),
         whenSubagentRegistryActivated: async () => {},
       });
-      await until(delivered(recordId), CLOCK_STEP_MS);
+      await advanceToRetry(recordId);
+      await until(delivered(recordId));
       await expectRanOnceAfterFollowups(recordId);
     });
   });
@@ -337,7 +342,9 @@ describe("a due continue_work wake whose session becomes active before reply adm
         expect(entered).toBe(false);
         expect(decided).toMatchObject({ status: "queued", failureReason: REFUSED });
 
-        await until(delivered(recordId), CLOCK_STEP_MS);
+        await until(idle);
+        await advanceToRetry(recordId);
+        await until(delivered(recordId));
         expect(world.effects).toEqual(["user-0", "user-1", "wake"]);
       });
     },
@@ -349,7 +356,7 @@ describe("unchanged admission (controls)", () => {
     await withSession("followup", async () => {
       const recordId = await electDueWake();
       await dispatchPendingContinuationWork({ sessionKey: key });
-      await until(delivered(recordId), CLOCK_STEP_MS);
+      await until(delivered(recordId));
       expect(world.effects).toEqual(["user-0", "wake"]);
     });
   });
@@ -372,7 +379,7 @@ describe("unchanged admission (controls)", () => {
 
       held.release();
       await first;
-      await until(delivered(recordId), CLOCK_STEP_MS);
+      await until(delivered(recordId));
       expect(world.effects).toEqual(["user-0", "user-1", "wake"]);
     });
   });
@@ -384,7 +391,8 @@ describe("unchanged admission (controls)", () => {
         await queueFollowupsBehindEndedTurn();
         expect(await systemTurn(4, trigger)).toBeUndefined();
         expect(pendingFollowups()).toEqual(["user-2", "user-3", "event-4"]);
-        await until(ran("event-4"), CLOCK_STEP_MS);
+        await vi.advanceTimersByTimeAsync(FOLLOWUP_DEBOUNCE_MS);
+        await until(ran("event-4"));
         expect(world.effects).toEqual(["user-0", "user-1", "user-2", "user-3", "event-4"]);
       });
     },
