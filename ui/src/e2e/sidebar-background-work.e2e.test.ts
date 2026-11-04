@@ -119,8 +119,8 @@ suite.define(() => {
           .locator(".sidebar-session-indicator .session-glyph__ring--background")
           .count(),
       ).toBe(0);
-      await ui.visible(toggle.locator(".session-run-spinner"));
-      expect(await toggle.getAttribute("aria-description")).toBe("Active run");
+      expect(await toggle.locator(".session-run-spinner").count()).toBe(0);
+      expect(await toggle.getAttribute("aria-description")).toBeNull();
       await toggle.click();
       const background = page.locator(
         `.sidebar-recent-session[data-session-key="${children[5]!.key}"]`,

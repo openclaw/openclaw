@@ -280,7 +280,7 @@ it("does not offer personal PR attribution without a durable profile", async () 
     "unresolved-profile",
   );
   await waitForFast(() =>
-    expect(page.textContent).toContain("Your identity profile could not be loaded."),
+    expect(page.textContent).toContain("Couldn’t load your profile. Try again."),
   );
   expect(attributionToggle(page)).toBeUndefined();
   expect(request.mock.calls.some(([method]) => method.startsWith("users.prefs."))).toBe(false);
