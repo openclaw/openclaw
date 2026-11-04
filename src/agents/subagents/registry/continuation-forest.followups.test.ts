@@ -6,8 +6,9 @@
 //   Every crane is folded once, every report finds its room's current occupant once, nobody else.
 // The world, what is real and what is doubled: continuation-forest.test-support.ts. A failure
 // message tells the story of each break (for example, "the attic inspector of tree 2 ran 2 times").
-// // This file: the crash in the attic's turn when recovery finds the wake with follow-ups pending,
-// // in a room that runs the real reply owner (its admission, follow-up mailbox and drain).
+// // This file: the crash in the attic's turn, and a wake due beside it, when recovery finds them
+// // with follow-ups pending, in a room that runs the real reply owner (admission, the follow-up
+// // mailbox and its drain).
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
@@ -58,11 +59,11 @@ await prewarmConfigDrivenReplyRuntime();
 
 const fixture = useSubagentControlFixture();
 const annex = useContinuationForest(() => fixture.stateDir, { realReplyOwner: true });
-/** Running-recovery finds a wake left running one minute after its last write, at its claim. */
+/** Running-recovery finds a wake left running one minute after its last write (its fence). */
 const RECOVERY_MS = ATTIC_DELAY_MS + 60_000;
 
 describe("the burning annex: the crash in the attic's turn, with follow-ups pending", () => {
-  it("a wake that died after its turn checked the attic, found by recovery while follow-ups wait and no turn runs, ran once, is interrupted with one notice, and never queues as a follow-up", async () => {
+  it("recovery finds the crashed wake and a due one while follow-ups wait and no turn runs: the crashed wake ran once and is interrupted with one notice, the due one is refused and runs once after the follow-ups, and neither queues as a follow-up", async () => {
     // One prince alone; his room runs the real reply owner.
     const forest = await annex.build({ trees: 1, depth: 1, fanOut: 1 });
     const prince = forest.princes[0]!;
@@ -76,7 +77,12 @@ describe("the burning annex: the crash in the attic's turn, with follow-ups pend
     // delivery is recorded; the Gateway restarts.
     await forest.crashMidWake(attic, "effect");
 
-    // Just before recovery: user-1's turn runs, user-2 and user-3 queue behind it, and it ends.
+    // In the new process the prince asks to be woken again, due as recovery finds the crash.
+    await forest.advanceTo(RECOVERY_MS - ATTIC_DELAY_MS, 5_000);
+    const watch = await forest.asksToBeWoken(prince, "the night watch of tree 0");
+    forest.expectElection(watch, { outcome: "executed", deferred: "behind the follow-ups" });
+
+    // Just before: user-1's turn runs, user-2 and user-3 queue behind it, and it ends.
     await forest.advanceTo(RECOVERY_MS - 500, 5_000);
     const firstTurn = forest.hold("turn:user-1");
     const first = forest.says(prince, "user-1");
@@ -89,19 +95,26 @@ describe("the burning annex: the crash in the attic's turn, with follow-ups pend
     const waiting = [userText("user-2"), userText("user-3")];
     expect(forest.followups(prince.sessionKey), "the follow-ups are not waiting").toEqual(waiting);
     expect(forest.turnRunning(prince.sessionKey), "a turn still runs").toBe(false);
-    expect(await forest.record(attic), "recovery found the wake early").toMatchObject({
+    expect(await forest.record(attic), "recovery found the crash early").toMatchObject({
       status: "running",
     });
 
-    // Recovery finds the wake inside the follow-ups' debounce window.
+    // Recovery finds both wakes inside the follow-ups' debounce window.
     await forest.advance(250);
     const queuedAtRecovery = forest.followups(prince.sessionKey);
-    expect((await forest.record(attic))?.status, "recovery never found the wake").not.toBe(
+    expect((await forest.record(attic))?.status, "recovery never found the crash").not.toBe(
       "running",
     );
 
     await forest.advanceTo(80_000);
     await forest.expectForestHolds();
-    expect(queuedAtRecovery, "the wake queued as a follow-up").toEqual(waiting);
+    expect(queuedAtRecovery, "a wake queued as a follow-up").toEqual(waiting);
+    expect(forest.providerTurns.map((turn) => turn.who)).toEqual([
+      attic.name,
+      "user-1",
+      "user-2",
+      "user-3",
+      watch.name,
+    ]);
   });
 });

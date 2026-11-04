@@ -232,15 +232,15 @@ export async function provideTurn(
 ): Promise<EmbeddedAgentRunResult> {
   await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
   const election = atticOf(forest, params.prompt);
-  const user = USER_TAG.exec(params.prompt)?.[1];
+  const who = election?.name ?? USER_TAG.exec(params.prompt)?.[1];
+  if (!who) {
+    throw new Error(`unexpected provider turn: ${params.prompt.slice(0, 120)}`);
+  }
+  forest.providerTurns.push({ sessionKey: params.sessionKey ?? "", who, at: Date.now() });
   if (election) {
     inspectAttic(forest, election);
-  } else if (user) {
-    await forest.gate(`turn:${user}`);
   } else {
-    throw new Error(
-      `unexpected provider turn for ${params.sessionKey}: ${params.prompt.slice(0, 120)}`,
-    );
+    await forest.gate(`turn:${who}`);
   }
   return { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
 }

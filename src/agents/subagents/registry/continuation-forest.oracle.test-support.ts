@@ -91,7 +91,7 @@ function electionStories(
   const lines = forest.attemptsByElection.get(election.id) ?? [];
   const attempts = lines.filter((line) => line.kind === "attempt");
   const effects = lines.filter((line) => line.kind === "effect");
-  const { outcome, reason, stage } = election.expected;
+  const { outcome, reason, stage, deferred } = election.expected;
   const runsOnce = outcome === "executed" || outcome === "interrupted";
   if (runsOnce) {
     if (attempts.length !== 1) {
@@ -150,14 +150,15 @@ function electionStories(
     }
   }
   if (election.kind === "attic" && runsOnce && record) {
-    // When the inspector's turn ran, from the attempt log.
+    // When the inspector's turn ran, from the attempt log; a deferred wake may run late, never early.
     const wokeAt = attempts[0]?.at;
     if (
       election.dueAt !== undefined &&
-      (wokeAt === undefined || !firesOnTime(forest, election.dueAt, wokeAt))
+      (wokeAt === undefined ||
+        (deferred ? wokeAt < election.dueAt : !firesOnTime(forest, election.dueAt, wokeAt)))
     ) {
       stories.push(
-        `${election.name} woke at ${wokeAt === undefined ? "no time" : at(wokeAt)}, not at its due time ${at(election.dueAt)}`,
+        `${election.name} woke at ${wokeAt === undefined ? "no time" : at(wokeAt)}, ${deferred ? "before" : "not at"} its due time ${at(election.dueAt)}`,
       );
     }
     if (outcome === "executed" && record.status !== "succeeded") {

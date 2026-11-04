@@ -54,7 +54,7 @@ import { peekSystemEventEntries, resetSystemEventsForTest } from "../../../infra
 import { defaultRuntime } from "../../../runtime.js";
 import { isSessionRunActiveForKey } from "../../../sessions/session-controller.queries.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { buildForest, lightAnnex } from "./continuation-forest.build.test-support.js";
+import { buildForest, electAttic, lightAnnex } from "./continuation-forest.build.test-support.js";
 import {
   admitRunner,
   checkAttic,
@@ -226,6 +226,8 @@ export class ContinuationForest {
   readonly runners = new Map<string, AnnexElection[]>();
   /** Rooms whose turns run the real reply owner (runsRealReplyOwner). */
   readonly realReplyRooms = new Set<string>();
+  /** The turns their provider ran, in order: who took each (a wake's election, or a user). */
+  readonly providerTurns: Array<{ sessionKey: string; who: string; at: number }> = [];
   /** The Gateway dies as the work dispatcher writes this wake's `mark` (crashMidWake). */
   dying: { flowId: string; mark: WorkMark; died: () => void } | undefined;
   stopDeliveryRuntime: (() => Promise<void>) | undefined;
@@ -273,6 +275,8 @@ export class ContinuationForest {
   cancel = (owner: AnnexNode, electionIds: string[]) =>
     trouble.cancelElections(this, owner, electionIds);
   says = (node: AnnexNode, who: string) => trouble.userSays(this, node, who);
+  /** The prince's continue_work, elected now: `name` checks the attic after the minimum delay. */
+  asksToBeWoken = (prince: AnnexNode, name: string) => electAttic(this, prince, name);
 
   /** From now on the room's turns run the real reply owner; the world stands in for its provider. */
   runsRealReplyOwner(node: AnnexNode): void {

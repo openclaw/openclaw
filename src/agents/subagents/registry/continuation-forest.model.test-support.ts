@@ -47,7 +47,13 @@ export type AnnexNode = {
  * recorded. It never runs again; its record fails as interrupted and its room is told once.
  */
 export type ElectionOutcome = "executed" | "interrupted" | "refused" | "cancelled";
-export type ElectionExpectation = { outcome: ElectionOutcome; reason?: string; stage?: string };
+/** `deferred`: why it may run after its due time (refused while its room was busy, run after). */
+export type ElectionExpectation = {
+  outcome: ElectionOutcome;
+  reason?: string;
+  stage?: string;
+  deferred?: string;
+};
 
 export type AnnexElection = {
   /** The election id: the child run (crane, relay), the custody record (branch, attic). */
