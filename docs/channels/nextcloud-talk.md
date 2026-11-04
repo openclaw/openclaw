@@ -354,6 +354,7 @@ Full configuration: [Configuration](/gateway/configuration)
 Provider options:
 
 - `channels.nextcloud-talk.enabled`: enable/disable channel startup.
+- `channels.nextcloud-talk.configWrites`: allow or deny Talk-initiated config writes (`/config set|unset`, when command features are enabled); enabled by default. Per-account override: `channels.nextcloud-talk.accounts.<id>.configWrites`.
 - `channels.nextcloud-talk.baseUrl`: Nextcloud instance URL.
 - `channels.nextcloud-talk.botSecret`: bot shared secret (string or secret reference).
 - `channels.nextcloud-talk.botSecretFile`: regular-file secret path. Symlinks are rejected.
