@@ -149,7 +149,12 @@ describe("settings sidebar search", () => {
     const onRetry = vi.fn();
     render({
       presentation: "embed-page",
-      saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed", onRetry },
+      saveIndicator: {
+        ...saveIndicator(),
+        status: "error",
+        lastError: "Couldn’t save settings. Try again.",
+        onRetry,
+      },
     });
     expect(container.querySelector<HTMLElement>(".settings-sidebar")).toBeNull();
     await vi.waitFor(() => {
@@ -539,7 +544,11 @@ describe("settings sidebar search", () => {
           lastError,
           gatewayVersion: "1.0.0",
           onRetryConnect,
-          saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed" },
+          saveIndicator: {
+            ...saveIndicator(),
+            status: "error",
+            lastError: "Couldn’t save settings. Try again.",
+          },
         });
 
       renderSidebar(null);

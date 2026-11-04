@@ -871,7 +871,7 @@ const startupEnglish = {
   },
   configPage: {},
   configView: {
-    adminRequired: "Configuration changes require operator.admin access.",
+    adminRequired: "You need admin access to change settings.",
     categories: {},
     sections: {},
     themes: {},
