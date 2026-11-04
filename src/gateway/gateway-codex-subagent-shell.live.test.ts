@@ -17,6 +17,7 @@ import {
   connectTestGatewayClient,
   ensurePairedTestGatewayClientIdentity,
 } from "./gateway-cli-backend.live-helpers.js";
+import { liveOpenAiApiKeyModels } from "./live-openai-models.test-support.js";
 
 const LIVE =
   isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_SUBAGENT_SHELL);
@@ -81,6 +82,12 @@ describeLive("gateway live (Codex hidden subagent native shell)", () => {
             },
           },
         },
+        ...(AUTH_MODE === "api-key"
+          ? {
+              secrets: { providers: { default: { source: "env" } } },
+              models: liveOpenAiApiKeyModels(),
+            }
+          : {}),
       } as OpenClawConfig;
       await fs.writeFile(instance.configPath, `${JSON.stringify(cfg, null, 2)}\n`);
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
