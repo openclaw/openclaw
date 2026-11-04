@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, expect, it } from "vitest";
 import {
   readInstalledTerminalDependencyTree,
@@ -12,6 +12,7 @@ import {
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-contracts.mjs";
 import {
   assertInstalledTerminalOutput,
+  buildInstalledTerminalSummary,
   captureInstalledTerminalProcessAbsence,
   installedTerminalDescendants,
   type InstalledTerminalProcessAbsence,
@@ -21,6 +22,7 @@ import {
   readInstalledTerminalHasher,
   readInstalledTerminalHeartbeat,
   restoreInstalledTerminalLauncher,
+  summarizeInstalledTerminalLaunches,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-observer.mjs";
 import { readWorkerCellPackageIdentity } from "../../scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -1619,6 +1621,196 @@ it("bounds suppressed Worker callbacks by actual enclosing native teardown", () 
     );
     expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow("no unique native exit");
   }
+});
+
+it("exports compact launch summaries with exact raw references and unchanged bounds", () => {
+  const rows: Record<string, unknown>[] = [
+    { event: "startup", pid: 100, thread: 0, sequence: 0, time: "1" },
+  ];
+  for (let childThread = 1; childThread <= 20; childThread++) {
+    rows.push({
+      event: "thread",
+      pid: 100,
+      thread: 0,
+      sequence: rows.length,
+      childThread,
+      time: String(childThread * 2),
+      entry: "file:///fixture/heartbeat.js",
+      packageHeartbeat: { source: "retained helper body\n".repeat(1800), sha256: "a".repeat(64) },
+      coverage: { role: "state-lease-heartbeat", reason: "settled-before-handoff" },
+    });
+    rows.push({
+      event: "thread-exit",
+      pid: 100,
+      thread: 0,
+      sequence: rows.length,
+      childThread,
+      code: 0,
+      time: String(childThread * 2 + 1),
+    });
+  }
+  rows.push({
+    event: "spawn",
+    pid: 100,
+    thread: 0,
+    sequence: rows.length,
+    spawnId: 0,
+    child: 200,
+    time: "50",
+    packageEntry: { source: "exact probe" },
+    coverage: { role: "node-runtime-probe", reason: "settled-before-handoff" },
+  });
+  for (const event of ["spawn-exit", "spawn-close"]) {
+    rows.push({
+      event,
+      pid: 100,
+      thread: 0,
+      sequence: rows.length,
+      spawnId: 0,
+      child: 200,
+      code: 0,
+      signal: null,
+      time: "60",
+    });
+  }
+  rows.push({ event: "handoff", pid: 100, thread: 0, sequence: rows.length, time: "100" });
+  rows[1].lifetimeBound = { sourceKind: "process-native-exit", ownExitCode: null, time: "80" };
+  const raw = rows.map(({ coverage: _coverage, lifetimeBound: _bound, ...event }) => event);
+  const projection = summarizeInstalledTerminalLaunches(rows);
+  expect(projection.workersWithoutPreload).toHaveLength(20);
+  expect(projection.workersWithoutPreload[0]).toMatchObject({
+    pid: 100,
+    creatorThread: 0,
+    thread: 1,
+    exitCode: 0,
+    joinedBeforeHandoff: true,
+    coverage: rows[1].coverage,
+    evidence: {
+      source: "100-0.jsonl",
+      sequence: 1,
+      event: "thread",
+      sha256: createHash("sha256").update(JSON.stringify(raw[1])).digest("hex"),
+    },
+  });
+  expect(projection.processesWithoutPreload[0]).toMatchObject({
+    pid: 200,
+    creatorPid: 100,
+    creatorThread: 0,
+    spawnId: 0,
+    nativeSettlement: [expect.any(Object), expect.any(Object)],
+  });
+  expect(projection.workerLifetimeBounds[0].bound).toEqual(rows[1].lifetimeBound);
+  expect(Buffer.byteLength(JSON.stringify(rows))).toBeGreaterThan(512 * 1024);
+  const summary = { status: "passed", cells: [{ name: "healthy", ...projection }] };
+  const bundle = (events = raw, lifecycle = raw) => {
+    const artifacts = new Map([
+      [
+        "healthy-observer.jsonl.gz",
+        gzipSync(events.map((event) => JSON.stringify(event)).join("\n") + "\n"),
+      ],
+      [
+        "healthy-lifetimes.jsonl.gz",
+        gzipSync(
+          JSON.stringify({ name: "100-0.jsonl", recordsComplete: true, events: lifecycle }) +
+            "\n" +
+            JSON.stringify({
+              status: "complete",
+              omittedFiles: 0,
+            }) +
+            "\n",
+        ),
+      ],
+    ]);
+    const manifest = {
+      status: "complete",
+      omissions: [],
+      files: [...artifacts].map(([name, bytes]) => ({
+        name,
+        bytes: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      })),
+    };
+    const bytes = Buffer.from(JSON.stringify(manifest));
+    const read = (name: string) => {
+      const value = artifacts.get(name);
+      assert(value);
+      return value;
+    };
+    return { artifacts, manifest, bytes, read };
+  };
+  const evidence = bundle();
+  const original = [...evidence.artifacts].map(([name, bytes]) => [name, Buffer.from(bytes)]);
+  const result = buildInstalledTerminalSummary(summary, evidence.bytes, evidence.read);
+  expect(Buffer.byteLength(JSON.stringify(result, null, 2))).toBeLessThan(32 * 1024);
+  expect(result.evidence).toEqual({
+    manifest: "manifest.json",
+    bytes: evidence.bytes.length,
+    sha256: createHash("sha256").update(evidence.bytes).digest("hex"),
+  });
+  expect([...evidence.artifacts]).toEqual(original);
+  const lifecycleOnly = bundle(raw.filter((event) => event.sequence !== 1));
+  expect(() =>
+    buildInstalledTerminalSummary(summary, lifecycleOnly.bytes, lifecycleOnly.read),
+  ).not.toThrow();
+
+  for (const [field, value] of [
+    ["source", "999-0.jsonl"],
+    ["sequence", 999],
+    ["event", "spawn"],
+    ["sha256", "0".repeat(64)],
+  ] as const) {
+    const changed = structuredClone(summary);
+    const reference = changed.cells[0].workersWithoutPreload[0].evidence;
+    assert(reference && typeof reference === "object");
+    Object.assign(reference, { [field]: value });
+    expect(
+      () => buildInstalledTerminalSummary(changed, evidence.bytes, evidence.read),
+      field,
+    ).toThrow();
+  }
+  expect(() =>
+    buildInstalledTerminalSummary(
+      { ...summary, cells: [{ ...summary.cells[0], name: "late-failure" }] },
+      evidence.bytes,
+      evidence.read,
+    ),
+  ).toThrow("Missing summary evidence");
+  const missing = bundle(
+    raw.filter((event) => event.sequence !== 1),
+    raw.filter((event) => event.sequence !== 1),
+  );
+  expect(() => buildInstalledTerminalSummary(summary, missing.bytes, missing.read)).toThrow(
+    "Missing summary event",
+  );
+  const duplicate = bundle([...raw, raw[1]]);
+  expect(() => buildInstalledTerminalSummary(summary, duplicate.bytes, duplicate.read)).toThrow(
+    "Duplicate summary event",
+  );
+  const changed = structuredClone(raw);
+  changed[1].packageHeartbeat = { source: "changed helper", sha256: "a".repeat(64) };
+  const conflicting = bundle(raw, changed);
+  expect(() => buildInstalledTerminalSummary(summary, conflicting.bytes, conflicting.read)).toThrow(
+    "Conflicting summary event",
+  );
+  const tampered = bundle(changed, changed);
+  expect(() => buildInstalledTerminalSummary(summary, tampered.bytes, tampered.read)).toThrow(
+    "Changed summary event digest",
+  );
+  evidence.manifest.files[0].sha256 = "0".repeat(64);
+  expect(() =>
+    buildInstalledTerminalSummary(
+      summary,
+      Buffer.from(JSON.stringify(evidence.manifest)),
+      evidence.read,
+    ),
+  ).toThrow("Changed summary evidence");
+  expect(() =>
+    buildInstalledTerminalSummary(
+      { ...summary, unrelated: "x".repeat(512 * 1024) },
+      evidence.bytes,
+      evidence.read,
+    ),
+  ).toThrow("Terminal summary exceeds 512 KiB");
 });
 
 it("exports complete command and isolate bytes with a bounded artifact census", () => {

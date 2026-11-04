@@ -10,7 +10,7 @@ import path from "node:path";
 import { fileURLToPath, URL, URLSearchParams } from "node:url";
 import { types } from "node:util";
 import workerThreads from "node:worker_threads";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import {
   fileIdentity,
   installedRecoveryEvidenceMode,
@@ -2645,6 +2645,177 @@ function readIsolateCensus(directory, files) {
     );
   }
   return bytes;
+}
+
+// The reader adds decisions to copies of canonical events. Reference the original
+// event bytes, retaining decisions separately instead of repeating helper bodies.
+export function summarizeInstalledTerminalLaunches(rows) {
+  const reference = (row) => {
+    const record = { ...row };
+    delete record.coverage;
+    delete record.lifetimeBound;
+    assert(Number.isSafeInteger(row.pid) && row.pid > 0);
+    assert(Number.isSafeInteger(row.thread) && row.thread >= 0);
+    assert(Number.isSafeInteger(row.sequence) && row.sequence >= 0);
+    return {
+      source: `${row.pid}-${row.thread}.jsonl`,
+      sequence: row.sequence,
+      event: row.event,
+      sha256: digest(JSON.stringify(record)),
+    };
+  };
+  const handoffs = rows.filter((row) => row.event === "handoff");
+  assert.equal(handoffs.length, 1);
+  const startups = rows.filter((row) => row.event === "startup");
+  return {
+    workersWithoutPreload: rows
+      .filter(
+        (row) =>
+          row.event === "thread" &&
+          !startups.some((start) => start.pid === row.pid && start.thread === row.childThread),
+      )
+      .map((row) => {
+        const exits = rows.filter(
+          (event) =>
+            event.event === "thread-exit" &&
+            event.pid === row.pid &&
+            event.childThread === row.childThread,
+        );
+        assert.equal(exits.length, 1);
+        return {
+          pid: row.pid,
+          creatorThread: row.thread,
+          thread: row.childThread,
+          evidence: reference(row),
+          coverage: row.coverage ?? { role: "package-hasher", reason: "state-incapable" },
+          nativeExit: reference(exits[0]),
+          exitCode: exits[0].code,
+          joinedBeforeHandoff: BigInt(exits[0].time) < BigInt(handoffs[0].time),
+        };
+      }),
+    processesWithoutPreload: rows
+      .filter((row) => row.event === "spawn" && row.coverage)
+      .map((row) => ({
+        pid: row.child,
+        creatorPid: row.pid,
+        creatorThread: row.thread,
+        spawnId: row.spawnId,
+        evidence: reference(row),
+        coverage: row.coverage,
+        nativeSettlement: rows
+          .filter(
+            (event) =>
+              ["spawn-exit", "spawn-sync-return", "spawn-close"].includes(event.event) &&
+              event.pid === row.pid &&
+              event.thread === row.thread &&
+              event.spawnId === row.spawnId,
+          )
+          .map(reference),
+      })),
+    workerLifetimeBounds: rows
+      .filter((row) => row.event === "thread" && row.lifetimeBound)
+      .map((row) => ({
+        pid: row.pid,
+        creatorThread: row.thread,
+        thread: row.childThread,
+        evidence: reference(row),
+        bound: row.lifetimeBound,
+      })),
+  };
+}
+
+// This is an export check, not a replay of the runtime oracle. Resolve every
+// compact launch reference against the finalized, hash-bound raw artifacts.
+export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifact) {
+  assert(manifestBytes.length <= 128 * 1024, "Evidence manifest exceeds 128 KiB");
+  const manifest = JSON.parse(Buffer.from(manifestBytes).toString());
+  if (summary.status === "passed") {
+    assert.equal(manifest.status, "complete");
+    assert.deepEqual(manifest.omissions, []);
+  }
+  const names = new Set(manifest.files.map((file) => file.name));
+  assert.equal(names.size, manifest.files.length, "Duplicate evidence artifact");
+  const read = (name, maximum) => {
+    const file = manifest.files.find((entry) => entry.name === name);
+    assert(file, `Missing summary evidence: ${name}`);
+    assert(Number.isSafeInteger(file.bytes) && file.bytes >= 0 && file.bytes <= 7 * 1024 * 1024);
+    const bytes = readArtifact(name);
+    assert.equal(bytes.length, file.bytes);
+    assert.equal(digest(bytes), file.sha256, `Changed summary evidence: ${name}`);
+    const decoded = gunzipSync(bytes, { maxOutputLength: maximum });
+    assert.equal(decoded.at(-1), 10, `Truncated summary evidence: ${name}`);
+    return decoded
+      .toString()
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+  };
+  for (const cell of summary.cells) {
+    assert(["healthy", "late-failure", "historical-control"].includes(cell.name));
+    const references = [
+      ...(cell.workersWithoutPreload ?? []).flatMap((row) => [row.evidence, row.nativeExit]),
+      ...(cell.processesWithoutPreload ?? []).flatMap((row) => [
+        row.evidence,
+        ...row.nativeSettlement,
+      ]),
+      ...(cell.workerLifetimeBounds ?? []).map((row) => row.evidence),
+    ];
+    if (references.length === 0) {
+      continue;
+    }
+    const events = new Map();
+    const add = (row, kind) => {
+      const source = `${row.pid}-${row.thread}.jsonl`;
+      const key = `${source}:${row.sequence}`;
+      const encoded = JSON.stringify(row);
+      const previous = events.get(key);
+      if (previous) {
+        assert(!previous.kinds.has(kind), `Duplicate summary event: ${key}`);
+        assert.equal(previous.encoded, encoded, `Conflicting summary event: ${key}`);
+        previous.kinds.add(kind);
+      } else {
+        events.set(key, { row, encoded, kinds: new Set([kind]) });
+      }
+    };
+    for (const row of read(`${cell.name}-observer.jsonl.gz`, 32 * 1024 * 1024)) {
+      add(row, "raw");
+    }
+    const lifecycleName = `${cell.name}-lifetimes.jsonl.gz`;
+    if (names.has(lifecycleName)) {
+      const lifecycle = read(lifecycleName, 4 * 1024 * 1024);
+      const footer = lifecycle.pop();
+      assert.equal(footer.status, "complete");
+      assert.equal(footer.omittedFiles, 0);
+      for (const source of lifecycle) {
+        assert.equal(source.recordsComplete, true);
+        for (const row of source.events) {
+          assert.equal(source.name, `${row.pid}-${row.thread}.jsonl`);
+          add(row, "lifecycle");
+        }
+      }
+    }
+    for (const reference of references) {
+      assert(reference && /^\d+-\d+\.jsonl$/u.test(reference.source));
+      assert(Number.isSafeInteger(reference.sequence) && reference.sequence >= 0);
+      const found = events.get(`${reference.source}:${reference.sequence}`);
+      assert(found, "Missing summary event");
+      assert.equal(found.row.event, reference.event, "Changed summary event kind");
+      assert.equal(digest(found.encoded), reference.sha256, "Changed summary event digest");
+    }
+  }
+  const result = {
+    ...summary,
+    evidence: {
+      manifest: "manifest.json",
+      bytes: manifestBytes.length,
+      sha256: digest(manifestBytes),
+    },
+  };
+  assert(
+    Buffer.byteLength(`${JSON.stringify(result, null, 2)}\n`) <= 512 * 1024,
+    "Terminal summary exceeds 512 KiB",
+  );
+  return result;
 }
 
 // Export complete bounded evidence, not one artifact per Node isolate. The raw

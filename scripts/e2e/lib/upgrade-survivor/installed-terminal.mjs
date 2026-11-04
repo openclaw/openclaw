@@ -25,6 +25,7 @@ import {
 import { installedTerminalNpmOwner } from "./installed-terminal-dependencies.mjs";
 import {
   assertInstalledTerminalOutput,
+  buildInstalledTerminalSummary,
   captureInstalledTerminalProcessAbsence,
   installedTerminalDescendants,
   readInstalledTerminalClosedEntries,
@@ -33,6 +34,7 @@ import {
   readInstalledTerminalHasher,
   readInstalledTerminalHeartbeat,
   restoreInstalledTerminalLauncher,
+  summarizeInstalledTerminalLaunches,
 } from "./installed-terminal-observer.mjs";
 import {
   assertWorkerCellPackageIdentity,
@@ -242,27 +244,6 @@ async function main() {
     assert.equal(closed.signal, null);
     assert(closed.stdoutEnded && closed.stderrEnded);
     const startups = rows.filter((row) => row.event === "startup");
-    const workersWithoutPreload = rows
-      .filter(
-        (row) =>
-          row.event === "thread" &&
-          !startups.some((start) => start.pid === row.pid && start.thread === row.childThread),
-      )
-      .map((row) => {
-        const exit = only(
-          rows.filter((event) => event.pid === row.pid && event.childThread === row.childThread),
-          "thread-exit",
-        );
-        return {
-          pid: row.pid,
-          thread: row.childThread,
-          entry: row.entry,
-          contract: row.packageHasher ?? row.packageHeartbeat ?? row.packageEntry,
-          coverage: row.coverage ?? { role: "package-hasher", reason: "state-incapable" },
-          exitCode: exit.code,
-          joinedBeforeHandoff: BigInt(exit.time) < BigInt(handoff.time),
-        };
-      });
     assert(startups.some((row) => row.pid === handoff.child));
     assert(
       startups.some((row) => row.pid === result.pid && row.thread === 0),
@@ -337,25 +318,7 @@ async function main() {
       canonicalStateAccess,
       zeroReopenRequired: !spec.historical,
       historicalEarlyPublication: spec.historical === true,
-      workersWithoutPreload,
-      processesWithoutPreload: rows
-        .filter((row) => row.event === "spawn" && row.coverage)
-        .map((row) => ({
-          pid: row.child,
-          creatorPid: row.pid,
-          spawnId: row.spawnId,
-          contract: row.packageEntry,
-          coverage: row.coverage,
-        })),
-      workerLifetimeBounds: rows
-        .filter((row) => row.event === "thread" && row.lifetimeBound)
-        .map((row) => ({
-          pid: row.pid,
-          creatorThread: row.thread,
-          thread: row.childThread,
-          entry: row.entry,
-          bound: row.lifetimeBound,
-        })),
+      ...summarizeInstalledTerminalLaunches(rows),
       processAbsence: spec.processAbsence,
     };
   }
@@ -825,11 +788,13 @@ async function main() {
     const exportedSummary = path.join(artifacts, "export/installed-terminal.json");
     try {
       if (fs.existsSync(path.dirname(exportedSummary))) {
-        assert(
-          Buffer.byteLength(`${JSON.stringify(summary, null, 2)}\n`) <= 512 * 1024,
-          "Terminal summary exceeds 512 KiB",
+        const exportDirectory = path.dirname(exportedSummary);
+        const exported = buildInstalledTerminalSummary(
+          summary,
+          fs.readFileSync(path.join(exportDirectory, "manifest.json")),
+          (name) => fs.readFileSync(path.join(exportDirectory, name)),
         );
-        writeInstalledRecoveryEvidence(exportedSummary, summary);
+        writeInstalledRecoveryEvidence(exportedSummary, exported);
       }
     } catch (error) {
       summary.status = "failed";

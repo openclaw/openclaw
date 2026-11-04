@@ -100,3 +100,19 @@ export function publishInstalledTerminalEvidence(
     cells: { name: string }[];
   },
 ): void;
+
+export function summarizeInstalledTerminalLaunches(rows: Record<string, unknown>[]): {
+  workersWithoutPreload: Record<string, unknown>[];
+  processesWithoutPreload: Record<string, unknown>[];
+  workerLifetimeBounds: Record<string, unknown>[];
+};
+
+export function buildInstalledTerminalSummary(
+  summary: {
+    status: string;
+    cells: Record<string, unknown>[];
+    [key: string]: unknown;
+  },
+  manifestBytes: Uint8Array,
+  readArtifact: (name: string) => Uint8Array,
+): Record<string, unknown>;
