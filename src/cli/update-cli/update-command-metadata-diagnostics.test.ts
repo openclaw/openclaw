@@ -340,6 +340,21 @@ it.each([
   ["registry lookup error", "target-registry-metadata", /registry/i, registryFailure],
   ["existing profile lookup error", "target-registry-metadata", /registry/i, registryFailure],
   ["missing exact version", "target-version-resolution", /version/i, { version: null }],
+  [
+    "unpublished npm version",
+    "target-version-resolution",
+    /version/i,
+    {
+      version: null,
+      error: "npm view failed: npm error 404 No match found for version 2026.9.2",
+    },
+  ],
+  [
+    "registry HTTP 404",
+    "target-version-resolution",
+    /version/i,
+    { version: null, error: "HTTP 404" },
+  ],
   ["mismatched exact version", "target-version-resolution", /version/i, { version: "2026.9.1" }],
   [
     "missing target schema metadata",

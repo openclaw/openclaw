@@ -111,6 +111,30 @@ export async function fetchRegistryPackageDocument<T = unknown>(params: {
   }
 }
 
+const UNPUBLISHED_NPM_TARGET_ERROR = /No match found for version|\bETARGET\b|\bE404\b|^HTTP 404\b/u;
+
+/** The registry answered, and the requested package version is not published. */
+export function isUnpublishedNpmTargetError(error: string): boolean {
+  return UNPUBLISHED_NPM_TARGET_ERROR.test(error);
+}
+
+function formatNpmViewFailure(stdout: string, stderr: string): string {
+  const lines = (stderr.trim() || stdout.trim())
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const match = lines.find((line) => /No match found for version/u.test(line));
+  const code = lines.find((line) => /error code E(?:404|TARGET)\b/u.test(line));
+  const selected: string[] = [];
+  for (const line of match ? [code, match] : lines.slice(-3)) {
+    if (line && !selected.includes(line)) {
+      selected.push(line);
+    }
+  }
+  const raw = selected.join("\n");
+  return raw ? `npm view failed: ${raw}` : "npm view failed";
+}
+
 export async function fetchNpmPackageTargetStatus(params: {
   target: string;
   timeoutMs?: number;
@@ -163,11 +187,10 @@ export async function fetchNpmPackageTargetStatus(params: {
       },
     );
     if (res.code !== 0) {
-      const raw = (res.stderr.trim() || res.stdout.trim()).split("\n").slice(-3).join("\n");
       return {
         version: null,
         nodeEngine: null,
-        error: raw ? `npm view failed: ${raw}` : "npm view failed",
+        error: formatNpmViewFailure(res.stdout, res.stderr),
       };
     }
     return parseNpmPackageTargetMetadata(
