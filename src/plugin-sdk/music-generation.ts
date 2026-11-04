@@ -19,3 +19,5 @@ export {
 } from "../music-generation/google-music.js";
 // A dispatched billable operation may not be replayed after an uncertain response.
 export { recordModelFallbackStop } from "../agents/model-fallback-stop.js";
+
+export { readOpenRouterAudioStream } from "../music-generation/openrouter-audio.js";
