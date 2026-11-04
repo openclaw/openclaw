@@ -3,7 +3,7 @@ import { sql } from "kysely";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { listTranscriptArchivesFromDatabase } from "../config/sessions/session-accessor.sqlite-archive-read.js";
+import { listTranscriptArchiveIdentitiesFromDatabase } from "../config/sessions/session-accessor.sqlite-archive-read.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
@@ -162,7 +162,7 @@ export function createUsageCostCollectionAccess(params: {
       const database = target(agentId, storePath);
       return readStore(agentId, storePath, () => {
         const result = withOpenClawAgentDatabaseReadOnly(
-          (opened) => listTranscriptArchivesFromDatabase(opened, undefined, [], archiveNames),
+          (opened) => listTranscriptArchiveIdentitiesFromDatabase(opened, archiveNames),
           { ...database, env },
         );
         return sourceRows(result);

@@ -237,7 +237,8 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     const { toast: restingToast } = await renderToast({ message: "Saved" }, host);
     const restingBounds = rect(restingToast);
     const controller = new AbortController();
-    const confirmation = showConfirmDialog({ message: "Keep?", signal: controller.signal });
+    const prompt = { title: "Keep?", message: "", confirmLabel: "Keep" };
+    const confirmation = showConfirmDialog({ ...prompt, signal: controller.signal });
     try {
       const { modal, dialog } = await waitForRenderedModalDialog(document.body);
       const onAction = vi.fn();

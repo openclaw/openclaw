@@ -46,8 +46,10 @@ import {
 } from "./chat-pane-state.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
+import { isChatQueuePaused } from "./chat-queue-pause.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
+import { clearChatQueue, resumeChatQueue } from "./chat-send-actions.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import { refreshChatCommands } from "./chat-session-commands.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
@@ -519,6 +521,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...composerAvailability,
       disabledReasonAction: catalogReason?.action,
       error: providerPaused ? null : state.lastError,
+      errorDetail: state.lastErrorDetail,
       diskSpace: placementComposer.diskSpace,
       workerRuntimeInstall: placementComposer.workerRuntimeInstall,
       runError:
@@ -620,6 +623,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         state.realtimeTalk.update({ realtimeTalkInputNotice: null }),
       ...sessionActionCallbacks,
       onQueueRemove: state.removeQueuedMessage,
+      queuePaused: isChatQueuePaused(state),
+      onQueueResume: providerPaused ? undefined : () => resumeChatQueue(state),
+      onQueueClear: () => clearChatQueue(state),
       onQueueRetry: providerPaused ? undefined : (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer:
         sessionParticipationBlocked || providerPaused

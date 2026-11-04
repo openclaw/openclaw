@@ -51,6 +51,8 @@ In **Models**, **Connect provider** offers the credential-only sign-in methods d
 
 Model pickers show the authentication methods available to the selected agent. In **Models** settings, this muted information appears on the right of each open option row; the closed control shows only the model name and icon. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
 
+Inbox account alerts distinguish **Sign in** from **Update API key**. Accounts without a known recovery method show **Review account**. These actions open **Models** so you can repair the saved account.
+
 Open panels share provider sign-in status. Configuration edits keep that status until the Gateway publishes updated authentication information; credential changes, reconnects, and expiry deadlines still refresh it.
 
 During first-run **Model Setup**, reloading the browser resumes an unfinished provider wizard on the same running Gateway without repeating your answers. Continue from its current question, or choose **Cancel** to release provider choices once the Gateway confirms cancellation. Unsubmitted input is not saved. If the Gateway restarted or no longer has the wizard, **Check again** refreshes the current setup without starting another provider attempt; the recovery guard remains until a model can be verified or the pending attempt expires.
@@ -560,7 +562,10 @@ The bottom-left account footer, including the Settings sidebar, shows **Suspendi
 Sidebar visibility belongs to the current tab and is not remembered across tabs, windows, or reloads; the sidebar's width is still remembered. On desktop, new tabs, direct links, bookmarks, and reloads start with the sidebar expanded. Middle-click or Cmd/Ctrl-click a session to open it in a new tab without changing the original tab. Press ⌘B on Mac or Ctrl+B on Windows/Linux to collapse or expand the sidebar in the current tab.
 
 Pending approvals also contribute to the rail’s **Inbox** attention badge.
-Open Inbox to inspect them and navigate to the Approvals page.
+Open Inbox to inspect them and navigate to the Approvals page. Command approvals
+show **Runs on** with **This computer** for the Gateway’s computer or the paired
+device’s name. Approval history keeps the recorded decision and resolution reason,
+including decisions made elsewhere.
 
 When an approval appears inline in a different session, **Approval requested by session**
 uses the requesting session's loaded title, not the open conversation's title. If that

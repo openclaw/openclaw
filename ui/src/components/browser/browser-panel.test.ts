@@ -436,7 +436,7 @@ describe("Browser panel", () => {
       });
       if (outcome === "failed") {
         await panel.updateComplete;
-        expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Could not paste");
+        expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Couldn’t paste");
         expect(panel.textContent).not.toContain(text);
       }
     });
