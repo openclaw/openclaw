@@ -1,4 +1,5 @@
 import { expect, it, type Mock } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { runCapability } from "./capability-cli.test-harness.js";
 
 export function registerEmbeddingCapabilityCliTests({
@@ -81,4 +82,24 @@ export function registerEmbeddingCapabilityCliTests({
       expectError("embedding failed");
     },
   );
+
+  it("passes the interrupt signal to the embedding batch and suppresses late output", async () => {
+    const scope = new AsyncWorkScope();
+    const received: AbortSignal[] = [];
+    embedBatch.mockImplementationOnce(async (_inputs, options) => {
+      const signal = (options as { signal?: AbortSignal } | undefined)?.signal;
+      if (signal !== undefined) {
+        received.push(signal);
+        scope.beginClose(new Error("interrupted"));
+      }
+      return [[0.1, 0.2]];
+    });
+
+    await scope.track(() => create("--json"));
+
+    expect(received).toHaveLength(1);
+    expect(received[0]!.aborted).toBe(true);
+    expect(jsonOutput()).toBeUndefined();
+    expect(closeProvider).toHaveBeenCalledTimes(1);
+  });
 }
