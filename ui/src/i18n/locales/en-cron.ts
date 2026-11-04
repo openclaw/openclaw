@@ -159,7 +159,7 @@ const enCron = {
       every: "Every",
       at: "At",
       cronOption: "Cron",
-      runAt: "Started at",
+      runAt: "Run at",
       unit: "Unit",
       minutes: "Minutes",
       hours: "Hours",
