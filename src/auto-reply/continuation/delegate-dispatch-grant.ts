@@ -18,12 +18,15 @@ import { restoreGatewayQueuedOperatorRecovery } from "../../gateway/operator-run
 import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getInProcessGatewayRequestContext,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import type { ContinuationDelegateDispatchGrant } from "./types.js";
+
+const log = createSubsystemLogger("continuation/delegate-dispatch");
 
 /**
  * A grant outlives its delegate's due time by this much: room for hedge retries, busy
@@ -55,14 +58,15 @@ export async function captureContinuationDelegateDispatchGrant(params: {
       });
   try {
     const source = captureQueuedOperatorRecoverySource(ambient.authority);
-    // Channel principals are bound to their channel turn, not to a Gateway connection.
-    if (!source || source.kind === "channel") {
+    // Channel principals are bound to their channel turn, not to a Gateway connection. A source
+    // the recovery owner cannot retain keeps its live authority, as before (accepted edge).
+    if (source?.kind !== "gateway") {
+      if (source?.kind === "unavailable") {
+        log.info(
+          `[continuation:delegate-grant-unavailable] session=${params.ownerSessionKey} dispatches under its arming request`,
+        );
+      }
       return undefined;
-    }
-    if (source.kind === "unavailable") {
-      throw new Error(
-        "This operator connection's authority cannot be retained for a delegated dispatch; reconnect with a paired device or the Gateway token and try again.",
-      );
     }
     return {
       source,

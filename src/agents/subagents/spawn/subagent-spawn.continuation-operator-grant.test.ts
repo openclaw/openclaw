@@ -157,8 +157,12 @@ function turnScope(gateway: ReturnType<typeof gatewayInstance>, client?: Gateway
 }
 
 /** A CLI operator connection (k6, `openclaw agent`) electing delegates in its own turn. */
-async function operatorConnection(gateway: ReturnType<typeof gatewayInstance>, scopes: string[]) {
-  const profile = ensureProfileForEmail("elector@example.test");
+async function operatorConnection(
+  gateway: ReturnType<typeof gatewayInstance>,
+  scopes: string[],
+  options: { retainable?: false; email?: string } = {},
+) {
+  const profile = ensureProfileForEmail(options.email ?? "elector@example.test");
   const device = pairedOperator();
   const fixture = await createOperatorRecoveryFixture({
     stateDir,
@@ -169,8 +173,11 @@ async function operatorConnection(gateway: ReturnType<typeof gatewayInstance>, s
     scopes,
     sourceIngress: "internal",
   });
-  // The handshake binds access policy: none configured, so no plugin grant (null).
-  fixture.client.internal = { ...fixture.client.internal, operatorAccessAuthority: null };
+  // The handshake binds access policy: none configured, so no plugin grant (null). Without that
+  // binding the recovery owner cannot retain the source.
+  if (options.retainable !== false) {
+    fixture.client.internal = { ...fixture.client.internal, operatorAccessAuthority: null };
+  }
   const turn = turnScope(gateway, fixture.client);
   return {
     profileId: profile.id,
@@ -446,7 +453,7 @@ describe("continuation delegate dispatch under the elector's bounded grant", () 
     });
     const before = gatewayInstance(runtimeConfig());
     const operator = await operatorConnection(before, ["operator.write"]);
-    const recordId = await operator.elect(0.3);
+    const recordId = await operator.elect(1);
     // The process dies: its timers, its connection and its Gateway instance go with it.
     resetDelegateDispatchHedgesForTests();
     operator.disconnect();
@@ -457,6 +464,8 @@ describe("continuation delegate dispatch under the elector's bounded grant", () 
       resolveGatewayContext: after.context.resolveGatewayContext,
       whenSubagentRegistryActivated: async () => {},
     });
+    // A later turn on the session re-arms the hedge from a scope that names no Gateway.
+    await dispatchQueued(OWNER);
     const record = await settledDelegate(recordId);
 
     expect(ambient).toEqual([]);
@@ -468,19 +477,34 @@ describe("continuation delegate dispatch under the elector's bounded grant", () 
     expect(await interruptedNotices()).toEqual([]);
   });
 
-  it("leaves internal-caller (channel) and immediate operator delegates as they were", async () => {
+  it("leaves internal-caller, unretainable and immediate operator delegates as they were", async () => {
     const gateway = gatewayInstance(runtimeConfig());
-    const channelTurn = turnScope(gateway);
-    const channelRecord = await settledDelegate(await channelTurn.elect(0.05));
+    const internalTurn = turnScope(gateway);
+    const internal = await settledDelegate(await internalTurn.elect(0.05));
+    const unretained = await operatorConnection(gateway, ["operator.write"], {
+      retainable: false,
+      email: "unretained@example.test",
+    });
+    const live = await settledDelegate(await unretained.elect(0));
     const operator = await operatorConnection(gateway, ["operator.write"]);
-    const immediateRecord = await settledDelegate(await operator.elect(0));
+    const immediate = await settledDelegate(await operator.elect(0));
 
-    expect([channelRecord.status, immediateRecord.status]).toEqual(["succeeded", "succeeded"]);
-    expect(channelRecord.stateJson).not.toContain("dispatchGrant");
-    expect(gateway.launches).toHaveLength(2);
+    expect([internal, live, immediate].map((record) => record.status)).toEqual([
+      "succeeded",
+      "succeeded",
+      "succeeded",
+    ]);
+    expect([internal, live].map((record) => record.stateJson.includes("dispatchGrant"))).toEqual([
+      false,
+      false,
+    ]);
+    expect(gateway.launches).toHaveLength(3);
     expect(gateway.launches[0]!.client.internal?.operatorRunAuthority).toBeUndefined();
-    expectChildUnderElector(gateway.launches[1], operator.profileId);
-    await expectReturnsToOwner(2);
+    expect(gateway.launches[1]!.client.internal?.operatorRunAuthority?.profileId).toBe(
+      unretained.profileId,
+    );
+    expectChildUnderElector(gateway.launches[2], operator.profileId);
+    await expectReturnsToOwner(3);
     expect(await interruptedNotices()).toEqual([]);
   });
 });

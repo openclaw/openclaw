@@ -100,9 +100,13 @@ function mergeHedgeParams(
   existing: DelegateDispatchHedgeParams,
   incoming: DelegateDispatchHedgeParams,
 ): DelegateDispatchHedgeParams {
+  // Boot recovery's timer runs outside any request scope; a later arm keeps its Gateway.
+  const resolveGatewayContext =
+    incoming.ctx.resolveGatewayContext ?? existing.ctx.resolveGatewayContext;
   const merged: DelegateDispatchHedgeParams = {
     ...existing,
     ...definedEntriesOnly(incoming),
+    ctx: { ...incoming.ctx, ...(resolveGatewayContext ? { resolveGatewayContext } : {}) },
     ...(existing.applyDelegateChainTokensFold || incoming.applyDelegateChainTokensFold
       ? { applyDelegateChainTokensFold: true }
       : {}),
