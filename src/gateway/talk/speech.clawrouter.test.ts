@@ -148,28 +148,26 @@ describe("Talk catalog-selected ClawRouter speech", () => {
               talk: {
                 provider: "clawrouter",
                 providers: {
-                  clawrouter: {
-                    ...(eleven
+                  clawrouter: eleven
+                    ? {
+                        upstreamProvider: "elevenlabs",
+                        speakerVoiceId: "syntheticVoice1234567",
+                        voiceAliases: { narrator: "syntheticOverride123" },
+                        latencyTier: 2,
+                      }
+                    : azure
                       ? {
-                          upstreamProvider: "elevenlabs",
-                          speakerVoiceId: "syntheticVoice1234567",
-                          voiceAliases: { narrator: "syntheticOverride123" },
-                          latencyTier: 2,
+                          upstreamProvider: "azure-speech",
+                          speakerVoiceId: "en-US-JennyNeural",
+                          lang: "en-US",
                         }
-                      : azure
-                        ? {
-                            upstreamProvider: "azure-speech",
-                            speakerVoiceId: "en-US-JennyNeural",
-                            lang: "en-US",
-                          }
-                        : gradium
-                          ? { upstreamProvider: "gradium", speakerVoiceId: "synthetic-voice" }
-                          : {
-                              modelId: "openai/tts-1",
-                              speakerVoiceId: "shimmer",
-                              responseFormat: "mp3",
-                            }),
-                  },
+                      : gradium
+                        ? { upstreamProvider: "gradium", speakerVoiceId: "synthetic-voice" }
+                        : {
+                            modelId: "openai/tts-1",
+                            speakerVoiceId: "shimmer",
+                            responseFormat: "mp3",
+                          },
                 },
               },
             };

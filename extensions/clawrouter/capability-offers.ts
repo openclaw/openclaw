@@ -153,13 +153,15 @@ export function readClawRouterCapabilityOffers(
         continue;
       }
       const resolved = expected.replace(/\$\{([a-zA-Z0-9_]+)\}/gu, (placeholder, name: string) => {
-        if (name === "model") return encodeURIComponent(upstream ?? "");
-        const value = nativePathParams?.[name];
+        if (name === "model") {
+          return encodeURIComponent(upstream ?? "");
+        }
+        const pathValue = nativePathParams?.[name];
         // Caller parameters are single path segments; model remains catalog-owned.
         return routeKind === "native" &&
-          typeof value === "string" &&
-          /^[A-Za-z0-9_-]{1,128}$/u.test(value)
-          ? encodeURIComponent(value)
+          typeof pathValue === "string" &&
+          /^[A-Za-z0-9_-]{1,128}$/u.test(pathValue)
+          ? encodeURIComponent(pathValue)
           : placeholder;
       });
       if (resolved.includes("${")) {
@@ -234,7 +236,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
       const catalog = asOptionalRecord(body);
       const scope = asOptionalRecord(catalog?.scope);
       const observedAt =
-        typeof catalog?.observedAt === "string" ? Date.parse(catalog.observedAt) : NaN;
+        typeof catalog?.observedAt === "string" ? Date.parse(catalog.observedAt) : Number.NaN;
       const age = Date.now() - observedAt;
       if (
         !Number.isFinite(age) ||
