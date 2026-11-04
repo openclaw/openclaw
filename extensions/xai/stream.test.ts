@@ -9,27 +9,31 @@ import { captureXaiRequest, xaiModel } from "./test-helpers.js";
 function patchPayload<T extends Record<string, unknown>>(
   payload: T,
   model: Partial<Model<"openai-responses">> = {},
-): T | Promise<T> {
-  const captured = captureXaiRequest(xaiModel(model), {
-    extraParams: { tool_stream: false },
-    payload,
-  });
-  if (captured.payloadPromise instanceof Promise) {
-    return captured.payloadPromise.then(() => payload);
-  }
+): T {
+  captureXaiRequest(xaiModel(model), { extraParams: { tool_stream: false }, payload });
   return payload;
 }
 
 function project(
   input: Array<Record<string, unknown>>,
   model: Partial<Model<"openai-responses">> = {},
-) {
+): Array<Record<string, unknown>> {
+  return patchPayload({ input: structuredClone(input) }, model).input;
+}
+
+async function projectAsync(
+  input: Array<Record<string, unknown>>,
+  model: Partial<Model<"openai-responses">> = {},
+): Promise<Array<Record<string, unknown>>> {
   const payload = { input: structuredClone(input) };
-  const res = patchPayload(payload, model);
-  if (res instanceof Promise) {
-    return res.then((p) => p.input);
+  const captured = captureXaiRequest(xaiModel(model), {
+    extraParams: { tool_stream: false },
+    payload,
+  });
+  if (captured.payloadPromise instanceof Promise) {
+    await captured.payloadPromise;
   }
-  return res.input;
+  return payload.input;
 }
 
 function toolOutput(output: unknown, callId = "call_1") {
@@ -285,7 +289,7 @@ describe("xai stream wrappers", () => {
     const result = toolOutput([inputText("Read GIF"), gifImage], "call_gif");
     const history = [message("user", "Inspect the gif"), toolCall("call_gif"), result];
 
-    const projected = (await project(history)) as Array<Record<string, unknown>>;
+    const projected = await projectAsync(history);
     const carrier = projected.find(
       (item) => item.type === "message" && item.role === "user" && Array.isArray(item.content),
     );
@@ -302,14 +306,14 @@ describe("xai stream wrappers", () => {
       message("assistant", "I see a 1x1 GIF."),
       message("user", "What was in it?"),
     ];
-    const secondProjected = (await project(nextTurn)) as Array<Record<string, unknown>>;
+    const secondProjected = await projectAsync(nextTurn);
     expect(secondProjected).toHaveLength(nextTurn.length);
 
     // Native xAI API route also normalizes GIF in tool output
-    const nativeProjected = (await project([result], {
+    const nativeProjected = await projectAsync([result], {
       provider: "x-ai",
       baseUrl: XAI_BASE_URL,
-    })) as Array<Record<string, unknown>>;
+    });
     const nativeToolOutput = nativeProjected[0];
     expect(nativeToolOutput?.type).toBe("function_call_output");
     const nativeParts = nativeToolOutput?.output as Array<Record<string, unknown>>;
@@ -321,9 +325,9 @@ describe("xai stream wrappers", () => {
       type: "input_image",
       source: { type: "base64", media_type: "image/gif", data: "R0lGOD_corrupt_payload" },
     };
-    const corruptProjected = (await project([
+    const corruptProjected = await projectAsync([
       toolOutput([inputText("corrupt"), corruptGif], "call_corrupt"),
-    ])) as Array<Record<string, unknown>>;
+    ]);
     expect(JSON.stringify(corruptProjected)).toContain(
       "omitted image payload: invalid inline image data",
     );
