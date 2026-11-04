@@ -305,7 +305,7 @@ suite.define(() => {
           expect(await pane.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
             "later ordinary turn",
           );
-          await pane.getByRole("status", { name: "Loading chat", exact: true }).waitFor();
+          await pane.getByRole("status", { name: "Loading conversation…", exact: true }).waitFor();
           expect(await pane.locator(".agent-chat__welcome, .agent-chat__empty").count()).toBe(0);
           expect(await pane.locator(".chat-topbar-notices .chat-error").count()).toBe(0);
 

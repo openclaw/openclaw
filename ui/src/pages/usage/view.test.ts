@@ -219,9 +219,7 @@ describe("renderUsage", () => {
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
     const container = mountFixture({ providerUsageUnavailable: true });
 
-    expect(container.textContent).toContain(
-      "Provider usage is unavailable; the last request failed. Refresh to retry.",
-    );
+    expect(container.textContent).toContain("Couldn’t load provider usage. Refresh to try again.");
   });
 
   it("does not fall back to global insights when a query matches no sessions", () => {
@@ -231,8 +229,8 @@ describe("renderUsage", () => {
       queryDraft: "missing-session",
     });
 
-    const providers = insightCard(container, "Top Providers");
-    expect(providers?.textContent).toContain("No provider data");
+    const providers = insightCard(container, "Top providers");
+    expect(providers?.textContent).toContain("No provider data yet.");
     expect(providers?.textContent).not.toContain("openai");
   });
 
@@ -405,7 +403,7 @@ describe("renderUsage", () => {
     });
 
     expect(container.querySelector(".usage-callout")?.textContent).toContain(
-      "Provider usage did not finish loading",
+      "Couldn’t finish loading provider usage",
     );
     const card = container.querySelector(".provider-usage-card");
     for (const label of ["OpenAI", "Weekly"]) {

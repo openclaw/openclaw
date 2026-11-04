@@ -139,7 +139,7 @@ describe("CommandPalette pending searches", () => {
     expect(results.getAttribute("aria-busy")).toBe("false");
     expect(palette.textContent).not.toContain("Searching sessions");
     const empty = query(".cmd-palette__no-results")!;
-    expect(empty.querySelector("h2")?.textContent).toBe("No results found");
+    expect(empty.querySelector("h2")?.textContent).toBe("No results match your search.");
     expect(empty.textContent).toContain("to start a new session.");
     expect(empty.querySelector("button")).toBeNull();
   });
@@ -192,16 +192,16 @@ describe("CommandPalette pending searches", () => {
         "false",
       );
       await searchPalette(palette, "zzmissing");
-      expect(palette.textContent).toContain("No results found");
+      expect(palette.textContent).toContain("No results match your search.");
       expect(request).toHaveBeenCalledTimes(2);
       expect(list).not.toHaveBeenCalled();
     },
   );
 
   it.each([
-    ["partial", {}, "Transcript search unavailable"],
-    ["model failure", {}, "Model search unavailable"],
-    ["indexing", { indexing: true }, "Results may be incomplete — search again shortly."],
+    ["partial", {}, "Couldn’t search messages"],
+    ["model failure", {}, "Couldn’t search models"],
+    ["indexing", { indexing: true }, "Results may be incomplete. Search again shortly."],
     ["archived", { archivedTranscriptsExcluded: 2 }, "Archived sessions"],
   ] as const)(
     "does not announce empty success for %s transcript results",
@@ -338,7 +338,9 @@ describe("CommandPalette session search", () => {
     expect(items[0]?.textContent).toContain("needle");
     expect(items[1]?.textContent).toContain("Unrelated title");
     expect(items[1]?.textContent).toContain("needle appears only in the conversation body");
-    expect(palette.textContent).not.toMatch(/Search notices|may be incomplete|Chat search failed/);
+    expect(palette.textContent).not.toMatch(
+      /Search notices|may be incomplete|Couldn’t search sessions/,
+    );
     findPaletteOption(palette, "needle")!.click();
     expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:metadata");
   });

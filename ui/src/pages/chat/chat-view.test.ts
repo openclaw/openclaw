@@ -1519,8 +1519,8 @@ describe("chat voice controls", () => {
   });
 
   it.each([
-    ["connecting", "Connecting voice input..."],
-    ["thinking", "Asking OpenClaw..."],
+    ["connecting", "Connecting voice input…"],
+    ["thinking", "Asking the agent…"],
   ] as const)("renders %s voice activity with the appropriate status region", (status, label) => {
     const inputLevel = new RealtimeTalkLevelSignal();
     inputLevel.set(0.64);
@@ -2651,7 +2651,7 @@ describe("chat welcome", () => {
       modelSetupRequired: true,
       onModelSetup,
     });
-    expect(container.textContent).toContain("No AI provider configured");
+    expect(container.textContent).toContain("No model set up");
     expect(container.querySelector(".agent-chat__suggestions")).toBeNull();
     container.querySelector<HTMLButtonElement>(".agent-chat__welcome button")?.click();
     expect(onModelSetup).toHaveBeenCalledOnce();
