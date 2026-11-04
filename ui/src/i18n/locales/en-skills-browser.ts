@@ -7,7 +7,7 @@ const catalog = {
     tabs: {
       all: "All",
       ready: "Ready",
-      needsSetup: "Needs Setup",
+      needsSetup: "Needs setup",
       disabled: "Disabled",
     },
     defaultAgent: "{name} (default)",
@@ -22,6 +22,9 @@ const catalog = {
     notScannedByClawHub: "Not scanned by ClawHub",
     install: "Install",
     installed: "Installed",
+    installedRef: "Installed {ref}",
+    skillEnabled: "Skill enabled",
+    skillDisabled: "Skill disabled",
     installing: "Installing…",
     close: "Close",
     by: "By",
