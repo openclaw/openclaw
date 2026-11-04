@@ -236,7 +236,10 @@ export async function provideTurn(
   if (!who) {
     throw new Error(`unexpected provider turn: ${params.prompt.slice(0, 120)}`);
   }
-  forest.providerTurns.push({ sessionKey: params.sessionKey ?? "", who, at: Date.now() });
+  const sessionKey = params.sessionKey ?? "";
+  forest.providerTurns.push({ sessionKey, who, at: Date.now() });
+  // The system events its admission drained are in the prompt.
+  forest.adopt(sessionKey, [params.prompt]);
   if (election) {
     inspectAttic(forest, election);
   } else {

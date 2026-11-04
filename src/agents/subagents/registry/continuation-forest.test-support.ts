@@ -193,7 +193,7 @@ export class ContinuationForest {
   readonly stopped = new Map<string, string>();
   readonly adoptions: Adoption[] = [];
   readonly adoptionCounts = new Map<string, number>();
-  /** Every block a head adopted, with its room and time. */
+  /** Every block a head adopted (adopt()), with its room and time. */
   readonly adoptedBlocks: Array<{ sessionKey: string; text: string; at: number }> = [];
   readonly wakes: Array<{ sessionKey: string; deliveryIds: readonly string[] }> = [];
   /** Durable rows a head's turn adopted and acknowledged. */
@@ -778,12 +778,24 @@ export class ContinuationForest {
       deliveries: adoption.managedDeliveries.values(),
       persistedMessage: { __openclaw: { sessionDeliveryAckIds: ackIds } },
     });
-    const head = this.head(sessionKey) ?? "missing";
+    const adopted = this.adopt(
+      sessionKey,
+      adoption.blocks.map((block) => block.text),
+    );
     this.time("turnMs", started);
+    return adopted;
+  }
+
+  /**
+   * A head's turn took these texts into its prompt: the world's own turns their adopted blocks, a
+   * real reply owner's turn its whole prompt (from its provider). Returns the reports among them.
+   */
+  adopt(sessionKey: string, texts: readonly string[]): number {
+    const head = this.head(sessionKey) ?? "missing";
     let count = 0;
-    for (const block of adoption.blocks) {
-      this.adoptedBlocks.push({ sessionKey, text: block.text, at: Date.now() });
-      for (const match of block.text.matchAll(REPORT_TAG)) {
+    for (const text of texts) {
+      this.adoptedBlocks.push({ sessionKey, text, at: Date.now() });
+      for (const match of text.matchAll(REPORT_TAG)) {
         this.noteAdoption(sessionKey, match[1]!, head);
         count += 1;
       }
