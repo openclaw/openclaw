@@ -139,7 +139,7 @@ export async function reclaimChatPanePlacement(params: {
         params.publishError(error);
         showToast({
           message: error instanceof Error ? error.message : String(error),
-          severity: "warning",
+          severity: "error",
         });
         // A refresh failure must not offer to repeat a successful stop.
         return stopped ? "close" : "retry";

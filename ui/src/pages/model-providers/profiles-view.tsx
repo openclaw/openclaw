@@ -24,7 +24,7 @@ registerEnglishCatalog(registerSettingsEnglish);
 export function showProfileActionError(error: unknown): void {
   showToast({
     message: modelProviderErrorMessage(error),
-    severity: "warning",
+    severity: "error",
     durationMs: 12_000,
   });
 }

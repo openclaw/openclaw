@@ -67,8 +67,9 @@ suite.define(() => {
           const toast = page.locator(".app-toast");
           await toast.waitFor();
           await expectAttachmentErrorToast(toast, theme === "beacon" ? 7 : 4.5);
-          expect(await toast.locator(".app-toast__message").textContent()).toBe(
-            "File too large. Try a smaller file.",
+          expect(await toast.locator(".app-toast__message").textContent()).toBe("File too large.");
+          expect(await toast.locator(".app-toast__description").textContent()).toBe(
+            "Try a smaller file.",
           );
           await expectToastPosition(toast, viewport);
           expect(await toast.getAttribute("role")).toBe("alert");

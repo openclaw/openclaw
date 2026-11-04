@@ -108,10 +108,19 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
   const lane = (): ToastLane => props.entry.lane;
   const dismiss = (reason: "action" | "dismiss") => props.owner.dismiss(props.entry.id, reason);
   const content = createMemo(() => toast().message);
+  // Two-sentence copy reads as a title and a muted description, without rewording.
+  const copy = createMemo(() => {
+    const value = content();
+    const text = typeof value === "string" ? formatUiExternalText(value) : "";
+    const split = toast().description ? null : /^(.+?[.!?])\s+(?=\p{Lu})(.+)$/su.exec(text);
+    return split
+      ? { title: split[1]!, description: split[2]! }
+      : { title: text, description: toast().description };
+  });
   const message = createMemo(() => {
     const value = content();
     if (typeof value === "string") {
-      return formatUiExternalText(value);
+      return copy().title;
     }
     // Snapshot only on message changes: inserting a fragment consumes its children.
     return value instanceof DocumentFragment ? Array.from(value.childNodes) : value;
@@ -199,8 +208,9 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
       <div class="app-toast__content">
         <div class="app-toast__body">
           <span class="app-toast__message">{message()}</span>
-          {toast().description ? (
-            <span class="app-toast__description">{formatUiExternalText(toast().description)}</span>
+          {copy().description ? " " : undefined}
+          {copy().description ? (
+            <span class="app-toast__description">{formatUiExternalText(copy().description)}</span>
           ) : undefined}
         </div>
         {toast().actionLabel && toast().onAction ? (
