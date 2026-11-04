@@ -29,7 +29,6 @@ import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-ut
 import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
 import { preparePromptSnapshotReply } from "./prepared-reply-prompt.js";
 import {
-  CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO,
   CODEX_PROMPT_SNAPSHOT_FILES,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
@@ -41,16 +40,6 @@ const WORKSPACE_DIR = "/tmp/openclaw-happy-path/workspace";
 const AGENT_DIR = "/tmp/openclaw-happy-path/agent";
 const SESSION_FILE = "/tmp/openclaw-happy-path/session.jsonl";
 const MODEL_ID = "gpt-5.5";
-const CODEX_PROMPT_PERSONALITY = "pragmatic";
-// Render the pinned POSIX scenario consistently on every snapshot-generation host.
-const CODEX_MODEL_PROMPT_FIXTURE_PATH = path.posix.join(
-  CODEX_MODEL_PROMPT_FIXTURE_DIR,
-  `${MODEL_ID}.${CODEX_PROMPT_PERSONALITY}.instructions.md`,
-);
-const CODEX_MODEL_PROMPT_SOURCE_PATH = path.posix.join(
-  CODEX_MODEL_PROMPT_FIXTURE_DIR,
-  `${MODEL_ID}.${CODEX_PROMPT_PERSONALITY}.source.json`,
-);
 const CODEX_YOLO_PERMISSION_INSTRUCTIONS = [
   "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled.",
   "Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.",
@@ -994,10 +983,6 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "Use `telegram-direct` to inspect the complete base catalog.",
     "",
-    "The Codex model prompt fixture is generated from the same Codex model catalog/cache shape that the Codex runtime uses for remote model metadata. Regenerate it from Codex's runtime cache or, when present, a local Codex checkout with:",
-    "",
-    markdownFence("sh", "pnpm prompt:snapshots:sync-codex-model"),
-    "",
     "These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params.",
     "",
     "Regenerate with:",
@@ -1014,17 +999,6 @@ function renderReadme(scenarios: PromptScenario[]): string {
       scenario === CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO ? `- ${fileName}` : `- ${fileName}.diff`,
     ),
     ...scenarios.map((scenario) => `- ${scenario.toolSnapshotFile}`),
-    "",
-    "Codex model prompt fixtures:",
-    "",
-    `- ${path.posix.relative(
-      CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
-      CODEX_MODEL_PROMPT_FIXTURE_PATH,
-    )}`,
-    `- ${path.posix.relative(
-      CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
-      CODEX_MODEL_PROMPT_SOURCE_PATH,
-    )}`,
     "",
   ].join("\n");
 }

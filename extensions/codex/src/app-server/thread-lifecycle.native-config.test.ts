@@ -256,9 +256,15 @@ describe("Codex native configuration lifecycle", () => {
     }
   });
 
-  it.each([false, true])(
-    "suppresses plugin suggestions on start and resume without disabling plugins (authored: %s)",
-    async (authored) => {
+  // An authored native base keeps its place on start and cold resume; OpenClaw's base
+  // then rides the developer carrier.
+  it.each([
+    [false, undefined],
+    [true, "model_instructions_file"],
+    [false, "instructions"],
+  ] as const)(
+    "suppresses plugin suggestions and places the base on start and resume (authored: %s, native base: %s)",
+    async (authored, nativeBaseKey) => {
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
       const native = threadStartResult("plugin-thread", { cwd: workspaceDir });
       const config: JsonObject = {
@@ -275,7 +281,10 @@ describe("Codex native configuration lifecycle", () => {
           if (method === "thread/start" || method === "thread/resume") {
             return native;
           }
-          return readNativeConfig(method);
+          return readNativeConfig(
+            method,
+            nativeBaseKey ? { [nativeBaseKey]: "Operator policy" } : {},
+          );
         },
       });
       const common = { ...lifecycleParams(fixture.client), config };
@@ -298,42 +307,13 @@ describe("Codex native configuration lifecycle", () => {
             plugins: { "calendar@fixture": { enabled: true } },
             apps: { calendar: { enabled: true } },
           },
-        });
-      }
-    },
-  );
-
-  it.each(["model_instructions_file", "instructions"])(
-    "keeps an authored native %s as the base on start and cold resume",
-    async (key) => {
-      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-      const native = threadStartResult("operator-base-thread", { cwd: workspaceDir });
-      const value = key === "instructions" ? "Operator policy" : "/synthetic/codex/policy.md";
-      const fixture = await createAgentLifecycleHarness({
-        respond: async (method) => {
-          if (method === "thread/start" || method === "thread/resume") {
-            return native;
-          }
-          return readNativeConfig(method, { [key]: value });
-        },
-      });
-      await startOrResumeThread(lifecycleParams(fixture.client));
-      fixture.seed(native, { loaded: false, subscribed: false });
-      await startOrResumeThread(lifecycleParams(fixture.client));
-
-      const requests = fixture.writes
-        .map((line): unknown => JSON.parse(line))
-        .filter(isJsonObject)
-        .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
-      expect(requests.map((frame) => frame.method)).toEqual(["thread/start", "thread/resume"]);
-      for (const { params: request } of requests) {
-        expect(request).not.toHaveProperty("baseInstructions");
-        // OpenClaw's policy still reaches the model, through the developer carrier.
-        expect(request).toMatchObject({
-          developerInstructions: expect.stringContaining(
+          [nativeBaseKey ? "developerInstructions" : "baseInstructions"]: expect.stringContaining(
             "You are a personal assistant running inside OpenClaw.",
           ),
         });
+        expect(isJsonObject(request.params) && "baseInstructions" in request.params).toBe(
+          !nativeBaseKey,
+        );
       }
     },
   );

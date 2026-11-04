@@ -26,12 +26,6 @@ node --import tsx scripts/generate-prompt-snapshots.ts --materialize discord-gro
 
 Use `telegram-direct` to inspect the complete base catalog.
 
-The Codex model prompt fixture is generated from the same Codex model catalog/cache shape that the Codex runtime uses for remote model metadata. Regenerate it from Codex's runtime cache or, when present, a local Codex checkout with:
-
-```sh
-pnpm prompt:snapshots:sync-codex-model
-```
-
 These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params.
 
 Regenerate with:
@@ -52,8 +46,3 @@ Snapshots:
 - discord-group-codex-message-tool.md.diff
 - codex-dynamic-tools.telegram-direct.json
 - codex-dynamic-tools.discord-group.json
-
-Codex model prompt fixtures:
-
-- ../codex-model-catalog/gpt-5.5.pragmatic.instructions.md
-- ../codex-model-catalog/gpt-5.5.pragmatic.source.json

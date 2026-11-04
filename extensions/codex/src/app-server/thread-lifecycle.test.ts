@@ -83,11 +83,7 @@ it("uses direct OpenClaw functions and hosted web search for subscription sharin
       selectedAuthMode: "oauth",
       selectedAuthFlow: "chatgpt-token-sharing",
     },
-    prompt: {
-      provider: "openai",
-      modelId: params.modelId,
-      resolveSystemPromptContribution: () => undefined,
-    },
+    prompt: { resolveSystemPromptContribution: () => undefined },
   } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
   const nativeCodeModeEnabled = shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
     nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),

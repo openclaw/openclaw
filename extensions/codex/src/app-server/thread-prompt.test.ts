@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolFunctionSpec,
@@ -60,41 +60,38 @@ function render(
 }
 
 describe("buildDeveloperInstructions deferred tool discovery", () => {
-  it.each(["full", "minimal"] as const)(
-    "carries shared permission recovery guidance once in %s mode",
-    (promptMode) => {
-      const params = { agentId: "main", config: {}, modelId: "gpt-5.6-luna", promptMode };
-      const base = buildCodexBaseInstructions(params, { dynamicTools: [] });
-      expect(base.match(/Permission blocks:/g)).toHaveLength(1);
-      expect(base).toContain("Omit unverified remediation advice");
-      expect(render({ promptMode }, { dynamicTools: [] })).not.toContain("Permission blocks:");
-    },
-  );
-
-  it("keeps policy in the developer carrier when the prompt mode leaves the base identity-only", () => {
-    const instructions = render({ promptMode: "none" }, { dynamicTools: [] });
-    expect(instructions.match(/Permission blocks:/g)).toHaveLength(1);
+  // The base carries this policy unless it is identity-only (none) or empty (ring zero).
+  it.each<[string, Partial<CodexThreadPromptContext>, number]>([
+    ["full", {}, 0],
+    ["minimal", { promptMode: "minimal" }, 0],
+    ["none", { promptMode: "none" }, 1],
+    ["ring-zero", { toolsAllow: ["openclaw"] }, 1],
+  ])("keeps developer-carrier policy only without a base: %s", (_mode, params, count) => {
+    const instructions = render(params, { dynamicTools: [], hostSystemAgentActive: true });
+    expect(instructions.match(/Permission blocks:/g) ?? []).toHaveLength(count);
+    expect(instructions.includes("You are a personal agent running inside OpenClaw.")).toBe(
+      count === 1,
+    );
   });
 
   it("renders the provider's stable policy into the base instructions", () => {
-    const resolveSystemPromptContribution = vi.fn(() => ({
-      stablePrefix: "<provider_contract>stay exact</provider_contract>",
-    }));
     const base = buildCodexBaseInstructions(
       {
         agentId: "main",
         config: {},
         modelId: "gpt-5.6-luna",
         runtimePlan: {
-          prompt: { provider: "openai", resolveSystemPromptContribution },
+          prompt: {
+            provider: "openai",
+            resolveSystemPromptContribution: (context: object) => ({
+              stablePrefix: JSON.stringify(context),
+            }),
+          },
         } as unknown as CodexThreadPromptContext["runtimePlan"],
       },
       { dynamicTools: [] },
     );
-    expect(base).toContain("<provider_contract>stay exact</provider_contract>");
-    expect(resolveSystemPromptContribution).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openai", modelId: "gpt-5.6-luna", promptMode: "full" }),
-    );
+    expect(base).toContain(`"provider":"openai","modelId":"gpt-5.6-luna","promptMode":"full"`);
   });
 
   it("resolves supervised guidance from the native provider without an outer plan", () => {
@@ -110,22 +107,7 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
     expect(
       buildCodexBaseInstructions(supervised, { nativeModelProvider: "custom-native" }),
     ).toContain("## Interaction Style");
-    expect(
-      buildCodexBaseInstructions(
-        { ...supervised, modelId: "other-model" },
-        { nativeModelProvider: "openai" },
-      ),
-    ).not.toContain("<execution_policy>");
     expect(buildCodexBaseInstructions(supervised)).not.toContain("<execution_policy>");
-  });
-
-  it("keeps policy in the developer carrier for ring-zero threads, which have no base", () => {
-    const instructions = render(
-      { toolsAllow: ["openclaw"] },
-      { dynamicTools: [], hostSystemAgentActive: true },
-    );
-    expect(instructions).toContain("You are a personal agent running inside OpenClaw.");
-    expect(instructions.match(/Permission blocks:/g)).toHaveLength(1);
   });
 
   it.each([

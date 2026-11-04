@@ -954,9 +954,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "thread/start",
       "thread/resume",
     ]);
-    const fixture = await createAgentLifecycleHarness({
-      respond,
-    });
+    const fixture = await createAgentLifecycleHarness({ respond });
     const { client, request } = fixture;
     const common = {
       client,
@@ -1450,9 +1448,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "thread/start",
       "thread/resume",
     ]);
-    const fixture = await createAgentLifecycleHarness({
-      respond,
-    });
+    const fixture = await createAgentLifecycleHarness({ respond });
     const { client, request } = fixture;
     const common = {
       client,
@@ -1514,9 +1510,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.authProfileId = "openai:before";
     const respond = createFixedThreadRequest("thread-warm-auth", ["thread/start", "thread/resume"]);
-    const fixture = await createAgentLifecycleHarness({
-      respond,
-    });
+    const fixture = await createAgentLifecycleHarness({ respond });
     const { client, request } = fixture;
     const common = {
       client,
@@ -2345,9 +2339,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const fixture = await createAgentLifecycleHarness({
-      respond,
-    });
+    const fixture = await createAgentLifecycleHarness({ respond });
 
     await expect(
       startOrResumeThread({
@@ -3350,9 +3342,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const fixture = await createAgentLifecycleHarness({
-      respond,
-    });
+    const fixture = await createAgentLifecycleHarness({ respond });
     const { client, request } = fixture;
     const basePolicyContext = createPluginAppPolicyContext();
     const pluginAppPolicyContext = {

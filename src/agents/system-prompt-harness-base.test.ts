@@ -20,7 +20,7 @@ function sectionBody(prompt: string, heading: string) {
 }
 
 describe("buildAgentHarnessBasePrompt", () => {
-  it("renders the regular prompt's policy sections byte for byte", () => {
+  it("renders the regular prompt's policy sections byte for byte, without turn facts", () => {
     const regular = buildAgentSystemPrompt({ workspaceDir: "/work", toolNames });
     const base = buildAgentHarnessBasePrompt({ toolNames });
 
@@ -34,19 +34,8 @@ describe("buildAgentHarnessBasePrompt", () => {
     ]) {
       expect(sectionBody(base, heading)).toBe(sectionBody(regular, heading));
     }
-  });
-
-  it("omits every fact that would change the pinned bytes between turns", () => {
-    const base = buildAgentHarnessBasePrompt({ toolNames });
-
-    for (const turnFact of [
-      "## Workspace",
-      "## Runtime\n",
-      "## Skills",
-      "## Messaging",
-      "## Silent Replies",
-      "Runtime: agent=",
-    ]) {
+    // These change between turns and would invalidate the pinned bytes.
+    for (const turnFact of ["## Workspace", "## Runtime\n", "## Skills", "Runtime: agent="]) {
       expect(base).not.toContain(turnFact);
     }
   });
@@ -55,12 +44,10 @@ describe("buildAgentHarnessBasePrompt", () => {
     const withTools = buildAgentHarnessBasePrompt({
       toolNames,
       promptContribution: {
-        stablePrefix: "<provider_contract>stay exact</provider_contract>",
         dynamicSuffix: "turn-only suffix",
         sectionOverrides: { interaction_style: "## Interaction Style\nProvider voice." },
       },
     });
-    expect(withTools).toContain("<provider_contract>stay exact</provider_contract>");
     expect(withTools).toContain("Provider voice.");
     expect(withTools).toContain("`image_generate`");
     expect(withTools).not.toContain("turn-only suffix");

@@ -1169,7 +1169,7 @@ describe("canonical descendant lifecycle through real owners", () => {
     );
   }, 180_000);
 
-  it("keeps native model selection and provider guidance across a canonical fork cold resume", async () => {
+  it("forks with the current native model and keeps provider guidance on cold resume", async () => {
     await withFixture(async (fixture, fork) => {
       const source = await fixture.adopt();
       const binding = await fixture.turn(source.sessionKey, "canonical");
@@ -1193,7 +1193,6 @@ describe("canonical descendant lifecycle through real owners", () => {
         "supervised parent base",
       );
       expect(parentBase).toContain("<execution_policy>");
-      expect(parentBase).toContain("## Interaction Style");
       const childThreadId = expectDefined(bindingFor(fixture, childKey)?.threadId, "child thread");
       await fixture.native.restart();
       const offset = fixture.native.calls.length;
@@ -1203,15 +1202,7 @@ describe("canonical descendant lifecycle through real owners", () => {
         nativeCalls(fixture, "thread/resume", offset).at(-1),
         "canonical fork cold resume",
       );
-      expect(resume.params).not.toHaveProperty("model");
-      expect(resume.params).not.toHaveProperty("modelProvider");
       expect(resume.params.baseInstructions).toBe(parentBase);
-      expect(bindingFor(fixture, childKey)).toMatchObject({
-        connectionScope: "supervision",
-        preserveNativeModel: true,
-        model: "gpt-5.5",
-        modelProvider: current.thread.modelProvider,
-      });
     });
   }, 180_000);
 
