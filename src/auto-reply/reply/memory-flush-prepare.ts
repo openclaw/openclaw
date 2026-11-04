@@ -121,6 +121,7 @@ export async function prepareMemoryFlushAttempt(params: {
             // Maintenance copies carry the source turn's owner status apart from their own grant.
             senderIsOwner: followupRun.memoryAudienceSenderIsOwner ?? followupRun.run.senderIsOwner,
             storePath: sourceStorePath,
+            requester: followupRun.operatorAuthority,
             resolveAgentStorePath: (hopAgentId) =>
               resolveSessionStorePathForScope({ agentId: hopAgentId }, params.cfg),
             assertCallerCurrent: params.assertCurrent,

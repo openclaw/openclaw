@@ -5,6 +5,8 @@ import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.
 
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
+  /** Authenticated input requester or its validated continuation, never a session-owner fallback. */
+  requesterBound?: true;
   /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
   recoverySnapshot?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
   /** Existing immutable policy and link; accepted-input owners may retain them for recovery. */

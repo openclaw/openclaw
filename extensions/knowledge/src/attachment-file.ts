@@ -22,6 +22,13 @@ export async function attachWorkspaceFile(
   if (context.source !== "tool") {
     throw new Error("Workspace file attachment is available only to agent tools.");
   }
+  // A workspace boundary is not a person-space boundary. Byte uploads keep
+  // this path from importing another space through an otherwise readable file.
+  if (context.tool.memoryAudience?.requesterProfileId !== undefined) {
+    throw new Error(
+      "Person-scoped Knowledge requires byte uploads; host workspace file imports are unavailable.",
+    );
+  }
   if (context.tool.sandboxed || context.tool.sandbox) {
     throw new Error(
       "Sandbox files require programmatic knowledge_attach byte transfer; host paths are not accepted.",

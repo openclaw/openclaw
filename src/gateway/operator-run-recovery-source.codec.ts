@@ -11,6 +11,7 @@ const refs = z.strictObject({
 });
 const operatorRunRecoverySnapshotSchema = z.strictObject({
   profileId: boundedString,
+  requesterBound: z.literal(true).optional(),
   scopes: z.array(boundedString).max(64),
   assignedRole: boundedString.nullable(),
   githubLogin: boundedString.nullable(),

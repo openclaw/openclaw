@@ -224,6 +224,7 @@ async function prepareSessionPrincipalRunAccess(params: {
     );
     return {
       client,
+      requesterBound: params.sessionPrincipal ? undefined : (true as const),
       assertCurrent,
       signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
       gatewayAccessGrant: access ? access.gatewayAccessGrant : null,

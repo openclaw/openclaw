@@ -18,6 +18,7 @@ type GenerationLease = Awaited<ReturnType<typeof prepareSessionGenerationFacts>>
 // lease and borrows its parent's record, so either side going stale rejects it.
 type AudienceRecord = {
   parent?: AudienceRecord;
+  assertRequesterCurrent?: () => void;
   leases: GenerationLease[];
   state: "current" | "stale" | "released";
   holders: number;
@@ -128,6 +129,7 @@ function assertRecordCurrent(record: AudienceRecord): void {
     if (current.state === "stale") {
       throw new Error("memory audience is no longer current");
     }
+    current.assertRequesterCurrent?.();
     for (const lease of current.leases) {
       try {
         lease.assertCurrent();
@@ -194,6 +196,9 @@ type MemoryAudienceResolutionParams = {
   /** Session store of another configured agent; without it, cross-agent lineage is denied. */
   resolveAgentStorePath?: (agentId: string) => string;
   scheduledParent?: ScheduledMemoryParent;
+  /** The execution owner separately attests an input requester. General
+   * operator authority can instead come from the current session owner. */
+  requester?: { profileId: string; requesterBound?: true; assertCurrent(): void };
   assertCallerCurrent?: () => void;
 };
 
@@ -348,12 +353,25 @@ export async function resolveMemoryAudienceFromEntry(
       // Revalidate every captured hop after the final await, before minting.
       assertCallerCurrent();
       assertRecordCurrent(record);
+      // Only direct roots carry person authority. A group turn must never
+      // release the sender's personal knowledge into a shared conversation.
+      const requester =
+        entry.chatType === "direct" && params.requester?.requesterBound === true
+          ? params.requester
+          : undefined;
+      requester?.assertCurrent();
+      record.assertRequesterCurrent = requester ? () => requester.assertCurrent() : undefined;
+      const person = requester ? { requesterProfileId: requester.profileId } : {};
       // Only the durable root chat type selects the partition. Thread-shaped
       // keys intentionally receive no special interpretation here.
       if (entry.chatType === "direct" && senderIsOwner === true && scheduledOwnerCap !== false) {
         return {
           status: "granted",
-          ...mintMemoryAudience({ kind: "owner-private", agentId }, params.sessionKey, record),
+          ...mintMemoryAudience(
+            { kind: "owner-private", agentId, ...person },
+            params.sessionKey,
+            record,
+          ),
         };
       }
       if (crossedAgents) {
@@ -370,7 +388,7 @@ export async function resolveMemoryAudienceFromEntry(
         return {
           status: "granted",
           ...mintMemoryAudience(
-            { kind: "conversation", agentId, sessionKey, sessionId },
+            { kind: "conversation", agentId, sessionKey, sessionId, ...person },
             params.sessionKey,
             record,
           ),

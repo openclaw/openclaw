@@ -48,7 +48,14 @@ export function createKnowledgeMemoryRuntime(stores: Stores): MemoryProviderRunt
       await stores.ensure();
       stores.assertLive(incarnation);
       const pinned = pinPrincipal(
-        memoryPrincipal(context, agentId, stores.policy.operatorRead, purpose, stores.grantFor),
+        memoryPrincipal(
+          context,
+          agentId,
+          stores.policy.operatorRead,
+          purpose,
+          stores.grantFor,
+          stores.personGrantFor,
+        ),
       );
       // Host readiness leases may validate storage but never release its content.
       const assertContentAccess = () => {

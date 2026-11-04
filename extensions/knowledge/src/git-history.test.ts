@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs, { existsSync, realpathSync } from "node:fs";
 import { mkdir, writeFile, readFile, rm, rename, symlink } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
@@ -110,6 +110,81 @@ it("default repository, exact grouped content, clean index, actor, and one commi
   expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("2");
   expect(Check(GitStatus, f.service.history(f.access, {}).git)).toBeTruthy();
   expect(git(f.root, "remote")).toBe("");
+});
+
+it("space publications commit exact records and evidence and replay without another commit", async () => {
+  const f = await fixture(),
+    spaceId = "0123456789abcdef".repeat(4),
+    access = plainAccess({ visibility: "space", spaceId }),
+    input = { ...draft(), source: { text: "Space evidence bytes\n", attribution: "Space source" } };
+  const saved = await f.service.save(input, access, "agent");
+  expect(saved.state).toBe("published");
+  expect(saved.git!.state, JSON.stringify(saved)).toBe("committed");
+  const descriptor =
+    JSON.stringify({
+      attribution: input.source.attribution,
+      format: "knowledge-source-v1",
+      path: `artifacts/${input.requestId}.txt`,
+      sha256: createHash("sha256").update(input.source.text).digest("hex"),
+    }) + "\n";
+  const sourceId = createHash("sha256").update(descriptor).digest("hex"),
+    prefix = `spaces/${spaceId}/`,
+    files = [saved.path, `artifacts/${input.requestId}.txt`, `artifacts/sources/${sourceId}.json`];
+  expect(git(f.root, "ls-tree", "-r", "--name-only", "HEAD").split("\n")).toStrictEqual(
+    files.map((file) => prefix + file).toSorted(defaultOrder),
+  );
+  const record = await f.service.run(access, async (vault) => (await vault.scan()).records[0]!);
+  expect(record.id).toBe(saved.id);
+  expect(record.body).toBe(input.body);
+  for (const [file, expected] of [
+    [saved.path, record.raw],
+    [`artifacts/${input.requestId}.txt`, input.source.text],
+    [`artifacts/sources/${sourceId}.json`, descriptor],
+  ]) {
+    expect(
+      execFileSync("git", ["-C", f.root, "show", `HEAD:${prefix}${file}`], { encoding: "utf8" }),
+    ).toBe(expected);
+  }
+  expect(git(f.root, "rev-parse", "HEAD")).toBe(saved.git!.commit);
+  expect(await new KnowledgeStorage(f.config).save(input, access, "agent")).toStrictEqual(saved);
+  expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("1");
+  expect(git(f.root, "diff", "--cached", "--name-only")).toBe("");
+});
+
+it("Git rejects malformed space partitions and unsafe or unsupported content paths before initialization", async () => {
+  const f = await fixture(),
+    history = new GitHistory(f.root),
+    prefix = `spaces/${"a".repeat(64)}/`;
+  for (const file of [
+    "spaces/person/note.md",
+    `spaces/${"a".repeat(63)}/note.md`,
+    `spaces/${"a".repeat(65)}/note.md`,
+    `spaces/${"A".repeat(64)}/note.md`,
+    "unsupported/note.md",
+    "vault.json",
+    ...[
+      "../note.md",
+      "./note.md",
+      ".git/config",
+      ".knowledge-history/recovery",
+      "bad\\note.md",
+      "bad\u0000note.md",
+      "bad\nnote.md",
+      "/note.md",
+    ].map((suffix) => prefix + suffix),
+  ]) {
+    expect(
+      () =>
+        history.checkpoint({
+          token: "b".repeat(64),
+          changes: [{ path: file, raw: "Synthetic content\n" }],
+          actor: "agent",
+          at: "2026-01-01T00:00:00Z",
+        }),
+      file,
+    ).toThrow("Unsafe Git content path.");
+  }
+  expect(existsSync(path.join(f.root, ".git"))).toBe(false);
 });
 
 it("missing Git is nonfatal and later availability catches up every version in order", async () => {

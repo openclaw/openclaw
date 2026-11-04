@@ -22,10 +22,16 @@ import {
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Check } from "typebox/value";
 import { registerIdentity, SqliteIdentityStore } from "./identity-store.js";
+import { personGrantKey, type PersonGrant, type PersonGrants } from "./person-grants-contract.js";
 import { registrySchema, type RegistryTables } from "./registry-schema.js";
 import { ensureKnowledgeSchema, UnrecognizedSchema } from "./storage-schema.js";
 import { Manifest, checkpointKey } from "./store-manifest.js";
-import { canonicalJson, grantsRevision, type ConversationGrants } from "./stores-config.js";
+import {
+  canonicalJson,
+  grantsRevision,
+  storesRevision,
+  type ConversationGrants,
+} from "./stores-config.js";
 import type { GrantAccess, StoreState } from "./stores-contract.js";
 
 const BUSY_TIMEOUT_MS = 5000;
@@ -61,6 +67,7 @@ export type RegistrySnapshot = {
   pending: OperationRow | null;
   /** Owner conversation grants, keyed by conversation session key. */
   grants: ConversationGrants;
+  personGrants: PersonGrants;
 };
 export class RegistryRecoveryRequired extends Error {}
 
@@ -79,7 +86,10 @@ export class StoreRegistry {
    * the operational database's link guard would otherwise reject. */
   readonly stateRoot: string;
   /** `converting` is only for the conversion tool, which owns an unfinished journal. */
-  constructor(requestedRoot: string, options: { converting?: boolean } = {}) {
+  constructor(
+    requestedRoot: string,
+    private readonly options: { converting?: boolean; assertGrantCurrent?: () => void } = {},
+  ) {
     mkdirSync(requestedRoot, { recursive: true, mode: 0o700 });
     const stateRoot = realpathSync(requestedRoot);
     this.stateRoot = stateRoot;
@@ -239,12 +249,47 @@ export class StoreRegistry {
             .get(),
         ) ?? null,
       grants: this.grants(),
+      personGrants: this.personGrants(),
     };
   }
   // Only grant() writes this value, so it is trusted as written.
   private grants(): ConversationGrants {
     const raw = this.meta("conversation_grants");
     return raw ? JSON.parse(raw) : {};
+  }
+
+  private personGrants(): PersonGrants {
+    const raw = this.meta("person_grants");
+    return raw ? JSON.parse(raw) : {};
+  }
+
+  personGrant(
+    profileId: string,
+    agent: string,
+    value: PersonGrant | null,
+    expectedRevision: string,
+  ) {
+    this.tx(() => {
+      const grants = this.personGrants();
+      if (storesRevision(grants) !== expectedRevision) {
+        return;
+      }
+      // BEGIN IMMEDIATE may have waited on SQLite before reaching this point.
+      // Revalidate the original host source inside the transaction, immediately
+      // before the permission write, with no further awaits or lock acquisition.
+      if (!this.options.assertGrantCurrent) {
+        throw new Error("Person grant publication requires live operator authority.");
+      }
+      this.options.assertGrantCurrent();
+      const key = personGrantKey(profileId, agent);
+      if (value) {
+        grants[key] = value;
+      } else {
+        delete grants[key];
+      }
+      this.setMeta("person_grants", Object.keys(grants).length ? canonicalJson(grants) : null);
+    });
+    return this.snapshot();
   }
 
   /** Set or remove ("none") one conversation's grant, only if the grants are

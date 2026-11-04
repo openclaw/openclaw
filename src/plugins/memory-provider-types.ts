@@ -2,9 +2,14 @@ import type { ConversationRecallContext } from "../agents/conversation-recall.ty
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Host-resolved memory partition for one trusted session invocation. */
-export type MemoryAudience =
-  | { kind: "owner-private"; agentId: string }
-  | { kind: "conversation"; agentId: string; sessionKey: string; sessionId: string };
+export type MemoryAudience = Readonly<{
+  /** Canonical requester for a verified direct-chat invocation, never a session-owner hint. */
+  requesterProfileId?: string;
+}> &
+  (
+    | { kind: "owner-private"; agentId: string }
+    | { kind: "conversation"; agentId: string; sessionKey: string; sessionId: string }
+  );
 
 /** Authenticated caller authority supplied by the trusted host, never inferred from IDs. */
 export type MemoryCallerAuthority =

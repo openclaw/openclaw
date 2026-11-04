@@ -13,7 +13,11 @@ export const canonical = (x: unknown): string =>
       : v,
   );
 export const scopeKey = (scope: Scope) =>
-  scope.visibility === "conversation" ? `conversations/${scope.sessionId}` : "private";
+  scope.visibility === "space"
+    ? `spaces/${scope.spaceId}`
+    : scope.visibility === "conversation"
+      ? `conversations/${scope.sessionId}`
+      : "private";
 export const blocked = () =>
   new Error(
     "Knowledge publication pending or conflicted; inspect mutation history and retry the original request. No partial catalog returned.",

@@ -113,6 +113,120 @@ Grants are keyed by conversation session key:
 Removing access stops future reads and saves. It cannot remove what the
 conversation already retrieved.
 
+## Verified-person spaces
+
+A verified direct-chat requester can use a store-local space instead of the
+legacy agent-private partition. This is an additional restriction on existing
+agent-store membership, not another store or memory provider. Knowledge remains
+the durable record, revision, publication, evidence, and history owner.
+
+The host supplies an optional canonical **requesterProfileId** on its memory
+audience, with the original profile's live authority and a separately attested
+requester origin. Unattributed system turns that execute as a session owner do
+not acquire that owner's person identity. It is not inferred from a
+session owner, display name, prompt, or tool argument. Direct-chat descendants
+and delegated memory flushes retain that authority. Authenticated OpenAI-compatible
+HTTP requests selecting the same existing direct session retain the same person
+binding; an adapter client is not permission to fall back to legacy partitions.
+Group and channel roots do
+not receive a sender's person identity; a person grant cannot disclose personal
+knowledge into a shared conversation.
+
+For a person-bound audience, **no grant means denied**, not fallback to the
+agent-private or conversation partition. An administrator uses the operator-only
+**person_grants** query and **person_grant** action to select one space for the
+tuple (profileId, agent). Both operations require current **operator.admin**
+authority; the agent must also be within the administrator's role. Agent tools
+cannot list or modify these grants.
+
+If Knowledge reports a missing person/agent grant, ask a Gateway administrator
+to grant that person access to the agent’s Knowledge space using these
+operator-only actions. Agent tools cannot repair the missing grant themselves.
+
+The action takes **expectedRevision** from the query, the canonical **profileId**,
+**agent**, a lowercase **space** key, and **access** (read, read-write, or none to
+revoke). A grant records the agent's current effective store binding and applies only
+while the agent uses that binding. Moving to another binding does not transfer
+the grant. Grants live in the existing registry database, survive restart,
+and do not add configuration options or copy existing records.
+
+For example, with main and research already assigned to one named store:
+
+1. Grant person P and main the space personal to save private notes.
+2. Select space orchid for P and main; select orchid for P and research.
+   Main can publish a project record and research can retrieve the same
+   revision and evidence. A read grant refuses saves.
+3. Research cannot retrieve P's personal records, identifiers, titles, counts,
+   evidence, standing index, or automatic-recall candidates through the
+   enabled Knowledge operations in the restricted profile below. Another person with the same space key gets a different partition.
+4. Revoke P and research with access none. Existing provider leases, old
+   references, and warmed indexes cannot restore the grant, including after a
+   restart. Data is retained, not erased.
+
+One grant selects exactly **one** space per person and agent. There is no union
+search across spaces or stores, and no model-controlled scope selector. Changing
+the selected space affects tools, provider search/get/health/candidates, and the
+standing index together. In-flight work rechecks the selected grant before
+publication or disclosure. The index cache includes the selected partition.
+
+### Deployment boundary
+
+This is a Knowledge access boundary, not operating-system tenant isolation.
+
+The qualified specialist profile uses an explicit allowlist, not all Knowledge
+tools. In particular, Knowledge's History, Recent, and revision cursors contain
+store-wide sequence identifiers and are excluded rather than represented as
+person-private activity counts. Workspace-file imports are excluded for every
+audience, including legacy/group audiences. The existing execution-policy owner
+must deny actual calls; this is not a prompt-only restriction.
+
+Use an explicitly restricted specialist tool profile: no raw filesystem or
+execution tools, arbitrary admin/config APIs, or cross-session history/search
+routes. Test execution denials in the actual selected harness; absence from a
+prompt is not proof. Person-scoped knowledge_attach_file also refuses host
+workspace imports because a workspace boundary does not establish person-space
+access. Byte uploads and evidence reads through Knowledge remain scoped.
+
+For the bounded embedded-runtime scenario, the existing configuration is:
+
+```json5
+{
+  agents: { defaults: { skipBootstrap: true } },
+  tools: {
+    allow: [
+      "knowledge_save_page",
+      "knowledge_records",
+      "knowledge_record",
+      "knowledge_grep",
+      "knowledge_lookup",
+      "knowledge_attach",
+      "knowledge_attachment",
+      "knowledge_evidence_read",
+    ],
+    codeMode: false,
+    toolSearch: false,
+  },
+}
+```
+
+This disables automatic workspace bootstrap for the qualified scenario; it does
+not change USER.md selection or its file owner. Broader bootstrap, tools,
+providers, or native harnesses require separate qualification. Operator setup
+uses authenticated session actions, outside the specialist's tool surface.
+
+LosslessClaw still owns conversational history and compaction. This feature does
+not authorize private database reads or retract content already disclosed in
+messages, previous tool results, or model context. It does not isolate
+administrators or plugins that can read Gateway files. Only deployments whose
+other enabled retrieval/file/history paths are denied or separately qualified
+can claim the complete person-isolation scenario.
+
+**Upgrade behavior:** verified direct requesters require explicit person grants.
+Existing agent-private and conversation records are neither migrated nor
+reclassified automatically. Audiences without a verified requester retain their
+legacy behavior and cannot read person spaces. Coordinate this permission
+change and any desired import with the administrator before deployment.
+
 ## Storage layout
 
 Knowledge keeps all state under the Gateway state directory (`~/.openclaw` by
@@ -132,6 +246,8 @@ default, or `$OPENCLAW_STATE_DIR`):
         people/, projects/, … # page records
         claims/, relationships/
         artifacts/            # retained evidence for this partition
+      spaces/<spaceId>/          # one store-local person/space partition
+        …                     # same record and evidence layout
       conversations/<sessionId>/
         …                     # same layout, scoped to one conversation
 ```
@@ -248,3 +364,31 @@ Original source files are hash-verified with streaming reads; see
 [Evidence files](/plugins/knowledge/evidence). An incomplete scan fails instead
 of returning a partial or empty result. File access rejects symlinks and
 hardlinks.
+
+## Installed context-engine continuity qualification
+
+The opt-in E2E qualification installs pinned `@martian-engineering/lossless-claw@1.2.0`
+in disposable Gateway state. It is not run, and does not download external plugins,
+in ordinary PR tests. From a source checkout with the normal test dependencies:
+
+```bash
+OPENCLAW_KNOWLEDGE_LOSSLESS_CONTINUITY_PROOF=1 OPENCLAW_E2E_VERBOSE=1 \
+  pnpm test test/knowledge-lossless-continuity.e2e.test.ts --maxWorkers=1
+```
+
+It uses deterministic model I/O and the shared Gateway-owner profile, not live
+inference or different-person identity proof. It saves Knowledge with committed
+Git history, invokes real public LCM compaction, restarts the Gateway, recovers
+the original historical canary with `lcm_grep`, and reads the same record revision
+and verified evidence through the other authorized agent. It also crashes after
+publication but before the final agent reply and verifies that retrying the same
+mutation preserves the record and Git commit without another record. This is not
+a mid-transaction crash qualification.
+
+The provider-outage control records the current 30-second client timeout after
+synthetic HTTP 503 responses and verifies that no tool call was issued. It does
+not qualify fail-fast or terminal provider recovery. The runtime exceeds the
+ordinary test budget because it crosses an installed third-party context engine
+and multiple real Gateway processes; the outage control alone waits for that
+public client deadline. Person-space isolation has a separate maintained proof
+in `test/knowledge-person-project.e2e.test.ts`.

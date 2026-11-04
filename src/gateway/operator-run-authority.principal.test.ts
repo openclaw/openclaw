@@ -82,6 +82,7 @@ function principalContext(cfg: OpenClawConfig) {
 
 async function admitPrincipal(params: Parameters<typeof prepareSessionPrincipalRunAuthority>[0]) {
   const admitted = await prepareSessionPrincipalRunAuthority(params);
+  expect(admitted.authority.requesterBound).toBe(params.sessionPrincipal ? undefined : true);
   return { ...admitted, [Symbol.dispose]: admitted.release };
 }
 
@@ -425,3 +426,88 @@ it.for([
     });
   },
 );
+
+it("does not promote a session-owner system turn into a verified person memory audience", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { randomUUID } = await import("node:crypto");
+    const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
+    const { readSessionEntryReadOnlyInWorker } =
+      await import("../config/sessions/session-entry-read-runtime.js");
+    const { resolveSessionStorePathForScope } =
+      await import("../config/sessions/session-store-path.js");
+    const { prepareSessionSystemTurnAuthority } =
+      await import("./session-system-turn-authority.js");
+    const admission = await import("../agents/admitted-run-context.js");
+    const { withPostAdmissionExecutionOwnerBinding } =
+      await import("../audit/execution-owner-binding.js");
+    const { resolveEmbeddedAttemptMemoryAudience } =
+      await import("../agents/embedded-agent-runner/run/attempt-memory-audience.js");
+    const memoryState = await import("../plugins/memory-state.js");
+    // Select a native provider without activating a plugin; authority, profile,
+    // session writes, worker reads and memory-audience resolution remain real.
+    const native = vi
+      .spyOn(memoryState, "resolveLoadedMemoryProviderKind")
+      .mockReturnValue("native");
+    const cfg: OpenClawConfig = { ...config, agents: { entries: { main: {} } } };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const profile = ensureProfileForEmail("system-person-memory@example.test");
+    const target = { agentId: "main", sessionKey: "agent:main:system-person-memory" };
+    const systemSessionId = randomUUID();
+    await replaceSessionEntry(target, {
+      sessionId: systemSessionId,
+      updatedAt: 1,
+      chatType: "direct",
+      createdActor: { type: "human", source: "profile", id: profile.id },
+    });
+    const storePath = resolveSessionStorePathForScope(target, cfg);
+    const system = await prepareSessionSystemTurnAuthority({
+      ...target,
+      sessionId: systemSessionId,
+      storePath,
+      context: principalContext(cfg),
+      assertCurrent() {},
+    });
+    expect(system?.authority.profileId).toBe(profile.id);
+    if (!system) {
+      throw new Error("Expected current owner-derived system authority");
+    }
+    const runId = randomUUID();
+    const prepared = withPostAdmissionExecutionOwnerBinding(
+      admission.prepareAgentRunAdmission({
+        cfg,
+        facts: {
+          runId,
+          agentId: "main",
+          ingress: { kind: "system", boundary: "test", state: "present" },
+        },
+        operationalRunInstance: admission.createOperationalRunInstanceRef(runId),
+        operatorAuthority: system.authority,
+      }),
+      () => {},
+    );
+    let releaseAudience: (() => void) | undefined;
+    try {
+      const admittedRunContext = await prepared.admit("embedded");
+      const row = await readSessionEntryReadOnlyInWorker({ ...target, storePath }, () =>
+        system.authority.assertCurrent(),
+      );
+      if (!row) {
+        throw new Error("Expected canonical direct session row");
+      }
+      const resolved = await resolveEmbeddedAttemptMemoryAudience({
+        ...target,
+        sessionId: systemSessionId,
+        admission: { entry: row, storePath },
+        run: { config: cfg, senderIsOwner: true, admittedRunContext },
+      });
+      releaseAudience = resolved.release;
+      expect(resolved.memoryAudience?.kind).toBe("owner-private");
+      expect(resolved.memoryAudience?.requesterProfileId).toBeUndefined();
+    } finally {
+      releaseAudience?.();
+      prepared.close();
+      system.release();
+      native.mockRestore();
+    }
+  }));

@@ -316,7 +316,7 @@ export class GitHistory {
   checkpoint(batch: GitBatch, hook: (stage: string) => void = () => {}): string {
     for (const c of batch.changes) {
       if (
-        !/^(private|conversations\/[^/]+)\//.test(c.path) ||
+        !/^(private|conversations\/[^/]+|spaces\/[a-f0-9]{64})\//.test(c.path) ||
         c.path
           .split("/")
           .some(

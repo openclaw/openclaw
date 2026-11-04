@@ -3,6 +3,7 @@ import path from "node:path";
 import { Check } from "typebox/value";
 import type { VaultAccess } from "./access.js";
 import { readText } from "./files.js";
+import { scopeKey } from "./storage-types.js";
 import { Manifest, checkpointKey } from "./store-manifest.js";
 import { SampleVault, type ScanCache } from "./vault.js";
 
@@ -92,8 +93,7 @@ export class RealVault {
     if (JSON.stringify(checkpoint) !== JSON.stringify(before.manifest)) {
       throw unavailable();
     }
-    const relative =
-      access.scope.visibility === "private" ? "private" : `conversations/${access.scope.sessionId}`;
+    const relative = scopeKey(access.scope);
     const scopedPath = path.join(before.rootPath, relative);
     let missing = false,
       scopeStamp = "";
@@ -115,7 +115,7 @@ export class RealVault {
       if (
         // SAFETY: lstat, realpath and unavailable() throw Error objects; code is optional on ErrnoException.
         (e as NodeJS.ErrnoException).code === "ENOENT" &&
-        access.scope.visibility === "conversation"
+        access.scope.visibility !== "private"
       ) {
         missing = true;
       } else {
