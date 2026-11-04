@@ -72,9 +72,7 @@ it("scores project-qualified inventory without consuming terminal outcomes or ch
   const changed = captureAdaptiveModelRanking(input);
   expect(changed.rows.map((row) => row.score)).toEqual([0, 0]);
   expect(changed.inputSha256).not.toBe(first.inputSha256);
-  expect(
-    input.current.invocations[0]!.files.map(({ file, project, pool }) => ({ file, project, pool })),
-  ).toEqual(files);
+  expect(input.current.invocations[0]!.files).toMatchObject(files);
 });
 
 it("keeps unknown dependency features unknown and rejects malformed model data", () => {
@@ -100,7 +98,7 @@ it("keeps unknown dependency features unknown and rejects malformed model data",
     model({ score: 2 }),
     model({ score: null }),
     model({ feature: 5, threshold: 0, left: { score: 0 }, right: { score: 1 } }),
-    model({ score: 1 }, [...featureNames].reverse()),
+    model({ score: 1 }, featureNames.toReversed()),
   ]) {
     const invalid = captureAdaptiveModelRanking({ ...input, modelBytes: bytes });
     expect(invalid.rows.map((row) => [row.score, row.unknownReasons])).toEqual([

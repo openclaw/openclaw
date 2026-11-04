@@ -66,7 +66,10 @@ function modelTree(value: unknown): { tree: Tree; used: Set<number> } {
       );
       return { score: node.score };
     }
-    assert(Object.keys(node).sort().join(",") === "feature,left,right,threshold", "Invalid split");
+    assert(
+      Object.keys(node).toSorted().join(",") === "feature,left,right,threshold",
+      "Invalid split",
+    );
     assert(
       typeof node.feature === "number" &&
         Number.isInteger(node.feature) &&
