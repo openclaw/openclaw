@@ -4,6 +4,16 @@ import { en } from "./en.ts";
 // Plugin management and its lazy sibling surfaces register this shared copy on use.
 const enPluginManagement = {
   pluginUi: {
+    actionSessionUnavailable: "This session is no longer available. Reopen the session menu.",
+    actionInactiveSession: "This plugin action is no longer active. Reopen the session menu.",
+    actionInactiveView: "This plugin action is no longer active. Try again from the current view.",
+    actionUnavailableSession:
+      "This plugin action is currently unavailable. Reopen the session menu.",
+    actionUnavailableView:
+      "This plugin action is currently unavailable. Try again from the current view.",
+    activationTimedOut: "Plugin UI initialization timed out. Check the plugin and reload its UI.",
+    settingsTimedOut: "Settings presentation timed out.",
+    settingsLoadFailed: "Settings presentation could not load.",
     sessionRecentMessages: "Recent messages",
     sessionHistoryUnavailable: "Session history could not be loaded. Try again.",
     sessionHistoryEmpty: "No recent messages.",
@@ -136,6 +146,8 @@ const enPluginManagement = {
     },
   },
   pluginsPage: {
+    auditClean: "Clean",
+    auditReview: "Review",
     recommendedPrompts: {
       label: "Recommended prompts",
     },
@@ -255,24 +267,35 @@ const enPluginManagement = {
         "The credential could not be saved. Your draft is still available; try saving again.",
     },
     detailCapabilities: "Capabilities",
+    detailExtensions: "Extensions",
     uiCapabilities: {
-      page: { name: "Pages", description: "Adds pages to OpenClaw." },
-      navigation: { name: "Navigation", description: "Adds links to OpenClaw navigation." },
-      panel: { name: "Panels", description: "Adds interface panels." },
-      action: { name: "Actions", description: "Adds buttons or menu actions." },
+      page: { name: "Pages", description: "Adds dedicated plugin pages." },
+      navigation: { name: "Navigation", description: "Adds destinations to the app sidebar." },
+      panel: { name: "Panels", description: "Adds panels you can open beside a conversation." },
+      action: {
+        name: "Actions",
+        description: "Adds buttons or menu items in the composer, session header, or session menu.",
+      },
       accessory: {
         name: "Session accessories",
-        description: "Adds information or controls alongside sessions.",
+        description: "Shows information or controls in the session header.",
       },
-      widget: { name: "Dashboard widgets", description: "Adds widgets to the dashboard." },
-      inline: { name: "Inline views", description: "Shows native plugin views in conversations." },
+      widget: {
+        name: "Dashboard widgets",
+        description: "Adds widgets you can place on session dashboards.",
+      },
+      inline: {
+        name: "Inline views",
+        description: "Shows interactive plugin content within chat messages.",
+      },
       replacement: {
         name: "Interface replacements",
-        description: "Replaces supported parts of the interface.",
+        description:
+          "Offers alternate app views. Choose them in Plugins → Advanced → Customize UI.",
       },
       "link-reader": {
         name: "Link previews",
-        description: "Shows previews and details for supported links.",
+        description: "Opens supported links in a plugin-provided reader.",
       },
     },
     capabilityFamilies: {
@@ -332,7 +355,7 @@ const enPluginManagement = {
     searchInstalled: "Search installed plugins",
     noSettingsMatches: "No installed plugins match this search.",
     noInstalled: "No plugins are installed.",
-    connectToManage: "Connect to the gateway to inspect plugins.",
+    connectToManage: "Reconnect to inspect plugins.",
     auth: {
       accounts: "Accounts",
       credentials: "Credentials",
@@ -360,8 +383,9 @@ const enPluginManagement = {
     configurationDescription: "Settings declared by this plugin.",
     accessCapabilities: "Access & capabilities",
     accessCapabilitiesDescription: "What this plugin can access with the current policy.",
-    promptContextAccess: "Add context to prompts",
-    promptContextAccessDescription: "Allows hooks to add plugin context before a model runs.",
+    promptContextAccess: "Modify prompts",
+    promptContextAccessDescription:
+      "Allows this plugin to add or change the context and instructions sent to the model, which can influence its responses. Only allow this for plugins you trust.",
     conversationAccess: "Read conversation context",
     conversationAccessDescription: "Allows hooks to inspect conversation content.",
     modelOverrideAccess: "Override model selection",
@@ -393,7 +417,7 @@ const enPluginManagement = {
     loadingDiscovery: "Loading ClawHub plugins…",
     loadMore: "Load more",
     loadingMore: "Loading more…",
-    discoveryOffline: "Connect to browse plugins from ClawHub.",
+    discoveryOffline: "Reconnect to browse plugins from ClawHub.",
     noDiscoveryResults: "No plugins found",
     noDiscoveryResultsHint: "Try a different search or choose another filter.",
     searchClawHub: "Search ClawHub plugins",
@@ -517,12 +541,13 @@ const enPluginManagement = {
     detailOrigin: "Source",
     detailPackage: "Package",
     detailPluginId: "Plugin ID",
-    offlineBody: "Connect to browse installed and recommended plugins.",
+    offlineBody: "Reconnect to browse installed and recommended plugins.",
     optionalCapability: "Optional OpenClaw capability.",
     enabled: "Enabled",
     disabled: "Disabled",
     available: "Available",
     needsAttention: "Needs attention",
+    needsSetup: "Needs setup",
     included: "Included",
     global: "Global",
     workspace: "Workspace",
@@ -539,7 +564,7 @@ const enPluginManagement = {
     viewInstallStatusNamed: "View status of {name} installation",
     installing: "Installing",
     installNamed: "Install {name}",
-    connectToChange: "Connect to the gateway to change plugins.",
+    connectToChange: "Reconnect to change plugins.",
     adminRequired: "Plugin changes require operator.admin access.",
     changesDisabled: "This gateway does not allow plugin changes.",
     configRefreshFailed: "Could not refresh Control UI configuration: {error}",

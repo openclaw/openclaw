@@ -220,7 +220,11 @@ suite.define(() => {
       expect(await page.getByRole("button", { name: "Save skill", exact: true }).count()).toBe(0);
       expect(await page.getByLabel("Retained revision", { exact: true }).count()).toBe(0);
       const panel = page.locator(".skill-library-dialog");
-      expect(await panel.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+      expect(
+        await panel.evaluate(
+          (node) => node.clientWidth > 0 && node.scrollWidth <= node.clientWidth + 1,
+        ),
+      ).toBe(true);
       expect(await getRequests("skills.library.activate")).toHaveLength(0);
       await page.getByRole("button", { name: "Close", exact: true }).click();
 

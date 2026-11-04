@@ -52,7 +52,7 @@ it("names connected and unconnected provider actions with their displayed provid
     "Replace API key: OpenAI",
   );
   expect(actions(container, "anthropic")).toEqual([
-    { name: "Connect provider: Anthropic", text: "Connect", disabled: false },
+    { name: "Add account: Anthropic", text: "Add account", disabled: false },
     { name: "Set API key: Anthropic", text: "Set API key", disabled: false },
   ]);
 });

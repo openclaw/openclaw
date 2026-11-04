@@ -23,9 +23,15 @@ Configuration field text and `tag:` comparisons ignore case and match canonicall
 People search in **Session access**, the **New Session → Where** picker, and provider
 search also match equivalent composed and decomposed Unicode text without changing
 the original labels or identifiers. Filtering does not change sharing permissions.
-The **Connect provider** search and command palette session-settings workspace
+The **Add account** search and command palette session-settings workspace
 search use the same comparison-only matching. Filtering does not start sign-in or
-change the selected provider, machine, or project.
+change the selected provider, device, or project.
+
+In **Models**, choose **Add account** to save a provider sign-in or API key for an agent.
+**Accounts** lists saved access; keys supplied by config or the environment stay
+managed at their source. **Sign out** removes a saved sign-in. Removing a provider
+also removes its saved accounts and may stop active replies; the confirmation
+explains whether shared accounts and other agents are affected.
 
 Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact. Where custom entry is supported, choose **Custom model…** to enter a provider/model reference.
 
@@ -47,9 +53,11 @@ An unsettled Save or Apply stays bound to its original Gateway. Switching Gatewa
 
 In Memory's **Settings** tab, unfinished number text such as `1e` restores the last accepted value when you leave the field, without removing its override. Deliberately clearing the field still removes the override, and valid edits save normally.
 
-In **Models**, **Connect provider** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide every model of the provider, saving its API key or sign-in adds `<provider>/*` to them so its models appear in the model picker; restrictions that already name some of its models stay unchanged. Choose **Models → Connect provider → On this Gateway** to find existing connections or open [setup and explicit model activation](/start/onboarding). Saving credentials does not activate a model; testing and using a model remains a separate choice for the selected agent. If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved credentials.
+In **Models**, **Add account** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide every model of the provider, saving its API key or sign-in adds `<provider>/*` to them so its models appear in the model picker; restrictions that already name some of its models stay unchanged. Choose **Models → Add account → On this Gateway** to find existing connections or open [setup and explicit model activation](/start/onboarding). Saving credentials does not activate a model; testing and using a model remains a separate choice for the selected agent. If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved accounts.
 
 Model pickers show the authentication methods available to the selected agent. In **Models** settings, this muted information appears on the right of each open option row; the closed control shows only the model name and icon. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
+
+Inbox account alerts distinguish **Sign in** from **Update API key**. Accounts without a known recovery method show **Review account**. These actions open **Models** so you can repair the saved account.
 
 Open panels share provider sign-in status. Configuration edits keep that status until the Gateway publishes updated authentication information; credential changes, reconnects, and expiry deadlines still refresh it.
 
@@ -129,9 +137,12 @@ In **Agent settings → Files**, an unread file stays unavailable for editing an
 
 Elsewhere, agents without a custom image or emoji use a generated face that fills the circular avatar. Its color, eyes, mouth, and solid or pastel background come from the agent ID, so the same agent keeps the same face across reloads and clients. Renaming the agent's display name does not change its face. Generated faces are decorative and do not indicate activity or model choice.
 
-## Gateway host status
+<a id="gateway-host-status" />
 
-The connection settings use one **Gateway secret** field for the configured
+## Gateway connection
+
+The **Connection** page shows the Gateway connection and this tab’s saved sign-in.
+It uses one **Gateway secret** field for the configured
 token or password. The Gateway accepts either wire field; its auth mode selects
 the configured secret. After a successful token-mode connection, the UI remembers
 the secret in session storage for the current browser tab and Gateway only.
@@ -152,7 +163,7 @@ Gateway in this browser without reconnecting. Session edits and connection edits
 have independent Save/Apply and Discard actions. Switching Gateways restores
 that Gateway's saved session selection.
 
-Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a ten-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery and state-directory disk space reuse thirty-second snapshots. Machine name, CPU count, and CPU model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
+Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a ten-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery and state-directory disk space reuse thirty-second snapshots. Machine name, CPU count, and CPU model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Disk paths, including the state directory, are returned only to `operator.admin` connections; read-only connections receive the state volume's total and free space without a path, so the card shows no per-disk meters. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
 
 The **Connection** card also shows average ping and p50, p95, and p99 round-trip
 times in milliseconds. It samples every ten seconds while the page is visible
@@ -562,7 +573,10 @@ The bottom-left account footer, including the Settings sidebar, shows **Suspendi
 Sidebar visibility belongs to the current tab and is not remembered across tabs, windows, or reloads; the sidebar's width is still remembered. On desktop, new tabs, direct links, bookmarks, and reloads start with the sidebar expanded. Middle-click or Cmd/Ctrl-click a session to open it in a new tab without changing the original tab. Press ⌘B on Mac or Ctrl+B on Windows/Linux to collapse or expand the sidebar in the current tab.
 
 Pending approvals also contribute to the rail’s **Inbox** attention badge.
-Open Inbox to inspect them and navigate to the Approvals page.
+Open Inbox to inspect them and navigate to the Approvals page. Command approvals
+show **Runs on** with **This computer** for the Gateway’s computer or the paired
+device’s name. Approval history keeps the recorded decision and resolution reason,
+including decisions made elsewhere.
 
 When an approval appears inline in a different session, **Approval requested by session**
 uses the requesting session's loaded title, not the open conversation's title. If that

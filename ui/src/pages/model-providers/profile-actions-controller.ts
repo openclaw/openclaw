@@ -345,7 +345,7 @@ export function createModelProviderProfileActions(options: {
       const confirmed = await showConfirmDialog({
         title: removing
           ? t("modelProviders.remove.title", { provider: pending.label })
-          : t("modelProviders.logout.actionFor", { account: pending.label }),
+          : t("modelProviders.logout.title", { account: pending.label }),
         message: removing
           ? [
               pending.removeTargets.some((target) => !target.credentialType)

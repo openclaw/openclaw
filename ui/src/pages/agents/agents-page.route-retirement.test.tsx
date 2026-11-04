@@ -184,7 +184,7 @@ it("leaves Agents through RouterOutlet while its admitted default write settles 
     await router.navigate("agents", context);
     const defaultItem = () =>
       [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) =>
-        /^(Set Default|Saving)/.test(item.textContent?.trim() ?? ""),
+        /^(Set default|Saving)/.test(item.textContent?.trim() ?? ""),
       );
     const trigger = await waitForSolid(() => {
       const element = mounted.container.querySelector<HTMLButtonElement>(
@@ -195,7 +195,7 @@ it("leaves Agents through RouterOutlet while its admitted default write settles 
     });
     trigger.click();
     const control = await waitForSolid(() => {
-      expect(defaultItem()?.textContent).toContain("Set Default");
+      expect(defaultItem()?.textContent).toContain("Set default");
       return defaultItem()!;
     });
     control.click();

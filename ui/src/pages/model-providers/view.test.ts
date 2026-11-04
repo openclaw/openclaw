@@ -591,7 +591,7 @@ describe("renderModelProviders", () => {
       }),
     );
     const provider = container.querySelector('[data-provider-id="openai"]');
-    expect(text(container)).toContain("Connections for Writer");
+    expect(text(container)).toContain("Accounts for Writer");
     expect(text(provider)).toContain("From environment (OPENAI_API_KEY)");
     expect(text(provider?.querySelector(".model-providers__probe-summary") ?? null)).toBe(
       "Access verified",
@@ -626,13 +626,13 @@ describe("renderModelProviders", () => {
     );
 
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
-    expect(text(readiness)).toContain("Choose and test a model");
+    expect(text(readiness)).toContain("Set up a model");
     expect(text(readiness)).toContain("Model required");
     expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
     // Setup has one way to connect; the access section offers its own again once it ends.
     expect(container.querySelectorAll("[data-models-connect]")).toHaveLength(1);
 
-    button(readiness!, "Connect provider")?.click();
+    button(readiness!, "Add account")?.click();
     expect(onConnectProvider).toHaveBeenCalledOnce();
 
     mount(props(), container);
@@ -703,7 +703,7 @@ describe("renderModelProviders", () => {
     const provider = expand(container).querySelector('[data-provider-id="openai"]');
     expect(text(provider)).not.toContain("API key set in config");
     // Models are available, so the provider works with credentials OpenClaw does not hold.
-    expect(text(provider)).toContain("Credentials managed outside OpenClaw");
+    expect(text(provider)).toContain("Account access managed outside OpenClaw");
   });
 
   it("renders mixed credential probes as connected with warnings", () => {

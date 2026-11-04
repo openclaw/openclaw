@@ -369,7 +369,7 @@ export function renderModelProvidersPageShell(props: {
         title={t("routeTitles.modelProviders")}
         subtitle={
           <>
-            {t("modelProviders.subtitle")}{" "}
+            {t("subtitles.modelProviders")}{" "}
             <LearnMoreLink url={"https://docs.openclaw.ai/concepts/model-providers"} />
           </>
         }

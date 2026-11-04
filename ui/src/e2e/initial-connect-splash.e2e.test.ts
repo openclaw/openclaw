@@ -364,7 +364,7 @@ suite.define(() => {
     await waitForControlUiProofSurface(page.locator(".shell"), [loadingSections]);
     const sectionTitles = [
       "Use an installed agent",
-      "Found on this Gateway",
+      "Available models",
       "Run a model locally",
       "Set up and verify a model",
       "Connect with an API key or token",

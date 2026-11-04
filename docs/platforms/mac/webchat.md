@@ -206,7 +206,7 @@ conflicts. Hover a row or give it keyboard focus to reveal **Pin**/**Unpin** and
 With a supporting Gateway UI, rows also show the web sidebar's unsent-draft
 pencil and the count of outbox messages needing attention, including other
 conversations in that web window. **More actions…** opens the selected thread's
-web actions menu, including plugin actions and **Stop cloud worker…** when
+web actions menu, including plugin actions and **Stop cloud device…** when
 available. Confirmation, progress, and errors stay in the web conversation.
 Older Gateway UIs keep their existing conversation behavior without these extras.
 

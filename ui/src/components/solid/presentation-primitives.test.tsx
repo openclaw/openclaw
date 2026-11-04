@@ -78,6 +78,27 @@ describe("Solid presentation primitives", () => {
     expect(original).not.toHaveBeenCalled();
   });
 
+  it("keeps panel diagnostics collapsed and redacted", () => {
+    const [diagnostic, setDiagnostic] = createSignal("OPENAI_API_KEY=sk-1234567890abcdef");
+    const view = render(() => (
+      <PanelErrorState
+        title="Couldn’t load this panel."
+        subtitle="Try again."
+        detail={diagnostic()}
+      />
+    ));
+    const details = view.container.querySelector("details")!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent).toBe("Show details");
+    expect(details.textContent).not.toContain("sk-1234567890abcdef");
+    fireEvent.click(details.querySelector("summary")!);
+    expect(details.open).toBe(true);
+    expect(view.getByRole("alert")).not.toBeNull();
+    setDiagnostic("Another diagnostic");
+    flush();
+    expect(view.container.querySelector("details")?.open).toBe(false);
+  });
+
   it("supports non-alert panel errors with no details or actions", () => {
     const view = render(() => (
       <PanelErrorState

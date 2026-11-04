@@ -63,7 +63,7 @@ it.each([
     });
     await waitForSolid(() =>
       expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-        "Example API key is connected",
+        "Example API key is ready",
       ),
     );
     if (recommended || verified) {
@@ -101,7 +101,7 @@ it.each([
         await waitForSolid(() => expect(button.disabled).toBe(false));
         expect(startChat()).toBe(button);
         expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-          "Couldn’t complete the request",
+          "Couldn’t complete the request. Try again.",
         );
       }
     } else {
