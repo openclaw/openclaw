@@ -265,7 +265,8 @@ are unchanged.
 ## Session sources
 
 Open the sidebar's **Filter & sort** menu and choose **Session sources…** to
-control automatic discovery of **Claude Code**, **Codex**, **OpenCode**, and **Pi** conversations.
+control automatic discovery of **Claude Code**, **Codex**, **OpenCode**, and **Pi** sessions
+on this Gateway and paired devices.
 The same controls live in **Settings → Appearance → Session sources**; searching
 Settings for the coding app's name and **sessions** opens them directly.
 

@@ -1609,7 +1609,7 @@ const startupEnglish = {
       startingFromSnapshot: "Starting from snapshot…",
       preparingCloudEnvironment: "Preparing cloud environment…",
       savingSnapshot: "Saving snapshot…",
-      preparingContext: "Preparing this turn…",
+      preparingContext: "Preparing reply…",
       waitingForTurn: "Waiting for turn to start",
       memoryFlushing: "Saving conversation memory…",
       startingModel: "Waiting for a response",
@@ -1674,12 +1674,12 @@ const startupEnglish = {
       merged: "Merged",
       closed: "Closed",
     },
-    usageRemaining: "Usage Remaining",
+    usageRemaining: "Usage remaining",
     view: {},
 
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
 
-    followUpModeSteer: "Steer into the active run",
+    followUpModeSteer: "Steer this reply",
 
     catalogOutputTruncated: "[Output truncated]",
     onboardingDisabled: "Disabled during setup",
@@ -1899,7 +1899,7 @@ const startupEnglish = {
       browser: "Browser",
       browserEmpty: "A shared browser for you and the agent.",
       browserUnavailableReason: {
-        permission: "You need operator.admin to use Browser.",
+        permission: "You need admin access to use Browser.",
         disconnected: "Disconnected.",
         unavailable: "Browser unavailable.",
       },
