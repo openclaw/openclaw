@@ -1,0 +1,2 @@
+# Visible spawned sessions keep native tools and exit wakes while inherited denies and spawn admission still apply.
+94
