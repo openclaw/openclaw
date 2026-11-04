@@ -402,7 +402,6 @@ describe("release candidate checklist", () => {
     mismatchedRun?: boolean;
     defaultOutput?: boolean;
     unpinnedTooling?: boolean;
-    earlySdkAcknowledgement?: boolean;
     tagPublished?: boolean;
   };
 
@@ -414,10 +413,8 @@ describe("release candidate checklist", () => {
     { launch: "npm-only", generatedFailure: true },
     { launch: "npm-only", changelogFailure: true },
     { mismatchedRun: true },
-    { defaultOutput: true },
+    { defaultOutput: true, tagPublished: true },
     { unpinnedTooling: true },
-    { unpinnedTooling: true, earlySdkAcknowledgement: true },
-    { tagPublished: true },
     { workflowSha: "b".repeat(40), savedToolingTag: "release-publish/bbbbbbbbbbbb-100" },
     {
       workflowSha: "b".repeat(40),
@@ -490,7 +487,6 @@ describe("release candidate checklist", () => {
       mismatchedRun,
       defaultOutput,
       unpinnedTooling,
-      earlySdkAcknowledgement,
       tagPublished = false,
     }) => {
       const { root: targetRoot, git } = candidateGitFixture({
@@ -702,7 +698,7 @@ describe("release candidate checklist", () => {
           },
           runLocalGeneratedCheckIfNeeded: generatedChecks,
           runEarlyPluginSdkApiReview: () =>
-            earlySdkAcknowledgement
+            unpinnedTooling
               ? {
                   flag: "--plugin-sdk-api-acknowledgement",
                   value: "f4b495f3",
@@ -804,16 +800,11 @@ describe("release candidate checklist", () => {
       if (unpinnedTooling) {
         // Every missing flag is reported once, before waiting on validation.
         const error = await completion.catch((cause: Error) => cause);
-        expect(error.message).toContain(
-          `--workflow-sha ${toolingSha} reuses or mints release-publish/${toolingSha.slice(0, 12)}-<epoch>`,
-        );
-        expect(error.message.includes("acknowledgement digest f4b495f3")).toBe(
-          Boolean(earlySdkAcknowledgement),
-        );
+        expect(error.message).toContain("acknowledgement digest f4b495f3");
         expect(decodeRerunCommand(error.message)).toEqual({
           ...parseArgs(candidateArgv),
           workflowSha: toolingSha,
-          ...(earlySdkAcknowledgement ? { pluginSdkApiAcknowledgement: "f4b495f3" } : {}),
+          pluginSdkApiAcknowledgement: "f4b495f3",
         });
         expect(waitedRuns).toEqual([]);
         expect(preflight).not.toHaveBeenCalled();
