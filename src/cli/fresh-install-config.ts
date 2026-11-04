@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-catalog-config.js";
 
@@ -14,14 +15,13 @@ function isIncompleteWizardConfig(value: unknown): boolean {
 
 // The config writer stamps this privacy opt-out into every new file, so it proves nothing authored.
 function isFirstWritePluginsConfig(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
-  const { entries, ...rest } = value as { entries?: unknown };
+  const { entries, ...rest } = value;
   return (
     Object.keys(rest).length === 0 &&
-    typeof entries === "object" &&
-    entries !== null &&
+    isRecord(entries) &&
     Object.entries(entries).every(([pluginId, entry]) =>
       isNativeSessionCatalogOptOutOnly(pluginId, entry),
     )
