@@ -50,6 +50,7 @@ enum OnboardingProviderIcon {
         case "codex-cli", "codex", "openai", "chatgpt": "ProviderIcon-codex"
         case "gemini-cli", "gemini", "googlegemini", "google": "ProviderIcon-gemini"
         case "ollama": "ProviderIcon-ollama"
+        case "llama", "llama-app": "ProviderIcon-llama"
         case "lmstudio", "lm-studio": "ProviderIcon-lmstudio"
         case "pi": "ProviderIcon-pi"
         case "opencode": "ProviderIcon-opencode"
