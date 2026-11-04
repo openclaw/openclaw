@@ -262,13 +262,12 @@ const enActivity = {
           description: "The durable projection will load when this browser reconnects.",
         },
         loading: {
-          title: "Loading run inspection",
+          title: "Loading run inspection…",
           description: "Reading the Gateway's retained identity projection…",
         },
         disconnected: {
-          title: "Gateway disconnected",
-          description:
-            "Run identity is durable on the Gateway, but it cannot be read while this browser is disconnected.",
+          title: "Disconnected",
+          description: "Run identity is saved. Reconnect to view it.",
         },
         unauthorized: {
           title: "Operator read access required",

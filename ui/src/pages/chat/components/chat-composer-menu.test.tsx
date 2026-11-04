@@ -728,7 +728,9 @@ it("expands one server at a time and keeps switch and bulk tool actions separate
   await waitForSolid(() => {
     expect(patch).toHaveBeenLastCalledWith(null);
     expect(overrides()).toBeNull();
-    expect(view.queryByRole("menuitem", { name: /changes in this/, hidden: true })).toBeNull();
+    expect(
+      view.queryByRole("menuitem", { name: /changes in this session/, hidden: true }),
+    ).toBeNull();
   });
 });
 

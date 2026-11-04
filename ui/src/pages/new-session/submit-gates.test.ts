@@ -259,7 +259,7 @@ describe("DraftSubmissionFlow submit gates", () => {
   it.each([
     {
       reason: "missing-auth",
-      message: "No provider credential is configured for this model. Set it up in Model Setup.",
+      message: "No account is available for this model. Add one in Models.",
     },
     {
       reason: "auth-failed",
@@ -292,7 +292,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
       await vi.waitFor(() =>
         expect(place.modelControl.modelSelectionBlockedReason(place.selectedAgent())).toContain(
-          "No provider credential",
+          "No account is available",
         ),
       );
       const createParams = restoreCreate(flow, {
