@@ -127,7 +127,7 @@ function prepare(req: VideoGenerationRequest) {
     req.model !== MODEL ||
     !req.prompt.trim() ||
     /\p{Surrogate}/u.test(req.prompt) ||
-    [...req.prompt].length > 1500
+    Array.from(req.prompt).length > 1500
   ) {
     throw new Error(
       "ClawRouter Wan requires the qualified model and 1-1500 valid prompt characters.",

@@ -440,6 +440,7 @@ it("lists only freshly qualified offers through the registered video catalog", a
       entry.provider.provider === "clawrouter" && entry.provider.kinds.includes("video_generation"),
   )!.provider;
   const resolveAuth = () => ({
+    apiKey: undefined,
     profileId: "clawrouter:video",
     mode: "api_key" as const,
     source: "env" as const,
