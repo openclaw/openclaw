@@ -1700,6 +1700,12 @@ jobs:
           source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
+      - name: Check release fast lane test-line budget
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && github.event_name == 'pull_request' && needs.preflight.outputs.release_fast_lane == 'true' }}
+        env:
+          BASE_SHA: *diff_base
+        run: node scripts/check-test-lines-ratchet.mts --base "$BASE_SHA" --no-merge-base
+
       - name: Setup protocol coverage compatibility dependencies
         id: protocol_dependencies
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_protocol_event_coverage == 'true' && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.checkout_revision != github.workflow_sha }}
@@ -3823,6 +3829,7 @@ jobs:
 
       - name: Run Node test shard
         env:
+          CHECKOUT_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_CI_TEST_OBSERVATIONS_DIR: ${{ github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target == 'false' && (github.event_name == 'schedule' || (github.event_name == 'pull_request' && endsWith(github.run_id, '0'))) && format('{0}/ci-test-observations', runner.temp) || '' }}
           OPENCLAW_E2E_USE_PREBUILT_DIST: ${{ steps.node-test-runtime.outcome == 'success' && matrix.pretest_build_mode == 'private-qa' && '1' || '' }}
@@ -3856,7 +3863,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-test-observations-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
-          path: ${{ runner.temp }}/ci-test-observations/*/observations.json
+          path: |
+            ${{ runner.temp }}/ci-test-observations/*/observations.json
+            ${{ runner.temp }}/ci-test-observations/*/launch.json
           if-no-files-found: ignore
           retention-days: 7
 
