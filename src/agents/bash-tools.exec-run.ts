@@ -97,6 +97,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
   let subagentExecutionPromise: Promise<boolean> | undefined;
   const resolveSubagentExecution = () =>
+    defaults?.preparedSubagentExecution ??
     (subagentExecutionPromise ??= withPreparedSessionCapabilityRead(
       () =>
         resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
