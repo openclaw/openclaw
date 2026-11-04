@@ -652,14 +652,14 @@ describe("chat transcript invalidation", () => {
       transcript.start();
       await flushDeferredRowPrune();
       await waitForSolid(() =>
-        expect(container.textContent).toContain("Received · waiting for worker setup"),
+        expect(container.textContent).toContain("Received · setting up device"),
       );
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
       expect(buildSpy).toHaveBeenCalledOnce();
 
       rerender();
       expect(buildSpy).toHaveBeenCalledOnce();
-      expect(container.textContent).toContain("Received · waiting for worker setup");
+      expect(container.textContent).toContain("Received · setting up device");
 
       props.selectedSession = {
         ...props.selectedSession,
@@ -670,7 +670,7 @@ describe("chat transcript invalidation", () => {
       };
       rerender();
       expect(buildSpy).toHaveBeenCalledTimes(2);
-      expect(container.textContent).not.toContain("Received · waiting for worker setup");
+      expect(container.textContent).not.toContain("Received · setting up device");
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
     } finally {
       transcript.dispose();

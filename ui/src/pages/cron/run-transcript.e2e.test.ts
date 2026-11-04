@@ -25,7 +25,7 @@ const buttonNamed = (root: Page | Locator, name: string) =>
   root.getByRole("button", { name, exact: true });
 const exactText = (root: Page | Locator, text: string) => root.getByText(text, { exact: true });
 const transcriptRegion = (page: Page) =>
-  page.getByRole("region", { name: "Run transcript", exact: true });
+  page.getByRole("region", { name: "Conversation", exact: true });
 const history = (content: string) => ({ messages: [message(content)] });
 const historyPage = (messages: unknown[]) => ({ messages, nextCursor: "older" });
 const runResponse = (overrides: Partial<CronRunLogEntry>) => ({
@@ -40,7 +40,7 @@ async function installCron(page: Page, methodResponses: Record<string, unknown>)
   return gateway;
 }
 async function openRunHistory(page: Page) {
-  await page.getByRole("tab", { name: "Run history", exact: true }).click();
+  await page.getByRole("tab", { name: "Activity history", exact: true }).click();
   const button = buttonNamed(page.locator(".cron-run-entry"), "View transcript");
   await button.click();
   return { button, region: transcriptRegion(page) };
@@ -57,7 +57,7 @@ suite.define(() => {
       );
       try {
         await installCron(page, { "cron.history": history("Delayed transcript output") });
-        await page.getByRole("tab", { name: "Run history", exact: true }).waitFor();
+        await page.getByRole("tab", { name: "Activity history", exact: true }).waitFor();
         expect(held.requests()).toBe(0);
         const { button, region } = await openRunHistory(page);
         await held.request;

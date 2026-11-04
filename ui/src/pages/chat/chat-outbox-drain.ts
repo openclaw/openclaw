@@ -26,12 +26,13 @@ import {
 } from "./chat-outbox-retry.ts";
 import { collectChatOutboxes, readChatOutboxLane } from "./chat-outbox-scopes.ts";
 import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
+import { parkedChatQueueRows } from "./chat-queue-pause.ts";
 import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
 import type { PendingComposerSnapshot } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
   chatSendHoldReason,
-  OFFLINE_QUEUE_STORAGE_ERROR,
+  chatOfflineQueueStorageError,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
@@ -167,13 +168,14 @@ async function drainStoredChatOutbox(
         (entry.queueMode ||
           (!entry.intent && lane.pendingOptions.get(entry.id)?.allowActiveRunSend)),
     );
+    // Rows parked by Stop leave only through Resume or an explicit send (retry, steer, edit).
+    const parked = parkedChatQueueRows(host, scope);
     const storedItem =
       freshActiveRunItem ??
       outbox.queue.find(
         (entry) =>
           lane.freshAdmissions.has(entry.id) ||
-          entry.sendState !== "failed" ||
-          entry.localCommandName,
+          (!parked?.has(entry.id) && (entry.sendState !== "failed" || entry.localCommandName)),
       );
     if (!storedItem) {
       return;
@@ -299,7 +301,7 @@ async function drainStoredChatOutbox(
             host,
             outbox.sessionKey,
             outbox.agentId,
-            updated ? error : OFFLINE_QUEUE_STORAGE_ERROR,
+            updated ? error : chatOfflineQueueStorageError(),
           );
         }
       };
@@ -339,7 +341,7 @@ async function drainStoredChatOutbox(
               sendState: "held",
             }))
           ) {
-            setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+            setChatError(host, chatOfflineQueueStorageError());
             // Keep the claimed clear row as the reload-safe barrier.
             return;
           }
@@ -349,7 +351,7 @@ async function drainStoredChatOutbox(
             host,
             outbox.sessionKey,
             outbox.agentId,
-            OFFLINE_QUEUE_STORAGE_ERROR,
+            chatOfflineQueueStorageError(),
           );
           return;
         }
