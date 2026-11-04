@@ -103,6 +103,7 @@ function applySupplementalContext(ctx: MsgContext): void {
     ReplyToBody: supplemental.quote?.body,
     ReplyToSender: supplemental.quote?.sender,
     ReplyToIsQuote: supplemental.quote?.isQuote,
+    ReplyToIsExternal: supplemental.quote?.isExternal,
     ForwardedFrom: supplemental.forwarded?.from,
     ForwardedFromType: supplemental.forwarded?.fromType,
     ForwardedFromId: supplemental.forwarded?.fromId,

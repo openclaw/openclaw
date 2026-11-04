@@ -217,6 +217,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
     forwardedDate?: number;
   }>;
   ReplyToIsQuote?: boolean;
+  /** Reply target belongs to another conversation; its ID is not local to this chat. */
+  ReplyToIsExternal?: boolean;
   /** Forward origin from the reply target (when reply_to_message is a forwarded message). */
   ReplyToForwardedFrom?: string;
   ReplyToForwardedFromType?: string;

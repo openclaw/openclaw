@@ -356,7 +356,39 @@ describe("buildInboundUserContextPrefix", () => {
     );
   });
 
-  it("keeps Telegram current-message quote even when context already includes the target", () => {
+  it.each([
+    { name: "native window", body: "quoted status body", reference: true },
+    {
+      name: "merged session window",
+      body: "quoted status body",
+      source: "session",
+      reference: true,
+    },
+    { name: "normalized body", body: "quoted\nstatus\0 body", reference: true },
+    { name: "different message ID", body: "quoted status body", id: "34970", reference: false },
+    { name: "transcript ID", body: "quoted status body", id: "session:34971", reference: false },
+    { name: "empty body", body: "", reference: false },
+    { name: "clipped body", body: "quoted status…[truncated]", reference: false },
+    { name: "edited body", body: "old status body", reference: false },
+    {
+      name: "external reply",
+      body: "quoted status body",
+      extra: { ReplyToIsExternal: true },
+      reference: false,
+    },
+    {
+      name: "selected quote",
+      body: "quoted status body",
+      extra: { ReplyToQuoteText: "status" },
+      reference: false,
+    },
+    {
+      name: "quote flag",
+      body: "quoted status body",
+      extra: { ReplyToIsQuote: true },
+      reference: false,
+    },
+  ])("preserves Telegram reply context with $name", ({ body, id, source, extra, reference }) => {
     const text = buildInboundUserContextPrefix({
       Provider: "telegram",
       Surface: "telegram",
@@ -365,20 +397,21 @@ describe("buildInboundUserContextPrefix", () => {
       MessageSid: "34974",
       ReplyToId: "34971",
       ReplyToBody: "quoted status body",
+      ...extra,
       SenderName: "obviyus",
       ChannelStructuredContext: [
         {
           label: "Conversation context",
-          source: "telegram",
+          source: source ?? "telegram",
           type: "chat_window",
           payload: {
             order: "chronological",
             relation: "selected_for_current_message",
             messages: [
               {
-                message_id: "34971",
+                message_id: id ?? "34971",
                 sender: "bh.ai",
-                body: "quoted status body",
+                body,
                 is_reply_target: true,
               },
             ],
@@ -387,11 +420,33 @@ describe("buildInboundUserContextPrefix", () => {
       ],
     } as TemplateContext);
 
-    expect(text).toContain("#34971 [reply target] bh.ai: quoted status body");
-    expect(text).toContain('Current message:\n[Replying to: "quoted status body"]\n#34974:');
-    expect(text).toContain('[Replying to: "quoted status body"]');
+    const reply = reference
+      ? "[Replying to #34971]"
+      : `[Replying to: ${JSON.stringify(extra?.ReplyToQuoteText ?? "quoted status body")}]`;
+    expect(text).toContain(`Current message:\n${reply}\n#34974:`);
+    if (reference) {
+      expect(text.match(/quoted status body/g)).toHaveLength(1);
+    }
     expect(text.trimEnd().endsWith("#34974:")).toBe(true);
   });
+
+  it.each([true, false])(
+    "uses only emitted bounded history for Telegram replies: %s",
+    (included) => {
+      const text = buildInboundUserContextPrefix({
+        Provider: "telegram",
+        ReplyToId: "1",
+        ReplyToBody: "Earlier answer",
+        SessionTranscriptContext: { historyKind: "recent", historyLimit: included ? 2 : 1 },
+        InboundHistory: [
+          { messageId: "1", sender: "Bot", body: "Earlier answer" },
+          { messageId: "2", sender: "User", body: "Later turn" },
+        ],
+      });
+      expect(text).toContain(included ? "[Replying to #1]" : '[Replying to: "Earlier answer"]');
+      expect(text.match(/Earlier answer/g)).toHaveLength(1);
+    },
+  );
 
   it("omits duplicate phone identity from the conversation sender", () => {
     const text = buildInboundUserContextPrefix({
