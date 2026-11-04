@@ -1,5 +1,49 @@
 import type { ToolCallRecord } from "../logging/diagnostic-session-state.js";
 
+export function getCrossToolNoProgressStreak(history: readonly ToolCallRecord[]): number {
+  const outcomes = new Map<
+    string,
+    { toolName: string; resultHash?: string; count: number; concrete: number; vetoes: number }
+  >();
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const record = history[i];
+    if (
+      !record ||
+      record.outcomeKind === "argument-validation" ||
+      (!record.resultHash && record.outcomeKind !== "tool-loop-veto")
+    ) {
+      continue;
+    }
+    let outcome = outcomes.get(record.argsHash);
+    if (!outcome) {
+      outcome = { toolName: record.toolName, count: 0, concrete: 0, vetoes: 0 };
+      outcomes.set(record.argsHash, outcome);
+    }
+    if (record.outcomeKind === "tool-loop-veto") {
+      outcome.vetoes += 1;
+      continue;
+    }
+    if (!record.resultHash) {
+      continue;
+    }
+    // Progress by any participating signature ends the shared no-progress tail.
+    if (outcome.resultHash && outcome.resultHash !== record.resultHash) {
+      break;
+    }
+    outcome.resultHash = record.resultHash;
+    outcome.count += outcome.vetoes + 1;
+    outcome.concrete += 1;
+    outcome.vetoes = 0;
+  }
+
+  // A first observation is not repetition, and vetoes cannot establish their
+  // own outcome. Keep single-tool argument churn under its warning-only owner.
+  const repeated = [...outcomes.values()].filter((outcome) => outcome.concrete >= 2);
+  return new Set(repeated.map((outcome) => outcome.toolName)).size > 1
+    ? repeated.reduce((count, outcome) => count + outcome.count, 0)
+    : 0;
+}
+
 export function getNoProgressStreak(
   history: readonly ToolCallRecord[],
   toolName: string,
