@@ -209,7 +209,7 @@ it.each([
   ({ success, fallback, staleRun }) =>
     withStateDirEnv("workboard-deferred-agent-end-", async () => {
       vi.useFakeTimers();
-      onTestFinished(() => vi.useRealTimers());
+      onTestFinished(() => void vi.useRealTimers());
       await using store = openStore();
       const sessionKey = "agent:worker:subagent:workboard-delayed";
       const runId = "run-current";
