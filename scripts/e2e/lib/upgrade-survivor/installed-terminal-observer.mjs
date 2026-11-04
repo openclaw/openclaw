@@ -2754,10 +2754,9 @@ export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifa
     assert(["healthy", "late-failure", "historical-control"].includes(cell.name));
     const references = [
       ...(cell.workersWithoutPreload ?? []).flatMap((row) => [row.evidence, row.nativeExit]),
-      ...(cell.processesWithoutPreload ?? []).flatMap((row) => [
-        row.evidence,
-        ...row.nativeSettlement,
-      ]),
+      ...(cell.processesWithoutPreload ?? []).flatMap((row) =>
+        [row.evidence].concat(row.nativeSettlement),
+      ),
       ...(cell.workerLifetimeBounds ?? []).map((row) => row.evidence),
     ];
     if (references.length === 0) {
