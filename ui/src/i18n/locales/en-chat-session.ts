@@ -6,7 +6,7 @@ import { en } from "./en.ts";
 // This copy follows its lazy rendering consumers; shared labels stay in en.ts.
 const enChatSession = {
   chat: {
-    savedConversation: "Saved conversation · {status}",
+    savedConversation: "{status} · Saved conversation",
     sessionAutomation: {
       everyDuration: "Every {duration}",
       onceAt: "{day} at {time}",
