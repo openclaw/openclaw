@@ -7,7 +7,7 @@ Welcome to the lobster tank! 🦞
 - **GitHub:** https://github.com/openclaw/openclaw
 - **Vision:** [`VISION.md`](VISION.md)
 - **Support:** https://community.openclaw.ai/
-- **Discord:** https://discord.gg/clawd
+- **Discord:** https://openclaw.ai/discord?from=github-openclaw-contributing
 - **X/Twitter:** [@openclaw](https://x.com/openclaw)
 
 ## Maintainers
