@@ -135,7 +135,10 @@ export function resolveInitialThinkLevel(params: {
 export function resolveRequestStreamTransportOverrides(
   streamParams: RunEmbeddedAgentParams["streamParams"],
 ): "present" | undefined {
-  return streamParams && Object.keys(streamParams).length > 0 ? "present" : undefined;
+  // A forced tool choice is best-effort: the gateway emulates and checks it, so it must not
+  // reject harnesses that cannot apply provider stream params.
+  const { toolChoice: _toolChoice, ...egressParams } = streamParams ?? {};
+  return Object.keys(egressParams).length > 0 ? "present" : undefined;
 }
 
 export function resolveInitialEmbeddedRunModel(params: {
