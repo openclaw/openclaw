@@ -420,7 +420,7 @@ async function* readTranscriptRecords(
   // Durable byte-offset scans own their checkpoint reader. Diagnostic history
   // shares the canonical transcript stream and materializes archive bytes once.
   // Legacy JSONL transcripts predate the inherited-history marker, as in their rollup scan.
-  const transcriptPath = materializeSessionArchiveForRead(filePath);
+  const transcriptPath = await materializeSessionArchiveForRead(filePath);
   for await (const line of streamSessionTranscriptLines(transcriptPath)) {
     try {
       const parsed: unknown = JSON.parse(line);

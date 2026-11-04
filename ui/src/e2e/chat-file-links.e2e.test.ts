@@ -495,7 +495,7 @@ suite.define(() => {
       });
 
       const beforeReveal = (await gateway.getRequests("sessions.files.list")).length;
-      await selectFileAction(fileView, "Show in Files");
+      await selectFileAction(fileView, "Show in files");
       await gateway.waitForRequest("sessions.files.list", { after: beforeReveal });
       expect(
         (await gateway.getRequests("sessions.files.list"))[beforeReveal]?.params,
@@ -530,7 +530,7 @@ suite.define(() => {
       expect(await fileView.locator(".file-view__line--target").getAttribute("data-line")).toBe(
         "3",
       );
-      await selectFileAction(fileView, "Show in Files");
+      await selectFileAction(fileView, "Show in files");
       await workspace.getByRole("button", { name: "Search files", exact: true }).click();
       const search = workspace.getByRole("searchbox", { name: "Search files", exact: true });
       await search.fill("README");

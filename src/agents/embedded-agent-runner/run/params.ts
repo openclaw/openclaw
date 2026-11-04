@@ -9,14 +9,13 @@ import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.t
 import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
-import type { QueuedAgentRunParams } from "../../command/queued-run-params.types.js";
 import type {
   AgentRunExecutionContext,
   AgentRunMessageContext,
   AgentRunChannelContext,
-  AgentStreamParams,
-  ClientToolDefinition,
-} from "../../command/shared-types.js";
+} from "../../command/execution-context.types.js";
+import type { QueuedAgentRunParams } from "../../command/queued-run-params.types.js";
+import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { ConversationRecallContext } from "../../conversation-recall.types.js";
 import type { CronCreatorAuthorityCapability } from "../../cron-creator-authority-context.js";
 import type {
@@ -39,7 +38,6 @@ import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhaseInfo } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
-export type { ClientToolDefinition } from "../../command/shared-types.js";
 export type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 
 export type RunEmbeddedAgentParams = Pick<

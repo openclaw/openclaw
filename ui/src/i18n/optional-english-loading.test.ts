@@ -304,9 +304,9 @@ it.each([false, true])(
     registerEnglishCatalog(ordered[1]!);
     registerAgentsHomeEnglish();
     registerTemplateCreatorEnglish();
-    expect(manager.t("templatesDraft.title")).toBe("Create Template");
+    expect(manager.t("templatesDraft.title")).toBe("Create template");
     expect(manager.t("templatesDraft.sendFailed")).toBe(
-      "The main chat did not accept the Create Template message.",
+      "Couldn’t start template creation. Try again.",
     );
     expect(manager.t("templatesDraft.reviewTitle")).toBe("Vorlage prüfen");
     expect(manager.t("agentsHome.pinnedAgents")).toBe("Angeheftete Agenten");
@@ -454,13 +454,13 @@ it("keeps a cold roster metadata failure readable before its view catalog loads"
   const stop = store.subscribe(() => {});
   try {
     await store.refresh();
-    expect(store.snapshot.error).toBe("Could not load agents. Try again.");
+    expect(store.snapshot.error).toBe("Couldn’t load agents. Retry.");
     const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
     const { registerAgentsHomeEnglish } = await import("./locales/en-agents-home.ts");
     registerEnglishCatalog(registerAgentsHomeEnglish);
     expect(en.agentsHome).toBe(agentsHome);
     await store.refresh();
-    expect(store.snapshot.error).toBe("Could not load agents. Try again.");
+    expect(store.snapshot.error).toBe("Couldn’t load agents. Retry.");
   } finally {
     stop();
     sessions.dispose();

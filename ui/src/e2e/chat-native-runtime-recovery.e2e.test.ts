@@ -237,7 +237,7 @@ suite.define(() => {
           const modal = page.locator("openclaw-modal-dialog");
           await modal.waitFor();
           expect(await modal.textContent()).toContain("own permissions");
-          expect(await modal.textContent()).toContain("Gateway host");
+          expect(await modal.textContent()).toContain("Gateway device");
           expect(await modal.textContent()).toContain("Only this session");
           expect(await modal.textContent()).toContain(
             "other sessions and global configuration stay unchanged",

@@ -59,6 +59,12 @@ If you prefer editing config directly:
 - Applies a safe-inventory policy: exact file-content reads stay raw, standalone repository-inventory commands can compact, and unsafe mixed command sequences stay raw.
 - Stays opt-in: disable the plugin if you want verbatim output everywhere.
 
+The plugin releases Tokenjuice's compiled rule cache after results have used 128
+distinct working-directory contexts. This bounds retained rule sets from old
+worktrees while preserving reuse for repeated results within the current set.
+After a release, active projects reload their rules on the next eligible result.
+Rule selection still uses the command's working directory.
+
 ## Verify it is working
 
 1. Enable the plugin.
