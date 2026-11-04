@@ -55,6 +55,8 @@ Operational Discord surfaces: reaction and presence wakes, bot presence, gateway
   <Accordion title="Presence configuration">
     Presence updates are applied when you set a status or activity field, or when you enable auto presence.
 
+    `channels.discord.status` accepts `online`, `idle`, `dnd`, or `invisible`; omitting the key sends `online`. `invisible` keeps the bot connected while it appears offline to members. Per-account override: `channels.discord.accounts.<id>.status`.
+
     Status only:
 
 ```json5
