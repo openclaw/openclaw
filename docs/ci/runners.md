@@ -378,6 +378,12 @@ Full Release Validation's existing frozen-target lint exception remains separate
 Npm preflight uses the larger Blacksmith request by default and retains its
 explicit `use_github_hosted_runners` option.
 
+Candidate discovery and binding, plus short Full Release Validation admission,
+reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. They honor
+`OPENCLAW_RELEASE_RUNNER_GROUP` with the same label. Release Decision, Diagnostic
+Drain, and the nightly watcher keep their existing runner selection and
+720-minute budgets; standard hosted runners cannot preserve that lifetime.
+
 Ordinary iOS smoke CI builds the app and embedded Watch targets for the runner's
 architecture, using the same iPhone simulator for compilation and voice-cleanup
 tests. It omits compiler indexes, which CI does not consume, and finishes
