@@ -211,8 +211,7 @@ jobs:
       - name: Check source, test types, and architecture
         env:
           OPENCLAW_LOCAL_CHECK: "0"
-          # The 32-class delivers 8 CPUs/31 GiB, so oxlint would run the full core and
-          # extension Programs together; Blacksmith runners starved there in 2026.11.5-beta.1.
+          # The 32-class delivers only 8 CPUs/31 GiB; concurrent oxlint shards lost the runner.
           OPENCLAW_OXLINT_SHARD_CONCURRENCY: "1"
         run: |
           set -euo pipefail
