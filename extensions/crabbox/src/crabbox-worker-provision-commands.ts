@@ -351,6 +351,7 @@ export async function runProvisionSetup(
               env: childEnv,
               input: params.setup,
               signal: params.signal,
+              assertCurrent: params.assertCurrent,
               timeoutMs: remainingProvisionTimeout(
                 params.deadline,
                 params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
