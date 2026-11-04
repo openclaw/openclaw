@@ -453,6 +453,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       message: {
         ...source.message,
         content,
+        activity: undefined,
         toolCallId: undefined,
         tool_call_id: undefined,
         toolUseId: undefined,

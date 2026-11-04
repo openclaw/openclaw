@@ -384,8 +384,21 @@ function keepsRowWithToolsHidden(item: ChatItem): boolean {
     return true;
   }
   const cards = extractToolCardsCached(item.message);
+  const message = asRecord(item.message);
+  // Anonymous calls cannot be split into identified invocation rows. Keep their
+  // accompanying content; the message renderer already hides the tool cards.
+  const hasContent =
+    (message?.role === "assistant" || message?.role === "user") &&
+    (typeof message.content === "string"
+      ? Boolean(message.content.trim())
+      : Array.isArray(message.content) &&
+        message.content.some((block) => {
+          const type = asRecord(block)?.type;
+          return !isToolCallContentType(type) && !isToolResultContentType(type);
+        }));
   return (
     cards.length === 0 ||
+    hasContent ||
     hasHandoffToolCall(item.message) ||
     cards.some((card) => readNodePermissionRequest(asRecord(card.details)?.permissionMissing))
   );
