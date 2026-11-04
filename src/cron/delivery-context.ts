@@ -86,10 +86,7 @@ export async function resolveCronCreationDelivery(params: {
   // jobs stay route-less and resolve the current default at run time.
   const jobAgentId = typeof params.job?.agentId === "string" ? params.job.agentId.trim() : "";
   if (
-    cronDeliveryUsesDefaultDestination(
-      { delivery: params.job?.delivery as CronDelivery | undefined },
-      "announce",
-    ) &&
+    cronDeliveryUsesDefaultDestination({ delivery: params.job?.delivery }, "announce") &&
     resolveCronDefaultDeliveryDestination({
       cronConfig: params.cfg.cron,
       agentId: jobAgentId || params.agentId,

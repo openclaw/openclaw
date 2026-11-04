@@ -114,13 +114,21 @@ export function resolveCronFailureAlertDefaults(
 }
 
 /**
+ * Routing fields read from a stored delivery or from raw create-time tool input,
+ * which has not been through the delivery codec yet.
+ */
+type CronDeliveryRouteFields = Partial<
+  Record<"target" | "channel" | "to" | "threadId" | "accountId", unknown>
+>;
+
+/**
  * A configured default destination replaces the remembered session route of any
  * announce job that names no route of its own. `none` and `webhook` never gain a
  * chat destination, and any job routing field (channel other than `last`, `to`,
  * `threadId`, `accountId`, or owner targeting) keeps the job on its own route.
  */
 export function cronDeliveryUsesDefaultDestination(
-  job: Pick<CronJob, "delivery">,
+  job: { delivery?: CronDeliveryRouteFields },
   mode: CronDelivery["mode"],
 ): boolean {
   if (mode !== "announce") {
@@ -130,8 +138,8 @@ export function cronDeliveryUsesDefaultDestination(
   return (
     !delivery ||
     !hasExplicitCronDeliveryTarget({
-      target: delivery.target,
-      channel: normalizeMessageChannel(delivery.channel),
+      target: delivery.target === "owner" ? "owner" : undefined,
+      channel: normalizeMessageChannel(normalizeOptionalString(delivery.channel)),
       to: normalizeOptionalString(delivery.to),
       threadId: normalizeOptionalThreadValue(delivery.threadId),
       accountId: normalizeOptionalString(delivery.accountId),
