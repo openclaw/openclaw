@@ -1,8 +1,8 @@
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   agentRunFrameActiveStatusParts,
   chatItemGroups,
@@ -266,12 +266,17 @@ function messageRevision(message: object): string {
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
-  props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName" | "messageReactions">,
+  props: Pick<
+    ChatThreadProps,
+    "assistantName" | "currentAgentId" | "agents" | "userId" | "userName" | "messageReactions"
+  >,
 ): TranscriptIndex {
   const cacheKey = [
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     props.assistantName,
+    props.currentAgentId,
+    props.agents,
     props.userId,
     props.userName,
     props.messageReactions,
@@ -335,7 +340,11 @@ export function projectTranscriptIndex(
           transcriptMessageKeys.set(part.key, item.key);
         }
         for (const group of chatItemGroups(part)) {
-          const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, props);
+          const senderLabel = resolveMessageGroupSenderLabel(
+            firstGroup ?? group,
+            props,
+            props.currentAgentId,
+          );
           const rowKey =
             item.kind === "work-group" && expandedToolCards.get(item.key)
               ? item.key + ":" + group.key

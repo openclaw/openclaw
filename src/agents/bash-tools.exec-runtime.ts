@@ -614,6 +614,7 @@ export async function runExecProcess({
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
       executionIntent: "agent-tool" as const,
+      executionScopeKey: opts.sessionKey ?? opts.scopeKey,
       runId: sessionId,
       ...(opts.sandbox ? { cleanupOwnership: "external" as const, exactEnv: true as const } : {}),
       scopeKey: opts.scopeKey,

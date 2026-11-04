@@ -922,7 +922,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}activity?view=run&run=${runId}`);
-      await page.getByRole("heading", { name: "Loading run inspection" }).waitFor();
+      await page.getByRole("heading", { name: "Loading run inspection…" }).waitFor();
       await screenshot(page, "06-loading.png");
       await gateway.rejectDeferred("audit.run.inspect", {
         code: "UNAVAILABLE",
@@ -939,7 +939,7 @@ suite.define(() => {
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
       expect(await receipts.textContent()).toBe(evidence);
-      expect(await page.getByRole("heading", { name: "Gateway disconnected" }).count()).toBe(0);
+      expect(await page.getByRole("heading", { name: "Disconnected" }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Load more receipts" }).isDisabled()).toBe(
         true,
       );

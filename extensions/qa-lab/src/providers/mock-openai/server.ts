@@ -24,6 +24,7 @@ import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import { resolveAfterToolHttpFailure } from "./mock-openai-after-tool-failures.js";
 import {
   buildAssistantText,
+  buildImageGenerationCompletionReply,
   buildImageInspectionReply,
   readForkedContextCompletion,
   isCanonicalCompactionRetryWriteResult,
@@ -1441,6 +1442,22 @@ async function buildResponsesPayload(
       return settledFanout;
     }
   }
+  // A handoff completion owns its reply before generic marker directives in
+  // the requester's quoted history can replace the child result.
+  const handoff = mockSubagent.resolveMockSubagentHandoff({
+    input,
+    body,
+    state: scenarioState,
+    toolOutput,
+    canSpawn: canCallSessionsSpawn,
+    canYield: canCallSessionsYield,
+    task: subagentHandoffTaskForProvider(providerVariant),
+  });
+  if (handoff) {
+    return "text" in handoff
+      ? buildAssistantEvents(handoff.text)
+      : buildToolCallEventsWithArgs(handoff.tool, handoff.args);
+  }
   const promptMarkerReply = promptExactMarkerDirective ?? promptExactReplyDirective;
   if (/\bmarker\b/i.test(prompt) && promptMarkerReply) {
     return buildAssistantEvents(promptMarkerReply);
@@ -1709,6 +1726,10 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents("NONE");
   }
+  const imageCompletionReply = buildImageGenerationCompletionReply(input);
+  if (imageCompletionReply) {
+    return buildAssistantEvents(imageCompletionReply);
+  }
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
     !hasCompletedToolOutput &&
@@ -1849,20 +1870,6 @@ async function buildResponsesPayload(
     if (taskEvidenceText.includes("# Personal task ledger")) {
       return buildToolCallEventsWithArgs("read", { path: "FOLLOWTHROUGH_NOTE.md" });
     }
-  }
-  const handoff = mockSubagent.resolveMockSubagentHandoff({
-    input,
-    body,
-    state: scenarioState,
-    toolOutput,
-    canSpawn: canCallSessionsSpawn,
-    canYield: canCallSessionsYield,
-    task: subagentHandoffTaskForProvider(providerVariant),
-  });
-  if (handoff) {
-    return "text" in handoff
-      ? buildAssistantEvents(handoff.text)
-      : buildToolCallEventsWithArgs(handoff.tool, handoff.args);
   }
   if (
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(prompt) &&

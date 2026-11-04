@@ -142,6 +142,23 @@ for (const [field, allowed, assign] of [
   });
 }
 
+test("preserves type short-circuiting and mixed enum diagnostic order", (t) => {
+  const f = fixture(t);
+  f.review.nitSweep = { performed: true, status: false, summary: "No nits." };
+  f.review.issueValidation.source = "unknown";
+  f.review.behavioralSweep.silentDropRisk = 0;
+  f.review.docs = "unknown";
+  const result = f.validate();
+  assert.equal(result.status, 1);
+  assert.deepEqual(result.stdout.trimEnd().split("\n"), [
+    "Invalid nit sweep status in .local/review.json: nitSweep.status must be a string",
+    'Invalid issue validation source in .local/review.json: issueValidation.source="unknown" (allowed: linked_issue|pr_body|both)',
+    "Invalid behavioral sweep risk in .local/review.json: behavioralSweep.silentDropRisk must be a string",
+    'Invalid docs status in .local/review.json: docs="unknown" (allowed: up_to_date|missing|not_applicable)',
+    "4 artifact violations",
+  ]);
+});
+
 test("empty required summaries and missing finding severity remain invalid", (t) => {
   const f = fixture(t);
   f.review.issueValidation.summary = "";

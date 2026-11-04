@@ -324,6 +324,8 @@ export type PluginManifestControlUi = {
   entry: string;
   /** Stylesheets in the same asset directory, loaded before activation. */
   styles?: string[];
+  /** SVG used for this plugin's side-panel picker entries and tabs, relative to its root. */
+  panelIcon?: string;
   /** Omission retains ordinary runtime activation. */
   activation?: "settings-only";
   settingsViews?: import("../../packages/gateway-protocol/src/plugin-control-ui-settings.js").ControlUiSettingsPlacement[];
@@ -548,6 +550,8 @@ export type PluginManifest = {
   agentSkillsDir?: string;
   name?: string;
   description?: string;
+  /** Up to three author-written starter prompts; display and insertion preserve this text. */
+  recommendedPrompts?: string[];
   /** Optional presentation hints for plugin catalog surfaces. */
   catalog?: PluginManifestCatalog;
   version?: string;

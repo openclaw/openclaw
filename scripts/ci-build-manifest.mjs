@@ -730,7 +730,7 @@ const uiWebkitOwners = [
   "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
-  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
+  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*}.{ts,tsx}",
   "ui/src/lib/solid-bridge.ts",
   "ui/src/lib/solid-bridge-view.tsx",
   "ui/src/lib/presentation.ts",
@@ -1095,7 +1095,7 @@ const postgresConformancePaths = [
   "packages/memory-host-sdk/src/memory-entry-origins.ts",
   "src/config/zod-schema.database.ts",
   "scripts/test-database-conformance*.mjs",
-  "scripts/lib/weighted-test-shards.mts",
+  "scripts/lib/postgres-conformance-shards.mts",
   "config/postgres-conformance-timings.json",
 ];
 const runPostgresConformance =
@@ -1337,9 +1337,17 @@ const nodeTestShards = targetNodeTestShards
     const row = {
       check_name: shard.checkName,
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
+      adaptive_observations:
+        (shard.groups ?? [shard]).some((group) =>
+          group.configs?.includes("test/vitest/vitest.unit-fast.config.ts"),
+        ) || undefined,
       requires_bun:
         !shard.requiresDist &&
-        Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
+        (Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)) ||
+          // Node-hosted packaging proof also launches a pinned Bun child.
+          shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
+            plan.configs?.includes(goToolingConfig),
+          )),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
@@ -1951,6 +1959,10 @@ if (hybridHostedEligible) {
     "check-docs": count(manifest.run_check_docs),
     "postgres-conformance": count(manifest.run_postgres_conformance, 3),
     "skills-python": count(manifest.run_skills_python_job),
+    "checks-windows": count(
+      manifest.run_checks_windows,
+      manifest.checks_windows_matrix.include.length,
+    ),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),
     "ios-build": count(manifest.run_ios_build),

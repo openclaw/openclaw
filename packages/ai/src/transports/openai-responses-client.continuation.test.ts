@@ -11,6 +11,12 @@ import { createSessionsYieldTool } from "../../../../src/agents/tools/sessions-y
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
 import { createDiagnosticTraceContext } from "../../../../src/infra/diagnostic-trace-context.js";
 import {
+  createCodexNativeWebSearchWrapper,
+  createOpenAIFastModeWrapper,
+  createOpenAIResponsesContextManagementWrapper,
+  createOpenAITextVerbosityWrapper,
+} from "../../../../src/llm/providers/stream-wrappers/openai.js";
+import {
   freezeJsonSnapshot,
   isDeeplyFrozenPlainData,
 } from "../../../../src/shared/immutable-data.js";
@@ -214,14 +220,25 @@ describe("native OpenAI Responses SSE continuation", () => {
     vi.useRealTimers();
   });
 
-  it("retains prefix ownership through diagnostic observers while isolating mutating hooks", async () => {
+  it("retains prefix ownership through provider policies and observers while isolating mutating hooks", async () => {
     configureAiTransportHost({
       ...getAiTransportHost(),
       immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
     });
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       wrapStreamFnWithProviderPromptState({
-        streamFn: createOpenAIResponsesTransportStreamFn(),
+        streamFn: createCodexNativeWebSearchWrapper(
+          createOpenAITextVerbosityWrapper(
+            createOpenAIFastModeWrapper(
+              createOpenAIResponsesContextManagementWrapper(
+                createOpenAIResponsesTransportStreamFn(),
+                { responsesServerCompaction: false },
+              ),
+            ),
+            "low",
+          ),
+          { codeModeToolSurfaceEnabled: true, nativeWebSearchAllowedByToolPolicy: false },
+        ),
         state: {},
         effectiveContextTokenBudget: 200_000,
       }),
@@ -244,7 +261,11 @@ describe("native OpenAI Responses SSE continuation", () => {
         reasoningEffort: "low",
         onPayload,
       } satisfies OpenAIResponsesOptions;
-      const stream = await wrapped(astra, { messages }, options);
+      const stream = await wrapped(
+        astra,
+        { messages, tools: [functionTool("exec"), functionTool("wait")] },
+        options,
+      );
       for await (const event of stream) {
         void event;
       }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { SessionDiffFile } from "../../../packages/gateway-protocol/src/index.js";
 import { workerProtocolObject } from "../../worker/protocol-record.js";
+import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -62,6 +63,7 @@ export type StagedWorkerWorkspaceInventory = {
   currentManifestRef: string;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
+  reconciliation: WorkspaceReconciliationPreparation;
   changed: boolean;
   changedEntries: WorkerWorkspaceManifestEntry[];
   objectsByPath: Map<string, { mode: string; objectId: string }>;

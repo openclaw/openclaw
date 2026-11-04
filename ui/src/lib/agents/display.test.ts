@@ -219,3 +219,11 @@ function aliases(defaults: Record<string, string | null>, worker = {}) {
     },
   };
 }
+
+it("names a configured model the catalog does not know by its own ref", () => {
+  expect(buildModelOptions(null, "fixture/unlisted", [])[0]).toMatchObject({
+    value: "fixture/unlisted",
+    label: "fixture/unlisted",
+    provider: "fixture",
+  });
+});

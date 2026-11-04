@@ -264,7 +264,7 @@ describe("transcript message reactions", () => {
       flush();
       expect(onReact).not.toHaveBeenCalled();
       expect(root.querySelector(".emoji-search-panel__empty")?.textContent).toBe(
-        "No matching emoji",
+        "No emoji match your search.",
       );
     }
     enter(input, " 🦞 ");

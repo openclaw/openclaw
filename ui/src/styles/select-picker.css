@@ -73,13 +73,19 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 32px;
-  padding: 6px 8px;
+  min-height: var(--menu-item-height);
+  padding: 4px 8px;
   border-radius: var(--menu-item-radius);
   font-size: calc(13px * var(--control-ui-text-scale));
   line-height: calc(1.25 / 0.875);
   color: var(--text);
   cursor: var(--cursor-action);
+}
+
+/* The model picker keeps its own rows, which carry a provider icon and detail. */
+.model-picker :is(.picker-select__option, .multi-select__option) {
+  min-height: 32px;
+  padding-block: 6px;
 }
 
 /* Windowed rows are absolute, so their gap comes from the virtualizer. */
@@ -230,6 +236,8 @@ openclaw-select-picker {
 .picker-select__chevron,
 .picker-select__check {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 16px;
   width: 16px;
   margin-inline-start: auto;
@@ -241,11 +249,23 @@ openclaw-select-picker {
   height: 16px;
 }
 
+.picker-select__chevron svg {
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
+}
+
 .picker-select__menu.oc-overlay {
   /* Keep the picker budget when the shared overlay stylesheet loads later. */
   max-height: min(400px, var(--oc-overlay-available-height, calc(100dvh - 16px)));
   min-width: anchor-size(width);
   width: max-content;
+}
+
+@media (max-width: 640px) {
+  .oc-modal-dialog .picker-select__menu.oc-overlay {
+    max-width: anchor-size(width);
+  }
 }
 
 .picker-select__menu[hidden],
@@ -451,6 +471,137 @@ openclaw-select-picker {
   :is(.picker-select__menu, .multi-select__menu).oc-overlay,
   :is(.picker-select__option, .multi-select__option)::before {
     transition: none;
+  }
+}
+
+/* A long list at phone width: the same list and search in a bottom sheet, matching PhoneSheet's
+   panel. The native top layer's backdrop keeps the page behind it from taking taps. */
+.picker-select__menu.picker-select__menu--phone-sheet.oc-overlay {
+  position: fixed;
+  inset: auto var(--safe-area-right) calc(100dvh - var(--shell-canvas-height, 100dvh))
+    var(--safe-area-left) !important;
+  position-area: none;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  max-height: calc(var(--shell-canvas-height, 100dvh) - var(--safe-area-top) - var(--space-7));
+  margin: 0;
+  padding: 0 var(--chat-mobile-edge-inset) calc(var(--space-2) + var(--shell-safe-area-bottom));
+  border-radius: var(--overlay-modal-radius) var(--overlay-modal-radius) 0 0;
+  background: var(--popover);
+  box-shadow: var(--overlay-shadow);
+  backdrop-filter: none;
+  animation: picker-sheet-in var(--motion-sheet);
+}
+
+.picker-select__menu.picker-select__menu--phone-sheet.oc-overlay:popover-open {
+  opacity: 1;
+  scale: 1;
+}
+
+.picker-select__menu--phone-sheet::backdrop {
+  background: var(--overlay-modal-backdrop);
+}
+
+.picker-select__grabber {
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: 36px;
+  height: 4px;
+  margin-block: 8px 2px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+  /* The grabber swipes the sheet down; its touch target extends past the pill. */
+  touch-action: none;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: -12px -64px;
+  }
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.picker-select__sheet-close {
+  position: absolute;
+  z-index: 1;
+  inset-block-start: 14px;
+  inset-inline-end: var(--space-2);
+  display: grid;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.picker-select__sheet-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* The title keeps clear of the close button, and the search toggle sits beside it. */
+.picker-select__menu--phone-sheet > :is(.picker-select__page-header, .header-search) {
+  min-height: 44px;
+  padding-inline-end: 36px;
+  font-weight: var(--control-ui-font-weight-semibold);
+}
+
+.picker-select__menu--phone-sheet > .header-search {
+  padding-inline-start: 0;
+  border-block-end: 0;
+}
+
+.picker-select__menu--phone-sheet > .header-search[data-searching] {
+  padding-inline-end: 0;
+}
+
+/* Filtering shouldn't resize the sheet under the keyboard. */
+.picker-select__menu.picker-select__menu--phone-sheet.oc-overlay:has(
+    .header-search[data-searching]
+  ) {
+  height: calc(var(--shell-canvas-height, 100dvh) - var(--safe-area-top) - var(--space-7));
+}
+
+.picker-select__menu--phone-sheet .picker-select__options {
+  flex: 1 1 auto;
+  overscroll-behavior: contain;
+}
+
+.picker-select__menu--phone-sheet:has(.agent-select__menu-title) > .picker-select__page-header {
+  display: none;
+}
+
+.picker-select__menu--phone-sheet .agent-select__menu-title {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 36px 0 0;
+  color: var(--text);
+  font-size: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+@keyframes picker-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .picker-select__menu.picker-select__menu--phone-sheet.oc-overlay {
+    animation: none;
   }
 }
 

@@ -30,7 +30,6 @@ export function createRealtimeTelephonyBinding(params: {
   activeBindingsByCallId: Map<string, RealtimeTelephonyBinding>;
   streamDisconnectLifecycle: StreamDisconnectGrace;
   previousBinding?: RealtimeTelephonyBinding;
-  idleHangupMs?: number;
   emitCallEnd: (cause: RealtimeCallEndCause) => Promise<void>;
   trackTermination: (work: Promise<void>) => void;
 }): RealtimeTelephonyBinding {
@@ -147,11 +146,6 @@ export function createRealtimeTelephonyBinding(params: {
   activeBindingsByCallId.set(callId, telephonyBinding);
   telephonyBinding.noteMediaActivity();
   activity.start();
-  if (params.idleHangupMs) {
-    console.log(
-      `[voice-call] Realtime speech idle monitor armed callId=${callId} providerCallId=${callSid} timeoutMs=${params.idleHangupMs}`,
-    );
-  }
   if (params.previousBinding && params.previousBinding !== telephonyBinding) {
     params.previousBinding.retire();
   }

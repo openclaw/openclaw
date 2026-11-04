@@ -375,7 +375,6 @@ it("refreshes cached profile aliases without rewriting non-profile or unresolved
           kind: "resolved" as const,
           profileId: "canonical-id",
           avatarUrl: "/api/users/canonical-id/avatar?v=20",
-          hasUploadedAvatar: false,
         },
   );
   const projected = projectStable(messages, { resolveCurrentUserProfileDisplay });
