@@ -556,7 +556,10 @@ export async function driveThroughCore(
   });
   const drain = async () => {
     await core.waitForIdle();
-    await new Promise<void>((resolve) => setImmediate(resolve)); // the core hands its idle on later
+    // The core hands its idle to the plan on a later turn.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await Promise.all(idles);
   };
   const lastIdle = () => Promise.resolve(plan.onIdle?.()).catch(() => undefined);
@@ -594,7 +597,7 @@ export async function driveThroughCore(
         });
       }
     } else if (op === "message") {
-      await result.replyOptions.onAssistantMessageStart?.();
+      result.replyOptions.onAssistantMessageStart?.();
     } else if (op === "drain" || op === "idle" || op === "end") {
       if (op === "end") {
         core.markComplete();
@@ -611,7 +614,7 @@ export async function driveThroughCore(
       }
     }
   }
-  const labeled = Object.entries(names).sort(([, a], [, b]) => b.length - a.length);
+  const labeled = Object.entries(names).toSorted(([, a], [, b]) => b.length - a.length);
   const name = (text: string) =>
     labeled.reduce((out, [key, value]) => out.split(value).join(key), text).replaceAll("\n\n", "+");
   const chat = [...new Set(visible())].map(
