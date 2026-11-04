@@ -205,9 +205,16 @@ Batch104, pinned main `a2b19fec2c4f`: remove obsolete logging-redaction setup
 from the transcript mirror identity/replay fixture. The case and all its existing
 assertions and mirror operations remain; only the unused config, its passthrough,
 title and temporary prefix are selected. No production change or case removal.
-The selected primary is still unchanged in this prerequisite draft. Native
-baseline/candidate inventory proof, scoped checks and fresh review are pending;
-no fixture-removal or runtime credit is claimed yet.
+The unchanged primary passes all36 cases; the candidate passes the same36 and
+both user-idempotency sibling cases. Actual inventories match after the intended
+title rename. Every mirror call/assertion and all bytes outside the selected case
+remain unchanged, as do the production owners. Two test lines are removed; no
+case, import, helper, export or allocation is removed or added. Focused type,
+typed-lint, format, MDX, whitespace and shrink-only ratchet checks pass. Required
+removal scans retain the same Skill Workshop/setup-fixture exports and Podman
+declaration findings with original test bytes; production unused-files and
+script exports pass. No suppression or unrelated repair. Review and exact-head
+CI remain publication gates; fixture-removal credit awaits verified landing.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
