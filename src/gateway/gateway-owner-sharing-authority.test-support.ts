@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { assert, expect } from "vitest";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
@@ -60,6 +61,7 @@ export async function proveOwnerSharingThroughCli(options: {
   return await runQaGatewayFixture(
     async () => {
       instance.state.applyEnv();
+      await captureRuntimeConfigAsyncReader()();
       const creator = ensureProfileForEmail("session-creator@example.test");
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
