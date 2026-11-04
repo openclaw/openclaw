@@ -2,6 +2,7 @@ import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-rep
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { commitCronConversationResult } from "../cron/conversation-result.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
 import {
@@ -60,7 +61,8 @@ export async function finalizeCronCompletionAnnouncement(params: {
   traceResolvedFailure?: boolean;
 }) {
   let agent: { agentId: string; cfg: OpenClawConfig } | undefined;
-  const resolveAgent = () => (agent ??= params.resolveCronAgent(params.job.agentId));
+  const resolveAgent = () =>
+    (agent ??= params.resolveCronAgent(tryResolveCronJobEffectiveAgentId(params.job)));
   // Only a route-less announce job needs the owner before planning; others keep
   // resolving their agent at send time.
   const owner = cronDeliveryUsesDefaultDestination(params.job, resolveCronDeliveryMode(params.job))
