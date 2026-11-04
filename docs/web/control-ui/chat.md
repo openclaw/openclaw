@@ -222,6 +222,16 @@ In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, 
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
 
+## Slash-command feedback
+
+Type `/` to open the command menu. `/steer` guides the agent’s current reply;
+`/redirect` restarts the agent’s reply with a new message. `/clear` clears the
+conversation. The `/help` result uses the heading **Available commands**.
+
+Command failures explain what could not be done and what to try next. For example,
+`/model` shows “Couldn’t load model details. Try again.” when model details cannot
+be loaded, followed by the diagnostic in a separate paragraph.
+
 ## Desktop message input
 
 Choose **Settings → Appearance → Chat → Send shortcut** to control how you submit
