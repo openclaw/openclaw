@@ -262,7 +262,7 @@ const enActivity = {
           description: "The durable projection will load when this browser reconnects.",
         },
         loading: {
-          title: "Loading run inspection",
+          title: "Loading run inspection…",
           description: "Reading the Gateway's retained identity projection…",
         },
         disconnected: {

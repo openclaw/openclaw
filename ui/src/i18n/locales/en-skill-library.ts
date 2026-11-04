@@ -56,7 +56,8 @@ const enSkillLibrary = {
     defaultLimit: registerSessionSkillLibraryEnglish.catalog.skillLibrary.defaultLimit,
     session: registerSessionSkillLibraryEnglish.catalog.skillLibrary.session,
     search: "Search names, descriptions, and owners",
-    empty: "No skills in this library. Create one or import a bundle.",
+    empty: "No skills yet. Create or import one.",
+    noMatches: "No skills match your search.",
     you: "You",
     shared: "Shared with team",
     private: "Private",
@@ -79,8 +80,7 @@ const enSkillLibrary = {
     bundleLimit: "Use at most 256 files, 1 MiB per file, and 8 MiB per bundle or ZIP.",
     missingSkill:
       "Choose SKILL.md together with its supporting files, or a folder containing SKILL.md at its root.",
-    uploadFailed:
-      "The Gateway did not confirm the upload. Check your library before retrying the import.",
+    uploadFailed: "Couldn’t confirm the upload. Check your library before importing again.",
     importHelp: "Import a skill into your private library.",
     importClawHub: "Import {source} into your private library.",
     files: "Files",
@@ -97,7 +97,7 @@ const enSkillLibrary = {
     },
     confirmBody: {
       remove: "New sessions can’t attach it.",
-      transfer: "Team administrators will manage it.",
+      transfer: "Team admins will manage it.",
     },
     receipt: {
       published: "Saved {slug} to {target} library (owner: {owner}).",

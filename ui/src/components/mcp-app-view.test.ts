@@ -113,7 +113,7 @@ describe("mcp-app-view localization", () => {
       await vi.advanceTimersByTimeAsync(15_000);
       await view.updateComplete;
       expect(view.querySelector(".error")?.textContent).toContain(
-        "This app took too long to open. Try again.",
+        "This app took too long to load. Try again.",
       );
       view.querySelector<HTMLButtonElement>(".error button")!.click();
       await vi.advanceTimersByTimeAsync(0);
@@ -139,7 +139,7 @@ describe("mcp-app-view localization", () => {
     expect(view.querySelector("iframe")).toBe(frame);
     expect(transport.close).not.toHaveBeenCalled();
     await expect(bridge.updateModelContextHandler!({ structuredContent: {} })).rejects.toThrow(
-      "This app couldn’t connect. Reconnect and try again.",
+      "Couldn’t connect this app. Reconnect and try again.",
     );
     pendingContext.resolve({ state: null });
     expect(await rejected).toMatchObject({ name: "AbortError" });
@@ -849,7 +849,7 @@ describe("mcp-app-view localization", () => {
       );
       await expect
         .poll(() => view.querySelector(".error")?.textContent)
-        .toContain("This app couldn’t open. Check the app’s settings.");
+        .toContain("Couldn’t load this app. Check its URL and try again.");
       expect(view.querySelector("iframe")).toBeNull();
     },
   );
