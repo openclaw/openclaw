@@ -72,6 +72,7 @@ export function resolveClawRouterCapabilityHttpContext(
 export function readClawRouterCapabilityOffers(
   payload: unknown,
   baseUrl: string,
+  nativePathParams?: Readonly<Record<string, string>>,
 ): ClawRouterCapabilityOffer[] {
   const catalog = asOptionalRecord(payload);
   if (catalog?.version !== "clawrouter.client-catalog.v1" || !Array.isArray(catalog.providers)) {
@@ -151,7 +152,18 @@ export function readClawRouterCapabilityOffers(
       if (expected.includes("${model}") && (!upstream || upstream === "." || upstream === "..")) {
         continue;
       }
-      const resolved = expected.replaceAll("${model}", encodeURIComponent(upstream ?? ""));
+      const resolved = expected.replace(/\$\{([a-zA-Z0-9_]+)\}/gu, (placeholder, name: string) => {
+        if (name === "model") {
+          return encodeURIComponent(upstream ?? "");
+        }
+        const pathValue = nativePathParams?.[name];
+        // Caller parameters are single path segments; model remains catalog-owned.
+        return routeKind === "native" &&
+          typeof pathValue === "string" &&
+          /^[A-Za-z0-9_-]{1,128}$/u.test(pathValue)
+          ? encodeURIComponent(pathValue)
+          : placeholder;
+      });
       if (resolved.includes("${")) {
         continue;
       }
@@ -184,6 +196,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
   ssrfPolicy?: SsrFPolicy;
   /** Require a recent proxy-key observation for consumers without model-scoped grants. */
   requireFreshProxyCatalog?: boolean;
+  nativePathParams?: Readonly<Record<string, string>>;
 }): Promise<ClawRouterCapabilityOffer[]> {
   params.signal?.throwIfAborted();
   const remaining = createProviderOperationTimeoutResolver({
@@ -223,7 +236,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
       const catalog = asOptionalRecord(body);
       const scope = asOptionalRecord(catalog?.scope);
       const observedAt =
-        typeof catalog?.observedAt === "string" ? Date.parse(catalog.observedAt) : NaN;
+        typeof catalog?.observedAt === "string" ? Date.parse(catalog.observedAt) : Number.NaN;
       const age = Date.now() - observedAt;
       if (
         !Number.isFinite(age) ||
@@ -238,7 +251,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
     }
     remaining();
     params.signal?.throwIfAborted();
-    return readClawRouterCapabilityOffers(body, context.baseUrl);
+    return readClawRouterCapabilityOffers(body, context.baseUrl, params.nativePathParams);
   } finally {
     void response.body?.cancel().catch(() => undefined);
     await release();

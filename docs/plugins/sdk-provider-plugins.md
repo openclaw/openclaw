@@ -859,3 +859,9 @@ results with the native plugin's untrusted-content marking and result metadata.
 The native plugins and ClawRouter use the same codecs. Callers own credentials,
 endpoint admission, SSRF policy, cancellation, response limits and caching; a
 codec does not grant permission to execute an offer or establish its billing.
+
+The `speech-provider` SDK entrypoint includes `buildElevenLabsSpeechRequestBody`
+and the existing ElevenLabs model/voice defaults. Direct ElevenLabs and
+catalog-scoped ClawRouter speech share this native wire serializer. It does not
+resolve credentials, select an endpoint, or authorize a model or output format;
+each consumer owns those checks.

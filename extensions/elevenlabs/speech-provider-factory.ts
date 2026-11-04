@@ -7,6 +7,11 @@ import type {
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech";
 import {
+  buildElevenLabsSpeechRequestBody,
+  DEFAULT_ELEVENLABS_VOICE_ID,
+  DEFAULT_ELEVENLABS_MODEL_ID,
+  DEFAULT_ELEVENLABS_VOICE_SETTINGS,
+  ELEVENLABS_TTS_MODELS,
   createSpeechDirectiveParser,
   MAX_AUDIO_BYTES,
   normalizeApplyTextNormalization,
@@ -26,24 +31,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
-const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
-const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
-const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
-  stability: 0.5,
-  similarityBoost: 0.75,
-  style: 0,
-  useSpeakerBoost: true,
-  speed: 1,
-};
-
-const ELEVENLABS_TTS_MODELS = [
-  "eleven_v3",
-  "eleven_multilingual_v2",
-  "eleven_flash_v2_5",
-  "eleven_flash_v2",
-  "eleven_turbo_v2_5",
-  "eleven_monolingual_v1",
-] as const;
 
 type ElevenLabsTtsRequestParams = {
   text: string;
@@ -87,20 +74,16 @@ async function requestElevenLabsTts(params: ElevenLabsTtsRequestParams, stream: 
   const normalizedOutputFormat = outputFormat.trim().toLowerCase();
   const acceptHeader =
     !normalizedOutputFormat || normalizedOutputFormat.startsWith("mp3_") ? "audio/mpeg" : undefined;
-  const body = JSON.stringify({
-    text,
-    model_id: modelId,
-    seed,
-    apply_text_normalization: normalizedNormalization,
-    language_code: normalizedLanguage,
-    voice_settings: {
-      stability: voiceSettings.stability,
-      similarity_boost: voiceSettings.similarityBoost,
-      style: voiceSettings.style,
-      use_speaker_boost: voiceSettings.useSpeakerBoost,
-      speed: voiceSettings.speed,
-    },
-  });
+  const body = JSON.stringify(
+    buildElevenLabsSpeechRequestBody({
+      text,
+      modelId,
+      seed,
+      applyTextNormalization: normalizedNormalization,
+      languageCode: normalizedLanguage,
+      voiceSettings,
+    }),
+  );
   const { assertOkOrThrowProviderError } = await import("openclaw/plugin-sdk/provider-http");
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");

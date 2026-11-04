@@ -16,6 +16,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
+import { readElevenLabsSpeechConfig, synthesizeElevenLabsSpeech } from "./speech-elevenlabs.js";
 
 const MODEL = "openai/tts-1";
 const VOICES = OPENAI_TTS_VOICES;
@@ -31,8 +32,20 @@ function readVoice(raw: Record<string, unknown>) {
 
 function readConfig(raw: Record<string, unknown>, path: string) {
   const upstreamProvider = normalizeOptionalString(raw.upstreamProvider) ?? "openai";
-  if (!["openai", "gradium", "azure-speech"].includes(upstreamProvider)) {
+  if (!["openai", "gradium", "azure-speech", "elevenlabs"].includes(upstreamProvider)) {
     throw new Error("Unsupported ClawRouter speech upstreamProvider");
+  }
+  if (upstreamProvider === "elevenlabs") {
+    return {
+      ...readElevenLabsSpeechConfig(raw),
+      upstreamProvider,
+      apiKey: normalizeResolvedSecretInputString({ value: raw.apiKey, path: path + ".apiKey" }),
+      baseUrl: normalizeOptionalString(raw.baseUrl),
+      profileId: normalizeOptionalString(raw.profileId),
+      speed: undefined,
+      instructions: undefined,
+      lang: "en-US",
+    };
   }
   const azure = upstreamProvider === "azure-speech";
   if (azure && [raw.region, raw.endpoint].some((value) => value !== undefined)) {
@@ -133,7 +146,7 @@ export function buildClawRouterSpeechProvider(
               },
             }
           : cfg,
-      modelId: config.model,
+      modelId: config.upstreamProvider === "elevenlabs" ? undefined : config.model,
       modelBaseUrl: baseUrl,
       capability: "audio.speech",
       ...(config.profileId ? { profileId: config.profileId, lockedProfile: true } : {}),
@@ -177,6 +190,14 @@ export function buildClawRouterSpeechProvider(
       defaultTimeoutMs: req.timeoutMs,
     });
     const base = readConfig(req.providerConfig, "tts.providers.clawrouter");
+    if (base.upstreamProvider === "elevenlabs") {
+      return synthesizeElevenLabsSpeech({
+        request: req,
+        resolveContext: () => resolveAuth(req.cfg, req.providerConfig),
+        fetchWithSsrFGuard: context.fetchWithSsrFGuard,
+        remaining,
+      });
+    }
     const overrides = req.providerOverrides ?? {};
     const config = {
       ...base,
@@ -241,7 +262,7 @@ export function buildClawRouterSpeechProvider(
     if (
       ssml !== undefined &&
       (Buffer.byteLength(ssml, "utf8") > 65536 ||
-        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ud800-\udfff\ufffe\uffff]/u.test(ssml))
+        /[^\t\n\r\u0020-\ud7ff\ue000-\ufffd\u{10000}-\u{10ffff}]/u.test(ssml))
     ) {
       throw new Error("ClawRouter Azure speech requires valid XML text within 64 KiB");
     }

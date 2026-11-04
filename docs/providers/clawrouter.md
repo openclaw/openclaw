@@ -509,6 +509,43 @@ does not establish full-text delivery or free generation; the Worker owns admiss
 usage, and settlement. Direct Azure provider credentials and output formats remain
 unchanged.
 
+## Native ElevenLabs speech
+
+ClawRouter TTS and Talk consume a current, eligible, model-less
+`elevenlabs.speech` → `audio.binary` offer. This requires the qualified Worker
+speech implementation; client support alone does not activate ElevenLabs.
+
+Set `upstreamProvider: "elevenlabs"` in `tts.providers.clawrouter` or
+`talk.providers.clawrouter`. Keep the ClawRouter URL and proxy key in
+`models.providers.clawrouter`. `voice`/`voiceId` and Talk speaker overrides bind
+the native voice path. The default voice is `pMsXgVXv3BLzUgSXRplE` and default
+native `model`/`modelId` input is `eleven_multilingual_v2`. This input is sent as
+`model_id`; it is not a catalog model grant. Leave the agent `voiceModel` unset
+for this model-less offer.
+
+Both native and manifest offers preserve the native JSON payload using the
+same serializer as the direct ElevenLabs plugin. Manifest requests bind
+`pathParams.voice_id` and the declared `query` envelope. Native requests bind
+the voice path and URL query. Qualified output is only `mp3_44100_128` with
+`audio/mpeg`. Optional numeric `latencyTier` (0–4) becomes
+`optimize_streaming_latency`; it is rejected for `eleven_v3`. `seed`,
+`applyTextNormalization`, two-letter lowercase `languageCode`, and bounded
+`voiceSettings` retain their native meanings. Streaming, voice notes,
+telephony, raw request overrides, and other output formats fail before dispatch.
+
+Every synthesis refreshes the selected proxy key's catalog. Stale, foreign,
+revoked, model-scoped, and unknown-format offers fail closed. An explicit
+ClawRouter `profileId` stays terminal; missing proxy credentials never borrow an
+ElevenLabs key. Vendor credential headers are removed before discovery and
+synthesis. The Worker owns the original vendor credential, grant, admission,
+and settlement.
+
+Only complete, nonempty HTTP 200 MP3 is accepted within the caller's deadline
+and the smaller of its audio cap and 16 MiB. Redirects, ranges, encoded or
+truncated responses fail without replay. Successful transport does not invent
+a character tariff or prove full-text delivery. Direct ElevenLabs behavior is
+unchanged.
+
 ## Native Gradium speech
 
 ClawRouter speech can consume a qualified, model-less Gradium offer for
