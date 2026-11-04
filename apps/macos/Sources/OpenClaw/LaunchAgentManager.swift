@@ -132,18 +132,12 @@ final class LaunchAgentManager {
         guard status == 3 || status == 113 else {
             return await self.failedChange(command: "print", status: status, previousPlist: previousPlist)
         }
-        // An absent job needs no bootout; never unload the app that owns this request.
-        for arguments in [
-            ["bootstrap", "gui/\(getuid())", self.plistURL.path],
-            ["kickstart", "-k", target],
-        ] {
-            guard self.generation == generation else { return nil }
-            let status = await self.runLaunchctl(arguments)
-            guard self.generation == generation else { return nil }
-            guard status == 0 else {
-                return await self.failedChange(
-                    command: arguments[0], status: status, previousPlist: previousPlist)
-            }
+        // RunAtLoad starts the job during bootstrap. A second kickstart can race
+        // that launch and fail after the login item was already registered.
+        let bootstrapStatus = await self.runLaunchctl(["bootstrap", "gui/\(getuid())", self.plistURL.path])
+        guard self.generation == generation else { return nil }
+        guard bootstrapStatus == 0 else {
+            return await self.failedChange(command: "bootstrap", status: bootstrapStatus, previousPlist: previousPlist)
         }
         let finalStatus = await self.runLaunchctl(["print", target])
         guard self.generation == generation else { return nil }

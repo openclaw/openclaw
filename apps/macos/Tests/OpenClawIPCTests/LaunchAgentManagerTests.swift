@@ -47,7 +47,7 @@ struct LaunchAgentManagerTests {
             from: Data(contentsOf: plistURL), format: nil) as? [String: Any])
         #expect(plist["ProgramArguments"] as? [String] == ["/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"])
         let operations = await calls.arguments.map(\.first)
-        #expect(operations == (loaded ? ["print"] : ["print", "bootstrap", "kickstart", "print"]))
+        #expect(operations == (loaded ? ["print"] : ["print", "bootstrap", "print"]))
     }
 
     @Test(arguments: [true, false])
@@ -84,10 +84,8 @@ struct LaunchAgentManagerTests {
         #expect(failure != nil)
     }
 
-    @Test(arguments: ["bootstrap", "kickstart"], [Int32(5), Int32(-1)])
-    func `failed launchctl commands do not report login changes as applied`(
-        operation: String, status: Int32) async throws
-    {
+    @Test(arguments: [Int32(5), Int32(-1)])
+    func `failed bootstraps do not report login changes as applied`(status: Int32) async throws {
         let directory = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: directory) }
         let plistURL = directory.appendingPathComponent("Library/LaunchAgents/login.plist")
@@ -96,7 +94,7 @@ struct LaunchAgentManagerTests {
             await calls.record(arguments)
             return switch arguments.first {
             case "print", "bootout": 3 // An absent job is expected on first enable.
-            case operation: status
+            case "bootstrap": status
             default: 0
             }
         }
@@ -109,10 +107,8 @@ struct LaunchAgentManagerTests {
         #expect(!applied)
         #expect(!FileManager.default.fileExists(atPath: plistURL.path))
         let operations = await calls.arguments.compactMap(\.first)
-        #expect(operations.contains(operation))
-        if operation == "bootstrap" {
-            #expect(!operations.contains("kickstart"))
-        }
+        #expect(operations.contains("bootstrap"))
+        #expect(!operations.contains("kickstart"))
     }
 
     @Test(arguments: [Int32(5), Int32(-1)])
