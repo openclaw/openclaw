@@ -689,8 +689,10 @@ describe("Workshop through the OpenClaw tool set", () => {
         // Documented loss: the plugin tool refuses sandboxed runs, so this library turn is not
         // sandboxed (it was `sandboxed: true` while core admitted Workshop through the grant).
         const run = { sandboxed: false, skillLibraryAuthoring: capability };
-        expect(skillToolNames(run)).toEqual(
-          multiple ? ["skill_library"] : ["skill_workshop", "skill_library"],
+        // Plugin tools follow core tools; provider requests sort tools by name, so only the set
+        // of skill tools is model-visible behavior.
+        expect(skillToolNames(run).toSorted()).toEqual(
+          multiple ? ["skill_library"] : ["skill_library", "skill_workshop"],
         );
         const surface = tools(run);
         const invoke = (name: string, args: Record<string, unknown>) =>
