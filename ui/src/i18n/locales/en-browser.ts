@@ -44,9 +44,9 @@ const enBrowser = {
     start: "Start browser",
     errors: {
       pasteFailed: "Couldn’t paste. Reconnect to a managed browser and try again.",
-      requestFailed: "Couldn’t complete the browser action. Try again. Details: {error}",
+      requestFailed: "Couldn’t complete the browser action. Try again.\n{error}",
       downloadFailed:
-        "Couldn’t download this file. Try again, or open it in your browser to save it. Details: {error}",
+        "Couldn’t download this file. Try again, or open it in your browser to save it.\n{error}",
       downloadEmpty: "Couldn’t download this file. No file was returned. Try again.",
       screenshotPathMissing: "Couldn’t capture the page. No screenshot path was returned. Try again.",
       screenshotFetchTimedOut: "Couldn’t load the screenshot in time. Try again.",

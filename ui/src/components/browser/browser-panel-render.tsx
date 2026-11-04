@@ -1,4 +1,5 @@
 import { createMemo } from "@solidjs/signals";
+import { ErrorDetails } from "../config-error.tsx";
 import type { JSX } from "@solidjs/web";
 import { For, Match, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
@@ -416,7 +417,8 @@ export function BrowserPanelChrome(
       {props.controller.errorText ? (
         emptyError() ? null : (
           <div class="bp-note bp-note--error" role="alert">
-            {props.controller.errorText}
+            <div>{props.controller.errorText.split("\n")[0]}</div>
+            <ErrorDetails error={props.controller.errorText.split("\n").slice(1).join("\n")} />
           </div>
         )
       ) : props.controller.noticeText ? (
