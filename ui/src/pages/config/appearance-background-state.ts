@@ -10,6 +10,7 @@ import {
 import type { UsersBackgroundResult } from "../../../../packages/gateway-protocol/src/schema/users-background.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import {
   adoptCommittedBackgroundPreference,
   resolveServerUiPrefWriteStatus,
@@ -133,7 +134,10 @@ export function createAppearanceBackground(
   } | null = null;
   function captureScope(): BackgroundScope | null {
     const snapshot = application.gateway.snapshot;
-    return snapshot.phase === "connected" && snapshot.client && snapshot.selfUser?.id
+    return snapshot.phase === "connected" &&
+      snapshot.client &&
+      snapshot.selfUser?.id &&
+      hasOperatorReadAccess(snapshot.hello?.auth ?? null)
       ? { client: snapshot.client, profileId: snapshot.selfUser.id }
       : null;
   }
@@ -542,7 +546,7 @@ export function createAppearanceBackground(
       hasImage: Boolean(readSnapshot()?.asset),
       mutation,
       uploadAllowed: canUpload() && writeStatus.status === "saved",
-      scopeHint: !scope
+      scopeHint: !application.gateway.snapshot.selfUser?.id
         ? t("configView.appearance.background.browserOnly")
         : !canUpload()
           ? t("configView.appearance.background.readOnly")

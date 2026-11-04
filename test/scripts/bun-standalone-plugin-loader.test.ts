@@ -24,45 +24,44 @@ const temporary = useAutoCleanupTempDirTracker(afterEach);
 
 const configuredBun = process.env.OPENCLAW_BUN_PATH?.trim();
 const bunCommand = configuredBun || "bun";
-const hasBun = spawnSync(bunCommand, ["--version"], { timeout: 10_000 }).status === 0;
+// Explicit compilers are exercised by the fixtures; probing cannot change admission.
+const hasBun =
+  Boolean(configuredBun) || spawnSync(bunCommand, ["--version"], { timeout: 10_000 }).status === 0;
 
 // Node-only test jobs do not provision Bun; an explicit compiler override must work.
-it.skipIf(!configuredBun && !hasBun)(
-  "keeps retained loader bytes independent of the staging directory",
-  async () => {
-    const root = temporary.make("standalone-plugin-loader-bytes-");
-    const outputs: Buffer[] = [];
-    for (const name of ["first", "second"]) {
-      const outputRoot = path.join(root, name);
-      const runtimeRoot = path.join(outputRoot, "runtime");
-      const jitiRoot = path.join(runtimeRoot, "node_modules/jiti");
-      fs.mkdirSync(jitiRoot, { recursive: true });
-      fs.writeFileSync(path.join(runtimeRoot, "package.json"), '{"name":"openclaw"}');
-      fs.writeFileSync(path.join(jitiRoot, "package.json"), '{"name":"jiti","main":"index.cjs"}');
-      fs.writeFileSync(path.join(jitiRoot, "LICENSE"), "fixture license");
-      fs.writeFileSync(path.join(jitiRoot, "index.cjs"), "exports.createJiti = () => 42;");
-      const loader = await stageStandalonePluginLoader({
-        runtimeRoot,
-        outputRoot,
-        build: async (options) => {
-          const result = spawnSync(
-            bunCommand,
-            [
-              "--eval",
-              'const result = await Bun.build(JSON.parse(process.argv.at(-1))); if (!result.success) throw new AggregateError(result.logs, "Loader bundle failed");',
-              JSON.stringify(options),
-            ],
-            { cwd: root, encoding: "utf8", timeout: 10_000 },
-          );
-          expect(result.status, result.stderr).toBe(0);
-          return { success: true, logs: [] };
-        },
-      });
-      outputs.push(fs.readFileSync(path.join(runtimeRoot, loader.modulePath)));
-    }
-    expect(outputs[0]).toEqual(outputs[1]);
-  },
-);
+it.skipIf(!hasBun)("keeps retained loader bytes independent of the staging directory", async () => {
+  const root = temporary.make("standalone-plugin-loader-bytes-");
+  const outputs: Buffer[] = [];
+  for (const name of ["first", "second"]) {
+    const outputRoot = path.join(root, name);
+    const runtimeRoot = path.join(outputRoot, "runtime");
+    const jitiRoot = path.join(runtimeRoot, "node_modules/jiti");
+    fs.mkdirSync(jitiRoot, { recursive: true });
+    fs.writeFileSync(path.join(runtimeRoot, "package.json"), '{"name":"openclaw"}');
+    fs.writeFileSync(path.join(jitiRoot, "package.json"), '{"name":"jiti","main":"index.cjs"}');
+    fs.writeFileSync(path.join(jitiRoot, "LICENSE"), "fixture license");
+    fs.writeFileSync(path.join(jitiRoot, "index.cjs"), "exports.createJiti = () => 42;");
+    const loader = await stageStandalonePluginLoader({
+      runtimeRoot,
+      outputRoot,
+      build: async (options) => {
+        const result = spawnSync(
+          bunCommand,
+          [
+            "--eval",
+            'const result = await Bun.build(JSON.parse(process.argv.at(-1))); if (!result.success) throw new AggregateError(result.logs, "Loader bundle failed");',
+            JSON.stringify(options),
+          ],
+          { cwd: root, encoding: "utf8", timeout: 10_000 },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        return { success: true, logs: [] };
+      },
+    });
+    outputs.push(fs.readFileSync(path.join(runtimeRoot, loader.modulePath)));
+  }
+  expect(outputs[0]).toEqual(outputs[1]);
+});
 
 it.each(["jit", "bytecode", "aot"])(
   "keeps native plugin loading and transforms lazy after relocation (%s)",
@@ -164,7 +163,7 @@ console.log("lazy relocated loader");`,
   },
 );
 
-it.skipIf(process.platform === "win32" || (!configuredBun && !hasBun))(
+it.skipIf(process.platform === "win32" || !hasBun)(
   "keeps compiled SDK exports and disk CommonJS identity across image and plugin imports",
   () => {
     const root = temporary.make("standalone-image-exports-");

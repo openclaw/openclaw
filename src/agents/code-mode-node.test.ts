@@ -207,6 +207,47 @@ it("reuses healthy workers after rejected cells without retaining guest state", 
   expect(workerStarts() - before).toBe(1);
 });
 
+it("contains dynamic imports and late guest rejections in the owning cell", async () => {
+  const sources = [
+    "await import('node:fs')",
+    `await eval("import('node:fs')")`,
+    `await new Function("return import('node:fs')")()`,
+    `await (() => {}).constructor("return import('node:fs')")()`,
+    `Promise.resolve().then(() => eval("import('node:fs')")); return 1`,
+    `setTimeout(() => eval("import('node:fs')"), 0); return 1`,
+  ];
+  const observed = await runNodeProbe(`
+    const unhandled = [];
+    process.on('unhandledRejection', error => unhandled.push(String(error)));
+    const sibling = await run('await yield_control(); return 42');
+    const failures = [];
+    for (const source of ${JSON.stringify(sources)}) {
+      failures.push(await run(source, {}, { inlineHost: { onBoundary } }));
+    }
+    const caught = await run(${JSON.stringify(`try { await eval("import('node:fs')"); } catch (error) { return error.message; }`)});
+    const late = await run('Promise.resolve().then(() => { throw new Error("late failure"); }); return 1');
+    const resumed = await sibling.continuation.resume({ kind: 'resume', config,
+      settledRequests: sibling.pendingRequests.map(({ id }) => ({ id, ok: true, json: 'null' })),
+    }, { timeoutMs: 7000 });
+    const recovered = await run('return 7');
+    console.log(JSON.stringify({ failures, caught, late, resumed, recovered, unhandled }));
+  `);
+  expect(observed).toMatchObject({
+    failures: sources.map(() => ({
+      status: "failed",
+      error: expect.stringContaining("code mode module access is disabled"),
+    })),
+    caught: {
+      status: "completed",
+      value: { json: expect.stringContaining("code mode module access is disabled") },
+    },
+    late: { status: "failed", error: expect.stringContaining("late failure") },
+    resumed: { status: "completed", value: { json: "42" } },
+    recovered: { status: "completed", value: { json: "7" } },
+    unhandled: [],
+  });
+});
+
 it("reports heap exhaustion, recovers, and bounds captured output below the heap limit", async () => {
   // Vitest runs inside a Worker whose inherited heap flags can override resourceLimits.
   // A standalone process exercises native OOM without changing the test runner's V8 flags.

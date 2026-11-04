@@ -98,6 +98,7 @@ type MentionableActivity = {
   recipient?: { id?: string } | null;
   entities?: Array<{
     type?: string;
+    text?: string;
     mentioned?: { id?: string };
   }> | null;
 };
@@ -132,6 +133,35 @@ export function parseMSTeamsActivityTimestamp(value: unknown): Date | undefined 
 export function stripMSTeamsMentionTags(text: string): string {
   // Teams wraps mentions in <at>...</at> tags
   return text.replace(/<at[^>]*>.*?<\/at>/gi, "").trim();
+}
+
+export function normalizeMSTeamsMentionTags(
+  text: string,
+  activity: MentionableActivity,
+  options: { preserveHtml?: boolean } = {},
+): string {
+  const normalizeTag = (tag: string) =>
+    tag.trim().replace(/<\/?at\b/gi, (delimiter) => delimiter.toLowerCase());
+  const botId = activity.recipient?.id;
+  const botMentions = new Map<string, boolean>();
+  for (const entity of activity.entities ?? []) {
+    if (entity.type !== "mention" || typeof entity.text !== "string") {
+      continue;
+    }
+    const tag = normalizeTag(entity.text);
+    const isBot = Boolean(botId && entity.mentioned?.id === botId);
+    botMentions.set(tag, isBot && botMentions.get(tag) !== false);
+  }
+  return text
+    .replace(/<at\b[^>]*>([\s\S]*?)<\/at\s*>/gi, (tag: string, label: string) => {
+      // Identical display spans can name different users; remove only an unambiguous bot span.
+      if (botMentions.get(normalizeTag(tag))) {
+        return options.preserveHtml ? " " : "";
+      }
+      const displayName = htmlToPlainText(label);
+      return displayName ? `@${options.preserveHtml ? label : displayName}` : "";
+    })
+    .trim();
 }
 
 export function wasMSTeamsBotMentioned(activity: MentionableActivity): boolean {

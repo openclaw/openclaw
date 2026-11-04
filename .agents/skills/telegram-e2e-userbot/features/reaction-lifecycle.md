@@ -30,6 +30,7 @@ Preconditions:
   E2E_REQUIRE_MENTION=true \
   E2E_ROOT_CONFIG_PATCH='{"messages":{"ackReaction":"👀","ackReactionScope":"group-mentions","statusReactions":{"enabled":true}}}' \
   node "$TELEGRAM_E2E_SKILL_DIR/scripts/run-mock-sut-user-e2e.mjs" \
+    --gateway-port "$TELEGRAM_GATEWAY_PORT" --mock-port "$TELEGRAM_MOCK_PORT" \
     --timeout-ms 25000 \
     --text '@{sut} Run the OPENCLAW_E2E_DRAFTPROOF scenario.' \
     --record "$TELEGRAM_E2E_PROOF_DIR/reaction-lifecycle/events.ndjson" \

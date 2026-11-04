@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json-normalize.js";
 import { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";
 import {
   castAgentMessages,

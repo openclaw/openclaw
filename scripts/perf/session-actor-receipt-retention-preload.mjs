@@ -145,4 +145,5 @@ function ${counterName}(phase, hasPreimage, hasAppend, hasInitialEntry) {
       );
     }
   });
+  process.channel?.unref();
 }

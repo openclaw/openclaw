@@ -70,7 +70,9 @@ export function sessionPlacementActionReason(
   const access = readSessionMethodAccess(snapshot, {
     method: action === "dispatch" ? "sessions.dispatch" : "sessions.move",
     requiredScope:
-      retry?.target.kind === "profile" || requiredProfile ? "operator.admin" : "operator.write",
+      action !== "dispatch" && (retry?.target.kind === "profile" || requiredProfile)
+        ? "operator.admin"
+        : "operator.write",
   });
   if (!access.allowed) {
     return access.reason;

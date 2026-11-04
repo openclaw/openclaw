@@ -2,6 +2,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { sqliteSessionEntriesEqual } from "../../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type {
   SessionEntryCurrentCheck,
@@ -25,6 +26,7 @@ import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-c
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import { getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -155,12 +157,9 @@ export async function persistSubagentSessionTiming(
   const projectedStatus = resolveSubagentSessionStatus(entry);
   const status = isTerminalSessionStatus(projectedStatus) ? projectedStatus : undefined;
 
-  const lastRunError =
-    status === "interrupted"
-      ? "Run interrupted by a Gateway restart."
-      : status
-        ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
-        : undefined;
+  const lastRunError = status
+    ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
+    : undefined;
   const update = (sessionEntry: InternalSessionEntry) => {
     const settled = options?.settledQueuedCancellation;
     if (
@@ -187,7 +186,7 @@ export async function persistSubagentSessionTiming(
       });
       if (existingCompletion && existingCompletion.reason !== SUBAGENT_ENDED_REASON_KILLED) {
         // A provider result already reached durable session state. The kill
-        // marker is provisional and must not erase restart reconciliation evidence
+        // marker is provisional and must not erase an accepted result
         // or leave the session looking aborted after that completion won.
         if (sessionEntry.abortedLastRun !== true) {
           return null;
@@ -227,7 +226,7 @@ export async function persistSubagentSessionTiming(
     } else if (status && status !== "killed") {
       delete next.abortedLastRun;
     }
-    return next;
+    return sqliteSessionEntriesEqual(sessionEntry, next) ? null : next;
   };
   const persist = async (expected: SessionEntry | undefined, assertSessionCurrent?: () => void) => {
     let selected: InternalSessionEntry | undefined;
@@ -379,7 +378,8 @@ export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenCl
           Number.isFinite(entry.completion.capturedAt)
         ? entry.completion.capturedAt
         : endedAt
-    : entry.cleanup === "delete" && entry.pauseReason !== "sessions_yield"
+    : entry.cleanup === "delete" &&
+        (entry.pauseReason !== "sessions_yield" || subagentRuns.isCompletionAuthorityRetired(entry))
       ? entry.delivery?.discardReason === "task-missing"
         ? (entry.delivery.discardedAt ?? endedAt)
         : endedAt

@@ -495,13 +495,15 @@ export function resolveChatFastModeSelectState(input: {
           : "off"
       : configuredOverride;
   const supported = standardOnly || requestSupported || Boolean(configuredOverride);
-  // A saved Ultrafast setting remains Ultrafast even when access is unavailable.
-  const active =
-    effectiveMode === true || effectiveMode === "auto" || effectiveMode === "ultrafast";
+  // A request that cannot carry Fast runs at its standard tier, whatever the saved or
+  // inherited preference says; the preference stays selected so it can be cleared.
+  // A saved Ultrafast setting remains Ultrafast when only Ultrafast access is unavailable.
+  const runningMode = requestSupported ? effectiveMode : false;
+  const active = runningMode === true || runningMode === "auto" || runningMode === "ultrafast";
   const label =
-    effectiveMode === "auto"
+    runningMode === "auto"
       ? "Auto"
-      : effectiveMode === "ultrafast"
+      : runningMode === "ultrafast"
         ? "Ultrafast"
         : active
           ? "Fast"
@@ -521,8 +523,7 @@ export function resolveChatFastModeSelectState(input: {
       : active
         ? "off"
         : "on";
-  const requestedTier =
-    effectiveMode === "ultrafast" ? "ultrafast" : active ? "priority" : undefined;
+  const requestedTier = runningMode === "ultrafast" ? "ultrafast" : active ? "priority" : undefined;
   const observation = selectedEntries
     .flatMap(({ runtime }) => runtime?.serviceTierObservations ?? [])
     .find((value) => value.requestedTier === requestedTier);

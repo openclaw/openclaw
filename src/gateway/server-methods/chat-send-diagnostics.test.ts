@@ -88,6 +88,7 @@ test.each(["startup", "steer", "queued"] as const)(
     using _ = { [Symbol.dispose]: stop };
     const { info, diagnostics } = createDiagnostics();
     const request = diagnostics.scope("persist")!;
+    diagnostics.setRunIdentity("synthetic-session", "synthetic-run");
     at(10, () => request.mark("response"));
     const snapshot = diagnostics.scope("snapshot")!;
     at(15, request.finish);
@@ -103,7 +104,10 @@ test.each(["startup", "steer", "queued"] as const)(
       isTerminal: () => false,
     });
     expect(events).toEqual([]);
-    expectLog(info, `slow chat send 1400ms stage=${stage} ack=15ms snapshot=2000ms dispatch=200ms`);
+    expectLog(
+      info,
+      `slow chat send 1400ms stage=${stage} sessionId=synthetic-session runId=synthetic-run ack=15ms snapshot=2000ms dispatch=200ms`,
+    );
 
     at(4_000, () => snapshot.mark("effects"));
     snapshot.finish();

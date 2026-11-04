@@ -1,9 +1,10 @@
 import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { ChatModelPickerTargetGroup } from "../chat/components/chat-model-picker-options.ts";
@@ -121,18 +122,27 @@ export function allowsSelectedAgent(
 }
 
 export async function resolveCreateTarget(
-  client: GatewayBrowserClient,
+  snapshot: ApplicationGatewaySnapshot,
   catalogId: string,
   agentId?: string,
 ): Promise<
   Pick<NewSessionRouteData, "catalogLabel" | "startTerminal" | "terminalHosts"> | undefined
 > {
+  if (
+    !snapshot.client ||
+    !canCallGatewayMethod(snapshot, "sessions.catalog.list", "operator.read")
+  ) {
+    return undefined;
+  }
   try {
-    const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
-      ...(agentId ? { agentId } : {}),
-      catalogId,
-      limitPerHost: 1,
-    });
+    const result = await snapshot.client.request<SessionsCatalogListResult>(
+      "sessions.catalog.list",
+      {
+        ...(agentId ? { agentId } : {}),
+        catalogId,
+        limitPerHost: 1,
+      },
+    );
     const catalog = result.catalogs.find((candidate) => candidate.id === catalogId);
     const terminal = catalog?.capabilities.startTerminal;
     return catalog && terminal === true
@@ -208,16 +218,19 @@ export class CatalogTargetDiscovery {
     this.notify();
   }
 
-  load(context: ApplicationContext | undefined, agentId: string, enabled: boolean) {
+  load(
+    context: Pick<ApplicationContext, "gateway"> | undefined,
+    agentId: string,
+    enabled: boolean,
+  ) {
     const snapshot = context?.gateway.snapshot;
     const client = snapshot?.client;
     const normalizedAgentId = agentId.trim() ? normalizeAgentId(agentId) : "";
     if (
       !enabled ||
-      snapshot?.phase !== "connected" ||
       !client ||
       !normalizedAgentId ||
-      isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") !== true
+      !canCallGatewayMethod(snapshot, "sessions.catalog.list", "operator.read")
     ) {
       this.clear();
       return;
@@ -236,11 +249,12 @@ export class CatalogTargetDiscovery {
     this.startRequest(owner);
   }
 
-  retry(client: GatewayBrowserClient | undefined, agentId: string) {
+  retry(snapshot: ApplicationGatewaySnapshot | undefined, agentId: string) {
     const targetDiscovery = this.read;
     if (
       targetDiscovery?.canRetry &&
-      targetDiscovery.owner.client === client &&
+      canCallGatewayMethod(snapshot, "sessions.catalog.list", "operator.read") &&
+      targetDiscovery.owner.client === snapshot?.client &&
       targetDiscovery.owner.agentId === agentId
     ) {
       this.startRequest(targetDiscovery.owner);

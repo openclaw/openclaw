@@ -302,6 +302,32 @@ describe("Codex app-server attempt context", () => {
     expect(context.promptContext).toBeUndefined();
   });
 
+  it("injects source workspace rules into restricted sandbox turns", async () => {
+    const workspace = tempDirs.make("codex-source-rules-");
+    const sandbox = tempDirs.make("codex-sandbox-rules-");
+    await fs.writeFile(path.join(workspace, "AGENTS.md"), "Source operating rules.");
+    await fs.writeFile(path.join(sandbox, "AGENTS.md"), "Sandbox decoy rules.");
+    for (const restricted of [true, false]) {
+      const context = await workspaceContext(
+        workspace,
+        { effectiveWorkspace: sandbox, sandboxed: true, tools: [] },
+        { pluginHarnessToolPolicyRestricted: restricted },
+      );
+      expect(context.threadDeveloperInstructions ?? "").not.toContain("Sandbox decoy rules.");
+      expect(context.promptContext ?? "").not.toContain("Source operating rules.");
+      expect(context.threadDeveloperInstructionFiles).toEqual(
+        restricted
+          ? [{ path: path.join(sandbox, "AGENTS.md"), content: "Source operating rules." }]
+          : [],
+      );
+      if (restricted) {
+        expect(context.threadDeveloperInstructions).toContain("Source operating rules.");
+      } else {
+        expect(context.threadDeveloperInstructions).toBeUndefined();
+      }
+    }
+  });
+
   it("keeps ambient workspace instructions out of overlapping ring-zero restrictions", async () => {
     const workspaceDir = tempDirs.make("codex-ring-zero-workspace-");
     const executionDir = tempDirs.make("codex-ring-zero-execution-");

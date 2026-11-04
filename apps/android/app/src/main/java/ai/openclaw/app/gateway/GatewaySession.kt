@@ -210,6 +210,7 @@ data class GatewayErrorDetails(
   val recommendedNextStep: String?,
   val pauseReconnect: Boolean? = null,
   val reason: String? = null,
+  val method: String? = null,
   val requestId: String? = null,
   val retryable: Boolean = false,
   val clientMinProtocol: Int? = null,
@@ -377,7 +378,19 @@ class GatewaySession(
     val code: String,
     val message: String,
     val details: GatewayErrorDetails? = null,
+    val retryable: Boolean = false,
   ) {
+    /** Only the method-bound startup refusal proves this chat send did no handler work. */
+    fun startupRetryDelayMs(method: String): Long? {
+      if (
+        method != "chat.send" || code != "UNAVAILABLE" || !retryable ||
+        details?.reason != "startup-sidecars" || details.method != method
+      ) {
+        return null
+      }
+      return (details.retryAfterMs ?: 500).coerceIn(100, 2_000).toLong()
+    }
+
     fun missingScopeDetails(): GatewayMissingScopeErrorDetails? {
       val details = details ?: return null
       val missingScope = details.missingScope?.trim().orEmpty()
@@ -457,6 +470,23 @@ class GatewaySession(
       timeoutMs: Long = 15_000,
       withEnqueue: (() -> Unit) -> Unit = { it() },
     ): String = requestImpl(method, paramsJson, timeoutMs, withEnqueue)
+
+    /** Voice retains its original input while startup refuses admission on this socket. */
+    suspend fun requestAwaitingStartup(
+      method: String,
+      paramsJson: String?,
+      timeoutMs: Long = 15_000,
+      withEnqueue: (() -> Unit) -> Unit = { it() },
+    ): String {
+      while (true) {
+        try {
+          return request(method, paramsJson, timeoutMs, withEnqueue)
+        } catch (error: GatewayRequestRejected) {
+          val retryDelayMs = error.gatewayError.startupRetryDelayMs(method) ?: throw error
+          delay(retryDelayMs)
+        }
+      }
+    }
   }
 
   private val json =
@@ -2069,6 +2099,7 @@ class GatewaySession(
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
                 pauseReconnect = it["pauseReconnect"].asBooleanOrNull(),
                 reason = it["reason"].asStringOrNull(),
+                method = it["method"].asStringOrNull(),
                 requestId = normalizeGatewayApprovalRequestId(it["requestId"].asStringOrNull()),
                 retryable = it["retryable"].asBooleanOrNull() == true || wireError.retryable == true,
                 retryAfterMs = frame["error"].asObjectOrNull()?.get("retryAfterMs").asIntOrNull(),
@@ -2081,7 +2112,7 @@ class GatewaySession(
                 requiredScopes = it["requiredScopes"].asStringList(),
               )
             }
-          ErrorShape(wireError.code, wireError.message, details)
+          ErrorShape(wireError.code, wireError.message, details, retryable = wireError.retryable == true)
         }
       pending.remove(id)?.complete(RpcResult(response.ok, payloadJson, error))
     }

@@ -1,8 +1,10 @@
 /**
- * Real state-read worker manifest benchmark, using synthetic repository-shaped files.
+ * Public workspace-store manifest benchmark, using synthetic repository-shaped files.
+ * For cross-class contention through the public store boundary, use
+ * local-workspace-manifest-contention-measure.ts (host + every worker counted).
  * Node 26.12: node --import ./scripts/tsx.mjs scripts/perf/local-workspace-manifest-measure.ts prepare .local/buf28 [count=24000]
  * Use `prepare-edited` instead of `prepare` to edit 1% of admitted files after
- * storing their original stat hints. Read-only runs repeatedly scan those edits;
+ * storing their original stat hints. Uncommitted runs repeatedly scan those edits;
  * publication runs accept them during warmup.
  * Run: node --import ./scripts/tsx.mjs scripts/perf/local-workspace-manifest-measure.ts run .local/buf28 <label> <canonical|projection|materialize|replace> [allocation|cpu]
  * `cpu` writes a worker .cpuprofile; `allocation` writes a full .heapprofile.
@@ -19,7 +21,8 @@
  * or `<action> control-all [calls=1]` for five A/A pairs in all three passes,
  * or `<action> timing [calls=1]` for A/B timing pairs. A block's calls run
  * consecutively without forced GC between them; normalize work totals by calls.
- * OPENCLAW_BENCH_COMMIT=1 additionally publishes through one retained store lease:
+ * Every run prepares through one retained store lease. OPENCLAW_BENCH_COMMIT=1
+ * additionally publishes:
  * scans accept observations/stat deltas; replacements accept their prepared update.
  * Report this separately from read-action timing. `all work` counts SQL/transaction
  * holds in a separate instrumented pass; `all timing` excludes that instrumentation.
@@ -482,14 +485,13 @@ if (mode === "seed-candidate") {
       : name === "materialize"
         ? { kind: "materialize" }
         : { kind: "scan", target: name, canonicalRoot: root };
-  const { executeExistingOpenClawStateRead } =
-    await import("../../src/state/openclaw-state-db-readonly.js");
   const { drainGlobalSingletonLifecycleState } =
     await import("../../src/shared/global-singleton.js");
   let store: LocalWorkspaceStore | undefined;
   let releaseStore: (() => void) | undefined;
   let storeTask: Promise<void> | undefined;
-  if (process.env.OPENCLAW_BENCH_COMMIT === "1") {
+  const committing = process.env.OPENCLAW_BENCH_COMMIT === "1";
+  {
     const { openOpenClawStateDatabase } = await import("../../src/state/openclaw-state-db.js");
     const { withLocalWorkspaceStore } =
       await import("../../src/gateway/worker-environments/local-workspace-store.js");
@@ -506,8 +508,9 @@ if (mode === "seed-candidate") {
     store = await ready.promise;
   }
   const invoke = async (name: ActionName) => {
-    if (store) {
-      const value = await store.manifest(store.get()!, actionFor(name));
+    assert.ok(store);
+    const value = await store.manifest(store.get()!, actionFor(name));
+    if (committing) {
       if (value.kind === "replace") {
         await store.accept(value.update);
       } else if (value.kind === "scan") {
@@ -521,16 +524,8 @@ if (mode === "seed-candidate") {
           await store.update(store.get()!, {}, undefined, value);
         }
       }
-      return { type: "localWorkspace.manifest" as const, value };
     }
-    return await executeExistingOpenClawStateRead(
-      { env },
-      {
-        type: "localWorkspace.manifest",
-        input: { id, revision, action: actionFor(name) },
-      },
-      { current: true, live: true },
-    );
+    return { type: "localWorkspace.manifest" as const, value };
   };
   try {
     await invoke(actionName as ActionName);
@@ -565,14 +560,13 @@ if (mode === "seed-candidate") {
     };
     const measure = async (name: ActionName, resultLabel: string) => {
       const before = await command("collect");
-      const otherWorkers =
-        instrument === "work" ? identities.filter((identity) => identity !== worker) : [];
+      const otherWorkers = identities.filter((identity) => identity !== worker);
       for (const other of otherWorkers) {
         await command("start", other);
       }
       await command("start");
       const start = performance.now();
-      let reply: Awaited<ReturnType<typeof invoke>> = undefined;
+      let reply: Awaited<ReturnType<typeof invoke>> | undefined = undefined;
       for (let index = 0; index < operations; index++) {
         reply = await invoke(name);
       }
@@ -581,7 +575,7 @@ if (mode === "seed-candidate") {
       const otherWork = [];
       for (const other of otherWorkers) {
         const result = await command("stop", other);
-        otherWork.push({ script: other.script, sql: result.sql, fileCalls: result.fileCalls });
+        otherWork.push({ script: other.script, ...result });
       }
       const after = await command("collect");
       assert.ok(reply && reply.type === "localWorkspace.manifest");
@@ -598,7 +592,7 @@ if (mode === "seed-candidate") {
         editedFiles: fixture.editedFiles ?? 0,
         records: fixture.records,
         operations,
-        boundary: store ? "store-publication" : "read-action",
+        boundary: committing ? "store-publication" : "store-preparation",
         otherWork,
         load: os.loadavg(),
         requestElapsedMs: elapsedMs,

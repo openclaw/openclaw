@@ -6,7 +6,9 @@ import type { AgentCommandOpts } from "../agents/command/types.js";
 import type { EmbeddedAgentRunResult } from "../agents/embedded-agent-runner.js";
 import { resolveCommandReplyExpectation } from "../agents/reply-completion.js";
 import type * as CronDelivery from "../cron/delivery.js";
+import { loadCronStore } from "../cron/store.js";
 import { makeCronJob } from "./server-cron.events.test-support.js";
+import { installCronRepairTurn } from "./server.cron-repair-turn.test-support.js";
 import { expectCronJobIdFromResponse } from "./server.cron.assertions.test-support.js";
 import {
   agentCommandMock,
@@ -30,9 +32,7 @@ export function registerCronRepairCases(
   }>,
   sendCronAnnouncePayloadStrictMock: Mock<typeof CronDelivery.sendCronAnnouncePayloadStrict>,
 ) {
-  test("allows scheduler repair NO_REPLY without granting silence to public provenance", async ({
-    signal,
-  }) => {
+  test("accepts silent scheduler repairs but rejects public provenance", async ({ signal }) => {
     const caseDir = getCaseDir();
     testState.cronEnabled = true;
     const ownerSessionKey = "agent:main:dashboard:silent-cron-repair";
@@ -40,34 +40,39 @@ export function registerCronRepairCases(
     await writeSessionStore({
       agentId: "main",
       entries: {
-        [ownerSessionKey]: {
-          sessionId: "silent-cron-owner",
-          updatedAt: Date.now(),
-          lastChannel: "webchat",
-        },
+        [ownerSessionKey]: { sessionId: "owner", updatedAt: Date.now(), lastChannel: "webchat" },
       },
     });
     const { runPreparedCliAgent } = await import("../agents/cli-runner.js");
     const execution = await import("../agents/cli-runner/execute.runtime.js");
-    // Replace external CLI I/O only: the real policy, enforcement, and settlement
-    // consume the options produced by public RPC and trusted scheduler dispatch.
-    const cliOutput = vi
-      .spyOn(execution, "executePreparedCliRun")
-      .mockResolvedValue({ text: "NO_REPLY", rawText: "NO_REPLY" });
+    const cliOutput = vi.spyOn(execution, "executePreparedCliRun");
+    cliOutput.mockResolvedValue({ text: "NO_REPLY", rawText: "NO_REPLY" });
+    const runCli = async (
+      run: Pick<
+        Parameters<typeof runPreparedCliAgent>[0]["params"],
+        "sessionKey" | "runId" | "prompt" | "inputProvenance" | "terminalReplyExpectation"
+      >,
+    ): Promise<{ result?: EmbeddedAgentRunResult; error?: unknown }> => {
+      const context = buildPreparedCliRunContext({
+        workspaceDir: caseDir,
+        sessionKey: run.sessionKey,
+        runId: run.runId,
+        backend: { sessionMode: "none" },
+      });
+      context.params = { ...context.params, ...run };
+      return runPreparedCliAgent(context).then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+    };
     const publicOutcome = createDeferred<{ error?: unknown }>();
-    const repairOutcome = createDeferred<EmbeddedAgentRunResult>();
     const publicRunId = "public-cron-repair-provenance";
     const { request, run } = await startCronClient();
     await prepareGatewayReplyRuntimeForTest({ force: true });
     agentCommandMock.mockImplementation(async (command: AgentCommandOpts) => {
-      const context = buildPreparedCliRunContext({
-        workspaceDir: caseDir,
+      const outcome = await runCli({
         sessionKey: command.sessionKey,
-        runId: command.runId,
-        backend: { sessionMode: "none" },
-      });
-      context.params = {
-        ...context.params,
+        runId: command.runId ?? publicRunId,
         prompt: command.message,
         inputProvenance: command.inputProvenance,
         terminalReplyExpectation: resolveCommandReplyExpectation({
@@ -76,30 +81,22 @@ export function registerCronRepairCases(
           messageChannel: command.messageChannel ?? command.channel,
           opts: command,
         }),
-      };
-      try {
-        const result = await runPreparedCliAgent(context);
-        if (command.runId === publicRunId) {
-          publicOutcome.resolve({});
-        } else {
-          repairOutcome.resolve(result);
-        }
-        // The command boundary serializes the silent result as an empty payload list.
-        return { meta: result.meta, payloads: [] };
-      } catch (error) {
-        if (command.runId === publicRunId) {
-          publicOutcome.resolve({ error });
-        } else {
-          repairOutcome.reject(error);
-        }
-        throw error;
+      });
+      publicOutcome.resolve(outcome);
+      if (!outcome.result) {
+        throw outcome.error;
       }
+      return { meta: outcome.result.meta, payloads: [] };
     });
-    // Attach the rejection observer before dispatch, including on the red baseline.
-    const repaired = repairOutcome.promise.then(
-      (result) => ({ result }),
-      (error: unknown) => ({ error }),
-    );
+    const repairOutcome = createDeferred<{ result?: EmbeddedAgentRunResult; error?: unknown }>();
+    const repairTurn = installCronRepairTurn(async (params) => {
+      const outcome = await runCli(params);
+      repairOutcome.resolve(outcome);
+      if (!outcome.result) {
+        throw outcome.error;
+      }
+      return "NO_REPLY";
+    });
     try {
       const forged = await request("agent", {
         sessionKey: ownerSessionKey,
@@ -114,21 +111,28 @@ export function registerCronRepairCases(
       expect(control.error).toMatchObject({ message: "CLI backend returned an empty response." });
 
       cronIsolatedRun.mockResolvedValue({ status: "error", error: "temporary upstream outage" });
-      const added = await request(
-        "cron.add",
-        makeCronJob("silent repair", {
-          sessionTarget: "isolated",
-          payload: { kind: "agentTurn", message: "Inspect the upstream service." },
-          owner: { agentId: "main", sessionKey: ownerSessionKey },
-          delivery: { mode: "none" },
-          failureAlert: { after: 2, mode: "announce" },
-        }),
-      );
-      const jobId = expectCronJobIdFromResponse(added);
+      const repairJob = makeCronJob("silent repair", {
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "Inspect the upstream service." },
+        owner: { agentId: "main", sessionKey: ownerSessionKey },
+        delivery: { mode: "none" },
+        failureAlert: { after: 2, mode: "announce" },
+      });
+      const jobId = expectCronJobIdFromResponse(await request("cron.add", repairJob));
       await run(jobId);
       await run(jobId);
-      expect(await withinTest(repaired, signal)).toMatchObject({
+      expect(await withinTest(repairOutcome.promise, signal)).toMatchObject({
         result: { meta: { terminalReply: { disposition: "silent" } } },
+      });
+      expect(repairTurn.context()).toMatchObject({
+        SessionKey: ownerSessionKey,
+        InputProvenance: { kind: "internal_system", sourceTool: "cron_failure_repair" },
+      });
+      await vi.waitFor(async () => {
+        const stored = await loadCronStore(path.join(caseDir, "cron", "jobs.json"));
+        const repair = stored.jobs.find((job) => job.id === jobId)?.state.failureAlertIncident
+          ?.repair;
+        expect(repair).toMatchObject({ settledAtMs: expect.any(Number) });
       });
       expect(cliOutput).toHaveBeenCalledTimes(2);
       expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();

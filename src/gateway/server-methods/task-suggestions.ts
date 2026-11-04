@@ -401,8 +401,14 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
         const visibilityFilter = createSessionListEntryFilter({ client, cfg: currentConfig });
         const visible = visibilityFilter
           ? suggestions.filter((suggestion) => {
-              const target = reads.get(sourceKey(suggestion))?.readCurrent(currentConfig).target;
-              return Boolean(target && visibilityFilter(target.storeKey, target.entry));
+              const facts = reads.get(sourceKey(suggestion))?.readCurrent(currentConfig);
+              const target = facts?.target;
+              const currentFilter = createSessionListEntryFilter({
+                client,
+                cfg: currentConfig,
+                membership: facts?.membership,
+              });
+              return Boolean(target && currentFilter?.(target.storeKey, target.entry) !== false);
             })
           : suggestions;
         respond(true, { suggestions: visible }, undefined);

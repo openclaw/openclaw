@@ -33,7 +33,7 @@ import {
   extractAssistantPhaseText,
   extractAssistantTextForPhase,
 } from "../../shared/chat-message-content.js";
-import { combineNonStreamingReplyParts } from "../../shared/text/text-projection.js";
+import { combineNonStreamingReplyParts } from "../../shared/text/trim-code-text.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { isToolHistoryBlockType } from "../chat-display-projection.canvas.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";

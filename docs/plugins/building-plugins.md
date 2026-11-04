@@ -345,6 +345,21 @@ start while checkout continues. Plain tool objects default to `"execute"` becaus
 they have no runtime factory. `defineToolPlugin` accepts the same option on each
 tool definition.
 
+To tell the model when and how to use a tool, set `promptGuidance` in the
+registration options. OpenClaw adds that text to the system prompt only while
+one of the registration's named tools is callable in the run, including tools
+found through Tool Search, on every bundled agent harness. A run that denies the
+tool gets no guidance. The registration must name its tools with `name` or
+`names`. Use this instead of a `before_prompt_build` hook for tool guidance:
+that hook adds its text even when the tool is denied.
+
+```typescript
+api.registerTool(createWorkflowTool, {
+  name: "workflow_tool",
+  promptGuidance: "## Workflows\nUse `workflow_tool` for multi-step pipelines.",
+});
+```
+
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:
 

@@ -16,11 +16,13 @@ import { detectWorktreeFilesystemBackend } from "../../agents/worktrees/filesyst
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { prepareWorktreeTemplate } from "../../agents/worktrees/template-cache.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
 
 const log = createSubsystemLogger("agents/worktrees");
+const TEMPLATE_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.template";
 
 async function hasContainedVirtualStore(directory: string, workdir: string): Promise<boolean> {
   try {
@@ -206,6 +208,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     validate: (existing, templateOptions) =>
       validateTemplate(existing.path, params.baseCommit, templateOptions),
     prepare: async (preparing, templateOptions) => {
+      using phases = observeDiagnosticsTimelinePhases(`${TEMPLATE_PHASE}.build`);
       const templateGuard = {
         ...guard,
         ...templateOptions,
@@ -221,6 +224,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
         assertCurrent: templateGuard.commitGuard,
         rollbackGuard: templateOptions.rollbackGuard,
       });
+      phases.mark(`${TEMPLATE_PHASE}.validate`);
       const contained =
         result.installed &&
         (await hasContainedVirtualStore(preparing.path, identity.docker.workdir));
@@ -247,6 +251,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
         return;
       }
       templateGuard.commitGuard();
+      phases.mark(`${TEMPLATE_PHASE}.rebuild`);
       await fs.rm(preparing.path, { recursive: true, force: true });
       await prepareSource(preparing.path, templateGuard);
     },
@@ -258,6 +263,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
 export async function cloneLocalWorkspaceTemplate(
   params: LocalWorkspaceTemplateParams & { branch: string; destination: string },
 ): Promise<boolean> {
+  using phases = observeDiagnosticsTimelinePhases(`${TEMPLATE_PHASE}.select`);
   const prepared = await timeWorktreePreparationPhase("templatePrepare", () =>
     prepareLocalWorkspaceTemplate(params),
   );
@@ -268,6 +274,7 @@ export async function cloneLocalWorkspaceTemplate(
   const { guard } = params;
   let outcome: unknown;
   try {
+    phases.mark(`${TEMPLATE_PHASE}.clone`);
     guard.commitGuard();
     await guard.requireDiskSpace(
       [
@@ -306,6 +313,7 @@ export async function cloneLocalWorkspaceTemplate(
     outcome = error;
     throw error;
   } finally {
+    phases.mark(`${TEMPLATE_PHASE}.release`);
     await record.release(outcome);
   }
 }
