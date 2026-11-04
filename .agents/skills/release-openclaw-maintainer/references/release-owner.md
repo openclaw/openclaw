@@ -129,6 +129,15 @@ while other lanes drain. Batch confirmed repairs before the next candidate;
 do not launch a replacement parent for each newly observed failure. Do not
 cancel useful surviving work merely because another lane failed.
 
+While a long lane or operator decision is pending, keep either the active FRV
+or a named blocker/proof lane in flight. Pre-stage the next eligible FRV inputs
+and run independent proofs, but do not dispatch a duplicate parent. If an
+approved port is expected to land within about 15 minutes, wait for it before
+dispatching so the run can qualify the resulting candidate. Ask decisions in a
+non-blocking update with a recommended reversible default while independent
+work continues. If the question remains unanswered, send one notification;
+do not re-arm a watcher that has no new transition or work.
+
 Apply the existing blocker/flake policy: diagnose first, repair the owner,
 retry the affected surface within its budget, and retain successful exact-input
 evidence where allowed. P-only, credential, or infrastructure recovery does not
