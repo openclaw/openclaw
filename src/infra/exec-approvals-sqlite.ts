@@ -61,6 +61,19 @@ export function assertExecApprovalsMutationAllowed(params: {
   if (agentIds.size === 0) {
     return;
   }
+  // Node-scoped approvals persist in agent databases that predate the journal
+  // table; the deletion fence only exists where the journal itself lives.
+  const journalTable = executeSqliteQueryTakeFirstSync(
+    params.db,
+    getNodeSqliteKysely<{ name: string }>(params.db)
+      .selectFrom("sqlite_master")
+      .select("name")
+      .where("name", "=", "agent_deletion_journal")
+      .limit(1),
+  );
+  if (!journalTable) {
+    return;
+  }
   const journal = executeSqliteQueryTakeFirstSync(
     params.db,
     getNodeSqliteKysely<ExecApprovalsDatabase>(params.db)

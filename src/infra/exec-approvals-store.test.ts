@@ -40,7 +40,11 @@ import {
   type ExecApprovalsPublicationValue,
 } from "./exec-approvals-publication.js";
 import * as execApprovalsSocket from "./exec-approvals-socket.js";
-import { serializeExecApprovals, writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
+import {
+  assertExecApprovalsMutationAllowed,
+  serializeExecApprovals,
+  writeExecApprovalsConfigRow,
+} from "./exec-approvals-sqlite.js";
 import {
   commitExecAuthorizations,
   ensureExecApprovalsSnapshot,
@@ -381,6 +385,18 @@ describe("exec approvals SQLite store", () => {
 
     expect(policiesDuringCommit).toEqual({ kept: { security: "deny" } });
     expect(loadExecApprovals().agents).toEqual(agents);
+  });
+
+  it("skips the deletion fence on databases without the journal table", () => {
+    const db = new DatabaseSync(":memory:");
+    expect(() =>
+      assertExecApprovalsMutationAllowed({
+        db: db as never,
+        current: { version: 1, agents: {} },
+        next: { version: 1, agents: { removed: { security: "full" as const } } },
+        agentId: "removed",
+      }),
+    ).not.toThrow();
   });
 
   it.each(["missing", "superseded"] as const)(
