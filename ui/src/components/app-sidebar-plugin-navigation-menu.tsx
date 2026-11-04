@@ -56,7 +56,10 @@ export function renderSidebarPluginNavigationMenuForMenus(
     } catch (error) {
       if (!entry.signal.aborted) {
         host.sessionDataContext?.plugins.reportError(entry.pluginId, error);
-        showToast({ message: error instanceof Error ? error.message : String(error) });
+        showToast({
+          severity: "error",
+          message: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   };

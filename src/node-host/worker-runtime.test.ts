@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { WORKER_LOCAL_MCP_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { MCP_ELICITATION_TIMEOUT_MS } from "../agents/mcp-client-elicitation.js";
 import {
@@ -327,6 +328,41 @@ it.each([
     );
   },
 );
+
+it("keeps configured MCP tools on the Gateway route for the private app bridge", async () => {
+  fixture.prepare.mockImplementationOnce(async (params) => ({
+    ...(await prepareNodeHostRuntime({
+      ...params,
+      config: {
+        nodeHost: {
+          workerRuns: { enabled: true },
+          skills: { enabled: false },
+          mcp: { servers: { fixture: { command: "fixture-mcp" } } },
+        },
+      },
+      env: {},
+    })),
+    start: fixture.start,
+  }));
+  await withWorker(async ({ connect, send, messages }) => {
+    const command = "mcp.tools.call.v1";
+    expect(readyMessage(messages)).toMatchObject({
+      manifest: { commands: expect.arrayContaining([command]) },
+    });
+    connect(1, { ...currentGateway, capabilities: [WORKER_LOCAL_MCP_PROTOCOL_FEATURE] });
+    await vi.waitFor(() => expect(messages).toContainEqual(runnerPublication({ enabled: true })));
+    const inventory = messages.find((message) => message.method === "node.runnerInventory.update");
+    expect(inventory?.params).not.toHaveProperty("workerHost.localMcp");
+    const request = {
+      id: "routed",
+      nodeId: "app",
+      command,
+      paramsJSON: '{"server":"fixture","tool":"search","arguments":{}}',
+    };
+    send({ type: "invoke", generation: 1, request });
+    expect(fixture.runtime.invoke).toHaveBeenCalledWith(request);
+  });
+});
 
 it("publishes hosting through the app route and retires it on disconnect", async () => {
   const { send, connect, ready, messages, stderr, stop } = startWorkerFixture();
