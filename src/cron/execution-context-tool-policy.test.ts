@@ -44,6 +44,7 @@ vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   captureResidentUserProfileAccess: () => ({ assertCurrent: () => {} }),
 }));
 
+const { consumeCronNextCheckProposal } = await import("../infra/agent-run-registry.automation.js");
 const { claimAgentRunContext, releaseAgentRunContext } =
   await import("../infra/agent-run-registry.js");
 const { resolveAdmittedRunActiveAssertion } = await import("../agents/admitted-run-context.js");
@@ -182,15 +183,18 @@ async function admitRun(stored: CronStoredJob, runKey: string, toolsAllow: strin
 
 type Run = Awaited<ReturnType<typeof admitRun>>;
 
-async function embeddedTools(run: Run, onYield = () => {}) {
+async function embeddedTools(
+  run: Run,
+  onYield = () => {},
+  turn: { trigger?: "cron" | "event"; jobId?: string } = { trigger: "cron", jobId: "job-1" },
+) {
   return await createOpenClawCodingToolsInternalAsync({
     config: CFG,
     agentId: "main",
     sessionKey: run.runKey,
     sessionId: "run-session",
     runId: "run-1",
-    trigger: "cron",
-    jobId: "job-1",
+    ...turn,
     operationalRunInstance: run.admitted.operationalRunInstance,
     ...(run.senderIsOwner !== undefined ? { senderIsOwner: run.senderIsOwner } : {}),
     runtimeToolAllowlist: run.toolsAllow,
@@ -225,13 +229,13 @@ async function cliTools(run: Run, onYield = () => {}) {
 // Registers the run's automation invocation the way the cron runner does before
 // the runtime starts (src/cron/isolated-agent/run.ts). The returned close settles
 // it the same way: the invocation is marked closed, then the context released.
-function claimAutomationRun(run: Run) {
+function claimAutomationRun(run: Run, nextCheckEnabled = false) {
   const assertAdmitted = resolveAdmittedRunActiveAssertion(run.admitted);
   if (!assertAdmitted) {
     throw new Error("expected an admitted run assertion");
   }
   const invocation: { nextCheckEnabled: boolean; assertCurrent: () => void; closed?: boolean } = {
-    nextCheckEnabled: false,
+    nextCheckEnabled,
     assertCurrent: assertAdmitted,
   };
   const claim = claimAgentRunContext(
@@ -267,6 +271,30 @@ async function callError(tool: AnyAgentTool, params: Record<string, unknown>) {
 }
 
 describe("scheduled automations scope", () => {
+  it("keeps next_check and self scope when a session continuation carries only admitted job identity", async () => {
+    const run = await admitRun(
+      job({
+        sessionTarget: `session:${PARENT_KEY}`,
+        schedule: { kind: "at", at: "2026-11-01T18:00:00Z" },
+      }),
+      PARENT_KEY,
+      ["*"],
+    );
+    claimAutomationRun(run, true);
+    // Embedded session turns carry the admission but no separate jobId projection.
+    const automations = (await embeddedTools(run, undefined, { trigger: "cron" })).find(
+      (tool) => tool.name === AUTOMATIONS_TOOL_NAME,
+    )!;
+    await expect(
+      automations.execute("next", { action: "next_check", in: "5m" }),
+    ).resolves.toMatchObject({ details: { ok: true, delayMs: 300_000 } });
+    expect(await callError(automations, { action: "runs", jobId: "sibling-job" })).toContain(
+      SCOPE_ERROR,
+    );
+    expect(dispatched()).toEqual([]);
+    expect(consumeCronNextCheckProposal("run-1", "job-1")).toBe(300_000);
+  });
+
   describe.each(RUNS)("$name", (entry) => {
     it.each(["embedded", "cli"] as const)("%s run acts only on its own job", async (runtime) => {
       const run = await admitRun(entry.job, entry.runKey, ["*"]);
@@ -275,9 +303,9 @@ describe("scheduled automations scope", () => {
       expect(automations, "automations tool offered").toBeDefined();
       const actions = readActionEnum(automations!);
       expect(actions).toEqual(expect.arrayContaining(["status", "list", "get", "remove", "runs"]));
-      // No creation, edits, forced runs or wake: the parent wake action is not offered yet.
+      // Conversation schemas stay stable; execution enforces the scheduled scope.
       for (const action of ["add", "update", "run", "wake", "bind"]) {
-        expect(actions).not.toContain(action);
+        expect(await callError(automations!, { action })).toContain(SCOPE_ERROR);
       }
       for (const action of ["get", "remove", "runs"]) {
         expect(await callError(automations!, { action, jobId: "sibling-job" })).toContain(

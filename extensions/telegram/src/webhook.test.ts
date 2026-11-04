@@ -509,6 +509,7 @@ describe("startTelegramWebhook", () => {
   registerTelegramWebhookRegistrationTests({
     gateway,
     setWebhookSpy,
+    initSpy,
     stopSpy,
     transportCloseSpies,
     startWebhookStartupFixture,
@@ -516,24 +517,6 @@ describe("startTelegramWebhook", () => {
     token: TELEGRAM_TOKEN,
     secret: TELEGRAM_SECRET,
     path: TELEGRAM_WEBHOOK_PATH,
-  });
-
-  it("retries transient getMe startup init failures before starting the account", async () => {
-    const setStatus = vi.fn();
-    initSpy.mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(undefined);
-
-    await withWebhook(
-      async ({ port }) => {
-        await expectAccepted(await postUpdate(port, telegramMessageUpdate(806, "startup webhook")));
-      },
-      {
-        setStatus,
-      },
-    );
-
-    expect(initSpy).toHaveBeenCalledTimes(2);
-    expectStatusCall(setStatus, { lifecycle: "recovering" });
-    expect(setWebhookSpy).toHaveBeenCalledTimes(1);
   });
 
   it.each(["creation", "initialization", "route registration", "ingress queue"] as const)(
@@ -821,7 +804,7 @@ describe("startTelegramWebhook", () => {
   });
 
   it("durably retries a webhook update after acknowledging Telegram", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const seenUpdates: unknown[] = [];
     handleUpdateSpy.mockImplementation(async (update: unknown) => {
       seenUpdates.push(update);
@@ -834,20 +817,20 @@ describe("startTelegramWebhook", () => {
     });
     const update = telegramMessageUpdate(3, "boom");
 
-    await withWebhook(async ({ port }) => {
-      const response = await postUpdate(port, update);
-
-      await expectAccepted(response);
-      await waitForWebhookState(() => expect(seenUpdates).toEqual([update]));
-      await waitForWebhookState(async () =>
-        expect(await pendingUpdates()).toMatchObject([
-          { updateId: 3, attempts: 1, lastError: "agent turn failed" },
-        ]),
-      );
-      vi.setSystemTime(Date.now() + 1_100);
-      await vi.advanceTimersByTimeAsync(500);
-      await waitForWebhookState(() => expect(seenUpdates).toEqual([update, update]));
-      await waitForWebhookState(async () => expect(await pendingUpdates()).toEqual([]));
+    await withWebhook(async ({ port, ingress }) => {
+      await expectAccepted(await postUpdate(port, update));
+      // Join settlement and its follow-up pump before advancing the retry deadline.
+      await ingress.waitForIdle();
+      expect(seenUpdates).toEqual([update]);
+      expect(await pendingUpdates()).toMatchObject([
+        { updateId: 3, attempts: 1, lastError: "agent turn failed" },
+      ]);
+      for (const elapsed of [999, 1]) {
+        await vi.advanceTimersByTimeAsync(elapsed);
+        await ingress.waitForIdle();
+        expect(seenUpdates).toEqual(elapsed === 999 ? [update] : [update, update]);
+      }
+      expect(await pendingUpdates()).toEqual([]);
     });
   });
 

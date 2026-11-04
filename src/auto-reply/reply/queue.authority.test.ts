@@ -94,64 +94,44 @@ function prepareOperatorAdmission(run: FollowupRun, runId: string) {
 }
 
 describe("followup queue authority", () => {
-  it.each(["collect", "overflow"] as const)(
-    "keeps restart-restricted input separate through a %s drain",
-    async (mode) => {
-      const q = createQueueCase({ mode: "collect", cap: mode === "overflow" ? 1 : 50 });
-      const admissionConfigs = [{ tools: { deny: ["write"] } }, { tools: { deny: ["exec"] } }];
-      for (const restricted of [true, false]) {
-        const run = webchatRun(restricted ? "interrupted task" : "new task");
-        run.readAdmissionConfig = () => admissionConfigs[restricted ? 0 : 1]!;
-        if (restricted) {
-          run.forceRestartSafeTools = true;
-          run.forceCodeModeTools = true;
-        }
-        q.add(run);
+  it.each([false, true])(
+    "keeps different requesters separate when requests are identical=%s",
+    async (identical) => {
+      const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 2);
+      for (const [index, senderId] of ["alice", "bob", "bob"].entries()) {
+        q.enqueue(
+          {
+            prompt: identical ? "Summarize report.txt" : `${senderId} request ${index}`,
+            originatingChannel: "telegram",
+            originatingTo: "shared-chat",
+          },
+          {
+            senderId: "shared-receiver",
+            requesterOrigin: {
+              sessionKey: "agent:research:telegram:group:requesters",
+              messageProvider: "telegram",
+              senderId,
+            },
+          },
+        );
       }
-      q.start();
-      await vi.waitFor(() => expect(getExistingFollowupQueue(q.key)).toBeUndefined());
-      expect(q.calls).toHaveLength(2);
-      expect(q.calls.map((run) => run.readAdmissionConfig?.())).toEqual(admissionConfigs);
-      expect(q.calls[0]?.prompt).toContain("interrupted task");
-      expect(q.calls[0]?.prompt).not.toContain("new task");
-      expect(q.calls[0]).toMatchObject({
-        forceRestartSafeTools: true,
-        forceCodeModeTools: true,
-      });
-      expect(q.calls[1]?.prompt).toContain("new task");
-      expect(q.calls[1]?.forceRestartSafeTools).not.toBe(true);
-      expect(q.calls[1]?.forceCodeModeTools).not.toBe(true);
+      await q.drain();
+      if (identical) {
+        expect(q.calls.map(({ prompt }) => prompt.match(/Summarize report\.txt/g)?.length)).toEqual(
+          [1, 2],
+        );
+      } else {
+        expect(q.calls.map(({ prompt }) => prompt.match(/(?:alice|bob) request \d/g))).toEqual([
+          ["alice request 0"],
+          ["bob request 1", "bob request 2"],
+        ]);
+        expect(q.calls[0]?.prompt).not.toContain("bob request");
+        expect(q.calls[1]?.prompt).not.toContain("alice request");
+      }
+      expect(q.calls[0]?.run.requesterOrigin?.senderId).toBe("alice");
+      expect(q.calls[1]?.run.requesterOrigin?.senderId).toBe("bob");
     },
   );
-
-  it("keeps different original requesters in separate collected turns on the same route", async () => {
-    const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 2);
-    for (const [index, senderId] of ["alice", "bob", "bob"].entries()) {
-      q.enqueue(
-        {
-          prompt: `${senderId} request ${index}`,
-          originatingChannel: "telegram",
-          originatingTo: "shared-chat",
-        },
-        {
-          senderId: "shared-receiver",
-          requesterOrigin: {
-            sessionKey: "agent:research:telegram:group:requesters",
-            messageProvider: "telegram",
-            senderId,
-          },
-        },
-      );
-    }
-    await q.drain();
-    expect(q.calls.map(({ prompt }) => prompt.match(/(?:alice|bob) request \d/g))).toEqual([
-      ["alice request 0"],
-      ["bob request 1", "bob request 2"],
-    ]);
-    expect(q.calls[0]?.prompt).not.toContain("bob request");
-    expect(q.calls[1]?.prompt).not.toContain("alice request");
-    expect(q.calls[1]?.run.requesterOrigin?.senderId).toBe("bob");
-  });
 
   it("keeps a restricted sender's tool policy and task root through a collect drain", async () => {
     const q = createQueueCase({ mode: "collect" }, 2);

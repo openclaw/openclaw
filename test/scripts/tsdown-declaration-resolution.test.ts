@@ -466,9 +466,7 @@ try {
     }),
 );
 
-it.concurrent.for(
-  ["node", "workspace", "AI"].flatMap((owner) => [true, false].map((dts) => ({ owner, dts }))),
-)("honors resolved dts=$dts over the opposite $owner default", ({ owner, dts }, { command }) =>
+it.concurrent.for([true, false])("honors dts=%s overrides for every owner", (dts, { command }) =>
   command.lifetime.run(async () => {
     const { root, run } = containedFixture(command, undefined, ["tsdown.ai.config.ts"]);
     const outside = path.join(path.dirname(root), "runtime.ts");
@@ -479,19 +477,21 @@ const buildFixture = makeBuild(build);
 process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = ${JSON.stringify(dts ? "1" : "0")};
 const { default: configs } = await import("./tsdown.config.ts");
 const { default: ai } = await import("./tsdown.ai.config.ts");
-const owner = ${JSON.stringify(owner)};
+// Each default is imported once; every owner still gets a separate real build and output tree.
+for (const owner of ["node", "workspace", "AI"]) {
 const config = owner === "AI" ? ai : configs.find(config => config.outDir ===
   (owner === "node" ? "packages/agent-core/dist" : "packages/gateway-protocol/dist"));
 assert.ok(config);
-assert.deepEqual(config.dts, ${dts ? "false" : '{ tsconfig: "tsconfig.packages.json" }'});
+assert.deepEqual(config.dts, ${dts ? "false" : '{ tsconfig: "tsconfig.packages.json" }'}, owner);
+const outDir = "override-output-" + owner;
 // The build API's cwd, rather than the importing process's cwd, owns inputs.
 process.chdir(path.dirname(root));
 const runtime = Promise.withResolvers();
 const { bundles } = await buildFixture({
   ...config, cwd: root,
-  dts: ${dts ? '{ enabled: true, entry: ["src/shared.ts"], newContext: true }' : owner === "AI" ? "{ enabled: false }" : "false"}, format: ["esm", "cjs"], concurrency: 1,
+  dts: ${dts ? '{ enabled: true, entry: ["src/shared.ts"], newContext: true }' : 'owner === "AI" ? { enabled: false } : false'}, format: ["esm", "cjs"], concurrency: 1,
   entry: ${JSON.stringify(dts ? "src/shared.ts" : outside)},
-  outDir: "override-output", outExtensions: undefined, fixedExtension: true,
+  outDir, outExtensions: undefined, fixedExtension: true,
   inputOptions: async (input, format, context) => {
     const resolved = await config.inputOptions?.(input, format, context) ?? input;
     return { ...resolved, plugins: [resolved.plugins, {
@@ -507,20 +507,19 @@ const { bundles } = await buildFixture({
   },
 });
 try {
-  const files = fs.readdirSync(path.join(root, "override-output"));
   if (${dts}) {
     for (const extension of ["mts", "cts"]) {
-      const declaration = fs.readFileSync(path.join(root, "override-output/shared.d." + extension), "utf8");
+      const declaration = fs.readFileSync(path.join(root, outDir, "shared.d." + extension), "utf8");
       assert.match(declaration, /inferredOrigin: "local"/, extension + " used ancestor declarations");
       assert.match(declaration, /directoryName\\(\\): "declared-cwd"/, extension + " lost automatic types from declared cwd");
     }
   } else {
-    assert.equal(files.some(file => /\\.d\\.[cm]?ts$/.test(file)), false);
+    assert.equal(fs.readdirSync(path.join(root, outDir)).some(file => /\\.d\\.[cm]?ts$/.test(file)), false);
     for (const extension of ["mjs", "cjs"]) {
-      assert.match(fs.readFileSync(path.join(root, "override-output/runtime." + extension), "utf8"), /outside-runtime/);
+      assert.match(fs.readFileSync(path.join(root, outDir, "runtime." + extension), "utf8"), /outside-runtime/);
     }
   }
-  if (${dts && owner === "AI"}) {
+  if (${dts} && owner === "AI") {
     let starts = 0;
     const { bundles: objectOptions } = await buildFixture({
       ...config, cwd: root,
@@ -537,6 +536,7 @@ try {
   }
 } finally {
   await dispose(bundles);
+}
 }
 `);
   }),

@@ -11,6 +11,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
+import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -24,7 +25,7 @@ import {
 import { prepareTranscriptEventReadQuery } from "./session-accessor.sqlite-read.js";
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { iterateSessionColdRecords } from "./session-cold-storage-chunks.js";
 import type { SessionCompactionPreparation } from "./session-history-read.types.js";
 import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
@@ -97,10 +98,7 @@ export async function streamSessionTranscriptHydration(
         database,
         request.resolvedScope.sessionId,
       );
-      if (coldArchive) {
-        throw new SessionTranscriptColdError(request.resolvedScope.sessionId);
-      }
-      const encoding = readTranscriptStorageEncoding(database.db);
+      const encoding = coldArchive ? "UTF-8" : readTranscriptStorageEncoding(database.db);
       const source = prepareTranscriptEventReadQuery(database, request.resolvedScope.sessionId, {
         ...request.target,
         beforeEventSeq: fence?.beforeRawSeq,
@@ -144,7 +142,43 @@ export async function streamSessionTranscriptHydration(
             parameter((seq) => seq),
           ),
       );
-      function* readRows() {
+      function* readRows(): Generator<{
+        seq: number;
+        data: Uint8Array | null;
+        complete?: Uint8Array;
+      }> {
+        if (coldArchive) {
+          const limit = request.target.maxEventBytes;
+          const budget =
+            limit !== undefined && Number.isFinite(limit) && limit >= 0
+              ? Math.floor(limit)
+              : undefined;
+          let bytes = 0;
+          let separator = 0;
+          for (const record of iterateSessionColdRecords(database.db, database.path, coldArchive)) {
+            control.throwIfCancelled();
+            if (record.kind !== "event" || (fence && record.row.seq >= fence.beforeRawSeq)) {
+              continue;
+            }
+            if (budget !== undefined) {
+              bytes += Buffer.byteLength(record.row.event_json, "utf8") + separator;
+              separator = 1;
+              if (bytes > budget) {
+                throw new SqliteJsonlReadBudgetExceededError(
+                  `Trajectory transcript store is too large to export (at least ${bytes} bytes; limit ${budget})`,
+                );
+              }
+            }
+            if (request.afterSeq === undefined || record.row.seq > request.afterSeq) {
+              yield {
+                seq: record.row.seq,
+                data: null,
+                complete: Buffer.from(record.row.event_json, "utf8"),
+              };
+            }
+          }
+          return;
+        }
         if (!isPostgresSqlConnection(database.db)) {
           control.throwIfCancelled();
           const afterSeq = request.afterSeq;
@@ -259,6 +293,7 @@ export async function streamSessionTranscriptHydration(
       };
       for (const row of readRows()) {
         const initial =
+          row.complete ??
           row.data ??
           expectDefined(readCompressed(row.seq), "compressed transcript snapshot row").data;
         for (let offset = 1; ; offset += SLICE_BYTES) {

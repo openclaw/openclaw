@@ -17,7 +17,7 @@ import {
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
-import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { startWebSocketKeepalive, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { SignalRpcOptions } from "./client-types.js";
 import type { SignalReceivePayload } from "./monitor/event-handler.types.js";
 
@@ -408,6 +408,17 @@ export async function streamContainerEvents(params: {
 
     ws.on("open", () => {
       log("[signal-ws] connected");
+      // A network path that dies without a FIN never emits close; the missed pong
+      // ends this stream so the outer loop reconnects. The helper stops on close.
+      startWebSocketKeepalive(ws, () => {
+        // Local receive backpressure can leave the peer's pong unread. The
+        // keepalive keeps checking, and resumes enforcement when reads resume.
+        if (ws.isPaused) {
+          return;
+        }
+        logError("[signal-ws] heartbeat timed out; reconnecting");
+        ws.terminate();
+      });
       params.onStreamOpen?.();
     });
 
@@ -448,10 +459,6 @@ export async function streamContainerEvents(params: {
 
     ws.on("ping", () => {
       log("[signal-ws] ping received");
-    });
-
-    ws.on("pong", () => {
-      log("[signal-ws] pong received");
     });
 
     if (params.abortSignal) {

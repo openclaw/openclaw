@@ -10,7 +10,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createGatewayDeferredIntents } from "../../app/gateway-store.deferred-intents.ts";
 import * as confirmDialog from "../../components/confirm-dialog.ts";
 import { sessionRequest as mockSessionRequests } from "../../lib/sessions/hydration-family.test-support.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import "../../lib/toast-host.tsx";
@@ -34,7 +33,6 @@ import {
   createPage,
   createRenderedPage,
   liveSessions,
-  mountMutation,
   openRowMenu,
   selectRows,
   sessionRow,
@@ -284,10 +282,11 @@ describe("Sessions archive outcome lifetime", () => {
     ["replacement", "after"],
     ["failure", "attached"],
     ["failure", "detached"],
+    ["failure", "reconnected"],
   ] as const)("settles archive and captured Undo across %s (%s)", async (event, timing) => {
     const fixture = await setup();
     const { page, pending, patches, undo } = fixture;
-    const reconnect = event === "reconnect" || event === "new-client";
+    const reconnect = event === "reconnect" || event === "new-client" || timing === "reconnected";
     const transition = () => {
       if (reconnect) {
         fixture.gateway.emit({ phase: "reconnecting", client: null });
@@ -306,7 +305,7 @@ describe("Sessions archive outcome lifetime", () => {
     if (event !== "replacement") {
       await vi.waitFor(() => expect(patches()).toHaveLength(1));
     }
-    if (timing === "before" || timing === "detached") {
+    if (timing === "before" || timing === "detached" || timing === "reconnected") {
       transition();
     }
     const failure = new Error("Archive unavailable");
@@ -315,12 +314,24 @@ describe("Sessions archive outcome lifetime", () => {
     } else {
       pending.resolve(patched);
     }
-    await archived;
+    const outcome = await archived;
     if (event === "failure" || (reconnect && timing === "before")) {
       await fixture.toast.updateComplete;
       expect(undo()).toBeNull();
       if (event === "failure") {
-        expect(page.error).toBe(timing === "detached" ? null : failure);
+        const retired = timing !== "attached";
+        expect(page.error).toBe(retired ? null : failure);
+        if (retired) {
+          expect(outcome).toBe("stale");
+          expect(document.body.textContent).not.toContain(failure.message);
+        } else {
+          expect(typeof outcome === "object" ? outcome.error : undefined).toBe(failure);
+          await waitForFast(() => {
+            const alerts = page.querySelectorAll('[role="alert"]');
+            expect(alerts).toHaveLength(1);
+            expect(alerts[0]?.textContent).toContain(failure.message);
+          });
+        }
       }
       expect(patches()).toHaveLength(1);
       return;
@@ -544,37 +555,6 @@ describe("Sessions page confirmed tree archive outcomes", () => {
 });
 
 describe("sessions command outcomes", () => {
-  it.each([false, true])(
-    "returns the original patch failure only in its captured scope (retired: %s)",
-    async (retired) => {
-      const pending = createDeferred<Awaited<ReturnType<SessionCapability["patch"]>>>();
-      const failure = new Error("Patch unavailable. Try again.");
-      const { page, sessions, connection } = await mountMutation({
-        patch: vi.fn(() => pending.promise),
-      });
-      const completion = page.patchSession("agent:main:main", { label: "renamed" });
-      expect(sessions.patch).toHaveBeenCalledOnce();
-      if (retired) {
-        connection.emit({ phase: "reconnecting", client: null });
-      }
-      pending.reject(failure);
-      const outcome = await completion;
-      if (retired) {
-        expect(outcome).toBe("stale");
-        await page.updateComplete;
-        expect(page.error).toBeNull();
-        expect(document.body.textContent).not.toContain(failure.message);
-      } else {
-        expect(typeof outcome === "object" ? outcome.error : undefined).toBe(failure);
-        await waitForFast(() => {
-          const alerts = page.querySelectorAll('[role="alert"]');
-          expect(alerts).toHaveLength(1);
-          expect(alerts[0]?.textContent).toContain(failure.message);
-        });
-      }
-    },
-  );
-
   it("recovers personal visibility after showing its failure once and refreshing", async () => {
     const pending = createDeferred<{ ok: boolean }>();
     const failure = new Error("Personal visibility unavailable. Try again.");

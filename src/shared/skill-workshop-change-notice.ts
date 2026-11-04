@@ -1,8 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { SKILL_WORKSHOP_CHANGE_NOTICE_KIND } from "./transcript-only-openclaw-assistant.js";
+import { readPluginNoticeData } from "./plugin-notice.js";
 
-// Transcript marker on the notice a background skill review posts after changing learned
-// skills. The row's text serves every client; the marker lets the Control UI render it natively.
+// Data of the plugin notice a background skill review posts after changing learned skills.
+// The row's text serves every client; the data lets the Control UI render it natively.
+
+export const SKILL_WORKSHOP_PLUGIN_ID = "skill-workshop";
+export const SKILL_WORKSHOP_CHANGE_NOTICE_TYPE = "skills-changed";
 
 const NOTICE_ACTIONS = ["created", "updated", "archived", "restored"] as const;
 
@@ -15,7 +18,6 @@ export type SkillWorkshopChangeNoticeSkill = {
 };
 
 export type SkillWorkshopChangeNotice = {
-  kind: typeof SKILL_WORKSHOP_CHANGE_NOTICE_KIND;
   agentId: string;
   /** The background review's run id; `skills.workshop.undo` reverts all of its changes. */
   runId: string;
@@ -35,14 +37,17 @@ function readNoticeSkill(value: unknown): SkillWorkshopChangeNoticeSkill | undef
   };
 }
 
-/** Reads the notice marker from a transcript message; any malformed part rejects the whole row. */
+/** Reads the notice data from a transcript message; any malformed part rejects the whole row. */
 export function readSkillWorkshopChangeNotice(
   message: unknown,
 ): SkillWorkshopChangeNotice | undefined {
-  const marker = asOptionalRecord(asOptionalRecord(message)?.openclawDeliveryMirror);
+  const marker = readPluginNoticeData(
+    message,
+    SKILL_WORKSHOP_PLUGIN_ID,
+    SKILL_WORKSHOP_CHANGE_NOTICE_TYPE,
+  );
   if (
-    marker?.kind !== SKILL_WORKSHOP_CHANGE_NOTICE_KIND ||
-    typeof marker.agentId !== "string" ||
+    typeof marker?.agentId !== "string" ||
     !marker.agentId ||
     typeof marker.runId !== "string" ||
     !marker.runId ||
@@ -56,7 +61,6 @@ export function readSkillWorkshopChangeNotice(
     return undefined;
   }
   return {
-    kind: SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
     agentId: marker.agentId,
     runId: marker.runId,
     skills: skills.filter((skill) => skill !== undefined),

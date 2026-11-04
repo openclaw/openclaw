@@ -5,7 +5,6 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { AgentsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as runtimeMetadata from "../../agents/agent-runtime-metadata.js";
 import * as avatarRuntime from "../../agents/identity-avatar-file-runtime.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -25,6 +24,8 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
+import { createSessionGoalFixture } from "../session-goal.test-support.js";
 import { closeSessionSqliteDatabasesForTest } from "../session-utils.test-support.js";
 import { testState } from "../test-helpers.js";
 import {
@@ -87,10 +88,6 @@ async function expectRead(
   payload: unknown,
 ) {
   expect(await directSessionReq(method, params)).toMatchObject({ ok: true, payload });
-}
-
-async function expectSession(params: Record<string, unknown>, session: unknown) {
-  await expectRead("sessions.describe", params, { session });
 }
 
 async function expectInvalidRead(
@@ -216,12 +213,7 @@ function avatarRosterClient(): GatewayClient {
   const profileId = "reader-profile";
   client.connect.scopes = ["operator.read"];
   client.preparedSessionProfile = { profileId, aliases: new Set([profileId]), role: "reader" };
-  client.authenticatedUserProfile = {
-    profileId,
-    displayName: "Reader",
-    hasAvatar: false,
-    updatedAt: 1,
-  };
+  client.authenticatedUserProfile = gatewayProfile(profileId, "Reader");
   return client;
 }
 
@@ -417,7 +409,7 @@ test("sessions.resolve short IDs retain archived child-owner selection", async (
 });
 
 test("unknown-agent session reads return missing results without provisioning an agent", async () => {
-  await expectSession({ key: UNKNOWN_SESSION_KEY }, null);
+  await expectRead("sessions.describe", { key: UNKNOWN_SESSION_KEY }, { session: null });
   await expectRead("sessions.get", { key: UNKNOWN_SESSION_KEY }, { messages: [] });
 
   expect(await previews([UNKNOWN_SESSION_KEY])).toEqual([
@@ -526,20 +518,14 @@ test("searches rich displayed fields before selecting a page across visible agen
       label: "Quasar label",
       category: "Nebula category",
       displayName: "Stored comet",
+      agentHarnessId: "custom-harness",
+      modelSelectionLocked: true,
       status: "done",
-      goal: {
-        schemaVersion: 1,
-        id: "goal-target",
-        tokenStart: 0,
-        continuationTurns: 0,
-        objective: "Map distant galaxies",
-        status: "active",
-        createdAt: 1,
-        updatedAt: 1,
+      goal: createSessionGoalFixture("goal-target", "Map distant galaxies", {
         tokensUsed: 12000,
         tokenBudget: 50000,
         lastStatusNote: "Telescope calibrated",
-      },
+      }),
     });
     await put("work", "hidden", {
       label: "Quasar label",
@@ -547,13 +533,6 @@ test("searches rich displayed fields before selecting a page across visible agen
       createdActor: { type: "human", source: "profile", id: "restricted-owner@example.com" },
     });
     await put("work", "archived-target", { label: "Vault Orchid", archivedAt: 1 });
-    const runtime = runtimeMetadata.resolveCurrentSessionAgentRuntimeMetadata;
-    vi.spyOn(runtimeMetadata, "resolveCurrentSessionAgentRuntimeMetadata").mockImplementation(
-      (params) =>
-        params.sessionKey === "agent:work:target"
-          ? { id: "custom-harness", source: "session", fallback: "portable-mode" }
-          : runtime(params),
-    );
     for (let index = 0; index < 55; index++) {
       await put("main", `filler-${index}`, {});
     }
@@ -568,7 +547,7 @@ test("searches rich displayed fields before selecting a page across visible agen
       "Pursuing goal (12k/50k)",
       "Telescope calibrated",
       "Orchid Navigator",
-      "custom-harness (fallback portable-mode)",
+      "custom-harness",
     ]) {
       const result = await list({ search, limit: 50 });
       expect

@@ -6,12 +6,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import type { AgentEventRuntimePayload } from "../../src/infra/agent-events.types.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -125,9 +125,6 @@ function turn() {
     assert.equal(handler(event), undefined, "fixture admission must stay synchronous");
   }
 }
-function allocatedBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocatedBytes(child), 0);
-}
 try {
   turn();
   const golden = JSON.stringify(captured);
@@ -165,7 +162,7 @@ try {
     let bytes: number | undefined;
     if (values.allocation) {
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
-      bytes = allocatedBytes(profile.head);
+      bytes = sumSampledHeapBytes(profile.head);
       writeFileSync(`${output}.${sample}.heapprofile`, JSON.stringify(profile));
     }
     const result = {

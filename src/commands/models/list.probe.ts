@@ -23,7 +23,6 @@ import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/
 import { getScopedAuthProfileEnv } from "../../agents/auth-profiles/store.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as PROBE_STATUS_BY_FAILOVER_REASON } from "../../agents/failover/probe-status.js";
-import type { FailoverReason } from "../../agents/failover/signal.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
   hasSyntheticLocalProviderAuthConfig,
@@ -55,6 +54,7 @@ import type { EmbeddedStateLockHandle } from "../../infra/embedded-state-lock.js
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { redactStatusSecrets as redactAuthProbeError } from "../status-all/format.js";
 import { createAuthProbeWork, disposeAuthProbeDirectory } from "./list.probe.cleanup.js";
 import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
@@ -137,12 +137,6 @@ export type AuthProbeOptions = {
   concurrency: number;
   maxTokens: number;
 };
-
-export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
-  return reason
-    ? (PROBE_STATUS_BY_FAILOVER_REASON[reason as FailoverReason] ?? "unknown")
-    : "unknown";
-}
 
 const ELIGIBILITY_PROBE_ERRORS = {
   expired: "token credentials are expired.",
@@ -634,6 +628,7 @@ export async function runAuthProbes(
 ) {
   return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
     const startedAt = Date.now();
+    const startedAtMonotonic = monotonicNow();
     const plan = await buildProbeTargets(params);
 
     const totalTargets = plan.targets.length;
@@ -768,7 +763,9 @@ export async function runAuthProbes(
             } catch (err) {
               const described = describeFailoverError(err);
               return buildResult(
-                mapFailoverReasonToProbeStatus(described.reason),
+                described.reason
+                  ? (PROBE_STATUS_BY_FAILOVER_REASON[described.reason] ?? "unknown")
+                  : "unknown",
                 redactAuthProbeError(described.message),
               );
             } finally {
@@ -791,12 +788,10 @@ export async function runAuthProbes(
       );
     }
 
-    const finishedAt = Date.now();
-
     return {
       startedAt,
-      finishedAt,
-      durationMs: finishedAt - startedAt,
+      finishedAt: Date.now(),
+      durationMs: Math.round(monotonicNow() - startedAtMonotonic),
       totalTargets,
       options: params.options,
       results: [...plan.results, ...results],

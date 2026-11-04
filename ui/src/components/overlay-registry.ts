@@ -225,6 +225,7 @@ function createRegistryEvents(registry: OverlayRegistry) {
     started?: Press;
     target: Node | null;
     pointerId: number;
+    touch: boolean;
     frame?: number;
     finished: boolean;
   };
@@ -238,6 +239,7 @@ function createRegistryEvents(registry: OverlayRegistry) {
   let press: Press | undefined;
   // Touch releases precede their compatibility mousedown, where focus moves.
   let lastRelease: Release | undefined;
+  let stopAbsorbingClick: (() => void) | undefined;
   const starts = new WeakMap<Event, Press>();
   const releases = new WeakMap<Event, Release>();
   const pending = new Set<Release>();
@@ -334,6 +336,33 @@ function createRegistryEvents(registry: OverlayRegistry) {
       registry.stack.at(-1)?.keydown(event);
     }
   };
+  // A tap outside only dismisses: the click that follows it must not act on the page beneath.
+  // Keyboard activation reports no clicks in `detail` and still goes through. The tap can release
+  // the registry's last root before its click arrives, so this holds its own listeners, and a tap
+  // that produces no click stops holding them at the next press.
+  const absorbNextClick = () => {
+    const { document } = registry;
+    stopAbsorbingClick?.();
+    const stops = [
+      listen(
+        document,
+        "click",
+        (event: MouseEvent) => {
+          if (event.detail > 0) {
+            stopAbsorbingClick?.();
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        },
+        true,
+      ),
+      listen(document, "pointerdown", () => stopAbsorbingClick?.(), true),
+    ];
+    stopAbsorbingClick = () => {
+      stops.forEach((stop) => stop());
+      stopAbsorbingClick = undefined;
+    };
+  };
   const pointerdown = (event: PointerEvent) => {
     lastRelease = undefined;
     let started = starts.get(event);
@@ -367,12 +396,21 @@ function createRegistryEvents(registry: OverlayRegistry) {
     const branch = started.branch;
     if (branch?.open && branch.revision === started.revision && !branch.contains(released.target)) {
       branch.request(false);
+      if (released.touch) {
+        absorbNextClick();
+      }
     }
   };
   const pointerupCapture = (event: PointerEvent) => {
     let release = releases.get(event);
     if (!release) {
-      release = { started: press, target: null, pointerId: event.pointerId, finished: false };
+      release = {
+        started: press,
+        target: null,
+        pointerId: event.pointerId,
+        touch: event.pointerType === "touch",
+        finished: false,
+      };
       releases.set(event, release);
       lastRelease = release;
       const released = release;

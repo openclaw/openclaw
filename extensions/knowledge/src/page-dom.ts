@@ -172,3 +172,30 @@ export const fileSize = (bytes: number) =>
     : bytes < 1024 * 1024
       ? `${Math.round(bytes / 1024)} KB`
       : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+
+/** Labelled checkbox or radio row in a dialog's fieldset (knowledge-choice). */
+export function choice(
+  type: "checkbox" | "radio",
+  id: string,
+  title: string,
+  note: string,
+  disabled: boolean,
+  onChange: (checked: boolean) => void,
+  checked = false,
+  name?: string,
+) {
+  const row = el("label", undefined, "knowledge-choice"),
+    input = el("input");
+  input.type = type;
+  input.id = id;
+  input.disabled = disabled;
+  input.checked = checked;
+  if (name) {
+    input.name = name;
+  }
+  input.addEventListener("change", () => onChange(input.checked));
+  const copy = el("span");
+  copy.append(el("span", title), el("small", note));
+  row.append(input, copy);
+  return row;
+}

@@ -373,6 +373,9 @@ test.each([
     const { ws, connected } = await connect({ scopes: scenario.deviceScopes });
     try {
       expectScopes(connected, scenario.expectedScopes);
+      expect(responseAuth(connected)).toMatchObject({
+        roleAllowsAdmin: scenario.assignedRole === "admin-only",
+      });
       expect((await rpcReq(ws, "status")).ok).toBe(scenario.expectedScopes.length > 0);
       if (scenario.assignedRole === "read-only") {
         await expectWriteDenied(ws, "agent:main:denied");

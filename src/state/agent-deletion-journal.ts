@@ -14,7 +14,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveAgentCreationClaimAgentId } from "./agent-creation-claim.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
-import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
+import { hasTemplateDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
 import { agentDeletionJournalPublication } from "./agent-deletion-journal-publication.js";
 import { resolveAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
 import {
@@ -314,20 +314,20 @@ export function readAgentDeletionJournalInDatabase(
 
 export function listPendingAgentDeletionJournalsInDatabase(
   database: Pick<OpenClawStateDatabase, "db">,
-): { entries: AgentDeletionJournalEntry[]; manualClawAgentIds: string[] } {
+): { entries: AgentDeletionJournalEntry[]; manualTemplateAgentIds: string[] } {
   const entries: AgentDeletionJournalEntry[] = [];
-  const manualClawAgentIds: string[] = [];
+  const manualTemplateAgentIds: string[] = [];
   for (const row of readAgentDeletionPathFenceRows(database.db).rows) {
     if (row.cleanup_completed === 1) {
       continue;
     }
-    if (row.phase == null && hasClawDeletionOwnership(database, row.agent_id)) {
-      manualClawAgentIds.push(row.agent_id);
+    if (row.phase == null && hasTemplateDeletionOwnership(database, row.agent_id)) {
+      manualTemplateAgentIds.push(row.agent_id);
     } else {
       entries.push(fromRow(row));
     }
   }
-  return { entries, manualClawAgentIds };
+  return { entries, manualTemplateAgentIds };
 }
 
 export function beginAgentDeletionJournalInDatabase(
@@ -361,8 +361,8 @@ export function beginAgentDeletionJournalInDatabase(
     ) {
       throw new Error(`Agent ${normalized.agentId} deletion changed before recovery.`);
     }
-    if (existing.phase == null && hasClawDeletionOwnership(database, normalized.agentId)) {
-      throw new Error(`Agent ${normalized.agentId} deletion requires its Claw removal owner.`);
+    if (existing.phase == null && hasTemplateDeletionOwnership(database, normalized.agentId)) {
+      throw new Error(`Agent ${normalized.agentId} deletion requires its Template removal owner.`);
     }
   }
   const registeredDatabasePaths = executeSqliteQuerySync(
@@ -618,7 +618,7 @@ export async function listPendingAgentDeletionJournalsAsync(
   );
   return {
     entries: reply?.entries ?? [],
-    manualClawAgentIds: reply?.manualClawAgentIds ?? [],
+    manualTemplateAgentIds: reply?.manualTemplateAgentIds ?? [],
   };
 }
 

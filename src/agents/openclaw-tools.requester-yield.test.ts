@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -11,7 +12,6 @@ import { addSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import * as persistence from "./subagents/registry/subagent-registry-persistence.js";
 import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
 import {

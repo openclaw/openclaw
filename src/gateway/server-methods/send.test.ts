@@ -11,7 +11,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
@@ -69,13 +72,6 @@ const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
     async () => transcriptResult("message-x"),
   ),
-  beginRestartRecoveryTerminalDelivery: vi.fn<
-    () => Promise<
-      "started" | "already-delivered" | "delivery-ambiguous" | "stale" | "not-applicable"
-    >
-  >(async () => "started"),
-  cancelRestartRecoveryTerminalDelivery: vi.fn(async () => "cleared" as const),
-  completeRestartRecoveryTerminalDelivery: vi.fn(async () => "recorded" as const),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
   resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(),
   resolveOutboundSessionRoute: vi.fn(),
@@ -85,8 +81,6 @@ const mocks = vi.hoisted(() => ({
   sendPoll: vi.fn<NonNullable<NonNullable<ChannelPlugin["outbound"]>["sendPoll"]>>(),
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
-  getRuntimeConfigSnapshot: vi.fn(),
-  getRuntimeConfigSourceSnapshot: vi.fn(),
   loadSessionEntry:
     vi.fn<
       (sessionKey: string) => { canonicalKey: string; entry: { sessionId: string } | undefined }
@@ -131,12 +125,6 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
 }));
 
-vi.mock("../../config/runtime-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/runtime-snapshot.js")>()),
-  getRuntimeConfigSnapshot: mocks.getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
-}));
-
 vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
   resolveRuntimePluginRegistry: vi.fn(),
@@ -170,12 +158,6 @@ vi.mock("../../config/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions.js")>()),
   appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
   recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
-}));
-
-vi.mock("../../config/sessions/restart-recovery-receipt.js", () => ({
-  beginRestartRecoveryTerminalDelivery: mocks.beginRestartRecoveryTerminalDelivery,
-  cancelRestartRecoveryTerminalDelivery: mocks.cancelRestartRecoveryTerminalDelivery,
-  completeRestartRecoveryTerminalDelivery: mocks.completeRestartRecoveryTerminalDelivery,
 }));
 
 // mock-isolation: Send-method fixtures bind synthetic session rows without opening session storage.
@@ -436,6 +418,7 @@ describe("gateway send conversation ownership", () => {
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     resetPluginRuntimeStateForTest();
   });
 
@@ -443,8 +426,6 @@ describe("gateway send conversation ownership", () => {
     vi.clearAllMocks();
     registrySeq += 1;
     setActivePluginRegistry(createTestRegistry([]), `send-test-${registrySeq}`);
-    mocks.getRuntimeConfigSnapshot.mockReturnValue(null);
-    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
     mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
       canonicalKey: sessionKey,
       entry: undefined,
@@ -515,8 +496,7 @@ describe("gateway send conversation ownership", () => {
       channels: { discord: { enabled: true, accounts: { drclaw: runtimeAccount } } },
       plugins: { allow: ["discord"] },
     };
-    mocks.getRuntimeConfigSnapshot.mockReturnValue(runtimeConfig);
-    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(sourceConfig);
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     const { respond } = await runMessageActionRequest(
       {
         channel: "discord",
@@ -526,8 +506,6 @@ describe("gateway send conversation ownership", () => {
       null,
       makeContext(() => sourceConfig),
     );
-    expect(mocks.getRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
-    expect(mocks.getRuntimeConfigSourceSnapshot).toHaveBeenCalledTimes(1);
     expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(runtimeConfig);
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
@@ -833,24 +811,6 @@ describe("gateway send conversation ownership", () => {
   );
 
   registerSendDeliveryAttemptTests({ mocks, invokeGatewayMessageMethod, mockDeliverySuccess });
-
-  it("cancels a prepared terminal receipt when authority closes before action dispatch", async () => {
-    const receipt = createDeferred<"started">();
-    mocks.beginRestartRecoveryTerminalDelivery.mockReturnValueOnce(receipt.promise);
-    const authority = liveAuthority();
-    const request = runTelegramTerminalAction({
-      message: "must not escape",
-      context: authority.context,
-    });
-    await waitForCalls(mocks.beginRestartRecoveryTerminalDelivery);
-    authority.revoke();
-    receipt.resolve("started");
-
-    const { respond } = await request;
-    expectAuthorityDenied(respond);
-    expect(mocks.cancelRestartRecoveryTerminalDelivery).toHaveBeenCalledOnce();
-    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
-  });
 
   it("keeps the first deferred send route when a retry sees newer defaults", async () => {
     const firstSelection = createDeferred<{ channel: string; configured: string[] }>();
@@ -1231,7 +1191,7 @@ describe("gateway send conversation ownership", () => {
     }
   });
 
-  it("uses the signed run session for gateway-owned source reply receipts", async () => {
+  it("uses the signed run session for gateway-owned source reply transcript mirrors", async () => {
     registerMessageActionPlugin();
     mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
       jsonResult({ ok: true, messageId: "tg-split-session" }),
@@ -1245,27 +1205,12 @@ describe("gateway send conversation ownership", () => {
     });
 
     expect(firstRespondCall(respond)[0]).toBe(true);
-    expectCall(mocks.beginRestartRecoveryTerminalDelivery, {
-      sessionId: terminalRequest.sessionId,
-      sessionKey: runSessionKey,
-      sourceTurnId: terminalRequest.sourceTurnId,
-      toolCallId: terminalRequest.toolCallId,
-    });
-    expectCall(mocks.completeRestartRecoveryTerminalDelivery, { sessionKey: runSessionKey });
     expectCall(mocks.appendAssistantMessageToSessionTranscript, { sessionKey: runSessionKey });
     expectCall(mocks.dispatchChannelMessageAction, {
       sessionKey: policySessionKey,
       deliveryRetryOwner: "caller",
       skipQueue: true,
     });
-    const order = (mock: { mock: { invocationCallOrder: number[] } }) =>
-      expectDefined(mock.mock.invocationCallOrder[0], "delivery call order");
-    expect(order(mocks.beginRestartRecoveryTerminalDelivery)).toBeLessThan(
-      order(mocks.dispatchChannelMessageAction),
-    );
-    expect(order(mocks.dispatchChannelMessageAction)).toBeLessThan(
-      order(mocks.completeRestartRecoveryTerminalDelivery),
-    );
   });
 
   it("uses a distinct transcript receipt key after progress with the same send key", async () => {
@@ -1278,63 +1223,40 @@ describe("gateway send conversation ownership", () => {
       toolCallId: "message-call-shared-progress",
     });
     const terminal = await runTelegramTerminalAction();
-    mocks.beginRestartRecoveryTerminalDelivery.mockResolvedValueOnce("already-delivered");
-    const repeatedTerminal = await runTelegramTerminalAction({
-      message: "repeated terminal",
-      idempotencyKey: "idem-repeated-terminal",
-    });
-
     expect(mocks.appendAssistantMessageToSessionTranscript.mock.calls).toHaveLength(2);
     expect(appendTranscriptCall(0)?.idempotencyKey).toBe("idem-terminal");
     expect(appendTranscriptCall(1)?.idempotencyKey).toBe(
       "idem-terminal:terminal-receipt:channel-user:v1:terminal",
     );
-    for (const { respond } of [progress, terminal, repeatedTerminal]) {
+    for (const { respond } of [progress, terminal]) {
       expect(firstRespondCall(respond)[0]).toBe(true);
     }
-    expect(firstRespondCall(repeatedTerminal.respond)[1]).toMatchObject({
-      status: "already_delivered",
-      delivered: false,
-    });
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    "receipt finalization fails",
-    "transcript mirroring is rejected",
-    "transcript mirroring throws",
-  ])("preserves a delivered terminal reply when %s", async (failure) => {
-    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
-      jsonResult({ ok: true, messageId: "tg-2" }),
-    );
-    if (failure === "receipt finalization fails") {
-      mocks.completeRestartRecoveryTerminalDelivery.mockRejectedValueOnce(
-        new Error("receipt store unavailable"),
+  it.each(["transcript mirroring is rejected", "transcript mirroring throws"])(
+    "preserves a delivered terminal reply when %s",
+    async (failure) => {
+      mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+        jsonResult({ ok: true, messageId: "tg-2" }),
       );
-    } else if (failure === "transcript mirroring is rejected") {
-      mocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
-        ok: false,
-        code: "blocked",
-        reason: "transcript write rejected",
-      });
-    } else {
-      mocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
-        new Error("transcript unavailable"),
-      );
-    }
-    const sessionKey = "agent:main:telegram:direct:chat-123";
+      if (failure === "transcript mirroring is rejected") {
+        mocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
+          ok: false,
+          code: "blocked",
+          reason: "transcript write rejected",
+        });
+      } else {
+        mocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
+          new Error("transcript unavailable"),
+        );
+      }
+      const { respond } = await runTelegramTerminalAction();
 
-    const { respond } = await runTelegramTerminalAction();
-
-    expectSuccess(respond, { ok: true, messageId: "tg-2" });
-    expect(mocks.cancelRestartRecoveryTerminalDelivery).not.toHaveBeenCalled();
-    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
-    expectCall(mocks.completeRestartRecoveryTerminalDelivery, {
-      sessionId: terminalRequest.sessionId,
-      sessionKey,
-      sourceTurnId: terminalRequest.sourceTurnId,
-    });
-  });
+      expectSuccess(respond, { ok: true, messageId: "tg-2" });
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+    },
+  );
 
   it("mirrors a Slack DM send after target resolution strips its user prefix", async () => {
     registerMessageActionPlugin({
@@ -1434,7 +1356,7 @@ describe("gateway send conversation ownership", () => {
   });
 
   it.each(["unknown outcome", "partial delivery"] as const)(
-    "preserves terminal source reply receipts after %s",
+    "reports source reply delivery failures after %s",
     async (failure) => {
       const partial = failure === "partial delivery";
       const cause = new Error(partial ? "upload failed" : "provider timeout");
@@ -1451,9 +1373,6 @@ describe("gateway send conversation ownership", () => {
       expect(response[0]).toBe(false);
       expect(response[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
       expect(response[2]?.retryable).toBe(partial ? false : undefined);
-      expect(mocks.beginRestartRecoveryTerminalDelivery).toHaveBeenCalledOnce();
-      expect(mocks.cancelRestartRecoveryTerminalDelivery).not.toHaveBeenCalled();
-      expect(mocks.completeRestartRecoveryTerminalDelivery).toHaveBeenCalledTimes(partial ? 1 : 0);
       if (partial) {
         expect(response[2]?.details).toMatchObject({
           partialDelivery: { messageIds: ["caption_msg"], visibleReplySent: true },

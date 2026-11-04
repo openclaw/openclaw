@@ -343,11 +343,13 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         readMode: "writable",
         getSessionEntry: () => params.sessionEntry,
         classifyResult: params.classifyResult,
+        onCompactionAccounting: params.onCompactionAccounting,
       },
       async ({ sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult }) => {
-        if ((params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram) !== undefined) {
+        const accessProgram = params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram;
+        if (accessProgram !== undefined && accessProgram !== "standard") {
           throw new Error(
-            "Explicit access programs are unsupported by this CLI runtime. Reset Access to the model default or use the OpenClaw or native Codex runtime.",
+            "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",
           );
         }
         params.sessionEntry = sessionEntry;
@@ -655,6 +657,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     execSession: params.sessionEntry,
+    sessionPromptDelivery: params.sessionEntry?.delivery,
     execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,
     execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
     // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
@@ -673,8 +676,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     disableMessageTool: params.opts.disableMessageTool,
     swarmCollector: params.opts.swarmCollector,
     swarmOutputSchema: params.opts.swarmOutputSchema,
-    forceRestartSafeTools: params.opts.forceRestartSafeTools,
-    forceCodeModeTools: params.opts.forceCodeModeTools,
     codeModeOverride: params.opts.codeModeOverride,
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,

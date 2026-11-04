@@ -23,6 +23,10 @@ const storageFailures = [
 ] as const;
 
 it.each([
+  ...[
+    "No answer was returned. Ask again if you still need one.",
+    "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
+  ].map((notice) => [notice, notice, notice] as const),
   ...storageFailures.map(([error, , summary]) => {
     const content = `⚠️ ${summary} For details, open Settings → Logs in the Control UI or run \`openclaw logs --follow\` in your terminal.`;
     return [error, expect.any(String), content] as const;
@@ -31,8 +35,8 @@ it.each([
     Object.assign(new Error("EACCES: permission denied, scandir '/synthetic/workspace-main'"), {
       code: "EACCES",
     }),
-    '{"code":"EACCES"}',
-    'Your request couldn\'t be completed: {"code":"EACCES"}',
+    "EACCES: permission denied, scandir '/synthetic/workspace-main'",
+    "Your request couldn't be completed.",
   ],
 ] as const)(
   "appends failure copy and retains its diagnostic: %s",

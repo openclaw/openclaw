@@ -23,6 +23,7 @@ const enApprovals = {
     agentPending: en.execApproval.agentPending,
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    alwaysAllowHere: "Always allow here",
     alwaysAllowForDay: "Always allow ({days} day)",
     alwaysAllowForDays: "Always allow ({days} days)",
     reviewOnly: en.execApproval.reviewOnly,
@@ -33,6 +34,7 @@ const enApprovals = {
     details: "Details",
     requestDetails: "Request details",
     agentRunCommand: "{agent} wants to run a command",
+    inSession: "in “{session}”",
     agentStartWatcher: "{agent} wants to start “{name}”",
     agentChangeWatcher: "{agent} wants to change “{name}”",
     labels: {
@@ -110,15 +112,10 @@ const enApprovals = {
     revoke: "Revoke",
     revoking: "Revoking…",
     columns: {
-      automation: "Automation",
-      command: "Command",
       uses: "Uses",
-      state: "State",
     },
   },
   approvalHistory: {
-    description:
-      "Terminal exec, plugin, and system-agent approvals recorded by this gateway, newest first.",
     loading: "Loading approval history…",
     loadingMore: "Loading…",
     loadMore: "Load more",
@@ -128,14 +125,12 @@ const enApprovals = {
     invalidResponse: "The gateway returned an invalid approval history response.",
     unknown: "Unknown",
     notApplicable: "N/A",
-    columns: {
-      resolved: "Resolved",
+    fields: {
       kind: "Kind",
-      request: "Request",
-      decision: "Decision",
-      reason: "Resolution reason",
-      source: "Source agent / session",
+      source: "Source",
+      session: "Session",
       resolver: "Resolver",
+      reason: "Reason",
     },
     kinds: {
       exec: "Exec",
@@ -151,7 +146,6 @@ const enApprovals = {
     decisions: {
       allowOnce: "Allow once",
       allowAlways: "Always allow",
-      deny: "Deny",
     },
     reasons: {
       user: "User decision",

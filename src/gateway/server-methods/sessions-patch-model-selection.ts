@@ -6,13 +6,14 @@ import {
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  assertOperatorAccessProgramAllowed,
   assertOperatorModelAllowed,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessSessionExecutionRestriction } from "../../agents/harness/execution-environment.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
   getModelRefStatus,
@@ -40,6 +41,26 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import { prepareSessionWorkerPlacementPatchValidation } from "./sessions-shared.js";
+
+/** Recheck the composed model and Access selection immediately before its effect. */
+export function createSessionAccessProgramValidation(params: {
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
+  entry: SessionEntry;
+  validateModelSelection?: () => ErrorShape | undefined;
+}): () => ErrorShape | undefined {
+  return () => {
+    const modelError = params.validateModelSelection?.();
+    if (modelError) {
+      return modelError;
+    }
+    try {
+      assertOperatorAccessProgramAllowed(params.operatorAuthority, params.entry.cyberAccessProgram);
+      return undefined;
+    } catch (error) {
+      return errorShape(ErrorCodes.FORBIDDEN, formatErrorMessage(error));
+    }
+  };
+}
 
 export function persistSessionPatchModelSelection(params: {
   callerScopes: readonly string[];

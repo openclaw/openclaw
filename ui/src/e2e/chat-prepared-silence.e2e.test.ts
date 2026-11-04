@@ -38,7 +38,7 @@ suite.define(() => {
         }
         const historyLiteralCount = await literal.count();
         const composer = page.locator(".agent-chat__composer-combobox textarea");
-        const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+        const stop = page.getByRole("button", { name: "Stop", exact: true });
         await composer.fill("Show a prepared live literal marker.");
         await page.getByRole("button", { name: "Send message" }).click();
         const send = await gateway.waitForRequest("chat.send");

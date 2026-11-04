@@ -19,6 +19,7 @@ function harness(sessionUpdate: AgentSideConnection["sessionUpdate"] = vi.fn(asy
     recordUserPrompt: vi.fn(async () => {}),
     recordUpdate: vi.fn<AcpEventLedger["recordUpdate"]>(async () => {}),
     markIncomplete: vi.fn(async () => {}),
+    readSessionKey: vi.fn<AcpEventLedger["readSessionKey"]>(async () => undefined),
     readReplay: vi.fn(async () => ({ complete: true, events: [] })),
     readReplayBySessionId: vi.fn(async () => ({ complete: true, events: [] })),
     readReplayBySessionKey: vi.fn(async () => ({ complete: true, events: [] })),

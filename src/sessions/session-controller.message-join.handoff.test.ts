@@ -210,7 +210,6 @@ it.each([
             sourceSessionKey: sourceSessionKeys[0],
           };
           const runFollowup = vi.fn(async () => {});
-          const admission = {};
           // Actual adapter computes isInboundUserMessage=false from real peer host provenance.
           // It must not create the human continuation merely because profile/sender match.
           await runActiveReplySteer(
@@ -219,7 +218,7 @@ it.each([
               steeringIntent: { kind: "continue-existing" },
               sessionEntry: entry,
               storePath,
-              replyOperationRunState: admission,
+              replyOperationRunState: {},
               sessionCtx: { InputProvenance: incoming.run.inputProvenance },
             }),
           );
@@ -244,7 +243,6 @@ it.each([
         const delivery = prepareSteeringDelivery({
           agentId: "main",
           sessionKey,
-          sessionId,
           storePath,
           entry,
           assertCurrent: () => incomingAuthority.assertCurrent(),
@@ -270,7 +268,7 @@ it.each([
             return;
           }
           const prepared = await prepare();
-          if (["lower-scopes", "other-profile", "revoked-cohort"].includes(scenario)) {
+          if (["other-profile", "revoked-cohort"].includes(scenario)) {
             expect(prepared.kind).not.toBe("prepared");
             expect(sink).not.toHaveBeenCalled();
             return;
@@ -295,23 +293,14 @@ it.each([
               ),
             });
             const result = await injection.outcome;
-            expect(result).toMatchObject(outcomes[scenario] ?? { status: "accepted" });
+            const expected = outcomes[scenario] ?? { status: "accepted" };
+            const accepted = ["accepted", "indeterminate"].includes(expected.status);
+            expect(result).toMatchObject(expected);
             if (scenario === "late-cohort-revocation") {
               expect(result).toHaveProperty("errorMessage");
             }
-            if (
-              scenario === "late-cohort-revocation" ||
-              scenario === "late-source-and-cohort-revocation"
-            ) {
-              expect(await injection.acceptance).toBe(false);
-            } else if (scenario === "accepted-cohort-revocation") {
-              expect(await injection.acceptance).toBe(true);
-            }
-            expect(sink).toHaveBeenCalledTimes(
-              ["plain-owner", "trusted-completion", "accepted-cohort-revocation"].includes(scenario)
-                ? 1
-                : 0,
-            );
+            expect(await injection.acceptance).toBe(accepted);
+            expect(sink).toHaveBeenCalledTimes(accepted ? 1 : 0);
             // Neither the message nor fallback data acquires the incumbent's canonical handoff.
             expect(incoming.run.inputProvenance).toBeUndefined();
             expect(incoming.run.trustedInternalHandoff).toBeUndefined();

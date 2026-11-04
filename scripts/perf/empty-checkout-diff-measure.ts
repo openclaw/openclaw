@@ -5,7 +5,9 @@
  * Measure each revision in alternating order:
  *   node --expose-gc --import ./scripts/tsx.mjs scripts/perf/empty-checkout-diff-measure.ts --state-dir .local/empty-diff --boundary owner --iterations 10 --output <result.json>
  * --boundary read exercises the production cache/worker owner; owner calls the
- * uncached collector. --rewrite rewrites identical contents before each sample;
+ * uncached collector. --scope all tests branch-relative reads; detach the seeded
+ * repository first to make its resolved base equal HEAD. --rewrite rewrites
+ * identical contents before each sample;
  * --rewrite-once rewrites before warmup to measure subsequent idle polls;
  * --refresh then refreshes the index outside measurement. --allocations selects
  * a separate sampled-allocation pass (parent isolate only; timings diagnostic).
@@ -25,13 +27,14 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs, promisify } from "node:util";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -41,6 +44,7 @@ const { values } = parseArgs({
     files: { type: "string", default: "300000" },
     iterations: { type: "string", default: "10" },
     boundary: { type: "string", default: "owner" },
+    scope: { type: "string", default: "uncommitted" },
     rewrite: { type: "boolean" },
     "rewrite-once": { type: "boolean" },
     refresh: { type: "boolean" },
@@ -53,6 +57,7 @@ const { values } = parseArgs({
 });
 assert(values["state-dir"], "--state-dir is required");
 assert(values.boundary === "owner" || values.boundary === "read");
+assert(values.scope === "all" || values.scope === "uncommitted");
 assert(!values.refresh || values.rewrite, "--refresh requires --rewrite");
 const integer = (key: "files" | "iterations") =>
   parseStrictIntegerOption({
@@ -196,7 +201,11 @@ registerHooks({ load(url, context, nextLoad) {
   const { loadCheckoutDiff } = await import("../../src/sessions/session-diff.js");
   const { drainGlobalSingletonLifecycleState } =
     await import("../../src/shared/global-singleton.js");
-  const input = { cwd: repo, scope: "uncommitted" as const, summaryOnly: false };
+  const input: Parameters<typeof collectCheckoutDiff>[0] = {
+    cwd: repo,
+    scope: values.scope,
+    summaryOnly: false,
+  };
   const read = async () => {
     const result =
       values.boundary === "owner"
@@ -207,8 +216,6 @@ registerHooks({ load(url, context, nextLoad) {
     assert.equal(result.additions, 0);
     assert.equal(result.deletions, 0);
   };
-  const allocated = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-    node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
   const inspector = new Session();
   let drained = false;
   const gc: Array<{ kind: number; durationMs: number }> = [];
@@ -225,12 +232,7 @@ registerHooks({ load(url, context, nextLoad) {
     await read();
     global.gc?.();
     if (values.allocations) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 32768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 32768);
     }
     const common = (await git(repo, "rev-parse", "--git-common-dir")).stdout.trim();
     const config = path.resolve(repo, common, "config");
@@ -312,6 +314,7 @@ registerHooks({ load(url, context, nextLoad) {
       gc,
       memoryBefore,
       boundary: values.boundary,
+      scope: values.scope,
       iterations,
       rewrite: Boolean(values.rewrite),
       rewriteOnce: Boolean(values["rewrite-once"]),
@@ -319,7 +322,7 @@ registerHooks({ load(url, context, nextLoad) {
       allocationPass: Boolean(values.allocations),
       metadataChurn: Boolean(values["metadata-churn"]),
       traceEnabled,
-      allocatedBytesPerDiff: profile ? allocated(profile.head) / iterations : undefined,
+      allocatedBytesPerDiff: profile ? sumSampledHeapBytes(profile.head) / iterations : undefined,
       memory: process.memoryUsage(),
       loadedSources: (await fs.readFile(loadedLog, "utf8"))
         .trim()

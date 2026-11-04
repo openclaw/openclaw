@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
-import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
+import {
+  createPageOpener,
+  deferRecoveryScopeHydration,
+} from "./new-session-page.scenario.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
   LOCAL_GIT_WORKSPACE_RESPONSES,
@@ -116,18 +119,7 @@ suite.define(() => {
       });
       if (late === "recovery scope") {
         // Resolve auth recovery after name discovery to exercise their independent lifetimes.
-        await page.addInitScript(() => {
-          const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
-          const delayed = new Promise<void>((resolve) => {
-            window.addEventListener("test-release-recovery-scope", () => resolve(), { once: true });
-          });
-          crypto.subtle.digest = async (algorithm, data) => {
-            if (new TextDecoder().decode(data) === "e2e-device-token") {
-              await delayed;
-            }
-            return originalDigest(algorithm, data);
-          };
-        });
+        await page.addInitScript(deferRecoveryScopeHydration);
       }
       const systemInfo = {
         machineName: "QA-Gateway",
@@ -275,7 +267,7 @@ suite.define(() => {
       .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
     await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
 
-    expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
+    await expect.poll(() => page.locator("#new-session-checkout-trigger").count()).toBe(0);
     await page.locator("#new-session-where-trigger").click();
     const where = page.locator(".oc-popover.new-session-page__where-popover");
     const cloud = where.getByRole("button", { name: "aws", exact: true });

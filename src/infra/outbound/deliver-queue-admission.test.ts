@@ -75,7 +75,11 @@ describe("stageAndEnqueueOutboundDelivery", () => {
     });
     expect(
       restoreQueuedDeliveryCustody(params, { ...entry, sessionGeneration: generation }),
-    ).toMatchObject({ to: entry.to, payloads, sessionGeneration: generation });
+    ).toMatchObject({
+      to: entry.to,
+      payloads,
+      sessionGeneration: generation,
+    });
   });
 
   it.each(["checkpoint", "staging"])(
