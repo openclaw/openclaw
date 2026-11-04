@@ -7,6 +7,8 @@ import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 const repository = "openclaw/openclaw";
 const revision = "a".repeat(40);
 const tree = "b".repeat(40);
+const consumerRevision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const consumerTree = execFileSync("git", ["rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim();
 const cutoff = "2026-11-04T01:00:00Z";
 const earlier = "2026-11-03T01:00:00Z";
 const later = "2026-11-04T02:00:00Z";
@@ -33,6 +35,7 @@ function fixture(
     digestMismatch?: boolean;
     conclusion?: string;
     freshConclusion?: string;
+    comparison?: Record<string, unknown>;
   } = {},
 ) {
   const run = {
@@ -105,8 +108,18 @@ function fixture(
         updated_at: options.updatedAt ?? earlier,
         head_repository: { full_name: options.freshFork ? "contributor/fork" : repository },
       };
-    } else if (endpoint === `git/commits/${revision}`) {
-      body = { sha: revision, tree: { sha: tree } };
+    } else if (endpoint === `compare/${revision}...${consumerRevision}`) {
+      body = {
+        status: "ahead",
+        behind_by: 0,
+        base_commit: { sha: revision, commit: { tree: { sha: tree } } },
+        merge_base_commit: { sha: revision },
+        files: [
+          { filename: "src/removed.ts", status: "removed" },
+          { filename: "src/new.ts", previous_filename: "src/old.ts", status: "renamed" },
+        ],
+        ...options.comparison,
+      };
     } else if (/^actions\/artifacts\/\d+\/zip$/u.test(endpoint)) {
       return new Response(new Uint8Array(archive));
     } else {
@@ -144,12 +157,14 @@ describe("adaptive CI prior restore", () => {
     expect(bundle.consumer).toEqual({
       runId: "30",
       runAttempt: "2",
-      revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      revision: consumerRevision,
+      tree: consumerTree,
     });
     expect(bundle.cutoffAt).toBe(cutoff);
     expect(bundle.candidates).toHaveLength(4);
     expect(bundle.fallbackReasons).toEqual([]);
     expect(f.requests.filter((request) => request.endsWith("/zip"))).toHaveLength(2);
+    expect(f.requests.filter((request) => request.includes("/compare/"))).toHaveLength(1);
     expect(bundle.candidates[0]).toEqual({
       artifactId: 102,
       runId: 20,
@@ -159,6 +174,13 @@ describe("adaptive CI prior restore", () => {
       memberPath: "node/observations.json",
       memberSha256: sha256(JSON.stringify(f.exported)),
       observations: f.exported,
+      comparison: {
+        baseRevision: revision,
+        baseTree: tree,
+        headRevision: consumerRevision,
+        headTree: consumerTree,
+        changedFiles: ["src/new.ts", "src/old.ts", "src/removed.ts"],
+      },
     });
     expect(JSON.stringify(bundle)).not.toContain(env.GITHUB_TOKEN);
   });
@@ -171,6 +193,15 @@ describe("adaptive CI prior restore", () => {
     ["fresh fork provenance", { freshFork: true }],
     ["archive digest", { digestMismatch: true }],
     ["completion after cutoff", { updatedAt: later }],
+    ["divergent history", { comparison: { merge_base_commit: { sha: "c".repeat(40) } } }],
+    ["wrong comparison base", { comparison: { base_commit: { sha: "c".repeat(40) } } }],
+    ["behind comparison", { comparison: { status: "behind", behind_by: 1 } }],
+    [
+      "saturated comparison",
+      { comparison: { files: Array.from({ length: 300 }, () => ({ filename: "src/a.ts" })) } },
+    ],
+    ["incomplete rename", { comparison: { files: [{ filename: "src/a.ts", status: "renamed" }] } }],
+    ["invalid comparison path", { comparison: { files: [{ filename: "../outside.ts" }] } }],
   ] as const)("discards a prior with invalid %s", async (_name, options) => {
     const f = fixture(options);
     const bundle = await restoreCiAdaptivePriors({ env, fetchImpl: f.fetchImpl });

@@ -67,16 +67,13 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
   return fixture;
 }
 
-function startContinuation() {
+async function startContinuation() {
   const continued = createDeferred<{ sessionKey: string }>();
   const request = vi.fn(() => continued.promise);
   const fixture = createCatalogContinuationPane(request);
-  return {
-    ...fixture,
-    request,
-    continued,
-    pending: fixture.pane.continueCatalogSession(fixture.key),
-  };
+  const pending = fixture.pane.continueCatalogSession(fixture.key);
+  await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+  return { ...fixture, request, continued, pending };
 }
 
 function expectNoContinuation({ pane, state }: ReturnType<typeof createCatalogContinuationPane>) {
@@ -87,6 +84,31 @@ function expectNoContinuation({ pane, state }: ReturnType<typeof createCatalogCo
 }
 
 describe("chat pane catalog", () => {
+  it("does not dispatch a continuation after its owner changes during action loading", async () => {
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    vi.doMock("./chat-pane-catalog-continuation.runtime.ts", async (importOriginal) => {
+      started.resolve();
+      await held.promise;
+      return importOriginal();
+    });
+    const request = vi.fn();
+    const fixture = createCatalogContinuationPane(request);
+    const pending = fixture.pane.continueCatalogSession(fixture.key);
+    onTestFinished(async () => {
+      fixture.pane.connectionGeneration += 1;
+      held.resolve();
+      vi.doUnmock("./chat-pane-catalog-continuation.runtime.ts");
+      await pending;
+    });
+    await started.promise;
+    fixture.pane.connectionGeneration += 1;
+    held.resolve();
+    await pending;
+    expect(request).not.toHaveBeenCalled();
+    expectNoContinuation(fixture);
+  });
+
   it("reuses catalog history while admitting an older page", async () => {
     installTranscriptDomMocks();
     onTestFinished(resetTranscriptTestDom);
@@ -329,6 +351,11 @@ describe("chat pane catalog", () => {
     const pending = pane.loadCatalogSession(key, true);
     const continuing = pane.continueCatalogSession(key);
     await vi.waitFor(() => expect(reads).toBe(1));
+    await vi.waitFor(() =>
+      expect(request.mock.calls.some(([method]) => method === "sessions.catalog.continue")).toBe(
+        true,
+      ),
+    );
     pane.presented = false;
     expect(signal?.aborted).toBe(true);
     expect(
@@ -455,6 +482,22 @@ describe("chat pane catalog", () => {
     },
   );
 
+  it("keeps the composed draft when catalog adoption fails", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("Synthetic adoption refused"));
+    const { key, pane, state } = createCatalogContinuationPane(request);
+    const draft = state.chatMessage;
+    const attachments = state.chatAttachments;
+
+    await pane.continueCatalogSession(key);
+
+    expect(state.chatMessage).toBe(draft);
+    expect(state.chatAttachments).toBe(attachments);
+    expect(state.chatSending).toBe(false);
+    expect(state.lastError).toContain("Synthetic adoption refused");
+    expect(pane.onPaneSessionChange).not.toHaveBeenCalled();
+    expect(state.handleSendChat).not.toHaveBeenCalled();
+  });
+
   it("still ignores a continuation with no draft and no attachments", async () => {
     const request = vi.fn();
     const { key, pane, state } = createCatalogContinuationPane(request);
@@ -489,6 +532,7 @@ describe("chat pane catalog", () => {
       const { key, pane, state, sessions } = fixture;
       state.assistantAgentId = "main";
       const pending = pane.continueCatalogSession(key);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
       const replacement = { request: vi.fn() } as unknown as GatewayBrowserClient;
       if (changed === "conversation" || changed === "pane owner") {
         state.sessionKey =
@@ -528,7 +572,7 @@ describe("chat pane catalog", () => {
   );
 
   it("does not clear a newer scoped send when a stale catalog continuation resolves", async () => {
-    const { pane, state, continued, pending } = startContinuation();
+    const { pane, state, continued, pending } = await startContinuation();
     state.sessionKey = "agent:main:different-conversation";
     pane.sessionKey = state.sessionKey;
     pane.catalogLoadGeneration += 1;
@@ -552,8 +596,10 @@ describe("chat pane catalog", () => {
     const { key, pane, state } = createCatalogContinuationPane(request);
 
     const staleContinuation = pane.continueCatalogSession(key);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
     state.chatMessage = "Only send the latest catalog draft";
     const currentContinuation = pane.continueCatalogSession(key);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     first.resolve({ sessionKey: "agent:main:stale-continuation" });
     await staleContinuation;
 
@@ -577,7 +623,7 @@ describe("chat pane catalog", () => {
   it.each([false, true])(
     "scopes catalog continuation failure to its conversation (stale=%s)",
     async (stale) => {
-      const { pane, state, continued, pending } = startContinuation();
+      const { pane, state, continued, pending } = await startContinuation();
       if (stale) {
         state.sessionKey = "agent:main:different-conversation";
         pane.sessionKey = state.sessionKey;

@@ -80,6 +80,8 @@ export const SessionCatalogSessionSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   createdActor: Type.Optional(SessionCreatedActorSchema),
   canContinue: Type.Boolean(),
+  /** Provider-owned next step when this source is temporarily view-only. */
+  continuationUnavailableReason: Type.Optional(Type.String({ minLength: 1, maxLength: 384 })),
   canArchive: Type.Boolean(),
   canOpenTerminal: Type.Optional(Type.Boolean()),
 });

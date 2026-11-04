@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, assert, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
@@ -20,7 +20,6 @@ import { createPaneTestHost } from "./chat-pane.test-support.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
 import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import { ReplyPreview } from "./components/chat-composer-view.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -28,7 +27,6 @@ import {
 
 const defaults = { modelProvider: null, model: null, contextTokens: null };
 
-beforeAll(() => ReplyPreview.preload());
 afterEach(async () => {
   await resetComposerFixture();
 });
@@ -623,7 +621,7 @@ describe("subagent composer", () => {
 
   it.each([true, false])(
     "keeps an ordinary nested session reply editable while connected=%s",
-    (connected) => {
+    async (connected) => {
       installTranscriptDomMocks();
       const { pane, state, context } = createRefreshChatPane(
         connected ? createGatewayBrowserClientFixture() : undefined,
@@ -660,8 +658,10 @@ describe("subagent composer", () => {
         expect(reply).not.toBeNull();
         reply!.click();
         draw();
-        expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
-          "Review complete.",
+        await waitForSolid(() =>
+          expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
+            "Review complete.",
+          ),
         );
         expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
           "Keep this draft",

@@ -148,14 +148,16 @@ history or unavailable APIs produce an empty bundle and preserve full execution.
 
 The bundle is shared through a same-run artifact. Test jobs download it without
 additional token permissions. Each bundle binds the current workflow run,
-attempt and actual checkout commit; the reporter also freezes the bundle hash.
-At the native inventory callback, the reporter selects the newest compatible
-prior and computes the complete prior-to-current Git diff, including both ends
-of renames. It does not substitute the launch record's comparison base.
+attempt and actual checkout commit/tree; the reporter also freezes the bundle
+hash. Preflight obtains the exact prior-to-current comparison from GitHub once
+per prior revision, including removed paths and both ends of renames. It verifies
+the prior is an ancestor and rejects comparisons with 300 or more files because
+GitHub caps the returned file list. The native inventory callback consumes this
+bound comparison; it does not substitute the launch record's comparison base.
 
 Exact configuration, lock, environment and runtime identities must match. The
-prior commit must be locally available and an ancestor; no test process fetches
-history. Unknown source, dirty checkout, stale bundle or incompatible inputs
+test checkout can remain shallow; no test process fetches history or calls GitHub.
+Unknown source, dirty checkout, stale bundle or incompatible inputs
 produce an explicit fallback. Different shard membership can still prevent a
 match; graph-input comparability alone does not relax the selector.
 
