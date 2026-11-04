@@ -383,7 +383,10 @@ it("keeps registered provider discovery, POST and EOF under one deadline", async
   let observed = false;
   vi.spyOn(openRouterAudio, "readOpenRouterAudioStream").mockImplementation(
     async (res, limit, opts) => {
-      const body = res.body!;
+      const body = res.body;
+      if (!body) {
+        return await decode(res, limit, opts);
+      }
       const reader = body.getReader();
       const read = reader.read.bind(reader);
       vi.spyOn(body, "getReader").mockReturnValue(reader);
