@@ -10,6 +10,7 @@ import {
 } from "./session-cost-usage-partitions.js";
 import {
   decodeUsageCostRollup,
+  isUsageCostRollupFresh,
   USAGE_COST_ROLLUP_VERSION,
   type UsageCostRollupEntry,
   type UsageCostRollupEnvelope,
@@ -120,8 +121,8 @@ export async function loadUsageCostRollupEntry(
 
 /**
  * Re-keys an undecodable archive's last committed usage to its current identity.
- * Reports read only that identity, and the matching checkpoint keeps the archive
- * from being rescanned until its bytes change again.
+ * Reports read only that identity and see it as stale; the matching identity keeps
+ * the archive from being rescanned until its bytes change again.
  */
 export function carryUsageCostRollupToFile(
   carried: UsageCostRollupEntry,
@@ -140,6 +141,31 @@ export function carryUsageCostRollupToFile(
       observedMtimeMs: file.mtimeMs,
       device: file.device ?? 0,
       inode: file.inode ?? 0,
+      undecodable: 1,
     },
   };
+}
+
+/** A carried archive stays stale for readers but is rescanned only after its bytes change. */
+export function isCarriedArchiveCurrent(
+  checkpoint: UsageCostRollupEntry["checkpoint"] | undefined,
+  file: UsageCostTranscriptFile,
+): boolean {
+  return (
+    checkpoint?.kind === "jsonl" &&
+    checkpoint.undecodable !== undefined &&
+    isUsageCostRollupFresh({ checkpoint: { ...checkpoint, undecodable: undefined }, file })
+  );
+}
+
+/** Prior rows of archives whose current identity has no committed rollup yet. */
+export function collectSupersededArchiveRows(
+  rows: readonly SessionCostUsageRollupRow[],
+  supersededArchiveKey: (key: string) => string | undefined,
+  committed: ReadonlyMap<string, unknown>,
+) {
+  return rows.flatMap((row) => {
+    const current = supersededArchiveKey(row.key);
+    return current && current !== row.key && !committed.has(current) ? [{ row, current }] : [];
+  });
 }

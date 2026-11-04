@@ -383,24 +383,15 @@ it("refreshes archives from their source and keeps the last usage of one that ca
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionsDir = await sessionsDirectory(state.stateDir);
     const header = (id: string) => ({ type: "session", version: 1, id });
-    // An archive record past the scanner's bound is skipped without buffering it;
-    // the branch through it still counts the usage recorded before it.
-    const oversized = {
-      type: "message",
-      id: "big",
-      parentId: "a",
-      message: { role: "user", content: "x".repeat(33 * 1024 * 1024) },
-    };
+    // Past the scanner's bound, an archive record keeps its structure and short
+    // strings, so the usage on a huge assistant message still counts.
     const transcripts = {
       healthy: [
         header("healthy"),
-        { ...assistantEntry(5, { cost: 1 }), id: "a", parentId: null },
-        oversized,
         {
-          type: "message",
-          id: "leaf",
-          parentId: "big",
-          message: { role: "user", content: "next" },
+          ...assistantEntry(5, { cost: 1, content: "x".repeat(33 * 1024 * 1024) }),
+          id: "a",
+          parentId: null,
         },
       ],
       undecodable: [header("undecodable"), assistantEntry(6, { cost: 1 })],
@@ -423,9 +414,10 @@ it("refreshes archives from their source and keeps the last usage of one that ca
     const [healthy, undecodable] = archives as [string, string];
     const keyOf = async (archive: string) =>
       resolveSessionArchiveReadPath(archive, await fs.stat(archive));
+    const read = (sessionFile: string) =>
+      loadCached({ agentId: "main", sessions: [{ sessionFile }], requestRefresh: false });
     const totalOf = async (sessionFile: string) =>
-      (await loadCached({ agentId: "main", sessions: [{ sessionFile }], requestRefresh: false }))
-        .summaries[0]?.totalTokens;
+      (await read(sessionFile)).summaries[0]?.totalTokens;
     expect(await refreshUsage({ agentId: "main" })).toBe("refreshed");
     const healthyKey = await keyOf(healthy);
     expect([await totalOf(healthy), await totalOf(undecodable)]).toEqual([5, 6]);
@@ -447,10 +439,13 @@ it("refreshes archives from their source and keeps the last usage of one that ca
     await fs.utimes(undecodable, new Date(), new Date(Date.now() + 60_000));
     await fs.appendFile(live!.sessionFile, `${JSON.stringify(assistantEntry(4, { cost: 1 }))}\n`);
 
-    expect(await refreshUsage({ agentId: "main" })).toBe("refreshed");
+    // A targeted refresh alone must find the prior identity's totals.
     expect(
       await refreshUsage({ agentId: "main", sessionFiles: [undecodable, live!.sessionFile] }),
     ).toBe("refreshed");
+    expect(await totalOf(undecodable)).toBe(6);
+    expect((await read(undecodable)).cacheStatus).toMatchObject({ staleFiles: 1 });
+    expect(await refreshUsage({ agentId: "main" })).toBe("refreshed");
     expect(JSON.parse(storedRollup(healthyKey).valueJson).checkpoint).toMatchObject({
       observedSize: (await fs.stat(healthy)).size,
     });

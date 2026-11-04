@@ -52,6 +52,8 @@ import {
 import { projectUsageCostQuartersInWorker } from "./session-cost-usage-worker-overview.js";
 import {
   carryUsageCostRollupToFile,
+  collectSupersededArchiveRows,
+  isCarriedArchiveCurrent,
   createSupersededArchiveKeyResolver,
   loadUsageCostRollupEntry,
   createUsageCostRollupPruner,
@@ -174,15 +176,16 @@ export async function executeUsageCostWorker(
     });
     return result.found ? result.value : missing;
   };
-  const readMetadata = async (): Promise<SessionCostUsageRollupRow[]> => {
+  const readMetadata = async (allRows = false): Promise<SessionCostUsageRollupRow[]> => {
+    const paths = allRows ? undefined : selectedPaths;
     const receipt = refreshInputs?.rollupReceipt();
     const cached =
-      selectedPaths?.flatMap((filePath) => {
+      paths?.flatMap((filePath) => {
         const value = refreshInputs?.readRollup(filePath, receipt);
         return value ? [value.row] : [];
       }) ?? [];
     const cachedKeys = new Set(cached.map((row) => row.key));
-    const missing = selectedPaths?.filter((filePath) => !cachedKeys.has(filePath));
+    const missing = paths?.filter((filePath) => !cachedKeys.has(filePath));
     if (missing?.length === 0) {
       return cached;
     }
@@ -444,6 +447,13 @@ export async function executeUsageCostWorker(
       pruned = true;
     }
     await pruner.flush();
+  } else if (
+    files.some((file) => file.filePath !== file.sourcePath && !byPath.has(file.filePath))
+  ) {
+    // A targeted archive with a new identity needs its prior row to carry if decoding fails.
+    supersededArchiveRows.push(
+      ...collectSupersededArchiveRows(await readMetadata(true), supersededArchiveKey, byPath),
+    );
   }
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
   const unreadable = new Map<string, unknown>();
@@ -464,10 +474,11 @@ export async function executeUsageCostWorker(
       row &&
       ((invalid?.valueJson === row.valueJson && invalid.updatedAt === row.updatedAt) ||
         (row.bodyBytes !== undefined && envelope?.body.storedBytes !== row.bodyBytes));
+    const checkpoint = envelope?.checkpoint;
     const outdated =
       rebuild ||
-      !envelope?.projection ||
-      !isUsageCostRollupFresh({ checkpoint: envelope?.checkpoint, file });
+      (!isCarriedArchiveCurrent(checkpoint, file) &&
+        (!envelope?.projection || !isUsageCostRollupFresh({ checkpoint, file })));
     if (outdated && !old) {
       stale.push({ file, row, envelope, rebuild, backfill: false });
     } else if (!outdated && row && gap) {

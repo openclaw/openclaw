@@ -69,10 +69,75 @@ async function readJsonlAnchorHash(filePath: string, offset: number): Promise<st
   }
 }
 
-// A compressed archive can expand far past its stored size, so a record above this
-// bound is skipped rather than buffered. Plain transcripts are bounded by their
-// bytes on disk and keep whole-record parsing.
+// A compressed archive can expand far past its stored size. Past this many bytes, an
+// archive record keeps its JSON structure but only the start of each long string, so
+// usage, cost, and tree fields survive while inlined media or tool output does not.
 const USAGE_COST_MAX_ARCHIVE_RECORD_BYTES = 32 * 1024 * 1024;
+const PRUNED_STRING_BYTES = 1024;
+
+/** Copies JSON bytes while truncating string values; state spans fragments. */
+function createJsonStringPruner() {
+  const output: Buffer[] = [];
+  let outputBytes = 0;
+  let inString = false;
+  let stringBytes = 0;
+  let escaped = false;
+  let unicodeDigits = 0;
+  // An escape sequence is kept or dropped whole so the result stays valid JSON.
+  let keepEscape = true;
+  return {
+    get bytes() {
+      return outputBytes;
+    },
+    push(bytes: Buffer) {
+      let runStart = 0;
+      let keeping = true;
+      for (let index = 0; index < bytes.length; index += 1) {
+        const byte = bytes[index]!;
+        let keep = true;
+        if (!inString) {
+          if (byte === 0x22) {
+            inString = true;
+            stringBytes = 0;
+          }
+        } else if (unicodeDigits > 0) {
+          unicodeDigits -= 1;
+          keep = keepEscape;
+        } else if (escaped) {
+          escaped = false;
+          unicodeDigits = byte === 0x75 ? 4 : 0;
+          keep = keepEscape;
+        } else if (byte === 0x5c) {
+          escaped = true;
+          keepEscape = stringBytes < PRUNED_STRING_BYTES;
+          keep = keepEscape;
+          stringBytes += 1;
+        } else if (byte === 0x22) {
+          inString = false;
+        } else {
+          keep = stringBytes < PRUNED_STRING_BYTES;
+          stringBytes += 1;
+        }
+        if (keep !== keeping) {
+          if (keeping) {
+            output.push(bytes.subarray(runStart, index));
+            outputBytes += index - runStart;
+          } else {
+            runStart = index;
+          }
+          keeping = keep;
+        }
+      }
+      if (keeping) {
+        output.push(bytes.subarray(runStart));
+        outputBytes += bytes.length - runStart;
+      }
+    },
+    take() {
+      return Buffer.concat(output, outputBytes);
+    },
+  };
+}
 
 function parseJsonlRecord(line: Buffer): Record<string, unknown> | undefined {
   return safeParseJsonRecord(line.toString("utf8").trim());
@@ -100,31 +165,44 @@ async function scanJsonlRange(params: {
   // would repeatedly copy and rescan large transcript records.
   const lineChunks: Buffer[] = [];
   let lineBytes = 0;
-  let oversized = false;
+  let pruner: ReturnType<typeof createJsonStringPruner> | undefined;
   const append = (fragment: Buffer) => {
-    if (oversized) {
-      return;
-    }
-    if (params.archive && lineBytes + fragment.length > USAGE_COST_MAX_ARCHIVE_RECORD_BYTES) {
-      oversized = true;
+    if (
+      !pruner &&
+      params.archive &&
+      lineBytes + fragment.length > USAGE_COST_MAX_ARCHIVE_RECORD_BYTES
+    ) {
+      pruner = createJsonStringPruner();
+      for (const chunk of lineChunks) {
+        pruner.push(chunk);
+      }
       lineChunks.length = 0;
       lineBytes = 0;
+    }
+    if (pruner) {
+      pruner.push(fragment);
+      if (pruner.bytes > USAGE_COST_MAX_ARCHIVE_RECORD_BYTES) {
+        // Structure alone past the bound cannot come from a transcript writer.
+        throw Object.assign(
+          new RangeError(`Session archive ${params.filePath} has a record too large to account`),
+          { code: "ERR_BUFFER_TOO_LARGE" },
+        );
+      }
       return;
     }
     lineChunks.push(fragment);
     lineBytes += fragment.length;
   };
   const takeRecord = () => {
-    const record = oversized
-      ? undefined
-      : lineBytes > 0
-        ? parseJsonlRecord(
-            lineChunks.length === 1 ? lineChunks[0]! : Buffer.concat(lineChunks, lineBytes),
-          )
-        : undefined;
+    const line = pruner
+      ? pruner.take()
+      : lineChunks.length === 1
+        ? lineChunks[0]!
+        : Buffer.concat(lineChunks, lineBytes);
+    const record = pruner || lineBytes > 0 ? parseJsonlRecord(line) : undefined;
     lineChunks.length = 0;
     lineBytes = 0;
-    oversized = false;
+    pruner = undefined;
     return record;
   };
   let chunkStart = params.startOffset;
@@ -151,7 +229,7 @@ async function scanJsonlRange(params: {
       }
       chunkStart += bytes.length;
     }
-    if (lineBytes > 0) {
+    if (lineBytes > 0 || pruner) {
       const record = takeRecord();
       if (record) {
         const pending = params.onRecord(record);
@@ -206,7 +284,9 @@ async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostR
   );
   const startOffset = appendOnly ? (previousCheckpoint?.parsedOffset ?? 0) : 0;
   const scan = createUsageRollupScan({ ...params, appendOnly });
-  let pendingRecords: Record<string, unknown>[] = [];
+  // Project each record to its compact usage entry before batching, so a batch never
+  // retains message bodies.
+  let pendingEntries: ParsedTranscriptEntry[] = [];
   const scannedOffset = await scanJsonlRange({
     filePath: readPath,
     archive,
@@ -214,26 +294,19 @@ async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostR
     endOffset: params.file.size,
     checkProgress: params.checkProgress,
     onRecord: (record) => {
-      pendingRecords.push(record);
-      if (pendingRecords.length === 128) {
-        const batch = pendingRecords;
-        pendingRecords = [];
-        return scan.addEntries(
-          batch.flatMap((item) => {
-            const entry = parseUsageCostTranscriptRecord(item);
-            return entry ? [entry] : [];
-          }),
-        );
+      const entry = parseUsageCostTranscriptRecord(record);
+      if (entry) {
+        pendingEntries.push(entry);
+      }
+      if (pendingEntries.length === 128) {
+        const batch = pendingEntries;
+        pendingEntries = [];
+        return scan.addEntries(batch);
       }
       return undefined;
     },
   });
-  await scan.addEntries(
-    pendingRecords.flatMap((record) => {
-      const entry = parseUsageCostTranscriptRecord(record);
-      return entry ? [entry] : [];
-    }),
-  );
+  await scan.addEntries(pendingEntries);
   const processedOffset = archive ? params.file.size : scannedOffset;
   const postStats = await fs.promises.stat(readPath);
   if (
