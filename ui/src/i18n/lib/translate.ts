@@ -10,7 +10,6 @@ import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { en } from "../locales/en.ts";
 import { getLazyLocaleCatalog } from "./locale-catalog.ts";
-import { loadLazyLocaleTranslation } from "./registry.ts";
 import type { TranslationMap } from "./types.ts";
 
 function lookupTranslation(map: TranslationMap | undefined, keys: readonly string[]): unknown {
@@ -160,7 +159,10 @@ class I18nManager {
           const translation = await getOrCreatePromise(
             this.inFlightLocaleLoads,
             locale,
-            () => loadLazyLocaleTranslation(locale),
+            async () => {
+              const { loadLazyLocaleTranslation } = await import("./registry.ts");
+              return loadLazyLocaleTranslation(locale);
+            },
             { evictOnSettled: true },
           );
           if (!translation) {
@@ -171,11 +173,13 @@ class I18nManager {
         await this.prepareCatalog(locale);
       } catch (e) {
         const isCurrentRequest = this.localeRequestGeneration === requestGeneration;
-        if (retrying && isCurrentRequest && this.localeLoadRecovery?.isUnrecoverableError(e)) {
+        if (isCurrentRequest && this.localeLoadRecovery?.isUnrecoverableError(e)) {
           if (shouldPersist) {
             this.persistLocale(locale);
           }
-          this.localeLoadRecovery.onUnrecoverableLocaleLoad?.(locale);
+          if (retrying) {
+            this.localeLoadRecovery.onUnrecoverableLocaleLoad?.(locale);
+          }
         }
         console.error(`Failed to load locale: ${locale}`, e);
         return;
