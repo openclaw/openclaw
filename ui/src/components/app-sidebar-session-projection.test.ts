@@ -42,6 +42,7 @@ function projectionInput(
 ): ProjectionInput {
   return {
     rows,
+    selectedSessionKey: null,
     grouping: "category",
     knownGroups: [],
     collapsedSections: new Set(),
@@ -349,8 +350,10 @@ it("reveals late active ancestry once per navigation without changing other disc
       childrenDisplayMode: "collapsed-by-user",
     })),
   );
-  const projectTree = (rows: SidebarRecentSession[]) =>
-    treeProjection.project(projectionInput(rows));
+  const projectTree = (
+    rows: SidebarRecentSession[],
+    selectedSessionKey: string | null = leaf.key,
+  ) => treeProjection.project(projectionInput(rows, { selectedSessionKey }));
   projectTree([sessionRow(root.key), unrelated]);
   expect(treeProjection.children.isExpanded(root.key)).toBe(false);
   projectTree([root, unrelated]);
@@ -362,7 +365,20 @@ it("reveals late active ancestry once per navigation without changing other disc
   projectTree([root, unrelated]);
   expect(treeProjection.children.isFullyShown(root.key)).toBe(true);
   expect(treeProjection.children.isExpanded(middle.key)).toBe(false);
-  projectTree([]);
+  // A partial refresh is not a navigation away from the selected session.
+  projectTree([
+    {
+      ...root,
+      containsActiveDescendant: false,
+      children: [
+        { ...middle, children: [], loadingChildren: true, containsActiveDescendant: false },
+      ],
+    },
+    unrelated,
+  ]);
+  projectTree([root, unrelated]);
+  expect(treeProjection.children.isExpanded(middle.key)).toBe(false);
+  projectTree([], null);
   projectTree([root, unrelated]);
   expect(treeProjection.children.isExpanded(middle.key)).toBe(true);
   expect(treeProjection.children.isExpanded(unrelated.key)).toBe(false);

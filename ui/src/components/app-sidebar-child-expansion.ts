@@ -2,29 +2,28 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 export type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
 
-type SidebarExpansionScope = { agentId: string; connectionIdentity: unknown };
+export type SidebarExpansionScope = {
+  agentId: string;
+  connectionIdentity: unknown;
+  selectedSessionKey: string | null;
+};
 
 /** Parent disclosure state: explicit choices plus the child identities each parent last showed. */
 export class SidebarChildExpansion {
   private readonly modes = new Map<string, SidebarExpansionMode>();
   private readonly observedChildKeys = new Map<string, readonly string[]>();
   private restoredPending = false;
-  private activeSessionKey: string | null = null;
   private readonly revealedAncestors = new Set<string>();
 
   constructor(private readonly onChange: () => void) {}
 
   /** Opens a projection pass; a scope change drops state unless a snapshot handoff is pending. */
-  beginPass(
-    input: SidebarExpansionScope & { rows: readonly SidebarRecentSession[] },
-    previous: SidebarExpansionScope | null,
-  ): void {
+  beginPass(input: SidebarExpansionScope, previous: SidebarExpansionScope | null): void {
     const scopeChanged =
       previous !== null &&
       (previous.agentId !== input.agentId ||
         previous.connectionIdentity !== input.connectionIdentity);
-    if (scopeChanged) {
-      this.activeSessionKey = null;
+    if (scopeChanged || previous?.selectedSessionKey !== input.selectedSessionKey) {
       this.revealedAncestors.clear();
     }
     if (scopeChanged && !this.restoredPending) {
@@ -32,47 +31,31 @@ export class SidebarChildExpansion {
       this.observedChildKeys.clear();
     }
     this.restoredPending = false;
-    this.revealActiveSession(input.rows);
   }
 
   keys(): string[] {
     return [...this.modes.keys(), ...this.observedChildKeys.keys()];
   }
 
-  private revealActiveSession(rows: readonly SidebarRecentSession[]): void {
-    const ancestors: string[] = [];
-    const visit = (row: SidebarRecentSession): string | null => {
-      let activeKey: string | null = null;
-      for (const child of row.children) {
-        activeKey = visit(child) ?? activeKey;
-      }
-      if (activeKey !== null) {
-        ancestors.push(row.key);
-      }
-      return row.visuallyActive ? row.key : activeKey;
-    };
-    let sessionKey: string | null = null;
-    for (const row of rows) {
-      sessionKey = visit(row) ?? sessionKey;
-    }
-    if (this.activeSessionKey !== sessionKey) {
-      this.activeSessionKey = sessionKey;
-      this.revealedAncestors.clear();
-    }
-    for (const key of ancestors) {
-      // Reveal late-arriving ancestors once; refreshes still respect a manual collapse.
-      if (!this.revealedAncestors.has(key)) {
-        if (!this.isExpanded(key)) {
-          this.modes.set(key, "expanded");
-        }
-        this.revealedAncestors.add(key);
-      }
-    }
-  }
-
-  observe(session: SidebarRecentSession, listLoaded: boolean): void {
+  observe(
+    session: SidebarRecentSession,
+    listLoaded: boolean,
+    selectedSessionKey: string | null,
+  ): void {
     const previousChildren = this.observedChildKeys.get(session.key);
-    const mode = this.modes.get(session.key);
+    let mode = this.modes.get(session.key);
+    if (
+      selectedSessionKey !== null &&
+      session.containsActiveDescendant &&
+      !this.revealedAncestors.has(session.key)
+    ) {
+      this.revealedAncestors.add(session.key);
+      // The tree producer already marks the selected path. Reopen its explicit
+      // collapses once per navigation in this existing observation pass.
+      if (mode === "collapsed-by-user") {
+        mode = undefined;
+      }
+    }
     // New children reveal their parent once; ordinary refreshes and reordering
     // must not undo an explicit collapse or the operator's Show more choice.
     const hasNewChild =

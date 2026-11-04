@@ -1,18 +1,16 @@
-import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
-import {
-  groupSidebarSessionRows,
-  type SidebarSessionSection,
-  type SidebarSessionsGrouping,
-} from "../lib/sessions/grouping.ts";
+import { groupSidebarSessionRows, type SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import { SidebarChildExpansion } from "./app-sidebar-child-expansion.ts";
+import {
+  SidebarChildExpansion,
+  type SidebarExpansionScope,
+} from "./app-sidebar-child-expansion.ts";
 import { sidebarPresencePresentation, type SidebarPresenceScope } from "./app-sidebar-presence.ts";
 import {
   catalogErrorMessages,
@@ -20,15 +18,13 @@ import {
   catalogSessionRowsByKey,
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
+import type { SidebarProjectionInput } from "./app-sidebar-session-projection-input.ts";
 import {
   sidebarSessionPagination,
   isListedInPinnedSection,
   type SidebarPinZone,
   visibleSessionChildren,
-  type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
-  type SidebarSessionSortMode,
-  type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { areSessionCatalogsSettled, type SessionDataInputs } from "./session-data-catalog.ts";
@@ -45,38 +41,6 @@ const SIDEBAR_SUBTITLE_MIN_DISPLAY_MS = 2_000;
 
 type SidebarSubtitleParams = Parameters<typeof resolveSidebarSessionSubtitle>[0];
 type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
-
-type SidebarProjectionInput = {
-  rows: SidebarRecentSession[];
-  /** Personal placements participate in disclosure lifetime, not canonical grouping. */
-  referencedRows?: readonly SidebarRecentSession[];
-  sections?: SidebarSessionSection<SidebarRecentSession>[];
-  /** Personal pins render in the Pinned section above these sections, never twice. */
-  pinnedKeys?: ReadonlySet<string>;
-  grouping: SidebarSessionsGrouping;
-  knownGroups: string[] | undefined;
-  selfOwnerId?: string | null;
-  catalogIds?: readonly string[];
-  sectionOrder?: readonly string[];
-  collapsedSections: ReadonlySet<string>;
-  emptyGroupsMode: SidebarEmptyGroupsMode;
-  /** "owner" selects exactly one owner; "involvingMe" can span several. */
-  ownerFilter: "owner" | "involvingMe" | null;
-  visibleSessionLimits: ReadonlyMap<string, number>;
-  sortMode: SidebarSessionSortMode;
-  statusFilter: SidebarSessionStatusFilter;
-  agentId: string;
-  connectionIdentity: object | null;
-  listSource: object | null;
-  /** False while rows are only route placeholders, before the session list arrives. */
-  listLoaded: boolean;
-  subtitle: {
-    sidebarLiveActivity: boolean;
-    showPreview: boolean;
-    narrationLines: ReadonlyMap<string, string>;
-    observerDigests: ReadonlyMap<string, SessionObserverDigest>;
-  };
-};
 
 export type SidebarVisibleSections = {
   sections: (SidebarSessionSection<SidebarRecentSession> & {
@@ -436,10 +400,10 @@ export class SidebarSessionProjection {
     string,
     { value: SidebarSubtitleValue; catalogValue?: SidebarSubtitleValue; shownAt: number }
   >();
-  private previousInput: Pick<
-    SidebarProjectionInput,
-    "grouping" | "sortMode" | "statusFilter" | "agentId" | "connectionIdentity" | "listSource"
-  > | null = null;
+  private previousInput:
+    | (SidebarExpansionScope &
+        Pick<SidebarProjectionInput, "grouping" | "sortMode" | "statusFilter" | "listSource">)
+    | null = null;
   private previousCollapsedSections = new Set<string>();
 
   get createdOrder(): ReadonlyMap<string, number> {
@@ -539,6 +503,7 @@ export class SidebarSessionProjection {
       agentId: input.agentId,
       connectionIdentity: input.connectionIdentity,
       listSource: input.listSource,
+      selectedSessionKey: input.selectedSessionKey,
     };
     this.previousCollapsedSections = new Set(input.collapsedSections);
 
@@ -551,7 +516,7 @@ export class SidebarSessionProjection {
       }
       observed.add(session.key);
       staleKeys.delete(session.key);
-      this.children.observe(session, input.listLoaded);
+      this.children.observe(session, input.listLoaded, input.selectedSessionKey);
       this.observeSubtitle(session, input.subtitle);
       pending.push(...session.children);
     }
