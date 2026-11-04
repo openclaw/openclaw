@@ -25,6 +25,8 @@ import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescrip
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
+import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
+import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
@@ -34,6 +36,7 @@ import { registerNewSessionRuntimeEnglish } from "../../ui/src/i18n/locales/en-n
 import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
+import { en } from "../../ui/src/i18n/locales/en.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
@@ -303,9 +306,14 @@ describe("control-ui-i18n generated ownership", () => {
     expect(result.exitCode, result.stderr).toBe(0);
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenCatalog(catalog, "en");
+    for (const [key, value] of Object.entries(en.chat.recovery)) {
+      expect(source.get("chat.recovery." + key), key).toBe(value);
+    }
     for (const fragment of [
       registerChatDetailsEnglish.catalog,
       registerChatSessionEnglish.catalog,
+      registerChatMessageMetadataEnglish.catalog,
+      registerChatFailedMessageEditEnglish.catalog,
       registerChatSessionOptionalEnglish.catalog,
       registerChatSessionSharingEnglish.catalog,
       registerCodeBlocksEnglish.catalog,

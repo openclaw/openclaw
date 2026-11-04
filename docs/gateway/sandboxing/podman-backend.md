@@ -22,6 +22,14 @@ manager and its bus must be available to the Gateway. Keep `Delegate=yes`,
 `DelegateSubgroup=gateway`, and the sandbox's resource limits enabled; switching
 the cgroup manager or clearing `INVOCATION_ID` does not repair this boundary.
 
+Dependency-template builders stop before their installed files become reusable.
+On native Linux with cgroup v2 and systemd, OpenClaw captures the builder's exact
+engine-reported cgroup at startup and checks kernel population after killing its
+immutable container ID. This avoids waiting for Podman's physical cleanup on the
+preparation path; registry housekeeping still owns removal and crash recovery.
+An unavailable cgroup capture uses the engine's wait and termination checks.
+An unreadable or still-populated captured cgroup blocks template publication.
+
 Rootless Podman defaults to `--userns=keep-id` for writable workspace mounts. A long-lived sandbox can reserve subordinate IDs and block unrelated `--userns=auto` workloads; remove it before starting those workloads. Set `sandbox.docker.user` to a nonzero numeric UID or UID:GID to control the container user. Rootless Podman rejects UID or GID 0 because Podman 4.x cannot remap namespace root while preserving workspace bind ownership; bake root-required setup into the image or use rootful Podman. Rootful Podman otherwise uses the workspace owner when available.
 
 ```json5

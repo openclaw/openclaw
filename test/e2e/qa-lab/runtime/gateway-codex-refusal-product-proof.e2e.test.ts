@@ -54,7 +54,7 @@ it.each(["bio", "cyber", "misalignment", "retryable"])(
     const terminalFailureSummary = retryable
       ? undefined
       : paused
-        ? "Your request couldn't be completed: Session stopped as a precaution. Review the findings in chat before continuing."
+        ? "Your request couldn't be completed: Chat stopped as a precaution. Review the findings in chat before continuing."
         : `Your request couldn't be completed: The provider refused this request (category: ${failureKind}). Revise the request and try again.`;
     const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
       CODEX_APP_SERVER_VERSION: string;

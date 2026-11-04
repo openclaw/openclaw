@@ -26,6 +26,7 @@ import {
   updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import { formatChatSelectionQuote } from "./components/chat-selection-attachment.ts";
 import type { ChatQueueAdmissionResult } from "./composer-queue-persistence.ts";
 import {
   admitChatSubmission,
@@ -319,7 +320,18 @@ export function surfaceChatDeliveryFailure(
         !scopedAgentId ||
         (session.agentId !== undefined && normalizeAgentId(session.agentId) === scopedAgentId)),
   );
-  showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}` });
+  showToast({
+    placement: "top-right",
+    severity: "error",
+    message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}`,
+  });
+}
+
+/** Model-facing text an annotation contributes ahead of the user's own message. */
+export function annotationMessageContext(attachment: ChatAttachment): string | undefined {
+  return attachment.selectionAnnotation
+    ? formatChatSelectionQuote(attachment.selectionAnnotation)
+    : attachment.browserAnnotation?.modelContext.trim();
 }
 
 export function prependReplyQuote(

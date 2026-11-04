@@ -14,7 +14,7 @@ const enChatGoals = {
       cancel: "Cancel goal entry",
       offline: "Reconnect to manage goals.",
       busy: "Wait for this reply to finish. Your draft is unchanged.",
-      annotationUnsupported: "Send or remove browser annotations first. Your draft is unchanged.",
+      annotationUnsupported: "Send or remove annotations first. Your draft is unchanged.",
       actionPending: "Wait for the pending goal action.",
       invalidRequest: "Couldn’t update the goal. Check the objective and try again.",
       outcomeUnknown: "Goal update not confirmed. Check its outcome before changing it.",

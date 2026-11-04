@@ -26,6 +26,7 @@ import {
 } from "./chat-outbox-retry.ts";
 import { collectChatOutboxes, readChatOutboxLane } from "./chat-outbox-scopes.ts";
 import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
+import { parkedChatQueueRows } from "./chat-queue-pause.ts";
 import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
 import type { PendingComposerSnapshot } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -167,13 +168,14 @@ async function drainStoredChatOutbox(
         (entry.queueMode ||
           (!entry.intent && lane.pendingOptions.get(entry.id)?.allowActiveRunSend)),
     );
+    // Rows parked by Stop leave only through Resume or an explicit send (retry, steer, edit).
+    const parked = parkedChatQueueRows(host, scope);
     const storedItem =
       freshActiveRunItem ??
       outbox.queue.find(
         (entry) =>
           lane.freshAdmissions.has(entry.id) ||
-          entry.sendState !== "failed" ||
-          entry.localCommandName,
+          (!parked?.has(entry.id) && (entry.sendState !== "failed" || entry.localCommandName)),
       );
     if (!storedItem) {
       return;

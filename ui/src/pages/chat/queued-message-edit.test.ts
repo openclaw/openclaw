@@ -220,7 +220,7 @@ it.each(["move", "remove"])("retains edits after peer %s and navigation", async 
   expect(host.chatQueuedEdit?.source).toBe(captured);
   expect(storedOrder(host)).toEqual(expectedOrder);
   expect(host.chatQueuedEdit?.draftText).toBe("message 1, corrected");
-  expect(host.chatError).toContain("This queued message changed while you were editing.");
+  expect(host.chatError).toContain("The queued message changed.");
   expect(cancelEdit(host as never)).toBe(true);
   expect(storedOrder(host)).toEqual(expectedOrder);
 });
@@ -280,7 +280,7 @@ it("retains the source after a failed replacement write", async () => {
   expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
   expect(isEditing(host as never, "queued-2")).toBe(true);
   expect(host.chatQueuedEdit?.draftText).toBe("message 2, corrected");
-  expect(host.chatError).toContain("Your edit could not be saved in this browser.");
+  expect(host.chatError).toContain("Couldn’t save your edit.");
   vi.restoreAllMocks();
   await submitQueuedEdit(host);
   expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);

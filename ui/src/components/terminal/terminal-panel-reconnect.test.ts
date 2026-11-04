@@ -197,7 +197,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     );
     await waitForFast(() =>
       expect(panel.querySelector(".tp-error")?.textContent).toContain(
-        "Terminal delivery could not be confirmed",
+        "Couldn’t confirm command delivery",
       ),
     );
 
@@ -303,7 +303,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     recovery.reject(new Error("temporary attach failure"));
     await waitForFast(() =>
       expect(panel.querySelector(".tp-error")?.textContent).toContain(
-        "Could not attach terminal session",
+        "Couldn’t attach this terminal session. Try again.",
       ),
     );
     expect(panel.hostedTabs[0]?.className).toBe("is-live");
@@ -312,7 +312,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     await panel.updateComplete;
     expectRetainedDraft();
     expect(panel.querySelector(".tp-error")?.textContent).toContain(
-      "Could not attach terminal session",
+      "Couldn’t attach this terminal session. Try again.",
     );
 
     panel.querySelector<HTMLButtonElement>(".tp-error .btn")!.click();
@@ -389,7 +389,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
         expect(panel.hostedTabs[0]?.id).toBe(tabId);
         await waitForFast(() =>
           expect(panel.querySelector('.tp-error[role="alert"]')?.textContent).toContain(
-            "Terminal delivery could not be confirmed",
+            "Couldn’t confirm command delivery",
           ),
         );
         armed = false;
@@ -399,7 +399,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
         await panel.updateComplete;
         expect(panel.hostedTabs[0]?.id).toBe(tabId);
         expect(panel.querySelector('.tp-error[role="alert"]')?.textContent).toContain(
-          "Terminal delivery could not be confirmed",
+          "Couldn’t confirm command delivery",
         );
       }
     },
