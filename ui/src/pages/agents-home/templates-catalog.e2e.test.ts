@@ -291,6 +291,17 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     },
   );
 
+  it("distinguishes an empty catalog from no matching templates", async () => {
+    const { page, gateway } = await fixture();
+    await page.locator("[data-templates-featured] [data-templates-entry]").first().waitFor();
+    await gateway.setMethodResponse("templates.catalog.search", { entries: [] });
+    const search = page.getByPlaceholder("Search templates");
+    await search.fill("unmatched");
+    await page.getByText("No templates match your search.", { exact: true }).waitFor();
+    await search.fill("");
+    await page.getByText("No templates yet.", { exact: true }).waitFor();
+  });
+
   it("uses the accepted publisher to add a personal Template and start chat despite pending setup", async () => {
     const community = {
       ...workflowOperator,

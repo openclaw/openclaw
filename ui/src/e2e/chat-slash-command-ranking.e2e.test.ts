@@ -85,7 +85,7 @@ suite.define(() => {
 
         await page
           .locator(".chat-thread-inner")
-          .getByText("There are no messages to export yet.", { exact: true })
+          .getByText("No messages to export yet.", { exact: true })
           .waitFor({ state: "visible" });
         await expect.poll(() => composer.inputValue()).toBe("");
         expect(await attachment.isVisible()).toBe(true);

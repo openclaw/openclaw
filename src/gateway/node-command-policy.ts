@@ -229,7 +229,7 @@ export function canInvokeNodeMcpLocally(commands: readonly string[]): boolean {
 }
 
 /** A local transport cannot run the Gateway's registered node.invoke policy or its missing-policy check. */
-export function requiresGatewayNodeInvokePolicy(command: string): boolean {
+function requiresGatewayNodeInvokePolicy(command: string): boolean {
   return (
     getPreparedPluginNodePolicy()?.dangerous.has(command) === true ||
     getActivePluginGatewayNodePolicyRegistry()?.nodeInvokePolicies.some((entry) =>
