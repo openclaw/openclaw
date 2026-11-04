@@ -1821,9 +1821,18 @@ export function assertInstalledTerminalOutput(rows, spec, result) {
     );
     for (const row of outputs) {
       if (Buffer.from(row.bytes, "base64").length) {
-        assert.equal(row.pid, handoff.pid, "Foreign predecessor published healthy output");
-        assert.equal(row.thread, 0);
-        assert(BigInt(row.time) > BigInt(success.time), "Healthy output preceded settlement");
+        if (row.pid === handoff.pid) {
+          assert.equal(row.thread, 0);
+          assert(BigInt(row.time) > BigInt(success.time), "Healthy output preceded settlement");
+        } else {
+          // Earlier inspection children use stdout for captured private replies.
+          // Complete CLI/parent equality above detects any bytes that escaped;
+          // after handoff, predecessor writers must also remain quiescent.
+          assert(
+            BigInt(row.time) < BigInt(handoff.time),
+            "Foreign predecessor wrote during healthy terminal handoff",
+          );
+        }
       }
     }
     return;

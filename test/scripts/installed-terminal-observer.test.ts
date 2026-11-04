@@ -94,16 +94,17 @@ function terminalOutputFixture() {
   };
 }
 
+function healthyTerminalOutputFixture() {
+  const f = terminalOutputFixture();
+  f.spec.fault = false;
+  f.result.code = 0;
+  f.rows.splice(f.rows.indexOf(f.fault), 1);
+  f.publish(f.candidateStdout);
+  return f;
+}
+
 it("binds healthy publication to the exact settled candidate and parent", () => {
-  const healthy = () => {
-    const f = terminalOutputFixture();
-    f.spec.fault = false;
-    f.result.code = 0;
-    f.rows.splice(f.rows.indexOf(f.fault), 1);
-    f.publish(f.candidateStdout);
-    return f;
-  };
-  const f = healthy();
+  const f = healthyTerminalOutputFixture();
   assertInstalledTerminalOutput(f.rows, f.spec, f.result);
   f.rows.push({ event: "stdout", pid: 10, thread: 8, time: "1", bytes: "" });
   const bytes = Buffer.from(f.result.stdout);
@@ -111,7 +112,7 @@ it("binds healthy publication to the exact settled candidate and parent", () => 
   f.rows.push({ ...f.parentOutput, time: "51", bytes: bytes.subarray(17).toString("base64") });
   assertInstalledTerminalOutput(f.rows, f.spec, f.result);
 
-  const invalid: [string, (value: ReturnType<typeof healthy>) => void][] = [
+  const invalid: [string, (value: ReturnType<typeof healthyTerminalOutputFixture>) => void][] = [
     [
       "exit failure",
       (value) => {
@@ -178,6 +179,15 @@ it("binds healthy publication to the exact settled candidate and parent", () => 
       },
     ],
   ];
+  for (const time of ["10", "11", "29", "30", "31"]) {
+    invalid.push([
+      `foreign writer at terminal time ${time}`,
+      (value) => {
+        value.rows.push({ event: "spawn", pid: 10, child: 12 });
+        value.rows.push({ ...value.parentOutput, pid: 12, time });
+      },
+    ]);
+  }
   for (const key of ["root", "runId"] as const) {
     invalid.push([
       `stale candidate ${key}`,
@@ -192,12 +202,80 @@ it("binds healthy publication to the exact settled candidate and parent", () => 
     ]);
   }
   for (const [label, mutate] of invalid) {
-    const value = healthy();
+    const value = healthyTerminalOutputFixture();
     mutate(value);
     expect(
       () => assertInstalledTerminalOutput(value.rows, value.spec, value.result),
       label,
     ).toThrow();
+  }
+});
+
+it("separates captured inspection replies from inherited or forwarded CLI bytes", () => {
+  for (const mode of ["captured", "inherited", "forwarded"]) {
+    const observed = fixture();
+    const f = healthyTerminalOutputFixture();
+    const parent = path.join(observed.root, "capture.mjs");
+    const child = path.join(observed.root, "reply.cjs");
+    const reply = '{"ok":true,"ownershipJson":"null"}';
+    fs.writeFileSync(child, `process.stdout.write(${JSON.stringify(reply)});`);
+    fs.writeFileSync(
+      parent,
+      `import assert from 'node:assert/strict';
+       import { execFile, spawn } from 'node:child_process';
+       import { once } from 'node:events';
+       let captured;
+       const child = ${JSON.stringify(mode)} === 'inherited'
+         ? spawn(process.execPath, [${JSON.stringify(child)}], {stdio:['ignore','inherit','pipe']})
+         : execFile(process.execPath, [${JSON.stringify(child)}], {encoding:'utf8'}, (error, stdout) => {
+             assert.ifError(error);
+             captured = stdout;
+           });
+       const [code, signal] = await once(child, 'close');
+       assert.equal(code, 0);
+       assert.equal(signal, null);
+       if (${JSON.stringify(mode)} !== 'inherited') assert.equal(captured, ${JSON.stringify(reply)});
+       if (${JSON.stringify(mode)} === 'forwarded') process.stdout.write(captured);
+       process.stdout.write(${JSON.stringify(f.candidateStdout)});`,
+    );
+    const plain = runProcess(node, [parent], process.env, 10_000);
+    const result = runProcess(node, [parent], observed.env, 10_000);
+    expect(result.status, result.stderr).toBe(0);
+    expect([result.status, result.signal, result.stdout], mode).toEqual([
+      plain.status,
+      plain.signal,
+      plain.stdout,
+    ]);
+    expect(result.stdout).toBe(`${mode === "captured" ? "" : reply}${f.candidateStdout}`);
+    const rows = readInstalledTerminalEvents(observed.spec.directory);
+    const startup = rows.find((row) => row.event === "startup" && row.entry === parent);
+    const childStartup = rows.find((row) => row.event === "startup" && row.entry === child);
+    assert(startup && typeof startup.pid === "number" && childStartup);
+    expect(childStartup.ppid).toBe(startup.pid);
+    const replies = rows.filter((row) => row.event === "stdout" && row.pid === childStartup.pid);
+    expect(replies).toHaveLength(1);
+    const recorded = replies[0];
+    assert(typeof recorded.time === "string");
+    expect(Buffer.from(String(recorded.bytes), "base64").toString()).toBe(reply);
+    // Keep the real stdout records intact. The pure oracle's candidate facts
+    // place its terminal window after the captured reply, before parent output.
+    const candidatePid = startup.pid + 1_000_000;
+    for (const row of f.rows.filter((row) => row.event !== "startup" && row.event !== "stdout")) {
+      row.pid = startup.pid;
+      row.child = candidatePid;
+      if (typeof row.time === "string") {
+        row.time = (BigInt(recorded.time) + BigInt(row.time)).toString();
+      }
+      rows.push(row);
+    }
+    const output = { ...f.result, pid: startup.pid, stdout: result.stdout };
+    if (mode === "captured") {
+      assertInstalledTerminalOutput(rows, f.spec, output);
+    } else {
+      expect(() => assertInstalledTerminalOutput(rows, f.spec, output), mode).toThrow(
+        "Healthy stdout changed candidate bytes",
+      );
+    }
   }
 });
 
