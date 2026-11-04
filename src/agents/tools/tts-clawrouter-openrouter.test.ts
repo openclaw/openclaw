@@ -20,7 +20,7 @@ const MODELS = [
   "hexgrad/kokoro-82m",
   "elevenlabs/eleven-turbo-v2",
   "mistralai/voxtral-mini-tts-2603",
-];
+] as const;
 type Call = { path: string; auth?: string; body: Record<string, unknown>; accept?: string };
 type State = {
   kind: "native" | "manifest";
