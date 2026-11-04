@@ -118,6 +118,7 @@ describeLive("gateway live (Codex hidden subagent native shell)", () => {
         client,
         sessionKey,
         workspace,
+        codexHome: path.join(instance.state.stateDir, "agents", "dev", "agent", "codex-home"),
         thinking: THINKING,
         requestTimeoutMs: REQUEST_TIMEOUT_MS,
         agentTimeoutSeconds: AGENT_TIMEOUT_SECONDS,
