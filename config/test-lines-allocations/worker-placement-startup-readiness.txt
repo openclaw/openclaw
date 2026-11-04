@@ -1,2 +1,2 @@
-# Provider recovery cannot block startup readiness; registered shutdown still drains provisioning and active reconciliation.
-10
+# Nonblocking startup with shutdown drainage; recovery preserves newly admitted/replaced worker and remote-exec claims while settling pre-start claims.
+52

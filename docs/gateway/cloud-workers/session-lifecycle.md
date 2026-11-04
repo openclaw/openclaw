@@ -57,9 +57,10 @@ matching pre-upgrade backup and binary only after settling retained operations a
 On Gateway restart, local workspace recovery journals settle before readiness.
 Remote provider reconciliation and Git publication recovery run in the background,
 so an unavailable cloud provider does not block the Gateway from becoming ready.
-Session admission still serializes worker recovery, and Gateway shutdown drains
-accepted recovery work before stopping the environment service. Gateway readiness
-does not imply that every retained worker is ready to execute.
+Restart recovery may interrupt only placement turn claims captured before startup;
+newly admitted or replaced claims keep their live execution ownership. Gateway
+shutdown drains accepted recovery work before stopping the environment service.
+Gateway readiness does not imply that every retained worker is ready to execute.
 
 ## Dispatch a session
 
