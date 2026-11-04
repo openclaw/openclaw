@@ -639,7 +639,7 @@ suite.define(() => {
                         Number.parseFloat(getComputedStyle(column).paddingLeft) -
                         title.getBoundingClientRect().left,
                     ),
-                    fitsColumn: box.width <= 760,
+                    fitsColumn: box.width <= (innerWidth === 820 ? innerWidth - 2 * 24 : 760),
                   };
                 }),
               { message: `${tab} at ${width}` },

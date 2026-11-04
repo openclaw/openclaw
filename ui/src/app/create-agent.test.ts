@@ -184,7 +184,9 @@ describe("application agent creation", () => {
       expect(navigate).not.toHaveBeenCalled();
       expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list"]);
       expect(context.chatSubmissions.creation).toBeUndefined();
-      await vi.waitFor(() => expect(toast.toast?.message).toContain("Pair this browser"));
+      await vi.waitFor(() =>
+        expect(toast.toasts[0]?.options.message).toContain("Pair this browser"),
+      );
     },
   );
 
@@ -265,7 +267,7 @@ describe("application agent creation", () => {
     expect(loadSettings(context.gateway.connection.gatewayUrl).sidebarRecentlyCreatedAgentId).toBe(
       "previous",
     );
-    expect(toast.active).toBe(true);
+    expect(toast.toasts[0]?.active).toBe(true);
     expect(toast.querySelector(".app-toast__message")?.textContent).toContain(
       "Provider credentials expired",
     );
@@ -326,7 +328,7 @@ describe("application agent creation", () => {
       expect(
         loadSettings(context.gateway.connection.gatewayUrl).sidebarRecentlyCreatedAgentId,
       ).toBe(roster.agents[1]?.id);
-      expect(toast.toast).toBeNull();
+      expect(toast.toasts).toEqual([]);
     },
   );
 
@@ -342,7 +344,7 @@ describe("application agent creation", () => {
     expectSelected(context, agent?.id);
     await toast.updateComplete;
     await vi.dynamicImportSettled();
-    expect(toast.active).toBe(true);
+    expect(toast.toasts[0]?.active).toBe(true);
     expect(toast.querySelector(".app-toast__message")?.textContent).toContain(
       "Your agent was created, but its first message couldn't be sent",
     );

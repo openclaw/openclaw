@@ -511,7 +511,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       } catch (error) {
         if (gateway.isCurrent(scope)) {
           if (kind === "mutating") {
-            showToast({ message: formatUiError(error) });
+            showToast({ severity: "error", message: formatUiError(error) });
           } else {
             const code =
               error instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(error) : null;
