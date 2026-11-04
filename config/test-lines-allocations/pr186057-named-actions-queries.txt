@@ -1,3 +1,4 @@
 # Exact net regression growth for named-query admission, live-authority delivery,
-# distinct authenticated readers, durable grants, approval renewal, and widget consumers.
-929
+# distinct authenticated readers, durable grants, approval renewal, widget consumers,
+# and reconnecting Android cleanup without accepting failed readiness.
+953
