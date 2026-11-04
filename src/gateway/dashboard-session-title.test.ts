@@ -69,7 +69,6 @@ function titleParams(entry: SessionEntry | undefined = baseEntry) {
   mocks.load.mockReturnValue(entry);
   return { ...titleDefaults, entry };
 }
-
 function mockSessionUpdate(current: SessionEntry): void {
   mocks.patch.mockImplementation(async (_scope, update) => {
     const patch = await update({ ...current });
@@ -78,7 +77,6 @@ function mockSessionUpdate(current: SessionEntry): void {
     return result;
   });
 }
-
 function pendingLabel(once = false) {
   const started = createDeferredCore();
   const label = createDeferredCore<string>();
@@ -93,7 +91,6 @@ function pendingLabel(once = false) {
   }
   return { ...label, started: started.promise };
 }
-
 function expectCalls(count: number, ...fns: Array<{ mock: { calls: unknown[][] } }>) {
   for (const fn of fns) {
     expect(fn.mock.calls).toHaveLength(count);
