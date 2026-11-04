@@ -8,6 +8,7 @@ import * as events from "../../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
+import type { GatewayRequestHandlerOptions } from "../../gateway/server-methods/types.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import * as exec from "../../infra/exec-request-context.js";
@@ -206,7 +207,7 @@ it.for([false, true])(
               name: "plugins.reload",
               scope: "operator.admin",
               owner: { kind: "core", area: "plugins" },
-              handler: async ({ respond }) => {
+              handler: async ({ respond }: GatewayRequestHandlerOptions) => {
                 respond(true, { ok: true });
               },
             },

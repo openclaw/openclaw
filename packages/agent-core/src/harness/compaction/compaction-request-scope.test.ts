@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
+import { parseCompactionDetails } from "./compaction-details.js";
 import { compactWithoutSummary, prepareCompaction } from "./compaction.js";
 import {
   createContextUsage,
@@ -193,7 +194,9 @@ describe("processed request recovery across compaction", () => {
     const result = compactWithoutSummary(prepared);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.details?.latestUnresolvedUserRequest).toBe(request);
+      expect(parseCompactionDetails(result.value.details)?.latestUnresolvedUserRequest).toBe(
+        request,
+      );
     }
     const missingUnprocessed = prepareCompaction(entries, settings, "unresolved", {
       requestFromEntryId: "already-compacted-request",
