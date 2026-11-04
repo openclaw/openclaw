@@ -857,8 +857,10 @@ session for an affected existing conversation; OpenClaw history is preserved.
 
 On Windows, if the admitted tool list exceeds the command-line limit, OpenClaw
 retries Claude startup with the same allowlist in a private settings file. Existing
-settings and denials are preserved, and the file is removed when that child exits.
-Commands that fit continue to run inline without creating this file.
+OpenClaw-generated restrictions and denials are preserved, and the file is removed
+when that child exits. Commands that fit continue to run inline without creating
+this file. Custom inline settings and settings paths retain the original error:
+moving those settings can change the meaning of relative permission or sandbox paths.
 
 When another backend passes configured MCP servers to its harness natively,
 `tools.allow` and `tools.deny` also constrain those servers.

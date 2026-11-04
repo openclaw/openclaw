@@ -1,5 +1,5 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { CLAUDE_RESTRICTED_SETTINGS } from "./cli-shared.js";
 
 /** Relocate only the prepared allowlist, retaining the last flag settings' policy. */
 export async function relocateClaudeCliAllowlist(args: string[]) {
@@ -22,22 +22,10 @@ export async function relocateClaudeCliAllowlist(args: string[]) {
       value = args[index]!.slice("--settings=".length);
     }
   }
-  let settings: unknown;
-  try {
-    settings = JSON.parse(value);
-  } catch {
-    // A caller-owned file or invalid JSON keeps its existing invocation/error.
-    return undefined;
-  }
-  if (!isRecord(settings)) {
-    return undefined;
-  }
-  const permissions = settings.permissions === undefined ? {} : settings.permissions;
-  if (!isRecord(permissions)) {
-    return undefined;
-  }
-  const allow = permissions.allow === undefined ? [] : permissions.allow;
-  if (!Array.isArray(allow) || !allow.every((rule) => typeof rule === "string")) {
+  // Only our path-independent projection may move. Caller-owned settings can
+  // contain permission/sandbox paths anchored at the settings file's directory.
+  const settings = value === "{}" ? {} : CLAUDE_RESTRICTED_SETTINGS;
+  if (value !== JSON.stringify(settings)) {
     return undefined;
   }
   const workspace = await tempWorkspace({
@@ -47,7 +35,7 @@ export async function relocateClaudeCliAllowlist(args: string[]) {
   try {
     const file = await workspace.writeJson("settings.json", {
       ...settings,
-      permissions: { ...permissions, allow: [...allow, ...allowed.split(",")] },
+      permissions: { allow: allowed.split(",") },
     });
     return {
       args: [

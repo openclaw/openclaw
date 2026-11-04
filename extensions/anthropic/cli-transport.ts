@@ -184,7 +184,7 @@ export async function createClaudeCliTransport(params: {
     // The private settings file belongs to this child, including its warm turns.
     void Promise.resolve(relocated?.cleanup())
       .catch(() => {})
-      .then(resolveExit);
+      .then(() => resolveExit());
   };
   child.onExit((code, signal) => {
     if (code !== 0) {

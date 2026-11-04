@@ -8,6 +8,7 @@ import {
   resultDetail,
 } from "./cli-runtime.test-support.js";
 
+const hostPlatform = process.platform;
 const harness = createCliTestHarness("openclaw-claude-allowlist-");
 const fixture = `
 import { readFileSync } from "node:fs";
@@ -42,29 +43,30 @@ it.each(["separate", "equals"])(
       disableAllHooks: true,
       enabledPlugins: {},
       autoMemoryEnabled: false,
-      claudeMdExcludes: ["**/CLAUDE.md"],
-      permissions: { allow: ["Read"], deny: ["Write"], defaultMode: "default" },
+      claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
     };
     const context = await harness.context(fixture, { liveSession: harness.liveSession() });
-    context.args.push("--settings", '{"model":"earlier-settings"}');
-    context.args.push(
+    context.args = [
+      ...context.args,
+      "--settings",
+      '{"model":"earlier-settings"}',
       ...(form === "equals"
         ? [`--settings=${JSON.stringify(settings)}`]
         : ["--settings", JSON.stringify(settings)]),
-    );
-    context.args.push(
       "--allowedTools",
       tools.join(","),
       "--tools",
       "Read",
       "--disallowedTools",
       "Bash,Write",
-    );
+    ];
     if (process.platform !== "win32") {
       // Linux cannot reproduce CreateProcess's total command limit. Inject only
       // that OS error; the retry still launches the real owned subprocess.
       vi.spyOn(processRuntime, "createOwnedStdioProcess").mockImplementationOnce(async () => {
-        vi.spyOn(process, "platform", "get").mockReturnValueOnce("win32");
+        vi.spyOn(process, "platform", "get")
+          .mockReturnValue(hostPlatform)
+          .mockReturnValueOnce("win32");
         throw Object.assign(new Error("spawn ENAMETOOLONG"), { code: "ENAMETOOLONG" });
       });
     }
@@ -76,7 +78,7 @@ it.each(["separate", "equals"])(
     expect(args[args.indexOf("--permission-mode") + 1]).toBe("default");
     expect(detail.settings).toEqual({
       ...settings,
-      permissions: { ...settings.permissions, allow: ["Read", ...tools] },
+      permissions: { allow: tools },
     });
     const handle = context.liveSession?.current();
     handle?.close("restart");
@@ -88,10 +90,37 @@ it.each(["separate", "equals"])(
 it("keeps fitting commands inline even when temporary settings cannot be created", async () => {
   const write = vi.spyOn(tempPath, "tempWorkspace").mockRejectedValue(new Error("Not writable"));
   const context = await harness.context(fixture);
-  context.args.push("--settings", "{}", "--allowedTools", "mcp__openclaw__message");
+  context.args = [...context.args, "--settings", "{}", "--allowedTools", "mcp__openclaw__message"];
   const detail = resultDetail(await collectClaudeCli(context));
   expect(detail.args).toContain("--allowedTools");
   expect(detail.settingsPath).toBeUndefined();
+  expect(write).not.toHaveBeenCalled();
+});
+
+it.each([
+  { permissions: { deny: ["Read(/secrets/**)"] } },
+  { sandbox: { filesystem: { denyRead: ["/secrets/**"] } } },
+])("retains the original failure for caller-owned settings %j", async (settings) => {
+  const context = await harness.context(fixture);
+  context.args = [
+    ...context.args,
+    "--settings",
+    JSON.stringify(settings),
+    "--allowedTools",
+    "mcp__openclaw__message",
+  ];
+  const failure = Object.assign(new Error("spawn ENAMETOOLONG"), { code: "ENAMETOOLONG" });
+  const spawn = vi
+    .spyOn(processRuntime, "createOwnedStdioProcess")
+    .mockImplementationOnce(async () => {
+      vi.spyOn(process, "platform", "get")
+        .mockReturnValue(hostPlatform)
+        .mockReturnValueOnce("win32");
+      throw failure;
+    });
+  const write = vi.spyOn(tempPath, "tempWorkspace");
+  await expect(collectClaudeCli(context)).rejects.toBe(failure);
+  expect(spawn).toHaveBeenCalledTimes(1);
   expect(write).not.toHaveBeenCalled();
 });
 
@@ -99,7 +128,13 @@ it.each(["write failure", "retired turn", "retry failure"])(
   "removes relocated settings after %s without admitting another command",
   async (failure) => {
     const context = await harness.context(fixture);
-    context.args.push("--settings", "{}", "--allowedTools", "mcp__openclaw__message");
+    context.args = [
+      ...context.args,
+      "--settings",
+      "{}",
+      "--allowedTools",
+      "mcp__openclaw__message",
+    ];
     let active = true;
     context.assertCurrent = () => {
       if (!active) {
@@ -108,7 +143,9 @@ it.each(["write failure", "retired turn", "retry failure"])(
     };
     const spawn = vi.spyOn(processRuntime, "createOwnedStdioProcess");
     spawn.mockImplementationOnce(async () => {
-      vi.spyOn(process, "platform", "get").mockReturnValueOnce("win32");
+      vi.spyOn(process, "platform", "get")
+        .mockReturnValue(hostPlatform)
+        .mockReturnValueOnce("win32");
       throw Object.assign(new Error("spawn ENAMETOOLONG"), { code: "ENAMETOOLONG" });
     });
     spawn.mockRejectedValueOnce(new Error("Retry failed"));
