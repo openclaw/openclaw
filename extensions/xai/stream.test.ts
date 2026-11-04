@@ -269,7 +269,7 @@ describe("xai stream wrappers", () => {
     },
   );
 
-  it("normalizes within-limit GIF images to supported PNG format for xAI Responses payloads across turns", async () => {
+  it("normalizes within-limit GIF images to supported JPEG format for xAI Responses payloads across turns", async () => {
     const gifImage = {
       type: "input_image",
       source: { type: "base64", media_type: "image/gif", data: GIF_B64 },
@@ -285,7 +285,7 @@ describe("xai stream wrappers", () => {
     const carrierContent = (carrier?.content as Array<Record<string, unknown>> | undefined) ?? [];
     const normalizedImagePart = carrierContent.find((part) => part.type === "input_image");
     expect(normalizedImagePart).toBeDefined();
-    expect((normalizedImagePart?.source as Record<string, unknown>)?.media_type).toBe("image/png");
+    expect((normalizedImagePart?.source as Record<string, unknown>)?.media_type).toBe("image/jpeg");
 
     const nextTurn = [
       ...projected,
@@ -301,7 +301,7 @@ describe("xai stream wrappers", () => {
     });
     const nativeParts = (nativeProjected[0]?.output as Array<Record<string, unknown>>) ?? [];
     const nativeImage = nativeParts.find((part) => part.type === "input_image");
-    expect((nativeImage?.source as Record<string, unknown>)?.media_type).toBe("image/png");
+    expect((nativeImage?.source as Record<string, unknown>)?.media_type).toBe("image/jpeg");
 
     const corruptGif = {
       type: "input_image",
@@ -310,8 +310,6 @@ describe("xai stream wrappers", () => {
     const corruptProjected = await projectAsync([
       toolOutput([inputText("corrupt"), corruptGif], "call_corrupt"),
     ]);
-    expect(JSON.stringify(corruptProjected)).toContain(
-      "omitted image payload: invalid inline image data",
-    );
+    expect(JSON.stringify(corruptProjected)).toContain("(see attached image)");
   });
 });

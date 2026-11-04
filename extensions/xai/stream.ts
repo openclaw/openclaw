@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
+import { resizeToJpeg } from "openclaw/plugin-sdk/media-runtime";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
@@ -132,6 +134,7 @@ function isGifImagePart(part: Record<string, unknown>): boolean {
   return false;
 }
 
+const MAX_CONVERTED_GIF_ENTRIES = 50;
 const convertedGifCache = new Map<string, string>();
 
 async function normalizeXaiImagePart(
@@ -155,23 +158,29 @@ async function normalizeXaiImagePart(
   }
 
   if (!base64.trim()) {
-    return { type: "input_text", text: "[omitted image payload: invalid inline image data]" };
+    return { type: "input_text", text: "(see attached image)" };
   }
 
   try {
-    let pngBase64 = convertedGifCache.get(base64);
-    if (!pngBase64) {
-      const { encode } = await import("rastermill");
+    const cacheKey = createHash("sha256").update(base64).digest("hex");
+    let jpegBase64 = convertedGifCache.get(cacheKey);
+    if (!jpegBase64) {
       const buffer = Buffer.from(base64, "base64");
-      const encoded = await encode(buffer, { format: "png" });
-      pngBase64 = encoded.data.toString("base64");
-      convertedGifCache.set(base64, pngBase64);
+      const encoded = await resizeToJpeg({ buffer });
+      jpegBase64 = encoded.toString("base64");
+      if (convertedGifCache.size >= MAX_CONVERTED_GIF_ENTRIES) {
+        const oldestKey = convertedGifCache.keys().next().value;
+        if (oldestKey !== undefined) {
+          convertedGifCache.delete(oldestKey);
+        }
+      }
+      convertedGifCache.set(cacheKey, jpegBase64);
     }
 
     if (isDataUrl) {
       return {
         ...part,
-        image_url: `data:image/png;base64,${pngBase64}`,
+        image_url: `data:image/jpeg;base64,${jpegBase64}`,
       };
     }
     const source = asOptionalRecord(part.source) ?? {};
@@ -180,12 +189,12 @@ async function normalizeXaiImagePart(
       source: {
         ...source,
         type: "base64",
-        media_type: "image/png",
-        data: pngBase64,
+        media_type: "image/jpeg",
+        data: jpegBase64,
       },
     };
   } catch {
-    return { type: "input_text", text: "[omitted image payload: invalid inline image data]" };
+    return { type: "input_text", text: "(see attached image)" };
   }
 }
 
