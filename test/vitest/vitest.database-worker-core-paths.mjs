@@ -1545,6 +1545,11 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/continuation/cross-session-targeting.nonexistent-target.test.ts",
   "src/auto-reply/continuation/trace-context-propagation.integration.test.ts",
   "src/auto-reply/continuation/delegate-claim-boundaries.test.ts",
+  // Their fixture writes run session maintenance, whose continuation preserve-key provider reads
+  // pending rows through shared state (#1544), so they need the host broker. Unit-fast keeps an
+  // earlier file's provider registered and runs it off the main thread.
+  "src/plugin-sdk/session-transcript-hit.projection.test.ts",
+  "src/agents/worktrees/checkout-policy.memory.test.ts",
   // Continuation custody and counts reach shared state from these suites' spawn,
   // result-accounting and cleanup paths, so they need the host broker.
   "src/agents/tools/sessions-spawn-tool.test.ts",
