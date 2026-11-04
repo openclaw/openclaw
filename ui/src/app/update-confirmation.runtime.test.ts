@@ -368,7 +368,7 @@ it.each([
   await stream.push({ busy: true, connected: false });
   expect(modal.textContent).toContain("The Gateway disconnected during the update");
   expect(modal.textContent).toContain("openclaw triage");
-  expect(modal.textContent).toContain("on this computer");
+  expect(modal.textContent).toContain("on the computer running OpenClaw");
   expect(modal.textContent).toContain("local coding agent");
   expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
 

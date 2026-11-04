@@ -6,7 +6,8 @@ import { en } from "./en.ts";
 const enUpdateActions = {
   updates: {
     adminRequired: "You need admin access to change update settings or start an update.",
-    refreshFailed: "Couldn’t refresh update status. Check your connection and try again.",
+    refreshUnreachable: "Couldn't reach the server",
+    refreshBlocked: "Finish pending work first",
     campaign: en.updates.campaign,
     holdOneHour: "Hold 1 h",
     reviewUpdate: "Review update",
@@ -103,9 +104,9 @@ const enUpdateActions = {
     },
     dialog: {
       disconnected:
-        "The Gateway disconnected during the update. This page reconnects on its own. If it stays disconnected, run `openclaw triage` on this computer to open a local coding agent for diagnosis and repair.",
+        "The Gateway disconnected during the update. This page reconnects on its own. If it stays disconnected, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair.",
       restarting:
-        "The Gateway is restarting. This page disconnects and reconnects on its own. If it stays disconnected, run `openclaw triage` on this computer to open a local coding agent for diagnosis and repair.",
+        "The Gateway is restarting. This page disconnects and reconnects on its own. If it stays disconnected, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair.",
       checkStatus: "Check status",
       checkingStatus: "Checking status…",
       statusRefreshed: "Status refreshed.",
@@ -114,7 +115,7 @@ const enUpdateActions = {
       retryUpdate: "Retry update",
       installing: "Installing the update on the Gateway. It restarts once the install finishes.",
       notStarted:
-        "The update request went unanswered. Run `openclaw triage` on this computer and inspect the result before retrying.",
+        "The update request went unanswered. Run `openclaw triage` on the computer running OpenClaw and inspect the result before retrying.",
     },
     channel: en.updates.channel,
     installKind: en.updates.installKind,
@@ -171,12 +172,19 @@ export const registerUpdateActionsEnglish = Object.assign(
       triage,
       report,
       adminRequired,
-      refreshFailed,
+      refreshUnreachable,
+      refreshBlocked,
       holdOneHour,
       reviewUpdate,
     } = enUpdateActions.updates;
     const { phase, ...runLabels } = run;
-    Object.assign(en.updates, { adminRequired, refreshFailed, holdOneHour, reviewUpdate });
+    Object.assign(en.updates, {
+      adminRequired,
+      refreshUnreachable,
+      refreshBlocked,
+      holdOneHour,
+      reviewUpdate,
+    });
     Object.assign(en.updates.run, runLabels);
     Object.assign(en.updates.run.phase, phase);
     Object.assign(en.updates.target, target);

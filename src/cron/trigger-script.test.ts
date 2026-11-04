@@ -218,6 +218,28 @@ it("keeps an uncanonicalized alias-name cap fail-closed for exec", async () => {
   expect(result.kind === "error" ? result.error : "").toContain("exec is not defined");
 });
 
+it("projects typed exec details into trigger scripts without content wrappers", async () => {
+  const evaluate = execEvaluator("gateway");
+
+  await expect(
+    evaluate({
+      ...INPUT,
+      toolsAllow: ["exec"],
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      script: `
+        const result = await exec({ command: "printf watcher-ready" });
+        return {
+          fire:
+            result.status === "completed" &&
+            result.exitCode === 0 &&
+            result.aggregated === "watcher-ready" &&
+            result.content === undefined,
+        };
+      `,
+    }),
+  ).resolves.toEqual({ kind: "evaluated", fire: true });
+});
+
 it.each([
   [
     "prefers the return value",

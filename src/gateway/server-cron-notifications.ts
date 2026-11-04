@@ -118,6 +118,8 @@ async function runGatewayCronFailureRepair(
         expectedTarget: target,
         // Only the agent's authored reply reaches the chat; the next alert owns escalation.
         suppressErrorDelivery: true,
+        // The scheduler's repair brief permits silence; public provenance does not grant it.
+        replyExpectation: "optional",
       });
       const accepted = await receipt.accepted;
       if (!accepted.ok) {

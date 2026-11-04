@@ -57,9 +57,6 @@ const learnMoreRoutes = [
   "talk",
 ] as const;
 
-const settingsGuidanceLinks: ReadonlyArray<{ route: string; container: string; section?: string }> =
-  [{ route: "mcp", section: "Configured servers", container: ".settings-section__desc" }];
-
 const sectionAlignmentRoutes = [
   "appearance",
   "cloud-workers",
@@ -69,7 +66,7 @@ const sectionAlignmentRoutes = [
   "updates",
 ] as const;
 
-const actionSectionCases = [{ route: "mcp", heading: "Configured servers" }] as const;
+const actionSectionCases = [{ route: "mcp", heading: "Servers" }] as const;
 
 const settingsRowRoutes = [
   "profile",
@@ -235,7 +232,7 @@ suite.define(() => {
         const stopCapturing: Array<() => void> = [];
         const settingsOnlyCopy = [
           "Global model defaults and provider access for your agents.",
-          "Find existing connections or prepare a local model for {agent}.",
+          "Find saved accounts or set up a local model for {agent}. This changes only this agent’s model, not the defaults for other agents.",
         ];
         // Keep each cold-boot document alive through the final assertions: replacing
         // an observed document cancels its idle imports and creates test-owned failures.
@@ -277,7 +274,7 @@ suite.define(() => {
               "Utility model",
             );
             await openModelSetup(page);
-            await page.getByText(/Find existing connections or prepare a local model/).waitFor();
+            await page.getByText(/Find saved accounts or set up a local model/).waitFor();
           }
           if (recordVisuals) {
             await page.screenshot({
@@ -642,7 +639,7 @@ suite.define(() => {
                         Number.parseFloat(getComputedStyle(column).paddingLeft) -
                         title.getBoundingClientRect().left,
                     ),
-                    fitsColumn: box.width <= 760,
+                    fitsColumn: box.width <= (innerWidth === 820 ? innerWidth - 2 * 24 : 760),
                   };
                 }),
               { message: `${tab} at ${width}` },
@@ -723,6 +720,70 @@ suite.define(() => {
       await expect.poll(read).toEqual({ floating: true, control: "38px", row: "column" });
       await page.setViewportSize({ height: 900, width: 641 });
       await expect.poll(read).toEqual({ floating: false, control: "32px", row: "row" });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("sizes touch controls from the control height above phone width", async () => {
+    const context = await suite.browser.newContext({
+      ...createDarkDesktopControlUiContextOptions(),
+      hasTouch: true,
+      isMobile: true,
+      viewport: { height: 768, width: 1024 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      const pathname = pathForRoute("appearance");
+      await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+      await waitForControlUiRoute(page, { pathname, routeId: "appearance" });
+      const trigger = page.locator("main.content .settings-select .picker-select__trigger").first();
+      await trigger.waitFor();
+      await expect.poll(async () => (await trigger.boundingBox())?.height).toBe(38);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("gives pickers and the agent menu one row height", async () => {
+    const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "research", name: "Research" },
+          ],
+        },
+      },
+    });
+
+    try {
+      const pathname = pathForRoute("appearance");
+      await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+      await waitForControlUiRoute(page, { pathname, routeId: "appearance" });
+      const readRows = () =>
+        page.evaluate(() => [
+          ...new Set(
+            [...document.querySelectorAll<HTMLElement>(".picker-select__option")]
+              .filter((row) => !row.closest(".picker-select__sizer") && row.offsetParent)
+              .map((row) => Math.round(row.getBoundingClientRect().height)),
+          ),
+        ]);
+      for (const trigger of [
+        "main.content .settings-select .picker-select__trigger",
+        ".settings-sidebar .agent-select__trigger",
+      ]) {
+        await page.locator(trigger).first().click();
+        await expect.poll(readRows).toEqual([28]);
+        await page.keyboard.press("Escape");
+      }
     } finally {
       await context.close();
     }
@@ -1103,86 +1164,48 @@ suite.define(() => {
             await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
           ).toBe("none");
         }
-        for (const guidanceLink of settingsGuidanceLinks.filter((entry) => entry.route === route)) {
-          const root = guidanceLink.section
-            ? page.locator(".settings-section").filter({
-                has: page.getByRole("heading", { name: guidanceLink.section, exact: true }),
-              })
-            : page;
-          const link = (guidanceLink.container ? root.locator(guidanceLink.container) : root)
-            .getByRole("link", { name: "Learn more", exact: true })
-            .first();
-          await link.waitFor();
-          expect(
-            await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
-          ).toBe("none");
-        }
-
         for (const sectionCase of actionSectionCases.filter((entry) => entry.route === route)) {
           const heading = page.getByRole("heading", {
             name: sectionCase.heading,
             exact: true,
           });
           const section = page.locator(".settings-section").filter({ has: heading });
-          const description = section.locator(".settings-section__desc");
           const actions = section.locator(".settings-section__actions");
           const group = section.locator(":scope > .settings-group");
-          await Promise.all([
-            heading.waitFor(),
-            description.waitFor(),
-            actions.waitFor(),
-            group.waitFor(),
-          ]);
+          await Promise.all([heading.waitFor(), actions.waitFor(), group.waitFor()]);
           // Cold route styles are covered above; this matrix checks responsive geometry.
           for (const viewport of responsiveViewports) {
             await page.setViewportSize(viewport);
             await expect
               .poll(async () => {
-                const [sectionBox, headingBox, descriptionBox, actionsBox, groupBox] =
-                  await Promise.all([
-                    section.boundingBox(),
-                    heading.boundingBox(),
-                    description.boundingBox(),
-                    actions.boundingBox(),
-                    group.boundingBox(),
-                  ]);
-                if (!sectionBox || !headingBox || !descriptionBox || !actionsBox || !groupBox) {
+                const [sectionBox, headingBox, actionsBox, groupBox] = await Promise.all([
+                  section.boundingBox(),
+                  heading.boundingBox(),
+                  actions.boundingBox(),
+                  group.boundingBox(),
+                ]);
+                if (!sectionBox || !headingBox || !actionsBox || !groupBox) {
                   return null;
                 }
                 return {
-                  actionPlacement:
-                    viewport.width <= 640
-                      ? Math.round(actionsBox.y - descriptionBox.y - descriptionBox.height)
-                      : Math.round(actionsBox.y - headingBox.y),
-                  actionGap:
-                    viewport.width <= 640
-                      ? null
-                      : Math.round(actionsBox.x - descriptionBox.x - descriptionBox.width),
+                  actionPlacement: Math.round(
+                    actionsBox.y + actionsBox.height / 2 - headingBox.y - headingBox.height / 2,
+                  ),
                   actionRightInset: Math.round(
                     sectionBox.x + sectionBox.width - actionsBox.x - actionsBox.width,
                   ),
-                  copyGap: Math.round(descriptionBox.y - headingBox.y - headingBox.height),
                   groupClearance: Math.round(
                     groupBox.y -
-                      Math.max(
-                        descriptionBox.y + descriptionBox.height,
-                        actionsBox.y + actionsBox.height,
-                      ),
+                      Math.max(headingBox.y + headingBox.height, actionsBox.y + actionsBox.height),
                   ),
-                  overlapsAction:
-                    descriptionBox.x < actionsBox.x + actionsBox.width &&
-                    descriptionBox.x + descriptionBox.width > actionsBox.x &&
-                    descriptionBox.y < actionsBox.y + actionsBox.height &&
-                    descriptionBox.y + descriptionBox.height > actionsBox.y,
+                  headingLeftInset: Math.round(headingBox.x - sectionBox.x),
                 };
               })
               .toEqual({
-                actionGap: viewport.width <= 640 ? null : 20,
-                actionPlacement: viewport.width <= 640 ? 8 : 0,
+                actionPlacement: 0,
                 actionRightInset: 0,
-                copyGap: 4,
                 groupClearance: 12,
-                overlapsAction: false,
+                headingLeftInset: 0,
               });
 
             if (proofEnabled && viewport.width === 1440) {

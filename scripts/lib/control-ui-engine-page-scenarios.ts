@@ -895,12 +895,12 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       run: async (page) => {
         const card = page.locator("openclaw-mcp-servers-card");
         await card.getByRole("button", { name: "Add server", exact: true }).click();
-        const form = card.locator(".mcp-server-form");
+        const form = page.locator(".mcp-server-form");
         await form.locator('input[name="mcp-name"]:enabled').waitFor({ state: "visible" });
         await form.locator('input[name="mcp-target"]:enabled').waitFor({ state: "visible" });
         assert.equal(
-          await form.locator('select[name="mcp-transport"]').inputValue(),
-          "streamable-http",
+          await form.locator('input[type="radio"][value="streamable-http"]').isChecked(),
+          true,
         );
         await frames(page);
         return { addServerForm: true };

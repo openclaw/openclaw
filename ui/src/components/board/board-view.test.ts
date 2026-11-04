@@ -619,7 +619,7 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() => {
       expectText(testId(view, "board-widget-action-error"), "approval service unavailable");
       expectText(
-        toastHost.querySelector(".app-toast__message"),
+        toastHost.querySelector(".app-toast__body"),
         "Could not reject widget access. Try again.",
       );
     });
