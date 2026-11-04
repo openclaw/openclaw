@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   claimGitHubPublicationExecutionFixture,
   createGitHubPublicationExecutionStoreFixture,
@@ -85,3 +86,65 @@ it("retires covered repository-only failures with the same read-only contract", 
     (await coordinator.sharedStatus(sharedPublicationSession, row.request_id))?.result.status,
   ).toBe("failed");
 });
+
+it.each(["worktree", "repository"] as const)(
+  "projects unknown non-empty %s failure codes as unavailable while rejecting empty codes",
+  async (store) => {
+    const coordinator = sharedPublicationCoordinator();
+    const db = openOpenClawStateDatabase().db;
+    const table =
+      store === "worktree"
+        ? "github_publication_requests"
+        : "github_repository_publication_requests";
+    let requestId: string;
+    if (store === "worktree") {
+      const row = insertSharedWorktreeReceipt("future-failure");
+      const claimed = claimGitHubPublicationExecutionFixture(row.request_id, "fixture-instance");
+      createGitHubPublicationExecutionStoreFixture("fixture-instance").complete(claimed, {
+        requestId: row.request_id,
+        status: "failed",
+        code: "workflow_changes_forbidden",
+        message: "GitHub publication failed.",
+        nextAction: "Ask a maintainer with full operator.write authority to publish here.",
+      });
+      requestId = row.request_id;
+    } else {
+      const workspace = await sharedRepositoryWorkspace();
+      requestId = insertRepositoryGitHubPublicationFixture(
+        repositoryReceipt(workspace, {
+          status: "failed",
+          error_code: "workflow_changes_forbidden",
+          next_action: "Ask a maintainer with full operator.write authority to publish here.",
+        }),
+        () => {},
+      ).request_id;
+    }
+    expect((await coordinator.latestShared(sharedPublicationSession))?.result).toMatchObject({
+      requestId,
+      status: "failed",
+      code: "workflow_changes_forbidden",
+    });
+    db.prepare(`UPDATE ${table} SET error_code = ? WHERE request_id = ?`).run(
+      "future_failure_code",
+      requestId,
+    );
+    expect((await coordinator.latestShared(sharedPublicationSession))?.result).toMatchObject({
+      requestId,
+      status: "failed",
+      code: "unavailable",
+      nextAction: "Ask a maintainer with full operator.write authority to publish here.",
+    });
+    expect(
+      (await coordinator.sharedStatus(sharedPublicationSession, requestId))?.result,
+    ).toMatchObject({
+      requestId,
+      status: "failed",
+      code: "unavailable",
+    });
+    db.prepare(`UPDATE ${table} SET error_code = '' WHERE request_id = ?`).run(requestId);
+    await expect(coordinator.latestShared(sharedPublicationSession)).rejects.toThrow(/corrupt/);
+    await expect(coordinator.sharedStatus(sharedPublicationSession, requestId)).rejects.toThrow(
+      /corrupt/,
+    );
+  },
+);

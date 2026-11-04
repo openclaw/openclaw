@@ -258,9 +258,50 @@ it.each([
     } else {
       expect(result).toMatchObject({
         status: "failed",
-        code: "github_rejected",
-        nextAction: expect.stringMatching(/OpenClaw.*not a GitHub token scope/),
+        code: "workflow_changes_forbidden",
+        nextAction: expect.stringMatching(
+          /OpenClaw permission check.*not a GitHub token-scope failure.*saved changes are intact.*contributor-owned fork.*exclude workflow edits/u,
+        ),
       });
+      if (route === "rpc" && !system) {
+        assert(
+          typeof result === "object" &&
+            result !== null &&
+            "requestId" in result &&
+            typeof result.requestId === "string",
+        );
+        const readiness = vi.fn();
+        await handleGatewayRequest({
+          req: {
+            type: "req",
+            id: `${operation}-readiness`,
+            method: "sessions.github.readiness",
+            params: { sessionKey: SESSION_KEY },
+          },
+          context: {
+            ...context,
+            getClientConnIds: (filter) =>
+              new Set(client.connId && (!filter || filter(client)) ? [client.connId] : []),
+          },
+          client,
+          isWebchatConnect: () => false,
+          respond: readiness,
+        });
+        expect(readiness).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            request: {
+              kind: "observed",
+              selection: "current",
+              receipt: {
+                requestId: result.requestId,
+                status: "failed",
+                code: "workflow_changes_forbidden",
+              },
+            },
+          }),
+        );
+      }
       expect(workspace.effects).toEqual([]);
       expect(await workspace.git("rev-parse", "HEAD")).toBe(head);
       expect(await fs.readFile(workspace.file(".git/index"))).toEqual(index);
@@ -383,7 +424,7 @@ it("rejects target inheritance with multiple best common ancestors", async () =>
   await workspace.git("reset", "--hard", merged);
   expect(await f.publish("ambiguous")).toMatchObject({
     status: "failed",
-    code: "github_rejected",
+    code: "workflow_changes_forbidden",
     nextAction: expect.stringContaining("Ask a maintainer"),
   });
   expect(await workspace.git("rev-parse", "HEAD")).toBe(merged);
@@ -527,10 +568,16 @@ it("cannot reintroduce a workflow after a remote reset following the last observ
   await expect(f.coordinator.requestForSessionV2(request)).rejects.toThrow(
     GitHubPublicationRecoveryPendingError,
   );
-  expect(await f.coordinator.requestForSessionV2(request)).toMatchObject({
+  const recovered = await f.coordinator.requestForSessionV2(request);
+  expect(recovered).toMatchObject({
     status: "failed",
-    code: "github_rejected",
+    code: "workflow_changes_forbidden",
+    nextAction: expect.stringMatching(
+      /OpenClaw permission check.*not a GitHub token-scope failure.*saved changes are intact/u,
+    ),
   });
+  assert(recovered.status === "failed");
+  expect(recovered.nextAction).not.toMatch(/nothing was sent to GitHub/iu);
   expect(pushes).toBe(1);
   expect(await workspace.git("--git-dir", remote, "rev-parse", `refs/heads/${BRANCH}`)).toBe(
     original,

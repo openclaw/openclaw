@@ -375,7 +375,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
         });
       }
       const failed = await f.coordinator.requestForSessionV2(f.request(randomUUID(), f.guest));
-      expect(failed).toMatchObject({ status: "failed", code: "github_rejected" });
+      expect(failed).toMatchObject({ status: "failed", code: "workflow_changes_forbidden" });
       expect((await f.invoke("guest", { action: "edit" })).details).toMatchObject({
         publication: f.publication,
       });

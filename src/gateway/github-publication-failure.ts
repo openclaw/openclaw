@@ -139,9 +139,9 @@ export class GitHubPublicationCreditChangedError extends GitHubPublicationKnownF
 export class GitHubPublicationWorkflowChangesError extends GitHubPublicationKnownFailure {
   constructor() {
     super("Publishing GitHub workflow changes requires full operator write permission.", {
-      code: "github_rejected",
+      code: "workflow_changes_forbidden",
       nextAction:
-        "OpenClaw requires the requester's full operator write authority for these workflow changes; this is not a GitHub token scope failure. Your saved changes are intact. Ask a maintainer with full write access to publish, or remove only unintended workflow edits after reviewing the accepted diff.",
+        "This is an OpenClaw permission check, not a GitHub token-scope failure. Your saved changes are intact. Ask a maintainer with full operator.write authority to publish here, validate intentional workflow changes in a contributor-owned fork through an authorized contributor workflow, or exclude workflow edits to publish unrelated changes separately.",
     });
   }
 }

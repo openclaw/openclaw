@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expect, type Mock } from "vitest";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { gitNullConfigPath } from "../infra/git-exec.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
@@ -51,8 +51,8 @@ export async function createRepositoryPublicationFixture(
       encoding: "utf8",
       env: {
         ...process.env,
-        GIT_CONFIG_GLOBAL: os.devNull,
-        GIT_CONFIG_SYSTEM: os.devNull,
+        GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+        GIT_CONFIG_SYSTEM: gitNullConfigPath(),
         GIT_CONFIG_COUNT: "0",
         GIT_AUTHOR_NAME: "Publication Fixture",
         GIT_AUTHOR_EMAIL: "publication@example.test",
