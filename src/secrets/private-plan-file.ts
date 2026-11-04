@@ -172,22 +172,14 @@ public sealed class OpenClawPrivatePlanFile : IDisposable
             return 6;
         }
         uint written;
-        if (content.Length > 0 &&
-            (!WriteFile(handle, content, (uint)content.Length, out written, IntPtr.Zero) ||
-             written != (uint)content.Length))
+        if ((content.Length > 0 &&
+             (!WriteFile(handle, content, (uint)content.Length, out written, IntPtr.Zero) ||
+              written != (uint)content.Length)) ||
+            !FlushFileBuffers(handle) ||
+            !SetDeleteOnClose(handle, false))
         {
-            var writeError = Marshal.GetLastWin32Error();
-            return writeError == 0 ? 29 : writeError;
-        }
-        if (!FlushFileBuffers(handle))
-        {
-            var flushError = Marshal.GetLastWin32Error();
-            return flushError == 0 ? 29 : flushError;
-        }
-        if (!SetDeleteOnClose(handle, false))
-        {
-            var dispositionError = Marshal.GetLastWin32Error();
-            return dispositionError == 0 ? 29 : dispositionError;
+            var nativeError = Marshal.GetLastWin32Error();
+            return nativeError == 0 ? 29 : nativeError;
         }
         handle.Dispose();
         handle = null;

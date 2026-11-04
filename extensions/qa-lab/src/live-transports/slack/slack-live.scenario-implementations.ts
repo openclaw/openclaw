@@ -2,19 +2,18 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { waitForSlackReaction } from "./slack-live.codex-approval.js";
 import {
-  SLACK_QA_REACTION_VERIFY_TIMEOUT_MS,
   SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
   SLACK_QA_LOG_TAIL_TIMEOUT_MS,
   type SlackQaApprovalScenarioRun,
   type SlackQaCodexApprovalScenarioRun,
   type SlackQaScenarioImplementation,
+  type SlackQaMessageScenarioRun,
   type SlackQaConfigOverrides,
   type SlackQaScenarioContext,
 } from "./slack-live.contracts.js";
 import { waitForSlackScenarioReply } from "./slack-live.message-observations.js";
 import {
-  isExpectedSlackNativeChartMessage,
-  isExpectedSlackNativeTableMessage,
+  isExpectedSlackNativeDataMessage,
   runSlackTableInvalidBlocksFallbackScenario,
   sendSlackChannelMessage,
   waitForSlackStoredMessage,
@@ -27,28 +26,37 @@ import {
   buildSlackProgressCommentaryRun,
 } from "./slack-live.scenario-fixtures.js";
 
-export const slackQaCanaryScenario: SlackQaScenarioImplementation = {
-  buildRun: (sutUserId) => {
-    const token = `SLACK_QA_ECHO_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
-      expectReply: true,
-      input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
-      matchText: token,
-    };
-  },
-};
+function createSlackMarkerScenario(
+  marker: string,
+  options: {
+    configOverrides?: SlackQaConfigOverrides;
+    expectReply?: boolean;
+    mention?: boolean;
+    verify?: SlackQaMessageScenarioRun["verify"];
+  } = {},
+): SlackQaScenarioImplementation {
+  return {
+    ...(options.configOverrides ? { configOverrides: options.configOverrides } : {}),
+    buildRun: (sutUserId) => {
+      const token = `SLACK_QA_${marker}_${randomUUID().slice(0, 8).toUpperCase()}`;
+      const expectReply = options.expectReply ?? true;
+      return {
+        expectReply,
+        input: `${options.mention === false ? "" : `<@${sutUserId}> `}reply with only this exact marker: ${token}`,
+        matchText: token,
+        ...(!expectReply ? { noReplyObservationMs: 8_000 } : {}),
+        ...(options.verify ? { verify: options.verify } : {}),
+      };
+    },
+  };
+}
 
-export const slackQaMentionGatingScenario: SlackQaScenarioImplementation = {
-  buildRun: () => {
-    const token = `SLACK_QA_NOMENTION_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
-      expectReply: false,
-      input: `reply with only this exact marker: ${token}`,
-      matchText: token,
-      noReplyObservationMs: 8_000,
-    };
-  },
-};
+export const slackQaCanaryScenario = createSlackMarkerScenario("ECHO");
+
+export const slackQaMentionGatingScenario = createSlackMarkerScenario("NOMENTION", {
+  expectReply: false,
+  mention: false,
+});
 
 export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation = {
   // Keep the event-dedupe assertion independent from Slack's separate
@@ -169,7 +177,6 @@ export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation 
           matchText: expectedRecallMarker,
           observedMessages: [],
           observationScenarioId: "slack-mpim-app-mention-dedupe",
-          observationScenarioTitle: "Slack MPIM app mention dispatches once with thread context",
           sentTs: sent.ts,
           sutIdentity: context.sutIdentity,
           threadTs: context.sentTs,
@@ -193,21 +200,13 @@ export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation 
   },
 };
 
-export const slackQaAllowlistBlockScenario: SlackQaScenarioImplementation = {
+export const slackQaAllowlistBlockScenario = createSlackMarkerScenario("BLOCK", {
   configOverrides: {
     allowFrom: ["U_OPENCLAW_QA_NEVER_ALLOWED"],
     users: ["U_OPENCLAW_QA_NEVER_ALLOWED"],
   },
-  buildRun: (sutUserId) => {
-    const token = `SLACK_QA_BLOCK_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
-      expectReply: false,
-      input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
-      matchText: token,
-      noReplyObservationMs: 8_000,
-    };
-  },
-};
+  expectReply: false,
+});
 
 export const slackQaChannelDisabledWarningScenario: SlackQaScenarioImplementation = {
   configOverrides: { channelEnabled: false },
@@ -252,24 +251,14 @@ export const slackQaChannelDisabledWarningScenario: SlackQaScenarioImplementatio
   },
 };
 
-export const slackQaTopLevelReplyShapeScenario: SlackQaScenarioImplementation = {
+export const slackQaTopLevelReplyShapeScenario = createSlackMarkerScenario("TOPLEVEL", {
   configOverrides: { replyToMode: "off" },
-  buildRun: (sutUserId) => {
-    const token = `SLACK_QA_TOPLEVEL_${randomUUID().slice(0, 8).toUpperCase()}`;
-    return {
-      expectReply: true,
-      input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
-      matchText: token,
-      verify: (message) => {
-        if (message.thread_ts) {
-          throw new Error(
-            `expected top-level Slack reply without thread_ts; got ${message.thread_ts}`,
-          );
-        }
-      },
-    };
+  verify: (message) => {
+    if (message.thread_ts) {
+      throw new Error(`expected top-level Slack reply without thread_ts; got ${message.thread_ts}`);
+    }
   },
-};
+});
 
 function createSlackProgressScenario(
   progress: NonNullable<SlackQaConfigOverrides["progress"]>,
@@ -343,15 +332,13 @@ function createSlackNativeDataScenario(kind: "chart" | "table"): SlackQaScenario
             client: context.sutReadClient,
             description: `message with native ${kind}`,
             matchesMessage: (message) =>
-              isChart
-                ? isExpectedSlackNativeChartMessage(
-                    message,
-                    renderSlackChartAccessibleText(summaryText),
-                  )
-                : isExpectedSlackNativeTableMessage(
-                    message,
-                    renderSlackTableAccessibleText(summaryText),
-                  ),
+              isExpectedSlackNativeDataMessage(
+                message,
+                isChart
+                  ? renderSlackChartAccessibleText(summaryText)
+                  : renderSlackTableAccessibleText(summaryText),
+                kind,
+              ),
             messageId,
             sutIdentity: context.sutIdentity,
             timeoutMs: SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
@@ -393,10 +380,8 @@ export const slackQaReactionGlyphNativeScenario: SlackQaScenarioImplementation =
         await waitForSlackReaction({
           channelId: context.channelId,
           client: context.sutReadClient,
-          expectedReactionName: "white_check_mark",
           messageId: context.sentTs,
           sutUserId: context.sutIdentity.userId,
-          timeoutMs: SLACK_QA_REACTION_VERIFY_TIMEOUT_MS,
         });
         return "verified SUT white_check_mark reaction from exact glyph instruction";
       },

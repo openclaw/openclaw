@@ -1,4 +1,5 @@
 import { ARTIFACT_DOWNLOAD_PATH } from "../../../packages/gateway-protocol/src/artifact-download.ts";
+import type { ChatImageRenditionWidth } from "../../../src/shared/chat-image-renditions.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { fetchControlUiResource } from "../app/browser-http.ts";
 import { isSameOriginGateway } from "../app/gateway-control-ui-reload.ts";
@@ -17,6 +18,7 @@ type ArtifactDownloadParams = {
   agentId?: string;
   artifactId: string;
   variant?: "full" | "thumbnail";
+  previewWidth?: ChatImageRenditionWidth;
 };
 
 export function isHttpArtifactDownloadUrl(url: string, resourceBasePath = ""): boolean {
@@ -35,7 +37,7 @@ export function isHttpArtifactDownloadUrl(url: string, resourceBasePath = ""): b
 
 export async function downloadArtifact(
   state: ArtifactDownloadHost,
-  { variant, ...params }: ArtifactDownloadParams,
+  { variant, previewWidth, ...params }: ArtifactDownloadParams,
   signal?: AbortSignal,
   options?: { readBinary?: boolean },
 ): Promise<(ArtifactDownloadResult & { blob?: Blob }) | null> {
@@ -43,11 +45,12 @@ export async function downloadArtifact(
   if (!state.connected || !client) {
     return null;
   }
-  // A loaded HTTPS Control UI proves this origin serves ordinary HTTP traffic.
-  // A remote wss endpoint alone may expose only WebSocket upgrades.
+  // Prefer same-origin HTTP without assuming a remote WebSocket exposes media
+  // routes. Preview intent also survives inline transport and HTTP fallback.
+  const managedArtifact = /^artifact_managed_(?:image|media)_/u.test(params.artifactId);
   const useHttp =
-    !/^artifact_managed_(?:image|media)_/u.test(params.artifactId) &&
-    globalThis.location?.protocol === "https:" &&
+    !managedArtifact &&
+    (globalThis.location?.protocol === "https:" || variant === "thumbnail") &&
     isSameOriginGateway(client.gatewayUrl);
   const isCurrent = () =>
     !signal?.aborted &&
@@ -60,7 +63,13 @@ export async function downloadArtifact(
     }
     const result = await client.request<ArtifactDownloadResult | null>(
       "artifacts.download",
-      { ...params, ...(http ? { transport: "http" } : {}) },
+      {
+        ...params,
+        ...(variant === "thumbnail" && !managedArtifact
+          ? { previewWidth: previewWidth ?? 960 }
+          : {}),
+        ...(http ? { transport: "http" } : {}),
+      },
       { timeoutMs: 30_000 },
     );
     return isCurrent() ? result : null;
@@ -75,7 +84,7 @@ export async function downloadArtifact(
   }
   const download = {
     ...result,
-    url: `${normalizeBasePath(resourceBasePath ?? "")}${url}${variant === "thumbnail" ? "?variant=thumbnail" : ""}`,
+    url: `${normalizeBasePath(resourceBasePath ?? "")}${url}${variant === "thumbnail" ? "?variant=thumbnail&width=" + (previewWidth ?? 960) : ""}`,
   };
   const mimeType = result.artifact.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   if (!options?.readBinary && !/^(?:image\/|text\/|application\/json$)/u.test(mimeType)) {
@@ -104,14 +113,14 @@ export async function downloadArtifact(
     const blobType = blob.type.split(";", 1)[0]?.trim().toLowerCase();
     if (
       blobType !== (mimeType || "application/octet-stream") &&
-      !(variant === "thumbnail" && result.artifact.type === "image" && blobType === "image/png")
+      !(variant === "thumbnail" && result.artifact.type === "image" && blobType === "image/webp")
     ) {
       throw new Error("Artifact download returned an unexpected content type");
     }
     return isCurrent() ? { ...download, blob } : null;
   } catch {
-    // Some proxies serve the UI and WebSocket but omit media routes. Reauthorize
-    // inline delivery on the same connection instead of probing or retargeting.
+    // Some proxies expose only WebSocket. Reauthorize on the same connection;
+    // previewWidth keeps this fallback bounded instead of requesting originals.
     return await request(false);
   }
 }

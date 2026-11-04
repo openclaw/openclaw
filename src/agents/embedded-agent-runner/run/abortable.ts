@@ -1,3 +1,4 @@
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { toErrorObject } from "../../../infra/errors.js";
 
 /** Marks AbortErrors produced by abortable() so provider aborts stay retryable. */
@@ -64,7 +65,7 @@ export function joinWithRunLivenessDeadline(input: {
       () => finish("timeout"),
       input.timeoutMs ?? RUN_LIVENESS_JOIN_TIMEOUT_MS,
     );
-    timer.unref?.();
+    timer.unref();
     if (input.runAbortSignal?.aborted) {
       finish("abort");
       return;
@@ -87,21 +88,12 @@ export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<
     void promise.catch(() => {});
     return Promise.reject(createAbortableError(signal));
   }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      reject(createAbortableError(signal));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (err: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(toErrorObject(err, "Non-Error rejection"));
-      },
-    );
-  });
+  return racePromiseWithAbortSignal(
+    () =>
+      promise.catch((err: unknown) => {
+        throw toErrorObject(err, "Non-Error rejection");
+      }),
+    signal,
+    createAbortableError,
+  );
 }

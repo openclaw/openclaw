@@ -171,7 +171,7 @@ baseline:
 
 - A configured policy file that does not exist on the host is an error
   (`Configured sandbox policy file <path> does not exist. Remove it from
-mxcPolicyPaths or create the file.`), not a silent skip.
+  mxcPolicyPaths or create the file.`), not a silent skip.
 - A policy file that is malformed JSON or includes an unsupported field fails
   with an error naming the policy file path and the invalid field.
 - Every `filesystem.additionalReadonlyPaths` and
@@ -210,8 +210,8 @@ Policy schema:
   bound. Values must be finite and at least `1`.
 
 Only the `filesystem` and `process` sections are supported. Unknown sections or
-unknown fields are rejected so policy files fail closed when they drift from the
-implemented MXC ProcessContainer surface.
+unknown fields are rejected so policy files cannot enable unsupported
+MXC ProcessContainer options.
 
 When multiple configured policy files exist, OpenClaw layers them
 deterministically in `mxcPolicyPaths` array order:

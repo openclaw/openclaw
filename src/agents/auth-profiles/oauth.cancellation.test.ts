@@ -6,18 +6,19 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const authMocks = vi.hoisted(() => ({
   resolveOAuthAccess: vi.fn(),
-  loadAuthProfileStoreForSecretsRuntime: vi.fn(),
+  loadAuthProfileStoreForRuntimeAsync: vi.fn(),
 }));
 
-vi.mock("./oauth-manager.js", () => ({
+vi.mock("./oauth-manager.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./oauth-manager.js")>()),
   createOAuthManager: () => ({
     resolveOAuthAccess: authMocks.resolveOAuthAccess,
-    resetRefreshQueuesForTest: () => {},
   }),
 }));
 
+// mock-isolation: Cancellation races use synthetic auth snapshots without reading host stores.
 vi.mock("./store-runtime.js", () => ({
-  loadAuthProfileStoreForSecretsRuntime: authMocks.loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreForRuntimeAsync: authMocks.loadAuthProfileStoreForRuntimeAsync,
 }));
 
 it.each(["primary", "legacy fallback"])(
@@ -38,7 +39,7 @@ it.each(["primary", "legacy fallback"])(
       },
     };
     authMocks.resolveOAuthAccess.mockReset();
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue(store);
+    authMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValue(store);
     const controller = new AbortController();
     const managerStarted = createDeferredCore();
     const managerResult = createDeferredCore<{ apiKey: string; credential: OAuthCredential }>();

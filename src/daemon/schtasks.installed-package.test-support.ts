@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +18,27 @@ import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.j
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 
+export function writeJson(filename: string, value: unknown) {
+  return fs.writeFile(filename, JSON.stringify(value, null, 2));
+}
+async function readJson(filename: string): Promise<unknown> {
+  return JSON.parse(await fs.readFile(filename, "utf8"));
+}
+export function assertAbsent(filename: string) {
+  return assert.rejects(fs.access(filename), { code: "ENOENT" });
+}
+function absentAsNull(error: unknown): null {
+  if (!hasErrnoCode(error, "ENOENT")) {
+    throw error;
+  }
+  return null;
+}
+async function assertOwnedDirectory(target: string, message: string) {
+  const stat = await fs.lstat(target);
+  assert.ok(stat.isDirectory() && !stat.isSymbolicLink(), message);
+  samePath(await fs.realpath(target), target);
+}
+
 export const installedStatusSchema = z.object({
   service: z.object({
     loaded: z.literal(true),
@@ -34,7 +56,7 @@ export async function readInstalledBuildIdentity(installRoot: string, expectedVe
   const filename = path.join(packageRoot(installRoot), "dist", "build-info.json");
   return z
     .object({ version: z.literal(expectedVersion), buildId: z.string().min(1) })
-    .parse(JSON.parse(await fs.readFile(filename, "utf8")));
+    .parse(await readJson(filename));
 }
 export function describeFailure(error: unknown): unknown {
   if (!(error instanceof Error)) {
@@ -112,63 +134,45 @@ export function createInstalledProgressRecorder(params: {
   return async (phase: string, error?: Error) => {
     progressFailure = error ?? progressFailure;
     // Persist settled commands and the original error before native cleanup can be interrupted.
-    await fs.writeFile(path.join(rootDir, "commands.json"), JSON.stringify(commands, null, 2));
-    await fs.writeFile(
-      proofPath,
-      JSON.stringify(
+    await writeJson(path.join(rootDir, "commands.json"), commands);
+    await writeJson(proofPath, {
+      result: progressFailure ? "failed" : "in-progress",
+      head: input.toolingSha,
+      candidate: input.candidate,
+      published: input.published,
+      cell: key,
+      cells: [
         {
-          result: progressFailure ? "failed" : "in-progress",
-          head: input.toolingSha,
-          candidate: input.candidate,
-          published: input.published,
-          cell: key,
-          cells: [
-            {
-              key,
-              phase,
-              commands,
-              observations,
-              failure: progressFailure && describeFailure(progressFailure),
-            },
-          ],
-          cleanupComplete: false,
-          elapsedMs: performance.now() - progressStarted,
-          recordedAt: new Date().toISOString(),
+          key,
+          phase,
+          commands,
+          observations,
+          failure: progressFailure && describeFailure(progressFailure),
         },
-        null,
-        2,
-      ),
-    );
+      ],
+      cleanupComplete: false,
+      elapsedMs: performance.now() - progressStarted,
+      recordedAt: new Date().toISOString(),
+    });
     // Only fixed labels reach stdout; command arguments and diagnostics stay in the proof.
-    let outputPhase = "fixture";
-    if (phase.startsWith("command:")) {
-      outputPhase = "command-result";
-    } else if (phase === "published-update:completed-step") {
-      outputPhase = "update-step-completed";
-    } else if (phase.startsWith("disabled-discovery:")) {
-      outputPhase = "disabled-discovery";
-    } else if (phase.endsWith(":waiting")) {
-      outputPhase = "readiness-wait";
-    } else if (phase.endsWith(":ready")) {
-      outputPhase = "readiness-ready";
-    } else if (phase === "selected-status-verified") {
-      outputPhase = "selected-status-verified";
-    } else if (phase.startsWith("authority:")) {
-      outputPhase = "authority-checkpoint";
-    } else if (
-      phase.startsWith("task-sibling-refusal:") ||
-      phase.startsWith("startup-alias-refusal:")
-    ) {
-      outputPhase = "sibling-refusal-checkpoint";
-    } else if (phase === "fingerprint-result") {
-      outputPhase = "fingerprint-result";
-    } else if (phase.endsWith(":hash-verified")) {
-      outputPhase = "install-hash-verified";
-    } else if (phase.endsWith("cleanup:command-result")) {
-      outputPhase = "cleanup-command-result";
-    } else if (phase === "before-native-cleanup") {
-      outputPhase = "native-cleanup";
-    }
+    const labels: [boolean, string][] = [
+      [phase.startsWith("command:"), "command-result"],
+      [phase === "published-update:completed-step", "update-step-completed"],
+      [phase.startsWith("disabled-discovery:"), "disabled-discovery"],
+      [phase.endsWith(":waiting"), "readiness-wait"],
+      [phase.endsWith(":ready"), "readiness-ready"],
+      [phase === "selected-status-verified", "selected-status-verified"],
+      [phase.startsWith("authority:"), "authority-checkpoint"],
+      [
+        phase.startsWith("task-sibling-refusal:") || phase.startsWith("startup-alias-refusal:"),
+        "sibling-refusal-checkpoint",
+      ],
+      [phase === "fingerprint-result", "fingerprint-result"],
+      [phase.endsWith(":hash-verified"), "install-hash-verified"],
+      [phase.endsWith("cleanup:command-result"), "cleanup-command-result"],
+      [phase === "before-native-cleanup", "native-cleanup"],
+    ];
+    const outputPhase = labels.find(([matches]) => matches)?.[1] ?? "fixture";
     process.stdout.write(
       `[schtasks-installed] ${JSON.stringify({
         cell: key,
@@ -204,7 +208,7 @@ export async function readPreparedCell(
   key: (typeof keys)[number],
 ) {
   const prepared = preparedCellSchema.parse(
-    JSON.parse(await fs.readFile(path.join(cellEvidence(inputPath, key), "prepared.json"), "utf8")),
+    await readJson(path.join(cellEvidence(inputPath, key), "prepared.json")),
   );
   assert.equal(prepared.cell, key);
   assert.equal(prepared.inputSha256, await hashFile(inputPath));
@@ -241,13 +245,18 @@ type OwnedUsage = {
   nonemptyFilesReportingZeroBlocks: number;
   vanishedEntries: number;
 };
+function fileUsage(stat: Stats): OwnedUsage {
+  return {
+    logicalBytes: stat.size,
+    reportedAllocatedBytes: stat.blocks * 512,
+    files: 1,
+    links: 0,
+    nonemptyFilesReportingZeroBlocks: stat.size > 0 && stat.blocks === 0 ? 1 : 0,
+    vanishedEntries: 0,
+  };
+}
 async function measureOwnedDirectory(root: string): Promise<OwnedUsage | null> {
-  const entries = await fs.readdir(root, { withFileTypes: true }).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(absentAsNull);
   if (entries === null) {
     return null;
   }
@@ -261,12 +270,7 @@ async function measureOwnedDirectory(root: string): Promise<OwnedUsage | null> {
   };
   for (const item of entries) {
     const full = path.join(root, item.name);
-    const stat = await fs.lstat(full).catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return null;
-      }
-      throw error;
-    });
+    const stat = await fs.lstat(full).catch(absentAsNull);
     if (stat === null) {
       total.vanishedEntries += 1;
       continue;
@@ -286,19 +290,18 @@ async function measureOwnedDirectory(root: string): Promise<OwnedUsage | null> {
         total.vanishedEntries += nested.vanishedEntries;
       }
     } else if (stat.isFile()) {
-      total.files += 1;
-      total.logicalBytes += stat.size;
-      total.reportedAllocatedBytes += stat.blocks * 512;
-      if (stat.size > 0 && stat.blocks === 0) {
-        total.nonemptyFilesReportingZeroBlocks += 1;
-      }
+      const usage = fileUsage(stat);
+      total.files += usage.files;
+      total.logicalBytes += usage.logicalBytes;
+      total.reportedAllocatedBytes += usage.reportedAllocatedBytes;
+      total.nonemptyFilesReportingZeroBlocks += usage.nonemptyFilesReportingZeroBlocks;
     }
   }
   return total;
 }
 export async function recordCapacityBoundary(
   inputPath: string,
-  input: Input,
+  input: Pick<Input, "installRoot" | "stateRoot">,
   key: (typeof keys)[number],
   boundary: string,
 ) {
@@ -311,21 +314,9 @@ export async function recordCapacityBoundary(
     if (item.isDirectory() && !item.isSymbolicLink()) {
       usage = await measureOwnedDirectory(pathname);
     } else if (item.isFile()) {
-      const stat = await fs.lstat(pathname).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return null;
-        }
-        throw error;
-      });
+      const stat = await fs.lstat(pathname).catch(absentAsNull);
       if (stat?.isFile()) {
-        usage = {
-          logicalBytes: stat.size,
-          reportedAllocatedBytes: stat.blocks * 512,
-          files: 1,
-          links: 0,
-          nonemptyFilesReportingZeroBlocks: stat.size > 0 && stat.blocks === 0 ? 1 : 0,
-          vanishedEntries: 0,
-        };
+        usage = fileUsage(stat);
       }
     }
     prefixes.push({ name: item.name, usage });
@@ -419,7 +410,7 @@ export function boundedEnv(root: string, installRoot: string): NodeJS.ProcessEnv
   ]);
 }
 export async function readInput(inputPath: string) {
-  const input = inputSchema.parse(JSON.parse(await fs.readFile(inputPath, "utf8")));
+  const input = inputSchema.parse(await readJson(inputPath));
   assert.equal(process.platform, "win32");
   samePath(input.installRoot, path.join(path.dirname(input.stateRoot), "native-package-installed"));
   assert.equal(process.version, input.runtime.version);
@@ -486,19 +477,12 @@ async function prepareInstalledLifecycle(inputPath: string) {
   await fs.mkdir(evidence, { recursive: true });
   const before = await recordCapacityBoundary(inputPath, input, key, "before-preparation");
   const space = requiredCellSpace(key);
-  await fs.writeFile(
-    path.join(evidence, "capacity-forecast.json"),
-    JSON.stringify(
-      {
-        cell: key,
-        basis: "finite conservative planning allowances; not measured capacity",
-        ...space,
-        observedAvailableBytes: before.availableBytes,
-      },
-      null,
-      2,
-    ),
-  );
+  await writeJson(path.join(evidence, "capacity-forecast.json"), {
+    cell: key,
+    basis: "finite conservative planning allowances; not measured capacity",
+    ...space,
+    observedAvailableBytes: before.availableBytes,
+  });
   assert.ok(
     before.availableBytes >= space.neededBytes,
     `Cell ${key} needs ${space.neededBytes} available bytes under its provisional forecast; observed ${before.availableBytes}; no install started`,
@@ -553,28 +537,18 @@ async function prepareInstalledLifecycle(inputPath: string) {
       cells.push({ key: name, installRoot, installed });
       await recordCapacityBoundary(inputPath, input, key, `installed-${name}`);
     }
-    await fs.writeFile(
-      path.join(evidence, "prepared.json"),
-      JSON.stringify(
-        {
-          cell: key,
-          inputSha256: await hashFile(inputPath),
-          preparationRoot: prep,
-          cells,
-          commands,
-        },
-        null,
-        2,
-      ),
-    );
+    await writeJson(path.join(evidence, "prepared.json"), {
+      cell: key,
+      inputSha256: await hashFile(inputPath),
+      preparationRoot: prep,
+      cells,
+      commands,
+    });
   } catch (error) {
     failure = toErrorObject(error, "Installed Scheduled Task fixture failed");
   }
   try {
-    await fs.writeFile(
-      path.join(evidence, "preparation-commands.json"),
-      JSON.stringify(commands, null, 2),
-    );
+    await writeJson(path.join(evidence, "preparation-commands.json"), commands);
     await recordCapacityBoundary(inputPath, input, key, "preparation-finished");
   } catch (error) {
     failure = new AggregateError(
@@ -622,12 +596,7 @@ async function retireInstalledLifecycle(inputPath: string) {
     path.join(input.stateRoot, key, "npm-cache"),
   ];
   for (const target of targets) {
-    const stat = await fs.lstat(target);
-    assert.ok(
-      stat.isDirectory() && !stat.isSymbolicLink(),
-      "Disposable cell root must remain an owned directory",
-    );
-    samePath(await fs.realpath(target), target);
+    await assertOwnedDirectory(target, "Disposable cell root must remain an owned directory");
   }
   const proofSha256 = await hashFile(proofPath);
   await recordCapacityBoundary(inputPath, input, key, "before-retirement");
@@ -635,12 +604,7 @@ async function retireInstalledLifecycle(inputPath: string) {
   let failure: Error | undefined;
   try {
     for (const target of targets) {
-      const current = await fs.lstat(target);
-      assert.ok(
-        current.isDirectory() && !current.isSymbolicLink(),
-        "Disposable cell root changed before retirement",
-      );
-      samePath(await fs.realpath(target), target);
+      await assertOwnedDirectory(target, "Disposable cell root changed before retirement");
       await fs.rm(target, { recursive: true });
       await assert.rejects(fs.lstat(target), { code: "ENOENT" });
       retired.push(target);
@@ -650,23 +614,16 @@ async function retireInstalledLifecycle(inputPath: string) {
   }
   try {
     await recordCapacityBoundary(inputPath, input, key, "after-retirement");
-    await fs.writeFile(
-      path.join(evidence, "retirement.json"),
-      JSON.stringify(
-        {
-          result: retired.length === targets.length ? "pass" : "incomplete",
-          cell: key,
-          inputSha256: await hashFile(inputPath),
-          proofSha256,
-          artifactId,
-          artifactDigest,
-          targets,
-          retired,
-        },
-        null,
-        2,
-      ),
-    );
+    await writeJson(path.join(evidence, "retirement.json"), {
+      result: retired.length === targets.length ? "pass" : "incomplete",
+      cell: key,
+      inputSha256: await hashFile(inputPath),
+      proofSha256,
+      artifactId,
+      artifactDigest,
+      targets,
+      retired,
+    });
   } catch (error) {
     failure = new AggregateError(
       failure ? [failure, error] : [error],

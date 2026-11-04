@@ -6,7 +6,8 @@ import {
 
 const MAX_DESCRIPTION_BYTES = 160;
 const MAX_BODY_LINES = 250;
-const MAX_BODY_BYTES = 12_000;
+/** Body size past which a skill gets the sprawl advisory and becomes eligible for a diet. */
+export const MAX_BODY_BYTES = 12_000;
 const MIN_NEGATION_LINES = 3;
 const MAX_ADVISORIES = 3;
 
@@ -16,15 +17,9 @@ const SHOUTING = /\bIMPORTANT\b/g;
 const NEGATION_LINE = /^(?:[-*+]|\d+[.)])?\s*(?:\*\*)?(?:never|don['’]t|do not)\b/i;
 const NARRATIVE_LINE = /^(?:[-*+]\s*)?(?:\*\*)?(?:UPDATE|NOTE|EDIT)\b|\b20\d\d-\d\d-\d\d\b/;
 
-type SkillLintFinding = { rule: string; message: string };
-
-function readDescription(content: string): string {
-  return (parseFrontmatterBlock(content).description ?? "").trim();
-}
-
 /** Authoring-convention findings for one SKILL.md, most useful first. */
-function lintSkillMarkdown(content: string): SkillLintFinding[] {
-  const description = readDescription(content);
+function lintSkillMarkdown(content: string): { rule: string; message: string }[] {
+  const description = (parseFrontmatterBlock(content).description ?? "").trim();
   const body = stripFrontmatterBlock(content);
   // Code is quoted material; only prose carries authoring style.
   const prose = body

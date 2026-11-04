@@ -7,15 +7,18 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { resolveUserPath } from "../../../infra/home-dir.js";
+import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import {
   formatTokenUsageDisplay,
   resolveTotalTokens,
   truncateLine,
 } from "../../../shared/subagents-format.js";
 import { resolveModelDisplayName, resolveModelDisplayRef } from "../../model-selection-display.js";
+import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   observeSubagentExecution,
+  resolveYieldedLeafPausedForMs,
   type SubagentExecutionObservation,
 } from "./subagent-execution-observation.js";
 import type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
@@ -31,6 +34,7 @@ import {
   getSubagentSessionStartedAt,
   resolveSubagentDisplayStatus,
 } from "./subagent-session-metrics.js";
+import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 /**
  * Model-visible bounds for the shared-cwd advisory.
@@ -116,7 +120,7 @@ export function captureSubagentListReadContext(
   return {
     now,
     recentMinutes,
-    view: structuredClone(view),
+    view,
     childSessionsByController,
     pendingDescendants,
     execution,
@@ -128,11 +132,27 @@ export async function readSubagentListSessionEntries(
   context: SubagentListReadContext,
 ): Promise<Map<string, SessionEntry>> {
   const runs = [...context.view.active, ...context.view.recent];
+  const privateReads: Array<Promise<void>> = [];
+  // Raw session keys can repeat across agents; keep each run's metadata separate.
+  const entries = new Map<string, SessionEntry>();
   const batches = new Map<
     string,
     { agentId: string; storePath: string; runs: SubagentRunRecord[] }
   >();
   for (const run of runs) {
+    if (!resolveSubagentChildAgentId(run)) {
+      continue;
+    }
+    if (isIncognitoSessionKey(run.childSessionKey)) {
+      privateReads.push(
+        loadSubagentSessionEntry({ ...run, cfg }).then((entry) => {
+          if (entry) {
+            entries.set(run.runId, entry);
+          }
+        }),
+      );
+      continue;
+    }
     const owner = resolveSubagentChildSessionOwner(run, cfg);
     const batch = batches.get(owner.agentId);
     if (batch) {
@@ -141,8 +161,11 @@ export async function readSubagentListSessionEntries(
       batches.set(owner.agentId, { ...owner, runs: [run] });
     }
   }
-  // Raw session keys can repeat across agents; keep each run's metadata separate.
-  const entries = new Map<string, SessionEntry>();
+  const privateResults = await Promise.allSettled(privateReads);
+  const failure = privateResults.find((result) => result.status === "rejected");
+  if (failure?.status === "rejected") {
+    throw failure.reason;
+  }
   for (const { agentId, storePath, runs: batchRuns } of batches.values()) {
     const selected = await readSessionEntriesFromStoreInWorker({
       agentId,
@@ -454,7 +477,10 @@ export function buildSubagentList(params: {
     const taskNamePrefix = taskName ? `${taskName}: ` : "";
     const sharedCwdGroupId = sharedCwdIndex.resolveGroupId(entry.runId);
     const sharedCwdSuffix = sharedCwdGroupId ? ` [shared cwd group ${sharedCwdGroupId}]` : "";
-    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}${sharedCwdSuffix}`;
+    const pausedForMs = resolveYieldedLeafPausedForMs(entry, execution, now);
+    const pausedAge =
+      pausedForMs === undefined ? undefined : formatDurationCompact(pausedForMs, { spaced: true });
+    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${pausedAge ? `, paused ${pausedAge}` : ""}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}${sharedCwdSuffix}`;
     const view = {
       index,
       line,
@@ -474,6 +500,7 @@ export function buildSubagentList(params: {
       totalTokens,
       startedAt: getSubagentSessionStartedAt(entry),
       ...(entry.execution.endedAt ? { endedAt: entry.execution.endedAt } : {}),
+      ...(pausedForMs === undefined ? {} : { pausedForMs }),
       ...(sharedCwdGroupId ? { sharedCwdGroupId } : {}),
     };
     index += 1;

@@ -9,7 +9,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -32,7 +33,12 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  setRuntimeConfigSnapshot({});
   await resetSubagentRegistryForTests();
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("shared cwd advisory: policy-inherited roots", () => {
@@ -90,6 +96,7 @@ describe("shared cwd advisory: policy-inherited roots", () => {
       });
     }
     const cfg: OpenClawConfig = { session: { store: storePath } };
+    setRuntimeConfigSnapshot(cfg);
 
     const list = await buildSubagentListForTests({ cfg, runs: [runA, runB], recentMinutes: 30 });
 
@@ -118,6 +125,7 @@ describe("shared cwd advisory: policy-inherited roots", () => {
       await seedSessionEntry(storePath, run.childSessionKey, requesterRoot);
     }
     const cfg: OpenClawConfig = { session: { store: storePath } };
+    setRuntimeConfigSnapshot(cfg);
 
     const list = await buildSubagentListForTests({ cfg, runs: [runA, runB], recentMinutes: 30 });
 
@@ -150,6 +158,7 @@ describe("shared cwd advisory: policy-inherited roots", () => {
     await seedSessionEntry(storePath, ordinary.childSessionKey, sharedDir);
     await seedSessionEntry(storePath, ordinaryPeer.childSessionKey, sharedDir);
     const cfg: OpenClawConfig = { session: { store: storePath } };
+    setRuntimeConfigSnapshot(cfg);
 
     const list = await buildSubagentListForTests({
       cfg,

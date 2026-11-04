@@ -1,9 +1,9 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { CronJob, CronRunLogEntry } from "../api/types.ts";
+import type { CronJob, CronRunsResult } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { cronListResponseFixture } from "../test-helpers/cron.ts";
+import { cronListResponseFixture, createCronRunsResult } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -27,7 +27,7 @@ suite.define(() => {
       delivery: { mode: "announce", channel: "last" },
       state: {},
     };
-    const entries: CronRunLogEntry[] = [
+    const entries: CronRunsResult["entries"] = [
       {
         ts: Date.UTC(2026, 8, 20, 12, 3),
         jobId: job.id,
@@ -79,14 +79,7 @@ suite.define(() => {
               nextOffset: null,
               hasMore: false,
             }),
-            "cron.runs": {
-              entries,
-              total: entries.length,
-              offset: 0,
-              limit: 50,
-              nextOffset: null,
-              hasMore: false,
-            },
+            "cron.runs": createCronRunsResult(entries),
             "cron.status": { enabled: true, triggersEnabled: true, jobs: 1 },
           },
         });
@@ -135,7 +128,7 @@ suite.define(() => {
           const previousRequests = (await gateway.getRequests("cron.runs")).length;
           const statusFilter = history.locator('[data-filter="status"]');
           await statusFilter.locator(".cron-filter-dropdown__trigger").click();
-          await statusFilter.locator('wa-dropdown-item[value="option:ok"]').click();
+          await statusFilter.locator('[data-value="option:ok"]').click();
           await expect
             .poll(async () =>
               (await gateway.getRequests("cron.runs")).slice(previousRequests).some((request) => {
@@ -144,7 +137,7 @@ suite.define(() => {
               }),
             )
             .toBe(true);
-          await statusFilter.locator('wa-dropdown-item[value="command:clear"]').click();
+          await statusFilter.locator('[data-value="command:clear"]').click();
           await page.keyboard.press("Escape");
         }
         expect(pageErrors).toEqual([]);

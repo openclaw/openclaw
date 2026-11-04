@@ -5,7 +5,6 @@ export type PluginHostCleanupFailure = {
   error: unknown;
 };
 
-/** Aggregate cleanup result for plugin host state. */
 export type PluginHostCleanupResult = {
   cleanupCount: number;
   failures: PluginHostCleanupFailure[];

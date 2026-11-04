@@ -1,0 +1,2 @@
+# Regression coverage for Windows POSIX-shell persistence and native-wrapper argv binding.
+41

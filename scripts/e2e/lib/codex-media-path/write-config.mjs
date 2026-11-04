@@ -16,6 +16,15 @@ const workspaceDir = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
 const token = requireEnv("OPENCLAW_GATEWAY_TOKEN");
 const timeoutSeconds = readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", 180);
 const gatewayPort = readTcpPortEnv("PORT", 18790);
+const agentConfig = {
+  model: { primary: "openai/gpt-5.6-luna", fallbacks: [] },
+  models: {
+    "openai/gpt-5.6-luna": {
+      agentRuntime: { id: "codex" },
+    },
+  },
+  workspace: workspaceDir,
+};
 
 const config = {
   gateway: {
@@ -43,27 +52,13 @@ const config = {
   },
   agents: {
     defaults: {
-      model: { primary: "openai/gpt-5.6-luna", fallbacks: [] },
-      models: {
-        "openai/gpt-5.6-luna": {
-          agentRuntime: { id: "codex" },
-        },
-      },
-      workspace: workspaceDir,
+      ...agentConfig,
       skipBootstrap: true,
       timeoutSeconds,
       sandbox: { mode: "off" },
     },
     entries: {
-      main: {
-        model: { primary: "openai/gpt-5.6-luna", fallbacks: [] },
-        models: {
-          "openai/gpt-5.6-luna": {
-            agentRuntime: { id: "codex" },
-          },
-        },
-        workspace: workspaceDir,
-      },
+      main: agentConfig,
     },
   },
   skills: { allowBundled: [] },

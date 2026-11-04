@@ -14,13 +14,12 @@ enum HealthAuthorization {
     }
 
     static var readTypes: Set<HKObjectType> {
-        let types: [HKObjectType?] = [
+        [
             HKWorkoutType.workoutType(),
-            HKObjectType.quantityType(forIdentifier: .stepCount),
-            HKObjectType.categoryType(forIdentifier: .sleepAnalysis),
-            HKObjectType.quantityType(forIdentifier: .restingHeartRate),
+            HKQuantityType(.stepCount),
+            HKCategoryType(.sleepAnalysis),
+            HKQuantityType(.restingHeartRate),
         ]
-        return Set(types.compactMap(\.self))
     }
 
     @MainActor
@@ -132,8 +131,7 @@ actor HealthSummaryService: HealthSummaryServicing {
     }
 
     private func stepCount(in range: DateInterval) async throws -> Int? {
-        guard let type = HKObjectType.quantityType(forIdentifier: .stepCount) else { return nil }
-        let predicate = Self.quantityPredicate(type: type, range: range)
+        let predicate = Self.quantityPredicate(type: HKQuantityType(.stepCount), range: range)
         let statistics = try await HKStatisticsQueryDescriptor(
             predicate: predicate,
             options: .cumulativeSum).result(for: self.healthStore)
@@ -141,8 +139,7 @@ actor HealthSummaryService: HealthSummaryServicing {
     }
 
     private func restingHeartRate(in range: DateInterval) async throws -> Double? {
-        guard let type = HKObjectType.quantityType(forIdentifier: .restingHeartRate) else { return nil }
-        let predicate = Self.quantityPredicate(type: type, range: range)
+        let predicate = Self.quantityPredicate(type: HKQuantityType(.restingHeartRate), range: range)
         let statistics = try await HKStatisticsQueryDescriptor(
             predicate: predicate,
             options: .discreteAverage).result(for: self.healthStore)
@@ -151,13 +148,12 @@ actor HealthSummaryService: HealthSummaryServicing {
     }
 
     private func sleepDuration(in range: DateInterval) async throws -> TimeInterval? {
-        guard let type = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
         let predicate = HKQuery.predicateForSamples(
             withStart: range.start,
             end: range.end,
             options: [])
         let descriptor = HKSampleQueryDescriptor(
-            predicates: [.categorySample(type: type, predicate: predicate)],
+            predicates: [.categorySample(type: HKCategoryType(.sleepAnalysis), predicate: predicate)],
             sortDescriptors: [],
             limit: nil)
         let samples = try await descriptor.result(for: self.healthStore)

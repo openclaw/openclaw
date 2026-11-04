@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { z } from "zod";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createChromeExtensionSetupResult } from "../test-helpers/chrome-extension-setup.ts";
 import {
@@ -12,6 +13,7 @@ import {
   type NativeDeviceSettingsCapability,
   type NativeDeviceSettingsSnapshot,
 } from "./native-device-settings.ts";
+import { nativeSetupCapability } from "./native-setup.ts";
 
 let capability: NativeDeviceSettingsCapability | null;
 afterEach(() => {
@@ -32,6 +34,27 @@ function publish(detail: unknown) {
 }
 
 describe("native device settings wire contract", () => {
+  it.each([undefined, false, true])(
+    "advertises AI setup only with explicit host support (%s)",
+    (available) => {
+      const base = createIosNativeDeviceSettingsSnapshot();
+      const post = installBridge({
+        ...base,
+        capabilities: {
+          ...base.capabilities,
+          ...(available === undefined ? {} : { aiSetupAvailable: available }),
+        },
+      });
+      const setup = nativeSetupCapability({ nativeDeviceSettings: capability, navigate: vi.fn() });
+      expect(typeof setup?.openAiSetup === "function").toBe(available === true);
+      setup?.openAiSetup?.();
+      if (available) {
+        expect(post).toHaveBeenCalledWith({ type: "open", panel: "ai-setup" });
+      } else {
+        expect(post).not.toHaveBeenCalledWith({ type: "open", panel: "ai-setup" });
+      }
+    },
+  );
   it("uses the shipped installation projection on an older native host without offering new actions", async () => {
     const snapshot = createNativeDeviceSettingsSnapshot();
     delete snapshot.browser.chromeSetupActions;
@@ -197,7 +220,7 @@ describe("native device settings wire contract", () => {
     const listener = vi.fn();
     const settled = vi.fn();
     capability!.subscribe(listener);
-    capability!.set("capabilities.desktopSharingEnabled", false, settled);
+    void capability!.set("capabilities.desktopSharingEnabled", false, settled);
     const stopped = {
       ...initial,
       revision: 3,
@@ -222,6 +245,80 @@ describe("native device settings wire contract", () => {
     publish(stopped);
     expect(listener).not.toHaveBeenCalled();
     expect(capability!.snapshot).toEqual(stopped);
+  });
+
+  it("keeps the shipped closed permission decoder valid while merging additional entries", () => {
+    // v2026.10.2's permission envelope ignores unknown fields but rejects unknown enum values.
+    const shippedEnvelope = z.object({
+      contract: z.literal(1),
+      permissions: z.object({
+        entries: z.array(
+          z.object({
+            id: z.enum([
+              "notifications",
+              "accessibility",
+              "screenRecording",
+              "microphone",
+              "camera",
+              "speechRecognition",
+              "location",
+              "contacts",
+              "calendars",
+              "reminders",
+              "photos",
+              "automation",
+            ]),
+            status: z.enum(["granted", "denied", "notDetermined", "unavailable", "limited"]),
+          }),
+        ),
+      }),
+    });
+    const legacy = createNativeDeviceSettingsSnapshot();
+    const additionalEntries = [{ id: "eventPosting", status: "denied", state: "restart-required" }];
+    const wire = { ...legacy, permissions: { ...legacy.permissions, additionalEntries } };
+    expect(shippedEnvelope.parse(wire).permissions.entries).toEqual(legacy.permissions.entries);
+    expect(
+      shippedEnvelope.safeParse({
+        ...wire,
+        permissions: { entries: [...legacy.permissions.entries, ...additionalEntries] },
+      }).success,
+    ).toBe(false);
+    installBridge(wire);
+    expect(capability?.snapshot?.permissions.entries).toEqual([
+      ...legacy.permissions.entries,
+      ...additionalEntries,
+    ]);
+    const listener = vi.fn();
+    capability?.subscribe(listener);
+    publish({
+      ...wire,
+      permissions: {
+        ...wire.permissions,
+        additionalEntries: [{ id: "eventPosting", status: "granted" }],
+      },
+    });
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        permissions: {
+          ...legacy.permissions,
+          entries: [...legacy.permissions.entries, { id: "eventPosting", status: "granted" }],
+        },
+      }),
+    );
+  });
+  it("advertises permission resolution when a connecting native node publishes its identity", async () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    const post = installBridge(snapshot);
+    expect(capability?.resolvePermission).toBeUndefined();
+    publish({ ...snapshot, device: { ...snapshot.device, nodeId: "node-mac" } });
+    const request = {
+      nodeId: "node-mac",
+      command: "screen.capture",
+      capabilities: ["screenRecording"],
+      state: "denied" as const,
+    };
+    await capability?.resolvePermission?.(request);
+    expect(post).toHaveBeenCalledWith({ type: "resolve-permission", request });
   });
 
   it("accepts shipped Mac snapshots without exposing their retired Terminal permission", () => {
@@ -366,6 +463,24 @@ describe("native device settings wire contract", () => {
           },
         ],
         [
+          "duplicate additional permission id",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              additionalEntries: [{ id: "camera", status: "denied" }],
+            },
+          },
+        ],
+        [
+          "additional permission status",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              additionalEntries: [{ id: "eventPosting", status: "unknown" }],
+            },
+          },
+        ],
+        [
           "precise editability",
           {
             permissions: {
@@ -447,13 +562,20 @@ describe("native device settings wire contract", () => {
     const settled = vi.fn(() => {
       pending = "";
     });
-    capability!.set("browser.cookieSync.targetProfile", pending, settled);
+    const completion = capability!.set("browser.cookieSync.targetProfile", pending, settled);
+    let completed = false;
+    void completion.then(() => {
+      completed = true;
+    });
     const observed: string[] = [];
     capability!.subscribe(() =>
       observed.push(pending || capability!.snapshot!.browser!.cookieSync!.targetProfile),
     );
+    await Promise.resolve();
+    expect(completed).toBe(false);
     reply.resolve(createNativeDeviceSettingsSnapshot());
-    await vi.waitFor(() => expect(observed).toEqual(["default"]));
+    await completion;
+    expect(observed).toEqual(["default"]);
     expect(settled).toHaveBeenCalledTimes(1);
   });
 
@@ -465,7 +587,7 @@ describe("native device settings wire contract", () => {
     const settled = vi.fn();
     const listener = vi.fn();
     capability!.subscribe(listener);
-    capability!.set("browser.cookieSync.targetProfile", "rejected", settled);
+    void capability!.set("browser.cookieSync.targetProfile", "rejected", settled);
     const failure = new Error("Document retired");
     rejected.reject(failure);
     await vi.waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
@@ -474,8 +596,11 @@ describe("native device settings wire contract", () => {
     expect(settled).toHaveBeenCalledWith(failure);
     const delayed = createDeferred<unknown>();
     post.mockReturnValueOnce(delayed.promise);
-    capability!.set("app.showDockIcon", false, settled);
+    const completion = capability!.set("app.showDockIcon", false, settled);
     capability!.dispose();
+    await completion;
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(1);
     const next = createNativeDeviceSettingsSnapshot();
     next.app.showDockIcon = false;
     delayed.resolve(next);
@@ -489,13 +614,13 @@ describe("native device settings wire contract", () => {
   it("posts exact native commands without optimistically changing the owner snapshot", () => {
     const post = installBridge();
     post.mockClear();
-    capability?.set("app.showDockIcon", false);
-    capability?.set("app.nativeExperienceEnabled", true);
-    capability?.set("app.iconStyle", "origami");
-    capability?.set("app.keepGatewayRunning", true);
-    capability?.set("voice.microphone", null);
-    capability?.set("browser.cookieSync.domains", ["example.com"]);
-    capability?.set("voice.locale.primary", "de-DE");
+    void capability?.set("app.showDockIcon", false);
+    void capability?.set("app.nativeExperienceEnabled", true);
+    void capability?.set("app.iconStyle", "origami");
+    void capability?.set("app.keepGatewayRunning", true);
+    void capability?.set("voice.microphone", null);
+    void capability?.set("browser.cookieSync.domains", ["example.com"]);
+    void capability?.set("voice.locale.primary", "de-DE");
     capability?.requestPermission("microphone");
     capability?.openSystemSettings("accessibility");
     capability?.openPanel("quick-chat-shortcut");

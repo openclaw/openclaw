@@ -1,7 +1,9 @@
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayServerOptions, GatewayStartupOperation } from "../../gateway/server-public.js";
+import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.types.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
@@ -12,26 +14,25 @@ import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleto
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
+import { resolveGatewayShutdownBudget } from "./run-loop-shutdown-budget.js";
 
 const lifecycleRuntimeLoader = createLazyImportLoader(() => import("./lifecycle.runtime.js"));
 
 /** Prime lifecycle code and acquire initial custody before installing signal handlers. */
-export async function prepareGatewayRunLoop(params: {
-  lockPort?: number;
-  lifecycleLockDeadlineMs?: number;
-}) {
+export async function prepareGatewayRunLoop(
+  params: { lockPort?: number; lifecycleLockDeadlineMs?: number },
+  logger: Pick<SubsystemLogger, "info" | "warn">,
+) {
   // Updates rotate dist chunks; signal handling must retain this exact runtime.
   const lifecycleRuntime = await measureGatewayBootstrapStep(
     "cli.bootstrap.lifecycle-runtime",
     () => lifecycleRuntimeLoader.load(),
   );
-  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity(
-    process.env,
-    process.platform,
-    { includeLinuxOpenClawGatewayServiceMarker: true },
-  );
+  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity();
   const supervisorMode = supervisor?.kind ?? null;
   const restartDecision = lifecycleRuntime.resolveGatewayRestartDecision();
+  // Resolve the native deadline before acquiring custody that needs final settlement.
+  const startupBudget = await resolveGatewayShutdownBudget(supervisorMode, logger);
   const lock = await measureGatewayBootstrapStep("cli.bootstrap.gateway-lock", () =>
     acquireGatewayLock({
       port: params.lockPort,
@@ -42,7 +43,7 @@ export async function prepareGatewayRunLoop(params: {
         : {}),
     }),
   );
-  return { lifecycleRuntime, supervisor, supervisorMode, restartDecision, lock };
+  return { lifecycleRuntime, supervisor, supervisorMode, restartDecision, startupBudget, lock };
 }
 
 export type GatewayRunLoopStartOptions = Pick<
@@ -51,6 +52,7 @@ export type GatewayRunLoopStartOptions = Pick<
   | "startupStartedAt"
   | "hostLifecycle"
   | "startupOperation"
+  | "exitAfterStartupFailure"
   | "gatewayStateOwner"
 > & { requestHotReloadRecovery?: GatewayRestartEmitter };
 
@@ -72,6 +74,14 @@ export function createGatewayRestartRecovery(
     | { controller: AbortController; settled: ReturnType<GatewayRestartStartupFailureHandler> }
     | undefined;
   return {
+    reportInstallationReplacement(
+      replacement: GatewayInstallationReplacement,
+    ): GatewayBootLifecycleCompletion {
+      logger.error(
+        `${replacement.message} Cannot continue in this process. Run: ${formatCliCommand(supervisor ? "openclaw gateway restart" : "openclaw gateway run")}`,
+      );
+      return { outcome: "planned_restart", reason: "gateway.installation_replaced" };
+    },
     reportStartupFailure(error: unknown, retryFailed: boolean) {
       const stack = error instanceof Error && error.stack ? `\n${error.stack}` : "";
       logger.error(
@@ -138,15 +148,9 @@ export function createGatewayRestartRecovery(
   };
 }
 
-export function createGatewayStartupOperations(): {
-  run: GatewayStartupOperation;
-  close(): void;
-  cancelledWith(error: unknown): boolean;
-  failedWith(error: unknown): boolean;
-  stopCompletion?: Promise<void>;
-  drain(): Promise<void>;
-} {
+export function createGatewayStartupOperations() {
   const scope = new AsyncWorkScope();
+  let stopCompletion: Promise<void> | undefined;
   let failure: { error: unknown } | undefined;
   // A process-group stop can kill a child before its separate admission owner is cancelled.
   const cancelledWith = (error: unknown) =>
@@ -171,6 +175,11 @@ export function createGatewayStartupOperations(): {
   };
   return {
     run,
+    signal: scope.signal,
+    getStopCompletion: () => stopCompletion,
+    retainStopCompletion: (completion: Promise<void>) => {
+      stopCompletion = completion;
+    },
     close: () => scope.beginClose(),
     cancelledWith,
     failedWith: (error: unknown) => failure !== undefined && failure.error === error,
@@ -189,6 +198,7 @@ export function createGatewayStartupOperations(): {
 export async function prepareGatewayRestartIteration(
   runtime: typeof import("./lifecycle.runtime.js"),
   logger: Pick<SubsystemLogger, "warn">,
+  isCurrent: () => boolean,
 ): Promise<void> {
   // Retire stale activity counts and timers; execution owners restore durable work.
   const {
@@ -206,9 +216,13 @@ export async function prepareGatewayRestartIteration(
   // Rotation aborts rootless stale owners before reset pumps preserved queues.
   rotateAgentEventLifecycleGeneration();
   advanceCronActiveJobGeneration();
-  abortActiveCronTaskRuns("Gateway restarting.");
+  abortActiveCronTaskRuns();
   const cronTaskDrain = await waitForActiveCronTaskRuns(1_000);
   const cronDrain = await waitForActiveCronJobs(1_000);
+  // A terminal decision made during these joins must not reopen root admission.
+  if (!isCurrent()) {
+    return;
+  }
   if (!cronTaskDrain.drained || !cronDrain.drained) {
     logger.warn(
       `cron run drain timed out during restart lifecycle reset after retiring old cron admission; ${cronTaskDrain.active} task handle(s) and ${cronDrain.active} active marker(s) remain after aborting old cron runs`,
@@ -228,5 +242,7 @@ export async function prepareGatewayRestartIteration(
   } catch (error) {
     logger.warn(`failed to reset ambient runtime state: ${formatErrorMessage(error)}`);
   }
-  markGatewayRestartTrace("restart.next-start");
+  if (isCurrent()) {
+    markGatewayRestartTrace("restart.next-start");
+  }
 }

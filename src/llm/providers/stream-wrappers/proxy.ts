@@ -4,6 +4,7 @@ import {
   applyCompletionsAnthropicCacheControl,
   resolveAnthropicEphemeralCacheControl,
 } from "@openclaw/ai/transports";
+import { normalizeOpenRouterModelFamilyId } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -19,12 +20,18 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { normalizeOpenAICompatibleReasoningPayload } from "../../../plugin-sdk/provider-stream-shared.js";
 import { parseBooleanValue } from "../../../utils/boolean.js";
 import { streamSimple } from "../../stream.js";
-import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const BOOLEAN_PARAM_PARSE_OPTIONS = {
   truthy: ["1", "true", "yes", "on", "enable", "enabled"],
   falsy: ["0", "false", "no", "off", "disable", "disabled"],
 };
+
+export const OPENROUTER_RESPONSE_CACHE_TTL_KEYS = [
+  "responseCacheTtlSeconds",
+  "response_cache_ttl_seconds",
+  "responseCacheTtl",
+  "response_cache_ttl",
+] as const;
 
 function resolveModelEndpointClass(model: Parameters<StreamFn>[0]) {
   return (
@@ -99,12 +106,7 @@ function resolveOpenRouterResponseCacheHeaders(
   }
 
   const ttl = resolveOpenRouterResponseCacheTtlSeconds(
-    readExtraParam(extraParams, [
-      "responseCacheTtlSeconds",
-      "response_cache_ttl_seconds",
-      "responseCacheTtl",
-      "response_cache_ttl",
-    ]),
+    readExtraParam(extraParams, OPENROUTER_RESPONSE_CACHE_TTL_KEYS),
   );
   if (ttl) {
     headers["X-OpenRouter-Cache-TTL"] = ttl;
@@ -122,10 +124,12 @@ export function createOpenRouterSystemCacheWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const modelId = readStringValue(model.id);
     // Keep OpenRouter-specific cache markers on verified OpenRouter routes
     // (or the provider's default route), but not on arbitrary OpenAI proxies.
-    if (!isOpenRouterEndpoint(model) || !modelId || !isAnthropicModelRef(modelId)) {
+    if (
+      !isOpenRouterEndpoint(model) ||
+      !normalizeOpenRouterModelFamilyId(model.id)?.startsWith("anthropic/")
+    ) {
       return underlying(model, context, options);
     }
 

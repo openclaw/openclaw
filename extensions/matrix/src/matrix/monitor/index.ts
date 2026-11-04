@@ -42,6 +42,7 @@ import { isMatrixStartupAbortError } from "../startup-abort.js";
 import {
   isMatrixDisconnectedSyncState,
   isMatrixReadySyncState,
+  isMatrixTerminalSyncState,
   type MatrixSyncState,
 } from "../sync-state.js";
 import { createMatrixThreadBindingManager } from "../thread-bindings.js";
@@ -50,13 +51,12 @@ import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
-import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
+import { createMatrixIngressMonitor } from "./ingress.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 import { createMatrixMonitorStatusController } from "./status.js";
-import { createMatrixMonitorSyncLifecycle } from "./sync-lifecycle.js";
 import { createMatrixMonitorTaskRunner, getMatrixMonitorTaskSignal } from "./task-runner.js";
 
 type MonitorMatrixOpts = {
@@ -90,6 +90,17 @@ function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixStreamingInput
     return streaming?.progress?.toolProgress ?? streaming?.preview?.toolProgress ?? false;
   }
   return streaming?.preview?.toolProgress ?? true;
+}
+
+function formatSyncLifecycleError(state: MatrixSyncState, error?: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  const message = typeof error === "string" && error.trim() ? error.trim() : undefined;
+  if (state === "STOPPED") {
+    return new Error(message ?? "Matrix sync stopped unexpectedly");
+  }
+  return new Error(message ?? `Matrix sync entered ${state} unexpectedly`);
 }
 
 const DEFAULT_MEDIA_MAX_MB = 20;
@@ -212,7 +223,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   });
   let disposeAutoJoin = () => {};
   let disposeMonitorEvents = () => {};
-  let syncLifecycle: ReturnType<typeof createMatrixMonitorSyncLifecycle> | null = null;
+  let disposeSyncIngress = () => {};
+  let ingress: ReturnType<typeof createMatrixIngressMonitor> | undefined;
+  let fatalError: Error | null = null;
+  let resolveFatalWait: (() => void) | null = null;
+  let rejectFatalWait: ((error: Error) => void) | null = null;
+  const isStopping = () => cleanedUp || monitorLifecycleSignal?.aborted === true;
   let monitorSetupClosed = false;
   const cleanup = (mode: "persist" | "stop" = "persist"): Promise<void> => {
     if (cleanupPromise) {
@@ -289,6 +305,49 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       healthySyncSinceMs = undefined;
     }
   };
+  const settleFatal = (error: Error) => {
+    if (fatalError) {
+      return;
+    }
+    fatalError = error;
+    rejectFatalWait?.(error);
+    resolveFatalWait = null;
+    rejectFatalWait = null;
+  };
+
+  const onSyncLifecycleState = (
+    state: MatrixSyncState,
+    _prevState: string | null,
+    error?: unknown,
+  ) => {
+    if (isMatrixTerminalSyncState(state) && !isStopping()) {
+      const fatalErrorLocal = formatSyncLifecycleError(state, error);
+      statusController.noteUnexpectedError(fatalErrorLocal);
+      settleFatal(fatalErrorLocal);
+      return;
+    }
+    // Fatal sync failures are sticky for telemetry; later SDK state churn during
+    // cleanup or reconnect should not overwrite the first recorded error.
+    if (fatalError) {
+      return;
+    }
+    // Operator-initiated shutdown can still emit transient sync states before
+    // the final STOPPED. Ignore that churn so intentional stops do not look
+    // like runtime failures.
+    if (isStopping() && !isMatrixTerminalSyncState(state)) {
+      return;
+    }
+    statusController.noteSyncState(state, error);
+  };
+
+  const onUnexpectedSyncError = (error: Error) => {
+    if (isStopping()) {
+      return;
+    }
+    statusController.noteUnexpectedError(error);
+    settleFatal(error);
+  };
+
   const monitorRetirement = {
     closeTaskAdmission: () => {
       monitorSetupClosed = true;
@@ -297,10 +356,18 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     detachListeners: () => {
       disposeAutoJoin();
       disposeMonitorEvents();
+      disposeSyncIngress();
       client?.off("sync.state", onSyncState);
-      syncLifecycle?.dispose();
+      resolveFatalWait?.();
+      resolveFatalWait = null;
+      rejectFatalWait = null;
+      client?.off("sync.state", onSyncLifecycleState);
+      client?.off("sync.unexpected_error", onUnexpectedSyncError);
     },
-    waitForTasks: monitorTaskRunner.waitForIdle,
+    waitForTasks: async () => {
+      await ingress?.stop();
+      await monitorTaskRunner.waitForIdle();
+    },
     cleanup: () => threadBindingManager?.stop(),
   };
 
@@ -308,7 +375,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     clientLease = await acquireSharedMatrixClient({
       cfg,
       auth: authWithLimit,
-      startClient: false,
       accountId: auth.accountId,
       abortSignal: opts.abortSignal,
       role: "monitor",
@@ -318,20 +384,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       ? AbortSignal.any([opts.abortSignal, clientLease.abortSignal])
       : clientLease.abortSignal;
     clientLease.registerMonitorRetirement(monitorRetirement);
-    const inboundDeduper = createMatrixInboundEventDeduper({
-      auth,
-      env: process.env,
-    });
-    syncLifecycle = createMatrixMonitorSyncLifecycle({
-      client,
-      statusController,
-      isStopping: () => cleanedUp || monitorLifecycleSignal?.aborted === true,
-    });
+    client.on("sync.state", onSyncLifecycleState);
+    client.on("sync.unexpected_error", onUnexpectedSyncError);
     client.on("sync.state", onSyncState);
-    // Cold starts should ignore old room history, but once we have a persisted
-    // /sync cursor we want restart backlogs to replay just like other channels.
-    const dropPreStartupMessages = !client.hasPersistedSyncState();
-    const { getRoomInfo, getMemberDisplayName, invalidateMemberDisplayName } =
+    const { getRoomInfo, getMemberDisplayName, invalidateMemberDisplayName, invalidateRoomName } =
       createMatrixRoomInfoResolver(client);
     const isExplicitlyConfiguredRoom = async (roomId: string): Promise<boolean> => {
       const roomInfoForConfig = needsRoomAliasesForConfig
@@ -413,9 +469,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       dmPolicy,
       mediaMaxBytes,
       historyLimit,
-      startupMs,
-      dropPreStartupMessages,
-      inboundDeduper,
       directTracker,
       getRoomInfo,
       getMemberDisplayName,
@@ -462,15 +515,25 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       needsRoomAliasesForConfig,
       getRoomInfo,
       invalidateMemberDisplayName,
+      invalidateRoomName,
       logVerboseMessage,
       warnedEncryptedRooms,
       warnedCryptoMissingRooms,
       logger,
       getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
-      onRoomMessage: handleRoomMessage,
       runDetachedTask: monitorTaskRunner.runDetachedTask,
     });
+
+    ingress = createMatrixIngressMonitor({
+      accountId: effectiveAccountId,
+      client,
+      startupMs,
+      dispatch: (roomId, event, lifecycle) =>
+        monitorTaskRunner.runTask(() => handleRoomMessage(roomId, event, lifecycle)),
+      onError: (error) => logger.warn("matrix ingress failed", { error: String(error) }),
+    });
+    disposeSyncIngress = await client.bindSyncIngress(ingress.admitSync);
 
     // Register Matrix thread bindings before the client starts syncing so threaded
     // commands during startup never observe Matrix as "unavailable".
@@ -480,6 +543,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       await cleanup("stop");
       return;
     }
+    ingress.start();
     logVerboseMessage("matrix: client started");
 
     logger.info(`matrix: logged in as ${auth.userId}`);
@@ -541,15 +605,18 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           });
         }
       }),
-      syncLifecycle.waitForFatalStop(),
+      new Promise<void>((resolve, reject) => {
+        if (fatalError) {
+          reject(fatalError);
+        } else {
+          resolveFatalWait = resolve;
+          rejectFatalWait = reject;
+        }
+      }),
     ]);
     await cleanup();
   } catch (err) {
-    if (monitorSetupClosed) {
-      await cleanup("stop");
-      return;
-    }
-    if (monitorLifecycleSignal?.aborted === true && isMatrixStartupAbortError(err)) {
+    if (monitorSetupClosed || (monitorLifecycleSignal?.aborted && isMatrixStartupAbortError(err))) {
       await cleanup("stop");
       return;
     }

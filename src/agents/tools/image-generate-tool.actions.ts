@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ImageGenerationProvider } from "../../image-generation/types.js";
+import type { ImageGenerationProvider } from "../../image-generation/provider-types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildImageGenerationTaskStatusListDetails,
@@ -48,14 +48,13 @@ function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider)
   return caps.join("; ");
 }
 
-export function createImageGenerateListActionResult(params: {
+export async function createImageGenerateListActionResult(params: {
   cfg?: OpenClawConfig;
   providers: ImageGenerationProvider[];
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
-}): MediaGenerateActionResult {
+}): Promise<MediaGenerateActionResult> {
   return createMediaGenerateProviderListActionResult({
     ...params,
     kind: "image_generation",

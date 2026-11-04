@@ -49,21 +49,11 @@ export type PluginUpdateLogger = {
 
 type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
-type PluginUpdateChannelFallback = {
-  requestedSpec: string;
-  usedSpec: string;
-  requestedLabel: string;
-  usedLabel: string;
-  reason: "unavailable" | "failed";
-  message: string;
-};
-
 type BasePluginUpdateOutcome = {
   pluginId: string;
   message: string;
   currentVersion?: string;
   nextVersion?: string;
-  channelFallback?: PluginUpdateChannelFallback;
   warning?: string;
 };
 
@@ -82,6 +72,29 @@ export type PluginUpdateOutcome =
       status: Exclude<PluginUpdateStatus, "skipped">;
       code?: string;
     });
+
+export function createOperatorManagedPluginUpdateOutcome(
+  update: OperatorManagedPluginUpdate,
+  coreVersion?: string,
+): PluginUpdateOutcome {
+  const [pluginId] = update.pluginIds;
+  const { source, rootDir, shadowedInstallOwner, shadowedInstallRecord } = update;
+  const shadowed = shadowedInstallRecord
+    ? ` It shadows the ${shadowedInstallRecord.source} install ${shadowedInstallRecord.spec ?? pluginId}${shadowedInstallRecord.installPath ? ` at ${shadowedInstallRecord.installPath}` : ""}.`
+    : "";
+  const guidance = `This copy was not updated; verify it against ${coreVersion ?? "the updated OpenClaw version"} or remove it from plugins.load.paths.`;
+  return {
+    pluginId,
+    status: "skipped",
+    code: "plugin-operator-managed",
+    source,
+    rootDir,
+    shadowedInstallOwner,
+    shadowedInstallRecord,
+    message: `Plugin "${pluginId}" is operator-managed by plugins.load.paths. ${guidance} Source: ${rootDir}.${shadowed}`,
+    guidance: [guidance],
+  };
+}
 
 export type PluginUpdateSummary = {
   config: OpenClawConfig;
@@ -106,7 +119,6 @@ export type UpdateInstalledPluginsParams = {
   skipIds?: Set<string>;
   skipDisabledPlugins?: boolean;
   syncOfficialPluginInstalls?: boolean;
-  disableOnFailure?: boolean;
   retainOnUnavailable?: boolean;
   timeoutMs?: number;
   /** Null removes the forward-work deadline while metadata remains bounded. */
@@ -396,18 +408,6 @@ function normalizeExactSemverVersion(value: string | undefined): string | undefi
     return undefined;
   }
   return trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
-}
-
-export function isTrustedSourceLinkedOfficialNpmUpdate(params: {
-  pluginId: string;
-  spec: string | undefined;
-  record: PluginInstallRecord;
-}): boolean {
-  const officialSpec =
-    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
-  const officialPackageName = resolveNpmSpecPackageName(officialSpec);
-  const requestedPackageName = resolveNpmSpecPackageName(params.spec);
-  return Boolean(officialPackageName && requestedPackageName === officialPackageName);
 }
 
 export function isTrustedSourceLinkedOfficialBridgeNpmInstall(params: {

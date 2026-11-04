@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
 
 describe("readPluginInstallPolicyWarning", () => {

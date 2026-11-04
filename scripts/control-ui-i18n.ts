@@ -1,4 +1,5 @@
 // Control Ui I18N script supports OpenClaw repository automation.
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -25,7 +26,12 @@ import {
   type LocaleEntry,
   type LocaleMeta,
   type TranslationBatchItem,
+  type TranslationMap,
 } from "./lib/control-ui-i18n-sync-plan.ts";
+import {
+  loadControlUiPluginCatalogs,
+  materializeControlUiPluginTranslations,
+} from "./lib/control-ui-plugin-i18n-catalog.ts";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { sleep } from "./lib/sleep.mjs";
 
@@ -213,12 +219,12 @@ function glossaryPath(entry: LocaleEntry): string {
   return path.join(I18N_ASSETS_DIR, `glossary.${entry.locale}.json`);
 }
 
-function metaPath(entry: LocaleEntry): string {
-  return path.join(I18N_ASSETS_DIR, `${entry.locale}.meta.json`);
+function metaPath(entry: LocaleEntry, assetsDir: string): string {
+  return path.join(assetsDir, `${entry.locale}.meta.json`);
 }
 
-function tmPath(entry: LocaleEntry): string {
-  return path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
+function tmPath(entry: LocaleEntry, assetsDir: string): string {
+  return path.join(assetsDir, `${entry.locale}.tm.jsonl`);
 }
 
 type PlaceholderMismatch = {
@@ -784,6 +790,15 @@ export function assertNoControlUiFallbacks(
   );
 }
 
+type LocaleCatalog = {
+  id: string;
+  sourceFlat: ReadonlyMap<string, string>;
+  sourceHash: string;
+  assetsDir: string;
+  sourcePath: string;
+  authored?: Record<string, TranslationMap>;
+};
+
 async function syncLocale(
   entry: LocaleEntry,
   options: {
@@ -794,22 +809,18 @@ async function syncLocale(
     refreshKeys: ReadonlySet<string>;
   },
   context: LocaleRunContext,
+  catalog: LocaleCatalog,
 ) {
-  const localeLabel = formatLocaleLabel(entry.locale, context);
+  const localeLabel = `${catalog.id}:${formatLocaleLabel(entry.locale, context)}`;
   const localeStartedAt = Date.now();
-  const { loadControlUiSourceCatalog, readControlUiSourceCatalog } =
-    await import("./lib/control-ui-i18n-catalog.ts");
-  const sourceRaw = await readControlUiSourceCatalog();
-  const sourceHash = sha256(sourceRaw);
-  const sourceMap = loadControlUiSourceCatalog();
-  const sourceFlat = flattenTranslations(sourceMap);
-  const tm = loadControlUiTranslationMemory(tmPath(entry));
+  const { sourceFlat, sourceHash, assetsDir } = catalog;
+  const tm = loadControlUiTranslationMemory(tmPath(entry, assetsDir));
   const existingMap = materializeControlUiLocaleCatalog(sourceFlat, tm);
   const existingFlat = flattenTranslations(existingMap);
   // Placeholder changes invalidate the old translation even when the key stays
   // stable. Treat it as pending so the locale bot can repair source-only PRs.
   const reusableExistingFlat = filterPlaceholderCompatibleTranslations(sourceFlat, existingFlat);
-  const previousMeta = await loadMeta(metaPath(entry));
+  const previousMeta = await loadMeta(metaPath(entry, assetsDir));
   const glossaryFilePath = glossaryPath(entry);
   const glossary = await loadGlossary(glossaryFilePath);
   const allowTranslate = options.allowTranslate;
@@ -818,6 +829,8 @@ async function syncLocale(
     cacheKeyFor: (key, textHash) => cacheKey(key, textHash, entry.locale),
     entry,
     existingFlat: reusableExistingFlat,
+    authoredFlat: catalog.authored && flattenTranslations(catalog.authored[entry.locale] ?? {}),
+    sourcePath: catalog.authored ? catalog.sourcePath : `ui/src/i18n/locales/${entry.fileName}`,
     force: options.force,
     refreshKeys: options.refreshKeys,
     hashText: hashControlUiTranslationText,
@@ -877,7 +890,7 @@ async function syncLocale(
         return {
           changed: false,
           fallbackCount: previousMeta?.fallbackKeys.length ?? 0,
-          locale: entry.locale,
+          locale: `${catalog.id}:${entry.locale}`,
           wrote: false,
         } satisfies SyncOutcome;
       }
@@ -908,25 +921,32 @@ async function syncLocale(
   const expectedGlossary = artifacts.glossary;
   const expectedTm = artifacts.translationMemory;
 
-  const currentMeta = existsSync(metaPath(entry)) ? await readFile(metaPath(entry), "utf8") : "";
+  const currentMeta = existsSync(metaPath(entry, assetsDir))
+    ? await readFile(metaPath(entry, assetsDir), "utf8")
+    : "";
   const currentGlossary = existsSync(glossaryFilePath)
     ? await readFile(glossaryFilePath, "utf8")
     : "";
-  const currentTm = existsSync(tmPath(entry)) ? await readFile(tmPath(entry), "utf8") : "";
+  const currentTm = existsSync(tmPath(entry, assetsDir))
+    ? await readFile(tmPath(entry, assetsDir), "utf8")
+    : "";
 
   const changed =
     currentMeta !== expectedMeta ||
-    currentGlossary !== expectedGlossary ||
+    (!catalog.authored && currentGlossary !== expectedGlossary) ||
     currentTm !== expectedTm;
 
   if (changed && !options.checkOnly && options.write) {
-    await mkdir(I18N_ASSETS_DIR, { recursive: true });
-    await writeFile(metaPath(entry), expectedMeta, "utf8");
-    await writeFile(glossaryFilePath, expectedGlossary, "utf8");
+    await mkdir(assetsDir, { recursive: true });
+    await writeFile(metaPath(entry, assetsDir), expectedMeta, "utf8");
+    // Plugins share the glossary read-only. Matrix patches contain only this locale's TM/meta.
+    if (!catalog.authored) {
+      await writeFile(glossaryFilePath, expectedGlossary, "utf8");
+    }
     if (expectedTm) {
-      await writeFile(tmPath(entry), expectedTm, "utf8");
-    } else if (existsSync(tmPath(entry))) {
-      await writeFile(tmPath(entry), "", "utf8");
+      await writeFile(tmPath(entry, assetsDir), expectedTm, "utf8");
+    } else if (existsSync(tmPath(entry, assetsDir))) {
+      await writeFile(tmPath(entry, assetsDir), "", "utf8");
     }
   }
 
@@ -936,7 +956,7 @@ async function syncLocale(
   return {
     changed,
     fallbackCount: artifacts.fallbackCount,
-    locale: entry.locale,
+    locale: `${catalog.id}:${entry.locale}`,
     wrote: !options.checkOnly && options.write && changed,
   } satisfies SyncOutcome;
 }
@@ -944,7 +964,9 @@ async function syncLocale(
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const {
+    flattenControlUiCatalog,
     syncControlUiCatalogFallbackBaseline,
+    verifyControlUiPluginCatalogs,
     verifyControlUiGeneratedCatalogs,
     verifyRuntimeLocaleConfig,
   } = await import("./control-ui-i18n-verify.ts");
@@ -952,6 +974,7 @@ async function main() {
     await verifyControlUiGeneratedCatalogs();
   } else {
     await verifyRuntimeLocaleConfig();
+    await verifyControlUiPluginCatalogs();
   }
   if (args.command === "sync" && args.write && !args.localeFilter) {
     const { syncControlUiRawCopyBaseline } = await import("./lib/control-ui-i18n-raw-copy.ts");
@@ -969,27 +992,107 @@ async function main() {
     throw new Error(`unknown locale: ${args.localeFilter}`);
   }
 
+  const { loadControlUiSourceCatalog, readControlUiSourceCatalog } =
+    await import("./lib/control-ui-i18n-catalog.ts");
+  const plugins = await loadControlUiPluginCatalogs(ROOT);
+  const catalogs: LocaleCatalog[] = [
+    {
+      id: "core",
+      sourceFlat: flattenTranslations(loadControlUiSourceCatalog()),
+      sourceHash: sha256(await readControlUiSourceCatalog()),
+      assetsDir: I18N_ASSETS_DIR,
+      sourcePath: "ui/src/i18n/locales/en.ts",
+    },
+    ...plugins.map((plugin) => ({
+      id: plugin.id,
+      sourceFlat: flattenControlUiCatalog(plugin.source, `${plugin.id}:en`),
+      sourceHash: sha256(JSON.stringify(plugin.source)),
+      sourcePath: `${plugin.browserRoot}/i18n/locales/en.ts`,
+      assetsDir: path.join(ROOT, plugin.browserRoot, "i18n/.i18n"),
+      // Shape, supported locales, shared keys and placeholders were verified above.
+      authored: plugin.translations as Record<string, TranslationMap>,
+    })),
+  ];
+  for (const key of args.refreshKeys) {
+    if (!catalogs.some((catalog) => catalog.sourceFlat.has(key))) {
+      throw new Error(`unknown refresh key: ${key}`);
+    }
+  }
+
   const allowTranslate = args.command === "sync" && hasTranslationProvider();
   logProgress(
     `command=${args.command} locales=${entries.length} translation=${allowTranslate ? "enabled" : "disabled"} thinking=${allowTranslate ? resolveThinkingLevel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
   );
   const outcomes: SyncOutcome[] = [];
-  for (const [index, entry] of entries.entries()) {
-    const outcome = await syncLocale(
-      entry,
-      {
-        allowTranslate,
-        checkOnly: args.command === "check",
-        force: args.force,
-        refreshKeys: args.refreshKeys,
-        write: args.write,
-      },
-      {
-        localeCount: entries.length,
-        localeIndex: index + 1,
-      },
+  for (const catalog of catalogs) {
+    const refreshKeys = new Set([...args.refreshKeys].filter((key) => catalog.sourceFlat.has(key)));
+    if (args.refreshKeys.size > 0 && refreshKeys.size === 0) {
+      continue;
+    }
+    for (const [index, entry] of entries.entries()) {
+      outcomes.push(
+        await syncLocale(
+          entry,
+          {
+            allowTranslate,
+            checkOnly: args.command === "check",
+            force: args.force,
+            refreshKeys,
+            write: args.write,
+          },
+          { localeCount: entries.length, localeIndex: index + 1 },
+          catalog,
+        ),
+      );
+    }
+    if (!catalog.authored || args.localeFilter) {
+      continue;
+    }
+    // Only the aggregate run owns translated.json; workers emit disjoint memory patches.
+    const result = materializeControlUiPluginTranslations(
+      catalog.sourceFlat,
+      catalog.authored,
+      new Map(
+        entries.map((entry) => [
+          entry.locale,
+          loadControlUiTranslationMemory(tmPath(entry, catalog.assetsDir)),
+        ]),
+      ),
     );
-    outcomes.push(outcome);
+    if (result.missing.length > 0 && (args.command === "check" || args.write)) {
+      throw new Error(`${catalog.id}: missing verified translations: ${result.missing.join(", ")}`);
+    }
+    if (result.added > 0) {
+      if (args.command === "check") {
+        throw new Error(`${catalog.id}: translated.json needs aggregate materialization`);
+      }
+      if (args.write) {
+        await writeFile(
+          path.join(catalog.assetsDir, "../locales/translated.json"),
+          `${JSON.stringify(result.translations, null, 2)}\n`,
+        );
+      }
+    }
+    let manifestChanged = false;
+    if (args.write) {
+      // Rebuild once after fan-in, even after an interrupted prior build. The native
+      // builder preserves unchanged manifests and repairs missing immutable assets.
+      const pluginRoot = path.join(ROOT, "extensions", catalog.id);
+      const manifestPath = path.join(pluginRoot, "openclaw.plugin.json");
+      const before = await readFile(manifestPath, "utf8");
+      execFileSync(
+        process.execPath,
+        ["--import", "tsx", path.join(ROOT, "scripts/build-plugin-control-ui.mts"), pluginRoot],
+        { stdio: "inherit" },
+      );
+      manifestChanged = before !== (await readFile(manifestPath, "utf8"));
+    }
+    outcomes.push({
+      locale: `${catalog.id}:bundle`,
+      changed: result.added > 0 || manifestChanged,
+      fallbackCount: result.missing.length,
+      wrote: args.write && (result.added > 0 || manifestChanged),
+    });
   }
 
   const changed = outcomes.filter((outcome) => outcome.changed);

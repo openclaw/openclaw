@@ -60,6 +60,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -760,6 +761,9 @@ class InitialOnboardingLayoutTest {
         awaitHeldRefresh()
         gateway.releaseNodeLists()
         awaitUnapprovedRefreshCompletion()
+        composeRule.mainClock.advanceTimeUntil(timeoutMillis = 1_000) {
+          composeRule.onNodeWithText("Still waiting for approval").isDisplayed()
+        }
         composeRule.onNodeWithText("Still waiting for approval").assertIsDisplayed()
       }
 
@@ -1223,7 +1227,11 @@ private class OnboardingApprovalGateway(
               check(role == "operator")
               val approvalMethods = if (nativeApproval) ",\"node.pair.list\",\"node.pair.approve\"" else ""
               val approvalScope = if (nativeApproval) ",\"operator.admin\"" else ""
-              Json.parseToJsonElement("""{"type":"hello-ok","server":{"host":"onboarding-approval"},"features":{"methods":["node.list","health","chat.history","chat.metadata","sessions.list","sessions.subscribe","sessions.observer.visibility"$approvalMethods]},"auth":{"role":"operator","scopes":["operator.read","operator.write"$approvalScope]},"snapshot":{}}""")
+              Json.parseToJsonElement("""{"type":"hello-ok","server":{"host":"onboarding-approval"},"features":{"methods":["agents.list","node.list","health","chat.history","chat.metadata","sessions.list","sessions.subscribe","sessions.observer.visibility"$approvalMethods]},"auth":{"role":"operator","scopes":["operator.read","operator.write"$approvalScope]},"snapshot":{}}""")
+            }
+
+            "agents.list" -> {
+              Json.parseToJsonElement("""{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}""")
             }
 
             "node.pair.list" -> {

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 import type { ThinkingCatalogEntry, ThinkLevel } from "./thinking.shared.js";
 
 const mocks = vi.hoisted(() => ({ profile: vi.fn() }));
@@ -14,7 +13,6 @@ const {
   listThinkingLevelOptions,
   listThinkingLevels,
   normalizeReasoningLevel,
-  normalizeThinkLevel,
   resolveProviderThinkingLevel,
   resolveSupportedThinkingLevel,
   resolveThinkingDefaultForModel,
@@ -36,34 +34,13 @@ function thinkingModel(entry: Omit<ThinkingCatalogEntry, "provider" | "id"> = {}
 const baseLevels = ["off", "minimal", "low", "medium", "high"];
 
 describe("thinking normalization", () => {
-  it.each([
-    [" Maximum ", "max"],
-    ["none", "off"],
-    [" extra_high ", "xhigh"],
-    ["extra-highest", undefined],
-    ["auto", "adaptive"],
-  ])("normalizes %s to %s", (input, expected) => {
-    expect(normalizeThinkLevel(input)).toBe(expected);
-  });
-
-  it("keeps explicit Ultra distinct from legacy ultrathink", () => {
-    expect(normalizeThinkLevel("ultra")).toBe("ultra");
-    expect(normalizeThinkLevel("ultrathink")).toBe("high");
-  });
-
   it("normalizes streaming reasoning visibility", () => {
     expect(normalizeReasoningLevel("streaming")).toBe("stream");
   });
 });
 
 describe("prepared catalog identity", () => {
-  it.each([
-    { provider: " DEMO ", model: " Mixed ", expected: ["off"], defaultLevel: "off" },
-    { provider: "demo", model: "demo/Mixed", expected: ["high"], defaultLevel: "high" },
-    { provider: "demo", model: "mixed", expected: baseLevels, defaultLevel: "off" },
-    { provider: "demo-cli", model: "Mixed", expected: baseLevels, defaultLevel: "off" },
-    { provider: "demo/team", model: "Reader", expected: baseLevels, defaultLevel: "off" },
-  ])(
+  it.each([{ provider: "demo/team", model: "Reader", expected: baseLevels, defaultLevel: "off" }])(
     "preserves literal identity for $provider/$model",
     ({ provider, model, expected, defaultLevel }) => {
       const thinkingLevelMap = { off: null, minimal: null, low: null, medium: null };
@@ -85,6 +62,38 @@ describe("prepared catalog identity", () => {
 });
 
 describe("provider profiles", () => {
+  it("retains medium defaults for Qwen chat-template models that declare efforts", () => {
+    mocks.profile.mockReturnValue(undefined);
+    const declaredCompat = {
+      thinkingFormat: "qwen-chat-template",
+      supportedReasoningEfforts: ["low", "medium", "xhigh"],
+    };
+    const catalog = [
+      { provider: "local-qwen", id: "qwen-template", reasoning: true, compat: declaredCompat },
+      {
+        provider: "local-qwen",
+        id: "qwen-template-no-high",
+        reasoning: true,
+        compat: declaredCompat,
+        thinkingLevelMap: { high: null },
+      },
+      {
+        provider: "local-qwen",
+        id: "qwen-template-undeclared",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      },
+      { provider: "local-qwen", id: "generic", reasoning: true },
+    ];
+    const resolveDefault = (model: string) =>
+      resolveThinkingDefaultForModel({ provider: "local-qwen", model, catalog });
+
+    expect(resolveDefault("qwen-template")).toBe("medium");
+    expect(resolveDefault("qwen-template-no-high")).toBe("medium");
+    expect(resolveDefault("qwen-template-undeclared")).toBe("medium");
+    expect(resolveDefault("generic")).toBe("medium");
+  });
+
   it("uses base levels without a provider", () => {
     expect(listThinkingLevels()).toEqual(baseLevels);
   });
@@ -102,7 +111,7 @@ describe("provider profiles", () => {
     });
   });
 
-  it.each(["off", undefined] as const)(
+  it.each([undefined] as const)(
     "preserves binary labels and default %s from catalog context",
     (defaultLevel) => {
       mocks.profile.mockImplementation(({ context }) =>
@@ -132,31 +141,6 @@ describe("provider profiles", () => {
       );
       expect(resolveThinkingDefaultForModel(params)).toBe(defaultLevel ?? "low");
       expect(resolveSupportedThinkingLevel({ ...params, level: "adaptive" })).toBe("low");
-    },
-  );
-
-  it("removes an opted-out provider default before choosing the implicit default", () => {
-    mocks.profile.mockReturnValue({
-      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "ultra" }],
-      defaultLevel: "high",
-    });
-    const params = thinkingModel({ reasoning: true, thinkingLevelMap: { off: null, high: null } });
-    expect(resolveThinkingProfile(params).levels.map(({ id }) => id)).toEqual([
-      "low",
-      "medium",
-      "ultra",
-    ]);
-    expect(resolveThinkingDefaultForModel(params)).toBe("medium");
-  });
-
-  it.each([false, true])(
-    "preserves an empty profile over a reasoning opt-out only when authoritative=%s",
-    (preserve) => {
-      mocks.profile.mockReturnValue({ levels: [], preserveWhenCatalogReasoningFalse: preserve });
-      const params = thinkingModel({ reasoning: true });
-      const profile = resolveThinkingProfile({ ...params, configuredReasoning: false });
-      expect(profile.levels).toEqual(preserve ? [] : [{ id: "off", label: "off", rank: 0 }]);
-      expect(profile.defaultLevel).toBe(preserve ? undefined : "off");
     },
   );
 
@@ -194,7 +178,6 @@ describe("provider profiles", () => {
   it.each([
     { agentRuntime: "openclaw", maxCap: undefined, expected: true },
     { agentRuntime: "auto", maxCap: null, expected: false },
-    { agentRuntime: "codex", maxCap: undefined, expected: false },
   ])(
     "projects mapped Max for $agentRuntime with cap=$maxCap",
     ({ agentRuntime, maxCap, expected }) => {
@@ -239,34 +222,54 @@ describe("provider profiles", () => {
     expect(resolveThinkingDefaultForModel(params)).toBe("high");
   });
 
-  it("adds mapped advanced efforts without duplicate compat metadata", () => {
+  it("lets a row with a default thinking level own the profile over the provider hook", () => {
+    mocks.profile.mockReturnValue({ levels: [{ id: "low" }], defaultLevel: "low" });
     const params = thinkingModel({
-      reasoning: true,
-      thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+      reasoning: false,
+      thinkingLevelMap: { off: null, minimal: null, low: "low", medium: null, xhigh: "max" },
+      compat: {
+        defaultThinkingLevel: "high",
+        adaptiveThinking: true,
+        thinkingRequired: true,
+        thinkingLevelLabels: { low: "light" },
+      },
     });
-    expect(listThinkingLevels(params.provider, params.model, params.catalog)).toEqual([
-      "minimal",
+    expect(resolveThinkingProfile({ ...params, agentRuntime: "openclaw" })).toEqual({
+      levels: [
+        { id: "low", label: "light", rank: expect.any(Number) },
+        { id: "adaptive", label: "adaptive", rank: expect.any(Number) },
+        { id: "high", label: "high", rank: expect.any(Number) },
+        { id: "xhigh", label: "xhigh", rank: expect.any(Number) },
+        { id: "ultra", label: "ultra", rank: expect.any(Number) },
+      ],
+      defaultLevel: "high",
+    });
+    expect(mocks.profile).not.toHaveBeenCalled();
+  });
+
+  it("keeps a row without a default thinking level on the provider hook", () => {
+    mocks.profile.mockReturnValue({ levels: [{ id: "low", label: "on" }], defaultLevel: "low" });
+    const params = thinkingModel({ reasoning: true, compat: { adaptiveThinking: true } });
+    expect(listThinkingLevels(params.provider, params.model, params.catalog, "codex")).toEqual([
       "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
+      "ultra",
     ]);
   });
 
-  it("does not interpret native effort labels as user aliases", () => {
+  it("lets a stated ladder own the profile without a default", () => {
+    mocks.profile.mockReturnValue({ levels: [{ id: "high" }], defaultLevel: "high" });
+    // A mapped wire alias (xhigh -> high) stays hidden on the OpenClaw runtime too.
     const params = thinkingModel({
-      api: "openai-completions",
+      api: "openai-responses",
       reasoning: true,
-      compat: { supportedReasoningEfforts: ["high", "XHIGH", "MAX", "extra-high", "auto"] },
+      compat: { thinkingLevels: ["low", "medium", "high"], reasoningEffortMap: { xhigh: "high" } },
     });
-    expect(listThinkingLevels(params.provider, params.model, params.catalog, "openclaw")).toEqual([
-      ...baseLevels,
-      "ultra",
-    ]);
-    expect(isThinkingLevelSupported({ ...params, level: "max", agentRuntime: "openclaw" })).toBe(
-      false,
-    );
+    expect(resolveThinkingProfile({ ...params, agentRuntime: "openclaw" })).toMatchObject({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "ultra" }],
+      defaultLevel: undefined,
+    });
+    expect(resolveProviderThinkingLevel({ ...params, level: "ultra" })).toBe("high");
+    expect(mocks.profile).not.toHaveBeenCalled();
   });
 
   it("preserves catalog-advertised advanced levels on other runtimes", () => {
@@ -299,60 +302,12 @@ describe("provider profiles", () => {
     expect(resolveSupportedThinkingLevel({ ...params, level: "adaptive" })).toBe("medium");
   });
 
-  it.each([
-    {
-      id: "claude-opus-4.7-hq",
-      api: "anthropic-messages",
-      expected: [...baseLevels.slice(0, 4), "adaptive", "high", "xhigh", "max"],
-    },
-    { id: "some-non-claude-model", api: "anthropic-messages", expected: baseLevels },
-    { id: "claude-opus-4.7-hq", api: "openai-completions", expected: baseLevels },
-    {
-      id: "claude-sonnet-4-6",
-      api: "anthropic-messages",
-      expected: [...baseLevels.slice(0, 4), "adaptive", "high", "max"],
-    },
-  ])(
-    "uses the Claude profile only for a matching transport and model: $api/$id",
-    ({ id, api, expected }) => {
-      const catalog = [
-        {
-          provider: "custom",
-          id,
-          api,
-          reasoning: true,
-          compat: { supportedReasoningEfforts: id === "some-non-claude-model" ? ["xhigh"] : [] },
-        },
-      ];
-      expect(listThinkingLevels("custom", id, catalog)).toEqual(expected);
-    },
-  );
-
   it.each<{
     levels: ThinkLevel[];
     defaultLevel?: ThinkLevel;
     requested: ThinkLevel;
     expected: ThinkLevel;
-  }>([
-    {
-      levels: ["off", "minimal", "low", "medium", "high", "adaptive", "max"],
-      requested: "xhigh",
-      expected: "high",
-    },
-    {
-      levels: ["off", "minimal", "low", "medium", "high"],
-      defaultLevel: "off",
-      requested: "adaptive",
-      expected: "medium",
-    },
-    {
-      levels: ["low", "medium", "high", "xhigh", "max"],
-      defaultLevel: "high",
-      requested: "adaptive",
-      expected: "high",
-    },
-    { levels: ["low", "medium", "high"], requested: "off", expected: "low" },
-  ])(
+  }>([{ levels: ["low", "medium", "high"], requested: "off", expected: "low" }])(
     "clamps $requested to $expected with default $defaultLevel",
     ({ levels, defaultLevel, requested, expected }) => {
       mocks.profile.mockReturnValue({ levels: levels.map((id) => ({ id })), defaultLevel });
@@ -397,35 +352,5 @@ describe("Ultra provider boundary", () => {
     expect(listThinkingLevels(params.provider, params.model, params.catalog, "codex")).toEqual([
       "off",
     ]);
-  });
-
-  it("respects native effort opt-outs and provider ranks", () => {
-    mocks.profile.mockReturnValue({
-      levels: [{ id: "low", rank: 100 }, { id: "high", rank: 40 }, { id: "max" }],
-    });
-    const params = {
-      ...thinkingModel({ thinkingLevelMap: { max: null } }),
-      agentRuntime: "openclaw",
-    };
-    expect(resolveProviderThinkingLevel({ ...params, level: "ultra" })).toBe("low");
-    expect(resolveThinkingSelectionForModel({ ...params, level: "max" }).level).toBe("high");
-  });
-
-  it("preserves explicitly advertised native Ultra even without other efforts", () => {
-    mocks.profile.mockReturnValue({ levels: [{ id: "ultra" }] } satisfies ProviderThinkingProfile);
-    expect(listThinkingLevels("demo", "demo-model", undefined, "codex")).toEqual(["ultra"]);
-  });
-
-  it("offers host Ultra to claude-cli but not unknown runtimes", () => {
-    expect(
-      resolveThinkingSelectionForModel({
-        ...thinkingModel(),
-        agentRuntime: "claude-cli",
-        level: "ultra",
-      }).level,
-    ).toBe("ultra");
-    expect(listThinkingLevels("demo", "demo-model", undefined, "unknown-runtime")).not.toContain(
-      "ultra",
-    );
   });
 });

@@ -6,13 +6,17 @@ import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-invento
 import {
   prepareExactSessionEntryRowReads,
   readExactSessionEntryRow,
+  readSessionKeyBySessionIdInDatabase,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
+import type { SessionEntryReplacementCommit } from "./session-accessor.sqlite-replacement-types.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 
 export type SessionEntryReplacementSelection = {
+  fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
   sessionKeys?: readonly string[];
+  includeSessionWindowOwner?: string;
   includeLabelOwners?: string;
 };
 
@@ -20,6 +24,7 @@ export type SessionEntryReplacementState = {
   entries: SessionEntryReplacementSnapshot[];
   expectedRows: Map<string, ResolvedSessionEntryRow>;
   labelOwnerKeys: string[];
+  selectedSessionKeys?: string[];
 };
 
 export function readSessionEntryReplacementLabelOwnerKeys(
@@ -38,44 +43,42 @@ export function readSessionEntryReplacementLabelOwnerKeys(
       ).rows.map((row) => row.session_key);
 }
 
-function selectReplacementKeys(
-  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
-  params: SessionEntryReplacementSelection,
-  labelOwnerKeys: readonly string[],
-): string[] {
-  if (params.sessionKeys) {
-    return uniqueStrings([...params.sessionKeys, ...labelOwnerKeys]);
-  }
-  assertCanonicalSqliteSessionKeysCurrent(database);
-  return [...iterateSessionEntryKeys(database)];
-}
-
 /** Detached entries and their CAS bytes must come from the same admitted read snapshot. */
 export function readSessionEntryReplacementState(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
   params: SessionEntryReplacementSelection,
 ): SessionEntryReplacementState {
-  const selectedKeys = params.sessionKeys ? new Set(params.sessionKeys) : undefined;
+  const windowOwner = params.includeSessionWindowOwner
+    ? readSessionKeyBySessionIdInDatabase(database, params.includeSessionWindowOwner)
+    : undefined;
+  const selectedSessionKeys = params.sessionKeys
+    ? uniqueStrings([...params.sessionKeys, ...(windowOwner ? [windowOwner] : [])])
+    : undefined;
   const labelOwnerKeys = readSessionEntryReplacementLabelOwnerKeys(
     database,
     params.includeLabelOwners,
   );
-  const selected = selectReplacementKeys(database, params, labelOwnerKeys);
+  if (!selectedSessionKeys) {
+    assertCanonicalSqliteSessionKeysCurrent(database);
+  }
+  const selected = selectedSessionKeys
+    ? uniqueStrings([...selectedSessionKeys, ...labelOwnerKeys])
+    : [...iterateSessionEntryKeys(database)];
   const expectedRows = new Map<string, ResolvedSessionEntryRow>();
+  const projection = params.fieldPatch?.snapshotFields ?? (params.fieldPatch ? "list" : "full");
   const readPrepared =
-    selected.length > 1 ? prepareExactSessionEntryRowReads(database, selected) : undefined;
+    selected.length > 1
+      ? prepareExactSessionEntryRowReads(database, selected, projection)
+      : undefined;
   const entries = selected.flatMap((sessionKey) => {
     const row = readPrepared
       ? readPrepared(sessionKey)
-      : readExactSessionEntryRow(database, sessionKey);
+      : readExactSessionEntryRow(database, sessionKey, projection);
     if (!row) {
-      if (!selectedKeys) {
-        throw new Error(`SQLite session entry changed before replacement for ${sessionKey}`);
-      }
       return [];
     }
     expectedRows.set(sessionKey, row);
     return [{ entry: structuredClone(row.entry), sessionKey }];
   });
-  return { entries, expectedRows, labelOwnerKeys };
+  return { entries, expectedRows, labelOwnerKeys, selectedSessionKeys };
 }

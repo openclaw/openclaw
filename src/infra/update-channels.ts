@@ -4,8 +4,10 @@ import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import type { UpdateInstallKind } from "./update-install-kind.js";
 
+const UPDATE_CHANNELS = ["stable", "extended-stable", "beta", "dev"] as const;
+
 /** Release stream used to choose registry tags and update policy defaults. */
-export type UpdateChannel = "stable" | "extended-stable" | "beta" | "dev";
+export type UpdateChannel = (typeof UPDATE_CHANNELS)[number];
 /** Evidence source that decided the effective update channel. */
 type UpdateChannelSource = "config" | "git-tag" | "git-branch" | "installed-version" | "default";
 
@@ -26,26 +28,10 @@ export const UPDATE_EFFECTIVE_CHANNEL_ENV = "OPENCLAW_UPDATE_EFFECTIVE_CHANNEL";
 /** Git branch that represents the development update stream. */
 export const DEV_BRANCH = "main";
 
-/** Orders the configured Dev upstream before any detached-checkout fallbacks. */
-export function resolveDevUpstreamRefs(
-  detached: boolean,
-  fallbacks: readonly string[] = [],
-): string[] {
-  return detached ? [`${DEV_BRANCH}@{upstream}`, ...fallbacks] : ["@{upstream}"];
-}
-
 /** Normalizes config or CLI channel input to a supported update channel. */
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (
-    normalized === "stable" ||
-    normalized === "extended-stable" ||
-    normalized === "beta" ||
-    normalized === "dev"
-  ) {
-    return normalized;
-  }
-  return null;
+  return UPDATE_CHANNELS.find((channel) => channel === normalized) ?? null;
 }
 
 /** Maps an OpenClaw update channel to the npm dist-tag used for package lookups. */

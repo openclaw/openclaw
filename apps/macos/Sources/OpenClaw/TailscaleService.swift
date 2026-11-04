@@ -9,9 +9,6 @@ import os
 final class TailscaleService {
     typealias InstallationProbe = @Sendable () -> Bool
     typealias StatusDataLoader = @Sendable (URL) async throws -> (Data, URLResponse)
-    #if DEBUG
-    typealias StatusCheckJoinHandler = @Sendable () async -> Void
-    #endif
 
     static let shared = TailscaleService()
 
@@ -32,17 +29,11 @@ final class TailscaleService {
     @ObservationIgnored private let cliInstallationProbe: InstallationProbe
     @ObservationIgnored private let statusDataLoader: StatusDataLoader
     @ObservationIgnored private var statusCheckTask: Task<Void, Never>?
-    #if DEBUG
-    @ObservationIgnored private let statusCheckJoinHandler: StatusCheckJoinHandler?
-    #endif
 
     private init() {
         self.appInstallationProbe = Self.detectAppInstallation
         self.cliInstallationProbe = Self.detectCLIInstallation
         self.statusDataLoader = Self.makeStatusDataLoader()
-        #if DEBUG
-        self.statusCheckJoinHandler = nil
-        #endif
         Task { await self.checkTailscaleStatus() }
     }
 
@@ -56,8 +47,7 @@ final class TailscaleService {
         statusError: String? = nil,
         appInstallationProbe: @escaping InstallationProbe = TailscaleService.detectAppInstallation,
         cliInstallationProbe: @escaping InstallationProbe = TailscaleService.detectCLIInstallation,
-        statusDataLoader: @escaping StatusDataLoader = TailscaleService.makeStatusDataLoader(),
-        statusCheckJoinHandler: StatusCheckJoinHandler? = nil)
+        statusDataLoader: @escaping StatusDataLoader = TailscaleService.makeStatusDataLoader())
     {
         self.isInstalled = isInstalled
         self.isAppInstalled = isAppInstalled
@@ -68,7 +58,6 @@ final class TailscaleService {
         self.appInstallationProbe = appInstallationProbe
         self.cliInstallationProbe = cliInstallationProbe
         self.statusDataLoader = statusDataLoader
-        self.statusCheckJoinHandler = statusCheckJoinHandler
     }
     #endif
 
@@ -117,11 +106,6 @@ final class TailscaleService {
         // Every caller that awaits a refresh must observe the same completed
         // status update; returning early here would expose stale state.
         if let statusCheckTask = self.statusCheckTask {
-            #if DEBUG
-            if let statusCheckJoinHandler = self.statusCheckJoinHandler {
-                await statusCheckJoinHandler()
-            }
-            #endif
             await statusCheckTask.value
             return
         }

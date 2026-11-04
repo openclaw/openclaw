@@ -22,7 +22,6 @@ import { type HistoryEntry, createChannelHistoryWindow } from "openclaw/plugin-s
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
-  type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
@@ -41,12 +40,12 @@ import {
   findZalouserGroupEntry,
   isZalouserGroupEntryAllowed,
 } from "./group-policy.js";
-import { createZalouserIngressMonitor, type ZalouserIngressLifecycle } from "./ingress.js";
+import { createZalouserIngressMonitor } from "./ingress.js";
 import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
 import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser } from "./send.js";
 import { resolveZalouserDmSessionScope } from "./session-scope.js";
-import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+import type { ResolvedZalouserAccount } from "./types.js";
 import {
   listZaloFriends,
   listZaloGroups,
@@ -67,47 +66,9 @@ type ZalouserMonitorOptions = {
   ingressQueue?: Parameters<typeof createZalouserIngressMonitor>[0]["queue"];
 };
 
-type ZalouserMonitorResult = {
-  stop: () => Promise<void>;
-};
-
 const ZALOUSER_TEXT_LIMIT = 2000;
 
-function resolveUserAllowlistEntries(
-  entries: string[],
-  byName: Map<string, Array<{ userId: string }>>,
-): {
-  additions: string[];
-  mapping: string[];
-  unresolved: string[];
-} {
-  const additions: string[] = [];
-  const mapping: string[] = [];
-  const unresolved: string[] = [];
-  for (const entry of entries) {
-    if (/^\d+$/.test(entry)) {
-      additions.push(entry);
-      continue;
-    }
-    const matches = byName.get(normalizeLowercaseStringOrEmpty(entry)) ?? [];
-    const match = matches[0];
-    const id = match?.userId;
-    if (id) {
-      additions.push(id);
-      mapping.push(`${entry}->${id}`);
-    } else {
-      unresolved.push(entry);
-    }
-  }
-  return { additions, mapping, unresolved };
-}
-
 type ZalouserCoreRuntime = ReturnType<typeof getZalouserRuntime>;
-
-type ZalouserGroupHistoryState = {
-  historyLimit: number;
-  groupHistories: Map<string, HistoryEntry[]>;
-};
 
 function normalizeZalouserAllowEntry(entry: string): string {
   return entry.replace(/^(zalouser|zlu):/i, "").trim();
@@ -117,606 +78,13 @@ function normalizeZalouserSender(value: string): string | null {
   return normalizeOptionalLowercaseString(normalizeZalouserAllowEntry(value)) || null;
 }
 
-function resolveZalouserRouteAccess(params: {
-  groupPolicy: "open" | "disabled" | "allowlist";
-  configured: boolean;
-  matched: boolean;
-  enabled?: boolean;
-}): {
-  allowed: boolean;
-  reason?: "disabled" | "empty_allowlist" | "route_not_allowlisted" | "route_disabled";
-} {
-  if (params.groupPolicy === "disabled") {
-    return { allowed: false, reason: "disabled" };
-  }
-  if (params.matched && params.enabled === false) {
-    return { allowed: false, reason: "route_disabled" };
-  }
-  if (params.groupPolicy !== "allowlist") {
-    return { allowed: true };
-  }
-  if (!params.configured) {
-    return { allowed: false, reason: "empty_allowlist" };
-  }
-  return params.matched ? { allowed: true } : { allowed: false, reason: "route_not_allowlisted" };
-}
-
-function senderScopedZalouserGroupPolicy(params: {
-  groupPolicy: "open" | "disabled" | "allowlist";
-  groupAllowFrom: readonly string[];
-}) {
-  if (params.groupPolicy === "disabled") {
-    return "disabled";
-  }
-  return params.groupAllowFrom.length > 0 ? "allowlist" : "open";
-}
-
 function logVerbose(core: ZalouserCoreRuntime, runtime: RuntimeEnv, message: string): void {
   if (core.logging.shouldLogVerbose()) {
     runtime.log(`[zalouser] ${message}`);
   }
 }
 
-async function processMessage(
-  message: ZaloInboundMessage,
-  account: ResolvedZalouserAccount,
-  config: OpenClawConfig,
-  groupsConfigPath: string,
-  core: ZalouserCoreRuntime,
-  runtime: RuntimeEnv,
-  historyState: ZalouserGroupHistoryState,
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void,
-  turnAdoptionLifecycle?: ZalouserIngressLifecycle,
-): Promise<void> {
-  const pairing = createChannelPairingController({
-    core,
-    channel: "zalouser",
-    accountId: account.accountId,
-  });
-
-  const rawBody = message.content?.trim();
-  if (!rawBody) {
-    return;
-  }
-  const commandBody = message.commandContent?.trim() || rawBody;
-
-  const isGroup = message.isGroup;
-  const chatId = message.threadId;
-  const senderId = message.senderId?.trim();
-  if (!senderId) {
-    logVerbose(core, runtime, `zalouser: drop message ${chatId} (missing senderId)`);
-    return;
-  }
-  const senderName = message.senderName ?? "";
-  const configuredGroupName = message.groupName?.trim() || "";
-  const groupContext =
-    isGroup && !configuredGroupName
-      ? await resolveZaloGroupContext(account.profile, chatId).catch((err: unknown) => {
-          logVerbose(
-            core,
-            runtime,
-            `zalouser: group context lookup failed for ${chatId}: ${String(err)}`,
-          );
-          return null;
-        })
-      : null;
-  const groupName = configuredGroupName || groupContext?.name?.trim() || "";
-  const groupMembers = groupContext?.members?.slice(0, 20).join(", ") || undefined;
-
-  if (message.eventMessage) {
-    try {
-      const ack = {
-        profile: account.profile,
-        isGroup,
-        message: message.eventMessage,
-      };
-      await sendZaloDeliveredEvent(ack);
-      await sendZaloSeenEvent(ack);
-    } catch (err) {
-      logVerbose(core, runtime, `zalouser: delivery/seen ack failed for ${chatId}: ${String(err)}`);
-    }
-  }
-
-  const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
-  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: config.channels?.zalouser !== undefined,
-    groupPolicy: account.config.groupPolicy,
-    defaultGroupPolicy,
-  });
-  warnMissingProviderGroupPolicyFallbackOnce({
-    providerMissingFallbackApplied,
-    providerKey: "zalouser",
-    accountId: account.accountId,
-    log: (entry) => logVerbose(core, runtime, entry),
-  });
-
-  const groups = account.config.groups ?? {};
-  const routeAllowlistConfigured = Object.keys(groups).length > 0;
-  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
-  let requireMention = false;
-  if (isGroup) {
-    const groupEntry = findZalouserGroupEntry(
-      groups,
-      buildZalouserGroupCandidates({
-        groupId: chatId,
-        groupName,
-        includeGroupIdAlias: true,
-        allowNameMatching,
-      }),
-    );
-    requireMention =
-      typeof groupEntry?.requireMention === "boolean" ? groupEntry.requireMention : true;
-    const routeAccess = resolveZalouserRouteAccess({
-      groupPolicy,
-      configured: routeAllowlistConfigured,
-      matched: Boolean(groupEntry),
-      enabled: isZalouserGroupEntryAllowed(groupEntry),
-    });
-    if (!routeAccess.allowed) {
-      if (routeAccess.reason === "disabled") {
-        logVerbose(core, runtime, `zalouser: drop group ${chatId} (groupPolicy=disabled)`);
-      } else if (routeAccess.reason === "empty_allowlist") {
-        logVerbose(
-          core,
-          runtime,
-          `zalouser: drop group ${chatId} (groupPolicy=allowlist, no allowlist)`,
-        );
-      } else if (routeAccess.reason === "route_not_allowlisted") {
-        logVerbose(core, runtime, `zalouser: drop group ${chatId} (not allowlisted)`);
-      } else if (routeAccess.reason === "route_disabled") {
-        logVerbose(core, runtime, `zalouser: drop group ${chatId} (group disabled)`);
-      }
-      return;
-    }
-  }
-
-  const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const configAllowFrom = normalizeStringEntries(account.config.allowFrom);
-  const configGroupAllowFrom = normalizeStringEntries(account.config.groupAllowFrom);
-  const senderGroupPolicy =
-    routeAllowlistConfigured && configGroupAllowFrom.length === 0
-      ? groupPolicy
-      : senderScopedZalouserGroupPolicy({
-          groupPolicy,
-          groupAllowFrom: configGroupAllowFrom,
-        });
-  const shouldComputeCommandAuth = core.channel.commands.shouldComputeCommandAuthorized(
-    commandBody,
-    config,
-  );
-  const resolveAccessDecision = async (contextBinding?: ChannelIngressContextBinding) =>
-    await core.channel.inbound.ingress.resolveStable({
-      channelId: "zalouser",
-      accountId: account.accountId,
-      identity: {
-        normalize: normalizeZalouserSender,
-        sensitivity: "pii",
-        entryIdPrefix: "zalouser-entry",
-      },
-      cfg: config,
-      readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
-      subject: { stableId: senderId },
-      conversation: {
-        kind: isGroup ? "group" : "direct",
-        id: isGroup ? chatId : senderId,
-      },
-      contextBinding,
-      dmPolicy,
-      groupPolicy: senderGroupPolicy,
-      policy: { groupAllowFromFallbackToAllowFrom: false },
-      allowFrom: configAllowFrom,
-      groupAllowFrom: configGroupAllowFrom,
-      command: shouldComputeCommandAuth
-        ? {
-            directGroupAllowFrom: "effective",
-            commandGroupAllowFromFallbackToAllowFrom: true,
-          }
-        : undefined,
-    });
-  let accessDecision = await resolveAccessDecision();
-  if (isGroup && accessDecision.senderAccess.decision !== "allow") {
-    if (accessDecision.senderAccess.reasonCode === "group_policy_empty_allowlist") {
-      logVerbose(core, runtime, "Blocked zalouser group message (no group allowlist)");
-    } else if (accessDecision.senderAccess.reasonCode === "group_policy_not_allowlisted") {
-      logVerbose(
-        core,
-        runtime,
-        `Blocked zalouser sender ${senderId} (not in groupAllowFrom/allowFrom)`,
-      );
-    }
-    return;
-  }
-
-  if (!isGroup && accessDecision.senderAccess.decision !== "allow") {
-    if (accessDecision.senderAccess.decision === "pairing") {
-      await pairing.issueChallenge({
-        senderId,
-        senderIdLine: `Your Zalo user id: ${senderId}`,
-        meta: { name: senderName || undefined },
-        onCreated: () => {
-          logVerbose(core, runtime, `zalouser pairing request sender=${senderId}`);
-        },
-        sendPairingReply: async (text) => {
-          await sendMessageZalouser(chatId, text, { profile: account.profile });
-          statusSink?.({ lastOutboundAt: Date.now() });
-        },
-        onReplyError: (err) => {
-          logVerbose(
-            core,
-            runtime,
-            `zalouser pairing reply failed for ${senderId}: ${String(err)}`,
-          );
-        },
-      });
-      return;
-    }
-    if (accessDecision.senderAccess.reasonCode === "dm_policy_disabled") {
-      logVerbose(core, runtime, `Blocked zalouser DM from ${senderId} (dmPolicy=disabled)`);
-    } else {
-      logVerbose(
-        core,
-        runtime,
-        `Blocked unauthorized zalouser sender ${senderId} (dmPolicy=${dmPolicy})`,
-      );
-    }
-    return;
-  }
-
-  let commandAuthorized = accessDecision.commandAccess.requested
-    ? accessDecision.commandAccess.authorized
-    : undefined;
-  const hasControlCommand = core.channel.commands.isControlCommandMessage(commandBody, config);
-  if (isGroup && hasControlCommand && commandAuthorized !== true) {
-    logVerbose(
-      core,
-      runtime,
-      `zalouser: drop control command from unauthorized sender ${senderId}`,
-    );
-    return;
-  }
-
-  const peer = isGroup
-    ? { kind: "group" as const, id: chatId }
-    : { kind: "direct" as const, id: senderId };
-
-  const route = core.channel.routing.resolveAgentRoute({
-    cfg: config,
-    channel: "zalouser",
-    accountId: account.accountId,
-    dmScope: resolveZalouserDmSessionScope(config),
-    // Doctor migrates retired group-shaped DM keys; runtime consumes only canonical direct keys.
-    peer,
-  });
-  const messageSid = resolveZalouserMessageSid({
-    msgId: message.msgId,
-    cliMsgId: message.cliMsgId,
-    fallback: `${message.timestampMs}`,
-  });
-  accessDecision = await resolveAccessDecision({
-    agentId: route.agentId,
-    sessionKey: route.sessionKey,
-    messageId: messageSid,
-    inboundEventKind: "user_request",
-  });
-  if (!accessDecision.senderAccess.allowed) {
-    logVerbose(core, runtime, `zalouser: authorization changed before dispatch for ${senderId}`);
-    return;
-  }
-  commandAuthorized = accessDecision.commandAccess.requested
-    ? accessDecision.commandAccess.authorized
-    : undefined;
-  if (isGroup && hasControlCommand && commandAuthorized !== true) {
-    logVerbose(
-      core,
-      runtime,
-      `zalouser: drop control command from unauthorized sender ${senderId}`,
-    );
-    return;
-  }
-  const historyKey = isGroup ? route.sessionKey : undefined;
-  const channelHistory = createChannelHistoryWindow({
-    historyMap: historyState.groupHistories,
-  });
-
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config, route.agentId);
-  const explicitMention = {
-    hasAnyMention: message.hasAnyMention === true,
-    isExplicitlyMentioned: message.wasExplicitlyMentioned === true,
-    canResolveExplicit: message.canResolveExplicitMention === true,
-  };
-  const wasMentioned = isGroup
-    ? core.channel.mentions.matchesMentionWithExplicit({
-        text: rawBody,
-        mentionRegexes,
-        explicit: explicitMention,
-      })
-    : true;
-  const canDetectMention = mentionRegexes.length > 0 || explicitMention.canResolveExplicit;
-  const mentionDecision = resolveInboundMentionDecision({
-    facts: {
-      canDetectMention,
-      wasMentioned,
-      hasAnyMention: explicitMention.hasAnyMention,
-      implicitMentionKinds: implicitMentionKindWhen("quoted_bot", message.implicitMention === true),
-    },
-    policy: {
-      isGroup,
-      requireMention,
-      allowTextCommands: core.channel.commands.shouldHandleTextCommands({
-        cfg: config,
-        surface: "zalouser",
-      }),
-      hasControlCommand,
-      commandAuthorized: commandAuthorized === true,
-    },
-  });
-  if (isGroup && requireMention && !canDetectMention && !mentionDecision.effectiveWasMentioned) {
-    runtime.error?.(
-      `[${account.accountId}] zalouser mention required but detection unavailable ` +
-        `(missing mention regexes and bot self id); dropping group ${chatId}`,
-    );
-    return;
-  }
-  if (isGroup && mentionDecision.shouldSkip) {
-    channelHistory.record({
-      historyKey: historyKey ?? "",
-      limit: historyState.historyLimit,
-      entry:
-        historyKey && rawBody
-          ? {
-              sender: senderName || senderId,
-              body: rawBody,
-              timestamp: message.timestampMs,
-              messageId: messageSid,
-            }
-          : null,
-    });
-    logInboundDrop({
-      log: runtime.log,
-      channel: "zalouser",
-      reason: "no mention",
-      target: chatId,
-      onceKey: JSON.stringify([account.accountId, chatId]),
-      hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(chatId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
-    });
-    return;
-  }
-
-  const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
-  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: config, route });
-  const body = buildEnvelope({
-    channel: "Zalo Personal",
-    from: fromLabel,
-    timestamp: message.timestampMs,
-    body: rawBody,
-  });
-  const combinedBody =
-    isGroup && historyKey
-      ? channelHistory.buildPendingContext({
-          historyKey,
-          limit: historyState.historyLimit,
-          currentMessage: body,
-          formatEntry: (entry) =>
-            buildEnvelope({
-              channel: "Zalo Personal",
-              from: fromLabel,
-              timestamp: entry.timestamp,
-              previousTimestamp: null,
-              body: `${entry.sender}: ${entry.body}${
-                entry.messageId ? ` [id:${entry.messageId}]` : ""
-              }`,
-            }),
-        })
-      : body;
-  const inboundHistory =
-    isGroup && historyKey && historyState.historyLimit > 0
-      ? channelHistory.buildInboundHistory({
-          historyKey,
-          limit: historyState.historyLimit,
-        })
-      : undefined;
-
-  const normalizedTo = isGroup ? `zalouser:group:${chatId}` : `zalouser:${chatId}`;
-  const messageSidFull = formatZalouserMessageSidFull({
-    msgId: message.msgId,
-    cliMsgId: message.cliMsgId,
-  });
-
-  const ctxPayload = core.channel.inbound.buildContext({
-    channelIngress: accessDecision,
-    channel: "zalouser",
-    accountId: route.accountId,
-    messageId: messageSid,
-    messageIdFull: messageSidFull,
-    timestamp: message.timestampMs,
-    from: isGroup ? `zalouser:group:${chatId}` : `zalouser:${senderId}`,
-    sender: {
-      id: senderId,
-      name: senderName || undefined,
-    },
-    conversation: {
-      kind: isGroup ? "group" : "direct",
-      id: chatId,
-      label: fromLabel,
-    },
-    route: {
-      agentId: route.agentId,
-      dmScope: route.dmScope,
-      accountId: route.accountId,
-      routeSessionKey: route.sessionKey,
-      dispatchSessionKey: route.sessionKey,
-    },
-    reply: {
-      to: normalizedTo,
-      originatingTo: normalizedTo,
-    },
-    message: {
-      body: combinedBody,
-      bodyForAgent: rawBody,
-      rawBody,
-      commandBody,
-      inboundHistory,
-    },
-    extra: {
-      BodyForCommands: commandBody,
-      GroupSubject: isGroup ? groupName || undefined : undefined,
-      GroupChannel: isGroup ? groupName || undefined : undefined,
-      GroupMembers: isGroup ? groupMembers : undefined,
-      WasMentioned: isGroup ? mentionDecision.effectiveWasMentioned : undefined,
-      CommandAuthorized: commandAuthorized,
-      ReplyToId: message.quotedGlobalMsgId || undefined,
-      ReplyToBody: message.quotedBody || undefined,
-      ReplyToIsQuote: message.quotedGlobalMsgId ? true : undefined,
-    },
-  });
-
-  const replyPipeline = {
-    typing: {
-      start: async () => {
-        await sendZaloTypingEvent(chatId, {
-          profile: account.profile,
-          isGroup,
-        });
-      },
-      onStartError: (err: unknown) => {
-        runtime.error?.(
-          `[${account.accountId}] zalouser typing start failed for ${chatId}: ${String(err)}`,
-        );
-        logVerbose(core, runtime, `zalouser typing failed for ${chatId}: ${String(err)}`);
-      },
-    },
-  };
-
-  await core.channel.inbound.dispatch({
-    channel: "zalouser",
-    accountId: account.accountId,
-    cfg: config,
-    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
-    ctxPayload,
-    delivery: {
-      preparePayload: (payload) => {
-        if (payload.text === undefined) {
-          return payload;
-        }
-        return {
-          ...payload,
-          text: core.channel.text.convertMarkdownTables(
-            payload.text,
-            core.channel.text.resolveMarkdownTableMode({
-              cfg: config,
-              channel: "zalouser",
-              accountId: account.accountId,
-            }),
-          ),
-        };
-      },
-      durable: () => ({
-        to: normalizedTo,
-      }),
-      deliver: async (payload) => {
-        return await deliverZalouserReply({
-          payload,
-          profile: account.profile,
-          mediaMaxBytes: account.mediaMaxBytes,
-          chatId,
-          isGroup,
-          runtime,
-          core,
-          config,
-          accountId: account.accountId,
-        });
-      },
-      onDelivered: (_payload, _info, result) => {
-        if (result?.visibleReplySent !== false) {
-          statusSink?.({ lastOutboundAt: Date.now() });
-        }
-      },
-      onError: (err, info) => {
-        if (isChannelPartialDeliveryError(err)) {
-          statusSink?.({ lastOutboundAt: Date.now() });
-        }
-        runtime.error(`[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`);
-      },
-    },
-    replyPipeline,
-    record: {
-      onRecordError: (err) => {
-        runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
-      },
-    },
-    replyOptions: turnAdoptionLifecycle ? { turnAdoptionLifecycle } : undefined,
-  });
-  if (isGroup && historyKey) {
-    channelHistory.clear({
-      historyKey,
-      limit: historyState.historyLimit,
-    });
-  }
-}
-
-async function deliverZalouserReply(params: {
-  mediaMaxBytes?: number;
-  payload: OutboundReplyPayload;
-  profile: string;
-  chatId: string;
-  isGroup: boolean;
-  runtime: RuntimeEnv;
-  core: ZalouserCoreRuntime;
-  config: OpenClawConfig;
-  accountId?: string;
-}): Promise<{ visibleReplySent: boolean }> {
-  const { payload, profile, chatId, isGroup, runtime, core, config, accountId } = params;
-  let visibleReplySent = false;
-  const reply = resolveSendableOutboundReplyParts(payload);
-  const chunkMode = core.channel.text.resolveChunkMode(config, "zalouser", accountId);
-  const textChunkLimit = core.channel.text.resolveTextChunkLimit(config, "zalouser", accountId, {
-    fallbackLimit: ZALOUSER_TEXT_LIMIT,
-  });
-  const accepted: Awaited<ReturnType<typeof sendMessageZalouser>>[] = [];
-  const sendReplyPart = async (text: string, mediaUrl?: string) => {
-    await sendMessageZalouser(chatId, text, {
-      profile,
-      mediaMaxBytes: params.mediaMaxBytes,
-      ...(mediaUrl ? { mediaUrl } : {}),
-      isGroup,
-      textMode: "markdown",
-      textChunkMode: chunkMode,
-      textChunkLimit,
-      onDeliveryResult: (result) => {
-        accepted.push(result);
-        visibleReplySent = true;
-      },
-    });
-    visibleReplySent = true;
-  };
-  try {
-    await deliverTextOrMediaReply({
-      payload,
-      text: reply.text,
-      sendText: sendReplyPart,
-      sendMedia: async ({ mediaUrl, caption }) => {
-        logVerbose(core, runtime, `Sending media to ${chatId}`);
-        await sendReplyPart(caption ?? "", mediaUrl);
-      },
-    });
-  } catch (error) {
-    if (!visibleReplySent) {
-      throw error;
-    }
-    throw createChannelPartialDeliveryError(
-      error,
-      createAcceptedChannelDeliveryResult({
-        results: accepted.map((result) => ({ receipt: result.receipt })),
-        kind: reply.hasMedia ? "media" : "text",
-      }),
-    );
-  }
-  return { visibleReplySent };
-}
-
-export async function monitorZalouserProvider(
-  options: ZalouserMonitorOptions,
-): Promise<ZalouserMonitorResult> {
+export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
   const { config } = options;
   let { account } = options;
   const { abortSignal, statusSink, runtime } = options;
@@ -755,7 +123,24 @@ export async function monitorZalouserProvider(
         if (entries.length === 0) {
           continue;
         }
-        const { additions, mapping, unresolved } = resolveUserAllowlistEntries(entries, byName);
+        const additions: string[] = [];
+        const mapping: string[] = [];
+        const unresolved: string[] = [];
+        for (const entry of entries) {
+          if (/^\d+$/.test(entry)) {
+            additions.push(entry);
+            continue;
+          }
+          const matches = byName.get(normalizeLowercaseStringOrEmpty(entry)) ?? [];
+          const match = matches[0];
+          const id = match?.userId;
+          if (id) {
+            additions.push(id);
+            mapping.push(`${entry}->${id}`);
+          } else {
+            unresolved.push(entry);
+          }
+        }
         account.config[key] = mergeAllowlist({ existing: account.config[key], additions });
         summarizeMapping(label, mapping, unresolved, runtime);
       }
@@ -802,18 +187,560 @@ export async function monitorZalouserProvider(
     ownUserId,
     runtime,
     ...(options.ingressQueue ? { queue: options.ingressQueue } : {}),
-    dispatch: async (message, lifecycle) => {
-      await processMessage(
-        message,
-        account,
-        config,
-        groupsConfigPath,
+    dispatch: async (message, turnAdoptionLifecycle) => {
+      const pairing = createChannelPairingController({
         core,
-        runtime,
-        { historyLimit, groupHistories },
-        statusSink,
-        lifecycle,
+        channel: "zalouser",
+        accountId: account.accountId,
+      });
+
+      const rawBody = message.content?.trim();
+      if (!rawBody) {
+        return;
+      }
+      const commandBody = message.commandContent?.trim() || rawBody;
+
+      const isGroup = message.isGroup;
+      const chatId = message.threadId;
+      const senderId = message.senderId?.trim();
+      if (!senderId) {
+        logVerbose(core, runtime, `zalouser: drop message ${chatId} (missing senderId)`);
+        return;
+      }
+      const senderName = message.senderName ?? "";
+      const configuredGroupName = message.groupName?.trim() || "";
+      const groupContext =
+        isGroup && !configuredGroupName
+          ? await resolveZaloGroupContext(account.profile, chatId).catch((err: unknown) => {
+              logVerbose(
+                core,
+                runtime,
+                `zalouser: group context lookup failed for ${chatId}: ${String(err)}`,
+              );
+              return null;
+            })
+          : null;
+      const groupName = configuredGroupName || groupContext?.name?.trim() || "";
+      const groupMembers = groupContext?.members?.slice(0, 20).join(", ") || undefined;
+
+      if (message.eventMessage) {
+        try {
+          const ack = {
+            profile: account.profile,
+            isGroup,
+            message: message.eventMessage,
+          };
+          await sendZaloDeliveredEvent(ack);
+          await sendZaloSeenEvent(ack);
+        } catch (err) {
+          logVerbose(
+            core,
+            runtime,
+            `zalouser: delivery/seen ack failed for ${chatId}: ${String(err)}`,
+          );
+        }
+      }
+
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
+      const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy(
+        {
+          providerConfigPresent: config.channels?.zalouser !== undefined,
+          groupPolicy: account.config.groupPolicy,
+          defaultGroupPolicy,
+        },
       );
+      warnMissingProviderGroupPolicyFallbackOnce({
+        providerMissingFallbackApplied,
+        providerKey: "zalouser",
+        accountId: account.accountId,
+        log: (entry) => logVerbose(core, runtime, entry),
+      });
+
+      const groups = account.config.groups ?? {};
+      const routeAllowlistConfigured = Object.keys(groups).length > 0;
+      const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
+      let requireMention = false;
+      if (isGroup) {
+        const groupEntry = findZalouserGroupEntry(
+          groups,
+          buildZalouserGroupCandidates({
+            groupId: chatId,
+            groupName,
+            includeGroupIdAlias: true,
+            allowNameMatching,
+          }),
+        );
+        requireMention =
+          typeof groupEntry?.requireMention === "boolean" ? groupEntry.requireMention : true;
+        const routeMatched = Boolean(groupEntry);
+        const routeEnabled = isZalouserGroupEntryAllowed(groupEntry);
+        if (groupPolicy === "disabled") {
+          logVerbose(core, runtime, `zalouser: drop group ${chatId} (groupPolicy=disabled)`);
+          return;
+        }
+        if (routeMatched && !routeEnabled) {
+          logVerbose(core, runtime, `zalouser: drop group ${chatId} (group disabled)`);
+          return;
+        }
+        if (groupPolicy === "allowlist") {
+          if (!routeAllowlistConfigured) {
+            logVerbose(
+              core,
+              runtime,
+              `zalouser: drop group ${chatId} (groupPolicy=allowlist, no allowlist)`,
+            );
+            return;
+          }
+          if (!routeMatched) {
+            logVerbose(core, runtime, `zalouser: drop group ${chatId} (not allowlisted)`);
+            return;
+          }
+        }
+      }
+
+      const dmPolicy = account.config.dmPolicy ?? "pairing";
+      const configAllowFrom = normalizeStringEntries(account.config.allowFrom);
+      const configGroupAllowFrom = normalizeStringEntries(account.config.groupAllowFrom);
+      const senderGroupPolicy =
+        routeAllowlistConfigured && configGroupAllowFrom.length === 0
+          ? groupPolicy
+          : groupPolicy === "disabled"
+            ? "disabled"
+            : configGroupAllowFrom.length > 0
+              ? "allowlist"
+              : "open";
+      const shouldComputeCommandAuth = core.channel.commands.shouldComputeCommandAuthorized(
+        commandBody,
+        config,
+      );
+      const resolveAccessDecision = async (contextBinding?: ChannelIngressContextBinding) =>
+        await core.channel.inbound.ingress.resolveStable({
+          channelId: "zalouser",
+          accountId: account.accountId,
+          identity: {
+            normalize: normalizeZalouserSender,
+            sensitivity: "pii",
+            entryIdPrefix: "zalouser-entry",
+          },
+          cfg: config,
+          readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
+          subject: { stableId: senderId },
+          conversation: {
+            kind: isGroup ? "group" : "direct",
+            id: isGroup ? chatId : senderId,
+          },
+          contextBinding,
+          dmPolicy,
+          groupPolicy: senderGroupPolicy,
+          policy: { groupAllowFromFallbackToAllowFrom: false },
+          allowFrom: configAllowFrom,
+          groupAllowFrom: configGroupAllowFrom,
+          command: shouldComputeCommandAuth
+            ? {
+                directGroupAllowFrom: "effective",
+                commandGroupAllowFromFallbackToAllowFrom: true,
+              }
+            : undefined,
+        });
+      let accessDecision = await resolveAccessDecision();
+      if (isGroup && accessDecision.senderAccess.decision !== "allow") {
+        if (accessDecision.senderAccess.reasonCode === "group_policy_empty_allowlist") {
+          logVerbose(core, runtime, "Blocked zalouser group message (no group allowlist)");
+        } else if (accessDecision.senderAccess.reasonCode === "group_policy_not_allowlisted") {
+          logVerbose(
+            core,
+            runtime,
+            `Blocked zalouser sender ${senderId} (not in groupAllowFrom/allowFrom)`,
+          );
+        }
+        return;
+      }
+
+      if (!isGroup && accessDecision.senderAccess.decision !== "allow") {
+        if (accessDecision.senderAccess.decision === "pairing") {
+          await pairing.issueChallenge({
+            senderId,
+            senderIdLine: `Your Zalo user id: ${senderId}`,
+            meta: { name: senderName || undefined },
+            onCreated: () => {
+              logVerbose(core, runtime, `zalouser pairing request sender=${senderId}`);
+            },
+            sendPairingReply: async (text) => {
+              await sendMessageZalouser(chatId, text, { profile: account.profile });
+              statusSink?.({ lastOutboundAt: Date.now() });
+            },
+            onReplyError: (err) => {
+              logVerbose(
+                core,
+                runtime,
+                `zalouser pairing reply failed for ${senderId}: ${String(err)}`,
+              );
+            },
+          });
+          return;
+        }
+        if (accessDecision.senderAccess.reasonCode === "dm_policy_disabled") {
+          logVerbose(core, runtime, `Blocked zalouser DM from ${senderId} (dmPolicy=disabled)`);
+        } else {
+          logVerbose(
+            core,
+            runtime,
+            `Blocked unauthorized zalouser sender ${senderId} (dmPolicy=${dmPolicy})`,
+          );
+        }
+        return;
+      }
+
+      let commandAuthorized = accessDecision.commandAccess.requested
+        ? accessDecision.commandAccess.authorized
+        : undefined;
+      const hasControlCommand = core.channel.commands.isControlCommandMessage(commandBody, config);
+      if (isGroup && hasControlCommand && commandAuthorized !== true) {
+        logVerbose(
+          core,
+          runtime,
+          `zalouser: drop control command from unauthorized sender ${senderId}`,
+        );
+        return;
+      }
+
+      const peer = isGroup
+        ? { kind: "group" as const, id: chatId }
+        : { kind: "direct" as const, id: senderId };
+
+      const route = core.channel.routing.resolveAgentRoute({
+        cfg: config,
+        channel: "zalouser",
+        accountId: account.accountId,
+        dmScope: resolveZalouserDmSessionScope(config),
+        // Doctor migrates retired group-shaped DM keys; runtime consumes only canonical direct keys.
+        peer,
+      });
+      const messageSid = resolveZalouserMessageSid({
+        msgId: message.msgId,
+        cliMsgId: message.cliMsgId,
+        fallback: `${message.timestampMs}`,
+      });
+      accessDecision = await resolveAccessDecision({
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        messageId: messageSid,
+        inboundEventKind: "user_request",
+      });
+      if (!accessDecision.senderAccess.allowed) {
+        logVerbose(
+          core,
+          runtime,
+          `zalouser: authorization changed before dispatch for ${senderId}`,
+        );
+        return;
+      }
+      commandAuthorized = accessDecision.commandAccess.requested
+        ? accessDecision.commandAccess.authorized
+        : undefined;
+      if (isGroup && hasControlCommand && commandAuthorized !== true) {
+        logVerbose(
+          core,
+          runtime,
+          `zalouser: drop control command from unauthorized sender ${senderId}`,
+        );
+        return;
+      }
+      const historyKey = isGroup ? route.sessionKey : undefined;
+      const channelHistory = createChannelHistoryWindow({
+        historyMap: groupHistories,
+      });
+
+      const mentionRegexes = core.channel.mentions.buildMentionRegexes(config, route.agentId);
+      const explicitMention = {
+        hasAnyMention: message.hasAnyMention === true,
+        isExplicitlyMentioned: message.wasExplicitlyMentioned === true,
+        canResolveExplicit: message.canResolveExplicitMention === true,
+      };
+      const wasMentioned = isGroup
+        ? core.channel.mentions.matchesMentionWithExplicit({
+            text: rawBody,
+            mentionRegexes,
+            explicit: explicitMention,
+          })
+        : true;
+      const canDetectMention = mentionRegexes.length > 0 || explicitMention.canResolveExplicit;
+      const mentionDecision = resolveInboundMentionDecision({
+        facts: {
+          canDetectMention,
+          wasMentioned,
+          hasAnyMention: explicitMention.hasAnyMention,
+          implicitMentionKinds: implicitMentionKindWhen(
+            "quoted_bot",
+            message.implicitMention === true,
+          ),
+        },
+        policy: {
+          isGroup,
+          requireMention,
+          allowTextCommands: core.channel.commands.shouldHandleTextCommands({
+            cfg: config,
+            surface: "zalouser",
+          }),
+          hasControlCommand,
+          commandAuthorized: commandAuthorized === true,
+        },
+      });
+      if (
+        isGroup &&
+        requireMention &&
+        !canDetectMention &&
+        !mentionDecision.effectiveWasMentioned
+      ) {
+        runtime.error?.(
+          `[${account.accountId}] zalouser mention required but detection unavailable ` +
+            `(missing mention regexes and bot self id); dropping group ${chatId}`,
+        );
+        return;
+      }
+      if (isGroup && mentionDecision.shouldSkip) {
+        channelHistory.record({
+          historyKey: historyKey ?? "",
+          limit: historyLimit,
+          entry:
+            historyKey && rawBody
+              ? {
+                  sender: senderName || senderId,
+                  body: rawBody,
+                  timestamp: message.timestampMs,
+                  messageId: messageSid,
+                }
+              : null,
+        });
+        logInboundDrop({
+          log: runtime.log,
+          channel: "zalouser",
+          reason: "no mention",
+          target: chatId,
+          onceKey: JSON.stringify([account.accountId, chatId]),
+          hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(chatId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+        });
+        return;
+      }
+
+      const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
+      const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: config, route });
+      const body = buildEnvelope({
+        channel: "Zalo Personal",
+        from: fromLabel,
+        timestamp: message.timestampMs,
+        body: rawBody,
+      });
+      const combinedBody =
+        isGroup && historyKey
+          ? channelHistory.buildPendingContext({
+              historyKey,
+              limit: historyLimit,
+              currentMessage: body,
+              formatEntry: (entry) =>
+                buildEnvelope({
+                  channel: "Zalo Personal",
+                  from: fromLabel,
+                  timestamp: entry.timestamp,
+                  previousTimestamp: null,
+                  body: `${entry.sender}: ${entry.body}${
+                    entry.messageId ? ` [id:${entry.messageId}]` : ""
+                  }`,
+                }),
+            })
+          : body;
+      const inboundHistory =
+        isGroup && historyKey && historyLimit > 0
+          ? channelHistory.buildInboundHistory({
+              historyKey,
+              limit: historyLimit,
+            })
+          : undefined;
+
+      const normalizedTo = isGroup ? `zalouser:group:${chatId}` : `zalouser:${chatId}`;
+      const messageSidFull = formatZalouserMessageSidFull({
+        msgId: message.msgId,
+        cliMsgId: message.cliMsgId,
+      });
+
+      const ctxPayload = core.channel.inbound.buildContext({
+        channelIngress: accessDecision,
+        channel: "zalouser",
+        accountId: route.accountId,
+        messageId: messageSid,
+        messageIdFull: messageSidFull,
+        timestamp: message.timestampMs,
+        from: isGroup ? `zalouser:group:${chatId}` : `zalouser:${senderId}`,
+        sender: {
+          id: senderId,
+          name: senderName || undefined,
+        },
+        conversation: {
+          kind: isGroup ? "group" : "direct",
+          id: chatId,
+          label: fromLabel,
+        },
+        route: {
+          agentId: route.agentId,
+          dmScope: route.dmScope,
+          accountId: route.accountId,
+          routeSessionKey: route.sessionKey,
+          dispatchSessionKey: route.sessionKey,
+        },
+        reply: {
+          to: normalizedTo,
+          originatingTo: normalizedTo,
+        },
+        message: {
+          body: combinedBody,
+          bodyForAgent: rawBody,
+          rawBody,
+          commandBody,
+          inboundHistory,
+        },
+        extra: {
+          BodyForCommands: commandBody,
+          GroupSubject: isGroup ? groupName || undefined : undefined,
+          GroupChannel: isGroup ? groupName || undefined : undefined,
+          GroupMembers: isGroup ? groupMembers : undefined,
+          WasMentioned: isGroup ? mentionDecision.effectiveWasMentioned : undefined,
+          CommandAuthorized: commandAuthorized,
+          ReplyToId: message.quotedGlobalMsgId || undefined,
+          ReplyToBody: message.quotedBody || undefined,
+          ReplyToIsQuote: message.quotedGlobalMsgId ? true : undefined,
+        },
+      });
+
+      const replyPipeline = {
+        typing: {
+          start: async () => {
+            await sendZaloTypingEvent(chatId, {
+              profile: account.profile,
+              isGroup,
+            });
+          },
+          onStartError: (err: unknown) => {
+            runtime.error?.(
+              `[${account.accountId}] zalouser typing start failed for ${chatId}: ${String(err)}`,
+            );
+            logVerbose(core, runtime, `zalouser typing failed for ${chatId}: ${String(err)}`);
+          },
+        },
+      };
+
+      await core.channel.inbound.dispatch({
+        channel: "zalouser",
+        accountId: account.accountId,
+        cfg: config,
+        route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
+        ctxPayload,
+        delivery: {
+          preparePayload: (payload) => {
+            if (payload.text === undefined) {
+              return payload;
+            }
+            return {
+              ...payload,
+              text: core.channel.text.convertMarkdownTables(
+                payload.text,
+                core.channel.text.resolveMarkdownTableMode({
+                  cfg: config,
+                  channel: "zalouser",
+                  accountId: account.accountId,
+                }),
+              ),
+            };
+          },
+          durable: () => ({
+            to: normalizedTo,
+          }),
+          deliver: async (payload) => {
+            const profile = account.profile;
+            const mediaMaxBytes = account.mediaMaxBytes;
+            const deliveryAccountId = account.accountId;
+            let visibleReplySent = false;
+            const reply = resolveSendableOutboundReplyParts(payload);
+            const chunkMode = core.channel.text.resolveChunkMode(
+              config,
+              "zalouser",
+              deliveryAccountId,
+            );
+            const textChunkLimit = core.channel.text.resolveTextChunkLimit(
+              config,
+              "zalouser",
+              deliveryAccountId,
+              {
+                fallbackLimit: ZALOUSER_TEXT_LIMIT,
+              },
+            );
+            const accepted: Awaited<ReturnType<typeof sendMessageZalouser>>[] = [];
+            const sendReplyPart = async (text: string, mediaUrl?: string) => {
+              await sendMessageZalouser(chatId, text, {
+                profile,
+                mediaMaxBytes,
+                ...(mediaUrl ? { mediaUrl } : {}),
+                isGroup,
+                textMode: "markdown",
+                textChunkMode: chunkMode,
+                textChunkLimit,
+                onDeliveryResult: (result) => {
+                  accepted.push(result);
+                  visibleReplySent = true;
+                },
+              });
+              visibleReplySent = true;
+            };
+            try {
+              await deliverTextOrMediaReply({
+                payload,
+                text: reply.text,
+                sendText: sendReplyPart,
+                sendMedia: async ({ mediaUrl, caption }) => {
+                  await sendReplyPart(caption ?? "", mediaUrl);
+                },
+              });
+            } catch (error) {
+              if (!visibleReplySent) {
+                throw error;
+              }
+              throw createChannelPartialDeliveryError(
+                error,
+                createAcceptedChannelDeliveryResult({
+                  results: accepted.map((result) => ({ receipt: result.receipt })),
+                  kind: reply.hasMedia ? "media" : "text",
+                }),
+              );
+            }
+            return { visibleReplySent };
+          },
+          onDelivered: (_payload, _info, result) => {
+            if (result?.visibleReplySent !== false) {
+              statusSink?.({ lastOutboundAt: Date.now() });
+            }
+          },
+          onError: (err, info) => {
+            if (isChannelPartialDeliveryError(err)) {
+              statusSink?.({ lastOutboundAt: Date.now() });
+            }
+            runtime.error(
+              `[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`,
+            );
+          },
+        },
+        replyPipeline,
+        record: {
+          onRecordError: (err) => {
+            runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+          },
+        },
+        replyOptions: turnAdoptionLifecycle ? { turnAdoptionLifecycle } : undefined,
+      });
+      if (isGroup && historyKey) {
+        channelHistory.clear({
+          historyKey,
+          limit: historyLimit,
+        });
+      }
     },
   });
 
@@ -831,22 +758,13 @@ export async function monitorZalouserProvider(
     return stopTask;
   };
 
-  let settled = false;
   const { promise: waitForExit, resolve: resolveRun, reject: rejectRun } = createDeferred<void>();
 
   const settleSuccess = () => {
-    if (settled) {
-      return;
-    }
-    settled = true;
     void stop().then(resolveRun, rejectRun);
   };
 
   const settleFailure = (error: unknown) => {
-    if (settled) {
-      return;
-    }
-    settled = true;
     const failure = error instanceof Error ? error : new Error(String(error));
     void stop().then(
       () => rejectRun(failure),
@@ -867,7 +785,6 @@ export async function monitorZalouserProvider(
         if (stopped) {
           return;
         }
-        logVerbose(core, runtime, `[${account.accountId}] inbound message`);
         statusSink?.({ lastInboundAt: Date.now() });
         await ingress.receive(msg);
       },

@@ -41,7 +41,15 @@ public enum ToolDisplayRegistry {
 
     /// Presentation only; invocation identity and stored tool names stay raw.
     public static func displayCall(name: String?, args: AnyCodable?) -> (name: String?, args: AnyCodable?) {
-        guard name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "tool_call",
+        // A tool bridged over MCP arrives as mcp__<server>__<tool>; show the tool, not the bridge.
+        if let name, name.hasPrefix("mcp__"),
+           let separator = name.range(of: "__", range: name.index(name.startIndex, offsetBy: 5)..<name.endIndex),
+           separator.upperBound < name.endIndex
+        {
+            return (String(name[separator.upperBound...]), args)
+        }
+        guard let key = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              ["dispatch_action", "tool_call"].contains(key),
               let arguments = args?.dictionaryValue,
               let id = arguments["id"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
               !id.isEmpty

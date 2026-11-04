@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import { hasExactKeys } from "../../chrome-extension/modules/strict-json.js";
 import {
   assertOwnedPath,
   chromeProductRoots,
   type ChromeProductRoot,
   ensurePrivateDirectory,
-  pathInfo,
 } from "./extension-install-layout.js";
 
 export const FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID = "kcdjddhmeafeomebliikmbpblkmkfoig";
@@ -38,7 +38,7 @@ async function inspectRequest(root: ChromeProductRoot): Promise<ChromeStoreInsta
   const target = requestPath(root);
   const result = { browser: root.label, path: target };
   try {
-    if (!(await pathInfo(target))) {
+    if (!(await lstatIfExists(target, "ENOENT"))) {
       return { ...result, state: "missing" };
     }
     await assertOwnedPath(root.userDataDir, "directory");

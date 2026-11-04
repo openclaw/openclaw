@@ -10,6 +10,13 @@ export type SecretStoreListInput = {
   redactedOnly?: boolean;
 };
 export type SecretStoreReadOperations = {
+  "secrets.selected": {
+    input: { names: readonly string[] };
+    output: {
+      type: "secrets.selected";
+      rows: Pick<SecretStoreRow, "name" | "value" | "allowed_hosts">[];
+    };
+  };
   "secrets.metadata": {
     input: SecretStoreListInput;
     output: { type: "secrets.metadata"; rows: SecretStoreRow[] };

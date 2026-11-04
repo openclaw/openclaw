@@ -54,10 +54,9 @@ export function assertImmutableDescriptorCurrent(descriptor: ImmutableInstallDes
   if (
     layout.rootIdentity !== descriptor.rootIdentity ||
     layout.releasesIdentity !== descriptor.releasesIdentity ||
-    layout.current.sha !== descriptor.current.sha ||
-    layout.current.path !== descriptor.current.path ||
-    layout.current.identity !== descriptor.current.identity ||
-    layout.current.pointerIdentity !== descriptor.current.pointerIdentity ||
+    (["sha", "path", "identity", "pointerIdentity"] as const).some(
+      (key) => layout.current[key] !== descriptor.current[key],
+    ) ||
     packageActivationRuntimeIdentity(descriptor.runtime.path) !== descriptor.runtime.identity
   ) {
     throw new Error("Immutable installation changed since adoption; current was not modified.");

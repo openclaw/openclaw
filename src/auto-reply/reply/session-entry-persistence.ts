@@ -1,3 +1,4 @@
+import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -5,6 +6,11 @@ import {
   mergeSessionSnapshotChanges,
   sessionSnapshotTouchedFieldsConflict,
 } from "../../config/sessions/session-snapshot-merge.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 
 type PersistReplySessionEntryParams = {
   allowCreate?: boolean;
@@ -16,6 +22,10 @@ type PersistReplySessionEntryParams = {
   skipMaintenance?: boolean;
   storePath: string;
   touchedFields?: ReadonlyArray<keyof SessionEntry>;
+  commitGuard?: SessionSourceAssertion;
+  /** Released SDK validators retain their synchronous native transaction contract. */
+  nativeCommitValidation?: true;
+  /** Prepared model/account checks only; session source checks travel in commitGuard. */
   validateCommit?: () => string | undefined;
 };
 
@@ -31,11 +41,23 @@ class SessionCommitRejectedError extends Error {}
 export async function persistReplySessionEntry(
   params: PersistReplySessionEntryParams,
 ): Promise<PersistReplySessionEntryResult> {
-  let lifecycleError: string | undefined;
-  let lifecycleEntry: SessionEntry | undefined;
-  let lockedEntry: SessionEntry | undefined;
+  const workspaceReadiness = captureAgentWorkspaceReadiness(params.sessionKey);
+  let blocked: PersistReplySessionEntryResult | undefined;
   let commitEntry = params.initialEntry;
   let persisted: SessionEntry | null;
+  const commitGuard = composeSessionSourceAssertion([params.commitGuard], (assertSource) => {
+    try {
+      assertSource();
+    } catch (error) {
+      throw new SessionCommitRejectedError(error instanceof Error ? error.message : String(error), {
+        cause: error,
+      });
+    }
+    const error = params.validateCommit?.();
+    if (error) {
+      throw new SessionCommitRejectedError(error);
+    }
+  });
   try {
     persisted = await patchSessionEntryCore(
       { sessionKey: params.sessionKey, storePath: params.storePath },
@@ -44,21 +66,26 @@ export async function persistReplySessionEntry(
         if (!existingEntry && params.allowCreate === true) {
           return params.entry;
         }
-        lifecycleError = resolveSessionWorkStartError(params.sessionKey, existingEntry, {
+        const lifecycleError = resolveSessionWorkStartError(params.sessionKey, existingEntry, {
           expectedSessionId: params.initialEntry.sessionId,
+          allowPendingWorkspace: workspaceReadiness ? true : undefined,
         });
-        if (!existingEntry) {
+        if (lifecycleError) {
+          blocked = {
+            status: "lifecycle-invalidated",
+            error: lifecycleError,
+            ...(existingEntry ? { entry: existingEntry } : {}),
+          };
           return null;
         }
-        if (lifecycleError) {
-          lifecycleEntry = existingEntry;
+        if (!existingEntry) {
           return null;
         }
         if (
           params.requireModelSelectionUnlocked === true &&
           existingEntry.modelSelectionLocked === true
         ) {
-          lockedEntry = existingEntry;
+          blocked = { status: "model-selection-locked", entry: existingEntry };
           return null;
         }
         const changes = {
@@ -79,14 +106,9 @@ export async function persistReplySessionEntry(
         fallbackEntry: params.entry,
         replaceEntry: true,
         skipMaintenance: params.skipMaintenance,
-        assertCommitAllowed: params.validateCommit
-          ? () => {
-              const error = params.validateCommit?.();
-              if (error) {
-                throw new SessionCommitRejectedError(error);
-              }
-            }
-          : undefined,
+        ...(params.nativeCommitValidation
+          ? { assertCommitAllowed: commitGuard }
+          : sessionEntryCommitGuardOptions(commitGuard)),
       },
     );
   } catch (error) {
@@ -95,15 +117,8 @@ export async function persistReplySessionEntry(
     }
     throw error;
   }
-  if (lifecycleError) {
-    return {
-      status: "lifecycle-invalidated",
-      error: lifecycleError,
-      ...(lifecycleEntry ? { entry: lifecycleEntry } : {}),
-    };
-  }
-  if (lockedEntry) {
-    return { status: "model-selection-locked", entry: lockedEntry };
+  if (blocked) {
+    return blocked;
   }
   if (!persisted) {
     return {

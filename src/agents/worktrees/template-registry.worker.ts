@@ -1,16 +1,17 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   parseStateLeaseProcessOwner,
   readStateLeaseProcessOwnerStatus,
   type StateLeaseProcessOwner,
 } from "../../infra/state-lease-process-owner.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { createOpenClawStateSchemaEnsurer } from "../../state/openclaw-state-feature-schema.js";
+import { createOpenClawStateSchemaEnsurer } from "../../state/openclaw-state-feature-schema-ensure.js";
 import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
@@ -20,7 +21,7 @@ import type { WorktreeTemplateRecord } from "./template-registry.js";
 
 type TemplateDatabase = Pick<DB, "worktree_templates" | "state_leases">;
 const TEMPLATE_READER_SCOPE = "core:managed-worktrees:template-readers";
-const kyselyFor = (db: DatabaseSync) => getNodeSqliteKysely<TemplateDatabase>(db);
+const kyselyFor = (db: EngineConnection) => getNodeSqliteKysely<TemplateDatabase>(db);
 const ensureTemplateSchema = createOpenClawStateSchemaEnsurer({
   table: "worktree_templates",
   operationLabel: "agents.worktrees.templates.schema.ensure",
@@ -56,7 +57,7 @@ function openTemplateDatabase(context: WorkerOperationContext) {
 
 function worktreeTemplateMutation<Input, Output>(
   operationLabel: string,
-  mutate: (db: DatabaseSync, input: Input) => Output,
+  mutate: (db: EngineConnection, input: Input) => Output,
 ) {
   return (input: Input, context: WorkerOperationContext): Output =>
     runOpenClawStateWriteTransaction(
@@ -71,35 +72,79 @@ function worktreeTemplateMutation<Input, Output>(
     );
 }
 
-export const worktreeTemplateOperations = {
-  "worktrees.templates.read": ({ cacheKey }: { cacheKey: string }, context) => {
-    const { db } = openTemplateDatabase(context).database;
-    const row = executeSqliteQuerySync(
-      db,
-      kyselyFor(db).selectFrom("worktree_templates").selectAll().where("cache_key", "=", cacheKey),
-    ).rows[0];
-    return row ? rowToRecord(row) : undefined;
+function hasTemplateReaders(db: EngineConnection, id: string): boolean {
+  const k = kyselyFor(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    k
+      .selectFrom("state_leases")
+      .select(["lease_key", "owner", "payload_json"])
+      .where("scope", "=", TEMPLATE_READER_SCOPE),
+  ).rows;
+  let retained = false;
+  for (const row of rows) {
+    const payload = safeParseJsonRecord(row.payload_json ?? "");
+    if (typeof payload?.template !== "string") {
+      throw new Error("Worktree template reader is unreadable; template retained");
+    }
+    const owner = parseStateLeaseProcessOwner(row.payload_json);
+    if (readStateLeaseProcessOwnerStatus(owner) === "dead") {
+      executeSqliteQuerySync(
+        db,
+        k
+          .deleteFrom("state_leases")
+          .where("scope", "=", TEMPLATE_READER_SCOPE)
+          .where("lease_key", "=", row.lease_key)
+          .where("owner", "=", row.owner),
+      );
+    } else if (payload.template === id) {
+      retained = true;
+    }
+  }
+  return retained;
+}
+
+export const worktreeTemplateReadOperations = {
+  "worktrees.templates.read": ({ cacheKey }: { cacheKey: string }, db) => {
+    const row = tableExists(db, "worktree_templates")
+      ? executeSqliteQuerySync(
+          db,
+          kyselyFor(db)
+            .selectFrom("worktree_templates")
+            .selectAll()
+            .where("cache_key", "=", cacheKey),
+        ).rows[0]
+      : undefined;
+    return {
+      type: "worktrees.templates.read" as const,
+      record: row ? rowToRecord(row) : undefined,
+    };
   },
-  "worktrees.templates.has": (_input: undefined, context) => {
-    const { db } = openTemplateDatabase(context).database;
-    return (
+  "worktrees.templates.has": (_input: undefined, db) => ({
+    type: "worktrees.templates.has" as const,
+    has:
+      tableExists(db, "worktree_templates") &&
       executeSqliteQuerySync(
         db,
         kyselyFor(db).selectFrom("worktree_templates").select("cache_key").limit(1),
-      ).rows.length > 0
-    );
-  },
-  "worktrees.templates.list": (_input: undefined, context) => {
-    const { db } = openTemplateDatabase(context).database;
-    return executeSqliteQuerySync(
-      db,
-      kyselyFor(db)
-        .selectFrom("worktree_templates")
-        .selectAll()
-        .orderBy("last_used_at", "asc")
-        .orderBy("id", "asc"),
-    ).rows.map(rowToRecord);
-  },
+      ).rows.length > 0,
+  }),
+  "worktrees.templates.list": (_input: undefined, db) => ({
+    type: "worktrees.templates.list" as const,
+    records: tableExists(db, "worktree_templates")
+      ? executeSqliteQuerySync(
+          db,
+          kyselyFor(db)
+            .selectFrom("worktree_templates")
+            .selectAll()
+            .orderBy("last_used_at", "asc")
+            .orderBy("id", "asc"),
+        ).rows.map(rowToRecord)
+      : [],
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;
+
+export const worktreeTemplateOperations = {
   "worktrees.templates.reserve": worktreeTemplateMutation(
     "worktrees.templates.reserve",
     (db, record: WorktreeTemplateRecord & { status: "preparing" }) => {
@@ -124,12 +169,29 @@ export const worktreeTemplateOperations = {
   ),
   "worktrees.templates.ready": worktreeTemplateMutation(
     "worktrees.templates.ready",
-    (db, { id, now }: { id: string; now: number }) =>
+    (
+      db,
+      {
+        id,
+        now,
+        content,
+      }: {
+        id: string;
+        now: number;
+        content?: Pick<WorktreeTemplateRecord, "sourceCommit" | "contentKey">;
+      },
+    ) =>
       executeSqliteQuerySync(
         db,
         kyselyFor(db)
           .updateTable("worktree_templates")
-          .set({ status: "ready", last_used_at: now })
+          .set({
+            status: "ready",
+            last_used_at: now,
+            ...(content
+              ? { source_commit: content.sourceCommit, content_key: content.contentKey }
+              : {}),
+          })
           .where("id", "=", id)
           .where("status", "=", "preparing"),
       ).numAffectedRows === 1n,
@@ -144,17 +206,48 @@ export const worktreeTemplateOperations = {
   ),
   "worktrees.templates.retainReader": worktreeTemplateMutation(
     "worktrees.templates.retainReader",
-    (db, input: { id: string; key: string; owner: StateLeaseProcessOwner; unpublish?: true }) => {
-      const now = Date.now();
-      if (input.unpublish) {
+    (
+      db,
+      input: {
+        key: string;
+        owner: StateLeaseProcessOwner;
+      } & (
+        | { id: string; unpublish?: true }
+        | { selection: Pick<WorktreeTemplateRecord, "cacheKey" | "contentKey" | "backend"> }
+      ),
+    ) => {
+      const k = kyselyFor(db);
+      const row = executeSqliteQuerySync(
+        db,
+        "id" in input
+          ? k.selectFrom("worktree_templates").selectAll().where("id", "=", input.id)
+          : k
+              .selectFrom("worktree_templates")
+              .selectAll()
+              .where("cache_key", "=", input.selection.cacheKey)
+              .where("content_key", "=", input.selection.contentKey)
+              .where("backend", "=", input.selection.backend)
+              .where("status", "=", "ready"),
+      ).rows[0];
+      if (!row) {
+        return undefined;
+      }
+      const unpublish = "id" in input && input.unpublish;
+      // Existing readers own validation; idle generations still require the
+      // exclusive owner. Admission and unpublication share this transaction.
+      if ("selection" in input && !hasTemplateReaders(db, row.id)) {
+        return undefined;
+      }
+      if (unpublish && hasTemplateReaders(db, row.id)) {
+        return undefined;
+      }
+      if (unpublish) {
         executeSqliteQuerySync(
           db,
-          kyselyFor(db)
-            .updateTable("worktree_templates")
-            .set({ status: "preparing" })
-            .where("id", "=", input.id),
+          k.updateTable("worktree_templates").set({ status: "preparing" }).where("id", "=", row.id),
         );
       }
+      const now = Date.now();
       executeSqliteQuerySync(
         db,
         kyselyFor(db)
@@ -165,11 +258,12 @@ export const worktreeTemplateOperations = {
             owner: input.key,
             expires_at: null,
             heartbeat_at: null,
-            payload_json: JSON.stringify({ owner: input.owner, template: input.id }),
+            payload_json: JSON.stringify({ owner: input.owner, template: row.id }),
             created_at: now,
             updated_at: now,
           }),
       );
+      return rowToRecord(row);
     },
   ),
   "worktrees.templates.releaseReader": worktreeTemplateMutation(
@@ -187,37 +281,7 @@ export const worktreeTemplateOperations = {
   ),
   "worktrees.templates.hasReaders": worktreeTemplateMutation(
     "worktrees.templates.hasReaders",
-    (db, { id }: { id: string }) => {
-      const k = kyselyFor(db);
-      const rows = executeSqliteQuerySync(
-        db,
-        k
-          .selectFrom("state_leases")
-          .select(["lease_key", "owner", "payload_json"])
-          .where("scope", "=", TEMPLATE_READER_SCOPE),
-      ).rows;
-      let retained = false;
-      for (const row of rows) {
-        const payload = safeParseJsonRecord(row.payload_json ?? "");
-        if (typeof payload?.template !== "string") {
-          throw new Error("Worktree template reader is unreadable; template retained");
-        }
-        const owner = parseStateLeaseProcessOwner(row.payload_json);
-        if (readStateLeaseProcessOwnerStatus(owner) === "dead") {
-          executeSqliteQuerySync(
-            db,
-            k
-              .deleteFrom("state_leases")
-              .where("scope", "=", TEMPLATE_READER_SCOPE)
-              .where("lease_key", "=", row.lease_key)
-              .where("owner", "=", row.owner),
-          );
-        } else if (payload.template === id) {
-          retained = true;
-        }
-      }
-      return retained;
-    },
+    (db, { id }: { id: string }) => hasTemplateReaders(db, id),
   ),
 } satisfies WorkerOperationHandlers;
 

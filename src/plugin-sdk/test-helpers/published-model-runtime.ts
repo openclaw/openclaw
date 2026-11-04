@@ -28,5 +28,11 @@ export async function mockPublishedModelRuntimeForTest(params: {
   const lookup = vi
     .spyOn(publishedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
     .mockReturnValue(owner);
-  onTestFinished(() => lookup.mockRestore());
+  const load = vi
+    .spyOn(publishedCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
+    .mockResolvedValue(owner);
+  onTestFinished(() => {
+    lookup.mockRestore();
+    load.mockRestore();
+  });
 }

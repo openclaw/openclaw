@@ -14,10 +14,12 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramAccountConfig } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import {
@@ -38,6 +40,7 @@ import type {
   TelegramChannelIngressResolver,
 } from "./bot-message-context.types.js";
 import {
+  createTelegramSpooledReplayDeferredParticipant,
   resolveTelegramSpooledReplayHeartbeatIntervalMs,
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
@@ -46,6 +49,7 @@ import {
   MEDIA_GROUP_TIMEOUT_MS,
   type MediaGroupEntry,
 } from "./bot-updates.js";
+import type { TelegramMediaKind } from "./bot/body-helpers.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import {
   buildTelegramGroupPeerId,
@@ -74,7 +78,7 @@ type MediaAuthorization = {
   topicConfig?: TelegramTopicConfig;
 };
 
-export type TelegramMediaGroupInput = MediaAuthorization & {
+type TelegramMediaGroupInput = MediaAuthorization & {
   ctx: TelegramContext;
   msg: Message;
   storeAllowFrom: string[];
@@ -89,11 +93,27 @@ type BufferedMediaGroupEntry = MediaGroupEntry &
     spooledReplayParticipants: TelegramSpooledReplayDeferredParticipant[];
     collectionClosed: ReturnType<typeof createDeferred<void>>;
     heartbeatTimer?: ReturnType<typeof setInterval>;
-    revision: number;
     holdDeadlineMs: number;
   };
 
 type TelegramGroupMediaDisposition = "process" | "skip" | "silent-ingest";
+
+const ALBUM_MEDIA_NOUNS: Record<TelegramMediaKind, string> = {
+  image: "images",
+  video: "videos",
+  audio: "audio",
+  document: "files",
+  sticker: "stickers",
+};
+
+function resolveAlbumMediaNoun(kinds: ReadonlySet<TelegramMediaKind>): string {
+  if (kinds.size !== 1) {
+    // Mixed albums use the generic noun, matching the agent-side download notice.
+    return "attachments";
+  }
+  const [kind] = kinds;
+  return kind ? ALBUM_MEDIA_NOUNS[kind] : "attachments";
+}
 
 export function createTelegramInboundMedia({
   params,
@@ -103,7 +123,6 @@ export function createTelegramInboundMedia({
     RegisterTelegramHandlerParams,
     | "accountId"
     | "ownerAgentId"
-    | "telegramDeps"
     | "bot"
     | "opts"
     | "runtime"
@@ -117,7 +136,6 @@ export function createTelegramInboundMedia({
   const {
     accountId,
     ownerAgentId,
-    telegramDeps,
     bot,
     opts,
     runtime,
@@ -131,10 +149,7 @@ export function createTelegramInboundMedia({
     recordMessageResolvedMedia,
     mergeDispatchDedupeClaims,
     releaseDispatchDedupeClaims,
-    buildFailedProcessingResult,
     settleSpooledReplayParticipants,
-    createSpooledReplayParticipantForBufferedWork,
-    spooledReplayOptions,
     resolveTelegramSessionState,
     processMessageWithReplyChain,
   } = message;
@@ -144,8 +159,12 @@ export function createTelegramInboundMedia({
       ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
       : MEDIA_GROUP_TIMEOUT_MS;
   const buffer = new Map<string, BufferedMediaGroupEntry>();
-  const queue = new KeyedAsyncQueue();
+  const queue = new Map<string, Promise<void>>();
   const heads = new Map<string, BufferedMediaGroupEntry>();
+  const conversationKeyFor = (input: Pick<TelegramMediaGroupInput, "chatId" | "threadSpec">) =>
+    `media:${input.chatId}:${input.threadSpec.scope}:${input.threadSpec.id ?? "main"}`;
+  const pendingMediaGroups = (input: Pick<TelegramMediaGroupInput, "chatId" | "threadSpec">) =>
+    queue.get(conversationKeyFor(input));
 
   const resolveUnaddressedGroupMediaDisposition = async (
     authorization: MediaAuthorization & { ctx: TelegramContext; msg: Message },
@@ -174,7 +193,7 @@ export function createTelegramInboundMedia({
       senderId,
       runtimeCfg: authorization.authorizationCfg,
     });
-    const activationOverride = resolveGroupActivation({
+    const activationOverride = await resolveGroupActivation({
       sessionKey: sessionState.sessionKey,
       agentId: sessionState.agentId,
       cfg: authorization.authorizationCfg,
@@ -195,12 +214,9 @@ export function createTelegramInboundMedia({
       threadSpec.id !== undefined &&
       requireMentionInBotThreads !== undefined
     ) {
-      const topicScope = telegramDeps.resolveStorePath(
-        authorization.authorizationCfg.session?.store,
-        {
-          agentId: ownerAgentId,
-        },
-      );
+      const topicScope = resolveStorePath(authorization.authorizationCfg.session?.store, {
+        agentId: ownerAgentId,
+      });
       ({ creatorUserId } = await resolveTelegramForumTopicMetadata({
         msg,
         threadId: threadSpec.id,
@@ -263,8 +279,8 @@ export function createTelegramInboundMedia({
       {
         provider: "telegram",
         conversationId: buildTelegramGroupPeerId(chatId, threadSpec),
-        providerPolicy:
-          authorization.authorizationCfg.channels?.telegram?.accounts?.[accountId]?.mentionPatterns,
+        providerPolicy: resolveTelegramAccountConfig(authorization.authorizationCfg, accountId)
+          ?.mentionPatterns,
       },
     );
     const hasAnyMention = textParts.entities.some((entity) => entity.type === "mention");
@@ -389,9 +405,11 @@ export function createTelegramInboundMedia({
         ...entry.spooledReplayParticipants.map((participant) => participant.abortSignal),
       );
       let skippedCount = 0;
+      const albumMediaKinds = new Set<TelegramMediaKind>();
       for (const { ctx, msg } of entry.messages) {
         const sourceMessageId = String(msg.message_id);
         const nativeKind = resolveTelegramPrimaryMedia(msg)?.kind ?? "document";
+        albumMediaKinds.add(nativeKind);
         let media;
         try {
           media = await resolveMedia({ ctx, maxBytes: mediaMaxBytes, ...mediaRuntime });
@@ -404,7 +422,9 @@ export function createTelegramInboundMedia({
             throw error;
           }
           // A failed attachment must not hide the rest of the album.
-          runtime.log?.(warn(`media group: skipping photo that failed to fetch: ${String(error)}`));
+          runtime.log?.(
+            warn(`media group: skipping ${nativeKind} that failed to fetch: ${String(error)}`),
+          );
         }
         if (media) {
           await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
@@ -431,7 +451,7 @@ export function createTelegramInboundMedia({
         const verb = skippedCount === 1 ? "was" : "were";
         await sendMediaWarning(
           { ...entry, ...primary, chatId: primary.msg.chat.id },
-          `⚠️ Received ${allMedia.length - skippedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
+          `⚠️ Received ${allMedia.length - skippedCount} of ${entry.messages.length} ${resolveAlbumMediaNoun(albumMediaKinds)} — ${skippedCount} could not be fetched and ${verb} skipped.`,
         );
       }
       const result = await processMessageWithReplyChain({
@@ -449,7 +469,7 @@ export function createTelegramInboundMedia({
             entry.promptContextMinTimestampMs,
             entry.promptContextAmbientWatermark,
           ),
-          ...spooledReplayOptions(entry.spooledReplayParticipants),
+          ...(entry.spooledReplayParticipants.length > 0 ? { spooledReplay: true } : {}),
           channelIngressResolvers: entry.channelIngressResolvers,
         },
         dispatchDedupeClaims: entry.dispatchDedupeClaims,
@@ -458,10 +478,10 @@ export function createTelegramInboundMedia({
       settleSpooledReplayParticipants(entry.spooledReplayParticipants, result);
     } catch (error) {
       releaseDispatchDedupeClaims(entry.dispatchDedupeClaims, error);
-      settleSpooledReplayParticipants(
-        entry.spooledReplayParticipants,
-        buildFailedProcessingResult(error),
-      );
+      settleSpooledReplayParticipants(entry.spooledReplayParticipants, {
+        kind: "failed-retryable",
+        error,
+      });
       runtime.error?.(danger(`media group handler failed: ${String(error)}`));
     }
   };
@@ -500,17 +520,21 @@ export function createTelegramInboundMedia({
     const stopHeartbeat = () => clearInterval(entry.heartbeatTimer);
     renewWaitingEntry(key, entry);
     void claimsSettled.then(stopHeartbeat);
-    void queue.enqueue(key, async () => {
-      stopHeartbeat();
-      heads.set(key, entry);
-      try {
-        await entry.collectionClosed.promise;
-        const processing = processMediaGroup(entry).catch(() => undefined);
-        // Released claims advance the queue even if a download ignores cancellation.
-        await (participants.length > 0 ? Promise.race([processing, claimsSettled]) : processing);
-      } finally {
-        heads.delete(key);
-      }
+    void enqueueKeyedTask({
+      tails: queue,
+      key,
+      task: async () => {
+        stopHeartbeat();
+        heads.set(key, entry);
+        try {
+          await entry.collectionClosed.promise;
+          const processing = processMediaGroup(entry).catch(() => undefined);
+          // Released claims advance the queue even if a download ignores cancellation.
+          await (participants.length > 0 ? Promise.race([processing, claimsSettled]) : processing);
+        } finally {
+          heads.delete(key);
+        }
+      },
     });
   };
 
@@ -527,11 +551,11 @@ export function createTelegramInboundMedia({
       flush();
       return;
     }
-    const revision = entry.revision;
+    const messageCount = entry.messages.length;
     // A stalled backlog read must not extend the album's fixed hold deadline.
     entry.timer = setTimeout(
       () => {
-        if (buffer.get(key) === entry && entry.revision === revision) {
+        if (buffer.get(key) === entry && entry.messages.length === messageCount) {
           flush();
         }
       },
@@ -539,7 +563,7 @@ export function createTelegramInboundMedia({
     );
     const settle = (hold: boolean) => {
       // A member that joined during the read already owns a fresh quiet timer.
-      if (buffer.get(key) !== entry || entry.revision !== revision) {
+      if (buffer.get(key) !== entry || entry.messages.length !== messageCount) {
         return;
       }
       clearTimeout(entry.timer);
@@ -579,10 +603,10 @@ export function createTelegramInboundMedia({
     if (!mediaGroupId) {
       return false;
     }
-    const conversationKey = `media:${input.chatId}:${input.threadSpec.scope}:${input.threadSpec.id ?? "main"}`;
+    const conversationKey = conversationKeyFor(input);
     const key = `${conversationKey}:${mediaGroupId}`;
     const existing = buffer.get(key);
-    const participant = createSpooledReplayParticipantForBufferedWork(
+    const participant = createTelegramSpooledReplayDeferredParticipant(
       `media-group:${key}:${input.msg.message_id}`,
     );
     if (existing) {
@@ -592,7 +616,6 @@ export function createTelegramInboundMedia({
       }
       clearTimeout(existing.timer);
       existing.messages.push({ msg: input.msg, ctx: input.ctx });
-      existing.revision += 1;
       existing.promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
         existing.promptContextMinTimestampMs,
         input.promptContextMinTimestampMs,
@@ -620,7 +643,6 @@ export function createTelegramInboundMedia({
       messages: [{ msg: input.msg, ctx: input.ctx }],
       spooledReplayParticipants: participant ? [participant] : [],
       collectionClosed: createDeferred<void>(),
-      revision: 0,
       holdDeadlineMs: performance.now() + MEDIA_GROUP_MAX_HOLD_MS,
       ...promptContextBoundaryOptions(
         input.promptContextMinTimestampMs,
@@ -635,5 +657,10 @@ export function createTelegramInboundMedia({
     return true;
   };
 
-  return { handleMediaGroup, resolveUnaddressedGroupMediaDisposition, sendMediaWarning };
+  return {
+    handleMediaGroup,
+    pendingMediaGroups,
+    resolveUnaddressedGroupMediaDisposition,
+    sendMediaWarning,
+  };
 }

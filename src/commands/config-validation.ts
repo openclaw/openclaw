@@ -1,4 +1,3 @@
-// Config validation helpers shared by commands that need fail-fast config loading.
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "../cli/config-recovery-hints.js";
 import { isJsonOutputModeActive } from "../cli/json-output-mode.js";
@@ -48,8 +47,6 @@ export async function requireValidConfigForWrite(runtime: RuntimeEnv) {
   }
   return read;
 }
-
-export type ConfigWriteSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
 
 /** Each command phase owns prepared facts; installation ends the preceding metadata scope. */
 export async function withCommandPluginMetadata<T>(

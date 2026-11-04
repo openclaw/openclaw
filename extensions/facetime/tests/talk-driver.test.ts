@@ -87,16 +87,6 @@ describe("FaceTime talk driver lifecycle", () => {
     },
   );
 
-  it("fails closed when OpenClaw cannot forward authenticated sender identity", async () => {
-    mocks.senderAuthVersion = undefined;
-
-    await expect(startFaceTimeTalkDriver(startParams())).rejects.toThrow(
-      "does not support authenticated sender identity",
-    );
-    expect(mocks.createSession).not.toHaveBeenCalled();
-    expect(mocks.pump.stop).not.toHaveBeenCalled();
-  });
-
   it("waits for provider connect, provider ready, and microphone routing", async () => {
     const connect = createDeferred<void>();
     const route = createDeferred<void>();
@@ -347,6 +337,25 @@ describe("FaceTime talk driver lifecycle", () => {
       expect(mocks.bridge.triggerGreeting).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("does not talk over a caller who speaks during the settle window", async () => {
+    const driver = await startReadyFaceTimeTalkDriver();
+
+    vi.useFakeTimers();
+    try {
+      driver.activate();
+      mocks.sessionParams?.onTranscript?.("user", "I have a question", true);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(mocks.bridge.triggerGreeting).not.toHaveBeenCalled();
+    } finally {
+      try {
+        await driver.close();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 

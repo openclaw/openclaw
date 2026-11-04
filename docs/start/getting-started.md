@@ -12,7 +12,7 @@ working chat session.
 
 ## What you need
 
-- **Node.js 24.16+ or 26.1+** (Node 26 is the recommended runtime)
+- **Node.js 24.16.0+ on 24.x, or 26.1.0+** (Node 26 is recommended; use 24.22.1+/26.12.1+ for the security fixes)
 - **An existing Claude Code or Codex CLI login, or a provider API key** — onboarding can reuse it
 
 <Tip>
@@ -81,9 +81,9 @@ run `openclaw gateway install`. Run `openclaw` for the TUI or
 
   </Step>
   <Step title="Install the Gateway service">
-    Quick start keeps the Gateway in the foreground of this terminal. The next
-    steps need it running in the background. Press **Ctrl+C** to stop the
-    foreground Gateway, then install the service:
+    Quick start asks **Keep OpenClaw running in the background?** and installs
+    the service when you accept, so skip this step in that case. Otherwise, press
+    **Ctrl+C** to stop the foreground Gateway, then install the service:
 
     ```bash
     openclaw gateway install
@@ -202,3 +202,4 @@ Full reference: [Environment variables](/help/environment).
 - [Personal assistant setup](/start/openclaw) - end-to-end guide to a dedicated number that behaves like an always-on assistant
 - [Triage](/cli/triage)
 - [Troubleshooting](/help/troubleshooting)
+- [Get support](/help/support) - official OpenClaw support and reporting routes

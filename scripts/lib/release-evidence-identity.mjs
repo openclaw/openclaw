@@ -50,6 +50,35 @@ export function normalizeWorkflowPathRef(ref) {
   return `refs/heads/${ref}`;
 }
 
+// This projects an eligible retained producer context. Only the strict FRV
+// verifier authenticates both admissions and the unchanged artifact descriptors.
+export function retainedPublicationArtifactSource(manifest) {
+  const reuse = manifest?.evidenceReuse;
+  const current = manifest?.sourceAdmission;
+  const retained = reuse?.publication?.sourceAdmission;
+  if (
+    reuse?.policy !== "exact-target-full-validation-v1" ||
+    !Array.isArray(reuse.changedPaths) ||
+    reuse.changedPaths.length !== 0 ||
+    String(reuse.runId) !== String(reuse.selectedRunId) ||
+    !/^[a-f0-9]{40}$/u.test(manifest?.targetSha ?? "") ||
+    manifest.targetSha !== manifest.workflowSha ||
+    reuse.evidenceSha !== manifest.targetSha ||
+    String(retained?.runId) !== String(reuse.runId) ||
+    String(current?.runId) !== String(manifest.runId) ||
+    current?.candidateSha !== manifest.targetSha ||
+    retained?.candidateSha !== manifest.targetSha ||
+    current?.workflow?.sha !== manifest.workflowSha ||
+    retained?.workflow?.sha !== manifest.workflowSha ||
+    !current?.qualificationAdmission ||
+    !retained?.qualificationAdmission ||
+    typeof retained.workflow.ref !== "string"
+  ) {
+    return null;
+  }
+  return retained;
+}
+
 export function validateTrustedProducerIdentity(
   evidence,
   client,

@@ -20,10 +20,14 @@ export function childSessionListQuery(parentKey: string, pageSize = CHILD_SESSIO
 export async function fetchChildSessionRows(params: {
   sessions: Pick<SessionCapability, "refreshList" | "listSnapshot">;
   parentKey: string;
+  agentId?: string;
   isCurrent: () => boolean;
   initialResult?: SessionsListResult;
 }): Promise<GatewaySessionRow[] | null> {
-  const query = childSessionListQuery(params.parentKey);
+  const query = {
+    ...childSessionListQuery(params.parentKey),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  };
   let pagination: SessionListSnapshot["pagination"];
   const readResult = () => {
     const snapshot = params.sessions.listSnapshot(query);
@@ -37,6 +41,9 @@ export async function fetchChildSessionRows(params: {
     // Observation callbacks run before their first read settles. Join that
     // owner before appending; a concurrent append does not queue another page.
     await params.sessions.refreshList(query);
+    if (!params.isCurrent()) {
+      return null;
+    }
   }
   return fetchPagedSessionRows({
     list: async (offset) => {

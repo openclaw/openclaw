@@ -39,25 +39,22 @@ type LmstudioLoadResponse = {
   instance_id?: string;
 };
 
-type LmstudioResolvedModelKeyError = {
-  resolvedModelKey: string;
-};
-
-type FetchLmstudioModelsResult = {
-  reachable: boolean;
-  status?: number;
-  models: LmstudioModelWire[];
-  error?: unknown;
-};
-
-type DiscoverLmstudioModelsParams = {
-  baseUrl: string;
-  apiKey: string;
-  headers?: Record<string, string>;
-  quiet: boolean;
-  discoveryMode?: "strict";
-  fetchImpl?: typeof fetch;
-};
+export class LmstudioModelLoadError extends Error {
+  constructor(
+    readonly resolvedModelKey: string,
+    readonly requiredContextLength: number | undefined,
+    cause: unknown,
+  ) {
+    super(
+      requiredContextLength === undefined
+        ? cause instanceof Error
+          ? cause.message
+          : String(cause)
+        : `LM Studio could not load "${resolvedModelKey}" with ${requiredContextLength} context tokens. Wait for loading to finish in LM Studio, then retry, or lower the model's contextTokens.`,
+      { cause },
+    );
+  }
+}
 
 async function fetchLmstudioEndpoint(params: {
   url: string;
@@ -106,19 +103,6 @@ async function fetchLmstudioEndpoint(params: {
   };
 }
 
-function withResolvedLmstudioModelKey(
-  error: unknown,
-  resolvedModelKey: string,
-): Error & LmstudioResolvedModelKeyError {
-  if (error instanceof Error) {
-    return Object.assign(error, { resolvedModelKey });
-  }
-  return Object.assign(new Error(String(error)), {
-    cause: error,
-    resolvedModelKey,
-  });
-}
-
 /** Fetches /api/v1/models and reports transport reachability separately from HTTP status. */
 export async function fetchLmstudioModels(params: {
   baseUrl?: string;
@@ -128,7 +112,12 @@ export async function fetchLmstudioModels(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
-}): Promise<FetchLmstudioModelsResult> {
+}): Promise<{
+  reachable: boolean;
+  status?: number;
+  models: LmstudioModelWire[];
+  error?: unknown;
+}> {
   const baseUrl = resolveLmstudioServerBase(params.baseUrl);
   const timeoutMs = params.timeoutMs ?? 5000;
   try {
@@ -180,9 +169,15 @@ export async function fetchLmstudioModels(params: {
   }
 }
 
-export async function discoverLmstudioModels(
-  params: DiscoverLmstudioModelsParams,
-): Promise<ModelDefinitionConfig[]> {
+export async function discoverLmstudioModels(params: {
+  onListedModels?: (models: LmstudioModelWire[]) => void;
+  baseUrl: string;
+  apiKey: string;
+  headers?: Record<string, string>;
+  quiet: boolean;
+  discoveryMode?: "strict";
+  fetchImpl?: typeof fetch;
+}): Promise<ModelDefinitionConfig[]> {
   const fetched = await fetchLmstudioModels({
     baseUrl: params.baseUrl,
     apiKey: params.apiKey,
@@ -204,6 +199,7 @@ export async function discoverLmstudioModels(
     return [];
   }
 
+  params.onListedModels?.(fetched.models);
   return mapLmstudioWireModels(fetched.models, "runtime");
 }
 
@@ -237,7 +233,7 @@ export async function prepareLmstudioModelForInference(
     throw new Error("LM Studio model key is required");
   }
 
-  const timeoutMs = params.timeoutMs ?? 30_000;
+  const timeoutMs = params.timeoutMs ?? 120_000;
   const baseUrl = resolveLmstudioServerBase(params.baseUrl);
   const preflight = await fetchLmstudioModels({
     baseUrl,
@@ -341,6 +337,10 @@ export async function prepareLmstudioModelForInference(
       await release();
     }
   } catch (error) {
-    throw withResolvedLmstudioModelKey(error, canonicalModelKey);
+    throw new LmstudioModelLoadError(
+      canonicalModelKey,
+      loadedContextWindow === null ? undefined : contextLengthForLoad,
+      error,
+    );
   }
 }
