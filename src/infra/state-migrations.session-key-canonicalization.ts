@@ -25,7 +25,7 @@ type SessionKeyCanonicalizationOptions = {
   legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 };
 
-export function canonicalizeSessionKeyForAgent(
+export function canonicalizeLegacySessionKeyForAgent(
   params: SessionKeyCanonicalizationOptions & {
     key: string;
     skipCrossAgentRemap?: boolean;
@@ -168,7 +168,7 @@ export function canonicalizeSessionStore({
     if (!entry || typeof entry !== "object") {
       continue;
     }
-    const canonicalKey = canonicalizeSessionKeyForAgent({
+    const canonicalKey = canonicalizeLegacySessionKeyForAgent({
       ...options,
       key,
       skipCrossAgentRemap: options.preserveAmbiguousKeys,
@@ -292,7 +292,7 @@ export function listLegacySessionKeys({
 }): string[] {
   return Object.keys(store).filter(
     (key) =>
-      canonicalizeSessionKeyForAgent({
+      canonicalizeLegacySessionKeyForAgent({
         ...options,
         key,
         skipCrossAgentRemap: options.preserveAmbiguousKeys,

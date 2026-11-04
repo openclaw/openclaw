@@ -43,7 +43,7 @@ import {
 } from "./state-migrations.fs.js";
 import { saveLegacySessionStore } from "./state-migrations.legacy-session-store.js";
 import {
-  canonicalizeSessionKeyForAgent,
+  canonicalizeLegacySessionKeyForAgent,
   canonicalizeSessionStore,
   isAmbiguousSharedStoreKey,
   sessionStoreMayNeedCanonicalization,
@@ -522,7 +522,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
           continue;
         }
         const rowAgentId = resolveCanonicalAgentSessionOwner(sessionKey) ?? target.agentId;
-        const canonicalSessionKey = canonicalizeSessionKeyForAgent({
+        const canonicalSessionKey = canonicalizeLegacySessionKeyForAgent({
           key: sessionKey,
           agentId: rowAgentId,
           mainKey,
