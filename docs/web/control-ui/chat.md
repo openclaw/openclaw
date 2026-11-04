@@ -12,6 +12,8 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: session controls, the composer, and how the transcript renders.
 
+Session sharing distinguishes owners, members, and viewers. A read-only session does not grant permission to send messages. Starting suggested tasks requires admin access; reconnect first if the Gateway is disconnected. Public sharing asks **Make this session public?** before publishing. Review the conversation and images for private information: disabling public access cannot recall downloaded copies.
+
 ## Goals, questions, and recovery
 
 A goal belongs to a session. Saving an edited goal does not start a reply. Replacing

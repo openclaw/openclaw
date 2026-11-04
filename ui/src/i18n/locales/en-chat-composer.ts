@@ -63,7 +63,7 @@ const catalog = {
           loadFailed: "Couldn’t load tools.",
         },
         offlineBlocked: "Reconnect to change tools for this session.",
-        adminBlocked: "Admin access is required to manage MCP servers.",
+        adminBlocked: "You need admin access to manage MCP servers.",
         savingBlocked: "Saving… try again in a moment.",
       },
       overrides: {
