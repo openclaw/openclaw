@@ -195,15 +195,22 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `79ea47fdf7cf`: investigate fixture-owned MCP App views in
-`extensions/codex/src/app-server/native-mcp-app.test.ts`. Both successful preview
-cases call the real preview owner, which retains a view, an expiry timer and a
-runtime lease. The test has no corresponding view release; the shared extension
-cleanup does not register this store for lifecycle reset.
+Pinned main `79ea47fdf7cf`: expire fixture-owned MCP App previews in
+`extensions/codex/src/app-server/native-mcp-app.test.ts`. Each case owns a fake
+clock and drains its pending expiry callbacks at test completion, restoring real
+timers in `finally`. The real view owner removes each view and releases its
+runtime lease. All five declarations/six cases, inputs and assertions remain.
+Ten added test lines have an equal separate allocation; production and the shared
+scalar are unchanged.
 
-This draft records the diagnosis prerequisite only. The primary test and
-production remain unchanged; actual entry-point retention measurement is pending
-native dependency qualification. No measured leak or repair success is claimed.
+The untouched suite passes all six cases but leaves two views after normal
+teardown, each with an active unref expiry timer and a runtime lease callback.
+The same zero-retention observer fails on the original and passes the repaired
+cases with zero views after every test and normal teardown. Per-test timer
+inventory is zero at clock installation, one only in each successful preview
+case, and zero after expiry; no other pending timer was observed. Case inventories
+remain identical. This is bounded fixture retention; no real Codex-process or
+live Gateway leak is claimed.
 
 ## Completed source review
 
