@@ -243,15 +243,16 @@ export function readOpenAICompletionsReasoningBatch(
       if (!isRecord(detail)) {
         continue;
       }
-      if (typeof detail.text !== "string" || !detail.text) {
+      const text = detail.type === "reasoning.summary" ? detail.summary : detail.text;
+      if (typeof text !== "string" || !text) {
         continue;
       }
-      if (detail.type === "reasoning.text") {
+      if (detail.type === "reasoning.text" || detail.type === "reasoning.summary") {
         deltas ??= [];
         appendOpenAICompletionsReasoningDelta(deltas, mirroredThinking, {
           kind: "thinking",
           signature: "reasoning_details",
-          text: detail.text,
+          text,
         });
         continue;
       }
@@ -261,7 +262,7 @@ export function readOpenAICompletionsReasoningBatch(
         deltas ??= [];
         appendOpenAICompletionsReasoningDelta(deltas, mirroredThinking, {
           kind: "text",
-          text: detail.text,
+          text,
           source: "reasoning_detail",
         });
       }
