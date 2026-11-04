@@ -294,7 +294,7 @@ describe("session workspace file reference resolution", () => {
       await openSessionWorkspaceFile(state, { path: "run.log", relativeTo: document });
 
       if (replaced) {
-        expect(state.sessionWorkspaceState?.error).toContain("The document's workspace changed");
+        expect(state.sessionWorkspaceState?.error).toContain("The document’s workspace changed");
         expect(state.sessionWorkspaceState?.activePreviewId).toBe(documentPreviewId);
         expect(await loadedSidebarContent(state)).toBe(document);
         expect(state.sessionWorkspaceState?.previews).toHaveLength(1);

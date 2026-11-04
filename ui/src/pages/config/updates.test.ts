@@ -60,10 +60,10 @@ function failedRun() {
 const checkFailure = {
   mode: "manual",
   tone: "warn",
-  text: "Could not check for updates: timeout",
+  text: "Couldn’t check for updates. timeout",
 } as const;
 const restartPending =
-  "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.";
+  "Update installed. A Gateway restart is already in progress; status will refresh after it reconnects.";
 const gitSchedule = (git: NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>) =>
   ({ channel: "dev", autoEnabled: false, install: { kind: "git", git } }) as const;
 
@@ -230,8 +230,12 @@ describe("renderUpdates", () => {
     statusCase("update available", {}),
     statusCase(
       "real update failure",
-      { update: { updateStatusBanner: { tone: "danger", text: "Update error: build failed" } } },
-      "Update error: build failed",
+      {
+        update: {
+          updateStatusBanner: { tone: "danger", text: "Couldn’t update OpenClaw. build failed" },
+        },
+      },
+      "Couldn’t update OpenClaw. build failed",
       "danger",
     ),
     statusCase(
@@ -268,16 +272,18 @@ describe("renderUpdates", () => {
       renderUpdates({
         update: {
           updateStatusRefreshing: statusChecking,
-          updateStatusBanner: { tone: "danger", text: "Update error: build failed" },
+          updateStatusBanner: { tone: "danger", text: "Couldn’t update OpenClaw. build failed" },
           updateStatusCheckBanner: statusChecking
             ? null
-            : { mode: "manual", tone: "warn", text: "Could not check for updates: timeout" },
+            : { mode: "manual", tone: "warn", text: "Couldn’t check for updates. timeout" },
         },
       });
       expect(row("Status").textContent).toContain(
-        statusChecking ? "Checking for updates…" : "Could not check for updates: timeout",
+        statusChecking ? "Checking for updates…" : "Couldn’t check for updates. timeout",
       );
-      expect(row("Failure details").textContent).toContain("Update error: build failed");
+      expect(row("Failure details").textContent).toContain(
+        "Couldn’t update OpenClaw. build failed",
+      );
     },
   );
 
@@ -530,7 +536,10 @@ describe("renderUpdates", () => {
     [{ status: "current" }, "Up to date"],
     [{ status: "ahead", commitsAhead: 2 }, "2 commits ahead of tracked upstream"],
     [{ status: "diverged", commitsAhead: 1, commitsBehind: 3 }, "Diverged · 1 ahead, 3 behind"],
-    [{ status: "unavailable", reason: "fetch-failed" }, "Could not fetch the tracked upstream"],
+    [
+      { status: "unavailable", reason: "fetch-failed" },
+      "Couldn’t check the update source. Try again.",
+    ],
   ] as const)("renders explicit %j git status without a dot", (git, label) => {
     renderUpdates({
       configObject: { update: { channel: "dev" } },

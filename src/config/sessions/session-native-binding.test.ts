@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createNativeSessionCommitFinalizer } from "../../agents/harness/native-session/deletion-participant.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -11,7 +12,6 @@ import { createPluginStateKeyedStoreV2 } from "../../plugin-state/plugin-state-s
 import { capturePluginStateNativeBindingStore } from "../../plugin-state/plugin-state-store.native-binding.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import * as execution from "../../state/openclaw-agent-execution.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import * as native from "./session-native-binding.execution.test-support.js";
 import { withNativeBindingFixture } from "./session-native-binding.test-support.js";
 
@@ -92,7 +92,7 @@ it("keeps archive bytes and identity publication equivalent with a legacy cleanu
         expect(native.bindingWrites(sql.queries)).toEqual([]);
         expect(result.deleted).toBe(true);
         expect(result.archivedTranscripts).toHaveLength(1);
-        const bytes = readSessionArchiveContentSync(result.archivedTranscripts[0]!.archivedPath);
+        const bytes = readSessionArchiveText(result.archivedTranscripts[0]!.archivedPath);
         const transcript = bytes
           .trim()
           .split("\n")

@@ -3,7 +3,6 @@ import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   readSessionMethodScopeAccess,
@@ -425,7 +424,10 @@ export function renderChatPaneComposerControls(params: {
             throw new Error("Session capability is unavailable");
           }
           if (patched.listRefreshError && ownsOutcome()) {
-            state.chatError = state.lastError = t("chat.permissionControls.refreshFailed");
+            state.setRecoverableChatError(
+              t("chat.permissionControls.refreshFailed"),
+              patched.listRefreshError,
+            );
           }
         } catch (error) {
           if (!ownsRoute() || !ownsOutcome()) {
@@ -443,9 +445,7 @@ export function renderChatPaneComposerControls(params: {
             change = { ...change, retainWhileCurrent };
             selection.pending = change;
           }
-          state.chatError = state.lastError = t("chat.permissionControls.updateFailed", {
-            error: formatUiError(error),
-          });
+          state.setRecoverableChatError(t("chat.permissionControls.updateFailed"), error);
         } finally {
           if (ownsOutcome()) {
             selection.outcome = undefined;
