@@ -69,9 +69,9 @@ const enLabs = {
       description: "Templates are ready-made agents for specific tasks.",
     },
     hostDesktop: {
-      title: "This computer’s desktop",
+      title: "Desktop on the computer running OpenClaw",
       description:
-        "Watch and control this computer from the Desktop panel through its existing VNC or Screen Sharing server.",
+        "Watch and control the computer running OpenClaw from the Desktop panel through its existing VNC or Screen Sharing server.",
     },
     workerDesktop: {
       title: "Cloud device desktop",
