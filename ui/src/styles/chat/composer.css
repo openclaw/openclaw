@@ -325,11 +325,6 @@
   overflow: hidden;
   overscroll-behavior: contain;
   scrollbar-gutter: auto;
-  transition:
-    opacity var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) ease,
-    scale var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) ease,
-    display var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) allow-discrete,
-    overlay var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) allow-discrete;
 }
 
 /* Height eases only between views of a settled menu. Entry and exit keep the
