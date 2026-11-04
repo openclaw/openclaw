@@ -1,21 +1,27 @@
 import { createServer } from "node:http";
 import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import openrouterPlugin from "../../../extensions/openrouter/index.js";
-import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { registerSingleProviderPlugin } from "../../plugin-sdk/plugin-test-runtime.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
-import { reserveTestPortListener } from "../../test-utils/port-claims.js";
-import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
-import { resolveRuntimeHooks, type ProviderRuntimeHooks } from "./model.provider-hooks.js";
+  createEmptyAgentDiscoveryStores,
+  resolveModelAsync,
+} from "../../src/agents/embedded-agent-runner/model.js";
+import {
+  resolveRuntimeHooks,
+  type ProviderRuntimeHooks,
+} from "../../src/agents/embedded-agent-runner/model.provider-hooks.js";
 import {
   loadOpenRouterModelCapabilities,
   getLoadedOpenRouterModelCapabilities,
-} from "./openrouter-model-capabilities.js";
+} from "../../src/agents/embedded-agent-runner/openrouter-model-capabilities.js";
+import type { OpenClawConfig } from "../../src/config/config.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../src/test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import openrouterPlugin from "./index.js";
 
 const baseId = "openai/gpt-5.2";
 const row = {
