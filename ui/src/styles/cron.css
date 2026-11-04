@@ -189,6 +189,37 @@
   line-height: 1.45;
 }
 
+.cron-failure-details {
+  display: grid;
+  gap: var(--space-2);
+  margin-block: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--danger-subtle);
+  border-inline-start: 3px solid var(--danger);
+  border-radius: var(--radius-md);
+  background: var(--danger-subtle);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+}
+
+.cron-failure-details h2,
+.cron-failure-details p {
+  margin: 0;
+}
+
+.cron-failure-details h2 {
+  font-size: var(--control-ui-text-md);
+}
+
+.cron-failure-details__cause {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cron-failure-details .btn {
+  justify-self: start;
+}
+
 /* ── Jobs table (escape hatch inside the tasks group) ── */
 
 .cron-table {

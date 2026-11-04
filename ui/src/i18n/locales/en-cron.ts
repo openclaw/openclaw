@@ -83,6 +83,7 @@ const enCron = {
       deliverySection: "Delivery",
       active: "Active",
       paused: "Paused",
+      autoDisabled: "Auto-disabled",
     },
     actions: {
       runNow: "Run now",
@@ -96,6 +97,21 @@ const enCron = {
       removeConfirmMessage:
         "This permanently deletes the automation and stops all future runs. This action cannot be undone.",
       moreJob: "More actions for {name}",
+    },
+
+    attention: {
+      title: "Latest run failed",
+      autoDisabledTitle: "Automation stopped after an error",
+      causeUnknown:
+        "No failure details were recorded. Review the run history for available evidence.",
+      autoDisabledConsequence:
+        "Automatic runs are disabled. Review the run before resuming this automation.",
+      nextRun: "Next run is scheduled for {time}.",
+      noNextRun: "No further run is scheduled.",
+      running: "A new run is in progress. Review its outcome before starting another run.",
+      effectsUnknown:
+        "Some actions may already have taken effect. Review the run and verify the outcome before running it again.",
+      reviewRun: "Review run",
     },
 
     jobs: {
