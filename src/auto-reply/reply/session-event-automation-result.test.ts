@@ -399,6 +399,7 @@ it.for(["user", "restart", "superseded", "timeout", "stalled"] as const)(
               }),
               text: "Wait for cancellation.",
               admissionSource: "operator-schedule",
+              deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
               abortSignal: signal,
               assertCurrent() {},
             },
