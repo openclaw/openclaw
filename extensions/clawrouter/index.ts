@@ -41,6 +41,7 @@ import {
 import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { clawrouterMediaUnderstandingProvider } from "./audio-transcription.js";
 import { normalizeClawRouterApiBaseUrl, normalizeClawRouterRootUrl } from "./base-url.js";
+import { createClawRouterConverseStream } from "./converse-stream.js";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
 import { clawrouterEmbeddingProvider } from "./embedding-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
@@ -667,6 +668,7 @@ export default defineSingleProviderPluginEntry({
         return baseUrl !== providerConfig.baseUrl ? { ...providerConfig, baseUrl } : undefined;
       },
       normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
+      createStreamFn: createClawRouterConverseStream,
       resolveFastModeSupport,
       resolveServiceTiers,
       resolveNativeWebSearch,
@@ -678,7 +680,7 @@ export default defineSingleProviderPluginEntry({
         if (ctx.modelApi === "openai-completions" && ctx.modelId?.startsWith("mistral/")) {
           return mistralReplay.buildReplayPolicy?.(ctx);
         }
-        if (ctx.modelApi === "anthropic-messages") {
+        if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
           return anthropicReplay.buildReplayPolicy?.(ctx);
         }
         if (ctx.modelApi === "google-generative-ai") {
