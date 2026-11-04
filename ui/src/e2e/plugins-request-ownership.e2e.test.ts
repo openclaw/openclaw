@@ -9,9 +9,11 @@ import type {
   PluginsInspectResult,
 } from "../lib/plugins/index.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createPluginDeclaredSurface } from "../test-helpers/plugins-e2e-fixtures.test-support.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Plugin request ownership" });
@@ -238,4 +240,121 @@ suite.define(() => {
       });
     });
   });
+
+  it.each([false, true])(
+    "blocks plugin installation with visible feedback throughout update reconciliation (touch detail: %s)",
+    async (touch) => {
+      await suite.withPage(
+        {
+          viewport: touch ? { width: 390, height: 844 } : { width: 1280, height: 900 },
+          hasTouch: touch,
+          isMobile: touch,
+        },
+        async ({ page }) => {
+          const beta = detail("ch_YmV0YQ", "Beta");
+          const run = createUpdateRunFixture();
+          const gateway = await installMockGateway(page, {
+            featureMethods: [...featureMethods, "update.run", "update.status", "update.runs.get"],
+            deferredMethods: ["update.run", "update.runs.get", "plugins.install"],
+            methodResponses: {
+              "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
+              "plugins.catalog.browse": { items: [beta.plugin] },
+              "plugins.catalog.categories": {
+                categories: [
+                  {
+                    slug: "productivity",
+                    label: "Productivity",
+                    description: "Tasks and work organization.",
+                    icon: "list-todo",
+                    order: 0,
+                  },
+                ],
+              },
+              "plugins.catalog.get": beta,
+              "update.status": { activeRun: null, lastRun: null },
+            },
+          });
+          await page.goto(suite.server.baseUrl + "plugins");
+          if (touch) {
+            await page.locator('.plugin-catalog-card[data-plugin-id="ch_YmV0YQ"] a').tap();
+          }
+          const install = page
+            .getByRole("button", { name: touch ? "Install" : "Install Beta", exact: true })
+            .first();
+          await expect.poll(() => install.isEnabled()).toBe(true);
+          await evaluateControlUiContext(page, (context) => {
+            void context.overlays.runUpdate();
+          });
+          await gateway.waitForRequest("update.run");
+          await captureSettled(
+            page,
+            touch ? "plugin-update-in-progress-touch" : "plugin-update-in-progress",
+          );
+          await expect.poll(() => install.isDisabled()).toBe(true);
+          if (touch) {
+            const bounds = await install.boundingBox();
+            expect(bounds).not.toBeNull();
+            await page.touchscreen.tap(
+              bounds!.x + bounds!.width / 2,
+              bounds!.y + bounds!.height / 2,
+            );
+          }
+          expect(await gateway.getRequests("plugins.install")).toHaveLength(0);
+          await expect
+            .poll(() =>
+              page
+                .getByRole("status")
+                .filter({
+                  hasText: "Plugin installation is paused while OpenClaw updates. Please wait.",
+                })
+                .isVisible(),
+            )
+            .toBe(true);
+          await gateway.resolveDeferred("update.run", { ok: true, runId: run.runId });
+          await gateway.waitForRequest("update.runs.get");
+          await gateway.rejectDeferred("update.runs.get", {
+            code: "UNAVAILABLE",
+            message: "Synthetic update status temporarily unavailable",
+          });
+          await expect
+            .poll(() =>
+              page
+                .getByRole("status")
+                .filter({
+                  hasText:
+                    "Plugin installation is paused while OpenClaw checks the update status. Please wait.",
+                })
+                .isVisible(),
+            )
+            .toBe(true);
+          await captureSettled(
+            page,
+            touch ? "plugin-update-reconciliation-touch" : "plugin-update-reconciliation",
+          );
+          await expect.poll(() => install.isDisabled()).toBe(true);
+          expect(await gateway.getRequests("plugins.install")).toHaveLength(0);
+          await gateway.setMethodResponse("update.status", {
+            activeRun: null,
+            lastRun: { ...run, status: "failed", finishedAtMs: Date.now() },
+          });
+          await evaluateControlUiContext(page, (context) =>
+            context.overlays.refreshUpdateStatus("completion"),
+          );
+          await expect.poll(() => install.isEnabled()).toBe(true);
+          await expect
+            .poll(() =>
+              page.getByRole("status").filter({ hasText: "Plugin installation is paused" }).count(),
+            )
+            .toBe(0);
+          await install.click();
+          await gateway.waitForRequest("plugins.install");
+          expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
+          await gateway.rejectDeferred("plugins.install", {
+            code: "UNAVAILABLE",
+            message: "Synthetic install complete",
+          });
+        },
+      );
+    },
+  );
 });
