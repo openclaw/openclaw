@@ -372,7 +372,7 @@ describe("settings sidebar search", () => {
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);
     expect(container.querySelector<HTMLElement>('[role="status"]')?.textContent?.trim()).toBe(
-      "No matching settings.",
+      "No settings match your search.",
     );
 
     container.querySelector<HTMLButtonElement>(".settings-sidebar__search-clear")?.click();

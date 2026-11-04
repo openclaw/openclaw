@@ -268,6 +268,7 @@ export function createChatState<TState extends ChatPageHost>(
           () => {
             if (!state.chatQueuedEdit && hasPrivateDraft(state)) {
               showToast({
+                severity: "error",
                 actionPrimary: true,
                 message: t("chat.privateDraftReload.blocked"),
                 actionLabel: t("chat.privateDraftReload.review"),
@@ -278,6 +279,7 @@ export function createChatState<TState extends ChatPageHost>(
             const edit = state.chatQueuedEdit;
             const client = state.client;
             showToast({
+              severity: "error",
               actionPrimary: true,
               message: t("chat.queue.reloadBlocked"),
               actionLabel: state.reviewQueuedMessageEdit ? t("chat.queue.reviewEdit") : undefined,
@@ -497,6 +499,7 @@ export function createChatState<TState extends ChatPageHost>(
         hasPrivateDraft(state)
       ) {
         showToast({
+          severity: "error",
           actionPrimary: true,
           message: t("chat.privateDraftReload.changed"),
           actionLabel: t("chat.privateDraftReload.review"),

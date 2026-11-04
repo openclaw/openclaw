@@ -308,15 +308,11 @@ suite.define(() => {
     });
     await Promise.all(deliveries);
     const portal = requester.page.locator("openclaw-portals-page[embedded]");
-    await portal
-      .getByText("Machine ready. Waiting for your application…", { exact: true })
-      .waitFor();
+    await portal.getByText("Device ready. Waiting for your app…", { exact: true }).waitFor();
     expect(await requester.gateway.getRequests("portal.list")).toHaveLength(0);
     await captureUiProof(suite, requester.page, "screen-requester-routing", "pending-portal.png");
     await requester.page.reload();
-    await portal
-      .getByText("Machine ready. Waiting for your application…", { exact: true })
-      .waitFor();
+    await portal.getByText("Device ready. Waiting for your app…", { exact: true }).waitFor();
     expect(await requester.gateway.getRequests("portal.list")).toHaveLength(0);
 
     await screen.execute("show-web", {

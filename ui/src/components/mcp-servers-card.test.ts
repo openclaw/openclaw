@@ -258,9 +258,9 @@ it("starts the selected connector and keeps a usable link when the popup is bloc
     .mockResolvedValueOnce(browserStep)
     .mockResolvedValue({ status: "cancelled" });
   expect([request.mock.calls, open.mock.calls]).toEqual([[], []]);
-  expect(card.querySelector('[aria-label="Sign in docs"]')).toBeNull();
+  expect(card.querySelector('[aria-label="Sign in to docs"]')).toBeNull();
   openRow(card, "docs");
-  expectNamedAction(card, "Sign in docs", "Sign in");
+  expectNamedAction(card, "Sign in to docs", "Sign in");
   actionButton(card, "Sign in").click();
   await waitForFast(() => expect(card.querySelector(".wizard-step__external-link")).not.toBeNull());
   expect(request).toHaveBeenCalledWith(
@@ -290,7 +290,7 @@ const unavailableLoginCases: [NonNullable<Parameters<typeof mountLoginCard>[0]>,
   [{ server: { ...oauthServer, enabled: false } }, loginCommand],
   [
     { server: { ...oauthServer, oauth: { identity: "per-requester" } } },
-    "Each person signs in through this MCP server in chat.",
+    "Each person signs in to this MCP server in Chat.",
   ],
   [
     { server: { ...oauthServer, oauth: { authProfileId: "linked-account" } } },
@@ -302,7 +302,7 @@ it.each(unavailableLoginCases)(
   async (options, alternative) => {
     const { card, request, open, harness } = await mountLoginCard(options);
     openRow(card, "docs");
-    expect(card.querySelector('[aria-label="Sign in docs"]')).toBeNull();
+    expect(card.querySelector('[aria-label="Sign in to docs"]')).toBeNull();
     expect(card.textContent).toContain(alternative);
     if (options.admin === false) {
       // Reading a server stays open to read-only operators; only changes are blocked.
@@ -370,7 +370,7 @@ it.each(["target replacement", "agent selection", "disconnect", "capability drop
     await lateNext.promise;
     flush();
     expect(card.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(card.textContent).not.toContain("Authentication saved");
+    expect(card.textContent).not.toContain("Signed in");
     expect(replacementRequest).not.toHaveBeenCalled();
   },
 );
@@ -383,7 +383,7 @@ it.each([
       toolFilter: {},
       sslVerify: false,
     },
-    ["https://m.test/?keep=y&token=***", "tool filter · TLS verify off"],
+    ["https://m.test/?keep=y&token=***", "Tool filter · TLS verification off"],
     ["secret"],
   ],
   [
@@ -395,7 +395,7 @@ it.each([
       supportsParallelToolCalls: true,
       clientCert: "client.pem",
     },
-    ["node", "parallel · mTLS"],
+    ["node", "Parallel · mTLS"],
     ["server.js", "secret"],
   ],
   [
@@ -498,7 +498,7 @@ it("retries removal confirmation and removes arrays after queued writes settle",
     expect(card.querySelector('[data-mcp-name="docs"]')).not.toBeNull();
     expect(showConfirmDialog).toHaveBeenCalledWith({
       title: "Remove docs?",
-      message: expect.stringContaining("saved configuration"),
+      message: expect.stringContaining("saved command"),
       confirmLabel: "Remove",
       danger: true,
     });
