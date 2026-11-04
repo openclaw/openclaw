@@ -44,7 +44,7 @@ it("refreshes an open defaults dialog without replacing its focused folder contr
   await i18n.setLocale("de");
   await waitForSolid(() => {
     expect(modal.querySelector(".exec-approval-title")?.textContent).toBe(
-      "New session defaults for “Example”",
+      "Standardeinstellungen für neue Sitzungen in „Example“",
     );
     expect(mode()?.getAttribute("aria-label")).toBe("Umgebung: Aktueller Checkout");
     expect(document.body.querySelector("openclaw-modal-dialog")).toBe(modal);
