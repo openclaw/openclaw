@@ -253,7 +253,7 @@ export function createPayloadPatchStreamWrapper(
     context: Parameters<StreamFn>[1];
     /** Stream options passed by the runtime. */
     options: Parameters<StreamFn>[2];
-  }) => void,
+  }) => void | Promise<void>,
   wrapperOptions?: {
     shouldPatch?: (params: {
       /** Model selected for the stream call. */
