@@ -65,8 +65,8 @@ suite.define(() => {
             .locator(`.session-progress-card__step-marker[data-status="${status}"] > svg`)
             .first()
             .evaluate((svg) => {
-              const { width, height } = svg.getBoundingClientRect();
-              return { width, height };
+              const bounds = svg.getBoundingClientRect();
+              return { width: bounds.width, height: bounds.height };
             });
         const paused = await markerSize("paused");
         const pending = await markerSize("pending");
