@@ -445,6 +445,12 @@ GitHub integration, repository access, and account capacity must be configured
 before dispatch. Resource, cache, and artifact behavior still require live
 qualification before expanding the cutover.
 
+For artifact consumer qualification, set `ci_shape=main`. The Boat build keeps
+the 35-minute dispatch budget, and the plan selects the existing macOS runtime
+and published-driver artifact consumers even for a CI-only change. Those
+consumers remain selected on hosted retries. The macOS scope retains its native
+Node, Swift, and shared-package checks; no platform proof moves to Boat.
+
 ### RunsOn qualification
 
 The opt-in `runson` profile derives its plan from `hybrid`. It extracts the three
