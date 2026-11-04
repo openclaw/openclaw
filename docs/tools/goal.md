@@ -29,6 +29,11 @@ Detached command completions return to the originating user-facing thread, so
 the next turn continues to see the same goal even when command execution used
 a separate sandbox policy session.
 
+When a goal yields to subagents, the selected harness receives the same active-goal
+context when their results return. A successful child-result turn can continue the
+goal under the current runtime and placement policy. An unrelated command, failed
+return, or operator pause does not restart pursuit.
+
 ## Quick start
 
 ```text
