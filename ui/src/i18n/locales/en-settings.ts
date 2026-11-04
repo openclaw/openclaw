@@ -1266,7 +1266,7 @@ const enSettings = {
     installedAgents: {
       title: "Installed agents",
       description:
-        "Coding apps on this computer. Each app manages its own account and permissions. Enabling an app doesn’t sign you in.",
+        "Coding apps on the computer running OpenClaw. Each app manages its own account and permissions. Enabling an app doesn’t sign you in.",
       status: {
         installed: "Installed",
         unverified: "Not verified",
@@ -1274,12 +1274,12 @@ const enSettings = {
         discovering: "Discovering models…",
         modelsAvailable: "Models available",
       },
-      unverifiedHint: "Check this app’s custom launch command on this computer, then check again.",
-      notDetected: "Not found on this computer: {names}. Install one, then check again.",
+      unverifiedHint: "Check this app’s custom launch command on the computer running OpenClaw, then check again.",
+      notDetected: "Not found on the computer running OpenClaw: {names}. Install one, then check again.",
       disabledHint: "Enable this app to include its models in the picker.",
-      signInHint: "Open {name} on this computer and check its sign-in, then check again.",
+      signInHint: "Open {name} on the computer running OpenClaw and check its sign-in, then check again.",
       discoveryHint:
-        "Open {name} on this computer and check its access and sign-in, then check again.",
+        "Open {name} on the computer running OpenClaw and check its access and sign-in, then check again.",
       toggle: "Use {name}",
       check: "Check again",
       checking: "Checking…",

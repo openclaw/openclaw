@@ -19,7 +19,11 @@ import type {
   ModelProviderRemovalTarget,
 } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
-import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.tsx";
+import {
+  showProfileActionError,
+  showProfileActionWarning,
+  showProfileLogoutSuccess,
+} from "./profiles-view.tsx";
 import { updateRecordEntry } from "./record-state.ts";
 
 type PendingProfileOrder = {
@@ -195,7 +199,7 @@ export function createModelProviderProfileActions(options: {
             }
           }
           if (clearOptimisticOrder(provider, pending.optimisticOrder) && result.warning) {
-            showProfileActionError(result.warning);
+            showProfileActionWarning(result.warning);
           }
         } catch (error) {
           if (!isCurrent()) {

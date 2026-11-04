@@ -5,6 +5,7 @@ import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -25,6 +26,15 @@ export function showProfileActionError(error: unknown): void {
   showToast({
     placement: "bottom",
     message: modelProviderErrorMessage(error),
+    icon: "alertTriangle",
+    durationMs: 12_000,
+  });
+}
+
+export function showProfileActionWarning(warning: string): void {
+  showToast({
+    placement: "bottom",
+    message: formatUiExternalText(warning),
     icon: "alertTriangle",
     durationMs: 12_000,
   });
