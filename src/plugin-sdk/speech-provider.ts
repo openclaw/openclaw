@@ -1,5 +1,6 @@
 // Private provider construction helpers; keep registry and execution imports out of this leaf.
 export type { SpeechProviderPlugin } from "../plugins/types.js";
+export { recordModelFallbackStop } from "../agents/model-fallback-stop.js";
 export {
   normalizeApplyTextNormalization,
   normalizeLanguageCode,

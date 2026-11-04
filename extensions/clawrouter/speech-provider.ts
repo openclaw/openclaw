@@ -17,6 +17,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
 import { readElevenLabsSpeechConfig, synthesizeElevenLabsSpeech } from "./speech-elevenlabs.js";
+import {
+  OPENROUTER_SPEECH_MODELS,
+  readOpenRouterSpeechConfig,
+  synthesizeOpenRouterSpeech,
+} from "./speech-openrouter.js";
 
 const MODEL = "openai/tts-1";
 const VOICES = OPENAI_TTS_VOICES;
@@ -32,8 +37,21 @@ function readVoice(raw: Record<string, unknown>) {
 
 function readConfig(raw: Record<string, unknown>, path: string) {
   const upstreamProvider = normalizeOptionalString(raw.upstreamProvider) ?? "openai";
-  if (!["openai", "gradium", "azure-speech", "elevenlabs"].includes(upstreamProvider)) {
+  if (
+    !["openai", "gradium", "azure-speech", "elevenlabs", "openrouter"].includes(upstreamProvider)
+  ) {
     throw new Error("Unsupported ClawRouter speech upstreamProvider");
+  }
+  if (upstreamProvider === "openrouter") {
+    return {
+      ...readOpenRouterSpeechConfig(raw),
+      upstreamProvider,
+      apiKey: normalizeResolvedSecretInputString({ value: raw.apiKey, path: path + ".apiKey" }),
+      baseUrl: normalizeOptionalString(raw.baseUrl),
+      profileId: normalizeOptionalString(raw.profileId),
+      instructions: undefined,
+      lang: "en-US",
+    };
   }
   if (upstreamProvider === "elevenlabs") {
     return {
@@ -189,7 +207,16 @@ export function buildClawRouterSpeechProvider(
       }),
       defaultTimeoutMs: req.timeoutMs,
     });
+    req.signal?.throwIfAborted();
     const base = readConfig(req.providerConfig, "tts.providers.clawrouter");
+    if (base.upstreamProvider === "openrouter") {
+      return synthesizeOpenRouterSpeech({
+        request: req,
+        resolveContext: () => resolveAuth(req.cfg, req.providerConfig),
+        fetchWithSsrFGuard: context.fetchWithSsrFGuard,
+        remaining,
+      });
+    }
     if (base.upstreamProvider === "elevenlabs") {
       return synthesizeElevenLabsSpeech({
         request: req,
@@ -424,7 +451,7 @@ export function buildClawRouterSpeechProvider(
     id: "clawrouter",
     label: "ClawRouter",
     defaultModel: MODEL,
-    models: [MODEL],
+    models: [MODEL, ...OPENROUTER_SPEECH_MODELS.map((model) => "openrouter/" + model)],
     voices: VOICES,
     resolveConfig: ({ rawConfig }) => ttsConfig(rawConfig),
     parseDirectiveToken: createSpeechDirectiveParser({

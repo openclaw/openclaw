@@ -62,6 +62,15 @@ JavaScript-only host export; its declarations are excluded from the package.
 
     Uses core `tts` configuration and provider selection. Returns PCM audio buffer + sample rate. `textToSpeechStream` is also available for streaming synthesis.
 
+    Buffered `textToSpeech` and speech-provider requests accept an optional `signal`.
+    Providers that implement cancellation should pass it through their request and
+    body reads. Caller cancellation stops provider fallback. A provider with a
+    possibly committed paid request can call `recordModelFallbackStop(error)` from
+    the existing `openclaw/plugin-sdk/speech-provider` entrypoint before throwing
+    that same error. The marker stops replay only; it does not classify billing or
+    refunds. Leave pre-dispatch validation errors unmarked so ordinary fallback
+    remains available.
+
     `buildSystemPromptHintAsync(config, agentId?, options?)` prepares the TTS prompt hint through the state owner and returns `Promise<string | undefined>`. It is optional on older host interfaces; require an upgrade when absent. See the [async prompt preparation recipe](/plugins/sdk-migration/async-transcript-and-tts#tts-prompts).
 
   </Accordion>

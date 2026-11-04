@@ -1,4 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import { isRecordedModelFallbackStop } from "../agents/model-fallback-stop.js";
 import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
 import { logVerbose } from "../globals.js";
@@ -258,6 +259,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   synthesisText: string;
   providerOverrides?: Record<string, SpeechProviderOverrides>;
   timeoutMs?: number;
+  signal?: AbortSignal;
   target: SpeechSynthesisTarget;
   logLabel: string;
   providerRegistry: TtsProviderRegistry;
@@ -301,6 +303,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
     try {
+      params.signal?.throwIfAborted();
       const providerRegistry = params.providerRegistry;
       const target = params.target;
       const resolveReadyProvider = async (): Promise<TtsProviderReadyResolution> => {
@@ -398,6 +401,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target: params.target,
         timeoutMs,
+        signal: params.signal,
       };
       const overrides = await resolvedProvider.provider.prepareSynthesis?.({ ...request });
       const prepared = {
@@ -409,6 +413,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
           ? { ...request.providerOverrides, ...overrides.providerOverrides }
           : request.providerOverrides,
       };
+      params.signal?.throwIfAborted();
       const synthesis = await operation.synthesize({
         text: prepared.text,
         cfg,
@@ -416,8 +421,10 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         target: params.target,
         providerOverrides: prepared.providerOverrides,
         timeoutMs,
+        signal: params.signal,
       });
       try {
+        params.signal?.throwIfAborted();
         const latencyMs = Date.now() - providerStart;
         attempts.push({
           provider,
@@ -468,6 +475,9 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
               : "none",
         error: errorMsg,
       });
+      if (params.signal?.aborted || isRecordedModelFallbackStop(err)) {
+        break;
+      }
       if (provider === primaryProvider) {
         const hasFallbacks = providers.length > 1;
         logVerbose(

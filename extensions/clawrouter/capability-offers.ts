@@ -231,6 +231,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
     const body = await readProviderJsonResponse(response, "clawrouter.capability-catalog", {
       maxBytes: 1024 * 1024,
       timeoutMs: remaining,
+      signal: params.signal,
     });
     if (params.requireFreshProxyCatalog) {
       const catalog = asOptionalRecord(body);
