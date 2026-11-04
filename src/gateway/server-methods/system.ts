@@ -49,6 +49,7 @@ import {
 } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { acceptsPresenceDeltas, createPresenceReset } from "../presence-delivery.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
@@ -80,7 +81,10 @@ function resolveCachedAdvertisedLanHost(): Promise<string | null> {
   return advertisedLanHostPromise;
 }
 
-async function collectSystemInfo(context: GatewayRequestContext): Promise<SystemInfoResult> {
+async function collectSystemInfo(
+  context: GatewayRequestContext,
+  includePaths: boolean,
+): Promise<SystemInfoResult> {
   const { cpuCount, cpuModel } = cpuInfoSnapshot;
   const [oneMinute = 0, fiveMinutes = 0, fifteenMinutes = 0] = os.loadavg();
   const loadAverage: [number, number, number] = [oneMinute, fiveMinutes, fifteenMinutes];
@@ -102,7 +106,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
   const port = resolveGatewayPort(config);
   const [lanAddress, disks] = await Promise.all([
     resolveCachedAdvertisedLanHost(),
-    readSystemDisks(),
+    includePaths ? readSystemDisks() : undefined,
   ]);
   const soleAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const defaultAgentUtilityModel: SystemInfoResult["defaultAgentUtilityModel"] =
@@ -177,18 +181,20 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     memoryTotalBytes: os.totalmem(),
     memoryFreeBytes: readHostFreeMemoryBytes(),
     ...readGatewayProcessVitals(context.getEventLoopHealth),
+    // Host paths are admin-only, matching the connect snapshot's stateDir gate.
     // Keep the existing state-volume reading when native discovery is unavailable;
     // an empty successful discovery intentionally stays empty.
-    disks:
-      disks ??
-      (disk?.totalBytes != null && disk.totalBytes > 0
-        ? [{ path: stateDir, totalBytes: disk.totalBytes, availableBytes: disk.availableBytes }]
-        : undefined),
+    disks: !includePaths
+      ? undefined
+      : (disks ??
+        (disk?.totalBytes != null && disk.totalBytes > 0
+          ? [{ path: stateDir, totalBytes: disk.totalBytes, availableBytes: disk.availableBytes }]
+          : undefined)),
     ...(disk?.totalBytes != null
       ? {
           diskTotalBytes: disk.totalBytes,
           diskAvailableBytes: disk.availableBytes,
-          diskPath: stateDir,
+          ...(includePaths ? { diskPath: stateDir } : {}),
         }
       : {}),
     defaultAgentUtilityModel,
@@ -264,11 +270,11 @@ export const systemHandlers: GatewayRequestHandlers = {
       respond(true, presence, undefined);
     }
   },
-  "system.info": async ({ params, respond, context }) => {
+  "system.info": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSystemInfoParams, "system.info", respond)) {
       return;
     }
-    respond(true, await collectSystemInfo(context), undefined);
+    respond(true, await collectSystemInfo(context, hasGatewayAdminScope(client)), undefined);
   },
   "system-event": async (options) => {
     const { params, respond, context, client } = options;
