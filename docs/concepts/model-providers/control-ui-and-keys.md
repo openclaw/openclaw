@@ -16,6 +16,8 @@ writer: key material stays in the auth store, and configured providers reference
 the saved profile. Environment-provided keys remain managed by the Gateway
 process environment. The page distinguishes saved accounts from API keys managed in config or the
 environment without revealing keys.
+Use **Test access** to check whether a provider account can use its models.
+You can view Models without admin access, but only admins can change model settings.
 
 Saving a key and refreshing the catalog are separate outcomes. If refresh fails,
 the saved key remains; follow the reported recovery step. Removing a stored key
@@ -38,7 +40,7 @@ provider data.
 
 After an account's quota recovers, model availability reflects the recovered account even if a catalog refresh began while it was blocked.
 
-Open **Model Setup** from the page header to inspect detected AI access. When available, it shows the authentication method (API key or account sign-in) and the actual email address reported by the provider or local runtime. API keys and tokens stay hidden.
+Open **Models** from the page header to inspect detected AI access. When available, it shows the authentication method (API key or account sign-in) and the actual email address reported by the provider or local runtime. API keys and tokens stay hidden.
 
 Use **Test connection** to run a live provider check and see latency or a categorized authentication, rate-limit, billing, timeout, or response error. A check makes a real provider request and may consume a small number of tokens. OAuth and token profiles can also be logged out from the provider card.
 

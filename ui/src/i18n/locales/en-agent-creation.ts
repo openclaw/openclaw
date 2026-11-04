@@ -7,18 +7,16 @@ const enAgentCreation = {
     createDialogName: "Name your agent",
     creationRequiresAdmin: "You need admin access to create an agent.",
     creationRequiresConnection: "Reconnect to create an agent.",
-    creationUnsupported: "This Gateway does not support agent creation",
-    creationUnavailable:
-      "Agent creation is unavailable. Ask an admin to check your access and the Gateway version.",
+    creationUnsupported: "This Gateway doesn’t support agent creation.",
+    creationUnavailable: "You need admin access to create an agent.",
     rosterUnavailable: "Couldn’t load your agents. Reconnect and try again.",
     creationUncertain:
-      "The Gateway hasn't confirmed whether your agent was saved. Reconnect, then choose Create new agent to check the same attempt before creating another agent.",
+      "The Gateway hasn’t confirmed whether your agent was saved. Reconnect, then choose Create new agent to check before trying again.",
     creationRecovered:
-      "The saved agent was recovered, but its opening message was not confirmed. If its chat is unavailable, apply the saved configuration or restart the Gateway.",
-    creationFailed:
-      "Couldn’t create the agent. Check your account in Models and try again. {error}",
+      "Your agent was recovered, but its first message wasn’t confirmed. If its session is unavailable, apply the saved configuration or restart the Gateway.",
+    creationFailed: "Couldn’t create an agent. Check your account in Models and try again. {error}",
     chatStartFailed:
-      "Your agent was created, but its first message couldn’t be sent. Open Chat to continue. {error}",
+      "Your agent was created. Couldn’t send its first message. Open its session to continue. {error}",
   },
 } satisfies TranslationMap;
 

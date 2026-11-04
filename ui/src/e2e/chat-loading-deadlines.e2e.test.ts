@@ -222,7 +222,7 @@ suite.define(() => {
           expect(errorText).toContain("Couldn’t load the conversation in time. Try again.");
           expect(await retry.isEnabled()).toBe(true);
           expect(
-            await page.getByRole("button", { name: "Loading chat", exact: true }).count(),
+            await page.getByRole("button", { name: "Loading conversation…", exact: true }).count(),
           ).toBe(0);
           const send = page.locator(".chat-send-btn--send");
           expect(await send.isEnabled()).toBe(true);

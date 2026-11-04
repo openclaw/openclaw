@@ -108,7 +108,7 @@ export async function runHeaderSessionOperation(
     );
     const resolvedRow = currentRow ?? (session.sessionId ? row : null);
     if (!resolvedRow && notify) {
-      showToast({ message: t("common.refresh") });
+      showToast({ severity: undefined, message: t("common.refresh") });
     }
     return resolvedRow ? toActionSession(resolvedRow) : null;
   };

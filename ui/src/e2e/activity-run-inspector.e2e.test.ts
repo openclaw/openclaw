@@ -922,7 +922,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}activity?view=run&run=${runId}`);
-      await page.getByRole("heading", { name: "Loading run inspection" }).waitFor();
+      await page.getByRole("heading", { name: "Loading run inspection…" }).waitFor();
       await screenshot(page, "06-loading.png");
       await gateway.rejectDeferred("audit.run.inspect", {
         code: "UNAVAILABLE",

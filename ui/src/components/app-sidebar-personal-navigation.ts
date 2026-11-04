@@ -94,6 +94,7 @@ export function hidePersonalSidebarCatalog(
   );
   message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
   showToast({
+    severity: "success",
     message,
     actionLabel: t("common.undo"),
     onAction: () => setStoredSessionCatalogHidden(catalogId, false),

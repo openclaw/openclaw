@@ -124,7 +124,7 @@ it.each([
   let expected: CronJob | null = linked;
   if (intent === "show all runs") {
     const showAll = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Show all runs",
+      (button) => button.textContent?.trim() === "Show all activity",
     );
     expect(showAll).toBeDefined();
     showAll!.click();

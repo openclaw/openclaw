@@ -188,7 +188,7 @@ describe("renderChatComposer context usage", () => {
       expect(part(container, "context-value")).toBeNull();
       const ring = contextRingFor(container);
       if (withPlanUsage) {
-        expect(ring?.getAttribute("aria-label")).toBe("Usage Remaining");
+        expect(ring?.getAttribute("aria-label")).toBe("Usage remaining");
         expect(part(container, "limit")?.textContent).toContain("72%");
       } else {
         expect(ring).toBeNull();
