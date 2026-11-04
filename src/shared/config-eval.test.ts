@@ -18,11 +18,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const truthy = (config: unknown, key: string) => isConfigPathTruthyWithDefaults(config, key, {});
 const prepared = async (bin = "fixture-tool") =>
   (await prepareBinaryAvailability([bin])).hasBinary(bin);
-function setup(platform?: "linux" | "win32") {
+function setup(platform?: "linux" | "win32", tempRoot?: string) {
   if (platform) {
     mockProcessPlatform(platform);
   }
-  const root = tempDirs.make("openclaw-binary-");
+  const root = tempDirs.make("openclaw-binary-", tempRoot);
   vi.stubEnv("PATH", root);
   vi.stubEnv("PATHEXT", ".EXE;.CMD");
   return root;
@@ -109,7 +109,7 @@ it.each(["linux", "win32"] as const)("rechecks misses on unchanged %s PATH", (pl
 });
 
 it.each([false, true])("refreshes binary facts with relative PATH: %s", async (relative) => {
-  const root = setup("linux");
+  const root = setup("linux", process.cwd());
   const dir = relative ? path.relative(process.cwd(), root) : root;
   vi.stubEnv("PATH", [path.join(dir, "missing"), dir].join(path.delimiter));
   const executable = path.join(root, "fixture-tool");
