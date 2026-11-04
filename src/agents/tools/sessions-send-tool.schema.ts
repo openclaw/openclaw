@@ -5,6 +5,7 @@ import { requesterProfileSchema } from "../schema/typebox.js";
 export const SessionsSendToolSchema = Type.Object({
   user: requesterProfileSchema({ defaultToTurnOwner: true }),
   sessionKey: Type.Optional(Type.String()),
+  idempotencyKey: Type.Optional(Type.String({ minLength: 1 })),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
@@ -13,6 +14,7 @@ export const SessionsSendToolSchema = Type.Object({
   mode: Type.Optional(
     Type.Union([
       Type.Literal("notify"),
+      Type.Literal("post"),
       Type.Literal("steer"),
       Type.Literal("followup"),
       Type.Literal("resume"),
@@ -28,6 +30,17 @@ const SessionsSendDeliverySchema = Type.Object(
 );
 
 export const SessionsSendOutputSchema = Type.Union([
+  Type.Object(
+    {
+      status: Type.Literal("posted"),
+      sessionKey: Type.String(),
+      sessionId: Type.String(),
+      messageId: Type.String(),
+      sourceSessionKey: Type.Optional(Type.String()),
+      replayed: Type.Boolean(),
+    },
+    { additionalProperties: false },
+  ),
   Type.Object(
     {
       status: Type.Literal("started"),

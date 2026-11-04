@@ -6,6 +6,7 @@ import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/li
 import { resolveCanonicalMainSessionKey } from "../../config/sessions/main-session-key.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isGatewayClientRequestError } from "../../gateway/call.js";
+import { isSessionCreatorProfile } from "../../gateway/session-creator.js";
 import {
   createSessionVisibilityDecisionChecker,
   logSessionOwnershipLookupFailure,
@@ -30,7 +31,10 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+} from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
@@ -61,7 +65,9 @@ type SessionToolActionFact = "committed" | "conflict" | "no-op" | "scheduled";
 
 type DescribedSessionVisibilityRow = SessionVisibilityRow & { sessionId?: string };
 
-function readDescribedSessionVisibilityRow(value: unknown): DescribedSessionVisibilityRow | null {
+export function readDescribedSessionVisibilityRow(
+  value: unknown,
+): DescribedSessionVisibilityRow | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -206,9 +212,41 @@ export async function runSessionToolActionWithConflictReceipt<T>(params: {
   }
 }
 
+/** The Gateway's creator predicate, with identity from current server-held tool authority. */
+export function isSessionToolRequesterCreator(actor: unknown): boolean {
+  const profileId = resolveGatewayToolOperatorSelection().operatorAuthority?.profileId;
+  return Boolean(
+    profileId &&
+    isRecord(actor) &&
+    actor.type === "human" &&
+    isRecord(actor.identity) &&
+    actor.identity.type === "profile" &&
+    typeof actor.identity.id === "string" &&
+    isSessionCreatorProfile({ type: "human", source: "profile", id: actor.identity.id }, profileId),
+  );
+}
+
+/** Creator reads supplement spawned-tree scope, never an explicit self/agent/A2A denial. */
+export function resolveSessionToolCreatorReadAccess(
+  decision: SessionVisibilityDecision,
+  actor: unknown,
+): SessionVisibilityDecision {
+  return !decision.allowed &&
+    decision.reasonCode === "tree_visibility_restricted" &&
+    isSessionToolRequesterCreator(actor)
+    ? { allowed: true }
+    : decision;
+}
+
+export function hasSessionToolRequesterProfile(): boolean {
+  return Boolean(resolveGatewayToolOperatorSelection().operatorAuthority?.profileId);
+}
+
 /** Check one prepared target without re-listing the requester's spawned sessions. */
 export async function resolveSessionToolAccess(params: {
   action: Exclude<SessionAccessAction, "list">;
+  /** Only read-only callers opt in; status-shaped management checks keep their old scope. */
+  allowCreatorRead?: boolean;
   watch?: boolean;
   displayAction?: SessionAccessAction | "search";
   requesterAgentId: string;
@@ -344,9 +382,17 @@ export async function resolveSessionToolAccess(params: {
     return finish(false);
   }
   const requesterOwnedAccess = check(true);
+  const creatorReadEligible =
+    params.action !== "send" &&
+    params.allowCreatorRead === true &&
+    !initial.allowed &&
+    initial.reasonCode === "tree_visibility_restricted";
   // Ownership proof can only widen tree visibility; do not let an operational
   // lookup failure replace a deterministic self/A2A policy denial.
-  if (!requesterOwnedAccess.allowed) {
+  if (
+    !requesterOwnedAccess.allowed &&
+    (!creatorReadEligible || !hasSessionToolRequesterProfile())
+  ) {
     return initial.allowed ? finish(false) : deny(initial);
   }
   if (authorizationTargetSessionKey === params.targetSessionKey) {
@@ -358,6 +404,20 @@ export async function resolveSessionToolAccess(params: {
         params: { key: params.targetSessionKey, agentId: params.targetAgentId },
       });
       const row = readDescribedSessionVisibilityRow(described?.session);
+      if (
+        creatorReadEligible &&
+        row?.key === params.targetSessionKey &&
+        (!row.agentId || row.agentId === params.targetAgentId) &&
+        isRecord(described?.session) &&
+        resolveSessionToolCreatorReadAccess(initial, described.session.createdActor).allowed
+      ) {
+        return {
+          allowed: true,
+          ...(typeof described.session.sessionId === "string"
+            ? { expectedSessionId: described.session.sessionId }
+            : {}),
+        };
+      }
       if (
         row?.key === params.targetSessionKey &&
         (row.agentId ?? parseAgentSessionKey(row.key)?.agentId) === params.targetAgentId &&

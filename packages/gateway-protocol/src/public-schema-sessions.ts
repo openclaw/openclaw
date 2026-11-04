@@ -130,6 +130,7 @@ export {
   SessionMovePlacementStateSchema,
   SessionMovePlacementSchema,
   SessionsMoveResultSchema,
+  SessionsPostParamsSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SESSIONS_PATCH_MANY_MAX_TARGETS,

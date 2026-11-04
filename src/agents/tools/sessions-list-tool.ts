@@ -7,6 +7,7 @@ import { SessionRunStatusSchema } from "../../../packages/gateway-protocol/src/s
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionTitle, prepareSessionTitleRead } from "../../gateway/session-utils-core.js";
+import { createSessionVisibilityDecisionChecker } from "../../plugin-sdk/session-visibility-internal.js";
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
 import { largestFittingValue } from "../../shared/largest-fitting-value.js";
@@ -41,7 +42,10 @@ import {
 } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
-  createSessionVisibilityRowChecker,
+  hasSessionToolRequesterProfile,
+  resolveSessionToolCreatorReadAccess,
+} from "./sessions-access.js";
+import {
   classifySessionListKind,
   deriveChannel,
   resolveDisplaySessionKey,
@@ -213,7 +217,7 @@ export function createSessionsListTool(opts?: {
         Boolean(gatewayContext) ||
         hasGatewayToolRoutingContext();
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
-      const visibilityGuard = createSessionVisibilityRowChecker({
+      const visibilityGuard = createSessionVisibilityDecisionChecker({
         action: "list",
         defaultAgentId: requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
@@ -275,7 +279,10 @@ export function createSessionsListTool(opts?: {
             includeLastMessage: false,
             includeGlobal: !restrictToSpawned,
             includeUnknown: !restrictToSpawned,
-            spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
+            spawnedBy:
+              restrictToSpawned && !hasSessionToolRequesterProfile()
+                ? effectiveRequesterKey
+                : undefined,
           },
         });
         const pageSessions = Array.isArray(page?.sessions) ? page.sessions : [];
@@ -329,17 +336,20 @@ export function createSessionsListTool(opts?: {
             continue;
           }
           seenSessions.add(identity);
-          const access = visibilityGuard.check({
-            key,
-            agentId: resolvedAgentId,
-            ownerSessionKey:
-              typeof (entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"
-                ? (entry as { ownerSessionKey?: string }).ownerSessionKey
-                : undefined,
-            spawnedBy: readStringValue(entry.spawnedBy),
-            parentSessionKey: readStringValue(entry.parentSessionKey),
-            childOwnerSessionKeys: entry.childOwnerSessionKeys,
-          });
+          const access = resolveSessionToolCreatorReadAccess(
+            visibilityGuard.check({
+              key,
+              agentId: resolvedAgentId,
+              ownerSessionKey:
+                typeof (entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"
+                  ? (entry as { ownerSessionKey?: string }).ownerSessionKey
+                  : undefined,
+              spawnedBy: readStringValue(entry.spawnedBy),
+              parentSessionKey: readStringValue(entry.parentSessionKey),
+              childOwnerSessionKeys: entry.childOwnerSessionKeys,
+            }),
+            entry.createdActor,
+          );
           const kind = classifySessionListKind(entry);
           if (
             access.allowed &&

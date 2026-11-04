@@ -242,6 +242,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   // Params-aware plus state-aware: the handler permits write-scoped cwd only
   // inside configured agent workspaces; execNode and other privileged modes stay admin.
   ["sessions.create", "sessions-create", "dynamic", "<=2026.7", { startup: true }],
+  ["sessions.post", "sessions-messaging", "operator.write", "2026.11"],
   ["sessions.send", "sessions-messaging", "operator.write", "<=2026.7", { startup: true }],
   ["sessions.abort", "sessions-abort", "operator.write", "<=2026.7", { startup: true }],
   // Dynamic mutation scope policy, including write-scoped model overrides, lives
@@ -748,4 +749,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.files.preview.release", "sessions-files", "operator.read", "2026.10"],
   ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
   ["sessions.groups.create", "sessions-groups", "operator.write", "2026.10"],
+  ["sessions.catalog.resolve", "session-catalog", "operator.read", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
