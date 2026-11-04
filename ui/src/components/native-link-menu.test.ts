@@ -65,11 +65,11 @@ it.each([
   menu.querySelector<HTMLButtonElement>('[data-value="copy"]')!.click();
   expect(menu.isConnected).toBe(false);
   expect(copy).toHaveBeenCalledExactlyOnceWith(anchor.href);
-  expect(host.querySelector('[role="status"]')).toBeNull();
+  expect(host.querySelector(".app-toast")).toBeNull();
 
   pending.resolve(copied);
   await waitForSolid(() => {
-    expect(host.querySelector('[role="status"]')?.textContent).toContain(message);
+    expect(host.querySelector(".app-toast")?.textContent).toContain(message);
   });
 });
 

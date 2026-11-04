@@ -7,12 +7,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { config, configMocks, pluginResponses } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Plugin whole-value schema controls" });
-const unionMember = (key: string): JsonSchema => ({
-  type: "object",
-  properties: { [key]: { type: "string" } },
-  required: [key],
-  additionalProperties: false,
-});
 const pluginConfig = (value: Record<string, unknown>) => ({
   ...config,
   plugins: {
@@ -36,7 +30,12 @@ suite.define(() => {
     {
       name: "root union",
       schema: {
-        anyOf: [unionMember("local"), unionMember("remote")],
+        anyOf: ["local", "remote"].map<JsonSchema>((key) => ({
+          type: "object",
+          properties: { [key]: { type: "string" } },
+          required: [key],
+          additionalProperties: false,
+        })),
       },
       before: { local: "Before" },
       after: { remote: "After" },
@@ -60,6 +59,7 @@ suite.define(() => {
     "edits and reloads a $name without splitting its value",
     async ({ schema, before, after, json }) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        await page.clock.install();
         const saved = pluginConfig(before);
         const gateway = await installMockGateway(page, {
           operatorScopes: ["operator.read", "operator.admin"],
@@ -105,7 +105,9 @@ suite.define(() => {
         expect(JSON.parse(String(asRecord(write.params).raw))).toEqual(pluginConfig(after));
         // A captured request precedes the Gateway reply; reload only after
         // the existing writer has acknowledged and retained the saved value.
-        await page.getByRole("button", { name: "Apply changes", exact: true }).waitFor();
+        const apply = page.getByRole("button", { name: "Apply changes", exact: true });
+        await expect.poll(() => page.clock.runFor(1_000).then(() => apply.isVisible())).toBe(true);
+        await page.clock.resume();
         await page.reload();
         await search.waitFor();
         if (json) {

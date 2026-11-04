@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
@@ -48,10 +47,10 @@ const directory: UsersListResult = {
 async function routeAvatars(page: Page, requests: string[]) {
   await page.route("**/api/users/**/avatar*", (route) => {
     requests.push(route.request().url());
-    return route.fulfill({
-      contentType: "image/png",
-      body: readFileSync("ui/public/apple-touch-icon.png"),
-    });
+    if (new URL(route.request().url()).pathname === "/api/users/profile-missing/avatar") {
+      return route.fulfill({ status: 404 });
+    }
+    return route.fulfill({ path: "ui/public/apple-touch-icon.png" });
   });
 }
 const referenceBounds = (references: Locator) =>
@@ -136,17 +135,17 @@ async function alignMentions(page: Page, viewport: { scale: number; font: string
     references.evaluateAll((elements) =>
       elements.map((element) => {
         const avatar = element.querySelector(".markdown-person-reference__avatar")!;
-        const name = [...element.childNodes].find(
-          (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
-        )!;
-        const range = document.createRange();
-        range.selectNodeContents(name);
-        const textBox = range.getClientRects()[0]!;
+        // A Range uses font ascent/descent, but avatars align to the capitals.
+        const capProbe = document.createElement("span");
+        capProbe.style.cssText = "display:inline-block;width:0;height:1cap;vertical-align:baseline";
+        avatar.after(capProbe);
+        const capBox = capProbe.getBoundingClientRect();
+        capProbe.remove();
         const box = avatar.getBoundingClientRect();
         const css = getComputedStyle(element);
         const size = Number.parseFloat(css.fontSize) + 2;
         const checks = {
-          aligned: Math.abs(box.top + box.height / 2 - (textBox.top + textBox.height / 2)) <= 1,
+          aligned: Math.abs(box.top + box.height / 2 - (capBox.top + capBox.height / 2)) <= 1,
           sized: box.width > 0 && box.width === size && box.height === size,
           fitsLine: box.height <= Number.parseFloat(css.lineHeight),
           borderless: css.borderWidth === "0px",
@@ -176,10 +175,12 @@ async function alignMentions(page: Page, viewport: { scale: number; font: string
   await expect
     .poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth))
     .toBeGreaterThan(0);
-  expect(await references.nth(1).locator("img").count()).toBe(0);
-  expect(avatarRequests.map((url) => new URL(url).pathname + new URL(url).search)).toEqual([
-    "/api/users/profile-photo/avatar?v=2",
-  ]);
+  const missingAvatar = references.nth(1).locator(".markdown-person-reference__avatar.is-fallback");
+  await browserExpect(missingAvatar).toHaveAttribute("data-initials", "FN");
+  await browserExpect(missingAvatar.locator("img")).toBeHidden();
+  expect(
+    avatarRequests.map((url) => new URL(url).pathname + new URL(url).search).toSorted(),
+  ).toEqual(["/api/users/profile-missing/avatar?v=2", "/api/users/profile-photo/avatar?v=2"]);
   expect(await referenceBounds(references)).toEqual(before);
   expect(await geometry()).toEqual([[], []]);
   expect(await references.allTextContents()).toEqual([label, label]);

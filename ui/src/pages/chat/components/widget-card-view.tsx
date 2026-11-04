@@ -572,7 +572,7 @@ function CanvasPreview(props: {
                 }
                 const frame = source instanceof HTMLIFrameElement ? source : source?.previewFrame;
                 if (!frame) {
-                  showToast({ message: t("chat.toolCards.widgetExportFailed") });
+                  showToast({ severity: "error", message: t("chat.toolCards.widgetExportFailed") });
                   return;
                 }
                 const documentHtml =
@@ -580,7 +580,10 @@ function CanvasPreview(props: {
                 void exportWidget(value, frame, title, { documentHtml })
                   .then((result) => {
                     if (result === "rerender-required") {
-                      showToast({ message: t("chat.toolCards.widgetExportRerender") });
+                      showToast({
+                        severity: "error",
+                        message: t("chat.toolCards.widgetExportRerender"),
+                      });
                     } else if (result === "html") {
                       showToast({ message: t("chat.toolCards.widgetExportHtmlFallback") });
                     } else if (value === "copy") {
@@ -588,7 +591,10 @@ function CanvasPreview(props: {
                     }
                   })
                   .catch(() => {
-                    showToast({ message: t("chat.toolCards.widgetExportFailed") });
+                    showToast({
+                      severity: "error",
+                      message: t("chat.toolCards.widgetExportFailed"),
+                    });
                   });
               }}
             />
