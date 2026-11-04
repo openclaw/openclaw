@@ -98,14 +98,15 @@ it("drops empty assistant turns while preserving the user turn", async () => {
   await check([user, assistant([text(" ")]), assistant([], { stopReason: "error" })], [user]);
 });
 
-it("keeps user and tool-result content nonempty", async () => {
+it("keeps blank tool results available for provider-specific replay", async () => {
+  const content = Object.freeze([Object.freeze(text("   ")), Object.freeze(text(""))]);
   const input = castAgentMessages([
-    { role: "user", content: [text(""), text("")] },
-    { role: "toolResult", toolCallId: "tool-1", content: [text("   "), text("")] },
+    { role: "user", content },
+    { role: "toolResult", toolCallId: "tool-1", content },
   ]);
   await check(input, [
     { ...input[0], content: [text("[empty content omitted]")] },
-    { ...input[1], content: [text("[empty content omitted]")] },
+    { ...input[1], content },
   ]);
 });
 
