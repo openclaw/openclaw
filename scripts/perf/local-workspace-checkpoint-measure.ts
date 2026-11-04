@@ -88,7 +88,7 @@
  * --acceleration with a native dependency fixture; run two identical controls
  * and five counterbalanced baseline/candidate pairs. Child CPU is excluded.
  * Add --owner-switch --head-advance cold to start the contender on other-first,
- * after worker warmup, while a new commit still requires a cold template.
+ * after warming both creation owners, while a new commit still needs a cold template.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -921,6 +921,9 @@ measurement: try {
       contenderGit("commit", "--quiet", "-m", "Synthetic contender");
       const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
       const service = new ManagedWorktreeService({ getConfig: () => config });
+      if (values["owner-switch"]) {
+        await service.create({ repoRoot: contenderRepo, name: "warmup", baseRef: "HEAD" });
+      }
       createContender = async () => {
         const spans: Record<string, number> = {};
         const started = performance.now();
