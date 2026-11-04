@@ -207,6 +207,8 @@ describe("resolveCodexAppServerSpawnEnv", () => {
         GIT_CONFIG_PARAMETERS: fixture.parameters,
         OPENCLAW_GIT_ENV_DROP: "fixture",
       },
+      // This fixture verifies removal of inherited Git settings from the private child.
+      // nosemgrep: security.opengrep.ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
       clearEnv: ["OPENCLAW_GIT_ENV_DROP", ...(fixture.clear ? ["GIT_CONFIG_PARAMETERS"] : [])],
     };
     const prepared = withCodexAppServerGitConfig(original, parameters);
