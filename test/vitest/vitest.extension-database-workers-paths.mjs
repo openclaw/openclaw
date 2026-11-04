@@ -150,6 +150,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/zalouser/src/ingress.test.ts",
   "extensions/zalouser/src/monitor.account-scope.test.ts",
   "extensions/zalouser/src/monitor.group-gating.test.ts",
+  "extensions/zalouser/src/monitor.media.test.ts",
   "extensions/imessage/src/monitor.reaction-owner.test.ts",
   "extensions/telegram/src/monitor.test.ts",
   "extensions/discord/src/durable-delivery.test.ts",
