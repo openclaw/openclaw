@@ -10,6 +10,7 @@ const enSecretsStore = {
     allowedHostsPlaceholder: en.secretsStore.allowedHostsPlaceholder,
     allowedHostsHint:
       "Exact hostnames only, one per line or comma-separated. No wildcards or ports.",
+    empty: "No secrets yet.",
     by: "{time} by {name}",
     actions: "Actions",
     add: "Add",

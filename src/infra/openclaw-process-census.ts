@@ -1,7 +1,11 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readProcessAncestry } from "@openclaw/proc-safe/identity";
-import { isBunRuntime, resolveRuntimeScriptPosition } from "../daemon/runtime-binary.js";
+import {
+  isBunRuntime,
+  isNodeRuntime,
+  resolveRuntimeScriptPosition,
+} from "../daemon/runtime-binary.js";
 import { readDarwinProcessCommand } from "../process/supervisor/darwin-process-command.js";
 import {
   readProcessGroupMembers,
@@ -77,12 +81,16 @@ type ArtifactCustody =
 
 // Without an artifact reference, an OpenClaw process can hold a runtime only as
 // the updater that created it, and `update`, its wizard, Doctor's git update,
-// and update workers all run it in-process. Only the Gateway and its spawn
-// broker never do; the Gateway's process title erases its script path.
+// and update workers all run it in-process. Only the Gateway, its spawn broker,
+// and the Windows job anchor that supervises its child never do; the Gateway's
+// process title erases its script path.
 const gatewayWorkerEntrypoints = [
-  path.posix.normalize(`src/infra/${runtimeProcessEntrypoints.spawnBroker.sourceWorkerName}.ts`),
-  `dist/${runtimeProcessEntrypoints.spawnBroker.distWorkerPath}`,
-];
+  runtimeProcessEntrypoints.spawnBroker,
+  runtimeProcessEntrypoints.serviceChildWindowsJobAnchor,
+].flatMap((entry) => [
+  path.posix.normalize(`src/infra/${entry.sourceWorkerName}.ts`),
+  `dist/${entry.distWorkerPath}`,
+]);
 
 function isGatewayProcess(
   argv: readonly string[],
@@ -252,9 +260,43 @@ type CensusProcess = {
   command?: { ppid: number } & ProcessCommand;
 };
 
+type WindowsCensusRow = ReturnType<typeof readWindowsProcessCensus>[number];
+
+/** Windows hides command lines across accounts like Darwin, whose unreadable foreign
+ * argv is likewise not custody evidence; only same-account doubt blocks. */
+function classifyOpaqueWindowsCustody(observation: WindowsCensusRow, pid: number): ArtifactCustody {
+  const argv = observation.commandLine
+    ? parseWindowsNativeCommandLine(observation.commandLine)
+    : null;
+  if (argv?.length) {
+    return classifyProcessArtifactCustody(
+      { argv, ...(observation.executable ? { executable: observation.executable } : {}) },
+      pid,
+      observation.cwd,
+    );
+  }
+  if ([observation.executable, observation.cwd].some((v) => v && referencesRetainedArtifact(v))) {
+    return { kind: "holder" };
+  }
+  // Every same-account process grants limited query at any integrity level, so a
+  // denied row belongs to another account or a protected system process, as the
+  // handoff census also assumes. Accepted edge: a same-account process with a custom
+  // DACL denying that query counts as foreign; OpenClaw never launches one.
+  if (observation.foreignOwner || observation.accessDenied) {
+    return { kind: "not-holder" };
+  }
+  const image = observation.executable;
+  return image &&
+    !isNodeRuntime(image) &&
+    !isBunRuntime(image) &&
+    !/openclaw/iu.test(path.win32.basename(image))
+    ? { kind: "not-holder" }
+    : { kind: "unknown", reason: "process command line is unavailable" };
+}
+
 function classifyWindowsHandoffAncestry(
-  process: ReturnType<typeof readWindowsProcessCensus>[number],
-  byPid: ReadonlyMap<number, ReturnType<typeof readWindowsProcessCensus>[number]>,
+  process: WindowsCensusRow,
+  byPid: ReadonlyMap<number, WindowsCensusRow>,
   drivers: NonNullable<HandoffReferences["drivers"]>,
 ): "descendant" | "unrelated" | "unknown" {
   const startedAt = process.startIdentity;
@@ -316,7 +358,7 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
     }
     const windows = process.platform === "win32";
     const deadline = Date.now() + (handoff ? 15_000 : 1_000);
-    const native = windows && handoff ? [...readWindowsProcessCensus(15_000)] : undefined;
+    const native = windows ? [...readWindowsProcessCensus(15_000)] : undefined;
     const nativeByPid = new Map(native?.map((entry) => [entry.pid, entry]));
     const sameWindowsUser =
       windows &&
@@ -361,7 +403,8 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
       const parent = byPid.get(parentPid);
       if (!parent?.command || ancestors.has(parentPid)) {
         // An observed process with unavailable argv remains unknown custody below.
-        if (handoff || (parent && !parent.command)) {
+        // Windows never reparents: an exited ancestor cannot be a launcher.
+        if (handoff || (parent ? !parent.command : windows)) {
           break;
         }
         throw new Error("OpenClaw process ancestry is incomplete.");
@@ -547,7 +590,11 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
         }
         continue;
       }
-      const custody = classifyProcessArtifactCustody(command, pid, directories.get(pid));
+      const observation = nativeByPid.get(pid);
+      const custody =
+        observation && !command
+          ? classifyOpaqueWindowsCustody(observation, pid)
+          : classifyProcessArtifactCustody(command, pid, directories.get(pid));
       if (custody.kind === "not-holder") {
         continue;
       }

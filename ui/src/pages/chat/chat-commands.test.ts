@@ -2,6 +2,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
+import { i18n } from "../../i18n/index.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { beginChatMetadataPublication } from "../../lib/chat/chat-metadata-store.ts";
 import {
@@ -330,4 +331,19 @@ describe("conversation reset confirmation", () => {
       }
     },
   );
+});
+
+it.each([
+  ["new", "newUnavailable"],
+  ["fork", "forkUnavailable"],
+])("routes /%s unavailable errors through the catalog", async (command, key) => {
+  const host = makeChatHost();
+  const translate = vi.spyOn(i18n, "t");
+  try {
+    await dispatchChatSlashCommand(host, command, "");
+    expect(translate).toHaveBeenCalledWith(`chat.commandResults.${key}`, undefined);
+    expect(host.chatError).toBe(i18n.t(`chat.commandResults.${key}`));
+  } finally {
+    translate.mockRestore();
+  }
 });

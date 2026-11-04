@@ -62,7 +62,9 @@ function ChannelStatusNotices(props: { channels: ChannelsState; error: string | 
   return (
     <>
       {showingStaleSnapshot() ? (
-        <div class="callout info">{t("channels.refreshingStaleSnapshot")}</div>
+        <span class="settings-control__sr-label" role="status">
+          {t("channels.refreshingStaleSnapshot")}
+        </span>
       ) : undefined}
       {props.channels.channelsSnapshot?.partial ? (
         <div class="callout warn">

@@ -4,6 +4,12 @@ import { en } from "./en.ts";
 const enChatCommandResults = {
   chat: {
     commandResults: {
+      newUnavailable: "New Chat is unavailable.",
+      forkUnavailable: "Fork conversation is unavailable.",
+      notConnected: "Gateway not connected",
+      cannotRunDisconnected: "Cannot run `/{name}`: Control UI is not connected to the Gateway.",
+      failedUnexpectedly: "Command `/{name}` failed unexpectedly.",
+      failed: "Command /{name} failed.",
       unknownCommand: "Couldn’t find `{command}`. Type `/` to see available commands.",
       options: "Options: {options}.",
       connectionChanged: "The Gateway connection changed. Try the command again.",

@@ -33,6 +33,7 @@ import {
 import {
   hasVerifiedProvider,
   isProviderUsable,
+  needsModelSetup,
   renderMutationMessage,
   ModelProviderConnectAction,
 } from "./view-status.tsx";
@@ -106,7 +107,7 @@ function AddProvider(props: ModelProvidersViewProps) {
 function ModelReadiness(props: ModelProvidersViewProps) {
   const signedIn = () => props.cards.some(hasVerifiedProvider);
   return (
-    <Show when={!props.configuredModels.some((model) => model.available !== false)}>
+    <Show when={needsModelSetup(props)}>
       <div class="model-providers__setup" data-model-readiness="model-required">
         <SettingsSection title={t("modelProviders.readiness.title")}>
           <SettingsRow
@@ -160,9 +161,7 @@ export function ModelProviders(props: ModelProvidersViewProps) {
     <>
       <SettingsPage>
         <>
-          <Show when={props.connected || !props.loading}>
-            <ModelReadiness {...props} />
-          </Show>
+          <ModelReadiness {...props} />
           <div id={MODEL_SETTINGS_TARGET_IDS.behavior}>
             <DefaultModels
               {...props}
@@ -229,17 +228,22 @@ function ProviderAccess(props: ModelProvidersViewProps) {
           time: formatTimeMs(props.updatedAt, { hour: "numeric", minute: "2-digit" }),
         })}`
       : refreshLabel();
+  // Setup with nothing connected has no list to filter.
+  const nothingToSearch = () =>
+    needsModelSetup(props) && props.cards.length === 0 && !props.error && !search();
   const providerRows = () => (
     <>
-      <label class="field model-providers__search">
-        <input
-          type="search"
-          aria-label={t("modelProviders.search")}
-          placeholder={t("modelProviders.search")}
-          value={search()}
-          onInput={(event) => setSearch(event.currentTarget.value)}
-        />
-      </label>
+      <Show when={!nothingToSearch()}>
+        <label class="field model-providers__search">
+          <input
+            type="search"
+            aria-label={t("modelProviders.search")}
+            placeholder={t("modelProviders.search")}
+            value={search()}
+            onInput={(event) => setSearch(event.currentTarget.value)}
+          />
+        </label>
+      </Show>
       <div class="model-providers__provider-list">
         <Show when={props.error}>
           {(error) => (
@@ -310,16 +314,12 @@ function ProviderAccess(props: ModelProvidersViewProps) {
       carapace
       title={t("modelProviders.accessTitle")}
       description={t("modelProviders.accessDescription", { agent: props.credentialAgentLabel })}
-      count={props.cards.length}
       actions={
         <>
           <button type="button" class="btn btn--sm btn--ghost" onClick={() => props.onOpenUsage()}>
             {t("modelProviders.viewUsage")}
           </button>
-          {/* The setup prompt above already offers this action until a model is usable. */}
-          <Show when={props.configuredModels.some((model) => model.available !== false)}>
-            {props.providerScope}
-          </Show>
+          {needsModelSetup(props) ? undefined : props.providerScope}
           <RefreshButton
             class="model-providers__refresh-button"
             label={refreshLabel()}
@@ -366,7 +366,7 @@ export function renderModelProvidersPageShell(props: {
         title={t("routeTitles.modelProviders")}
         subtitle={
           <>
-            {t("modelProviders.subtitle")}{" "}
+            {t("subtitles.modelProviders")}{" "}
             <LearnMoreLink url={"https://docs.openclaw.ai/concepts/model-providers"} />
           </>
         }

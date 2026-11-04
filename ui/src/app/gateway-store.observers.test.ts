@@ -5,6 +5,7 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/serv
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildBrowserGatewayConnectPlan } from "../api/gateway-connect-plan.ts";
 import { loadCommandPaletteCatalogItems } from "../components/command-palette-catalog-search.ts";
+import { t } from "../i18n/index.ts";
 import { usesCronInventoryEvents } from "../lib/cron/inventory-connection.ts";
 import { readCronInventory } from "../lib/cron/inventory.ts";
 import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
@@ -521,7 +522,9 @@ describe("createApplicationGateway connection ownership", () => {
     expect(current().testOptions.bootstrapToken).toBeUndefined();
     current().testOptions.onClose?.({ code: 1006, reason: "remote refused", willRetry: true });
     expect(gateway.snapshot.phase).toBe("connecting");
-    expect(gateway.snapshot.lastError).toBe("disconnected (1006): remote refused");
+    expect(gateway.snapshot.lastError).toBe(
+      `${t("connection.interrupted", { code: "1006" })} remote refused`,
+    );
   });
 
   it("advances the connection revision only when credentials change", () => {

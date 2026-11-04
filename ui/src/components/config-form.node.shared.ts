@@ -112,6 +112,7 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
     title: configLabelInContext(label, params.contextLabel),
     help,
     showLabel,
+    placement: params.compact ? undefined : ("column" as const),
     path: params.path,
     helpContext: params.helpContext,
     required: configFieldRequiresInput(params),
