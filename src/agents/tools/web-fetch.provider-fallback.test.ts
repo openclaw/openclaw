@@ -513,6 +513,16 @@ describe("web_fetch", () => {
       );
     });
 
+    it("preserves literal HTML text in HTTP failure diagnostics", async () => {
+      mockHttpResponse("<title># Error</title><p>Use <code>[report](draft)</code>.</p>", {
+        status: 500,
+        headers: { "content-type": "text/html" },
+      });
+      await expect(fetchContract("literal-html-error")).rejects.toThrow(
+        "# Error\nUse [report](draft).",
+      );
+    });
+
     it("releases discarded provider strings while caching bounded protocol metadata", async () => {
       const fields = Object.entries({ contentType: 256, extractor: 128, fetchedAt: 64 });
       const modes = [true, false];
