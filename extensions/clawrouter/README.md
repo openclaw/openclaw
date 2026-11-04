@@ -52,8 +52,10 @@ See the [ClawRouter provider docs](https://docs.openclaw.ai/providers/clawrouter
 
 ## Speech
 
-The native speech provider uses ClawRouter's binary `/v1/audio/speech` route,
-not the conversational Responses API. Select the qualified voice model
+The speech provider refreshes the selected key's catalog before each synthesis.
+It consumes eligible HTTP offers declaring `openai.audio_speech` and `audio.binary`
+through unified, native or manifest routes. Unknown formats and denied offers fail
+before synthesis. Select the qualified voice model
 `clawrouter/openai/tts-1` through `agents.defaults.voiceModel` or set
 `tts.provider: "clawrouter"`. Speech-only catalog rows stay out of chat models.
 
@@ -66,18 +68,22 @@ another key. An OpenAI key is never borrowed. The service still authorizes every
 request against the selected key's current speech grants and budget; discovering
 a model or finding a credential is not a grant.
 
-`tts.providers.clawrouter` accepts `model` (`openai/tts-1`), `voice`
-(`alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`), `speed` (0.25–4),
+`tts.providers.clawrouter` accepts an explicit catalog model, an OpenAI native
+voice, optional `instructions`, `speed` (0.25–4),
 and `responseFormat` (`mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`).
 The default is MP3 for files and Opus for voice notes. Telephony always requests
 signed 16-bit mono PCM at 24 kHz for the existing call transport conversion.
-Input is limited to 4096 Unicode code points. Newer instruction-based TTS,
-transcription, and realtime sessions are not advertised by this adapter.
+Input is limited to 4096 Unicode code points. The known client formats cover
+`openai/tts-1`, `openai/tts-1-hd`, `openai/gpt-4o-mini-tts` and
+`openai/gpt-4o-mini-tts-2025-12-15`; instructions apply only to the mini-TTS
+models. This list does not grant or activate a router model. Select additional
+models through `tts.providers.clawrouter.model` only when the current catalog
+advertises an eligible offer. The static voice-model picker remains unchanged.
 
 Talk uses `talk.provider: "clawrouter"` with the same credentials and format
 settings under `talk.providers.clawrouter`; use `modelId: "openai/tts-1"` and
 `speakerVoiceId` for its model and voice selections. Synthesis uses the normal
-TTS request timeout and generated-audio size limit and returns service failures
+shared catalog/synthesis deadline and generated-audio size limit and returns service failures
 rather than treating JSON error bodies as audio.
 
 ## Audio transcription
@@ -131,6 +137,12 @@ a policy to soft, fixed-price, or unmetered mode to make a request pass. Streami
 diarization, other response formats/models, and realtime transcription remain
 outside this adapter.
 
+Speech request construction and frozen OpenAI model/voice facts are shared with
+the native OpenAI plugin. The shared payload helper is an internal bundled-provider construction helper,
+not a new typed public SDK API. Native auth, proxy capture and custom endpoint
+behavior remain in the OpenAI plugin. The frozen speech SDK has no caller abort signal; deadlines
+bound requests, but this bridge does not claim caller cancellation support.
+
 ## Memory embeddings
 
 Choose `clawrouter` as the memory embedding provider and select a catalog model
@@ -168,3 +180,13 @@ filters are not exposed by this adapter. Request counters alone do not establish
 USD prices or budget eligibility; catalog affordability and runtime admission
 remain authoritative. Other declared search formats fail closed until a consumer
 adapter and its transport fixtures are qualified.
+
+## xAI Responses replay
+
+Catalog-qualified xAI Responses models share the native tool-schema/argument
+policy and encrypted reasoning include. Effort choices remain catalog-owned.
+The real Responses transport captures and replays opaque reasoning within its
+provider, model, origin, session and authentication-profile boundary. Grok CLI
+OAuth identity headers are not applied to the router endpoint. Worker-side
+upstream credential affinity and end-to-end replay remain separate requirements;
+the client does not advertise an unlanded Responses route.

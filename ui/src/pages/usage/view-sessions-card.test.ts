@@ -61,10 +61,10 @@ it("retires changed copy payloads and announces success and failure until feedba
     [...owner.querySelectorAll('.session-bar-actions [role="status"]')].map(
       (node) => node.textContent,
     );
-  expect(statusText()).toEqual(["Copied!"]);
+  expect(statusText()).toEqual(["Copied"]);
   const feedback = owner.querySelector<HTMLElement>(".session-bar-copy-feedback")!;
   expect(feedback.hidden).toBe(false);
-  expect(feedback.textContent).toBe("Copied!");
+  expect(feedback.textContent).toBe("Copied");
   await vi.advanceTimersByTimeAsync(1500);
   expect(statusText()).toEqual([""]);
   expect(feedback.hidden).toBe(true);
@@ -73,9 +73,9 @@ it("retires changed copy payloads and announces success and failure until feedba
   writeText.mockRejectedValueOnce(new Error("Synthetic clipboard rejection"));
   owner.querySelector<HTMLButtonElement>(".session-bar-actions button")!.click();
   await vi.advanceTimersByTimeAsync(0);
-  expect(statusText()).toEqual(["Copy failed"]);
+  expect(statusText()).toEqual(["Couldn’t copy. Try again."]);
   expect(feedback.hidden).toBe(false);
-  expect(feedback.textContent).toBe("Copy failed");
+  expect(feedback.textContent).toBe("Couldn’t copy. Try again.");
   await vi.advanceTimersByTimeAsync(2000);
   expect(statusText()).toEqual([""]);
   expect(feedback.hidden).toBe(true);
