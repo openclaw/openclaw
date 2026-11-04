@@ -156,7 +156,7 @@ const schemaCases: Array<[string, unknown, boolean]> = [
   ...[
     "https://mcp-apps.example.com/path",
     "https://mcp-apps.example.com?query=1",
-    "https://user:pass@mcp-apps.example.com",
+    "https://fixture-user@mcp-apps.example.com",
     "data:text/html,hello",
   ].map((value): [string, unknown, boolean] => ["mcp.apps.sandboxOrigin", value, false]),
 ];
