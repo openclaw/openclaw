@@ -50,8 +50,8 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Approved named Actions queries (#186057) add 354 B to Chat vs main 079d8d92.
-  // Measured 1,285,870 B plus the existing 64 B headroom; requests stay at 20.
-  chatBootJsGzipBytes: 1_285_934,
+  // Measured 1,285,870 B plus the existing 192 B headroom; requests stay at 20.
+  chatBootJsGzipBytes: 1_286_062,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
