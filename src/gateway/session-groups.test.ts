@@ -420,6 +420,7 @@ describe("session groups catalog", () => {
     const sessionB = await seedMember("b", "Other", "main", "b1", { updatedAt: updatedAtB });
     const sessionC = await seedMember("c", " Old ", "main", "c1", {
       updatedAt: updatedAtB,
+      archivedAt: 1,
       skillsSnapshot: { prompt: "retained session prompt", skills: [] },
     });
 
@@ -433,6 +434,7 @@ describe("session groups catalog", () => {
     expect(sessionC.read()).toMatchObject({
       sessionId: "c1",
       updatedAt: updatedAtB,
+      archivedAt: 1,
       category: "New",
       skillsSnapshot: { prompt: "retained session prompt", skills: [] },
     });

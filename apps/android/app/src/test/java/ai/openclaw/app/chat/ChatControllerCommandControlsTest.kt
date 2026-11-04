@@ -535,127 +535,120 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
-  fun renameSessionGroupPatchesEveryMemberIncludingArchivedOnlyOnes() =
+  fun renameSessionGroupUsesCatalogOwnerAndPreservesRosterWindow() =
     runTest {
+      var renamed = false
       val (controller, requests) =
         chatControllerTestSetup {
-          respond("sessions.list") { paramsJson ->
-            if (paramsJson.orEmpty().contains("\"archived\":true")) {
-              """{"sessions":[{"key":"agent:main:active","category":"Work"},{"key":"agent:main:archived","category":" Work "}]}"""
+          respond("sessions.groups.rename") {
+            renamed = true
+            "{}"
+          }
+          respond("sessions.groups.list") { """{"groups":[{"name":"Focus","position":0}],"sectionOrder":["category:Focus"]}""" }
+          respond("sessions.list") {
+            if (renamed) {
+              """{"sessions":[{"key":"agent:main:member","category":"Focus"}]}"""
             } else {
-              """{"sessions":[{"key":"agent:main:active","category":"Work"},{"key":"agent:main:other","category":"Play"}]}"""
+              """{"sessions":[{"key":"agent:main:member","category":"Work"}]}"""
             }
           }
         }
-
       controller.refreshSessions(limit = 100)
       advanceUntilIdle()
       requests.clear()
-
       controller.renameSessionGroup(from = "Work", to = "Focus", expectedGatewayId = "gateway-test")
-
-      // Membership enumeration sends the explicit high bound (absent limit is
-      // capped at 100 rows server-side) across active + archived rows.
-      val lists = requests.filter { it.first == "sessions.list" }.map { it.second.orEmpty() }
-      assertEquals(2, lists.count { it.contains("\"limit\":10000") })
-      assertEquals(1, lists.count { it.contains("\"archived\":true") })
-
-      val patches = requests.filter { it.first == "sessions.patch" }.map { it.second.orEmpty() }
-      assertEquals(2, patches.size)
-      assertTrue(patches.any { it.contains("\"key\":\"agent:main:active\"") && it.contains("\"category\":\"Focus\"") })
-      assertTrue(patches.any { it.contains("\"key\":\"agent:main:archived\"") && it.contains("\"category\":\"Focus\"") })
-      // Group enumeration must not replace the requested display window.
-      assertEquals(JsonPrimitive(100), json.parseToJsonElement(lists.last()).jsonObject["limit"])
+      val renames = requests.filter { it.first == "sessions.groups.rename" }
+      assertEquals(1, renames.size)
+      val params = json.parseToJsonElement(renames.single().second.orEmpty()).jsonObject
+      assertEquals(JsonPrimitive("Work"), params["name"])
+      assertEquals(JsonPrimitive("Focus"), params["to"])
+      assertFalse(requests.any { it.first == "sessions.patch" })
+      val lists = requests.filter { it.first == "sessions.list" }.map { json.parseToJsonElement(it.second.orEmpty()).jsonObject }
+      assertEquals(1, lists.size)
+      assertEquals(JsonPrimitive(100), lists.single()["limit"])
+      assertFalse(lists.any { it["archived"] == JsonPrimitive(true) })
+      assertEquals(listOf("Focus"), controller.sessionGroupCatalog.value.names)
+      assertEquals(
+        "Focus",
+        controller.sessions.value
+          .firstOrNull { it.key == "agent:main:member" }
+          ?.category,
+      )
     }
 
   @Test
-  fun renameSessionGroupDoesNotCrossGatewayAfterAcceptedListResponse() =
+  fun renameSessionGroupDoesNotPublishRetiredGatewayCatalog() =
     runTest {
       var gatewayScope = ChatCacheScope("gateway-a", 1)
       val listEntered = CompletableDeferred<Unit>()
-      val firstListResponse = CompletableDeferred<String>()
-      val patches = mutableListOf<Pair<String, String?>>()
+      val acceptedResponse = CompletableDeferred<String>()
+      val mutations = mutableListOf<String>()
 
       suspend fun request(
         gatewayId: String,
         method: String,
-        paramsJson: String?,
       ): String =
         when (method) {
-          "sessions.list" -> {
-            if (gatewayId == "gateway-a" && !paramsJson.orEmpty().contains("\"archived\":true")) {
-              listEntered.complete(Unit)
-              firstListResponse.await()
-            } else {
-              """{"sessions":[]}"""
-            }
+          "sessions.groups.rename" -> {
+            mutations += gatewayId
+            "{}"
           }
 
-          "sessions.patch" -> {
-            patches += gatewayId to paramsJson
-            "{}"
+          "sessions.groups.list" -> {
+            listEntered.complete(Unit)
+            acceptedResponse.await()
           }
 
           else -> {
             emptyChatGatewayResponse(method)
           }
         }
-
       val controller =
         createChatController(
           cacheScope = { gatewayScope },
-          requestGatewayForGateway = { gatewayId, method, paramsJson ->
+          requestGatewayForGateway = { gatewayId, method, _ ->
             if (gatewayId != gatewayScope.gatewayId) throw GatewayRequestNotEnqueued("gateway request lease changed")
-            request(gatewayId, method, paramsJson)
+            request(gatewayId, method)
           },
-          requestGateway = { method, paramsJson -> request(gatewayScope.gatewayId, method, paramsJson) },
+          requestGateway = { method, _ -> request(gatewayScope.gatewayId, method) },
         )
-      val rename = async { controller.renameSessionGroup(from = "Work", to = "Focus", expectedGatewayId = "gateway-a") }
+      val rename = async { controller.renameSessionGroup("Work", "Focus", "gateway-a") }
       try {
         listEntered.await()
-        // A accepted this reply before retirement; its queued continuation resumes on B.
-        firstListResponse.complete("""{"sessions":[{"key":"agent:main:from-a","category":"Work"}]}""")
+        acceptedResponse.complete("""{"groups":[{"name":"Focus","position":0}],"sectionOrder":["category:Focus"]}""")
         gatewayScope = ChatCacheScope("gateway-b", 2)
         controller.onGatewayScopeChanging()
         controller.handleGatewayEvent("agent", """{"stream":"error"}""")
         val replacementError = controller.errorText.value
         assertFalse(replacementError.isNullOrEmpty())
         rename.await()
-
-        assertTrue("Retired group selection must not mutate a replacement gateway: $patches", patches.isEmpty())
+        assertEquals(listOf("gateway-a"), mutations)
+        assertTrue(
+          controller.sessionGroupCatalog.value.names
+            .isEmpty(),
+        )
         assertEquals(replacementError, controller.errorText.value)
       } finally {
-        firstListResponse.complete("""{"sessions":[]}""")
         rename.cancelAndJoin()
       }
     }
 
   @Test
-  fun dissolveSessionGroupClearsCategoriesBestEffort() =
+  fun dissolveSessionGroupSurfacesCatalogFailureWithoutLocalOrMemberFallback() =
     runTest {
-      var patchCount = 0
       val (controller, requests) =
         chatControllerTestSetup {
-          respond("sessions.list") { paramsJson ->
-            if (paramsJson.orEmpty().contains("\"archived\":true")) {
-              """{"sessions":[{"key":"agent:main:archived","category":"Work"}]}"""
-            } else {
-              """{"sessions":[{"key":"agent:main:a","category":"Work"},{"key":"agent:main:b","category":"Work"}]}"""
-            }
-          }
-          respond("sessions.patch") { paramsJson ->
-            patchCount += 1
-            if (patchCount == 1) throw RuntimeException("offline") else "{}"
-          }
+          respond("sessions.groups.list") { """{"groups":[{"name":"Work","position":0}],"sectionOrder":[]}""" }
+          respond("sessions.groups.delete") { throw RuntimeException("offline") }
         }
-
-      controller.dissolveSessionGroup("Work", expectedGatewayId = "gateway-test")
-
-      // One failed member patch must not abandon the remaining members.
-      val patches = requests.filter { it.first == "sessions.patch" }.map { it.second.orEmpty() }
-      assertEquals(3, patches.size)
-      assertTrue(patches.all { it.contains("\"category\":null") })
-      assertEquals("offline", controller.errorText.value)
+      controller.refreshSessionGroups()
+      advanceUntilIdle()
+      requests.clear()
+      val failure = runCatching { controller.dissolveSessionGroup("Work", expectedGatewayId = "gateway-test") }.exceptionOrNull()
+      assertEquals("offline", failure?.message)
+      assertEquals(1, requests.count { it.first == "sessions.groups.delete" })
+      assertFalse(requests.any { it.first == "sessions.patch" || it.first == "sessions.list" || it.first == "sessions.groups.list" })
+      assertEquals(listOf("Work"), controller.sessionGroupCatalog.value.names)
     }
 
   @Test
