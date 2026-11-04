@@ -15,6 +15,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
@@ -67,6 +68,8 @@ type PlannedOpenClawModelsJsonSource = Readonly<{
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
 }>;
 
+const MODELS_JSON_READY_CACHE_LIMIT = 128;
+
 async function readFileMtimeMs(pathname: string): Promise<number | null> {
   try {
     const stat = await fs.stat(pathname);
@@ -117,7 +120,12 @@ async function buildModelsJsonFingerprint(
 }
 
 function modelsJsonReadyCacheKey(targetPath: string, fingerprint: string): string {
-  return `${targetPath}\0${fingerprint}`;
+  // Keep the full identity without retaining serialized configurations and env values.
+  return createHash("sha256")
+    .update(targetPath)
+    .update("\0")
+    .update(fingerprint)
+    .digest("base64url");
 }
 
 async function readExistingModelsFile(pathname: string): Promise<{
@@ -248,13 +256,29 @@ export async function ensureOpenClawModelsJsonWithInput(
   const context = await prepareModelsConfigContext(config, agentDirOverride, options);
   const { agentDir } = context;
   const targetPath = path.join(agentDir, "models.json");
-  const fingerprint = await buildModelsJsonFingerprint(context);
-  const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
-  const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
-  if (cached && !context.onProviderCatalogOutcome) {
-    await cached;
-    await ensureModelsFileModeForModelsJson(targetPath);
-    return {};
+  const readyCache = MODELS_JSON_STATE.readyCache;
+  // In-place updates retain the shared Map. Old full-string keys cannot match
+  // compact keys, so release them even when live refreshes bypass cache admission.
+  for (const key of readyCache.keys()) {
+    if (key.includes("\0")) {
+      readyCache.delete(key);
+    }
+  }
+  pruneMapToMaxSize(readyCache, MODELS_JSON_READY_CACHE_LIMIT);
+  // Live refreshes need their own outcomes, so they cannot consume readiness hits.
+  // Do not fingerprint or retain those configurations for a cache they bypass.
+  const cacheKey = context.onProviderCatalogOutcome
+    ? undefined
+    : modelsJsonReadyCacheKey(targetPath, await buildModelsJsonFingerprint(context));
+  if (cacheKey) {
+    const cached = readyCache.get(cacheKey);
+    if (cached) {
+      readyCache.delete(cacheKey);
+      readyCache.set(cacheKey, cached);
+      await cached;
+      await ensureModelsFileModeForModelsJson(targetPath);
+      return {};
+    }
   }
 
   // Keep publication payloads local; ready-cache promises retain only completion.
@@ -298,22 +322,33 @@ export async function ensureOpenClawModelsJsonWithInput(
       await ensureModelsFileModeForModelsJson(targetPath);
     }
   });
-  MODELS_JSON_STATE.readyCache.set(cacheKey, pending);
+  if (cacheKey) {
+    readyCache.set(cacheKey, pending);
+    // Keep alternating configurations warm without retaining every past generation.
+    // Evicted pending work still finishes through the directory's write queue.
+    pruneMapToMaxSize(readyCache, MODELS_JSON_READY_CACHE_LIMIT);
+  }
   try {
     await pending;
-    const refreshedFingerprint = await buildModelsJsonFingerprint(
-      context,
-      publishedSource?.pluginCatalogs,
-    );
-    const refreshedCacheKey = modelsJsonReadyCacheKey(targetPath, refreshedFingerprint);
-    if (refreshedCacheKey !== cacheKey) {
-      MODELS_JSON_STATE.readyCache.delete(cacheKey);
-      MODELS_JSON_STATE.readyCache.set(refreshedCacheKey, Promise.resolve());
+    if (cacheKey && readyCache.get(cacheKey) === pending) {
+      const refreshedFingerprint = await buildModelsJsonFingerprint(
+        context,
+        publishedSource?.pluginCatalogs,
+      );
+      const refreshedCacheKey = modelsJsonReadyCacheKey(targetPath, refreshedFingerprint);
+      // Fingerprinting yields: an evicted request must not replace a newer waiter.
+      if (readyCache.get(cacheKey) === pending && refreshedCacheKey !== cacheKey) {
+        readyCache.delete(cacheKey);
+        if (!readyCache.has(refreshedCacheKey)) {
+          readyCache.set(refreshedCacheKey, Promise.resolve());
+          pruneMapToMaxSize(readyCache, MODELS_JSON_READY_CACHE_LIMIT);
+        }
+      }
     }
     return publishedSource ? { publishedSource } : {};
   } catch (error) {
-    if (MODELS_JSON_STATE.readyCache.get(cacheKey) === pending) {
-      MODELS_JSON_STATE.readyCache.delete(cacheKey);
+    if (cacheKey && readyCache.get(cacheKey) === pending) {
+      readyCache.delete(cacheKey);
     }
     throw error;
   }

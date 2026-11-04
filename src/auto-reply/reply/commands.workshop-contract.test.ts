@@ -3,10 +3,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
+import { activateWorkshopPluginForTest } from "../../skills/test-support/workshop-plugin.test-support.js";
 import { historicalWorkshopChangesSchema } from "../../skills/test-support/workshop-schema.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -33,13 +33,16 @@ const CREATED = "---\nname: release\ndescription: Release builds\n---\n\nPublish
 
 let state: OpenClawTestState;
 let registry: PluginRegistry;
+let resetPlugins: (() => void) | undefined;
 
 beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "home" });
-  registry = createEmptyPluginRegistry();
+  // The skill-workshop plugin contributes Workshop's /learn guidance and subcommands.
+  ({ registry, reset: resetPlugins } = await activateWorkshopPluginForTest());
 });
 
 afterEach(async () => {
+  resetPlugins?.();
   await closeSkillsWatchers(true);
   await closeStateDatabaseForTest();
   await state.cleanup();

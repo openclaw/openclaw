@@ -1,7 +1,11 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 import { downloadSessionFile } from "./session-file-download.ts";
+
+registerFilePreviewEnglish();
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -83,4 +87,16 @@ it("discards a development-proxy download when the active session changes", asyn
   state.sessionKey = "agent:main:other";
   response.resolve({ filename: "report.md", url: "/api/artifacts/download/connection/ticket" });
   await expect(download).resolves.toBeNull();
+});
+
+it("routes file download connection errors through the catalog", async () => {
+  const translate = vi.spyOn(i18n, "t");
+  const client = new GatewayBrowserClient({ url: "wss://other-gateway.example.test" });
+  const result = downloadSessionFile(
+    { client, connected: true, connectionEpoch: 1, sessionKey: "main" },
+    { sessionKey: "main", path: "report.pdf" },
+    new AbortController().signal,
+  );
+  await expect(result).rejects.toBeInstanceOf(Error);
+  expect(translate).toHaveBeenCalledWith("chat.detailPanel.sameOrigin", undefined);
 });

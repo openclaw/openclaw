@@ -234,7 +234,6 @@ src/cli/mcp-cli.ts
 src/cli/plugins-cli-test-helpers.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/run-main.ts
-src/cli/skills-cli.ts
 src/commands/agent-via-gateway.test.ts
 src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
