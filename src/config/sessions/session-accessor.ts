@@ -185,7 +185,10 @@ export {
   updateSessionLastRoute,
 } from "./session-accessor.entry-mutation.js";
 export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
-export { captureSessionRecipientAuthority } from "./session-sharing-store.async.js";
+export {
+  assertSessionRecipientAuthorityOwner,
+  captureSessionRecipientAuthority,
+} from "./session-sharing-store.async.js";
 export { updateSessionProfileInvolvementAsync } from "./session-involvement-store.js";
 export { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
 export type { RecordSessionParticipantResult } from "./session-accessor.sqlite-participants.native.js";
