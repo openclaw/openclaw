@@ -6,7 +6,7 @@ import { createControlUiSessionRow as sessionRow } from "../test-helpers/control
 import * as ui from "./session-management.compact.test-support.ts";
 import * as support from "./session-management.test-support.ts";
 
-const suite = support.createSessionManagementE2eSuite(true);
+const suite = support.createSessionManagementE2eSuite();
 const parentKey = "agent:main:planning";
 const childKey = "agent:main:planning-child";
 const parent = sessionRow(parentKey, "Project planning", Date.parse("2026-07-01T16:00:00Z"));
