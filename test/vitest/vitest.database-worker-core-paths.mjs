@@ -1,5 +1,7 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  // Joined update acknowledgement proof owns real SQLite lifecycle queue state.
+  "test/plugins/discord-update-acknowledgement.integration.test.ts",
   "src/agents/clawrouter-failover.integration.test.ts",
   "src/infra/backup-local-companion.test.ts",
   "src/commands/backup-verify-completeness.test.ts",
