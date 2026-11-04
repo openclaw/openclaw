@@ -14,6 +14,9 @@ if (!emitOnly) assert(candidate && artifactArg);
 const artifacts = emitOnly ? undefined : path.resolve(artifactArg);
 if (!emitOnly) fs.mkdirSync(artifacts, { recursive: true });
 const harness = path.dirname(fileURLToPath(import.meta.url));
+const registryPin = JSON.parse(fs.readFileSync(path.join(harness, "br-beta-registry-pin.json"), "utf8"));
+const candidateSha256 = emitOnly ? undefined : digest(candidate);
+if (!emitOnly) assert.equal(candidateSha256, registryPin.packageSha256, "Consumed candidate differs from the retained exact package");
 const owner = path.join(harness, "native-systemd.mjs");
 let source = fs.readFileSync(owner, "utf8");
 function replace(before, after) {
@@ -37,7 +40,7 @@ replace('      record.update = JSON.parse(update.stdout);\n      assert.equal(up
       // Every after-failure oracle runs before the update verdict; no refusal is reclassified.
       try { record.afterRpc = probe("after"); } catch (error) { record.afterRpcError = String(error); }
       try { record.after = unit("after-unit"); } catch (error) { record.afterUnitError = String(error); }
-      record.betaProof = collectAfter(context, betaProof);
+      record.betaProof = collectAfter(context, betaProof, record.update);
       for (const [name, command] of [["state-survived", "assert-state"], ["approvals-survived", "assert-exec-approvals"]]) {
         try { oracle(name, command); } catch (error) { betaProof.errors.push(String(error)); }
       }
@@ -65,8 +68,10 @@ const generated = path.join(artifacts, "native-beta.generated.mjs");
 fs.writeFileSync(generated, source);
 fs.writeFileSync(path.join(artifacts, "fixture.json"), JSON.stringify({
   taskOnly: true, baseline, canonicalOwnerSha256: digest(owner), generatedSha256: digest(generated),
-  candidateSha256: digest(candidate), adapterSha256: digest(fileURLToPath(import.meta.url)),
+  candidateSha256, adapterSha256: digest(fileURLToPath(import.meta.url)),
   evidenceSha256: digest(path.join(harness, "br-beta-native-evidence.mjs")),
+  captureControlsSha256: digest(path.join(harness, "br-beta-capture-contract.test.mjs")),
+  registryPinSha256: digest(path.join(harness, "br-beta-registry-pin.json")),
   expectedSource: "bcae09093b5a06099cd3a3f0f3d5f4e4b499ad7f", pairedNativeRed: "not run; retained c2 actual beta failure and compatible 20a unit RED; see input tuple",
 }, null, 2) + "\n");
 try {

@@ -1,0 +1,1520 @@
+{
+  "productHead": "bcae09093b5a06099cd3a3f0f3d5f4e4b499ad7f",
+  "packageSha256": "4f67df079a8e179589aeecbf9a5b1546423856723132e40b7ef4a2c5c17a6448",
+  "proofArtifact": 13303425433,
+  "proofZipSha256": "0bb737002418f83ef83ce48517c19a9e75d66294ca315f00e37b62ad52721beb",
+  "baseline": [
+    {
+      "path": "dist/build-info.json",
+      "bytes": 212,
+      "sha256": "50c61647f9bf7034082c2173f6de4adc3d3ac393a4dd64e5c6cbee02c1365bbc"
+    },
+    {
+      "path": "dist/extensions/a2a/openclaw.plugin.json",
+      "bytes": 3258,
+      "sha256": "a229415ee96342c1bf44741b3df3b690cced2f58c811e7917d60fe1e22f1e80b"
+    },
+    {
+      "path": "dist/extensions/a2a/package.json",
+      "bytes": 1841,
+      "sha256": "2d8653795bd2e3245188eb90ae0600f1aa8030829a66f2164d47a07e7045dbef"
+    },
+    {
+      "path": "dist/extensions/active-memory/openclaw.plugin.json",
+      "bytes": 11560,
+      "sha256": "f5779f742e32a840b8fdf333d601b91336aea1535fd4e480b465f7b748a63cba"
+    },
+    {
+      "path": "dist/extensions/admin-http-rpc/openclaw.plugin.json",
+      "bytes": 380,
+      "sha256": "fafd75ef644c511d4483775911c43cbbf7c88d965bd78bd7092f0fc4e3e5c9a7"
+    },
+    {
+      "path": "dist/extensions/admin-http-rpc/package.json",
+      "bytes": 302,
+      "sha256": "e2a89224138ca73d2109b1adb60b620caaed6efef57b09a8226dc613a2a037d9"
+    },
+    {
+      "path": "dist/extensions/advisor/openclaw.plugin.json",
+      "bytes": 2600,
+      "sha256": "a1f21d3208117a2b9b1785ce6708a8ed11e0a31c0746f569432120d77bf6f159"
+    },
+    {
+      "path": "dist/extensions/advisor/package.json",
+      "bytes": 307,
+      "sha256": "f32752eaadc0b9fb4ef0f62ac25e8a801fc18dca435404ba79ba1a95a0f64dff"
+    },
+    {
+      "path": "dist/extensions/agent-guidance/openclaw.plugin.json",
+      "bytes": 2147,
+      "sha256": "8c5d2f078eb9aa7dda07f1bd6c9ab310bc11ea4b6143b10d488fdc465d424d8f"
+    },
+    {
+      "path": "dist/extensions/agent-guidance/package.json",
+      "bytes": 323,
+      "sha256": "36fdeafcd87081c8243b9453826ad32451d8018428929fc23e86cc4da76fa5a9"
+    },
+    {
+      "path": "dist/extensions/agentsapi/openclaw.plugin.json",
+      "bytes": 6082,
+      "sha256": "9fa1f10c08f8d4f8d8ddcf50bbf642e780e791f9cd05f01c46b00304ce519ec1"
+    },
+    {
+      "path": "dist/extensions/agentsapi/package.json",
+      "bytes": 606,
+      "sha256": "148dce92e069d74478c0de44766589647c251ecdc18ec03a552eaf842bd160d3"
+    },
+    {
+      "path": "dist/extensions/alibaba/openclaw.plugin.json",
+      "bytes": 1272,
+      "sha256": "459d0e39bc91e7be654e576458b258f71a2ebd28926e2d1f820a35c7c1316bc8"
+    },
+    {
+      "path": "dist/extensions/alibaba/package.json",
+      "bytes": 323,
+      "sha256": "914792a57119d12a64720e9727aac737b41000218d574360997c861b69b05ae8"
+    },
+    {
+      "path": "dist/extensions/anthropic/openclaw.plugin.json",
+      "bytes": 20518,
+      "sha256": "4c462a53a76bcdd3b7e1043858e0ec921c881c037d2d28ce17eeefb812c2fda6"
+    },
+    {
+      "path": "dist/extensions/anthropic/package.json",
+      "bytes": 348,
+      "sha256": "58e55525d8a41d7db948e212fb381e6de98a6691eca4d087ca0304e47d30d59b"
+    },
+    {
+      "path": "dist/extensions/apple-fm/openclaw.plugin.json",
+      "bytes": 1490,
+      "sha256": "467da44bb85ca3445dddfc2d53beb837698ab839cd7669c613e48697ccd57834"
+    },
+    {
+      "path": "dist/extensions/apple-fm/package.json",
+      "bytes": 604,
+      "sha256": "45827a49639df2421077274aafde392a9aa2af3f4de9a8e114b8cd7daad3a4fa"
+    },
+    {
+      "path": "dist/extensions/autoreview/openclaw.plugin.json",
+      "bytes": 502,
+      "sha256": "31649fbe9e14d00dbbc46fa251c035ec0d56db36b3220fe59bdc6498ce33f81b"
+    },
+    {
+      "path": "dist/extensions/autoreview/package.json",
+      "bytes": 344,
+      "sha256": "143ce0bd08709ba1a2a2368a86fde24d21bc7ff6fbf5f02991ddd815a263a972"
+    },
+    {
+      "path": "dist/extensions/azure-speech/openclaw.plugin.json",
+      "bytes": 2695,
+      "sha256": "45ffb25c4ead16d0a17b2c2ae09c93ba59d6639f736959b171ab8f50170dde1a"
+    },
+    {
+      "path": "dist/extensions/azure-speech/package.json",
+      "bytes": 296,
+      "sha256": "963e945a155295a622b6e77f28cc69ae5100a4e1d499e0e01d2f2f6a9078e6e0"
+    },
+    {
+      "path": "dist/extensions/beam/openclaw.plugin.json",
+      "bytes": 1794,
+      "sha256": "124894d004e7843d50eb075adc3fa05c591c17b143dd6fcbae788278f4752525"
+    },
+    {
+      "path": "dist/extensions/beam/package.json",
+      "bytes": 298,
+      "sha256": "6cc2972b8c840ec05a86bf6af6016cc49cd9eccaa807281c7817d27ea1f0dbb6"
+    },
+    {
+      "path": "dist/extensions/bifrost/openclaw.plugin.json",
+      "bytes": 1058,
+      "sha256": "e5dd8d104b06c98aa63ba9b602389437b8f915e528f2a3aeed13e2de62eb45d0"
+    },
+    {
+      "path": "dist/extensions/bifrost/package.json",
+      "bytes": 304,
+      "sha256": "787e9ec519f0b5409028da24e996b4e076b9c55255d9008fff40195e8b0b3c70"
+    },
+    {
+      "path": "dist/extensions/bonjour/openclaw.plugin.json",
+      "bytes": 382,
+      "sha256": "a6900f56e9deb4113fa36bf6fe1d0c24b2433f5a351cbce26e45028f06464055"
+    },
+    {
+      "path": "dist/extensions/bonjour/package.json",
+      "bytes": 395,
+      "sha256": "bf17d2114cf0dfa05b340ab775c41b171605f779ba3dde9f5d32b0e75b8d6e84"
+    },
+    {
+      "path": "dist/extensions/browser/openclaw.plugin.json",
+      "bytes": 641,
+      "sha256": "6fb7a9c4c9992ca80802ada708b2575043b72caa2cbbce84c934572b2a37dfb3"
+    },
+    {
+      "path": "dist/extensions/browser/package.json",
+      "bytes": 950,
+      "sha256": "6ab03973067e7aa7c474d862f23bb09721e9108ee7f38d2cb5a76b0020f6cc20"
+    },
+    {
+      "path": "dist/extensions/canvas/openclaw.plugin.json",
+      "bytes": 1347,
+      "sha256": "926b6e25bd0096548cc85ed6792ace6d52ae6cbc1b2243ff3913c2846147b0ab"
+    },
+    {
+      "path": "dist/extensions/canvas/package.json",
+      "bytes": 339,
+      "sha256": "3e58fc46067f1b0bf709ab3fa392f5e340e1c584ff12f54825f0eed5a48869aa"
+    },
+    {
+      "path": "dist/extensions/clawrouter/openclaw.plugin.json",
+      "bytes": 4083,
+      "sha256": "e2a7106eb9cc9caae72ae0e69e4fe78a2c82c501d0e484727a91b16fffb24187"
+    },
+    {
+      "path": "dist/extensions/clawrouter/package.json",
+      "bytes": 831,
+      "sha256": "9ba09c3b2741ab810a24ae20583144d89c961de4a35c7f48ee0cee0631d67f83"
+    },
+    {
+      "path": "dist/extensions/cloudflare/openclaw.plugin.json",
+      "bytes": 387,
+      "sha256": "3802102d2de5c9c8c50db32dc47bf39c082e9335c5f23f8c8a636d13c6a34394"
+    },
+    {
+      "path": "dist/extensions/cloudflare/package.json",
+      "bytes": 842,
+      "sha256": "a5f5555d83fadc37fe3690d89a51e1033ca59b9a33277f3072029c42095e6c48"
+    },
+    {
+      "path": "dist/extensions/code-mode-quickjs/openclaw.plugin.json",
+      "bytes": 421,
+      "sha256": "7fff9392f8dc29172395923b83b63843610183c3280428aa9c13569e878a6f13"
+    },
+    {
+      "path": "dist/extensions/code-mode-quickjs/package.json",
+      "bytes": 760,
+      "sha256": "6b95d76a31be014f45f84dc20a1bd1f09ebac78cd04b41ed6e16755e7f147b72"
+    },
+    {
+      "path": "dist/extensions/copilot-proxy/openclaw.plugin.json",
+      "bytes": 730,
+      "sha256": "d911c25fd4b140706c31eb21055c2d4c4bf90ff79b2368575b0e7310138631dc"
+    },
+    {
+      "path": "dist/extensions/copilot-proxy/package.json",
+      "bytes": 307,
+      "sha256": "e255238974dcd0d1568ebcdfa2a9ed559e14c52134b057f4bc8cf6f55cc585f6"
+    },
+    {
+      "path": "dist/extensions/crabbox/openclaw.plugin.json",
+      "bytes": 3980,
+      "sha256": "ecb2fda75a49318d134202bfe98f142504372c7b34866f549a8ffcf862240cca"
+    },
+    {
+      "path": "dist/extensions/crabbox/package.json",
+      "bytes": 594,
+      "sha256": "c91d8ae24c5806f8853a992853920a6dfdbb2c7afd3ac87799e6700d8567e287"
+    },
+    {
+      "path": "dist/extensions/cua-computer/openclaw.plugin.json",
+      "bytes": 606,
+      "sha256": "f5a1b4c32a28f573ecfa20bbe7e0e6e762a10178e768731cecdfd601fc4a2914"
+    },
+    {
+      "path": "dist/extensions/cua-computer/package.json",
+      "bytes": 2208,
+      "sha256": "2ead8fe8c9ae5157ff0666ceeb4556eb83d8dd82726f2316bea6495d471377d9"
+    },
+    {
+      "path": "dist/extensions/deepgram/openclaw.plugin.json",
+      "bytes": 923,
+      "sha256": "a38f8fc7e969fb2f4f4a7bafc8a7d5a2de6f86f853f3d99cc33a598fef86cae7"
+    },
+    {
+      "path": "dist/extensions/deepgram/package.json",
+      "bytes": 319,
+      "sha256": "6febf6cce31bc73a64d66f0ee769d93f7413f08b263f03c47ce72bcb47b1ab28"
+    },
+    {
+      "path": "dist/extensions/device-pair/openclaw.plugin.json",
+      "bytes": 944,
+      "sha256": "41b5bf099e90259baebc7f43aa12c5792c893917eb19ae5f80531c0530d95bd9"
+    },
+    {
+      "path": "dist/extensions/document-extract/openclaw.plugin.json",
+      "bytes": 445,
+      "sha256": "00fd4d26ff42b658e61fd978966c36339e0214266bbbb2de7ee04d7133a7ffdc"
+    },
+    {
+      "path": "dist/extensions/document-extract/package.json",
+      "bytes": 464,
+      "sha256": "2c26f0c4b3dc1c76ce3a7a053e1d3a7666afa8f75073f935cf6d9bb5599e2f1f"
+    },
+    {
+      "path": "dist/extensions/elevenlabs/openclaw.plugin.json",
+      "bytes": 1144,
+      "sha256": "53d473c4155736a1eb7311fc0782e749b83a472aac9ca8efe0c89a4c3fc2c98c"
+    },
+    {
+      "path": "dist/extensions/elevenlabs/package.json",
+      "bytes": 306,
+      "sha256": "52265899a44d27e7732407b9171a6eddb5cd24ba083cafdc820034bb6b58edc8"
+    },
+    {
+      "path": "dist/extensions/fal/openclaw.plugin.json",
+      "bytes": 1207,
+      "sha256": "a9333da2a1d4c1df2ac1d7f61eb627d76b82cff75126bb84b021feed166f7eac"
+    },
+    {
+      "path": "dist/extensions/fal/package.json",
+      "bytes": 296,
+      "sha256": "19a7d628573dc88d3528f15d00e471662565925d771dd03ed5fd48a391b01c35"
+    },
+    {
+      "path": "dist/extensions/file-transfer/openclaw.plugin.json",
+      "bytes": 4368,
+      "sha256": "dfe4c9b0c105bb6378ae1a476eb2906ea5ebe5b4902fbd0d3131227a69f880f0"
+    },
+    {
+      "path": "dist/extensions/file-transfer/package.json",
+      "bytes": 591,
+      "sha256": "fee8d815291c05cb38e79e0e2c8943f0bca803130cadd1877b482ab081835262"
+    },
+    {
+      "path": "dist/extensions/geolocation/openclaw.plugin.json",
+      "bytes": 1792,
+      "sha256": "016a7d79f07f2cd68dfa65c967e5e1494fb19219076b901454fca819a02ea65b"
+    },
+    {
+      "path": "dist/extensions/geolocation/package.json",
+      "bytes": 646,
+      "sha256": "3307d6cb49ea6c43c878d882235855aa62c387b29548d232b59345339c08241e"
+    },
+    {
+      "path": "dist/extensions/github-copilot/openclaw.plugin.json",
+      "bytes": 16917,
+      "sha256": "ab1e3bc7f04b67c484936fba19a84c5077f161e9b578eb3c7ab6c8b93da1db9b"
+    },
+    {
+      "path": "dist/extensions/github-copilot/package.json",
+      "bytes": 318,
+      "sha256": "62e50c1b8c11806aaa6a57ad4835560a977ea3ff81040134962775098db8bb0a"
+    },
+    {
+      "path": "dist/extensions/github/openclaw.plugin.json",
+      "bytes": 702,
+      "sha256": "6116958db16484978ffcb75f0f0d39c01985aa8db53c38df4f5196d9e739fbf2"
+    },
+    {
+      "path": "dist/extensions/github/package.json",
+      "bytes": 525,
+      "sha256": "8edcbc53be6ddf529c530e41551cb368305c3f6cc0787e56b553c54bed53df17"
+    },
+    {
+      "path": "dist/extensions/google/openclaw.plugin.json",
+      "bytes": 38957,
+      "sha256": "888a734ee197f7c898fe1d2b1846efb48562fce22fbb6a9ed4fe29b3699f6fb5"
+    },
+    {
+      "path": "dist/extensions/google/package.json",
+      "bytes": 407,
+      "sha256": "626a3b7d495827e0fbe95275d01dea2952e4aab1ca95b920b822a66bd481872c"
+    },
+    {
+      "path": "dist/extensions/huggingface/openclaw.plugin.json",
+      "bytes": 3437,
+      "sha256": "5c4d7e7c7e822f148ba7dc99916d77ee01fd9c0ef49db1e337371e0051f17528"
+    },
+    {
+      "path": "dist/extensions/huggingface/package.json",
+      "bytes": 313,
+      "sha256": "88dc2554187afa85e9e1fd21a6784fea944693a01b58bfece2ed65692ffd2f32"
+    },
+    {
+      "path": "dist/extensions/image-generation-core/package.json",
+      "bytes": 252,
+      "sha256": "959a8532f10a1d7bdcb2f1466f725e14c1e8f964fea549156b114ad70a854a85"
+    },
+    {
+      "path": "dist/extensions/imap/openclaw.plugin.json",
+      "bytes": 6458,
+      "sha256": "631fe4f9617232cb536bc130c7bdda4e5d0c36488cafdb56bff7dbf0437f7d51"
+    },
+    {
+      "path": "dist/extensions/imap/package.json",
+      "bytes": 438,
+      "sha256": "83cda3262491fe6357393985f83de6bc4ca35f8afd0392142f96202d893c1aff"
+    },
+    {
+      "path": "dist/extensions/kie/openclaw.plugin.json",
+      "bytes": 1087,
+      "sha256": "1b46b8040a109ba19fcb6374b090f55d02001a0fd1b8a69d53d831a301fb68bc"
+    },
+    {
+      "path": "dist/extensions/kie/package.json",
+      "bytes": 305,
+      "sha256": "2978be4c3a1443e87db7fa6e0e5cfdcb050248c8cf859aa1728c17387a3da1e3"
+    },
+    {
+      "path": "dist/extensions/knowledge/openclaw.plugin.json",
+      "bytes": 7048,
+      "sha256": "590684c82229542708be8ad6ff5b9094939f8e12a7ee324b1a1d0682ceaebbc1"
+    },
+    {
+      "path": "dist/extensions/knowledge/package.json",
+      "bytes": 3079,
+      "sha256": "aa1270f3593247746419aa9e753f9df521fdf9fcd01812c2b3cec076a5eb3639"
+    },
+    {
+      "path": "dist/extensions/linux-node/openclaw.plugin.json",
+      "bytes": 1753,
+      "sha256": "3c53c38af90a9d47eb6ff3ee2f4467ddd0225145fed3f9aacdc327be47ee0ae1"
+    },
+    {
+      "path": "dist/extensions/linux-node/package.json",
+      "bytes": 330,
+      "sha256": "e047fbe038aeb101f72a07eaea1b7435a3daa20694e8ebf9629ce9e5fcb7aa6f"
+    },
+    {
+      "path": "dist/extensions/litellm/openclaw.plugin.json",
+      "bytes": 1119,
+      "sha256": "28d3273b9a59a332ddfa3025a0542ec006b090434c1125fc8bc83475345f025b"
+    },
+    {
+      "path": "dist/extensions/litellm/package.json",
+      "bytes": 304,
+      "sha256": "c99c570ddbd2a2957fa9895590551b1034595d4e7626bb9c3cacbf00fcb580d1"
+    },
+    {
+      "path": "dist/extensions/llm-task/openclaw.plugin.json",
+      "bytes": 1283,
+      "sha256": "736a64e3de925f1a40525c011da728817acaf9929423be001b0f682e1aca1ab5"
+    },
+    {
+      "path": "dist/extensions/llm-task/package.json",
+      "bytes": 346,
+      "sha256": "3b42a9c9d45e4df7fae51c1f322fca19f417f5615b04ca58afdbc281851b8649"
+    },
+    {
+      "path": "dist/extensions/lmstudio/openclaw.plugin.json",
+      "bytes": 1773,
+      "sha256": "b0001a3eea62f1db45338f7f8f89712cea7578fc48c5ccae7dea564e99d2b1e2"
+    },
+    {
+      "path": "dist/extensions/lmstudio/package.json",
+      "bytes": 237,
+      "sha256": "8ba65c07fc3a0fedfe5f42a249b3bf6f1c5eb26eb7df2b51a95ae2e31929de6c"
+    },
+    {
+      "path": "dist/extensions/logbook/openclaw.plugin.json",
+      "bytes": 3421,
+      "sha256": "51f61e95d9c17a2c5b8547dc30656b017839a93b0774fae3acc35bee064a1fa2"
+    },
+    {
+      "path": "dist/extensions/logbook/package.json",
+      "bytes": 1205,
+      "sha256": "cda393380926d4e3929df09853097c39deed2bc7ed3aa3b6e058930cead19f55"
+    },
+    {
+      "path": "dist/extensions/mcp-events/openclaw.plugin.json",
+      "bytes": 1131,
+      "sha256": "5dae56d15ed3bb77d6da44eeeba312ac6ec0f1d05e95f36b84e2a5b7d52f04a7"
+    },
+    {
+      "path": "dist/extensions/mcp-events/package.json",
+      "bytes": 329,
+      "sha256": "90a4fde498e4dd34962089a0d43b51398900d6d5d3353dc33396d01a97aa1af4"
+    },
+    {
+      "path": "dist/extensions/mcp-relay/openclaw.plugin.json",
+      "bytes": 1409,
+      "sha256": "aa9ace551d9f229989ccf6beff5a5762a816f883c8254373210519897737268a"
+    },
+    {
+      "path": "dist/extensions/mcp-relay/package.json",
+      "bytes": 680,
+      "sha256": "077ec5b1976a3dcd0894eb69b4d3fc5b0bbc8ec4d097c7f8c2b40cf52e2c75db"
+    },
+    {
+      "path": "dist/extensions/memory-core/openclaw.plugin.json",
+      "bytes": 9567,
+      "sha256": "850e1798cb2a286ebc5105674fa8e38bc47c54e93caf3e980dd49e6f85a432c7"
+    },
+    {
+      "path": "dist/extensions/memory-core/package.json",
+      "bytes": 1614,
+      "sha256": "cc78fda60682005310da73b48bc6688e16e7610b43f69a5057ef73517377ab4b"
+    },
+    {
+      "path": "dist/extensions/memory-wiki/openclaw.plugin.json",
+      "bytes": 7989,
+      "sha256": "086af6428b97357d5ce03013e7966791ecd5d9f66e84e3b2d192070790e67fd9"
+    },
+    {
+      "path": "dist/extensions/memory-wiki/package.json",
+      "bytes": 1225,
+      "sha256": "af4aa64d4addbc010d83387a9e3e6b89b11304936828e018b290406d6163456e"
+    },
+    {
+      "path": "dist/extensions/microsoft-foundry/openclaw.plugin.json",
+      "bytes": 1648,
+      "sha256": "1b7fa3edbb440435c57148ea261fa0c8dc0579bfa489dba9ae7c68d9760f8f06"
+    },
+    {
+      "path": "dist/extensions/microsoft-foundry/package.json",
+      "bytes": 315,
+      "sha256": "85c2ad3a631496942123d83a4a1a9545ae4ade53eaf2111a2df3e10b0de38e7d"
+    },
+    {
+      "path": "dist/extensions/microsoft/openclaw.plugin.json",
+      "bytes": 376,
+      "sha256": "c7414eb0856162886564abd18aaafee37ccf4a7b22a4a3c0d38c3500e54248c3"
+    },
+    {
+      "path": "dist/extensions/microsoft/package.json",
+      "bytes": 359,
+      "sha256": "8efd50aa1e486b699dee728548586c3c1c489684a7aa777a52341364250f8346"
+    },
+    {
+      "path": "dist/extensions/migrate-claude/openclaw.plugin.json",
+      "bytes": 453,
+      "sha256": "e96e6522cc27bb3b73bd96de980d31ccc4ad41dd56f111446a240dced359dc9d"
+    },
+    {
+      "path": "dist/extensions/migrate-claude/package.json",
+      "bytes": 544,
+      "sha256": "7830e1646d5883a503c5c0ea3972c55e0a6e35cee5ac3dda4f5ea5504e1a53b9"
+    },
+    {
+      "path": "dist/extensions/migrate-hermes/openclaw.plugin.json",
+      "bytes": 430,
+      "sha256": "ced40066e29a7b5c870909f34b24bae71c049e345d06e198987e3895af73e82b"
+    },
+    {
+      "path": "dist/extensions/migrate-hermes/package.json",
+      "bytes": 553,
+      "sha256": "0f6268b8d700f49af8ba7e4cc6482152f4470dea6b1694ca4c32f0afba4ed8ad"
+    },
+    {
+      "path": "dist/extensions/minimax/openclaw.plugin.json",
+      "bytes": 5670,
+      "sha256": "895f4ed5c8d56bf07d133a3c44fb3dc8478dde54b55d513ee0eb33d1b7811af4"
+    },
+    {
+      "path": "dist/extensions/minimax/package.json",
+      "bytes": 314,
+      "sha256": "7cb253d8a59539e1704b5a9e6fd8e159ad990d749519b76c737824b2647e1c1e"
+    },
+    {
+      "path": "dist/extensions/nvidia/openclaw.plugin.json",
+      "bytes": 3633,
+      "sha256": "443cc62b6d77af338031390441ff2e6e3b83748ba38047d2672cf003ee24ec5a"
+    },
+    {
+      "path": "dist/extensions/nvidia/package.json",
+      "bytes": 302,
+      "sha256": "462465f7afaf487c4ac0b2b0d76b6959555a4e3392453a7174b9d31c90505640"
+    },
+    {
+      "path": "dist/extensions/oc-path/openclaw.plugin.json",
+      "bytes": 602,
+      "sha256": "4059dac4a995d8d217010d321547d00a8dca0385a21fdc4efa8d5b33408d491b"
+    },
+    {
+      "path": "dist/extensions/oc-path/package.json",
+      "bytes": 600,
+      "sha256": "6c533358a8fd4d5ec0345763e44d74d2f52c1b87a9949c841ee5b2485222da5b"
+    },
+    {
+      "path": "dist/extensions/ollama/openclaw.plugin.json",
+      "bytes": 10726,
+      "sha256": "03907f24ed5b070e6db51b00c6b8ea5c763b09d45be3d142e37bb6e99677fa78"
+    },
+    {
+      "path": "dist/extensions/ollama/package.json",
+      "bytes": 350,
+      "sha256": "63a26d637640fbdb5c52f99f8445e9645a3df7ebf836fffffc41b0cbcb1e7be0"
+    },
+    {
+      "path": "dist/extensions/omlx/openclaw.plugin.json",
+      "bytes": 1423,
+      "sha256": "0536a0dbb03a5179d602a1f0efc71ac22a81a182d481940976f3810f62abaa09"
+    },
+    {
+      "path": "dist/extensions/omlx/package.json",
+      "bytes": 298,
+      "sha256": "4f95da01c2592d1fe39e82cea22fe9c2bce0769c5fdd836e088fa9204ef8b248"
+    },
+    {
+      "path": "dist/extensions/onepassword/openclaw.plugin.json",
+      "bytes": 4531,
+      "sha256": "d427ed4cec24e6a8f9c22b012df398cc6f07cdf18836c0ae31b1e8797423d82b"
+    },
+    {
+      "path": "dist/extensions/onepassword/package.json",
+      "bytes": 1246,
+      "sha256": "10065ac73b260fea74ac3ac44b10f7dff2b7f2d2da012c8c152b4ee901765c48"
+    },
+    {
+      "path": "dist/extensions/openai/openclaw.plugin.json",
+      "bytes": 23848,
+      "sha256": "5845a4f83d4c40a2ed1a51edd323bdce0a50a390dd623e6c03510809a017eed6"
+    },
+    {
+      "path": "dist/extensions/openai/package.json",
+      "bytes": 702,
+      "sha256": "20d7c012aaa4772c904b2f549910d952bbd9694e3d16e51b6620c45b84f8013f"
+    },
+    {
+      "path": "dist/extensions/opencode-go/openclaw.plugin.json",
+      "bytes": 9792,
+      "sha256": "1fafd21d407642b27065ea00a1f3399c72db62313ecff08fefeba999d6412545"
+    },
+    {
+      "path": "dist/extensions/opencode-go/package.json",
+      "bytes": 829,
+      "sha256": "1969d4b9ae6ee183e6e28cd0410e1454a8993cfd1020c5e25513b560cb865ac3"
+    },
+    {
+      "path": "dist/extensions/openrouter/openclaw.plugin.json",
+      "bytes": 9088,
+      "sha256": "502fed231373042c0e070e3b7956b3daf8ba975c462dc7f9b3463d0f81595931"
+    },
+    {
+      "path": "dist/extensions/openrouter/package.json",
+      "bytes": 310,
+      "sha256": "be3762a04d8bb349b62347cdbf903fc2c55a25b20156b5e1bc7bcb7e6e62110d"
+    },
+    {
+      "path": "dist/extensions/policy/openclaw.plugin.json",
+      "bytes": 1787,
+      "sha256": "52c8e762dae222983597389b25d835ae9517f6589b64e8c8b40507f07760075f"
+    },
+    {
+      "path": "dist/extensions/policy/package.json",
+      "bytes": 540,
+      "sha256": "44af25f99a4db04fe29bf8a412fe79fae2d4373e646a9c627bff7a60bcd1fb89"
+    },
+    {
+      "path": "dist/extensions/reef/openclaw.plugin.json",
+      "bytes": 6260,
+      "sha256": "44e39b19ef3958523e8d26b2d558b10415e922cf857a6b1f78ef8e6e7e1d59d4"
+    },
+    {
+      "path": "dist/extensions/reef/package.json",
+      "bytes": 919,
+      "sha256": "50082ed2c06dd314f35809315ccff526320b77757813487dff3aa5c8bba95103"
+    },
+    {
+      "path": "dist/extensions/requesty/openclaw.plugin.json",
+      "bytes": 2921,
+      "sha256": "f3e0baac075e6a96934a43f7b4c6851b74ebc9e719ef044d4efb5561b5650651"
+    },
+    {
+      "path": "dist/extensions/requesty/package.json",
+      "bytes": 307,
+      "sha256": "2ba881dc287a0cf0cc6a2ccdd6a77d383c2ea875a1d908b06c394d41831e4d25"
+    },
+    {
+      "path": "dist/extensions/runway/openclaw.plugin.json",
+      "bytes": 967,
+      "sha256": "7ee1d24fc530f005e98870755aa13dd55b07e5cf20cb72cc617aa20e13825234"
+    },
+    {
+      "path": "dist/extensions/runway/package.json",
+      "bytes": 308,
+      "sha256": "9f1bd71c198ca39c6552500b35a1fc0951190ff08199326cf675f76e1292f99c"
+    },
+    {
+      "path": "dist/extensions/senseaudio/openclaw.plugin.json",
+      "bytes": 470,
+      "sha256": "44e558ea32f16909026a5051021e0eb21aa44dfcb0107be39c7a7f0e8ba51294"
+    },
+    {
+      "path": "dist/extensions/senseaudio/package.json",
+      "bytes": 323,
+      "sha256": "811c2777a3e29daa50f1ca5ed41b222a5e2695df94d202b6f5d42660e706be95"
+    },
+    {
+      "path": "dist/extensions/session-share/openclaw.plugin.json",
+      "bytes": 2770,
+      "sha256": "d2dcba2e394918eb4a4afcdd799125683220b5722d055aa3369e2a66f0822dd4"
+    },
+    {
+      "path": "dist/extensions/session-share/package.json",
+      "bytes": 315,
+      "sha256": "6c102fbd1dd24a2d835daef056116f881fa1baf006a35b7e70b0ca0d5e11a725"
+    },
+    {
+      "path": "dist/extensions/sglang/openclaw.plugin.json",
+      "bytes": 1105,
+      "sha256": "754a0c4d4de6f8d8207bef42a4d34402f78fc5ddf51b4923caa916cecaf75230"
+    },
+    {
+      "path": "dist/extensions/sglang/package.json",
+      "bytes": 302,
+      "sha256": "d8344f2f0a8df4c58e23820c671a2d74e6c03f18e567c27b1bff3970069e6e5d"
+    },
+    {
+      "path": "dist/extensions/talk-voice/openclaw.plugin.json",
+      "bytes": 474,
+      "sha256": "1997d33e4ed7d1feff156df90b84535e31e8a8d850fc85ea71de6e060c36d41e"
+    },
+    {
+      "path": "dist/extensions/telegram/openclaw.plugin.json",
+      "bytes": 99167,
+      "sha256": "27f1735829a3f930dbdee75fdbb8bd521d46256c5e64b30ca8c0c77bc2b02daf"
+    },
+    {
+      "path": "dist/extensions/telegram/package.json",
+      "bytes": 2799,
+      "sha256": "1a04306e0a8263f278d5bc824ffdd6006fa3bb176f08770e0429e20895032348"
+    },
+    {
+      "path": "dist/extensions/together/openclaw.plugin.json",
+      "bytes": 2469,
+      "sha256": "084b16c569e9d5a995c7715adc5a58f7efb0d3be17ed36227d4005108565affa"
+    },
+    {
+      "path": "dist/extensions/together/package.json",
+      "bytes": 306,
+      "sha256": "968e48ed53a21c914eb4189d88af9c154ae362a53928a1b90c7f48ef340f3342"
+    },
+    {
+      "path": "dist/extensions/tts-local-cli/openclaw.plugin.json",
+      "bytes": 383,
+      "sha256": "57d9c94482e1f02ecf54bd346460e21bc71358fb5a36c8ce5b151a0d63fb871e"
+    },
+    {
+      "path": "dist/extensions/tts-local-cli/package.json",
+      "bytes": 298,
+      "sha256": "91d8bff900e833a9becf9c3ba94a2b7f399fd9156c28315a7afb6c962b0badda"
+    },
+    {
+      "path": "dist/extensions/vault/openclaw.plugin.json",
+      "bytes": 1415,
+      "sha256": "e9f230234dcbac3fda92dceac3e88349bf75fb87ae00af8bd799176bd625325b"
+    },
+    {
+      "path": "dist/extensions/vault/package.json",
+      "bytes": 605,
+      "sha256": "a28c097d9e1b76b37e81826894a732cdb30efaadc3a059bbb24423abc8a2225a"
+    },
+    {
+      "path": "dist/extensions/vllm/openclaw.plugin.json",
+      "bytes": 1609,
+      "sha256": "a868966d795d9279e4353aa12e0087fd30b0c4f2e4a4327ebd260d6f4ddf8020"
+    },
+    {
+      "path": "dist/extensions/vllm/package.json",
+      "bytes": 298,
+      "sha256": "b6cb11dd2b4c1e1fcc30f910fbfc290c3cbb655be1c8db1ec3eeebcbd84befde"
+    },
+    {
+      "path": "dist/extensions/web-readability/openclaw.plugin.json",
+      "bytes": 448,
+      "sha256": "7405ff43234edc218f08f7aaecdff6484511c2a0ddae1b64ccaa4881f1330853"
+    },
+    {
+      "path": "dist/extensions/web-readability/package.json",
+      "bytes": 414,
+      "sha256": "ccd9fc0a2ea1e3b38363d0e75e548e1a8aaf7c8335ed2de30a00759e16ff6b99"
+    },
+    {
+      "path": "dist/extensions/workboard/openclaw.plugin.json",
+      "bytes": 5438,
+      "sha256": "f5f1240c251b42ca46816a22ef380ec25e887f587c915fb08d83f5e4caa79a3e"
+    },
+    {
+      "path": "dist/extensions/workboard/package.json",
+      "bytes": 1518,
+      "sha256": "d2d5ad5ec61e1f96c3b390d3b555f5dbc30e603c97542f1b63704217ac9bc60d"
+    },
+    {
+      "path": "dist/extensions/x/openclaw.plugin.json",
+      "bytes": 42028,
+      "sha256": "ab1782e3d0871b71a57c4c593b9b3a1e0b9c6c95c12fd6b32e855c1b34bfc467"
+    },
+    {
+      "path": "dist/extensions/x/package.json",
+      "bytes": 1569,
+      "sha256": "9dc83b9103f19ed7ab343e9c4fd1620814fa1dda3e7bdb7bbdd9e74f05eb2992"
+    },
+    {
+      "path": "dist/extensions/xai/openclaw.plugin.json",
+      "bytes": 14122,
+      "sha256": "b61a3256711035bb78985168aae2e150d8f0f893caac6389760f0ff7facd52e5"
+    },
+    {
+      "path": "dist/extensions/xai/package.json",
+      "bytes": 353,
+      "sha256": "0e7c20cf8f0303627b1d83fe3dadfbcd3c5cad81eadab04488e07708fcc29345"
+    },
+    {
+      "path": "package.json",
+      "bytes": 157605,
+      "sha256": "fac3f82a14e4e9e9cedc6edac5aae356d0c0eb72aa1dafe781f3b2c18a5e3b5e"
+    }
+  ],
+  "after": [
+    {
+      "path": "dist/build-info.json",
+      "bytes": 192,
+      "sha256": "76092e332c251ff7beac46b212058cfc08c8b1a9cd286ddd0b841c7390c71269"
+    },
+    {
+      "path": "dist/extensions/a2a/openclaw.plugin.json",
+      "bytes": 3258,
+      "sha256": "a229415ee96342c1bf44741b3df3b690cced2f58c811e7917d60fe1e22f1e80b"
+    },
+    {
+      "path": "dist/extensions/a2a/package.json",
+      "bytes": 1829,
+      "sha256": "8b5be495cf2401595039d275e47b658c76e85dedaa1b67352372a3586732dc42"
+    },
+    {
+      "path": "dist/extensions/active-memory/openclaw.plugin.json",
+      "bytes": 11560,
+      "sha256": "f5779f742e32a840b8fdf333d601b91336aea1535fd4e480b465f7b748a63cba"
+    },
+    {
+      "path": "dist/extensions/admin-http-rpc/openclaw.plugin.json",
+      "bytes": 380,
+      "sha256": "fafd75ef644c511d4483775911c43cbbf7c88d965bd78bd7092f0fc4e3e5c9a7"
+    },
+    {
+      "path": "dist/extensions/admin-http-rpc/package.json",
+      "bytes": 296,
+      "sha256": "7daad1f813bfb8531bc9d32b3dd330db9b103e775849b1f8dc85f17a65990faf"
+    },
+    {
+      "path": "dist/extensions/advisor/openclaw.plugin.json",
+      "bytes": 2600,
+      "sha256": "a1f21d3208117a2b9b1785ce6708a8ed11e0a31c0746f569432120d77bf6f159"
+    },
+    {
+      "path": "dist/extensions/advisor/package.json",
+      "bytes": 301,
+      "sha256": "95e72eb478423adcfce5981c220e6bb02e2d09478b982899be333e86398218a8"
+    },
+    {
+      "path": "dist/extensions/agent-guidance/openclaw.plugin.json",
+      "bytes": 2147,
+      "sha256": "8c5d2f078eb9aa7dda07f1bd6c9ab310bc11ea4b6143b10d488fdc465d424d8f"
+    },
+    {
+      "path": "dist/extensions/agent-guidance/package.json",
+      "bytes": 317,
+      "sha256": "31fb271f6b51f8aa7dbc0de0181ada6fbd3ed6ced355d0c8d1fd11283fbebcc1"
+    },
+    {
+      "path": "dist/extensions/agentsapi/openclaw.plugin.json",
+      "bytes": 6082,
+      "sha256": "9fa1f10c08f8d4f8d8ddcf50bbf642e780e791f9cd05f01c46b00304ce519ec1"
+    },
+    {
+      "path": "dist/extensions/agentsapi/package.json",
+      "bytes": 588,
+      "sha256": "aad23866e5ff8362064873de5f63fd204de0f3d5b84af9337a562157fa2aa505"
+    },
+    {
+      "path": "dist/extensions/alibaba/openclaw.plugin.json",
+      "bytes": 1272,
+      "sha256": "459d0e39bc91e7be654e576458b258f71a2ebd28926e2d1f820a35c7c1316bc8"
+    },
+    {
+      "path": "dist/extensions/alibaba/package.json",
+      "bytes": 317,
+      "sha256": "15d1c2655772b0f63748c1a655449e391104fce33ba2217116a458ffec0f344f"
+    },
+    {
+      "path": "dist/extensions/anthropic/openclaw.plugin.json",
+      "bytes": 20518,
+      "sha256": "4c462a53a76bcdd3b7e1043858e0ec921c881c037d2d28ce17eeefb812c2fda6"
+    },
+    {
+      "path": "dist/extensions/anthropic/package.json",
+      "bytes": 342,
+      "sha256": "2a6ccc84be14c7180843ff233a289365f6631583b8bcfa2f673129e8ceca7d9e"
+    },
+    {
+      "path": "dist/extensions/apple-fm/openclaw.plugin.json",
+      "bytes": 1490,
+      "sha256": "467da44bb85ca3445dddfc2d53beb837698ab839cd7669c613e48697ccd57834"
+    },
+    {
+      "path": "dist/extensions/apple-fm/package.json",
+      "bytes": 592,
+      "sha256": "15c5af5ff57a73ab015ab4a2c0f25e1d4178e3407669f5be37e479964d5401a4"
+    },
+    {
+      "path": "dist/extensions/autoreview/openclaw.plugin.json",
+      "bytes": 502,
+      "sha256": "31649fbe9e14d00dbbc46fa251c035ec0d56db36b3220fe59bdc6498ce33f81b"
+    },
+    {
+      "path": "dist/extensions/autoreview/package.json",
+      "bytes": 338,
+      "sha256": "6831ca9a254eb36aaff750cf1085b81143823a444945a585dd77be0b07a2a041"
+    },
+    {
+      "path": "dist/extensions/azure-speech/openclaw.plugin.json",
+      "bytes": 2695,
+      "sha256": "45ffb25c4ead16d0a17b2c2ae09c93ba59d6639f736959b171ab8f50170dde1a"
+    },
+    {
+      "path": "dist/extensions/azure-speech/package.json",
+      "bytes": 290,
+      "sha256": "b8c3759e8a11f2f62a388cdf338ba151080dde6745388a599b7b0e88dbe6332f"
+    },
+    {
+      "path": "dist/extensions/beam/openclaw.plugin.json",
+      "bytes": 1794,
+      "sha256": "124894d004e7843d50eb075adc3fa05c591c17b143dd6fcbae788278f4752525"
+    },
+    {
+      "path": "dist/extensions/beam/package.json",
+      "bytes": 292,
+      "sha256": "1b91b42f6554105194e169fe7a1b287047bdcf155b2f9cc92a74b76b49dc385d"
+    },
+    {
+      "path": "dist/extensions/bifrost/openclaw.plugin.json",
+      "bytes": 1058,
+      "sha256": "e5dd8d104b06c98aa63ba9b602389437b8f915e528f2a3aeed13e2de62eb45d0"
+    },
+    {
+      "path": "dist/extensions/bifrost/package.json",
+      "bytes": 298,
+      "sha256": "a46b81cb205e4465ece72400480521191e975df7db3677698ce1fafceb386684"
+    },
+    {
+      "path": "dist/extensions/bonjour/openclaw.plugin.json",
+      "bytes": 382,
+      "sha256": "a6900f56e9deb4113fa36bf6fe1d0c24b2433f5a351cbce26e45028f06464055"
+    },
+    {
+      "path": "dist/extensions/bonjour/package.json",
+      "bytes": 389,
+      "sha256": "a90762d67c13b039bb51b858d85c379493425eda9b3437aa54a49974936e9e3e"
+    },
+    {
+      "path": "dist/extensions/browser/openclaw.plugin.json",
+      "bytes": 641,
+      "sha256": "6fb7a9c4c9992ca80802ada708b2575043b72caa2cbbce84c934572b2a37dfb3"
+    },
+    {
+      "path": "dist/extensions/browser/package.json",
+      "bytes": 944,
+      "sha256": "7d5028d9e6102e3b6393e7f603f783666e263c2a428874aca1742130eaa5a2fd"
+    },
+    {
+      "path": "dist/extensions/canvas/openclaw.plugin.json",
+      "bytes": 1347,
+      "sha256": "926b6e25bd0096548cc85ed6792ace6d52ae6cbc1b2243ff3913c2846147b0ab"
+    },
+    {
+      "path": "dist/extensions/canvas/package.json",
+      "bytes": 333,
+      "sha256": "4b39a060e42ed5b45a0a5505e58fec6d0517ed0b58b4859a6333229555c3db2c"
+    },
+    {
+      "path": "dist/extensions/clawrouter/openclaw.plugin.json",
+      "bytes": 4191,
+      "sha256": "ec669eff6d6a0c3c48c49cca7e7d13d1b26575274a6997ea917a93bfb4adccda"
+    },
+    {
+      "path": "dist/extensions/clawrouter/package.json",
+      "bytes": 825,
+      "sha256": "f509b3b0fdd3623aa5289e06d71fe86d9086f4bf8e0bf8c28493c894f3eef002"
+    },
+    {
+      "path": "dist/extensions/cloudflare/openclaw.plugin.json",
+      "bytes": 387,
+      "sha256": "3802102d2de5c9c8c50db32dc47bf39c082e9335c5f23f8c8a636d13c6a34394"
+    },
+    {
+      "path": "dist/extensions/cloudflare/package.json",
+      "bytes": 824,
+      "sha256": "50c46126db0e21afcdc20f79952b7fe3de1193d9c30f3594a191c865872cb594"
+    },
+    {
+      "path": "dist/extensions/code-mode-quickjs/openclaw.plugin.json",
+      "bytes": 421,
+      "sha256": "7fff9392f8dc29172395923b83b63843610183c3280428aa9c13569e878a6f13"
+    },
+    {
+      "path": "dist/extensions/code-mode-quickjs/package.json",
+      "bytes": 754,
+      "sha256": "d605e26201c5fd1a0a544e462fd88d1c73bd660f9b1cac14f50e3bb260d3b8ab"
+    },
+    {
+      "path": "dist/extensions/copilot-proxy/openclaw.plugin.json",
+      "bytes": 730,
+      "sha256": "d911c25fd4b140706c31eb21055c2d4c4bf90ff79b2368575b0e7310138631dc"
+    },
+    {
+      "path": "dist/extensions/copilot-proxy/package.json",
+      "bytes": 301,
+      "sha256": "782e1d65257c1911188627ae9ccf5cbf5bee9b929ba01589f962ba9fcae7aed0"
+    },
+    {
+      "path": "dist/extensions/crabbox/openclaw.plugin.json",
+      "bytes": 3980,
+      "sha256": "ecb2fda75a49318d134202bfe98f142504372c7b34866f549a8ffcf862240cca"
+    },
+    {
+      "path": "dist/extensions/crabbox/package.json",
+      "bytes": 588,
+      "sha256": "31d398234a4cfcf0d1f6769a992a71a721c598d4c5352ae836fe1e064830dfa8"
+    },
+    {
+      "path": "dist/extensions/cua-computer/openclaw.plugin.json",
+      "bytes": 606,
+      "sha256": "f5a1b4c32a28f573ecfa20bbe7e0e6e762a10178e768731cecdfd601fc4a2914"
+    },
+    {
+      "path": "dist/extensions/cua-computer/package.json",
+      "bytes": 2189,
+      "sha256": "534f44ec3523e1ce70ad530cfa18487e251aead0a1c775c9594415669b907cc9"
+    },
+    {
+      "path": "dist/extensions/deepgram/openclaw.plugin.json",
+      "bytes": 923,
+      "sha256": "a38f8fc7e969fb2f4f4a7bafc8a7d5a2de6f86f853f3d99cc33a598fef86cae7"
+    },
+    {
+      "path": "dist/extensions/deepgram/package.json",
+      "bytes": 313,
+      "sha256": "fbf68496134a6093217c7c053da114af6f9ad45ff0adeec1b6d616f264b0d6be"
+    },
+    {
+      "path": "dist/extensions/device-pair/openclaw.plugin.json",
+      "bytes": 944,
+      "sha256": "41b5bf099e90259baebc7f43aa12c5792c893917eb19ae5f80531c0530d95bd9"
+    },
+    {
+      "path": "dist/extensions/document-extract/openclaw.plugin.json",
+      "bytes": 445,
+      "sha256": "00fd4d26ff42b658e61fd978966c36339e0214266bbbb2de7ee04d7133a7ffdc"
+    },
+    {
+      "path": "dist/extensions/document-extract/package.json",
+      "bytes": 458,
+      "sha256": "6658f8228a2a034c7c331728db9020ad5144aaca647bb7ace5f3807f97734c98"
+    },
+    {
+      "path": "dist/extensions/elevenlabs/openclaw.plugin.json",
+      "bytes": 1144,
+      "sha256": "53d473c4155736a1eb7311fc0782e749b83a472aac9ca8efe0c89a4c3fc2c98c"
+    },
+    {
+      "path": "dist/extensions/elevenlabs/package.json",
+      "bytes": 300,
+      "sha256": "5562b1583e01b123b537f4e1e037397f5b12b909051fb1090a9035a9dccb773d"
+    },
+    {
+      "path": "dist/extensions/fal/openclaw.plugin.json",
+      "bytes": 1207,
+      "sha256": "a9333da2a1d4c1df2ac1d7f61eb627d76b82cff75126bb84b021feed166f7eac"
+    },
+    {
+      "path": "dist/extensions/fal/package.json",
+      "bytes": 290,
+      "sha256": "54f69bed9ccabf560ba45464d40fb378624b25f69e22fb539e521a650d97b84d"
+    },
+    {
+      "path": "dist/extensions/file-transfer/openclaw.plugin.json",
+      "bytes": 4368,
+      "sha256": "dfe4c9b0c105bb6378ae1a476eb2906ea5ebe5b4902fbd0d3131227a69f880f0"
+    },
+    {
+      "path": "dist/extensions/file-transfer/package.json",
+      "bytes": 584,
+      "sha256": "8c7022f998d446444b418d9d9891e19dfc29d713212222a30952044ddc26d1bb"
+    },
+    {
+      "path": "dist/extensions/geolocation/openclaw.plugin.json",
+      "bytes": 1792,
+      "sha256": "016a7d79f07f2cd68dfa65c967e5e1494fb19219076b901454fca819a02ea65b"
+    },
+    {
+      "path": "dist/extensions/geolocation/package.json",
+      "bytes": 628,
+      "sha256": "a7c805922f334291ba97ca035fa5ce59fa89b999643b2e6938ae1c20fab3c827"
+    },
+    {
+      "path": "dist/extensions/github-copilot/openclaw.plugin.json",
+      "bytes": 16917,
+      "sha256": "ab1e3bc7f04b67c484936fba19a84c5077f161e9b578eb3c7ab6c8b93da1db9b"
+    },
+    {
+      "path": "dist/extensions/github-copilot/package.json",
+      "bytes": 312,
+      "sha256": "b7114a13efe5151b9f4ce14a70dcabe7d1087b2d40265a7d3a12f3177265e2de"
+    },
+    {
+      "path": "dist/extensions/github/openclaw.plugin.json",
+      "bytes": 702,
+      "sha256": "6116958db16484978ffcb75f0f0d39c01985aa8db53c38df4f5196d9e739fbf2"
+    },
+    {
+      "path": "dist/extensions/github/package.json",
+      "bytes": 519,
+      "sha256": "5b60157c98654c5bb7c5a57c42de1088972924c7435eca31df0584506dd425c8"
+    },
+    {
+      "path": "dist/extensions/google/openclaw.plugin.json",
+      "bytes": 38957,
+      "sha256": "888a734ee197f7c898fe1d2b1846efb48562fce22fbb6a9ed4fe29b3699f6fb5"
+    },
+    {
+      "path": "dist/extensions/google/package.json",
+      "bytes": 401,
+      "sha256": "20bd8760ff07a2fa9528b23c6a78fcbce51d0f69c870cf32bd9da37c3933ae64"
+    },
+    {
+      "path": "dist/extensions/huggingface/openclaw.plugin.json",
+      "bytes": 3437,
+      "sha256": "5c4d7e7c7e822f148ba7dc99916d77ee01fd9c0ef49db1e337371e0051f17528"
+    },
+    {
+      "path": "dist/extensions/huggingface/package.json",
+      "bytes": 307,
+      "sha256": "d9330b737ee70d988d524351627835f8a6a2a89cf401bef1163bdd48d79aa288"
+    },
+    {
+      "path": "dist/extensions/image-generation-core/package.json",
+      "bytes": 246,
+      "sha256": "943a0455919edeb320b3b9cae22f6f85765b3e5af14770ee6e36699a0e9754c4"
+    },
+    {
+      "path": "dist/extensions/imap/openclaw.plugin.json",
+      "bytes": 6458,
+      "sha256": "631fe4f9617232cb536bc130c7bdda4e5d0c36488cafdb56bff7dbf0437f7d51"
+    },
+    {
+      "path": "dist/extensions/imap/package.json",
+      "bytes": 432,
+      "sha256": "632adbd522e874501f37d0b604863da618e2aa0604b630a4b1b4adf9fd827f38"
+    },
+    {
+      "path": "dist/extensions/kie/openclaw.plugin.json",
+      "bytes": 1087,
+      "sha256": "1b46b8040a109ba19fcb6374b090f55d02001a0fd1b8a69d53d831a301fb68bc"
+    },
+    {
+      "path": "dist/extensions/kie/package.json",
+      "bytes": 299,
+      "sha256": "7c84112e0fc980a555890bebaeb616a26b96ea36595701d019a980852515e1fc"
+    },
+    {
+      "path": "dist/extensions/knowledge/openclaw.plugin.json",
+      "bytes": 7090,
+      "sha256": "f7ceedf635047e69b34e1722b2d35f40a57e13b4a5314ecadef72d9c5388512e"
+    },
+    {
+      "path": "dist/extensions/knowledge/package.json",
+      "bytes": 3060,
+      "sha256": "10adfec6338921639cbd8821c006bf771d3ac228c94927ca86bf6424fe80267b"
+    },
+    {
+      "path": "dist/extensions/linux-node/openclaw.plugin.json",
+      "bytes": 1753,
+      "sha256": "3c53c38af90a9d47eb6ff3ee2f4467ddd0225145fed3f9aacdc327be47ee0ae1"
+    },
+    {
+      "path": "dist/extensions/linux-node/package.json",
+      "bytes": 324,
+      "sha256": "646e93a5f22af6d7f311a1ae01f08441148defc6b103ab5a980ad43711ed8028"
+    },
+    {
+      "path": "dist/extensions/litellm/openclaw.plugin.json",
+      "bytes": 1119,
+      "sha256": "28d3273b9a59a332ddfa3025a0542ec006b090434c1125fc8bc83475345f025b"
+    },
+    {
+      "path": "dist/extensions/litellm/package.json",
+      "bytes": 298,
+      "sha256": "e72a4dfa90a8df5192c9d1b022c059a45f5dfec81004c32451b1557148703d97"
+    },
+    {
+      "path": "dist/extensions/llm-task/openclaw.plugin.json",
+      "bytes": 1312,
+      "sha256": "e3701feea0477fbc26cd14f9dae4ffb326a4c178bf9615967bccf997459bdc52"
+    },
+    {
+      "path": "dist/extensions/llm-task/package.json",
+      "bytes": 340,
+      "sha256": "d1e8502f9c36e0c2a79245e75f8764b7bd87c6ac0aa93747390ec61fc010e65e"
+    },
+    {
+      "path": "dist/extensions/lmstudio/openclaw.plugin.json",
+      "bytes": 1773,
+      "sha256": "b0001a3eea62f1db45338f7f8f89712cea7578fc48c5ccae7dea564e99d2b1e2"
+    },
+    {
+      "path": "dist/extensions/lmstudio/package.json",
+      "bytes": 231,
+      "sha256": "1ab20344845c18012369b57332576d77ff92f39c039b3c33b72f3a3c6ec4093f"
+    },
+    {
+      "path": "dist/extensions/logbook/openclaw.plugin.json",
+      "bytes": 3421,
+      "sha256": "51f61e95d9c17a2c5b8547dc30656b017839a93b0774fae3acc35bee064a1fa2"
+    },
+    {
+      "path": "dist/extensions/logbook/package.json",
+      "bytes": 1181,
+      "sha256": "99e7c061930f6669e831097603cec8e6b3645f0c8ab9f9064f8ae50c0a2d6dfd"
+    },
+    {
+      "path": "dist/extensions/mcp-events/openclaw.plugin.json",
+      "bytes": 1131,
+      "sha256": "5dae56d15ed3bb77d6da44eeeba312ac6ec0f1d05e95f36b84e2a5b7d52f04a7"
+    },
+    {
+      "path": "dist/extensions/mcp-events/package.json",
+      "bytes": 323,
+      "sha256": "15ff1d4055cf1efc7688c3abd9db95a5dacf40665bf21706adff87d2d1bf27f4"
+    },
+    {
+      "path": "dist/extensions/mcp-relay/openclaw.plugin.json",
+      "bytes": 1409,
+      "sha256": "1e6a78673c37b43bd039982429bd9f07ce12704f933c237ee168b4cb9a914227"
+    },
+    {
+      "path": "dist/extensions/mcp-relay/package.json",
+      "bytes": 674,
+      "sha256": "c5a37733be1b3fdd17761de4ad5a413c8e1f9c29e75564d571f2474a12ca2a76"
+    },
+    {
+      "path": "dist/extensions/memory-core/openclaw.plugin.json",
+      "bytes": 9596,
+      "sha256": "5f4f236a7d6064d91f5065bf7d02f61f7e1f4e8e457583de5b002109c93c3beb"
+    },
+    {
+      "path": "dist/extensions/memory-core/package.json",
+      "bytes": 1601,
+      "sha256": "474b6e2fe381bd6a97dbfd600f8a47d4d602e5b039e1688667ff5434b467d7db"
+    },
+    {
+      "path": "dist/extensions/memory-wiki/openclaw.plugin.json",
+      "bytes": 8431,
+      "sha256": "d61fcbc7e04629f523d26a2b09e034e1a082ee6dd135fb16e856a7532d5d1f57"
+    },
+    {
+      "path": "dist/extensions/memory-wiki/package.json",
+      "bytes": 1201,
+      "sha256": "316fe3cc41103a5884d97b18602661425afa5e2cc91abe367a4d5c5ede4ccf50"
+    },
+    {
+      "path": "dist/extensions/microsoft-foundry/openclaw.plugin.json",
+      "bytes": 1648,
+      "sha256": "1b7fa3edbb440435c57148ea261fa0c8dc0579bfa489dba9ae7c68d9760f8f06"
+    },
+    {
+      "path": "dist/extensions/microsoft-foundry/package.json",
+      "bytes": 309,
+      "sha256": "0ad41182f72b3fb8b9e8f3c9824f937fa109ff9b388ac9b0d0ffb8b7c0deedf1"
+    },
+    {
+      "path": "dist/extensions/microsoft/openclaw.plugin.json",
+      "bytes": 376,
+      "sha256": "c7414eb0856162886564abd18aaafee37ccf4a7b22a4a3c0d38c3500e54248c3"
+    },
+    {
+      "path": "dist/extensions/microsoft/package.json",
+      "bytes": 353,
+      "sha256": "dce166f6978b41b130587a174c37adfadf8057d714cbb83fa4f816560cee5393"
+    },
+    {
+      "path": "dist/extensions/migrate-claude/openclaw.plugin.json",
+      "bytes": 453,
+      "sha256": "e96e6522cc27bb3b73bd96de980d31ccc4ad41dd56f111446a240dced359dc9d"
+    },
+    {
+      "path": "dist/extensions/migrate-claude/package.json",
+      "bytes": 531,
+      "sha256": "514c9d48b5772004b58da0d95a4ff43f7f203ba18acc763ebe0b536b53c3a9b2"
+    },
+    {
+      "path": "dist/extensions/migrate-hermes/openclaw.plugin.json",
+      "bytes": 430,
+      "sha256": "ced40066e29a7b5c870909f34b24bae71c049e345d06e198987e3895af73e82b"
+    },
+    {
+      "path": "dist/extensions/migrate-hermes/package.json",
+      "bytes": 541,
+      "sha256": "5ddb2636322787dab6f5fb119bed77ff180e68cd7179669ce05d70b89bc3afbb"
+    },
+    {
+      "path": "dist/extensions/minimax/openclaw.plugin.json",
+      "bytes": 5670,
+      "sha256": "895f4ed5c8d56bf07d133a3c44fb3dc8478dde54b55d513ee0eb33d1b7811af4"
+    },
+    {
+      "path": "dist/extensions/minimax/package.json",
+      "bytes": 308,
+      "sha256": "06feca12a03fbeadefcd07bea425b6a0543a83579f8b0676d6b0168a67ab8d68"
+    },
+    {
+      "path": "dist/extensions/nvidia/openclaw.plugin.json",
+      "bytes": 3633,
+      "sha256": "443cc62b6d77af338031390441ff2e6e3b83748ba38047d2672cf003ee24ec5a"
+    },
+    {
+      "path": "dist/extensions/nvidia/package.json",
+      "bytes": 296,
+      "sha256": "ac690e2e2432853fdebe40b17dcb0e20c8cc31d454fddf1c5ba1ff522257aa5d"
+    },
+    {
+      "path": "dist/extensions/oc-path/openclaw.plugin.json",
+      "bytes": 602,
+      "sha256": "4059dac4a995d8d217010d321547d00a8dca0385a21fdc4efa8d5b33408d491b"
+    },
+    {
+      "path": "dist/extensions/oc-path/package.json",
+      "bytes": 588,
+      "sha256": "7df8ba07b2021e86a46df628e82db6ac8e5d33ec3da080a4b29ea29910a8b149"
+    },
+    {
+      "path": "dist/extensions/ollama/openclaw.plugin.json",
+      "bytes": 10726,
+      "sha256": "03907f24ed5b070e6db51b00c6b8ea5c763b09d45be3d142e37bb6e99677fa78"
+    },
+    {
+      "path": "dist/extensions/ollama/package.json",
+      "bytes": 344,
+      "sha256": "49b515a8a1f46a671941c9635f917182479b62810c1368fa88f8cb48cbe8f671"
+    },
+    {
+      "path": "dist/extensions/omlx/openclaw.plugin.json",
+      "bytes": 1423,
+      "sha256": "0536a0dbb03a5179d602a1f0efc71ac22a81a182d481940976f3810f62abaa09"
+    },
+    {
+      "path": "dist/extensions/omlx/package.json",
+      "bytes": 292,
+      "sha256": "71c32b70d87c9026b11c72b80bf5d72cf219e84dd84d600dd76a468abc16abef"
+    },
+    {
+      "path": "dist/extensions/onepassword/openclaw.plugin.json",
+      "bytes": 4531,
+      "sha256": "d427ed4cec24e6a8f9c22b012df398cc6f07cdf18836c0ae31b1e8797423d82b"
+    },
+    {
+      "path": "dist/extensions/onepassword/package.json",
+      "bytes": 1228,
+      "sha256": "3b7dd2f425aeb4444e315da837261a5f7b887bbc1d4db005394c52d58597f07b"
+    },
+    {
+      "path": "dist/extensions/openai/openclaw.plugin.json",
+      "bytes": 23846,
+      "sha256": "20fd7a91f9d186fb6becfa2dc7043ae0f1830de0bdcf87dc3bdbf52ec168972e"
+    },
+    {
+      "path": "dist/extensions/openai/package.json",
+      "bytes": 696,
+      "sha256": "ab525a300bcf1ac10213801e7b5235c622b0c5b3c99e68dd704e41790a63c32a"
+    },
+    {
+      "path": "dist/extensions/opencode-go/openclaw.plugin.json",
+      "bytes": 9792,
+      "sha256": "1fafd21d407642b27065ea00a1f3399c72db62313ecff08fefeba999d6412545"
+    },
+    {
+      "path": "dist/extensions/opencode-go/package.json",
+      "bytes": 811,
+      "sha256": "300c9d0278479478d0fd80ee87c25ef70e6a3bba11085eb3da92834bd1ef7e29"
+    },
+    {
+      "path": "dist/extensions/openrouter/openclaw.plugin.json",
+      "bytes": 9088,
+      "sha256": "502fed231373042c0e070e3b7956b3daf8ba975c462dc7f9b3463d0f81595931"
+    },
+    {
+      "path": "dist/extensions/openrouter/package.json",
+      "bytes": 304,
+      "sha256": "ecec564efcad3726fa4c2b1f6fc67731839cbd2d33996eb220f12dbef1d8c2df"
+    },
+    {
+      "path": "dist/extensions/policy/openclaw.plugin.json",
+      "bytes": 1787,
+      "sha256": "52c8e762dae222983597389b25d835ae9517f6589b64e8c8b40507f07760075f"
+    },
+    {
+      "path": "dist/extensions/policy/package.json",
+      "bytes": 528,
+      "sha256": "7189a3490521c713b52d489881d44646ba66d2ed29e2fd9847f5d893f25d8a16"
+    },
+    {
+      "path": "dist/extensions/reef/openclaw.plugin.json",
+      "bytes": 6260,
+      "sha256": "44e39b19ef3958523e8d26b2d558b10415e922cf857a6b1f78ef8e6e7e1d59d4"
+    },
+    {
+      "path": "dist/extensions/reef/package.json",
+      "bytes": 913,
+      "sha256": "3deff2416f5703caca0338d9083d8640b0ff32682bbb7433432f5e65a10e2bc2"
+    },
+    {
+      "path": "dist/extensions/requesty/openclaw.plugin.json",
+      "bytes": 2921,
+      "sha256": "f3e0baac075e6a96934a43f7b4c6851b74ebc9e719ef044d4efb5561b5650651"
+    },
+    {
+      "path": "dist/extensions/requesty/package.json",
+      "bytes": 301,
+      "sha256": "97406e0cc7b4a172d57c6de25d2de87e937bf2164c10c24258c76829889f9256"
+    },
+    {
+      "path": "dist/extensions/runway/openclaw.plugin.json",
+      "bytes": 967,
+      "sha256": "7ee1d24fc530f005e98870755aa13dd55b07e5cf20cb72cc617aa20e13825234"
+    },
+    {
+      "path": "dist/extensions/runway/package.json",
+      "bytes": 302,
+      "sha256": "a5ae969d78781e45609bb0d450b5cfa5f89f672571cff92cb63d099beda23153"
+    },
+    {
+      "path": "dist/extensions/senseaudio/openclaw.plugin.json",
+      "bytes": 470,
+      "sha256": "44e558ea32f16909026a5051021e0eb21aa44dfcb0107be39c7a7f0e8ba51294"
+    },
+    {
+      "path": "dist/extensions/senseaudio/package.json",
+      "bytes": 317,
+      "sha256": "4f8f8502943767bad106aa152b510d60ca4dc34beaf26fbfcc9ac6a35f11b671"
+    },
+    {
+      "path": "dist/extensions/session-share/openclaw.plugin.json",
+      "bytes": 2770,
+      "sha256": "d2dcba2e394918eb4a4afcdd799125683220b5722d055aa3369e2a66f0822dd4"
+    },
+    {
+      "path": "dist/extensions/session-share/package.json",
+      "bytes": 309,
+      "sha256": "7fed31ca72df1e9a470bcb7b1756a94f2d9a0a5cbadf17e5d78d5121568209f7"
+    },
+    {
+      "path": "dist/extensions/sglang/openclaw.plugin.json",
+      "bytes": 1105,
+      "sha256": "754a0c4d4de6f8d8207bef42a4d34402f78fc5ddf51b4923caa916cecaf75230"
+    },
+    {
+      "path": "dist/extensions/sglang/package.json",
+      "bytes": 296,
+      "sha256": "df65f3a67fc9b0a6171a8f23a1f1e148f4240d151ac92b04b2fb6162f6d7e317"
+    },
+    {
+      "path": "dist/extensions/skill-workshop/openclaw.plugin.json",
+      "bytes": 1840,
+      "sha256": "87a0eb1a0da493337b0fb248e804645f6de6bcbda5fc42151038297085015a05"
+    },
+    {
+      "path": "dist/extensions/skill-workshop/package.json",
+      "bytes": 294,
+      "sha256": "576cd0bde01ed55610e22872d903d1b6c024b34fb8536226ca35807ca194a75a"
+    },
+    {
+      "path": "dist/extensions/talk-voice/openclaw.plugin.json",
+      "bytes": 474,
+      "sha256": "1997d33e4ed7d1feff156df90b84535e31e8a8d850fc85ea71de6e060c36d41e"
+    },
+    {
+      "path": "dist/extensions/telegram/openclaw.plugin.json",
+      "bytes": 99167,
+      "sha256": "27f1735829a3f930dbdee75fdbb8bd521d46256c5e64b30ca8c0c77bc2b02daf"
+    },
+    {
+      "path": "dist/extensions/telegram/package.json",
+      "bytes": 2781,
+      "sha256": "b0c7ef5b0397470ed0f800361d7182cff3b22b7d7a1809e50678f40228e5e4a2"
+    },
+    {
+      "path": "dist/extensions/together/openclaw.plugin.json",
+      "bytes": 2469,
+      "sha256": "084b16c569e9d5a995c7715adc5a58f7efb0d3be17ed36227d4005108565affa"
+    },
+    {
+      "path": "dist/extensions/together/package.json",
+      "bytes": 300,
+      "sha256": "29defe91caf3d2e3074158f2ce6bf47c4a7137172b30de0216a89849ae33b601"
+    },
+    {
+      "path": "dist/extensions/tts-local-cli/openclaw.plugin.json",
+      "bytes": 383,
+      "sha256": "57d9c94482e1f02ecf54bd346460e21bc71358fb5a36c8ce5b151a0d63fb871e"
+    },
+    {
+      "path": "dist/extensions/tts-local-cli/package.json",
+      "bytes": 292,
+      "sha256": "20cc6aaa324cf00845fccf85c4d472e029d95e8104e45c2f41f51109562c895e"
+    },
+    {
+      "path": "dist/extensions/vault/openclaw.plugin.json",
+      "bytes": 1415,
+      "sha256": "e9f230234dcbac3fda92dceac3e88349bf75fb87ae00af8bd799176bd625325b"
+    },
+    {
+      "path": "dist/extensions/vault/package.json",
+      "bytes": 599,
+      "sha256": "5e69d4888b8a94eb1ec291d91d1a1de31df1a0659fe2a1b3d54517c2e7f4c668"
+    },
+    {
+      "path": "dist/extensions/vllm/openclaw.plugin.json",
+      "bytes": 1609,
+      "sha256": "a868966d795d9279e4353aa12e0087fd30b0c4f2e4a4327ebd260d6f4ddf8020"
+    },
+    {
+      "path": "dist/extensions/vllm/package.json",
+      "bytes": 292,
+      "sha256": "7e038e59c6d3629eafc66fd18581660a36e1860ef76d21ca27f5da6f79a4058e"
+    },
+    {
+      "path": "dist/extensions/web-readability/openclaw.plugin.json",
+      "bytes": 448,
+      "sha256": "7405ff43234edc218f08f7aaecdff6484511c2a0ddae1b64ccaa4881f1330853"
+    },
+    {
+      "path": "dist/extensions/web-readability/package.json",
+      "bytes": 408,
+      "sha256": "6d7d102f4af460b36a16c60376ae9b6bd50315a9af00b1a2c173461a36e7f63d"
+    },
+    {
+      "path": "dist/extensions/workboard/openclaw.plugin.json",
+      "bytes": 5438,
+      "sha256": "7c5c9f102afa39cf032300db6ddd1eae7f60b66bc47877ca57700189333c1a14"
+    },
+    {
+      "path": "dist/extensions/workboard/package.json",
+      "bytes": 1506,
+      "sha256": "e908884c0c5eac1efb21c2dbd70283f608e9bb4ffb27183e16aee58502c1fae8"
+    },
+    {
+      "path": "dist/extensions/x/openclaw.plugin.json",
+      "bytes": 42028,
+      "sha256": "681b452ba66565d48b63007b4628b08cbec71ac0331b6cd3b0d2f48757bc23a5"
+    },
+    {
+      "path": "dist/extensions/x/package.json",
+      "bytes": 1551,
+      "sha256": "85f8560764b07ec8308f958346a3fb87292bcbcad26b2b65ace1a11d8ac72a77"
+    },
+    {
+      "path": "dist/extensions/xai/openclaw.plugin.json",
+      "bytes": 15361,
+      "sha256": "f5c2e3a20f1e200b98b047e2aeb8a2884227ffd85508616d4b6ae2620046b604"
+    },
+    {
+      "path": "dist/extensions/xai/package.json",
+      "bytes": 347,
+      "sha256": "c5b683826f5ece753421d7e9d5ebbc1e529f7ae3a1b49869c2fdb666bee6cd5e"
+    },
+    {
+      "path": "package.json",
+      "bytes": 158754,
+      "sha256": "b48ccff645c68b2f1a6d778e7f92d709dfad8414be33f021d8494f3e71946daa"
+    }
+  ]
+}

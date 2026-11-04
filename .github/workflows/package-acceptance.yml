@@ -134,6 +134,7 @@ jobs:
           PACKAGE_FILE: ${{ inputs.package_file_name }}
         run: |
           set -euo pipefail
+          node --test scripts/e2e/lib/upgrade-survivor/br-beta-capture-contract.test.mjs > .artifacts/br-beta-native/capture-controls.tap
           sudo "$(command -v node)" scripts/e2e/lib/upgrade-survivor/br-beta-native.mjs \
             "$PWD/.artifacts/br-beta-native/package-input/$PACKAGE_FILE" \
             "$PWD/.artifacts/br-beta-native/native" 2026.11.5-beta.1

@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { zstdDecompressSync } from "node:zlib";
 
 export function digest(file, algorithm = "sha256", encoding = "hex") {
   const hash = createHash(algorithm);
@@ -48,16 +49,30 @@ function contained(root, relative) {
   return file;
 }
 
-// Compare user history logically: SQLite backup legitimately changes page layout.
+// Compare logical rows and schema: SQLite backup legitimately changes page layout.
 function history(file) {
   const db = new DatabaseSync(file, { readOnly: true });
   try {
     db.exec("BEGIN");
-    assert.deepEqual(db.prepare("PRAGMA quick_check").all().map(Object.values).flat(), ["ok"]);
+    const quickCheck = db.prepare("PRAGMA quick_check").all().map(Object.values).flat();
+    assert.deepEqual(quickCheck, ["ok"]);
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-      .all().map(({ name }) => name).filter((name) => /^(session_|transcript_)/u.test(name));
+      .all().map(({ name }) => name);
     return {
+      quickCheck,
       userVersion: db.prepare("PRAGMA user_version").get().user_version,
+      schemaSha256: createHash("sha256").update(JSON.stringify(db.prepare(
+        "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all())).digest("hex"),
+      mainConversation: db.prepare("SELECT session_id, seq, event_json, event_zstd FROM transcript_events WHERE session_id = ? ORDER BY seq")
+        .all(SESSIONS[0][1]).flatMap((row) => {
+          const text = row.event_json ?? (row.event_zstd && zstdDecompressSync(row.event_zstd, { maxOutputLength: 4 * 1024 * 1024 }).toString("utf8"));
+          if (!text) return [];
+          const event = JSON.parse(text);
+          if (event.message?.role !== "assistant" || !Array.isArray(event.message.content) ||
+            !event.message.content.some((part) => part.type === "text" && part.text === MARKER)) return [];
+          return [{ sessionId: row.session_id, seq: row.seq, messageId: event.id,
+            role: event.message.role, contentSha256: createHash("sha256").update(JSON.stringify(event.message.content)).digest("hex") }];
+        }),
       tables: tables.map((name) => {
         const statement = db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`);
         statement.setReadBigInts(true);
@@ -133,6 +148,82 @@ function registryIdentity(packageRoot, destination) {
   save(path.join(destination, "identity.json"), records);
   return records;
 }
+function assertRegistryPin(records, phase) {
+  const pin = json(new URL("./br-beta-registry-pin.json", import.meta.url));
+  assert.equal(pin.productHead, "bcae09093b5a06099cd3a3f0f3d5f4e4b499ad7f");
+  assert.equal(pin.packageSha256, "4f67df079a8e179589aeecbf9a5b1546423856723132e40b7ef4a2c5c17a6448");
+  assert.deepEqual([...records].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), pin[phase],
+    `Installed ${phase} registry differs from the retained exact package witness`);
+}
+
+function captureInventory(ctx, stage, before) {
+  const root = `${ctx.state}.update-captures`;
+  const captures = fs.existsSync(root) ? fs.readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory()).map(({ name }) => {
+      const file = path.join(root, name, "manifest.json");
+      const manifest = fs.existsSync(file) ? json(file) : null;
+      const preserveFiles = stage === "before" || before.captures.some((entry) => entry.name === name);
+      const files = manifest && preserveFiles ? manifest.entries.filter((entry) => entry.kind === "file").map((entry) => {
+        const payload = contained(path.dirname(file), entry.archivePath);
+        const stat = fs.lstatSync(payload);
+        assert(stat.isFile(), "Earlier capture payload is not a regular file");
+        const sha256 = digest(payload);
+        assert.equal(stat.size, entry.size);
+        assert.equal(sha256, entry.sha256, "Earlier capture payload integrity failed");
+        return { archivePath: entry.archivePath, size: stat.size, sha256 };
+      }) : [];
+      return { name, manifestPath: file, manifest, files,
+        sha256: fs.existsSync(file) ? digest(file) : null,
+        partialPresent: fs.lstatSync(`${file}.partial`, { throwIfNoEntry: false }) !== undefined };
+    }).sort((a, b) => a.name.localeCompare(b.name)) : [];
+  const ledger = publicJson(ctx.asUser(`capture-ledger-${stage}`, ctx.cli, ["update", "status", "--json"]));
+  const inventory = { stage, root, captures, ledger };
+  save(path.join(ctx.cellDir, `capture-inventory-${stage}.json`), inventory);
+  return inventory;
+}
+
+// The capture belongs to the actual update, not every earlier Doctor in this home.
+// Pure selection is shared by the fixture and its positive/negative controls.
+export function selectUpdateCapture({ before, after, result, owner }) {
+  assert.equal(typeof result?.runId, "string", "Updater run identity missing");
+  assert.equal(result.run?.runId, result.runId, "Updater result/ledger identity mismatch");
+  const run = after.ledger.lastRun;
+  assert.equal(run?.runId, result.runId, "Observed ledger belongs to a foreign run");
+  assert.notEqual(before.ledger.lastRun?.runId, result.runId, "Update reused the pre-update ledger");
+  assert.equal(run.origin.admission?.owner, "candidate");
+  assert.equal(run.origin.admission?.protocol, 1);
+  assert.equal(run.origin.admission?.candidateVersion, owner.candidateVersion);
+  assert.equal(run.origin.candidateAdmission?.protocol, 1);
+  assert.equal(run.origin.candidateAdmission?.verdict, "admit");
+  assert.equal(run.origin.candidateAdmission?.facts.installedVersion, owner.baselineVersion);
+  assert.equal(run.origin.candidateAdmission?.facts.candidateVersion, owner.candidateVersion);
+  assert.equal(run.before.buildId, owner.baselineBuildId);
+  assert.equal(run.after.buildId, owner.candidateBuildId);
+  for (const old of before.captures) {
+    const retained = after.captures.filter((entry) => entry.name === old.name);
+    assert.equal(retained.length, 1, "Earlier capture disappeared or became ambiguous");
+    assert.equal(retained[0].sha256, old.sha256, "Earlier capture manifest changed");
+    assert.deepEqual(retained[0].files, old.files, "Earlier capture payload bytes changed");
+  }
+  const matches = after.captures.filter((entry) => entry.manifest?.runId === result.runId);
+  assert.equal(matches.length, 1, "Expected one capture owned by this updater run");
+  const selected = matches[0];
+  assert.equal(selected.name, result.runId, "Capture directory differs from its owner run");
+  assert(!before.captures.some((entry) => entry.name === selected.name), "Selected capture predates update");
+  const manifest = selected.manifest;
+  assert.equal(manifest.schemaVersion, 2);
+  assert.equal(manifest.kind, "update-recovery");
+  assert.equal(manifest.generation.kind, "baseline");
+  for (const key of ["stateDir", "configPath", "installRoot"]) assert.equal(manifest[key], owner[key]);
+  const drivers = [run.origin.driver, ...(run.origin.previousDrivers ?? [])];
+  const driverMatches = (driver) => driver && typeof driver.host === "string" &&
+    Number.isSafeInteger(driver.pid) && driver.pid > 0 && typeof driver.startIdentity === "string" &&
+    drivers.some((candidate) => candidate && ["host", "pid", "startIdentity"].every((key) => candidate[key] === driver[key]));
+  assert(driverMatches(manifest.creator), "Capture creator is foreign to the update driver chain");
+  assert(Array.isArray(manifest.drivers) && manifest.drivers.length > 0 && manifest.drivers.every(driverMatches),
+    "Capture driver admission is foreign");
+  return selected;
+}
 export function captureBefore(ctx) {
   const { state, home, prefix, cli, packageRoot, asUser, cellDir, env } = ctx;
   const proofRoot = path.join(home, "br-proof");
@@ -148,6 +239,9 @@ export function captureBefore(ctx) {
   const beforeConfig = path.join(cellDir, "config-before.json");
   fs.copyFileSync(env.OPENCLAW_CONFIG_PATH, beforeConfig);
   const before = histories(state);
+  const specimen = before.flatMap((agent) => agent.mainConversation);
+  assert.equal(specimen.length, 1, "Baseline must contain the injected message in the existing main conversation");
+  assert.equal(specimen[0].messageId, injected.messageId, "Baseline database lacks the committed injection identity");
   assert(before.some((agent) => agent.tables.some((table) => table.name === "transcript_events" && table.rows > 0)),
     "Baseline has no real transcript specimen");
   const retainedPrefix = path.join(proofRoot, "baseline-prefix");
@@ -177,14 +271,18 @@ export function captureBefore(ctx) {
   assert.equal(`sha512-${digest(baselineArchive, "sha512", "base64")}`, BETA_PIN.integrity);
   assert.equal(digest(baselineArchive, "sha1"), BETA_PIN.shasum);
   const baselineRegistry = registryIdentity(packageRoot, path.join(cellDir, "registries", "baseline"));
+  assertRegistryPin(baselineRegistry, "baseline");
   const proof = { proofRoot, retainedPrefix, entry, archive, archiveSha256: digest(archive), stateAsset: assets[0].archivePath,
     beforeConfig, beforeConfigSha256: digest(beforeConfig), beforeHistory: before, beforePublicHistory,
-    baselineArchive, baselinePin: BETA_PIN, baselineRegistry, errors: [],
+    baselineArchive, baselinePin: BETA_PIN, baselineRegistry, injectedMessageId: injected.messageId,
+    beforeCaptures: captureInventory(ctx, "before"), errors: [],
     externalRegistry: "not used; package archives and installed bundled manifests/identity exported without dependency trees" };
+  assert(proof.beforeCaptures.captures.some((capture) => capture.manifest?.runId.startsWith("doctor-")),
+    "Fixture did not retain its initial Doctor capture; the original two-capture regression is absent");
   save(path.join(cellDir, "original-before.json"), proof);
   return proof;
 }
-export function collectAfter(ctx, proof) {
+export function collectAfter(ctx, proof, updateResult) {
   const { state, home, env, cellDir, run, user } = ctx;
   const observe = (name, read) => {
     try { proof[name] = read(); } catch (error) { proof.errors.push(`${name}: ${error}`); }
@@ -200,23 +298,40 @@ export function collectAfter(ctx, proof) {
     assert.deepEqual(value, proof.beforePublicHistory, "Live candidate changed conversation role/content");
     return value;
   });
-  observe("candidateRegistry", () => registryIdentity(ctx.packageRoot, path.join(cellDir, "registries", "after")));
+  observe("candidateRegistry", () => {
+    const records = registryIdentity(ctx.packageRoot, path.join(cellDir, "registries", "after"));
+    assertRegistryPin(records, "after");
+    return records;
+  });
+  observe("afterCaptures", () => captureInventory(ctx, "after", proof.beforeCaptures));
   observe("originalCapture", () => {
-    const root = `${state}.update-captures`;
-    const manifests = fs.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory())
-      .map(({ name }) => path.join(root, name, "manifest.json")).filter(fs.existsSync);
-    assert.equal(manifests.length, 1, "Expected one sealed original-state capture");
-    const partial = path.join(path.dirname(manifests[0]), "manifest.json.partial");
-    assert.equal(fs.lstatSync(partial, { throwIfNoEntry: false }), undefined, "Original capture publication is incomplete");
-    const manifest = json(manifests[0]);
+    const candidate = json(path.join(ctx.packageRoot, "dist/build-info.json"));
+    const selected = selectUpdateCapture({ before: proof.beforeCaptures, after: proof.afterCaptures,
+      result: updateResult, owner: { stateDir: state, configPath: env.OPENCLAW_CONFIG_PATH,
+        installRoot: ctx.packageRoot, baselineVersion: proof.baselinePin.version,
+        baselineBuildId: proof.baselinePin.build.buildId, candidateVersion: candidate.version, candidateBuildId: candidate.buildId } });
+    const manifestPath = selected.manifestPath;
+    const partial = `${manifestPath}.partial`;
+    const read = proof.captureRead = { runId: updateResult.runId, manifest: manifestPath,
+      manifestSha256: selected.sha256, partialObservations: [], files: [], agentHistories: [] };
+    const checkpoint = () => save(path.join(cellDir, "capture-read.json"), read);
+    const observePartial = (stage) => {
+      const present = fs.lstatSync(partial, { throwIfNoEntry: false }) !== undefined;
+      read.partialObservations.push({ stage, present }); checkpoint();
+      assert.equal(present, false, `Original capture publication incomplete at ${stage}`);
+    };
+    observePartial("before-payload-read");
+    const manifest = json(manifestPath);
+    assert.equal(digest(manifestPath), selected.sha256, "Selected capture manifest changed before read");
     assert.equal(manifest.schemaVersion, 2);
     assert.equal(manifest.kind, "update-recovery");
     assert.equal(manifest.generation.kind, "baseline");
     assert.equal(fs.realpathSync(manifest.stateDir), fs.realpathSync(state));
     for (const entry of manifest.entries.filter((entry) => entry.kind === "file")) {
-      const payload = contained(path.dirname(manifests[0]), entry.archivePath);
+      const payload = contained(path.dirname(manifestPath), entry.archivePath);
       assert.equal(fs.statSync(payload).size, entry.size);
       assert.equal(digest(payload), entry.sha256, "Original capture payload digest mismatch");
+      read.files.push({ sourcePath: entry.sourcePath, archivePath: entry.archivePath, size: entry.size, sha256: entry.sha256 }); checkpoint();
     }
     const config = manifest.entries.find((entry) => entry.sourcePath === env.OPENCLAW_CONFIG_PATH);
     assert(config && config.kind === "file", "Original capture lacks config bytes");
@@ -224,11 +339,19 @@ export function collectAfter(ctx, proof) {
     for (const expected of proof.beforeHistory) {
       const entry = manifest.entries.find((entry) => entry.sourcePath === path.join(state, expected.relative));
       assert(entry?.sqlite, "Original capture lacks baseline agent database");
-      assert.deepEqual(history(contained(path.dirname(manifests[0]), entry.archivePath)),
+      const captured = history(contained(path.dirname(manifestPath), entry.archivePath));
+      read.agentHistories.push({ sourcePath: entry.sourcePath, archivePath: entry.archivePath, ...captured }); checkpoint();
+      assert.deepEqual(captured,
         Object.fromEntries(Object.entries(expected).filter(([key]) => key !== "relative")), "Original capture history changed");
     }
-    assert.equal(fs.lstatSync(partial, { throwIfNoEntry: false }), undefined, "Original capture publication became incomplete");
-    return { manifest: manifests[0], sha256: digest(manifests[0]), entries: manifest.entries.length };
+    const specimen = read.agentHistories.flatMap((agent) => agent.mainConversation);
+    assert.equal(specimen.length, 1);
+    assert.equal(specimen[0].messageId, proof.injectedMessageId, "Captured database lost the existing main conversation injection");
+    observePartial("after-payload-and-history-read");
+    assert.equal(digest(manifestPath), selected.sha256, "Selected capture manifest changed during read");
+    read.verified = true; checkpoint();
+    return { manifest: manifestPath, sha256: digest(manifestPath), entries: manifest.entries.length,
+      runId: updateResult.runId, readReceipt: path.join(cellDir, "capture-read.json"), verified: true };
   });
   observe("restore", () => {
     assert.equal(digest(proof.archive), proof.archiveSha256, "Verified backup changed");
@@ -243,13 +366,17 @@ export function collectAfter(ctx, proof) {
     assert.equal(restored.ok, true, "Public backup owner refused restore");
     assert.equal(path.resolve(restored.targetPath), target);
     const restoredState = contained(target, proof.stateAsset);
-    assert.equal(digest(path.join(restoredState, "openclaw.json")), proof.beforeConfigSha256);
-    assert.deepEqual(histories(restoredState), proof.beforeHistory, "Restored baseline history changed");
+    const restoredConfigSha256 = digest(path.join(restoredState, "openclaw.json"));
+    assert.equal(restoredConfigSha256, proof.beforeConfigSha256);
+    const restoredHistory = histories(restoredState);
+    save(path.join(cellDir, "restored-history.json"), restoredHistory);
+    assert.deepEqual(restoredHistory, proof.beforeHistory, "Restored baseline history changed");
     // The public restore child has exited and its output passed. This private
     // runtime has no remaining consumer; release it before export packing.
     assert.equal(proof.retainedPrefix, path.join(proof.proofRoot, "baseline-prefix"));
     fs.rmSync(proof.retainedPrefix, { recursive: true });
-    return { result: restored, state: restoredState, archiveSha256: digest(proof.archive), privateRuntimeReleased: true };
+    return { result: restored, state: restoredState, archiveSha256: digest(proof.archive),
+      configSha256: restoredConfigSha256, history: restoredHistory, privateRuntimeReleased: true };
   });
   return proof;
 }
