@@ -465,10 +465,12 @@ it("refuses an AWS SDK account removed while provider auth preparation awaits", 
     const result = await runStoredTurn(cfg, job);
     expect(removed).toBe(true);
     expect(result.status).toBe("error");
+    // Effect before wording: the pre-dispatch check already stopped the request
+    // on base, so the message is what this change moves and names.
+    expect(requests).toEqual([]);
     expect(result.error).toContain(
       `account ${awsSdkId} on runtime openclaw was removed or replaced during the run`,
     );
-    expect(requests).toEqual([]);
   });
 });
 
