@@ -701,6 +701,7 @@ ${JSON.stringify(routeDetails, null, 2)}
                 agentId,
                 // The Gateway inventory resolves canonical keys, not legacy bare main aliases.
                 sessionKey: normalizeVisibilityTargetSessionKey(scopedResolved.key, agentId),
+                grantedScopes: resolveGatewayToolOperatorSelection().operatorAuthority?.scopes,
               })
             : undefined;
           const extraBlocks = [

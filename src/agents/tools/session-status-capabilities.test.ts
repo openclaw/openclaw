@@ -22,14 +22,10 @@ describe("session capability summary", () => {
           ],
         },
       ],
-      notices: [
-        { id: "browser-denied-by-policy", severity: "info", message: "Browser is denied." },
-      ],
       toolAccess: {
         checked: "live-session",
         profiles: [],
         tools: [
-          // A host-owned tool can survive filtering; presence in the final set wins.
           {
             id: "exec",
             status: "excluded",
@@ -37,11 +33,6 @@ describe("session capability summary", () => {
           },
           {
             id: "browser",
-            status: "excluded",
-            reasons: [{ kind: "deny", label: "Denied by tools.deny" }],
-          },
-          {
-            id: "canvas",
             status: "excluded",
             reasons: [{ kind: "deny", label: "Denied by tools.deny" }],
           },
@@ -63,21 +54,29 @@ describe("session capability summary", () => {
       checked: "live-session",
       available: ["exec", "read"],
       unavailable: [
-        { reason: "Denied by tools.deny", tools: ["browser", "canvas"] },
+        { reason: "Denied by tools.deny", tools: ["browser"] },
         { reason: "Not included in the session preview", tools: ["tts"] },
       ],
-      notices: ["Browser is denied."],
     });
     expect(formatSessionCapabilities(summary)).toBe(
       [
         "Capabilities (this session only; other sessions, agents, or config can differ):",
         "Available tools: exec, read",
         "Not available in this session:",
-        "- Denied by tools.deny: browser, canvas",
+        "- Denied by tools.deny: browser",
         "- Not included in the session preview: tts",
-        "Notices:",
-        "- Browser is denied.",
       ].join("\n"),
     );
+  });
+
+  it("names held scopes when the inventory check is refused", async () => {
+    const summary = await resolveSessionCapabilities({
+      callGateway: vi.fn().mockRejectedValue(new Error("missing scope: operator.read")),
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      grantedScopes: [" operator.sessions.write ", ""],
+    });
+    expect(summary.grantedScopes).toEqual(["operator.sessions.write"]);
+    expect(formatSessionCapabilities(summary)).toContain("holds operator.sessions.write");
   });
 });
