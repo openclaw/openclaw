@@ -77,7 +77,6 @@ import {
 } from "../skills/library/selection-read.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
-import { readAgentDatabaseDeletionWorkerSnapshot } from "./agent-deletion-journal.snapshot.worker.js";
 import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import {
   isConfigMachineStateReadCommand,
@@ -85,7 +84,6 @@ import {
 } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
-import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
@@ -111,7 +109,6 @@ import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.
 export {
   prepareAcpSessionMetadataRead,
   loadSubagentSessionListRunsFromSqlite,
-  readRegisteredAgentDatabaseRows,
   readStateStream,
   stateReadRegistry,
 };
@@ -129,6 +126,7 @@ export function readOpenClawStateDatabaseCommand(
         | "subagents.restore"
         | "meetingTranscripts.export"
         | "gatewayOwnerLease.read"
+        | "agentDatabaseDeletion.snapshot"
         | "agentDatabaseRegistry.read"
         | "subagents.sessionList";
     }
@@ -149,12 +147,6 @@ export function readOpenClawStateDatabaseCommand(
         command.agentId !== undefined && !install
           ? readClawOrphanWorkspaceInDatabase(db, command.agentId)
           : undefined,
-    };
-  }
-  if (command.type === "agentDatabaseDeletion.snapshot") {
-    return {
-      type: command.type,
-      snapshot: readAgentDatabaseDeletionWorkerSnapshot(db, input.databasePath, command.purpose),
     };
   }
   if (command.type === "deliveryQueue.outbound") {

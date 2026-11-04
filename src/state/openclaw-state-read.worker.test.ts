@@ -9,6 +9,12 @@ const mock = vi.hoisted(() => ({
   admit: vi.fn<() => void>(),
   query: vi.fn<() => []>(),
   settle: vi.fn<(operation: (source: { db: object }) => unknown) => unknown>(),
+  snapshot: vi.fn(() => ({
+    retainedDeletions: { status: "empty" as const },
+    registeredAgentDatabases: [],
+    deletedAgents: [],
+  })),
+  unrelatedMigrationLoaded: false,
   unrelatedHandlerLoaded: false,
 }));
 vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
@@ -24,6 +30,10 @@ vi.mock("./backup-run-records.kernel.js", async (importOriginal) => {
     readBackupRunsInDatabase: mock.query,
   };
 });
+vi.mock("../infra/deferred-plugin-migrations.js", async (importOriginal) => {
+  mock.unrelatedMigrationLoaded = true;
+  return importOriginal<typeof import("../infra/deferred-plugin-migrations.js")>();
+});
 vi.mock("../plugins/plugin-metadata-state.kernel.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-metadata-state.kernel.js")>()),
   readPluginMetadataStateRowsInDatabase: () => [
@@ -32,6 +42,9 @@ vi.mock("../plugins/plugin-metadata-state.kernel.js", async (importOriginal) => 
 }));
 vi.mock("./openclaw-agent-db-registry.read.js", () => ({
   readRegisteredAgentDatabaseRows: mock.query,
+}));
+vi.mock("./agent-deletion-journal.snapshot.worker.js", () => ({
+  readAgentDatabaseDeletionWorkerSnapshot: mock.snapshot,
 }));
 vi.mock("../infra/gateway-owner-lease.worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-owner-lease.worker.js")>()),
@@ -63,6 +76,7 @@ const request: OpenClawStateReadRequest = {
 
 beforeEach(() => {
   mock.admit.mockReset();
+  mock.snapshot.mockClear();
   mock.query.mockReset().mockReturnValue([]);
   mock.settle.mockReset().mockImplementation((operation) => {
     try {
@@ -89,6 +103,7 @@ it("reads plugin metadata without loading unrelated command handlers", async () 
     rows: [{ state_key: "plugins.bundledDiscovery", value_json: '"allowlist"' }],
   });
   expect(mock.unrelatedHandlerLoaded).toBe(false);
+  expect(mock.unrelatedMigrationLoaded).toBe(false);
 });
 
 it("reads the ownership lease without loading unrelated command handlers", async () => {
@@ -102,6 +117,41 @@ it("reads the ownership lease without loading unrelated command handlers", async
     sourceAdmitted: true,
     lease: undefined,
   });
+  expect(mock.unrelatedHandlerLoaded).toBe(false);
+});
+
+it("reads registry discovery without loading unrelated command handlers", async () => {
+  const reply = await mock.handler({
+    ...request,
+    command: { type: "agentDatabaseRegistry.read" },
+  });
+  expect(reply).toEqual({
+    ok: true,
+    type: "agentDatabaseRegistry.read",
+    sourceAdmitted: true,
+    result: { status: "available", entries: [] },
+  });
+  expect(mock.admit).toHaveBeenCalledOnce();
+  expect(mock.unrelatedHandlerLoaded).toBe(false);
+});
+
+it("reads the deletion snapshot without loading unrelated command handlers", async () => {
+  const reply = await mock.handler({
+    ...request,
+    command: { type: "agentDatabaseDeletion.snapshot", purpose: "runtime" },
+  });
+  expect(reply).toEqual({
+    ok: true,
+    type: "agentDatabaseDeletion.snapshot",
+    sourceAdmitted: true,
+    snapshot: {
+      retainedDeletions: { status: "empty" },
+      registeredAgentDatabases: [],
+      deletedAgents: [],
+    },
+  });
+  expect(mock.snapshot).toHaveBeenCalledWith({}, request.databasePath, "runtime");
+  expect(mock.admit).toHaveBeenCalledOnce();
   expect(mock.unrelatedHandlerLoaded).toBe(false);
 });
 
@@ -143,4 +193,20 @@ it.each([
     });
   }
   expect(mock.query).toHaveBeenCalledTimes(outcome === "schema-error" ? 0 : 1);
+});
+
+it("does not run the deletion snapshot when admission fails", async () => {
+  mock.admit.mockImplementation(() => {
+    throw new Error("controlled admission failure");
+  });
+  const reply = await mock.handler({
+    ...request,
+    command: { type: "agentDatabaseDeletion.snapshot", purpose: "runtime" },
+  });
+  expect(reply).toMatchObject({
+    ok: false,
+    sourceAdmitted: undefined,
+    message: "controlled admission failure",
+  });
+  expect(mock.snapshot).not.toHaveBeenCalled();
 });
