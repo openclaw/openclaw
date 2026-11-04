@@ -630,6 +630,7 @@ src/config/schema.shared.ts
 src/config/schema.walk.ts
 src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
+src/config/sessions/archive-decode.ts
 src/config/sessions/artifacts.ts
 src/config/sessions/transcript-file-names.ts
 src/config/sessions/auth-profile-override-provenance.ts
@@ -1277,6 +1278,7 @@ src/logging/logger-settings-internal.ts
 src/logging/logger.ts
 src/logging/redact-bounded.ts
 src/logging/redact-edit-composition.ts
+src/logging/redact-form-body.ts
 src/logging/redact-json-tokens.ts
 src/logging/redact-json.ts
 src/logging/redact-linear-matchers.ts

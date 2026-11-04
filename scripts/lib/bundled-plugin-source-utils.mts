@@ -29,14 +29,19 @@ export function collectTrackedBundledPluginSourceCandidates(repoRoot: string) {
     ":(glob)extensions/*/openclaw.plugin.json",
     ":(glob)extensions/*/package.json",
   ];
-  const runGitLsFiles = (args: string[]) =>
-    spawnSync("git", ["ls-files", ...args, "--", ...pathspecs], {
+  const runGit = (args: string[]) =>
+    spawnSync("git", args, {
       cwd: repoRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-  const result = runGitLsFiles([]);
-  const deletedResult = runGitLsFiles(["--deleted"]);
+  // Extracted trees may sit below another checkout; only its root owns the tracked inventory.
+  const prefix = runGit(["rev-parse", "--show-prefix"]);
+  if (prefix.status !== 0 || prefix.stdout.trim() !== "") {
+    return null;
+  }
+  const result = runGit(["ls-files", "--", ...pathspecs]);
+  const deletedResult = runGit(["ls-files", "--deleted", "--", ...pathspecs]);
   if (result.status !== 0 || deletedResult.status !== 0) {
     return null;
   }
