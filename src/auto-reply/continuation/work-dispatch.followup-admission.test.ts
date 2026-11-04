@@ -10,6 +10,7 @@ import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../../infra/system-events.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
@@ -17,7 +18,7 @@ import { withFullRuntimeReplyConfig } from "../reply/get-reply-fast-path.js";
 import { prewarmConfigDrivenReplyRuntime } from "../reply/get-reply-from-config.runtime.js";
 import { getReplyFromConfig } from "../reply/get-reply.js";
 import { finalizeInboundContext } from "../reply/inbound-context.js";
-import { getExistingFollowupQueue } from "../reply/queue/state.js";
+import { getExistingFollowupQueue, hasPendingFollowupQueueWork } from "../reply/queue/state.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import { runContinuationCustodyBoot } from "./custody-boot.js";
 import { resetContinuationCustodyProjection } from "./custody/custody-projection.js";
@@ -80,7 +81,7 @@ vi.mock("./work-recipient-authority.js", async (importOriginal) =>
 await prewarmConfigDrivenReplyRuntime();
 
 const FOLLOWUP_DEBOUNCE_MS = 500;
-const BUSY_BACKOFF_MS = 1_000;
+const CLOCK_STEP_MS = 100;
 const REFUSED = "Retryable continuation skip: followup-refused";
 // Worker replies arrive as real macrotasks that the injected clock never advances.
 const realSetImmediate = globalThis.setImmediate;
@@ -203,29 +204,30 @@ function pendingFollowups() {
   );
 }
 
-/** Yield real macrotasks, firing only due timers, until `done` holds. */
-async function until(done: () => boolean | Promise<boolean>) {
+/**
+ * Yield real macrotasks until `done` holds, letting `stepMs` of injected time pass between checks.
+ * With no step, only due timers fire.
+ */
+async function until(done: () => boolean | Promise<boolean>, stepMs = 0) {
   const deadline = realNow() + 30_000;
   while (!(await done())) {
     if (realNow() > deadline) {
       throw new Error(`stalled with effects ${JSON.stringify(world.effects)}`);
     }
     await new Promise<void>((resolve) => realSetImmediate(resolve));
-    await vi.advanceTimersByTimeAsync(0);
+    await settleWorkDispatchCustody();
+    await vi.advanceTimersByTimeAsync(stepMs);
   }
   await settleWorkDispatchCustody();
-}
-
-async function advance(ms: number, done: () => boolean | Promise<boolean>) {
-  await settleWorkDispatchCustody();
-  await vi.advanceTimersByTimeAsync(ms);
-  await until(done);
 }
 
 const ran =
   (...labels: string[]) =>
   () =>
     labels.every((label) => world.effects.includes(label));
+/** Every queued turn has run and none is running. */
+const drained = () =>
+  ran("user-3")() && !hasPendingFollowupQueueWork([key]) && !isSessionRunActiveForKey(key);
 const readWork = async (recordId: string) =>
   (await listContinuationRecords({ recordIds: [recordId] }))[0]!;
 /** The wake's turn ran and its delivery was recorded. */
@@ -259,8 +261,7 @@ describe("a due continue_work wake with follow-ups pending and no active run", (
       expect(await readWork(recordId)).toMatchObject({ status: "queued", failureReason: REFUSED });
       expect(await workState(recordId)).not.toHaveProperty("turnStart");
 
-      await advance(FOLLOWUP_DEBOUNCE_MS, ran("user-3"));
-      await advance(BUSY_BACKOFF_MS, delivered(recordId));
+      await until(delivered(recordId), CLOCK_STEP_MS);
       await expectRanOnceAfterFollowups(recordId);
     });
   });
@@ -270,17 +271,19 @@ describe("a due continue_work wake with follow-ups pending and no active run", (
       const recordId = await electDueWake();
       await queueFollowupsBehindEndedTurn();
       await dispatchPendingContinuationWork({ sessionKey: key });
-      await advance(FOLLOWUP_DEBOUNCE_MS, ran("user-3"));
+      // The queued turns drain within their debounce, before the claim's retry is due.
+      await vi.advanceTimersByTimeAsync(FOLLOWUP_DEBOUNCE_MS);
+      await until(drained);
+      expect(await readWork(recordId)).toMatchObject({ status: "queued" });
 
       // The Gateway restarts before the retry: process-local dispatch state is gone.
       resetContinuationWorkDispatchForTests();
       resetGatewayWorkAdmission();
-      vi.setSystemTime(Date.now() + BUSY_BACKOFF_MS);
       await runContinuationCustodyBoot({
         armedAt: Date.now(),
         whenSubagentRegistryActivated: async () => {},
       });
-      await until(delivered(recordId));
+      await until(delivered(recordId), CLOCK_STEP_MS);
       await expectRanOnceAfterFollowups(recordId);
     });
   });
@@ -308,7 +311,7 @@ describe("a due continue_work wake whose session becomes active before reply adm
 
       held.release();
       await userTurnOne;
-      await advance(BUSY_BACKOFF_MS, delivered(recordId));
+      await until(delivered(recordId), CLOCK_STEP_MS);
       expect(world.effects).toEqual(["user-0", "user-1", "wake"]);
     });
   });
@@ -319,7 +322,7 @@ describe("unchanged admission (controls)", () => {
     await withSession("followup", async () => {
       const recordId = await electDueWake();
       await dispatchPendingContinuationWork({ sessionKey: key });
-      await until(delivered(recordId));
+      await until(delivered(recordId), CLOCK_STEP_MS);
       expect(world.effects).toEqual(["user-0", "wake"]);
     });
   });
@@ -342,7 +345,7 @@ describe("unchanged admission (controls)", () => {
 
       held.release();
       await first;
-      await until(delivered(recordId));
+      await until(delivered(recordId), CLOCK_STEP_MS);
       expect(world.effects).toEqual(["user-0", "user-1", "wake"]);
     });
   });
@@ -354,7 +357,7 @@ describe("unchanged admission (controls)", () => {
         await queueFollowupsBehindEndedTurn();
         expect(await systemTurn(4, trigger)).toBeUndefined();
         expect(pendingFollowups()).toEqual(["user-2", "user-3", "event-4"]);
-        await advance(FOLLOWUP_DEBOUNCE_MS, ran("event-4"));
+        await until(ran("event-4"), CLOCK_STEP_MS);
         expect(world.effects).toEqual(["user-0", "user-1", "user-2", "user-3", "event-4"]);
       });
     },
