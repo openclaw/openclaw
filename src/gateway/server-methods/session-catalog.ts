@@ -22,7 +22,10 @@ import { upsertSessionUpstreamLinkAsync } from "../../sessions/session-upstream-
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { respondError } from "./response.js";
-import { copySessionCatalogToGateway } from "./session-catalog-gateway-copy.js";
+import {
+  copySessionCatalogToGateway,
+  resolveSessionCatalogGatewayConversation,
+} from "./session-catalog-gateway-copy.js";
 import { importAuthorizedSessionCatalog } from "./session-catalog-import.js";
 import { retireSessionCatalogLists } from "./session-catalog-list-operations.js";
 import { listSessionCatalogHandler } from "./session-catalog-list.js";
@@ -130,6 +133,39 @@ async function authorizeSessionCatalogThread(
 
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.list": listSessionCatalogHandler,
+
+  "sessions.catalog.resolve": defineValidatedGatewayHandler(
+    "sessions.catalog.resolve",
+    validateSessionsCatalogContinueParams,
+    async (options) => {
+      const provider = registrationOrRespond(options.params.catalogId, options.respond)?.provider;
+      if (!provider) return;
+      try {
+        const authorization = await authorizeSessionCatalogThread("read", provider, options);
+        if (!authorization) return;
+        const result = await resolveSessionCatalogGatewayConversation({
+          request: options.params,
+          provider,
+          client: options.client,
+          context: options.context,
+          assertCurrent: () => {
+            options.sessionMutationCommitGuard?.();
+            options.signal?.throwIfAborted();
+            if (options.hasCurrentClientAuthority?.() === false) {
+              throw new Error("Catalog resolution authority expired");
+            }
+          },
+        });
+        if (result.ok) {
+          options.respond(true, result.sessionKey ? { sessionKey: result.sessionKey } : null);
+        } else {
+          options.respond(false, undefined, result.error);
+        }
+      } catch (error) {
+        respondCatalogError(error, options.respond);
+      }
+    },
+  ),
 
   "sessions.catalog.read": defineValidatedGatewayHandler(
     "sessions.catalog.read",

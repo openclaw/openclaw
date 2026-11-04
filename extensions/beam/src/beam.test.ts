@@ -429,7 +429,10 @@ describe("Beam session catalog", () => {
     ).toEqual([[catalogParams.threadId, "live", "claude", true, true]]);
     expect(catalog.audience).toBe("gateway-operators");
 
-    await expect(catalog.copyToGatewaySession?.(catalogParams)).resolves.toEqual({
+    await expect(
+      catalog.copyToGatewaySession?.({ ...catalogParams, agentId: "main", assertCurrent() {} }),
+    ).resolves.toMatchObject({
+      continuation: { agentId: "main", reservedNow: true },
       displayName: "Fix the upload flow",
       preferredModel: "openai/gpt-5.6-sol",
     });

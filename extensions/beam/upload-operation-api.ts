@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { PluginStateOperationHandler } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   BEAM_MAX_GUEST_SESSIONS,
@@ -21,6 +22,17 @@ export type BeamUploadOperations = {
     input: { upload: BeamUpload; receivedAt: number; publisher: BeamPublisher };
     output: BeamUploadResult;
   };
+  reserveContinuation: {
+    input: {
+      beamId: string;
+      agentId: string;
+      publisherProfileId?: string;
+      createdAt: number;
+      completeId?: string;
+      action?: "begin" | "complete" | "rollback";
+    };
+    output: { session: BeamStoredSession; reservedNow: boolean };
+  };
 };
 
 function beamTimestampEpochNanoseconds(value: string): bigint {
@@ -34,9 +46,53 @@ function beamTimestampEpochNanoseconds(value: string): bigint {
 }
 
 export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations> = (
-  { input: { upload, receivedAt, publisher } },
+  command,
   tx,
 ) => {
+  if (command.type === "reserveContinuation") {
+    const { beamId, agentId, publisherProfileId, createdAt } = command.input;
+    const row = tx.entries<BeamStoredSession>(0).find((entry) => entry.key === beamId);
+    if (
+      !row ||
+      row.value.publisherProfileId !== publisherProfileId ||
+      row.value.createdAt !== createdAt
+    ) {
+      throw new Error("Beam publication changed before continuation; reopen its link");
+    }
+    if (row.value.continuation && !command.input.completeId) {
+      return { session: row.value, reservedNow: false };
+    }
+    if (command.input.completeId && row.value.continuation?.id !== command.input.completeId) {
+      throw new Error("Beam handoff changed before completion");
+    }
+    const binding = row.value.continuation;
+    if (command.input.action === "begin" && (binding?.creating || binding?.ready)) {
+      return { session: row.value, reservedNow: false };
+    }
+    if (command.input.action === "rollback" && binding?.ready) {
+      throw new Error("A completed conversation cannot be recreated");
+    }
+    const id = randomUUID();
+    const session = {
+      ...row.value,
+      continuation: command.input.completeId
+        ? command.input.action === "begin"
+          ? { ...binding!, creating: true as const }
+          : command.input.action === "rollback"
+            ? { id: binding!.id, agentId: binding!.agentId, sessionKey: binding!.sessionKey }
+            : { ...binding!, ready: true as const }
+        : { id, agentId, sessionKey: `agent:${agentId}:dashboard:${id}` },
+    };
+    // Binding is metadata, not a new upload: preserve the publication's actual expiry.
+    tx.set(
+      0,
+      beamId,
+      session,
+      row.expiresAt === undefined ? undefined : { ttlMs: Math.max(1, row.expiresAt - Date.now()) },
+    );
+    return { session, reservedNow: true };
+  }
+  const { upload, receivedAt, publisher } = command.input;
   const [existing] = tx.lookupMany<BeamStoredSession>([{ store: 0, key: upload.beamId }]);
   if (publisher.kind === "guest") {
     // Ownerless retained rows predate ownership or were published anonymously; never claim them.
@@ -68,6 +124,7 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
   const publisherProfileId = existing ? existing.publisherProfileId : publisher.profileId;
   tx.set(0, upload.beamId, {
     ...upload,
+    ...(existing?.continuation ? { continuation: existing.continuation } : {}),
     ...(publisherProfileId ? { publisherProfileId } : {}),
     // Attribution describes this accepted upload, independently of the immutable initial owner.
     ...(publisher.profileId ? { uploaderProfileId: publisher.profileId } : {}),

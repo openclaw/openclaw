@@ -5,7 +5,7 @@ import { canPresentGatewayMethod } from "../gateway-methods.ts";
 export function catalogMethod(
   snapshot: Pick<ApplicationGatewaySnapshot, "hello">,
   catalogId: string,
-  operation: "list" | "read" | "continue",
+  operation: "list" | "read" | "resolve" | "continue",
 ): string {
   const sharedMethod = `sessions.catalog.${operation}`;
   return catalogId === "beam" &&

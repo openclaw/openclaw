@@ -436,6 +436,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["environments.destroy", "environments", "operator.admin", "2026.7", SIDECAR_CONTROL_PLANE_WRITE],
   ["sessions.catalog.list", "session-catalog", "operator.read", "2026.7"],
   ["sessions.catalog.read", "session-catalog", "operator.read", "2026.7"],
+  ["sessions.catalog.resolve", "session-catalog", "operator.read", "2026.11"],
   ["terminal.upload", "terminal", "operator.admin", "2026.7"],
   ["sessions.catalog.continue", "session-catalog", "operator.write", "2026.7"],
   ["sessions.catalog.archive", "session-catalog", "operator.write", "2026.7"],

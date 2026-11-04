@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { memoryStore, sampleUpload, staffReceipt } from "./beam-store.test-support.js";
-import { beamTestServiceContext } from "./beam.test-support.js";
+import { beamTestServiceContext, persistentBeamTestStore } from "./beam.test-support.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
 
 it("shares inventory until expiry and invalidates it on upload and delete", async () => {
@@ -76,5 +76,147 @@ it("refreshes foreign changes in the background and drains its service on stop",
   } finally {
     await stop();
     vi.useRealTimers();
+  }
+});
+
+it("binds one destination across agents, repeated requests, and later source uploads", async () => {
+  const store = memoryStore();
+  await store.upload(sampleUpload(), staffReceipt(100));
+  const source = (await store.get(sampleUpload().beamId))!;
+  const attempts = await Promise.all(
+    ["main", "research"].map((agent) => store.reserveContinuation(source, agent, () => {})),
+  );
+  const binding = attempts[0]!.session.continuation!;
+  expect(attempts.map(({ reservedNow }) => reservedNow)).toEqual([true, true]);
+  expect(await attempts[0]!.beginCreate(() => {})).toBe(true);
+  expect(await attempts[1]!.beginCreate(() => {})).toBe(false);
+  await attempts[0]!.complete(() => {});
+  expect(attempts[1]!.session.continuation).toEqual(binding);
+  await store.upload(
+    sampleUpload({
+      updatedAt: "2026-07-21T12:00:00Z",
+      truncated: true,
+      items: [{ type: "agentMessage", text: "Late source snapshot" }],
+    }),
+    staffReceipt(200),
+  );
+  expect((await store.get(source.beamId))?.continuation).toMatchObject(binding);
+  const reopened = createBeamSessionCatalog(store);
+  expect((await reopened.list({ agentId: "research" }))[0]?.sessions[0]?.sessionKey).toBe(
+    binding.sessionKey,
+  );
+  const retried = await store.reserveContinuation(
+    (await store.get(source.beamId))!,
+    "other",
+    () => {},
+  );
+  expect(retried.reservedNow).toBe(false);
+  expect(retried.session.continuation).toMatchObject(binding);
+});
+
+it("does not inherit a deleted publication's handoff or reserve under stale ownership", async () => {
+  const store = memoryStore();
+  await store.upload(sampleUpload(), staffReceipt(100));
+  const original = (await store.get(sampleUpload().beamId))!;
+  const first = await store.reserveContinuation(original, "main", () => {});
+  await store.delete(original.beamId);
+  await store.upload(sampleUpload(), {
+    ...staffReceipt(200),
+    publisher: { kind: "staff", profileId: "new-publisher" },
+  });
+  await expect(store.reserveContinuation(original, "main", () => {})).rejects.toThrow(
+    "publication changed",
+  );
+  const replacement = (await store.get(original.beamId))!;
+  expect(replacement.continuation).toBeUndefined();
+  const second = await store.reserveContinuation(replacement, "main", () => {});
+  expect(second.session.continuation?.sessionKey).not.toBe(first.session.continuation?.sessionKey);
+});
+
+it("captures immutable handoff history and keeps an existing reservation noncreating", async () => {
+  const store = memoryStore();
+  await store.upload(sampleUpload(), staffReceipt(100));
+  const catalog = createBeamSessionCatalog(store);
+  const params = {
+    hostId: "gateway",
+    threadId: sampleUpload().beamId,
+    agentId: "main",
+    assertCurrent() {},
+  };
+  const first = (await catalog.copyToGatewaySession!(params)).continuation!;
+  expect(await first.beginCreate(() => {})).toBe(true);
+  await first.complete(() => {});
+  await store.upload(
+    sampleUpload({
+      updatedAt: "2026-07-21T12:00:00Z",
+      items: [{ type: "userMessage", text: "Different source history" }],
+    }),
+    staffReceipt(200),
+  );
+  const captured = await first.read(params);
+  expect(captured.items.map(({ text }) => text)).not.toContain("Different source history");
+  const second = (await createBeamSessionCatalog(store).copyToGatewaySession!(params))
+    .continuation!;
+  expect(second.reservedNow).toBe(false);
+  expect(second.sessionKey).toBe(first.sessionKey);
+});
+
+it("retries an unclaimed or proven rolled-back creation at the same key, but never an uncertain one", async () => {
+  const store = memoryStore();
+  await store.upload(sampleUpload(), staffReceipt(100));
+  const source = (await store.get(sampleUpload().beamId))!;
+  const first = await store.reserveContinuation(source, "main", () => {});
+  const key = first.session.continuation!.sessionKey;
+  const beforeDispatch = await store.reserveContinuation(
+    (await store.get(source.beamId))!,
+    "main",
+    () => {},
+  );
+  expect(beforeDispatch.reservedNow).toBe(true);
+  expect(await first.beginCreate(() => {})).toBe(true);
+  const uncertain = await store.reserveContinuation(
+    (await store.get(source.beamId))!,
+    "main",
+    () => {},
+  );
+  expect(uncertain.reservedNow).toBe(false);
+  expect(await uncertain.beginCreate(() => {})).toBe(false);
+  await first.rollback();
+  const retry = await store.reserveContinuation(
+    (await store.get(source.beamId))!,
+    "main",
+    () => {},
+  );
+  expect(retry.reservedNow).toBe(true);
+  expect(retry.session.continuation?.sessionKey).toBe(key);
+  expect(await retry.beginCreate(() => {})).toBe(true);
+});
+
+it("retains a native selected-publication guard across unrelated and ownership-preserving uploads", async () => {
+  const { store, close } = persistentBeamTestStore();
+  let release: (() => void) | undefined;
+  try {
+    await store.upload(sampleUpload(), staffReceipt(100));
+    const selected = (await store.get(sampleUpload().beamId))!;
+    const handoff = await store.reserveContinuation(selected, "main", () => {});
+    release = handoff.release;
+    await store.upload(sampleUpload({ beamId: "f".repeat(32) }), staffReceipt(200));
+    handoff.assertCurrent();
+    await store.delete("f".repeat(32));
+    handoff.assertCurrent();
+    expect(await handoff.beginCreate(() => {})).toBe(true);
+    await store.upload(
+      sampleUpload({ updatedAt: "2026-07-21T12:00:00Z", title: "Later projection" }),
+      staffReceipt(300),
+    );
+    handoff.assertCurrent();
+    await handoff.complete(() => {});
+    handoff.assertCurrent();
+    expect((await store.list())[0]?.continuation?.ready).toBe(true);
+    await store.delete(selected.beamId);
+    expect(handoff.assertCurrent).toThrow();
+  } finally {
+    release?.();
+    await close();
   }
 });

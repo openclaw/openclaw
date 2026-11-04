@@ -557,9 +557,29 @@ export async function handleGatewayRequest(
             source.assertCurrent();
           };
           assertCurrent();
-          const { createSessionCatalogGatewayCopyHandler } =
-            await import("./server-methods/session-catalog-gateway-copy.js");
+          const {
+            createSessionCatalogGatewayCopyHandler,
+            resolveSessionCatalogGatewayConversation,
+          } = await import("./server-methods/session-catalog-gateway-copy.js");
           assertCurrent();
+          if (source.resolveOnly) {
+            const result = await resolveSessionCatalogGatewayConversation({
+              provider: source.provider,
+              request: source.request,
+              client,
+              context,
+              assertCurrent,
+            });
+            if (result.ok) {
+              handlerOptions.respond(
+                true,
+                result.sessionKey ? { sessionKey: result.sessionKey } : null,
+              );
+            } else {
+              handlerOptions.respond(false, undefined, result.error);
+            }
+            return;
+          }
           await createSessionCatalogGatewayCopyHandler(source.provider)({
             ...handlerOptions,
             params: source.request,

@@ -46,6 +46,8 @@ export type BeamUpload = {
 };
 
 export type BeamStoredSession = BeamUpload & {
+  /** Receiver-owned handoff survives uploads, independently of provider runtime IDs. */
+  continuation?: { id: string; sessionKey: string; agentId: string; creating?: true; ready?: true };
   /** Immutable verified initial publisher. Older ownerless live rows remain ownerless. */
   publisherProfileId?: string;
   /** Verified uploader of this accepted snapshot; never accepted from the upload body. */

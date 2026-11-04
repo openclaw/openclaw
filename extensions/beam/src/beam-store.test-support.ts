@@ -8,6 +8,22 @@ import { executeBeamUpload, type BeamUploadOperations } from "../upload-operatio
 import { createBeamStore } from "./store.js";
 import type { BeamStoredSession } from "./types.js";
 
+const { guardFixtures } = vi.hoisted(() => ({
+  guardFixtures: new WeakMap<
+    object,
+    (key: string, predicate: (value: unknown) => void) => { assertCurrent(): void; release(): void }
+  >(),
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-state-runtime", async (importOriginal) => {
+  const runtime = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-state-runtime")>();
+  return {
+    ...runtime,
+    preparePluginStateGuard: (...args: Parameters<typeof runtime.preparePluginStateGuard>) =>
+      guardFixtures.get(args[0])?.(args[1], args[2]) ?? runtime.preparePluginStateGuard(...args),
+  };
+});
+
 type BeamUploadFixture = Omit<BeamStoredSession, "createdAt" | "receivedAt">;
 
 export function sampleUpload(overrides: Record<string, unknown> = {}): BeamUploadFixture {
@@ -56,6 +72,10 @@ export function memoryStore() {
     delete: async (beamId: string) => values.delete(beamId),
     entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
   };
+  guardFixtures.set(keyedStore, (key, predicate) => ({
+    assertCurrent: () => predicate(values.get(key)),
+    release() {},
+  }));
   return {
     ...createBeamStore({
       state: { openKeyedStoreV2: () => keyedStore },

@@ -21,7 +21,10 @@ function limit(value: unknown): number | undefined {
   return value;
 }
 
-function parseRequest(params: Record<string, unknown>, operation: "list" | "read" | "continue") {
+function parseRequest(
+  params: Record<string, unknown>,
+  operation: "list" | "read" | "resolve" | "continue",
+) {
   const allowed =
     operation === "list"
       ? ["agentId", "catalogId", "search", "hostIds", "limitPerHost", "cursors"]
@@ -45,7 +48,7 @@ function parseRequest(params: Record<string, unknown>, operation: "list" | "read
     ) {
       throw new Error("invalid read");
     }
-    if (operation === "continue") {
+    if (operation === "continue" || operation === "resolve") {
       return {
         kind: "continue" as const,
         request: {
@@ -101,7 +104,7 @@ function parseRequest(params: Record<string, unknown>, operation: "list" | "read
 // Separate from the shared operator catalog: no operator.read grant or generic catalog admission.
 export function createBeamOwnedViewHandler(
   store: BeamStore,
-  operation: "list" | "read" | "continue",
+  operation: "list" | "read" | "resolve" | "continue",
 ) {
   return async (
     options: Pick<
@@ -160,6 +163,12 @@ export function createBeamOwnedViewHandler(
       }
       const catalog = createBeamSessionCatalog({
         ...store,
+        async reserveContinuation(session, agentId, guard) {
+          assertCurrent();
+          const reserved = await store.reserveContinuation(session, agentId, guard);
+          const { uploaderProfileId: _uploaderProfileId, ...ownedSession } = reserved.session;
+          return { ...reserved, session: ownedSession };
+        },
         async list() {
           const rows = await store.list();
           assertCurrent();
@@ -184,6 +193,7 @@ export function createBeamOwnedViewHandler(
           provider: catalog,
           request: parsed.request,
           assertCurrent,
+          ...(operation === "resolve" ? { resolveOnly: true } : {}),
         });
         return;
       }

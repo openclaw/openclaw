@@ -34,7 +34,10 @@ function catalogContext(
   } as unknown as ApplicationContext;
 }
 
-function beamCatalog(sessions: Array<{ threadId: string; name: string }>, nextCursor?: string) {
+function beamCatalog(
+  sessions: Array<{ threadId: string; name: string; sessionKey?: string }>,
+  nextCursor?: string,
+) {
   return {
     catalogs: [
       {
@@ -210,4 +213,22 @@ describe("catalog share route resolution", () => {
       limitPerHost: 2,
     });
   });
+});
+
+it("reopens a Beam at its one live destination, retaining the bound non-default agent", async () => {
+  const key = "agent:analysis:dashboard:handoff";
+  const request = vi.fn(async (method: string) =>
+    method.endsWith(".resolve")
+      ? { sessionKey: key }
+      : beamCatalog([{ threadId: fullId, name: "Continued investigation", sessionKey: key }]),
+  );
+  const context = catalogContext(request);
+  for (let reopen = 0; reopen < 2; reopen++) {
+    await expect(loadRoute(context, "/beam/0123456789ab")).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: key,
+      agentId: "analysis",
+    });
+  }
+  expect(request.mock.calls.some(([method]) => method.endsWith(".continue"))).toBe(false);
 });

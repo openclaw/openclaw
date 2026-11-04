@@ -63,6 +63,7 @@ function makeCatalog(
     status?: string;
     archived?: boolean;
     sourceHomeId?: string;
+    sessionKey?: string;
     shareRoute?: typeof SHARE_ROUTE;
   } = {},
 ) {
@@ -93,6 +94,7 @@ suite.define(() => {
           "beam.owned.list",
           "beam.owned.read",
           "beam.owned.continue",
+          "beam.owned.resolve",
         ],
         methodResponses: {
           "sessions.catalog.list": { catalogs: [] },
@@ -112,6 +114,7 @@ suite.define(() => {
             sessionKey: "agent:main:publisher-continuation",
             entry: { sharingRole: "owner" },
           },
+          "beam.owned.resolve": { sessionKey: "agent:main:publisher-continuation" },
           "beam.owned.read": {
             hostId: "gateway",
             label: "Owned synthetic Beam",
@@ -161,9 +164,36 @@ suite.define(() => {
         "Your published conversation continues here.",
       ).waitFor();
       expect(await composer.isDisabled()).toBe(false);
+      await gateway.setMethodResponse("beam.owned.list", {
+        catalogs: [
+          makeCatalog(
+            "beam",
+            "Beam",
+            fullId,
+            "Owned synthetic Beam",
+            { hostId: "gateway", label: "Beamed sessions", kind: "gateway" },
+            {
+              shareRoute: SHARE_ROUTE,
+              canContinue: true,
+              sessionKey: "agent:main:publisher-continuation",
+            },
+          ),
+        ],
+      });
+      await page.goto(new URL("beam/owned-synthetic-beam-aaaaaaaaaaaa", suite.server.baseUrl).href);
+      await expect
+        .poll(async () => (await paneStates(page.locator(visiblePane)))[0]?.sessionKey)
+        .toBe("agent:main:publisher-continuation");
       await composer.fill("And continue with my next message");
       await composer.press("Enter");
       await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
+      expect(
+        (await gateway.getRequests("chat.send")).map(
+          ({ params }) => (params as { sessionKey?: string }).sessionKey,
+        ),
+      ).toEqual(["agent:main:publisher-continuation", "agent:main:publisher-continuation"]);
+      expect(await gateway.getRequests("beam.owned.continue")).toHaveLength(1);
+      expect(await gateway.getRequests("beam.owned.resolve")).toHaveLength(1);
     });
   });
   it.each(["Riley"])(
