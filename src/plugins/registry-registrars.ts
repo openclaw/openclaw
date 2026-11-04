@@ -645,7 +645,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
     if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {
       reportRegistrationWarning(
         record,
-        `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptModification=false`,
       );
       return;
     }

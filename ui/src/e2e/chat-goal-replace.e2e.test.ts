@@ -202,7 +202,7 @@ suite.define(() => {
         const dialog = page.getByRole("dialog", { name: "Replace goal objective?" });
         await dialog.waitFor();
         expect(await dialog.textContent()).toContain(
-          "Interrupt this turn, update the objective, then resume the goal.",
+          "Interrupt this reply, replace the objective, and resume the goal.",
         );
         if (artifacts) {
           await captureFrame(artifacts, "running-confirmation.png", page.locator("body"), [

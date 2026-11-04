@@ -500,7 +500,9 @@
     "!dist/plugin-sdk/provider-auth-markers.d.ts",
     "!dist/plugin-sdk/terminal-safe-text.d.ts",
     "!dist/plugin-sdk/memory-core-host-transcript-stats.d.ts",
-    "!dist/plugin-sdk/skill-authoring-runtime.d.ts"
+    "!dist/plugin-sdk/skill-authoring-runtime.d.ts",
+    "!dist/plugin-sdk/skill-workshop-host-runtime.d.ts",
+    "!dist/plugin-sdk/skill-workshop-host-cli.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1518,6 +1520,12 @@
     "./plugin-sdk/skill-authoring-runtime": {
       "default": "./dist/plugin-sdk/skill-authoring-runtime.js"
     },
+    "./plugin-sdk/skill-workshop-host-cli": {
+      "default": "./dist/plugin-sdk/skill-workshop-host-cli.js"
+    },
+    "./plugin-sdk/skill-workshop-host-runtime": {
+      "default": "./dist/plugin-sdk/skill-workshop-host-runtime.js"
+    },
     "./plugin-sdk/skill-commands-runtime": {
       "types": "./dist/plugin-sdk/skill-commands-runtime.d.ts",
       "default": "./dist/plugin-sdk/skill-commands-runtime.js"
@@ -2416,7 +2424,7 @@
     "@modelcontextprotocol/server": "2.3.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.27.0",
+    "@openclaw/fs-safe": "0.27.1",
     "@openclaw/proc-safe": "0.4.2",
     "@openclaw/proxyline": "0.4.0",
     "@opentelemetry/semantic-conventions": "1.43.0",

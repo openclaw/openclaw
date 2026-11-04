@@ -181,6 +181,9 @@ after editing its source; reload does not run the build. Multiple IDs use one Ga
 and one applied runtime generation. Repeated IDs are collapsed, and the Gateway
 resolves package siblings together. The request supports up to 64 distinct IDs.
 
+If the Gateway is offline, the command reports that it must be started before
+reloading a plugin and exits with code 1 without changing configuration.
+
 Bundled plugins share the running Gateway's code. Reload refreshes their
 registrations and returns `restartRequired: true`, even if their files have not
 changed. Restart the Gateway to load updated bundled code; rebuild first for
