@@ -140,6 +140,20 @@ its cases complete without skips or pending cases. Interrupted, filtered,
 unhandled-error, and missing-result runs remain unknown. Failure-tail replays
 are ignored; conflicting receipts are rejected.
 
+## Restore prior observations
+
+Sampled same-repository PRs and scheduled runs restore at most two observation
+archives from the five most recent successful scheduled main runs. Preflight
+uses its existing read-only Actions permission and a shared ten-second deadline
+without retries. Each archive is bound to its run, attempt, source commit/tree,
+digest and paired launch/member hashes. The producer must finish before the
+current run begins. Missing history or unavailable APIs produce an empty bundle.
+
+The same-run `ci-adaptive-priors-*` artifact contains inert JSON in
+`.artifacts/ci-adaptive-priors.json`, bound to the current run, attempt and actual
+checkout revision. It retains the existing seven-day observation retention.
+This layer restores evidence only; it does not change test execution.
+
 ## Current coverage
 
 Resource-reporter users receive the additional versioned inventory and case
