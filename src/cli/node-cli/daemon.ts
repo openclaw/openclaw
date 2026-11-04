@@ -259,10 +259,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     pinnedRuntimePath,
     devMode: restoreServiceCli ? false : undefined,
     wrapperPath,
-    installDurableCli: !restoreServiceCli,
+    installDurableCli: true,
     warn,
   });
-  const cliEntrypoint = restoreServiceCli?.entrypoint ?? durableCli;
+  const cliEntrypoint = restoreServiceCli?.entrypoint ?? (await durableCli());
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     cliEntrypoint,
     host,

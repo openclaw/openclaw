@@ -654,7 +654,7 @@ export async function buildGatewayInstallPlan(params: {
     runtimePath,
     wrapperPath,
     // Install callers create the durable copy first; planning only reuses it.
-    cliEntrypoint: params.serviceCli?.entrypoint ?? durableCli,
+    cliEntrypoint: params.serviceCli?.entrypoint ?? (await durableCli()),
     ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitNodeRuntimeWarning({

@@ -11,6 +11,17 @@ import { nodeProbeOutput } from "./install.test-helpers.js";
 import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
 import type { DaemonInstallOptions } from "./types.js";
 
+// Records durable-copy promotion; the npm install itself is the owner's own contract.
+const { resolveDurableServiceEntrypointMock } = vi.hoisted(() => ({
+  resolveDurableServiceEntrypointMock: vi.fn(
+    async (_env: NodeJS.ProcessEnv, _options: { install: boolean }) => undefined,
+  ),
+}));
+vi.mock("../../daemon/durable-service-entrypoint.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/durable-service-entrypoint.js")>()),
+  resolveDurableServiceEntrypoint: resolveDurableServiceEntrypointMock,
+}));
+
 const {
   actionState,
   buildGatewayInstallPlanMock,
@@ -427,6 +438,48 @@ describe("runDaemonInstall", () => {
       "Gateway service OPENCLAW_GATEWAY_TOKEN differs from the current install plan; refreshing the install.",
     );
   });
+
+  function standaloneArtifact() {
+    const root = tempDirs.make("openclaw-standalone-");
+    fs.mkdirSync(path.join(root, "runtime"));
+    fs.writeFileSync(path.join(root, "standalone"), "", { mode: 0o755 });
+    fs.writeFileSync(
+      path.join(root, "manifest.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        mode: "aot",
+        executable: { path: "standalone" },
+        runtime: { path: "runtime" },
+        openclaw: { version: "2026.10.25" },
+        bun: { version: "1.4.4" },
+      }),
+    );
+    // The pinned-runtime check probes the standalone executable for its Bun version.
+    const probe = nodeProbeOutput("26.12.1");
+    runExecMock.mockResolvedValue({
+      ...probe,
+      stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.4" }),
+    });
+    return path.join(root, "standalone");
+  }
+
+  it.each([
+    ["node", () => ({}), 1],
+    ["standalone", () => ({ runtime: "standalone", runtimePath: standaloneArtifact() }), 0],
+  ] as const)(
+    "promotes the CLI to a durable copy only for services that run it (%s)",
+    async (_name, options, promotions) => {
+      resolveDurableServiceEntrypointMock.mockClear();
+      await runDaemonInstall({ json: true, ...options() });
+
+      expect(actionState.failed).toEqual([]);
+      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledOnce();
+      const installs = resolveDurableServiceEntrypointMock.mock.calls.filter(
+        ([, { install }]) => install,
+      );
+      expect(installs).toHaveLength(promotions);
+    },
+  );
 
   it("moves a loaded service off a temporary npx copy onto a durable one", async () => {
     const npxPackage = path.join(path.sep, "home", "test", ".npm", "_npx", "abc", "node_modules");

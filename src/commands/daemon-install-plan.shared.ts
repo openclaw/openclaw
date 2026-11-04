@@ -3,6 +3,7 @@ import path from "node:path";
 import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import {
   isDisposableInstallPath,
+  resolveDurableServiceBinDir,
   resolveDurableServiceEntrypoint,
 } from "../daemon/durable-service-entrypoint.js";
 import {
@@ -71,12 +72,20 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
   devMode: boolean;
   runtime: GatewayDaemonRuntime;
   runtimePath?: string;
-  /** Durable copy the service runs instead of a disposable npx or dlx CLI. */
-  durableCli?: string;
+  /**
+   * Durable copy the service runs instead of a disposable npx or dlx CLI. Lazy so plans
+   * that retain another CLI (restore, Doctor fallback) never inspect or install it.
+   */
+  durableCli: () => Promise<string | undefined>;
 }> {
   const devMode = params.devMode ?? resolveGatewayDevMode();
   if (params.wrapperPath?.trim()) {
-    return { devMode, runtime: params.runtime, runtimePath: params.runtimePath };
+    return {
+      devMode,
+      runtime: params.runtime,
+      runtimePath: params.runtimePath,
+      durableCli: noCli,
+    };
   }
   if (params.runtime === "standalone") {
     const executable =
@@ -89,17 +98,18 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
       );
     }
     const runtimePath = await resolvePinnedDaemonRuntimePath(executable, "standalone", params.env);
-    return { devMode: false, runtime: "standalone", runtimePath };
+    return { devMode: false, runtime: "standalone", runtimePath, durableCli: noCli };
   }
   const pinnedRuntimePath =
     params.pinnedRuntimePath === undefined
       ? undefined
       : await resolvePinnedDaemonRuntimePath(params.pinnedRuntimePath, params.runtime, params.env);
-  const durableCli = devMode
-    ? undefined
-    : await resolveDurableServiceEntrypoint(params.env, {
-        install: params.installDurableCli === true,
-      });
+  const durableCli = async () =>
+    devMode
+      ? undefined
+      : await resolveDurableServiceEntrypoint(params.env, {
+          install: params.installDurableCli === true,
+        });
   const runtimePath =
     pinnedRuntimePath ??
     params.runtimePath ??
@@ -120,6 +130,27 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
     }
   }
   return { devMode, runtime: params.runtime, runtimePath, durableCli };
+}
+
+const noCli = async () => undefined;
+
+/** Wrapper and standalone services run their own executable, never the CLI entrypoint. */
+function runsCliEntrypoint(params: { runtime: GatewayDaemonRuntime; wrapperPath?: string }) {
+  return !params.wrapperPath?.trim() && params.runtime !== "standalone";
+}
+
+/**
+ * Install callers run this before planning so a service planned from npx or dlx points
+ * at a durable copy; planning itself only reuses a checked copy.
+ */
+export async function prepareDurableServiceCli(params: {
+  env: NodeJS.ProcessEnv;
+  runtime: GatewayDaemonRuntime;
+  wrapperPath?: string;
+}): Promise<void> {
+  if (runsCliEntrypoint(params)) {
+    await resolveDurableServiceEntrypoint(params.env, { install: true });
+  }
 }
 
 export function resolveDaemonRuntimeBinDir(runtimePath?: string): string[] | undefined {
@@ -156,6 +187,14 @@ export function resolveDaemonServicePathDirs(params: {
     }
   };
   const commandName = path.basename(argv1 ?? "");
+  // From npx or dlx the service runs the durable copy, so its launcher replaces the cache's.
+  const durableBinDir =
+    argv1 && isDisposableInstallPath(safeRealpathSync(argv1) ?? path.resolve(argv1))
+      ? resolveDurableServiceBinDir(env, platform)
+      : undefined;
+  if (durableBinDir) {
+    dirs.add(durableBinDir);
+  }
 
   if (
     argv1 &&

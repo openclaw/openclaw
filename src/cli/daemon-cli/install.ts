@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { SUPPORTED_NODE_VERSIONS } from "../../../node-version.mjs";
 import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
+import { prepareDurableServiceCli } from "../../commands/daemon-install-plan.shared.js";
 import {
   resolveGatewayDaemonRuntime,
   isGatewayDaemonRuntime,
@@ -13,10 +14,7 @@ import { resolveFutureConfigActionBlock } from "../../config/future-version-guar
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
 import { resolveGatewayPort } from "../../config/paths.js";
-import {
-  isDisposableEntrypoint,
-  resolveDurableServiceEntrypoint,
-} from "../../daemon/durable-service-entrypoint.js";
+import { isDisposableEntrypoint } from "../../daemon/durable-service-entrypoint.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { isNodeRuntime } from "../../daemon/runtime-binary.js";
 import {
@@ -591,9 +589,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     warn(warning);
   }
 
-  if (!restoreServiceCli && !wrapperPath) {
-    // From npx or dlx, install the durable copy that the plan then points the service at.
-    await resolveDurableServiceEntrypoint(installEnv, { install: true });
+  if (!restoreServiceCli) {
+    await prepareDurableServiceCli({ env: installEnv, runtime, wrapperPath });
   }
   const { programArguments, workingDirectory, environment, environmentValueSources } =
     await buildInstallPlan({

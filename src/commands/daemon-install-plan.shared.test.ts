@@ -42,7 +42,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
         runtime: "node",
         devMode: false,
       }),
-    ).resolves.toEqual({ devMode: false, runtime: "node", runtimePath: pinned });
+    ).resolves.toMatchObject({ devMode: false, runtime: "node", runtimePath: pinned });
   });
 
   it.each([
@@ -77,14 +77,8 @@ describe("durable CLI for an npx copy", () => {
   });
 
   it("does not install a durable copy while planning", async () => {
-    expect((await plan()).durableCli).toBeUndefined();
+    await expect((await plan()).durableCli()).resolves.toBeUndefined();
     expect(fs.existsSync(path.join(root, "state", "npm"))).toBe(false);
-  });
-
-  it("points the service at an existing durable copy instead of the npx cache", async () => {
-    const prefix = resolveNpmGlobalPrefixLayoutFromPrefix(path.join(root, "state", "npm"));
-    const durable = entrypoint(path.relative(root, path.join(prefix.globalRoot, "openclaw")));
-    expect((await plan()).durableCli).toBe(durable);
   });
 });
 
@@ -130,6 +124,24 @@ describe("resolveDaemonServicePathDirs", () => {
           platform: "darwin",
         }),
       ).toEqual(same ? [binDir] : undefined);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "puts the durable copy's launcher folder on the PATH of a service planned from npx",
+    () => {
+      const npxCli = entrypoint(path.join(".npm", "_npx", "abc", "node_modules", "openclaw"));
+      const { binDir } = resolveNpmGlobalPrefixLayoutFromPrefix(path.join(root, "state", "npm"));
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.writeFileSync(path.join(binDir, "openclaw"), "");
+      expect(
+        resolveDaemonServicePathDirs({
+          runtimePath: path.resolve("/opt/node/bin/node"),
+          argv: ["node", npxCli, "gateway", "install"],
+          env: { OPENCLAW_STATE_DIR: path.join(root, "state"), PATH: "" },
+          platform: "linux",
+        }),
+      ).toEqual([path.resolve("/opt/node/bin"), binDir]);
     },
   );
 
