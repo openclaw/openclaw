@@ -19,6 +19,14 @@ export function cronFailureDetailLines(
   errorReason: FailoverReason | undefined,
   failureNotificationDetail?: CronFailureNotificationDetail,
 ): string[] {
+  if (errorReason === "billing" || errorReason === "server_error") {
+    return [
+      `Cause: ${errorReason}`,
+      errorReason === "billing"
+        ? "Ask the provider account owner to resolve the billing error, or choose another provider for this automation, then run it again."
+        : "The AI service is having trouble. Wait a moment and run the automation again, or choose another provider.",
+    ];
+  }
   if (errorReason) {
     return errorReason === "model_not_found"
       ? [

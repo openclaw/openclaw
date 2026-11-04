@@ -81,7 +81,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
       });
     } catch (error) {
       if (isMutationCurrent(scope)) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   }
@@ -102,6 +102,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
       });
       if (!isMutationCurrent(scope)) {
         showToast({
+          severity: "error",
           message: t("sessionsView.deleteSessionStale", { session: menu.name }),
         });
         return;
@@ -132,7 +133,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
         });
       }
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     }
   }
 

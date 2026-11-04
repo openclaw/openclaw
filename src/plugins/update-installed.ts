@@ -73,7 +73,6 @@ import {
   expectedIntegrityForNpmUpdate,
   isNpmMetadataCompatibleWithCurrentHost,
   isPluginInstallRecordUpdateSource,
-  isTrustedSourceLinkedOfficialNpmUpdate,
   resolveClawHubNpmUpdateFallback,
   resolveClawHubUpdateSpecs,
   resolveNpmUpdateTarget,
@@ -268,11 +267,10 @@ async function runInstalledPluginUpdate(
         : record.source === "clawhub"
           ? clawhubSpecs?.recordSpec
           : record.spec;
-    const trustedSourceLinkedOfficialInstall = isTrustedSourceLinkedOfficialNpmUpdate({
-      pluginId,
-      spec: effectiveSpec,
-      record,
-    });
+    const trustedSourceLinkedOfficialInstall = Boolean(
+      npmTarget?.officialPackageName &&
+      parseRegistryNpmSpec(effectiveSpec ?? "")?.name === npmTarget.officialPackageName,
+    );
     let expectedIntegrity =
       catalogExpectedIntegrity ??
       expectedIntegrityForNpmUpdate({

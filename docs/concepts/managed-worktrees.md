@@ -15,6 +15,8 @@ background. A refreshing indicator stays visible until the Gateway sends the
 updated options; slow Git keeps cached choices available. Discovery never fetches
 from a remote or scans checkout contents. Ref changes invalidate the suggestions,
 and session creation validates the selected base before changing a checkout.
+Failed or non-Git discovery becomes eligible for another user-requested read after
+five seconds of elapsed time, even if the system wall clock moves backward.
 
 When the selected source is a folder inside a Git repository, **Recents** keeps
 that folder rather than replacing it with the repository root or the managed
@@ -44,6 +46,12 @@ preparation before starting their model turn. An explicitly
 requested worktree name or existing session title can name the checkout.
 Otherwise, allocation chooses a short generated name while display-title
 generation runs in the background.
+
+Worktree registration waits at most 30 seconds for a shared repository Git
+operation, including object repair. After one second it logs the wait; if the
+operation remains busy, creation reports a retryable error naming the repository
+wait. A timed-out registration cannot create a checkout later. Git operations
+that have already started retain their normal execution and cleanup budgets.
 
 Pull-request statistics may refresh Git's cached file timestamps in a managed
 checkout; they do not stage content or change commits. Statistics for user-managed
@@ -97,7 +105,9 @@ The reusable generation binds the source commit, frozen lockfile, immutable imag
 (including its Node and pnpm versions), guest path, and sandbox policy. A changed
 generation prepares a new template with a distinct builder identity; background
 housekeeping recovers interrupted builders independently of template expiration. Installation failure or changed tracked source
-records a warning and keeps a source-only template for that generation. Missing
+records a warning with a bounded, redacted tail of the installer output and keeps
+a source-only template for that generation. Repeated preparations with the same
+inputs reuse that source-only template without rerunning the failed install. Missing
 lockfiles, unsupported filesystems, and unavailable images use source-only
 checkout. The agent can install normally in that private checkout. Dependency
 preparation does not update an already-used session when its lockfile changes.
@@ -130,6 +140,11 @@ unchanged hashes while detecting same-size edits and files moved by directory
 renames. Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
 open does not rewrite their inventories.
+
+Archive preparation compares live sandbox files with that accepted tree in the
+filesystem worker. If Git already preserves every accepted file and directory,
+cleanup needs no separate workspace overlay. Ignored files and empty directories
+still retain their restore receipt, and owner protection gates removal.
 
 This storage format requires [shared-state schema 35](/reference/database-schemas/state-schema-history#state-schema-35).
 Let pending workspace operations settle before downgrading. Older builds refuse
@@ -234,7 +249,7 @@ Preparation logs include `templateDetails` with the backend, selection or failur
 
 The `checkout` phase includes its child phases; do not add it to `templateApply`. Sub-phases separate registration metadata and inspection, commit preparation, clone admission estimates, destination preparation, marker replacement, index location/copy/refresh, prompt publication, template release, and warm-slot acquisition/application. The clone-byte estimate is a disk-admission allowance, not measured bytes written.
 
-The `provision` phase includes ignored-file selection (`provisionInspect`), safe file copying (`provisionCopy`), and repository script execution (`setup`). Selection includes the Git worker queue; copying includes per-file eligibility and mutation safety checks. `provisionCopy` is absent when selection finds no files. Source custody waits and disk admission also occur inside `provision`; `diskAdmission` accumulates space checks across the entire preparation, so it is not exclusively a provisioning sub-phase. These timings do not log paths or setup output.
+The `provision` phase includes ignored-file selection (`provisionInspect`), copy admission and worker preparation (`provisionCopyWait`), safe file copying (`provisionCopy`), and repository script execution (`setup`). Selection includes the Git worker queue. `provisionCopyWait` includes filesystem worker queueing, startup, and eligibility checks before the first authorized mutation; `provisionCopy` covers the remaining copy work and safety checks. Copying runs in a filesystem worker so other sessions remain responsive; the new worktree waits for copying to finish before becoming ready. `provisionCopy` is absent when no file reaches an authorized mutation. Safe copying requests copy-on-write cloning when supported and falls back to ordinary copying otherwise; destination files remain independent of their source. Source custody waits and disk admission also occur inside `provision`; `diskAdmission` accumulates space checks across the entire preparation, so it is not exclusively a provisioning sub-phase. These timings do not log paths or setup output.
 
 Private Git index copies for template checkouts prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Safety snapshots use Git's read-only status and cached file metadata to identify changes. Clean checkouts reuse the committed tree without building a private snapshot index; changed checkouts hash only selected paths. Hidden index flags do not exclude edits from snapshots.
 
@@ -357,7 +372,7 @@ For partial clones, OpenClaw inventories missing objects before estimating check
 
 Empty pack directories skip pack mutation admission; threshold-gated commit-graph and loose-object maintenance still runs. Packs arriving after that inventory are handled by the next maintenance pass.
 
-Pack consolidation keeps promisor and ordinary packs separate. Each group selects up to 1,024 of its smallest eligible packs, capped at 16 GiB of pack data and 128 MiB of index data per pass. The index budget admits multiple large fetch indexes; a budget smaller than two ordinary indexes would leave their packs permanently fragmented. Consolidation combines at least two packs only when the smaller inputs together reach the largest selected pack's size. Otherwise it leaves that largest pack untouched and considers the smaller batch. The index budget bounds object metadata even for highly compressed inputs. Git verifies each selected pack and index, then streams all their objects into a replacement without fetching missing partial-clone objects. Inputs retire only after Git publishes the verified replacement. Kept packs, cruft packs, and packs outside the batch remain untouched. This size-based policy lets bounded batches keep converging below 16 packs without repeatedly rewriting a large pack for tiny additions. Maintenance removes optional multi-pack-index lookup metadata, including stale indexes, so Git uses individual pack indexes without a repository-wide rebuild. Verification and rewriting each have a 30-minute subprocess budget. Backlogs drain over successive passes; consolidation does not guarantee a fixed pack count for arbitrary repository growth or impose an operating-system RSS limit. Consolidation uses low-priority Git subprocesses, one thread per pack process, and idle I/O priority where `ionice` is available. On delegated Linux services, maintenance runs in the resource-limited `agent-exec` group. Foreground Git retains its Gateway placement. Maintenance acquires the project checkout lease without waiting, skips busy projects without consuming their hourly slot, and shares repository mutation ownership with fetch. The checkout lease also prevents concurrent maintenance owners from rewriting the same project.
+Pack consolidation keeps promisor and ordinary packs separate. Each group selects up to 1,024 of its smallest eligible packs, capped at 16 GiB of pack data and 128 MiB of index data per pass. The index budget admits multiple large fetch indexes; a budget smaller than two ordinary indexes would leave their packs permanently fragmented. Consolidation combines at least two packs only when the smaller inputs together reach the largest selected pack's size. Otherwise it leaves that largest pack untouched and considers the smaller batch. The index budget bounds object metadata even for highly compressed inputs. Git verifies each selected pack and index, then streams all their objects into a replacement without fetching missing partial-clone objects. Inputs retire only after Git publishes the verified replacement. Kept packs, cruft packs, and packs outside the batch remain untouched. This size-based policy lets bounded batches keep converging below 16 packs without repeatedly rewriting a large pack for tiny additions. Maintenance removes optional multi-pack-index lookup metadata, including stale indexes, so Git uses individual pack indexes without a repository-wide rebuild. Verification and rewriting each have a 30-minute subprocess budget. Backlogs drain over successive passes; consolidation does not guarantee a fixed pack count for arbitrary repository growth or impose an operating-system RSS limit. Consolidation uses low-priority Git subprocesses, one thread per pack process, and idle I/O priority where `ionice` is available. On delegated Linux services, maintenance runs in the resource-limited `agent-exec` group. Foreground Git retains its Gateway placement. Maintenance acquires the project checkout lease without waiting and skips busy projects without consuming their hourly slot. Losing the lease mid-pass defers that repository to its next hourly pass instead of suspending maintenance. Verification and rewriting run beside fetch and other ref updates; only retiring the replaced inputs waits for the repository's ref-mutation queue. The checkout lease also prevents concurrent maintenance owners from rewriting the same project.
 
 A fresh clone is not a replacement for a managed project's object store: remote
 history does not include its unpublished commits, local branches, snapshots, or
@@ -368,7 +383,7 @@ Do not substitute native `maintenance run --task=incremental-repack` on partial
 clones: Git versions including 2.56 can combine promisor and ordinary packs
 without retaining the promisor marker, then expire the original promisor pack.
 
-On Linux, maintenance also removes up to 256 abandoned `tmp_pack_*` files per pass once they are older than 24 hours. An isolated native helper must obtain an exclusive Linux file lease, which detects open users across user IDs and blocks new opens through deletion. It rechecks each file's identity, size, and timestamps before unlinking it. A live user, unsupported filesystem lease, or changed file preserves that temporary file. Other platforms retain temporary packs. Installing an update requires no migration or immediate repack; the next ordinary maintenance pass applies these bounds.
+On Linux, maintenance also removes up to 256 abandoned temporary pack files (`tmp_pack_*`, `tmp_idx_*`, and other `tmp_*_` files Git leaves when interrupted) per pass once they are older than 24 hours. An isolated native helper must obtain an exclusive Linux file lease, which detects open users across user IDs and blocks new opens through deletion. It rechecks each file's identity, size, and timestamps before unlinking it. A live user, unsupported filesystem lease, or changed file preserves that temporary file. Other platforms retain temporary packs. Installing an update requires no migration or immediate repack; the next ordinary maintenance pass applies these bounds.
 
 Transient fetch failures, including an incomplete object transfer, retry once after one second within the original fetch timeout. Cancellation and expired workspace authority stop recovery; a second failure surfaces the Git error. See [Retry policy](/concepts/retry#managed-git-operations).
 
@@ -412,7 +427,17 @@ Add `.worktreeinclude` at the source repository root to copy selected ignored, u
 fixtures/generated/**
 ```
 
+The manifest is read from the actual source checkout and does not need to be committed. Without it, provisioning copies no ignored files; there are no default include patterns. Broad patterns can select build outputs and caches, so include only files the new checkout needs.
+
 Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes and access/modification times at the filesystem’s supported precision. This keeps the timestamp ordering of prepared build inputs and outputs instead of making every copied file look newly written. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
+
+Ordinary removal snapshots omit provisioned files inside `node_modules` directories,
+including nested package dependencies. Reinstall those dependencies after restoring
+the worktree. Other provisioned files, including edited local configuration, remain
+recoverable. Tracked files and non-ignored untracked files keep their normal snapshot
+protection, including files inside `node_modules`. Existing snapshots still restore
+their recorded dependencies; explicit exact-state retirement retains its complete
+provisioned-file capture.
 
 ## Run repository setup
 
@@ -529,7 +554,7 @@ workers so they do not wait in the shared SQLite writer queue. Creation, activit
 and removal still await their durable writes; an unchanged registry update does
 not rewrite the row. Inspecting an empty registry does not create its database.
 
-Ordinary removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Host-provisioned ignored files do not enter the Git snapshot or repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Idle cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, ordinary removal stops unless `--force` explicitly permits snapshot loss. Cap eviction is best effort and can purge the checkout without a snapshot.
+Ordinary removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Host-provisioned ignored files do not enter the Git snapshot or repository object database. OpenClaw stores the ignored files it actually provisioned, except files inside `node_modules` directories, in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Idle cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, ordinary removal stops unless `--force` explicitly permits snapshot loss. Cap eviction is best effort and can purge the checkout without a snapshot.
 
 For an ordinary clean checkout, the snapshot reuses the original HEAD tree after checking working files with a private index that clears hidden status flags. It checks object availability in one batch before creating the same recovery commit and snapshot ref. Missing objects preserve the checkout with a repository-repair error, including in partial clones. Exact-state snapshots continue capturing their complete recorded state.
 
