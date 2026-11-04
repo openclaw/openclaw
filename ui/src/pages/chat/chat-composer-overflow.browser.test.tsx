@@ -29,6 +29,7 @@ import "../../styles/chat/composer-context-strip.css";
 import "../../styles/chat/composer-progress.css";
 import "../../styles/chat/composer-queue.css";
 import { resetChatComposerState } from "./components/chat-composer-state.ts";
+import { ReplyPreview } from "./components/chat-composer-view.tsx";
 
 const attachments = Array.from({ length: 7 }, (_, index) => ({
   id: `overflow-${index}`,
@@ -75,7 +76,7 @@ const drawComposer = (input: Parameters<typeof renderComposerInto>[1]) =>
   renderComposerInto(container, input);
 
 beforeEach(async () => {
-  await page.viewport(1200, 800);
+  await Promise.all([page.viewport(1200, 800), ReplyPreview.preload()]);
   container = createComposerContainer();
   container.className = "agent-chat__input";
   container.style.width = "760px";
