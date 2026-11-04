@@ -305,7 +305,11 @@ it.each([
 });
 
 it.each([0, 11, 1.5])("rejects count %s before network dispatch", async (count) => {
-  await expect(execute({ count })).rejects.toThrow(/count/);
+  expect(await execute({ count })).toMatchObject({
+    kind: "error",
+    provider: "clawrouter",
+    message: expect.stringMatching(/count/),
+  });
   expect(requests).toHaveLength(0);
 });
 
@@ -353,6 +357,19 @@ it.each([
   }
   expect(await execute({ count: 1 })).toMatchObject({ kind: "error", provider: "clawrouter" });
   expect(requests).toHaveLength(2);
+  expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+});
+
+it("rejects a manifest redirect before following it or replaying the search", async () => {
+  routeKind = "manifest";
+  catalog = makeCatalog();
+  responseStatus = 307;
+  responseHeaders.Location = "/follow";
+  expect(await execute()).toMatchObject({ kind: "error", provider: "clawrouter" });
+  expect(requests.map((request) => request.path)).toEqual([
+    "/tenant/v1/catalog",
+    "/tenant/v1/proxy/deepseek/search",
+  ]);
   expect(globalThis.fetch).toHaveBeenCalledTimes(2);
 });
 

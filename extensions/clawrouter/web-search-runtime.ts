@@ -14,7 +14,7 @@ import {
   type WebSearchProviderPlugin,
   type WebSearchProviderToolExecutionContext,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   fetchClawRouterCapabilityOffers,
@@ -84,29 +84,38 @@ export async function searchClawRouter(
   if ("body" in request) {
     headers.set("Content-Type", "application/json");
   }
-  const { response, release } = await fetchWithTimeoutGuarded(
-    request.url,
-    {
-      method: codec.method,
-      headers,
-      body:
-        "body" in request
-          ? JSON.stringify(offer.routeKind === "manifest" ? { body: request.body } : request.body)
-          : undefined,
-      signal: execution?.signal,
-    },
-    timeoutMs(),
-    fetch,
-    {
-      ssrfPolicy: mergeSsrFPolicies(
-        context.ssrfPolicy,
-        context.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
-      ),
-      dispatcherPolicy: context.dispatcherPolicy,
-      auditContext: "clawrouter.web-search",
-      ...(deepseek ? { maxRedirects: 0 } : {}),
-    },
+  const init: RequestInit = {
+    method: codec.method,
+    headers,
+    body:
+      "body" in request
+        ? JSON.stringify(offer.routeKind === "manifest" ? { body: request.body } : request.body)
+        : undefined,
+    signal: execution?.signal,
+  };
+  const policy = mergeSsrFPolicies(
+    context.ssrfPolicy,
+    context.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
   );
+  const { response, release } = deepseek
+    ? await fetchWithSsrFGuard({
+        url: request.url,
+        init,
+        timeoutMs: timeoutMs(),
+        policy,
+        dispatcherPolicy: context.dispatcherPolicy,
+        auditContext: "clawrouter.web-search",
+        maxRedirects: 0,
+        beforeRequest: () => {
+          execution?.signal?.throwIfAborted();
+          execution?.assertCurrent?.();
+        },
+      })
+    : await fetchWithTimeoutGuarded(request.url, init, timeoutMs(), fetch, {
+        ssrfPolicy: policy,
+        dispatcherPolicy: context.dispatcherPolicy,
+        auditContext: "clawrouter.web-search",
+      });
   try {
     if (!response.ok) {
       throw new Error(`ClawRouter search failed (HTTP ${response.status})`);
