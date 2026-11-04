@@ -1288,10 +1288,10 @@ export function refitTestTimings(
                 : profile === "github"
                   ? current.toolingGithub
                   : current.toolingBoat;
-            for (const [key, workerCeilings] of toolingWorkers) {
+            for (const [key, observedWorkerCeilings] of toolingWorkers) {
               const identity = runtimeLog.prefix + key;
               const observed = toolingBoatWorkers.get(identity) ?? new Set();
-              for (const ceiling of workerCeilings) {
+              for (const ceiling of observedWorkerCeilings) {
                 observed.add(ceiling);
               }
               toolingBoatWorkers.set(identity, observed);
