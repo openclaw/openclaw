@@ -51,9 +51,10 @@ subcommand, and `handle` returns `{ text }` for a reply or `{ prompt }` to
 replace the turn's message. A subcommand runs only while its contribution can
 learn, unless it is `direct`: a direct subcommand changes state without a model
 turn, so only owners can run it and gateway clients need `operator.admin`.
-Optional `unavailableText` is the reply when `/learn` cannot learn on a turn
-and the contribution's medium is the only one registered, or its subcommand was
-asked for; otherwise OpenClaw replies with a generic remedy.
+Optional `unavailableText` is the reply when the contribution's subcommand was
+asked for but cannot run, or when `/learn` cannot learn and every registered
+contribution is in one medium with the same reply; otherwise OpenClaw replies
+with a generic remedy.
 
 Gateway handlers can return a payload synchronously or asynchronously, for example
 `api.registerGatewayMethod("example.status", async () => ({ status: "ready" }))`.

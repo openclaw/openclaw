@@ -216,18 +216,18 @@ async function resolveActiveContributors(
   }
 }
 
-function unavailableReply(contributors: readonly LearnContributor[], medium?: LearnMedium) {
-  // With one medium in play, its contributor knows the remedy; across media, stay generic.
-  const scoped = medium
-    ? contributors.filter(({ contribution }) => contribution.medium === medium)
-    : contributors;
-  const media = new Set(scoped.map(({ contribution }) => contribution.medium));
-  const own =
-    media.size === 1
-      ? scoped.find(({ contribution }) => contribution.unavailableText)?.contribution
-          .unavailableText
-      : undefined;
-  return commandReply(own ?? LEARN_UNAVAILABLE_REPLY);
+function unavailableReply(contributors: readonly LearnContributor[], selected?: LearnContribution) {
+  // A selected subcommand's contributor knows its remedy. Otherwise only a reply that every
+  // registered contributor shares, all in one medium, is specific enough to use.
+  if (selected) {
+    return commandReply(selected.unavailableText ?? LEARN_UNAVAILABLE_REPLY);
+  }
+  const media = new Set(contributors.map(({ contribution }) => contribution.medium));
+  const texts = new Set(contributors.map(({ contribution }) => contribution.unavailableText));
+  const [shared] = texts;
+  return commandReply(
+    (media.size === 1 && texts.size === 1 ? shared : undefined) ?? LEARN_UNAVAILABLE_REPLY,
+  );
 }
 
 type LearnSubcommandCommand = Extract<LearnCommand, { kind: "subcommand" }>;
@@ -277,14 +277,14 @@ export const handleLearnCommand: CommandHandler = defineAuthorizedTextCommand(
     if (active.length === 0) {
       return unavailableReply(
         contributors,
-        command.kind === "subcommand" ? command.contributor.contribution.medium : undefined,
+        command.kind === "subcommand" ? command.contributor.contribution : undefined,
       );
     }
     if (command.kind === "subcommand") {
       const { contribution } = command.contributor;
       return active.some((entry) => entry.contribution === contribution)
         ? runSubcommand(params, command)
-        : unavailableReply(contributors, contribution.medium);
+        : unavailableReply(contributors, contribution);
     }
 
     applyCommandTextToParams(params, buildLearnPrompt(command.request, active));

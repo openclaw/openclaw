@@ -298,6 +298,16 @@ describe("learn command", () => {
       const handle = vi.fn(({ args }: { args: string }) => ({ prompt: `Review notes: ${args}` }));
       registeredContributions = [
         skillsContribution,
+        // Same medium, sorted first: its reply must not stand in for the selected subcommand's.
+        {
+          pluginId: "acme-alpha",
+          contribution: {
+            medium: "memory",
+            toolNames: ["memory_alpha"],
+            unavailableText: "Alpha memory is not available.",
+            buildGuidance: () => ({ lines: [] }),
+          },
+        },
         {
           pluginId: "acme-memory",
           contribution: {
