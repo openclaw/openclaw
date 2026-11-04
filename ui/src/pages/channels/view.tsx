@@ -18,6 +18,7 @@ import {
   type ChannelsState,
 } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/modal-dialog.tsx";
 import { channelDocsUrl } from "./hub-meta.ts";
@@ -356,6 +357,27 @@ function WizardStepBody(props: {
   wizard: Extract<ChannelWizardState, { phase: "step" }>;
   controls: ChannelsProps;
 }) {
+  // Re-focus the step input after a rejected reply re-enables the form, mirroring
+  // the model provider setup wizard.
+  let focusTargets = new Set<HTMLElement>();
+  const autofocusRef = (element: HTMLElement) => {
+    focusTargets.add(element);
+  };
+  const busy = () => props.controls.mutationBusy?.wizard || props.wizard.busy;
+  createPendingFocus(
+    () => `${props.wizard.step.id}:${busy() ? "busy" : "ready"}:${props.wizard.validationError ?? ""}`,
+    {
+      requested: () => true,
+      focus: () => {
+        focusTargets = new Set([...focusTargets].filter((element) => element.isConnected));
+        [...focusTargets]
+          .filter((element) => element.autofocus)
+          .toSorted((left, right) =>
+            left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+          )[0]?.focus({ preventScroll: true });
+      },
+    },
+  );
   const informational = () => ["note", "progress", "action"].includes(props.wizard.step.type);
   const message = () => props.wizard.step.message?.trim() ?? "";
   const gatewayOwned = () => props.wizard.step.executor === "gateway";
@@ -384,6 +406,7 @@ function WizardStepBody(props: {
             props.wizard.validationError ? "channel-wizard-validation-error" : undefined
           }
           presentation="channels"
+          onAutofocusRef={autofocusRef}
           channelSelect={props.wizard.channel === null}
           answerLabel={t("channels.setup.continue")}
           busyLabel={t("channels.setup.working")}

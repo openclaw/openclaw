@@ -85,6 +85,15 @@ it("retains a channel draft through validation, submits it, and resets on a new 
   expect(answer).toHaveBeenLastCalledWith("");
 });
 
+it("marks the channel step input as an autofocus target like model setup", () => {
+  const { container } = mountStep(step("text"), () => ({
+    value: "",
+    presentation: "channels",
+  }));
+  const input = container.querySelector("input")!;
+  expect(input.hasAttribute("autofocus")).toBe(true);
+});
+
 it("preserves a sensitive answer and cancel action across reveal changes", () => {
   const cancel = vi.fn();
   const { container, answer } = mountStep({ ...step("text"), sensitive: true }, () => {

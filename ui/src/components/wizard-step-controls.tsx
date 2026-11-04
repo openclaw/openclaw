@@ -205,7 +205,7 @@ function Answer(
       ref={(element) => props.onAutofocusRef?.(element)}
       type={props.onClick ? "button" : "submit"}
       class="btn primary"
-      autofocus={props.presentation === "model-setup"}
+      autofocus={focusRestorable(props.presentation)}
       disabled={props.busy || props.disabled}
       onClick={() => props.onClick?.()}
     >
@@ -242,10 +242,15 @@ function Answer(
   );
 }
 
+// Both wizard surfaces re-focus the rejected step input after a validation retry.
+function focusRestorable(presentation: WizardStepControlsProps["presentation"]): boolean {
+  return presentation === "model-setup" || presentation === "channels";
+}
+
 function TextForm(props: WizardStepControlsProps) {
   // Channel drafts stay in the input until submit; unrelated refreshes must not overwrite them.
   const value = createMemo(() => (typeof props.value === "string" ? props.value : ""));
-  const focusText = () => props.presentation === "model-setup";
+  const focusText = () => focusRestorable(props.presentation);
   let form: HTMLFormElement | undefined;
   // Disabling the field while a reply is pending drops its focus to the page. When the reply
   // settles on this step (e.g. a validation rejection), give it back unless focus moved elsewhere.
