@@ -1541,7 +1541,7 @@ const startupEnglish = {
       manage: "Manage saved accounts…",
     },
     mentions: {},
-    cloudWorkerFailed: "Couldn’t continue. Try again. {error}",
+    cloudWorkerFailed: "Couldn’t continue the session. Try again. {error}",
     errorDetails: "Error details",
     errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
     errorReplyTitle: "Couldn’t finish this reply",

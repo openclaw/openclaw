@@ -196,7 +196,7 @@ const catalog = {
       undo: "Undo",
       undoing: "Undoing…",
       undone: "Undone",
-      undoError: "Couldn’t undo. Try again. Details: {error}",
+      undoError: "Couldn’t undo the skill change. Try again. Details: {error}",
     },
     youtube: {
       provider: "YouTube",
