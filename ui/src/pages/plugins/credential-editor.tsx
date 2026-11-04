@@ -26,6 +26,7 @@ import {
   type SecretRef,
 } from "../../../../src/secrets/ref-contract.ts";
 import type { ConfigNodeRenderParams } from "../../components/config-form.node.shared.ts";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
@@ -563,97 +564,109 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
               void cancelReference();
             }}
           >
-            <section class="plugin-credential__dialog">
-              <h2>{t("pluginsPage.credentials.referenceTitle")}</h2>
-              {environment() ? (
-                <p>{t("pluginsPage.credentials.environmentHelp", { name: environment()! })}</p>
-              ) : (
-                <>
-                  <p>{t("pluginsPage.credentials.referenceHelp")}</p>
-                  <label>
-                    {t("pluginsPage.credentials.source")}
-                    <select
-                      ref={(element) => {
-                        referenceSourceSelect = element;
-                      }}
-                      autofocus
-                      class="settings-input"
-                      aria-label={t("pluginsPage.credentials.source")}
-                      value={reference.source}
-                      disabled={blocked()}
-                      onChange={(event) => {
-                        const source = credentialSources.find(
-                          (entry) => entry === event.currentTarget.value,
-                        );
-                        if (source) {
-                          setReference((draft) => {
-                            draft.source = source;
-                          });
-                        }
-                      }}
-                    >
-                      <For each={credentialSources}>
-                        {(source) => (
-                          <option value={source} selected={source === reference.source}>
-                            {t(`pluginsPage.credentials.sources.${source}`)}
-                          </option>
-                        )}
-                      </For>
-                    </select>
-                  </label>
-                  <For each={credentialReferenceParts}>
-                    {(key) => (
-                      <label>
-                        {t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}
-                        <input
-                          class="settings-input"
-                          value={reference[key]}
-                          disabled={blocked()}
-                          onInput={(event) =>
+            <section class="oc-dialog plugin-credential__dialog">
+              <DialogHeader
+                title={t("pluginsPage.credentials.referenceTitle")}
+                description={
+                  <p>
+                    {environment()
+                      ? t("pluginsPage.credentials.environmentHelp", { name: environment()! })
+                      : t("pluginsPage.credentials.referenceHelp")}
+                  </p>
+                }
+                closeDisabled={saving() || cancelling()}
+                onClose={() => void cancelReference()}
+              />
+              <div class="oc-dialog__body">
+                {environment() ? null : (
+                  <>
+                    <label>
+                      {t("pluginsPage.credentials.source")}
+                      <select
+                        ref={(element) => {
+                          referenceSourceSelect = element;
+                        }}
+                        autofocus
+                        class="settings-input"
+                        aria-label={t("pluginsPage.credentials.source")}
+                        value={reference.source}
+                        disabled={blocked()}
+                        onChange={(event) => {
+                          const source = credentialSources.find(
+                            (entry) => entry === event.currentTarget.value,
+                          );
+                          if (source) {
                             setReference((draft) => {
-                              draft[key] = event.currentTarget.value;
-                            })
+                              draft.source = source;
+                            });
                           }
-                        />
-                      </label>
-                    )}
-                  </For>
-                  <p class="muted">{t(`pluginsPage.credentials.help.${reference.source}`)}</p>
-                  {unresolved() ? (
-                    <p class="callout warn">{t("pluginsPage.credentials.unresolved")}</p>
-                  ) : null}
-                </>
-              )}
-              <Feedback dialog />
-              <openclaw-modal-actions>
-                <button
-                  class="btn"
-                  disabled={saving() || cancelling()}
-                  onClick={() => void cancelReference()}
-                >
-                  {t("common.cancel")}
-                </button>
-                {!inspection() && !loading() ? (
-                  <button class="btn" onClick={() => void inspect()}>
-                    {t("common.retry")}
-                  </button>
-                ) : null}
-                {!environment() ? (
+                        }}
+                      >
+                        <For each={credentialSources}>
+                          {(source) => (
+                            <option value={source} selected={source === reference.source}>
+                              {t(`pluginsPage.credentials.sources.${source}`)}
+                            </option>
+                          )}
+                        </For>
+                      </select>
+                    </label>
+                    <For each={credentialReferenceParts}>
+                      {(key) => (
+                        <label>
+                          {t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}
+                          <input
+                            class="settings-input"
+                            value={reference[key]}
+                            disabled={blocked()}
+                            onInput={(event) =>
+                              setReference((draft) => {
+                                draft[key] = event.currentTarget.value;
+                              })
+                            }
+                          />
+                        </label>
+                      )}
+                    </For>
+                    <p class="muted">{t(`pluginsPage.credentials.help.${reference.source}`)}</p>
+                    {unresolved() ? (
+                      <p class="callout warn">{t("pluginsPage.credentials.unresolved")}</p>
+                    ) : null}
+                  </>
+                )}
+                <Feedback dialog />
+              </div>
+              {environment() && (inspection() || loading()) ? null : (
+                <openclaw-modal-actions class="oc-dialog__footer">
                   <button
-                    class="btn primary"
-                    disabled={blocked() || !isValidSecretRef(reference)}
-                    onClick={() =>
-                      void patch({
-                        source: reference.source,
-                        provider: reference.provider,
-                        id: reference.id,
-                      })
-                    }
+                    class="btn"
+                    disabled={saving() || cancelling()}
+                    onClick={() => void cancelReference()}
                   >
-                    {saving() ? t("common.saving") : t("common.save")}
+                    {t("common.cancel")}
                   </button>
-                ) : null}
-              </openclaw-modal-actions>
+                  {!inspection() && !loading() ? (
+                    <button class="btn" onClick={() => void inspect()}>
+                      {t("common.retry")}
+                    </button>
+                  ) : null}
+                  {!environment() ? (
+                    <button
+                      class="btn primary"
+                      disabled={blocked() || !isValidSecretRef(reference)}
+                      onClick={() =>
+                        void patch({
+                          source: reference.source,
+                          provider: reference.provider,
+                          id: reference.id,
+                        })
+                      }
+                    >
+                      {saving() ? t("common.saving") : t("common.save")}
+                    </button>
+                  ) : null}
+                </openclaw-modal-actions>
+              )}
             </section>
           </openclaw-modal-dialog>
         ) : null}

@@ -7,6 +7,7 @@ import {
   presenceActivityLabel,
   presenceViewerActivity,
   presenceViewerLabel,
+  presenceUserLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
 import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
@@ -27,11 +28,11 @@ type PeopleView = {
 };
 
 export function isUnresolvedPerson(person: PresenceViewer): boolean {
-  return !person.name && !person.email && presenceViewerLabel(person) === person.id;
+  return !presenceUserLabel(person).isSharedOwner && !person.name?.trim();
 }
 
 function compactPersonLabel(person: PresenceViewer): string {
-  return isUnresolvedPerson(person) && person.id.length > 8
+  return isUnresolvedPerson(person) && !person.id.includes("@") && person.id.length > 8
     ? `${person.id.slice(0, 8)}…`
     : presenceViewerLabel(person);
 }

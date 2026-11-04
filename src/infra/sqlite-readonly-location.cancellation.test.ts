@@ -16,6 +16,7 @@ import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import * as workerUrls from "./runtime-worker-url.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -204,7 +205,11 @@ it.skipIf(process.platform === "win32")(
       expect(() => process.kill(snapshotPid, 0)).toThrow(
         expect.objectContaining({ code: "ESRCH" }),
       );
-      expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
+      expect(
+        fs.readdirSync(
+          resolvePrivateSqliteSnapshotStagingRoot({ ...process.env, XDG_CACHE_HOME: root }),
+        ),
+      ).toEqual([]);
       expect(fs.readFileSync(source)).toEqual(original);
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
@@ -230,7 +235,7 @@ it("joins an idle child that ignores graceful shutdown after its bounded fallbac
     inspectionFinished = true;
   });
   expect(inspectionChild("session")?.signalCode).toBe("SIGKILL");
-  expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
 });
 
 it.for([
@@ -283,7 +288,7 @@ it.for([
         await expect(operation).rejects.toThrow("scope closed");
       }
       expect(fs.existsSync(fs.readFileSync(ready, "utf8"))).toBe(false);
-      expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+      expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
     } finally {
       controller.abort(reason);
       await Promise.allSettled([operation]);
@@ -324,7 +329,7 @@ it("reports failed owned cleanup and keeps it retryable", async () => {
     expect(prepared.cleanup()).toBe(true);
   }
   expect(fs.readFileSync(source)).toEqual(before);
-  expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
 });
 it.each(["sync", "async", "scoped"] as const)(
   "bounds the %s child and removes its unpublished copy",
@@ -394,7 +399,7 @@ it.each(["sync", "async", "scoped"] as const)(
       expect(performance.now() - started).toBeLessThan(8_000);
       expect(fs.readFileSync(ready, "utf8")).toBe("ready");
       expect(fs.readFileSync(source, "utf8")).toBe("source must stay unchanged");
-      expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
+      expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
     } finally {
       await childClosed;
     }
