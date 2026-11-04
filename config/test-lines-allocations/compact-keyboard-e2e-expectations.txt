@@ -1,2 +1,0 @@
-# Retain exact composer tooltip assertions for Mac and compact non-Mac labels.
-5
