@@ -101,7 +101,9 @@ function appendImportEdges(
   includeTypeScript,
   onStaticImport,
   onLiteralCall,
+  onImportOccurrence,
 ) {
+  const occurrences = onImportOccurrence ? [] : undefined;
   function visit(node) {
     // These leaves cannot contain import edges; avoid allocating property lists for them.
     if (node.type === "Identifier" || node.type === "Literal" || node.type === "TemplateElement") {
@@ -117,6 +119,7 @@ function appendImportEdges(
     }
     let kind;
     let specifier;
+    let occurrenceKind;
     if (
       node.type === "ImportDeclaration" ||
       node.type === "ExportNamedDeclaration" ||
@@ -124,6 +127,14 @@ function appendImportEdges(
       node.type === "ImportExpression"
     ) {
       specifier = literal(node.source);
+      if (node.source) {
+        occurrenceKind =
+          node.type === "ImportExpression"
+            ? "dynamic-import"
+            : node.type === "ImportDeclaration"
+              ? "static-import"
+              : "static-export";
+      }
       if (node.source?.type === "Literal" && typeof node.source.value === "string") {
         onStaticImport?.(node.source.value);
       }
@@ -133,6 +144,7 @@ function appendImportEdges(
       node.callee.name === "require"
     ) {
       kind = "require";
+      occurrenceKind = "require";
       specifier = literal(node.arguments[0]);
     } else if (
       node.type === "NewExpression" &&
@@ -151,9 +163,11 @@ function appendImportEdges(
         base.object.property.name === "meta"
       ) {
         kind = "import-meta-url";
+        occurrenceKind = "import-meta-url";
         specifier = literal(node.arguments[0]);
       }
     }
+    let packageEdge;
     if (
       specifier?.startsWith(".") &&
       (kind !== "import-meta-url" || hasRuntimeFileExtension(specifier, includeTypeScript))
@@ -172,7 +186,18 @@ function appendImportEdges(
         importedPath === "dist/node_modules/@openclaw/proc-safe/dist/identity.js";
       if (!stagedNativeUrl && (kind !== "import-meta-url" || importedPath.startsWith("dist/"))) {
         imports.push({ importerPath, importedPath, ...(kind === "require" ? { kind } : {}) });
+        packageEdge = importedPath;
       }
+    }
+    if (occurrenceKind && occurrences) {
+      occurrences.push({
+        importerPath,
+        kind: occurrenceKind,
+        start: node.start,
+        end: node.end,
+        ...(specifier === undefined ? {} : { specifier }),
+        ...(packageEdge === undefined ? {} : { importedPath: packageEdge }),
+      });
     }
     for (const key in node) {
       const value = node[key];
@@ -202,18 +227,26 @@ function appendImportEdges(
     );
   if (sourceType) {
     scan(sourceType);
-    return;
-  }
-  // Node detects ESM syntax in .js files without an explicit package type.
-  const start = imports.length;
-  try {
-    scan("script");
-  } catch (error) {
-    if (!(error instanceof SyntaxError)) {
-      throw error;
+  } else {
+    // Node detects ESM syntax in .js files without an explicit package type.
+    const start = imports.length;
+    try {
+      scan("script");
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+      imports.length = start;
+      if (occurrences) {
+        occurrences.length = 0;
+      }
+      scan("module");
     }
-    imports.length = start;
-    scan("module");
+  }
+  // Publish only the successful parse, preserving distinct static/dynamic uses
+  // of the same target. Existing packaging edges and callbacks stay unchanged.
+  for (const occurrence of occurrences ?? []) {
+    onImportOccurrence(occurrence);
   }
 }
 
@@ -267,6 +300,7 @@ export function collectPackageDistImports(params) {
       params.includeTypeScript,
       params.onStaticImport,
       params.onLiteralCall,
+      params.onImportOccurrence,
     );
   }
 
