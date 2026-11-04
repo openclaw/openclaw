@@ -334,7 +334,7 @@
 
 /* Height eases only between views of a settled menu. Entry and exit keep the
    shared menu presentation instead of growing from the last measured height. */
-.agent-chat__capability-menu-panel[data-phase="open"] {
+.agent-chat__capability-menu-panel:where([data-phase="open"]) {
   transition: height 220ms cubic-bezier(0.2, 1, 0.22, 1);
 }
 

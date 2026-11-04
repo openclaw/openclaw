@@ -333,6 +333,14 @@ suite.define(() => {
       );
       await trigger.click();
       expect(new Set(await heights).size).toBe(1);
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page
+        .getByRole("menuitem", { name: /Skills/ })
+        .first()
+        .click();
+      expect(await panel.evaluate((surface) => getComputedStyle(surface).transitionProperty)).toBe(
+        "none",
+      );
     });
   });
 });
