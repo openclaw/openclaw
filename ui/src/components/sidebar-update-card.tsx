@@ -12,6 +12,7 @@ import {
 import type { UpdateRunServingIdentity } from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
 import {
   hasNativeUpdateBridge,
   NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
@@ -93,14 +94,13 @@ export function SidebarUpdateCard(
     refreshScope();
     return undefined;
   });
-  const refreshOutcome = createMemo(
+  // A reload guard explains its own block (for example, an unsent message), so
+  // only an unreachable document is this notice's failure.
+  const refreshProblem = createMemo(
     () =>
-      refreshCompletion()?.result.then((reloading) => {
-        if (!reloading) {
-          throw new Error("Control UI refresh did not reload the document");
-        }
-        return null;
-      }),
+      refreshCompletion()?.result.then((reloading) =>
+        reloading ? null : canReloadControlUiDocument() ? "unreachable" : "blocked",
+      ),
     { loadingValue: undefined },
   );
   const [targetCompletion, setTargetCompletion] = createSignal<{ result: Promise<boolean> }>();
@@ -434,47 +434,41 @@ export function SidebarUpdateCard(
   }
 
   function RefreshCard() {
+    const problem = () => (refreshInFlight() ? undefined : refreshProblem());
+    const detail = () =>
+      refreshInFlight()
+        ? t("common.refreshing")
+        : problem() === "unreachable"
+          ? t("updates.refreshUnreachable")
+          : problem() === "blocked"
+            ? t("updates.refreshBlocked")
+            : t("chat.sidebar.serverUpdatedRefresh");
     return (
-      <div class="sidebar-update-card" role="status" aria-live="polite">
+      <div class="refresh-notice" role="status" aria-live="polite">
         {renderStatus()}
-        <Show when={!refreshInFlight()}>
-          <Errored
-            fallback={
-              <div
-                class="sidebar-update-card__status sidebar-update-card__status--warn"
-                role="alert"
-              >
-                {t("updates.refreshFailed")}
-              </div>
-            }
-          >
-            {refreshOutcome()}
-          </Errored>
-        </Show>
         <button
           ref={sidebarAttentionFocusRef()}
           class={[
-            "sidebar-update-card__action",
-            { "sidebar-update-card__action--busy": refreshInFlight() },
+            "refresh-notice__surface",
+            { "refresh-notice__surface--warn": problem() === "unreachable" },
           ]}
+          data-problem={problem() ?? undefined}
+          aria-label={`${t("chat.sidebar.serverUpdatedTitle")}: ${detail()}`}
           type="button"
           disabled={refreshInFlight()}
           aria-busy={refreshInFlight() ? "true" : "false"}
           onClick={() => void refreshControlUi()}
         >
-          <span class="sidebar-update-card__icon" aria-hidden="true">
-            <Icon name="refresh" />
-          </span>
-          <span class="sidebar-update-card__text sidebar-update-card__text--stacked">
-            <span class="sidebar-update-card__title">{t("chat.sidebar.serverUpdatedTitle")}</span>
-            <span class="sidebar-update-card__subtitle">
-              <Show when={!refreshInFlight()} fallback={t("lazyView.reloading")}>
-                <Errored fallback={t("connection.retryNow")}>
-                  {refreshOutcome() ?? t("chat.sidebar.serverUpdatedRefresh")}
-                </Errored>
-              </Show>
+          {/* Phones replace the title with a following detail. */}
+          <Show when={refreshInFlight() || problem()}>
+            <span class="sidebar-update-card__subtitle refresh-notice__detail">{detail()}</span>
+          </Show>
+          <span class="sidebar-update-card__title">{t("chat.sidebar.serverUpdatedTitle")}</span>
+          <Show when={!refreshInFlight()}>
+            <span class="sidebar-update-card__hold refresh-notice__action" aria-hidden="true">
+              {problem() === "unreachable" ? t("common.retry") : t("common.refresh")}
             </span>
-          </span>
+          </Show>
         </button>
       </div>
     );
