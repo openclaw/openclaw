@@ -182,7 +182,12 @@ describe("kitchen-sink Docker limit reporting", () => {
   it.each([0, 23])("relays container warnings and preserves exit %s", (runStatus) => {
     const root = dirname(writeStats(""));
     const scripts = join(root, "scripts");
-    mkdirSync(join(scripts, "e2e"), { recursive: true });
+    const pluginFixture = join(scripts, "e2e", "lib", "kitchen-sink-plugin");
+    mkdirSync(pluginFixture, { recursive: true });
+    writeFileSync(
+      join(pluginFixture, "npm-version.txt"),
+      readFileSync("scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt", "utf8"),
+    );
     mkdirSync(join(scripts, "lib"));
     const runner = join(scripts, "e2e", "kitchen-sink-rpc-docker.sh");
     writeFileSync(runner, readFileSync("scripts/e2e/kitchen-sink-rpc-docker.sh", "utf8"));
