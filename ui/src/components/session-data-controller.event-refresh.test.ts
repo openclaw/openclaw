@@ -457,32 +457,10 @@ describe("filtered sidebar session event refresh", () => {
     expect(controller.sessionListError).toBeNull();
   });
 
-  it("toasts a current session action failure at the top right and ignores retired scopes", async () => {
-    const showToast = vi.spyOn(toast, "showToast");
-    const { controller } = await readyController("active", 1, true);
-    const scope = controller.beginSessionMutation();
-    if (!scope) {
-      throw new Error("expected a connected session mutation scope");
-    }
-
-    controller.publishSessionMutationError(scope, new Error("Archive rejected"));
-    expect(showToast).toHaveBeenCalledExactlyOnceWith({
-      severity: "error",
-      placement: "top-right",
-      message: "Archive rejected",
-    });
-    expect(controller.sessionListError).toBeNull();
-    expect(controller.sessionMutationError).toBe("Archive rejected");
-
-    controller.disconnect();
-    showToast.mockClear();
-    controller.publishSessionMutationError(scope, new Error("Late archive rejection"));
-    expect(showToast).not.toHaveBeenCalled();
-  });
-
   it.each(["active", "archived", "all"] as const)(
-    "clears a recovered %s list failure without erasing an action failure",
+    "keeps %s list recovery separate from current-scope action toasts",
     async (statusFilter) => {
+      const showToast = vi.spyOn(toast, "showToast");
       const { controller, selectStatusFilter, refreshError, expectRows } = await readyController(
         statusFilter,
         1,
@@ -495,6 +473,11 @@ describe("filtered sidebar session event refresh", () => {
       const mutation = controller.beginSessionMutation();
       expect(mutation).not.toBeNull();
       controller.publishSessionMutationError(mutation!, new Error("Session request failed"));
+      expect(showToast).toHaveBeenCalledExactlyOnceWith({
+        severity: "error",
+        placement: "top-right",
+        message: "Session request failed",
+      });
       await refreshError("Background session list failed");
       await refreshError();
       selectStatusFilter(statusFilter === "archived" ? "all" : "archived");
@@ -503,6 +486,8 @@ describe("filtered sidebar session event refresh", () => {
 
       controller.disconnect();
       expect(controller.sessionMutationError).toBeNull();
+      controller.publishSessionMutationError(mutation!, new Error("Late rejection"));
+      expect(showToast).toHaveBeenCalledOnce();
     },
   );
 

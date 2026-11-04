@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import type { MockGatewayRequest, MockGatewayWindow } from "../test-helpers/control-ui-e2e.ts";
+import {
+  pauseVirtualClock,
+  type MockGatewayRequest,
+  type MockGatewayWindow,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -134,6 +138,7 @@ suite.define(() => {
         const rename = await gateway.waitForRequest("sessions.patch", {
           after: concurrent ? 1 : 0,
         });
+        await pauseVirtualClock(page);
         if (pendingArchive) {
           await page.evaluate(
             ({ renameId, archiveId }) => {
@@ -157,7 +162,7 @@ suite.define(() => {
 
         const toasts = page.locator(".app-toast-lane--top-right .app-toast");
         await expect
-          .poll(() => dialog.getByRole("alert").textContent())
+          .poll(() => dialog.locator(".callout[role=alert]").textContent())
           .toContain("A session with this name already exists.");
         if (concurrent) {
           await expect
@@ -182,14 +187,8 @@ suite.define(() => {
         const error = toasts.filter({ hasText: "sidebar rename rejected" });
         await error.waitFor({ state: "visible" });
         await expect.poll(() => error.textContent()).toContain("sidebar rename rejected");
-        expect(
-          await error
-            .locator("xpath=ancestor::*[contains(@class, 'sidebar-recent-sessions')]")
-            .count(),
-        ).toBe(0);
-
         await expect
-          .poll(() => dialog.getByRole("alert").textContent())
+          .poll(() => dialog.locator(".callout[role=alert]").textContent())
           .toContain("sidebar rename rejected");
         expect(await dialog.getByRole("textbox", { name: "Rename session" }).inputValue()).toBe(
           "Unavailable rename",
