@@ -44,8 +44,8 @@ async function mountMenu(withTrigger = false) {
 }
 
 it.each([
-  [true, "Copied!"],
-  [false, "Copy failed"],
+  [true, "Copied"],
+  [false, "Couldn’t copy. Try again."],
 ])("reports clipboard success=%s after the menu closes", async (copied, message) => {
   const pending = Promise.withResolvers<boolean>();
   const copy = vi.spyOn(clipboard, "copyToClipboard").mockReturnValue(pending.promise);
@@ -65,11 +65,11 @@ it.each([
   menu.querySelector<HTMLButtonElement>('[data-value="copy"]')!.click();
   expect(menu.isConnected).toBe(false);
   expect(copy).toHaveBeenCalledExactlyOnceWith(anchor.href);
-  expect(host.querySelector('[role="status"]')).toBeNull();
+  expect(host.querySelector(".app-toast")).toBeNull();
 
   pending.resolve(copied);
   await waitForSolid(() => {
-    expect(host.querySelector('[role="status"]')?.textContent).toContain(message);
+    expect(host.querySelector(".app-toast")?.textContent).toContain(message);
   });
 });
 

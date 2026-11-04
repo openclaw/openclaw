@@ -18,11 +18,11 @@ import {
   SettingsRow,
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
-import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
+import { formatThemeValidationError } from "./custom-theme-import.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SessionSources } from "./session-sources.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
@@ -81,14 +81,13 @@ const ACCENT_PRESETS = [
 ] as const;
 
 /* Builtin cards preview their real palette (chip colors live in config.css,
-   mirrored from the base.css theme blocks). The custom card only has real
-   colors while active — its chips read the live CSS variables — so it falls
-   back to the download icon otherwise. */
+   mirrored from the base.css theme blocks). Plugin cards use the live palette.
+   Only the inactive custom import card falls back to the download icon. */
 function ThemeCardVisual(props: { id: ThemeName; activeTheme: ThemeName; selected: boolean }) {
   return (
     <span class="settings-theme-card__swatch" aria-hidden="true">
       <Show
-        when={(props.id !== "custom" && !props.id.includes("/")) || props.activeTheme === props.id}
+        when={props.id !== "custom" || props.activeTheme === props.id}
         fallback={
           <span class="settings-theme-card__icon">
             <Icon name="download" />
@@ -144,7 +143,8 @@ export function AppearanceSection(props: ConfigProps) {
   }
   const importMessage = () => {
     importResult();
-    return props.customThemeImportMessage;
+    const message = props.customThemeImportMessage;
+    return message?.kind === "error" ? message : null;
   };
   let focusFrame = 0;
   const showCustomThemeImport = () =>
@@ -173,7 +173,7 @@ export function AppearanceSection(props: ConfigProps) {
   const importedName = createMemo(() =>
     props.hasCustomTheme && props.customThemeLabel
       ? props.customThemeLabel
-      : t("configView.appearance.importedTheme"),
+      : t("configView.appearance.customTheme"),
   );
   const themeOptions = createMemo(
     (): Array<{ id: ThemeName; label: string; description: string }> => [
@@ -269,7 +269,7 @@ export function AppearanceSection(props: ConfigProps) {
             const status = () => {
               const error = catalog()?.error;
               if (error) {
-                throw new Error(error);
+                throw error instanceof Error ? error : new Error(error);
               }
               return undefined;
             };
@@ -277,7 +277,7 @@ export function AppearanceSection(props: ConfigProps) {
               <Errored
                 fallback={(error) => (
                   <p class="settings-status settings-status--error" role="alert">
-                    {formatUiError(error())}{" "}
+                    {formatThemeValidationError(error())}{" "}
                     <button
                       type="button"
                       class="btn btn--sm"
@@ -447,7 +447,8 @@ export function AppearanceSection(props: ConfigProps) {
                       class="settings-theme-import__message settings-theme-import__message--error"
                       role="alert"
                     >
-                      {formatUiError(error())}
+                      <div>{t("configView.appearance.importFailed")}</div>
+                      <div>{formatThemeValidationError(error())}</div>
                     </div>
                   )}
                 >

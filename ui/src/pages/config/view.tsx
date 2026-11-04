@@ -494,6 +494,7 @@ export function Config(props: ConfigProps) {
           ) : undefined
         }
         showSectionDocs={props.showSectionDocs}
+        sectionTitle={props.sectionTitle}
         sectionPrelude={props.sectionPrelude}
         curatedSections={props.curatedSections}
         revealSensitive={props.activeSection === "env" && view().envRevealed}

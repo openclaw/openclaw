@@ -481,7 +481,7 @@ suite.define(() => {
         await pollValue(pathInput).toBe(workspace);
         await page
           .locator(".new-session-page__browser")
-          .getByText("No subfolders", { exact: true })
+          .getByText("No subfolders yet.", { exact: true })
           .waitFor();
         await gateway.deferNext("fs.listDir", { path: "/tmp" });
         await pathInput.fill("/tmp");
@@ -499,9 +499,7 @@ suite.define(() => {
         });
         await pollLocatorText(
           page.locator(".new-session-page__browser .new-session-page__error"),
-        ).toContain(
-          "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
-        );
+        ).toContain("You need admin access to browse outside agent workspaces.");
         expect(await pathInput.inputValue()).toBe("/tmp");
         expect(await gateway.getRequests("fs.listDir")).toHaveLength(2);
       },
