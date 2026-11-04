@@ -196,9 +196,12 @@ remove its unreachable history-disabled branch. Preserve the complete user-text
 fixture and all continuity-window assertions. All25 declarations/29 expanded
 cases remain; ten fewer test lines, with no production or helper change.
 
-The managed checkout is code-only. Baseline/candidate runtime equivalence,
-scoped checks and fresh review remain pending through the native proof checkout.
-This is fixture simplification, not a change to Codex projection behavior.
+Native baseline and candidate runs each pass all29 cases and produce identical
+full result JSON for both changed fixtures. Expanded case inventories match after
+the intended history-case rename; the user-text case keeps its expanded name.
+The exact restored candidate also passes29. All original assertions remain.
+This is fixture simplification, not a change to Codex projection behavior; no
+native Codex, provider, or Gateway execution is claimed.
 
 ## Completed source review
 
