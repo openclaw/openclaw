@@ -148,7 +148,7 @@ export async function markPendingWorkTurnStarted(
  * The work kind's obligation value is `retry-exhausted` (the column's CHECK admits no other for
  * work); the failure reason selects the interrupted notice. A lost CAS means another pass did it.
  */
-async function interruptStartedWorkRecord(
+export async function interruptStartedWorkRecord(
   record: ContinuationRecord,
 ): Promise<PendingContinuationWork | undefined> {
   const interrupted = appliedRecord(
@@ -160,59 +160,6 @@ async function interruptStartedWorkRecord(
     }),
   );
   return interrupted ? toNoticeWork(interrupted) : undefined;
-}
-
-/**
- * The fence of a live wake whose turn started but whose delivery was never confirmed (RFC §5.4.2):
- * recovery interrupts such a wake, never drives it. A build without the fence strips `turnStart` on
- * decode and would re-drive it, so a seat moving to one must first hold none (the fence drain). A
- * cancel-fenced record is not one: no build drives it. An undecodable record is not one either: this
- * build rejects it unrun.
- */
-export function readUndeliveredTurnFence(
-  record: ContinuationRecord,
-): PendingWorkState["turnStart"] | undefined {
-  if (
-    !isContinuationWorkFlow(record) ||
-    (record.status !== "queued" && record.status !== "running") ||
-    record.cancelRequestedAt !== undefined
-  ) {
-    return undefined;
-  }
-  const state = decodeWorkState(record);
-  return state && !state.succeeded ? state.turnStart : undefined;
-}
-
-/** A record interrupted after its turn started whose notice has not reached the delivery queue. */
-export function owesInterruptedTurnNotice(record: ContinuationRecord): boolean {
-  return (
-    isContinuationWorkFlow(record) &&
-    record.status === "failed" &&
-    record.terminalNoticePending !== undefined &&
-    record.failureReason === WORK_TURN_INTERRUPTED_REASON
-  );
-}
-
-/**
- * The fence drain's interrupt, offline only: with no Gateway running no turn is in flight, so every
- * fenced, undelivered wake ends now exactly as recovery ends it, owing its one notice in the same
- * CAS. It never claims, requeues or drives a record. Returns the records this pass interrupted.
- */
-export async function interruptUndeliveredTurnFences(): Promise<PendingContinuationWork[]> {
-  const interrupted: PendingContinuationWork[] = [];
-  for (const record of await listContinuationRecords({
-    kinds: ["work"],
-    statuses: ["queued", "running"],
-  })) {
-    if (!readUndeliveredTurnFence(record)) {
-      continue;
-    }
-    const work = await interruptStartedWorkRecord(record);
-    if (work) {
-      interrupted.push(work);
-    }
-  }
-  return interrupted;
 }
 
 async function finalizeDeliveredWorkRecord(
@@ -705,7 +652,8 @@ export async function markPendingWorkFailed(
   return result.outcome === "applied";
 }
 
-function toNoticeWork(record: ContinuationRecord): PendingContinuationWork | undefined {
+/** A failed record's outstanding notice obligation, or undefined when nothing is owed. */
+export function toNoticeWork(record: ContinuationRecord): PendingContinuationWork | undefined {
   if (!isContinuationWorkFlow(record) || record.status !== "failed") {
     return undefined;
   }

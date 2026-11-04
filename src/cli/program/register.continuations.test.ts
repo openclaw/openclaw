@@ -340,7 +340,7 @@ describe("openclaw continuations", () => {
     // Nothing is left owed for the older build to word as retry-exhausted: the notice is already a
     // queue row, and startup delivery recovery replays a row with the text it holds.
     expect(await listPendingTerminalNoticeWork()).toEqual([]);
-    const [row] = (await interruptedNoticeRows()).filter((entry) =>
+    const row = (await interruptedNoticeRows()).find((entry) =>
       entry.text.includes(drained.recordId),
     );
     expect(row?.kind === "systemEvent" && row.text).toContain(

@@ -1,17 +1,25 @@
 /**
- * The fence drain (RFC docs/design/continue-work-signal-v2.md §5.4.2, "At most once through a
- * crash"). A build without the turn-start fence strips `turnStart` on decode and re-drives a fenced,
+ * The fence drain (RFC docs/design/continue-work-signal-v2.md §5.4.2, "Moving a seat below the
+ * fence"). A build without the turn-start fence strips `turnStart` on decode and re-drives a fenced,
  * undelivered wake, so a seat must hold none before such a build starts. The count reads the stopped
  * store without writing; the drain ends each such wake as recovery does and settles its one notice
  * into the delivery queue. The operator surface (`openclaw continuations`) runs both only while no
  * Gateway owns the state, so no turn is in flight.
  */
-import { listContinuationRecordsReadOnly } from "./custody/custody-store.js";
 import {
-  interruptUndeliveredTurnFences,
+  listContinuationRecords,
+  listContinuationRecordsReadOnly,
+} from "./custody/custody-store.js";
+import type { ContinuationRecord } from "./custody/custody-store.types.js";
+import {
+  decodeWorkState,
+  isContinuationWorkFlow,
+  type PendingWorkState,
+} from "./work-flow-state.js";
+import {
+  interruptStartedWorkRecord,
   listPendingTerminalNoticeWork,
-  owesInterruptedTurnNotice,
-  readUndeliveredTurnFence,
+  toNoticeWork,
 } from "./work-store.js";
 import { settlePendingTerminalNotice } from "./work-terminal-notice.js";
 
@@ -49,6 +57,25 @@ export type ContinuationFenceDrainReceipt = {
   }>;
 };
 
+/**
+ * The fence of a live wake whose turn started but whose delivery was never confirmed: recovery
+ * interrupts it, never drives it. A cancel-fenced record is not one, since no build drives it. An
+ * undecodable record is not one either: this build rejects it unrun.
+ */
+function readUndeliveredTurnFence(
+  record: ContinuationRecord,
+): PendingWorkState["turnStart"] | undefined {
+  if (
+    !isContinuationWorkFlow(record) ||
+    (record.status !== "queued" && record.status !== "running") ||
+    record.cancelRequestedAt !== undefined
+  ) {
+    return undefined;
+  }
+  const state = decodeWorkState(record);
+  return state && !state.succeeded ? state.turnStart : undefined;
+}
+
 /** Read-only: lists the stopped store through a snapshot, never a writer. */
 export async function readContinuationFenceStatus(
   env: NodeJS.ProcessEnv,
@@ -71,7 +98,9 @@ export async function readContinuationFenceStatus(
         ]
       : [];
   });
-  const owed = records.filter(owesInterruptedTurnNotice).map((record) => record.recordId);
+  const owed = records
+    .filter((record) => toNoticeWork(record)?.terminalNoticePending === "turn-interrupted")
+    .map((record) => record.recordId);
   return {
     fencedUndelivered: fenced.length,
     records: fenced,
@@ -81,13 +110,21 @@ export async function readContinuationFenceStatus(
 }
 
 /**
- * Interrupt every fenced, undelivered wake, then settle every interrupted-turn notice still owed:
- * this run's, and any an earlier pass left owed. Never runs a turn. A second run changes nothing.
+ * Offline only: with no Gateway running no turn is in flight, so every fenced, undelivered wake ends
+ * now exactly as recovery ends it, owing its one notice in the same CAS. Then every interrupted-turn
+ * notice still owed is settled: this run's, and any an earlier pass left owed. It never claims,
+ * requeues or drives a record, and a second run changes nothing.
  */
 export async function drainUndeliveredTurnFences(): Promise<ContinuationFenceDrainReceipt> {
-  const interruptedNow = new Set(
-    (await interruptUndeliveredTurnFences()).flatMap((work) => work.flowId ?? []),
-  );
+  const interruptedNow = new Set<string>();
+  for (const record of await listContinuationRecords({
+    kinds: ["work"],
+    statuses: ["queued", "running"],
+  })) {
+    if (readUndeliveredTurnFence(record) && (await interruptStartedWorkRecord(record))) {
+      interruptedNow.add(record.recordId);
+    }
+  }
   const records: ContinuationFenceDrainReceipt["records"] = [];
   for (const owed of await listPendingTerminalNoticeWork()) {
     if (owed.terminalNoticePending !== "turn-interrupted" || !owed.flowId) {
