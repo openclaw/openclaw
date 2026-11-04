@@ -394,13 +394,13 @@ const startupEnglish = {
     loading: "Loading…",
     gatewayStarting: "Gateway starting…",
     refreshing: "Refreshing…",
-    offline: "Offline",
+    offline: "Disconnected",
     connect: "Connect",
     connected: "Connected",
     refresh: "Refresh",
     retry: "Retry",
     helpFor: "Help for {section}",
-    staleData: "Showing stale data.",
+    staleData: "Showing last known data.",
     reload: "Reload",
     reset: "Reset",
     restore: "Restore",
@@ -1370,10 +1370,8 @@ const startupEnglish = {
     "reload-required": "Refresh required",
     offline: "Disconnected",
     reconnecting: "Reconnecting…",
-    interruptedRetrying:
-      "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket {code})",
-    interrupted:
-      "Connection to the Gateway was interrupted. Check your connection and try again. (WebSocket {code})",
+    interruptedRetrying: "Disconnected. Reconnecting automatically. (WebSocket {code})",
+    interrupted: "Disconnected. Check your connection and reconnect. (WebSocket {code})",
     restarting: "Restarting…",
     suspending: "Suspending…",
     suspended: "Suspended",
@@ -1382,13 +1380,14 @@ const startupEnglish = {
     offlineChangesDiscarded: "Offline changes discarded: {count}",
     offlineChangesReloadBlocked:
       "Offline changes are waiting to reconnect. Reloading would discard them.",
-    sessionMoveRefreshFailed: "The session move was saved, but refreshing the list failed: {error}",
+    sessionMoveRefreshFailed:
+      "Couldn’t refresh sessions after the move. The move was saved. Try again. {error}",
     sessionMoveUncertain:
-      "The session move could not be confirmed. Refresh and check its group before retrying. {error}",
+      "Couldn’t confirm the session move. Refresh and check its group before retrying. {error}",
     sessionOperationCompletedPreviousConnection:
       "The session operation completed on the previous connection. Check the current session list before continuing.",
     sessionOperationCompletedPreviousConnectionWithRefreshError:
-      "The session operation completed on the previous connection, but refreshing the current session list failed: {error}",
+      "Couldn’t refresh sessions. The operation completed on the previous connection. Try again. {error}",
     scopeUpgrade: {},
     // Settings → Gateway copy lives in the lazy en-settings catalog; the anchor keeps its merge target.
     access: {},
@@ -1928,8 +1927,8 @@ const startupEnglish = {
       agentUpdate: {},
     },
     pairingQrExpired: {
-      title: "Pairing QR expired",
-      reason: "Run /pair qr again to generate a fresh setup code.",
+      title: "Pairing code expired",
+      reason: "Run /pair qr again to get a new setup code.",
       badge: "Expired",
     },
     composer: {},
