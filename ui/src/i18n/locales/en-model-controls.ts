@@ -7,6 +7,7 @@ const enModelControls = {
       subscription: "Subscription",
       api: "API",
       default: "Default",
+      defaultModel: "Default model",
       routes: {
         claudeCli: {
           label: "Claude CLI · native",
@@ -40,7 +41,7 @@ const enModelControls = {
           detail: "Runs through the {runtime} agent runtime and the account it uses.",
         },
       },
-      decisionLabel: "Decision Model",
+      decisionLabel: "Decision model",
       decisionDisabled: "Disabled",
       decisionInherit: "Use global default · {model}",
       decisionUnavailable:

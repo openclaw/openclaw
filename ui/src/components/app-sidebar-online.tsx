@@ -217,7 +217,10 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
                         void copyToClipboard(
                           new URL(activity()!.href, window.location.href).href,
                         ).then((copied) =>
-                          showToast({ message: t(copied ? "common.copied" : "common.copyFailed") }),
+                          showToast({
+                            severity: copied ? undefined : "error",
+                            message: t(copied ? "common.copied" : "common.copyFailed"),
+                          }),
                         );
                       }
                     }}

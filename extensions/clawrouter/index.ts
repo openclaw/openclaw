@@ -63,6 +63,7 @@ import {
 } from "./provider-policy-api.js";
 import { buildClawRouterSpeechProvider } from "./speech-provider.js";
 import { fetchClawRouterUsage } from "./usage.js";
+import { createClawRouterWebSearchProvider } from "./web-search-provider.js";
 
 const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "patternProperties",
@@ -161,6 +162,7 @@ function setHeaderDefault(
 const openAiServiceTier = buildProviderStreamFamilyHooks("openai-responses-service-tier");
 const mistralReplay = buildProviderReplayFamilyHooks({ family: "mistral" });
 const cohereCompatibility = buildProviderStreamFamilyHooks("cohere-compatibility");
+const xaiReasoning = buildProviderStreamFamilyHooks("xai-responses-reasoning");
 const log = createSubsystemLogger("clawrouter-stream");
 
 function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
@@ -181,7 +183,9 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
         ? claudeStream
         : model.api === "openai-completions" && model.id.startsWith("cohere/")
           ? (cohereCompatibility.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn)
-          : streamFn;
+          : model.api === "openai-responses" && model.id.startsWith("xai/")
+            ? (xaiReasoning.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn)
+            : streamFn;
     const apiKey = options?.apiKey?.trim();
     const dispatchKey = apiKey && apiKey !== ENV_API_KEY_MARKER ? apiKey : undefined;
     const preparedModel = prepareClawRouterRequestModel(model);
@@ -455,6 +459,7 @@ export default defineSingleProviderPluginEntry({
   register(api) {
     api.registerSpeechProvider(buildClawRouterSpeechProvider);
     api.registerEmbeddingProvider(clawrouterEmbeddingProvider);
+    api.registerWebSearchProvider(createClawRouterWebSearchProvider());
     api.registerMediaUnderstandingProvider(clawrouterMediaUnderstandingProvider);
     api.registerDecisionProvider(buildClawRouterDecisionProvider());
     api.registerImageGenerationProvider(buildClawRouterImageGenerationProvider());

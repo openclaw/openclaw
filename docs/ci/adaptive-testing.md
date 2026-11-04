@@ -81,11 +81,85 @@ and context. Changes to configuration or include files during execution cannot
 rewrite that frozen identity. A missing or invalid terminal receipt leaves the
 incomplete snapshot available if the artifact upload runs.
 
-This snapshot follows configuration evaluation and native test selection. It
-does not contain a prior graph, source diff, model ranking or selection decision.
+If expanded dependency paths exceed the export limit, the capture retains
+terminal outcomes and the frozen snapshot with all dependencies set to `null`,
+and emits a warning. Missing graph data still requires conservative selection.
+If that smaller export also exceeds the limit, the incomplete snapshot remains.
+
+Before launching each observed Vitest child, the shard wrapper also writes
+`launch.json`. It records the actual checkout commit/tree and whether tracked or
+untracked changes exist, the preflight comparison base commit/tree, and a
+rename/deletion-aware diff. The comparison base is not necessarily the source of
+a prior dependency graph; consumers must retain both identities independently.
+Recording does not fetch Git history; an unavailable comparison commit is a data gap.
+The file hashes the finalized command arguments and pre/post-shard include-file
+contents without exporting absolute paths. A missing base, dirty checkout, or
+unreadable input records a fallback reason. Every launch record includes
+`no-prior-snapshot`: prior qualification happens later, when the reporter has
+the native inventory. The launch record itself does not resolve priors.
+
+The reporter freezes the launch file's SHA-256 hash when it initializes and
+retains it as `preExecution.launchInputs`. Consumers must match the hash to the
+same directory's uploaded `launch.json`, verify source/runtime identity, and
+check that recording preceded reporter initialization. A missing or mismatched
+record is a data gap. Both files use the existing sampled artifact upload;
+launch-only artifacts can survive a child that exits before producing inventory.
+Launch records are bounded to 1 MiB. Preparation is best effort and does not
+change the test command or result when it fails.
+
+The native snapshot follows configuration evaluation and native test selection;
+the launch record precedes them. Its `decision` field freezes a graph proposal
+before tests execute, using the full native inventory. `scheduledFiles` always
+contains that inventory; the proposal cannot change execution.
 Global setup can still change worker settings after capture. The local recording
 timestamp is not artifact availability: a later consumer must also retain the
 publication/download time before using an earlier run as predictive evidence.
+
+For the canonical `unit-fast` configuration, `preExecution.graphInputs` records
+a version-1 profile with separate configuration and environment hashes. These
+omit resolved include membership and pre/post-shard include-file contents. They
+retain native configuration sources, direct setup sources, declared execution
+and transform settings, runtime identity, and an explicit environment allowlist.
+Repository paths in settings are normalized before hashing; regular expressions
+retain their pattern and flags. Unsupported profiles or nonserializable settings
+produce `null` without discarding the exact-run observations.
+
+These hashes allow comparison of declared graph inputs across different file
+selections. They do not establish interchangeable graphs or outcomes: `unit-fast`
+shares process state between files, and the captured environment and direct setup
+sources are not an exhaustive dependency contract. Consumers must also compare
+the repository, lock, project/pool, runtime, platform and dependency-root identity,
+retain source/diff provenance, and measure overlapping-file graph differences.
+The shadow selector still requires the original exact context. Matching graph
+inputs never grants permission to omit tests.
+
+### Published prior snapshots
+
+For sampled same-repository PRs and scheduled runs, preflight uses its existing
+read-only Actions permission to restore at most two observation archives from
+the five most recent successful scheduled main runs. It verifies the exact
+run/attempt, source commit/tree, archive digest and paired launch/member hashes.
+The producer must have completed and published before the current run began.
+Restore has a shared ten-second deadline and does not retry requests. Missing
+history or unavailable APIs produce an empty bundle and preserve full execution.
+
+The bundle is shared through a same-run artifact. Test jobs download it without
+additional token permissions. Each bundle binds the current workflow run,
+attempt and actual checkout commit; the reporter also freezes the bundle hash.
+At the native inventory callback, the reporter selects the newest compatible
+prior and computes the complete prior-to-current Git diff, including both ends
+of renames. It does not substitute the launch record's comparison base.
+
+Exact configuration, lock, environment and runtime identities must match. The
+prior commit must be locally available and an ancestor; no test process fetches
+history. Unknown source, dirty checkout, stale bundle or incompatible inputs
+produce an explicit fallback. Different shard membership can still prevent a
+match; graph-input comparability alone does not relax the selector.
+
+The frozen decision records prior provenance, changed paths, graph candidates
+and the unchanged scheduled inventory. Model rankings remain a separate layer.
+These are prospective proposals, not measured omission savings. Include restore,
+download, comparison and export costs in the eventual net-benefit calculation.
 
 The first readout compares usable-data coverage, native-Bun gaps, observed
 failures, fallback causes, and paired total job costs. Learned selection and
