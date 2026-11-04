@@ -4,7 +4,6 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
-import { isClientCapsGatedCoreToolId } from "./core-tool-facts.js";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import {
   attachToolAllowlistIntersection,
@@ -55,6 +54,11 @@ const SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS = new Map<string, readonly string[
   // in that family so existing allow/deny configs retain their old surface.
   ["canvas", ["show_widget"]],
 ]);
+
+// Family members listed only for clients advertising the factory's requiredClientCaps
+// (`show_widget` needs inline-widgets). Kept here, not in core-tool-facts, because only the
+// allowlist diagnostics read it and core-tool-facts ships in the Control UI chat boot.
+const CLIENT_CAPS_GATED_FAMILY_CORE_TOOLS = new Set(["show_widget"]);
 
 const SHIPPED_CORE_POLICY_RENAMES = new Map<string, string>([
   // Mirror the shipped plugin-family mapping above without renaming runtime events:
@@ -284,7 +288,7 @@ export function analyzeAllowlistByToolType(
     [...configuredEntries].flatMap(
       (entry) =>
         SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS.get(entry)?.filter(
-          (tool) => isClientCapsGatedCoreToolId(tool) && !configuredEntries.has(tool),
+          (tool) => CLIENT_CAPS_GATED_FAMILY_CORE_TOOLS.has(tool) && !configuredEntries.has(tool),
         ) ?? [],
     ),
   );
