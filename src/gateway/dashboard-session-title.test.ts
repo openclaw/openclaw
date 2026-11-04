@@ -130,7 +130,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   afterEach(() => vi.useRealTimers());
 
   it.each([
-    ["/tmp/notes.md summarise this file", 0],
+    ["/tmp/notes.md summarise this file", 1],
     ["[Wed 2026-10-28 12:00 PDT] Plan the release", 0],
     ["/topic Plan the release", 1],
     ["[Wed 2026-10-28 12:00 PDT] /skill topic Plan the release", 1],
