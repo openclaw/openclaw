@@ -30,7 +30,7 @@ export type AutofillConnection = {
   statusNotBefore?: number;
 };
 type Store<T> = Pick<PluginStateKeyedStore<T, 2>, "lookup" | "register" | "delete" | "entries">;
-export type AutofillStores = {
+type AutofillStores = {
   connections: Store<AutofillConnection>;
   requests: Store<AutofillRequest>;
 };
@@ -53,6 +53,7 @@ const safeExtensionErrors = new Set([
   "fillFailed",
   "autosubmitFailed",
   "extensionNotReady",
+  "browserObserved",
   "rateLimitExceeded",
 ]);
 function unwrap<T>(response: ExtResult<T>): T {

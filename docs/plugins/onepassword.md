@@ -531,6 +531,10 @@ known successful rotation.
   The plugin does not write system browser policy; whole-browser Agentic Mode
   policy must not conflict with the adapter's tab-scoped enable/release calls.
   Status probes launch the owned browser if needed, without requesting access.
+- `browserObserved`: a live view (such as the Control UI Browser panel) or a
+  trace is watching the managed browser, so OpenClaw refuses to fill credentials
+  into it. Close the view or stop the trace, then retry `fill`; the approval
+  stays valid.
 - **Approval view unavailable**: open the originating conversation in the OpenClaw
   Control UI with administrator access and the Autofill tool allowed. If the
   private link expired or the Gateway restarted, ask for a new approval request.

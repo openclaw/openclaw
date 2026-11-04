@@ -187,13 +187,19 @@ export class BrowserAutofillExtension implements AgenticAutofillExtension {
     } catch (error) {
       // Never retry an uncertain worker call, especially a fill or request creation.
       this.warn("attachment", error);
+      // A watched browser is refused before any worker call; name the cause so the
+      // caller stops the viewer instead of reinstalling or restarting.
+      const observed = error instanceof Error && "code" in error && error.code === "tabObserved";
       if (attachment) {
         attachment.retired = true;
         if (this.session === attachment) {
           this.session = undefined;
         }
       }
-      return { success: false, error: { code: "extensionNotReady" } };
+      return {
+        success: false,
+        error: { code: observed ? "browserObserved" : "extensionNotReady" },
+      };
     } finally {
       // A busy probe must neither interrupt another caller's fill nor leak its
       // discarded attachment. Retire it after its last admitted caller settles.

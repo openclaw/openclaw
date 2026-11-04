@@ -143,6 +143,21 @@ it("passes secrets only as arguments and locks mapping, mode, fill, and release 
   await s.adapter.close();
 });
 
+it("reports an observed browser instead of an unready extension, without filling", async () => {
+  const s = setup();
+  s.session.withExclusiveTab = async () => {
+    throw Object.assign(new Error("Stop browser screencasts and traces"), { code: "tabObserved" });
+  };
+  expect(
+    await s.adapter.fillCredential(
+      { ...credentials, resourcePath: "reference", tab: { targetId: "tab", profile: "owner" } },
+      authority,
+    ),
+  ).toEqual({ success: false, error: { code: "browserObserved" } });
+  expect(s.worker.agenticAutofill.v1.fillCredential).not.toHaveBeenCalled();
+  await s.adapter.close();
+});
+
 it.each([
   null,
   {},

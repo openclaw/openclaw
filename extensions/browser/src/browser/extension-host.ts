@@ -28,6 +28,14 @@ declare const chrome: {
   tabs: { query(query: object): Promise<Array<{ id?: number; url?: string }>> };
 };
 
+/**
+ * Public `withExclusiveTab` rejection (see the SDK contract): a live screencast or trace
+ * observes the profile. Nothing ran, so callers may retry once the observer stops.
+ */
+class ExtensionTabObservedError extends Error {
+  readonly code = "tabObserved";
+}
+
 const manifestSchema = z.object({
   manifest_version: z.literal(3),
   version: z.string().regex(/^\d+(?:\.\d+){0,3}$/),
@@ -500,7 +508,7 @@ async function openWorkerSession(params: {
                 .some((context) => contextStates.get(context)?.traceActive),
           );
           if (hasBrowserScreencast(matchesEndpoint) || activeTrace) {
-            throw new Error(
+            throw new ExtensionTabObservedError(
               "Stop browser screencasts and traces before an exclusive extension operation.",
             );
           }

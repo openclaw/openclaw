@@ -1,7 +1,7 @@
 import { webcrypto } from "node:crypto";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AccessRequest, AgenticAutofillExtension } from "./autofill-contract.js";
+import type { AgenticAutofillExtension } from "./autofill-contract.js";
 import { decodeConnectionPath } from "./autofill-input.js";
 import { AutofillError } from "./autofill-relay.js";
 import {
@@ -40,6 +40,10 @@ const input = {
     },
   ],
 };
+type AccessRequest = Extract<
+  Awaited<ReturnType<AgenticAutofillExtension["createAccessRequest"]>>,
+  { success: true }
+>["result"]["accessRequest"];
 const request: AccessRequest = {
   ...input,
   id: "request",
@@ -197,6 +201,23 @@ it("keeps tokens, keys, links and references outside tool results through connec
     await execute({ action: "check_status", requestId: "request", approvalOpened: true }),
   );
   expect(s.extension.getAccessRequestStatus).toHaveBeenCalledTimes(1);
+  // A watched browser is a distinct, retryable refusal; the same grant fills afterward.
+  s.extension.fillCredential.mockResolvedValueOnce({
+    success: false,
+    error: { code: "browserObserved" },
+  });
+  const observed = JSON.parse(
+    JSON.parse(
+      await execute({
+        action: "fill",
+        requestId: "request",
+        entryId: "entry",
+        tab: { targetId: "tab" },
+      }),
+    ).content[0].text,
+  );
+  expect(observed).toMatchObject({ state: "error", code: "browserObserved" });
+  expect(observed.guidance).toContain("Browser panel");
   outputs.push(
     await execute({
       action: "fill",

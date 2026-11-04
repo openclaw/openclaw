@@ -209,9 +209,12 @@ it("keeps worker arguments out of source, maps tabs, fences browser routes and c
       "uniquely",
     );
     vi.spyOn(screencasts, "hasBrowserScreencast").mockReturnValueOnce(true);
-    await expect(session.withExclusiveTab(tab, async () => "unsafe recording")).rejects.toThrow(
-      "Stop browser screencasts",
-    );
+    await expect(
+      session.withExclusiveTab(tab, async () => "unsafe recording"),
+    ).rejects.toMatchObject({
+      code: "tabObserved",
+      message: expect.stringContaining("Stop browser screencasts"),
+    });
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     const fill = session.withExclusiveTab(tab, async () => {

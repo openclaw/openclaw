@@ -17,7 +17,11 @@ export interface ExtensionHostSession {
   callInServiceWorker<A>(fn: (args: A) => unknown, args: A): Promise<unknown>;
   /** Resolve an OpenClaw tab handle or raw target id; ambiguous same-URL tabs fail closed. */
   resolveChromeTabId(tab: { targetId: string }): Promise<number>;
-  /** Exclude browser reads/actions while fn runs. Conflicts fail with a clear busy error. */
+  /**
+   * Exclude browser reads/actions while fn runs. Conflicts fail with a clear busy error.
+   * While a live screencast or trace observes the profile, it rejects before fn runs with
+   * an Error whose `code` is `"tabObserved"`; retry after the observer stops.
+   */
   withExclusiveTab<R>(tab: { targetId: string }, fn: () => Promise<R>): Promise<R>;
   /** Detach the worker. Retained methods reject after closure. */
   close(): Promise<void>;

@@ -1278,8 +1278,10 @@ superset of the requested tab, including profile aliases reaching the same local
 CDP listener. Conflicting in-flight actions or extension
 operations fail with HTTP 409 rather than queueing. Snapshot, screenshot,
 evaluate, act, navigation, and other leased browser routes cannot overlap it.
-Stop continuous screencasts and Playwright traces first; an active recording
-rejects the operation, and pre-minted screencast tickets cannot attach while the
+Stop continuous screencasts and Playwright traces first; an active recording,
+including a Control UI Browser panel live view, rejects the operation before the
+callback runs with an `Error` whose `code` is `"tabObserved"`, so callers can tell
+the user to close the view and retry. Pre-minted screencast tickets cannot attach while the
 profile is locked. This is an in-process orchestrator boundary, not a fence for
 external CDP clients, OS screenshots, or other untrusted extensions.
 

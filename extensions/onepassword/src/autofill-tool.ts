@@ -195,7 +195,9 @@ export function createAutofillTool(
               ? "The connection ended. Connect 1Password again."
               : code === "extensionNotReady"
                 ? autofillBrowserGuidance
-                : "The operation did not complete. Check Agentic Autofill setup or reconnect; no secret details were returned.",
+                : code === "browserObserved"
+                  ? "1Password will not fill while the browser is being watched or recorded. Ask the user to close the Control UI Browser panel or any live view of this browser, and stop any trace, then retry fill with the same requestId. The approval is still valid."
+                  : "The operation did not complete. Check Agentic Autofill setup or reconnect; no secret details were returned.",
         });
       }
     },
