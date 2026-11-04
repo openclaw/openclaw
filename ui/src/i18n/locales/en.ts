@@ -619,19 +619,19 @@ const startupEnglish = {
     installKind: {},
     page: {},
     coalescedRestart:
-      "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
-    error: "Update error: {error}",
-    checkError: "Could not check for updates: {error}",
+      "Update installed. A Gateway restart is already in progress; status will refresh after it reconnects.",
+    error: "Couldn’t update OpenClaw. {error}",
+    checkError: "Couldn’t check for updates. {error}",
     status: "Update {status}: {reason}. {guidance}",
     verificationFailedWithIdentity:
-      "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}. Run `openclaw triage` on the Gateway host before retrying.",
+      "Couldn’t verify the update. Expected {expected}, running {actual}. Run `openclaw triage` on the computer running OpenClaw before retrying.",
     handoffTimeout:
-      "Update completion was not confirmed. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",
+      "Couldn’t confirm the update finished. Run `openclaw triage` on the computer running OpenClaw and inspect the result before retrying.",
     outcomeUnknown:
-      "The update outcome is unknown. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",
+      "Couldn’t confirm the update outcome. Run `openclaw triage` on the computer running OpenClaw and inspect the result before retrying.",
     triage: {
       hostHint:
-        "If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
+        "If Ask OpenClaw is unavailable, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     },
     report: {},
     failureReasons: {
@@ -641,15 +641,15 @@ const startupEnglish = {
         "Not a git checkout. Run `openclaw update` from the CLI for a global reinstall.",
       notOpenclawRoot:
         "Run the update from an OpenClaw checkout or use the CLI global reinstall path.",
-      depsInstallFailed: "Dependency install failed. Fix the install error and retry.",
-      buildFailed: "Build failed. Fix the build error and retry.",
+      depsInstallFailed: "Couldn’t install dependencies. Fix the install error and retry.",
+      buildFailed: "Couldn’t build the update. Fix the build error and retry.",
       buildDirty:
         "The selected revision's build changed checkout files. Retry with a revision that includes its generated artifacts.",
-      uiBuildFailed: "The control UI rebuild failed. Fix the UI build error and retry.",
+      uiBuildFailed: "Couldn’t rebuild the Control UI. Fix the UI build error and retry.",
       globalInstallFailed:
         "The global package install did not verify on disk. Retry or reinstall from the CLI.",
       restartDisabled:
-        "The update was not applied because gateway restarts are disabled. Enable restarts in config, then retry.",
+        "The update was not applied because Gateway restarts are disabled. Enable restarts in config, then retry.",
       restartUnavailable:
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
       externalSupervisorUpdateRequired:
@@ -672,9 +672,9 @@ const startupEnglish = {
         "The Gateway could not start the update helper. Run `openclaw update` in the terminal instead.",
       managedServiceHandoffParentTimeout:
         "The Gateway stayed up too long for the update helper. Start the update again, or run `openclaw update`.",
-      default: "See the gateway logs for the exact failure and retry once the cause is fixed.",
+      default: "See the Gateway logs for the exact failure and retry once the cause is fixed.",
     },
-    failedAtStep: "The update failed at {step}: {cause}.",
+    failedAtStep: "Couldn’t complete {step}: {cause}.",
     succeededVersion: "Gateway updated to v{version}.",
     succeededCommit: "Gateway updated · now on {sha}.",
     succeeded: "Gateway updated and restarted.",
