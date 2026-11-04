@@ -102,7 +102,7 @@ describe("promise dialog native focus and dismissal", () => {
       );
     await expect.poll(order).toEqual([secondary, primary, "Cancel"]);
     expect(document.activeElement).toBe(button("Cancel"));
-    for (const name of [secondary, primary, "Cancel"]) {
+    for (const name of ["close", secondary, primary, "Cancel"]) {
       // macOS WebKit uses Option-Tab to visit each control inside the dialog.
       if (
         navigator.platform.includes("Mac") &&
@@ -113,7 +113,9 @@ describe("promise dialog native focus and dismissal", () => {
       } else {
         await userEvent.tab();
       }
-      expect(document.activeElement).toBe(button(name));
+      expect(document.activeElement).toBe(
+        name === "close" ? document.querySelector(".oc-dialog__close") : button(name),
+      );
     }
     for (const width of [1280, 390, 320, 390]) {
       await setViewport(width, 844);

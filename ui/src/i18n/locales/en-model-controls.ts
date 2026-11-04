@@ -7,6 +7,7 @@ const enModelControls = {
       subscription: "Subscription",
       api: "API",
       default: "Default",
+      defaultModel: "Default model",
       routes: {
         claudeCli: {
           label: "Claude CLI · native",
@@ -40,7 +41,7 @@ const enModelControls = {
           detail: "Runs through the {runtime} agent runtime and the account it uses.",
         },
       },
-      decisionLabel: "Decision Model",
+      decisionLabel: "Decision model",
       decisionDisabled: "Disabled",
       decisionInherit: "Use global default · {model}",
       decisionUnavailable:
@@ -52,7 +53,7 @@ const enModelControls = {
       effort: "Effort",
       faster: "Faster",
       smarter: "Smarter",
-      fastMode: "Fast mode",
+      fastMode: "Speed",
       speed: "Speed",
       standard: "Standard",
       daybreak: "Daybreak",
@@ -64,9 +65,9 @@ const enModelControls = {
       accessUnavailable: "{program} (unavailable)",
       fast: "Fast",
       ultrafast: "Ultrafast",
-      ultrafastUnavailable: "Ultrafast is not available for this model",
-      tierDowngrade: "{requested} requested, currently served as {served}",
-      tierRejected: "{requested} requested, currently unavailable",
+      ultrafastUnavailable: "Ultrafast isn't available for this model.",
+      tierDowngrade: "Running at {served}. {requested} isn't available right now.",
+      tierRejected: "{requested} isn't available right now.",
       switchTitle: "Switch to {new}?",
       switchWarning:
         "Switching re-sends the whole conversation to {new} with your next message, which uses more tokens. Long conversations may be summarized.",
@@ -83,10 +84,10 @@ const enModelControls = {
       selectionScopeGlobal: "Changes the default for all agents.",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
-      fastHelp: "Faster responses, higher usage of limits.",
+      fastHelp: "Faster replies. Uses up your limits faster.",
       contextWindow: "Context window",
       contextWindowAria: "Context window: {state}",
-      speedUnsupported: "Speed control is not supported for this model.",
+      speedUnsupported: "This model doesn't offer speed options.",
       contextActiveAndMax: "{active} active · {maximum} max",
       chatOnly: "No tools",
       chatOnlyHelp:
@@ -108,8 +109,8 @@ const enModelControls = {
       emptyModelsAction: "Manage models",
       providerModels: "{provider} models",
       allModels: "All models ({count})",
-      useDefaultReasoning: "Use default reasoning ({level})",
-      fastResponsesAria: "Fast responses: {state}",
+      useDefaultReasoning: "Use default effort ({level})",
+      fastResponsesAria: "Speed: {state}",
     },
     nativeRuntimeRecovery: {
       title: "Use {runtime}’s native permissions?",

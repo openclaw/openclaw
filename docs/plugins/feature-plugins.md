@@ -38,9 +38,11 @@ Native browser UI is available by default for enabled plugins, including
 user-installed and local development plugins. There is no Custom plugin UI
 Labs switch. Install and enable only plugins you trust: their browser code runs
 inside the Control UI with each signed-in viewer's Gateway permissions.
-Installed plugin details and existing enable reviews disclose a native UI entry
-when the inspected manifest declares one. Catalog install surfaces explain that
-plugin code may include native UI when that metadata is not available yet.
+Plugin details list declared UI contributions under **Extensions**, with a short
+description of what each adds and where it appears. Existing enable reviews
+disclose a native UI entry when the inspected manifest declares one. Catalog
+install surfaces explain that plugin code may include native UI when that
+metadata is not available yet.
 
 The existing config key remains an advanced opt-out. To disable native browser
 code from user-installed plugins, set:
@@ -107,6 +109,15 @@ The project has three public SDK imports:
 
 Browser code owns its DOM and bundles its framework dependencies. It does not
 import Control UI internals or return the host framework's templates.
+
+For plugin-owned messages, `translateControlUiMessage(messages, locale, key, params?)`
+from `openclaw/plugin-sdk/control-ui` performs synchronous dotted-key lookup and
+string interpolation. The `messages` callback returns the plugin's nested string
+dictionary for a locale, or `undefined`. Missing keys fall back to `en`; empty
+strings stay empty, and non-string results return the key. Word placeholders such
+as `{name}` use the optional string parameters; unresolved placeholders stay intact.
+The helper does not load catalogs, select a locale, or retain state. Keep those
+responsibilities, including reactive reads and lazy translation assets, in the plugin.
 
 ## Define operations once
 

@@ -96,7 +96,7 @@ suite.define(() => {
       await cancel.click();
       await page.locator(".custodian__wizard-cancel").waitFor();
 
-      await page.setViewportSize({ width: 620, height: 844 });
+      await page.setViewportSize({ width: 641, height: 844 });
       await page.locator(".custodian__header .custodian__history-toggle").waitFor();
       expect(await page.locator(".topbar .custodian__history-toggle").count()).toBe(0);
       await page.setViewportSize({ width: 390, height: 844 });

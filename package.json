@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.9",
+  "version": "2026.10.10",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "updatePreflightProtocol": 1,
@@ -17,7 +17,7 @@
     ],
     "schemaVersions": {
       "state": 39,
-      "agent": 39
+      "agent": 40
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -500,7 +500,9 @@
     "!dist/plugin-sdk/provider-auth-markers.d.ts",
     "!dist/plugin-sdk/terminal-safe-text.d.ts",
     "!dist/plugin-sdk/memory-core-host-transcript-stats.d.ts",
-    "!dist/plugin-sdk/skill-authoring-runtime.d.ts"
+    "!dist/plugin-sdk/skill-authoring-runtime.d.ts",
+    "!dist/plugin-sdk/skill-workshop-host-runtime.d.ts",
+    "!dist/plugin-sdk/skill-workshop-host-cli.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1517,6 +1519,12 @@
     },
     "./plugin-sdk/skill-authoring-runtime": {
       "default": "./dist/plugin-sdk/skill-authoring-runtime.js"
+    },
+    "./plugin-sdk/skill-workshop-host-cli": {
+      "default": "./dist/plugin-sdk/skill-workshop-host-cli.js"
+    },
+    "./plugin-sdk/skill-workshop-host-runtime": {
+      "default": "./dist/plugin-sdk/skill-workshop-host-runtime.js"
     },
     "./plugin-sdk/skill-commands-runtime": {
       "types": "./dist/plugin-sdk/skill-commands-runtime.d.ts",
