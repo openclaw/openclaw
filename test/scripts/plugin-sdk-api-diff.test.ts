@@ -29,6 +29,7 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { withRuntimePreload } from "../helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const pendingChildCompletions = new Set<Promise<unknown>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -160,6 +161,23 @@ fixtureReceiptSocket.end();
   return `'${process.execPath.replace(/'/gu, `'\\''`)}' '${receiptPath.replace(/'/gu, `'\\''`)}'`;
 }
 
+function writeRevisionInstall(binDir: string): string {
+  // Each revision needs physical compiler inputs, not the caller's shared install.
+  materializeNativeCompiler(binDir);
+  const installer = join(binDir, "install-revision.mjs");
+  writeFileSync(
+    installer,
+    `import { cpSync, constants } from "node:fs";
+cpSync(${JSON.stringify(join(binDir, "node_modules"))}, "node_modules", {
+  recursive: true,
+  mode: constants.COPYFILE_FICLONE,
+  filter: () => true,
+});
+`,
+  );
+  return `'${process.execPath.replace(/'/gu, `'\\''`)}' '${installer.replace(/'/gu, `'\\''`)}'`;
+}
+
 async function installBeforeSettlement(
   marker: string,
   close: PromiseLike<unknown>,
@@ -193,6 +211,8 @@ it("finishes every revision install before starting declaration rendering", asyn
   writePnpm(
     binDir,
     `#!/bin/sh
+set -e
+${writeRevisionInstall(binDir)}
 if mkdir "$PNPM_MARKER" 2>/dev/null; then
   while [ ! -e "$PNPM_BLOCKED" ]; do sleep 0.05; done
   exit 0
@@ -424,7 +444,14 @@ it.each([
     git(repo, ["tag", "candidate"]);
     writeFileSync(source, "export type Fixture = uncommitted;\n");
     symlinkSync(resolve("node_modules"), join(repo, "node_modules"), "dir");
-    writePnpm(binDir, '#!/bin/sh\nprintf "%s\\n" "$PWD" >> "$PNPM_MARKER"\n');
+    writePnpm(
+      binDir,
+      `#!/bin/sh
+set -e
+${writeRevisionInstall(binDir)}
+printf "%s\\n" "$PWD" >> "$PNPM_MARKER"
+`,
+    );
     const worktrees = git(repo, ["worktree", "list", "--porcelain"]);
     const child = runCli(repo, runnerTemp, binDir, {
       "bases-json": JSON.stringify(bases),
