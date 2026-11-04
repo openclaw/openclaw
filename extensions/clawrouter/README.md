@@ -172,7 +172,17 @@ Model-less offers are supported. The adapter does not infer `/v1/search`, use
 upstream provider credentials, or execute undeclared formats. A router deployment
 that includes endpoint format declarations for the selected offer is required.
 
-Queries accept `query` and `count` (1–10). Catalog and search responses are bounded,
+The frozen xAI `grok-4.7` web-search consumer accepts native or manifest
+`openai.responses` offers only when the selected catalog declares `web_search`,
+supports `low` reasoning effort, and explicitly admits the hosted tool. It shares
+the native xAI request and answer codec: one search tool, `store:false`, no filters
+or paid POST replay. Answer text is sanitized and bounded; credential-bearing
+citation URLs and unqualified inline offsets are discarded. Incomplete and failed
+responses remain errors, not completed answers or evidence of free work. This
+client does not activate a Worker route or add a model, tariff, or `x_search` tool.
+
+Queries accept `query` and `count` (1–10). xAI returns an answer and ignores `count`,
+matching its native web-search consumer. Catalog and search responses are bounded,
 cancellation is propagated, and result text is marked as untrusted web content.
 
 Parallel queries are limited to 200 characters. Native provider-specific advanced

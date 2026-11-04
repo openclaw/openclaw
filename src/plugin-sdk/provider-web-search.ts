@@ -76,3 +76,10 @@ export { formatCliCommand } from "../cli/command-format.js";
 export { wrapWebContent } from "../security/external-content.js";
 
 export { nativeWebSearchCodecs } from "./provider-web-search-codecs.js";
+export {
+  buildResponsesSearchPayload,
+  buildResponsesSearchRequest,
+  requireResponsesSearchTextAndCitations,
+  requireResponsesSearchTextCitationsAndInline,
+  type ResponsesSearchResponse,
+} from "./provider-web-search-responses.js";

@@ -25,6 +25,7 @@ export type ClawRouterCapabilityOffer = {
   requestFormat: string;
   responseFormat: string;
   model?: Record<string, unknown>;
+  hostedToolAdmission?: Record<string, unknown>;
 };
 
 // A declared format only enables routes whose wire contract the consumer implements.
@@ -171,6 +172,7 @@ export function readClawRouterCapabilityOffers(
         requestFormat,
         responseFormat,
         ...(model ? { model } : {}),
+        hostedToolAdmission: asOptionalRecord(offer.hostedToolAdmission),
       });
     }
   }
