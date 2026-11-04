@@ -46,6 +46,9 @@ struct GatewayPersonalIdentityTests {
         #expect(GatewayConnection.primaryPersonalIdentityTLSRoute(
             url: try #require(URL(string: "wss://127.0.0.1:18789")),
             gatewayFingerprint: "not-a-fingerprint") == nil)
+        #expect(GatewayConnection.primaryPersonalIdentityTLSRoute(
+            url: try #require(URL(string: "wss://127.0.0.1:18789")),
+            gatewayFingerprint: Array(repeating: "c3", count: 32).joined(separator: ":")) == nil)
     }
 
     @Test func `bound boot id must match local Primary Gateway hello`() {
@@ -56,6 +59,6 @@ struct GatewayPersonalIdentityTests {
     }
 
     private static func fingerprint(byte: String) -> String {
-        Array(repeating: byte, count: 32).joined(separator: ":")
+        Array(repeating: byte, count: 32).joined()
     }
 }

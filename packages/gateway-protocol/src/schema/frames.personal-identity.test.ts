@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
 import { Value } from "typebox/value";
-import { HelloOkSchema } from "./frames.js";
+import { describe, expect, it } from "vitest";
 import { validateConnectParams } from "../validator-registry.js";
+import { HelloOkSchema } from "./frames.js";
 
 const baseConnect = {
   minProtocol: 1,
@@ -70,7 +70,7 @@ describe("personal identity handshake declaration", () => {
         bindingId: "binding-1",
         profileId: "profile-1",
         gatewayId: "gateway-1",
-        tlsFingerprint: "ab:".repeat(31) + "ab",
+        tlsFingerprint: "ab".repeat(32),
       }),
     ).toBe(true);
     expect(
@@ -80,7 +80,7 @@ describe("personal identity handshake declaration", () => {
         bindingId: "binding-1",
         profileId: "profile-1",
         gatewayId: "gateway-1",
-        tlsFingerprint: "ab:".repeat(31) + "ab",
+        tlsFingerprint: "ab".repeat(32),
         account_id: "account-1",
       }),
     ).toBe(false);

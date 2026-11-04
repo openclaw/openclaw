@@ -1135,8 +1135,8 @@ extension GatewayConnection {
     }
 
     private static func isSHA256Fingerprint(_ value: String) -> Bool {
-        let bytes = value.split(separator: ":")
-        return bytes.count == 32 && bytes.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isHexDigit) }
+        let bytes = value.utf8
+        return bytes.count == 64 && bytes.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 
     static func primaryPersonalIdentityTLSRoute(

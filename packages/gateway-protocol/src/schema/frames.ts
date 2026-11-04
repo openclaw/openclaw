@@ -151,7 +151,7 @@ export const HelloOkSchema = closedObject({
       bindingId: Type.String({ minLength: 1, maxLength: 128 }),
       profileId: UserProfileIdSchema,
       gatewayId: Type.String({ minLength: 1, maxLength: 128 }),
-      tlsFingerprint: Type.String({ pattern: "^(?:[a-f0-9]{2}:){31}[a-f0-9]{2}$" }),
+      tlsFingerprint: Type.String({ pattern: "^[a-f0-9]{64}$" }),
     }),
   ),
   auth: closedObject({
