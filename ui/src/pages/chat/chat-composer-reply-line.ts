@@ -43,6 +43,7 @@ export function createChatComposerReplyLine(input: { props: ChatProps }) {
           assistantAvatarUrl: props.assistantAvatarUrl,
           assistantAvatarSource: props.assistantAvatarSource,
           currentAgentId: props.currentAgentId,
+          agents: props.agentsList?.agents,
           userId: props.userId,
           userName: props.userName,
           senderAgentAvatars: props.senderAgentAvatars,
