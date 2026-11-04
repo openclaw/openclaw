@@ -13,7 +13,15 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 export function captureSessionEnvironmentToolPolicy(
   options: Pick<GatewayRequestHandlerOptions, "client" | "context">,
   caller: { identity: WorkerEnvironmentSessionIdentity; assertCurrent: () => void },
-  tool: "exec" | "process" | "screen",
+  tool:
+    | "exec"
+    | "process"
+    | "screen"
+    | "file_fetch"
+    | "file_write"
+    | "dir_fetch"
+    | "dir_list"
+    | "browser",
 ) {
   const ambient = getGatewayToolCallerIdentity();
   const runtime = options.client?.internal?.agentRuntimeIdentity;

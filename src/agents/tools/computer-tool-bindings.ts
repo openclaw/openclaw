@@ -8,6 +8,7 @@ import {
   type EligibleNodeMessages,
   resolveEligibleNodeFromList,
 } from "../../shared/node-resolve.js";
+import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { isEligibleComputerNode } from "../computer-use-node-capabilities.js";
 import {
   bindGatewayComputerCleanup,
@@ -75,7 +76,18 @@ export async function resolveComputerBinding(params: {
       throw new Error("Attached computer control requires an admitted agent run on its Gateway");
     }
     assertCaller();
-    const attachment = service.findSessionAttachment(caller);
+    const attachment = service.findSessionAttachment({
+      ...caller,
+      ...(caller.operatorAuthority ? { principalId: caller.operatorAuthority.profileId } : {}),
+      ...(caller.operatorAuthority &&
+      !roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.admin"],
+        allowedScopes: caller.operatorAuthority.scopes,
+      })
+        ? { requiresIsolatedEnvironment: true as const }
+        : {}),
+    });
     if (!attachment || attachment.environmentId !== params.environmentId) {
       throw new Error("Computer environment is not attached to this conversation");
     }

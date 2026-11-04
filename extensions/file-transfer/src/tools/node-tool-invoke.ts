@@ -5,30 +5,39 @@ import {
   resolveNodeIdFromList,
   type NodeListNode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  asNullableRecord,
-  normalizeOptionalString,
-  readNonBlankString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNullableRecord, readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { bindFileTransferAudit } from "../shared/audit-context.js";
 import type { FileTransferAuditOp } from "../shared/audit.js";
 import { throwFromNodePayload } from "../shared/errors.js";
 import { readGatewayCallOptions } from "../shared/params.js";
+import { invokeAttachedFileTool } from "./attached-node-tool-invoke.js";
 
 type ErrorAuditExtra = {
   sha256?: string;
   sizeBytes?: number;
 };
 
-export function readRequiredNodePath(params: Record<string, unknown>): {
-  node: string;
-  requestedPath: string;
-} {
-  const node = normalizeOptionalString(params.node);
-  // Paths name exact node targets; trimming can select a different sibling.
-  const requestedPath = readNonBlankString(params.path);
+export function readRequiredNodePath(params: Record<string, unknown>, allowResourceHandle = false) {
+  const environmentId = readNonBlankString(params.environmentId);
+  const selectedNode = readNonBlankString(params.node);
+  if (params.environmentId !== undefined && !environmentId) {
+    throw new Error("environmentId must be nonempty");
+  }
+  if (environmentId && params.node !== undefined) {
+    throw new Error("Choose node or environmentId, not both");
+  }
+  const resourceHandle = readNonBlankString(params.resourceHandle);
+  const path = readNonBlankString(params.path);
+  if (
+    params.resourceHandle !== undefined &&
+    (!allowResourceHandle || !environmentId || !resourceHandle || path)
+  ) {
+    throw new Error("Choose an attached resourceHandle or a path, not both");
+  }
+  const node = environmentId ?? selectedNode;
+  const requestedPath = path ?? (resourceHandle ? "resource:" + resourceHandle : undefined);
   if (!node) {
-    throw new Error("node required");
+    throw new Error("node or environmentId required");
   }
   if (!requestedPath) {
     throw new Error("path required");
@@ -38,6 +47,7 @@ export function readRequiredNodePath(params: Record<string, unknown>): {
 
 export async function invokeNodeToolPayload(input: {
   errorAuditExtra?: ErrorAuditExtra;
+  assertDispatchCurrent?: () => void;
   invalidPayloadError?: string;
   invalidPayloadMessage?: string;
   node: string;
@@ -48,31 +58,51 @@ export async function invokeNodeToolPayload(input: {
   requestedPath: string;
 }): Promise<{
   audit: ReturnType<typeof bindFileTransferAudit>;
+  assertCurrent?: () => Promise<void>;
   payload: Record<string, unknown>;
 }> {
-  const gatewayOpts = readGatewayCallOptions(input.params);
-  const nodes: NodeListNode[] = await listNodes(gatewayOpts);
-  if (nodes.length === 0) {
-    throw new Error(
-      "no paired nodes available; file-transfer tools require a paired node from nodes status. Use local file/exec tools for local workspace paths.",
+  input.assertDispatchCurrent?.();
+  const startedAt = Date.now();
+  const environmentId = readNonBlankString(input.params.environmentId);
+  let nodeId: string;
+  let nodeDisplayName: string;
+  let raw: { payload?: unknown };
+  let assertCurrent: (() => Promise<void>) | undefined;
+  if (environmentId) {
+    const attached = await invokeAttachedFileTool(input, environmentId);
+    ({ nodeId, nodeDisplayName, raw, assertCurrent } = attached);
+  } else {
+    const gatewayOpts = readGatewayCallOptions(input.params);
+    const nodes: NodeListNode[] = await listNodes(gatewayOpts);
+    if (nodes.length === 0) {
+      throw new Error("no paired nodes available; use node status or an owned environmentId");
+    }
+    nodeId = resolveNodeIdFromList(nodes, input.node, false);
+    nodeDisplayName = nodes.find((node) => node.nodeId === nodeId)?.displayName ?? input.node;
+    raw = await callGatewayTool<{ payload: unknown }>(
+      "node.invoke",
+      gatewayOpts,
+      {
+        nodeId,
+        command: input.command,
+        params: input.commandParams,
+        idempotencyKey: crypto.randomUUID(),
+      },
+      input.assertDispatchCurrent
+        ? {
+            dispatchAuthority: {
+              version: 2,
+              kind: "source-bound",
+              assertCurrent: input.assertDispatchCurrent,
+            },
+          }
+        : undefined,
     );
   }
-  const nodeId = resolveNodeIdFromList(nodes, input.node, false);
-  const nodeMeta = nodes.find((n) => n.nodeId === nodeId);
-  const nodeDisplayName = nodeMeta?.displayName ?? input.node;
-  const startedAt = Date.now();
   const audit = bindFileTransferAudit(
     { op: input.command, nodeId, nodeDisplayName, requestedPath: input.requestedPath },
     startedAt,
   );
-
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-    nodeId,
-    command: input.command,
-    params: input.commandParams,
-    idempotencyKey: crypto.randomUUID(),
-  });
-
   const payload = asNullableRecord(raw?.payload);
   if (!payload) {
     await audit({
@@ -93,5 +123,5 @@ export async function invokeNodeToolPayload(input: {
     throwFromNodePayload(input.command, payload);
   }
 
-  return { audit, payload };
+  return { audit, payload, assertCurrent };
 }

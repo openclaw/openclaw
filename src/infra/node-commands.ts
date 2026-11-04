@@ -1,3 +1,5 @@
+import { NODE_COMPUTER_RESOURCE_FETCH_COMMAND } from "../../packages/gateway-protocol/src/environment-node-capabilities.js";
+export { NODE_COMPUTER_RESOURCE_FETCH_COMMAND };
 // Node tool command names shared by routing, auth, and approval surfaces.
 export const NODE_SYSTEM_RUN_COMMANDS = [
   "system.run.prepare",
@@ -51,7 +53,10 @@ export const NODE_WORKER_PRIVATE_COMMANDS = [
   NODE_WORKER_PORTAL_STREAM_COMMAND,
 ] as const;
 
-const PRIVATE_NODE_INVOKE_COMMAND_SET = new Set<string>(NODE_WORKER_PRIVATE_COMMANDS);
+const PRIVATE_NODE_INVOKE_COMMAND_SET = new Set<string>([
+  ...NODE_WORKER_PRIVATE_COMMANDS,
+  NODE_COMPUTER_RESOURCE_FETCH_COMMAND,
+]);
 
 /** Private node controls are never part of advertised or operator-invocable command surfaces. */
 export function isPrivateNodeInvokeCommand(command: unknown): boolean {

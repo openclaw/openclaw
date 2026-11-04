@@ -57,7 +57,7 @@ export function selectStagedFreshnessChecks(paths: string[]): FreshnessCheck[] {
     {
       name: "protocol generated models",
       script: "protocol:check",
-      args: [],
+      args: ["--staged"],
       fix: "pnpm protocol:gen:swift && pnpm protocol:gen:kotlin",
       selects: hasProtocolGenerationInput,
       unstagedInputs: "tree",

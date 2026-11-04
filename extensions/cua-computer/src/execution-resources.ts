@@ -23,6 +23,11 @@ type SafeRoot = Awaited<ReturnType<typeof root>>;
 export type CuaExecutionResources = {
   createDirectory(kind: DirectoryResourceKind): Promise<{ handle: string; path: string }>;
   resolveFiles(handles: readonly string[]): Promise<string[]>;
+  readFile(
+    handle: string,
+    maxBytes: number,
+    signal?: AbortSignal,
+  ): Promise<{ buffer: Buffer; name: string }>;
   validateDirectoryTree(handle: string): Promise<string>;
   captureFiles(handle: string): Promise<string[]>;
   discard(handle: string): Promise<void>;
@@ -40,6 +45,8 @@ export function createLazyCuaExecutionResources(): CuaExecutionResources {
   return {
     createDirectory: async (label) => await (await resources()).createDirectory(label),
     resolveFiles: async (handles) => await (await resources()).resolveFiles(handles),
+    readFile: async (handle, maxBytes, signal) =>
+      await (await resources()).readFile(handle, maxBytes, signal),
     validateDirectoryTree: async (handle) =>
       await (await resources()).validateDirectoryTree(handle),
     captureFiles: async (handle) => await (await resources()).captureFiles(handle),
@@ -50,6 +57,31 @@ export function createLazyCuaExecutionResources(): CuaExecutionResources {
       }
     },
   };
+}
+
+async function recordingFiles(executionRoot: SafeRoot, directory: string): Promise<string[]> {
+  const files: string[] = [];
+  let visited = 0;
+  const visit = async (relativePath: string): Promise<void> => {
+    for (const child of await executionRoot.list(relativePath, { withFileTypes: true })) {
+      visited++;
+      if (visited > MAX_RESOURCE_TREE_ENTRIES) {
+        throw resourceError("resource tree is too large");
+      }
+      if (child.isSymbolicLink || (!child.isDirectory && !child.isFile)) {
+        throw resourceError("resource tree contains an unsupported entry");
+      }
+      const childPath = path.join(relativePath, child.name);
+      await executionRoot.resolve(childPath);
+      if (child.isDirectory) {
+        await visit(childPath);
+      } else {
+        files.push(childPath);
+      }
+    }
+  };
+  await visit(directory);
+  return files;
 }
 
 function resourceError(message: string): Error {
@@ -142,31 +174,51 @@ async function createCuaExecutionResources(): Promise<CuaExecutionResources> {
         ),
       );
     },
+    async readFile(handle, maxBytes, signal) {
+      assertActive();
+      signal?.throwIfAborted();
+      let entry = resources.get(handle);
+      if (entry?.kind === "recording") {
+        await requireEntry(resources, executionRoot, handle, "recording");
+        const videos = (await recordingFiles(executionRoot, entry.relativePath)).filter(
+          (file) => path.extname(file).toLowerCase() === ".mp4",
+        );
+        const [video] = videos;
+        if (videos.length !== 1 || !video) {
+          throw resourceError(
+            "choose a fileResourceHandle from stop_recording for multi-file or unfinished recordings",
+          );
+        }
+        entry = { kind: "file", relativePath: video };
+      } else {
+        entry = (await requireEntry(resources, executionRoot, handle, "file")).entry;
+      }
+      assertActive();
+      signal?.throwIfAborted();
+      const read = await executionRoot.read(entry.relativePath, { maxBytes, hardlinks: "reject" });
+      try {
+        assertActive();
+        signal?.throwIfAborted();
+        return { buffer: read.buffer, name: path.basename(entry.relativePath) };
+      } catch (error) {
+        read.buffer.fill(0);
+        throw error;
+      }
+    },
     async validateDirectoryTree(handle) {
       assertActive();
       const directory = await requireEntry(resources, executionRoot, handle, "recording");
-      let visited = 0;
-      const visit = async (relativePath: string): Promise<void> => {
-        for (const child of await executionRoot.list(relativePath, { withFileTypes: true })) {
-          visited += 1;
-          if (visited > MAX_RESOURCE_TREE_ENTRIES) {
-            throw resourceError("resource tree is too large");
-          }
-          if (child.isSymbolicLink || (!child.isDirectory && !child.isFile)) {
-            throw resourceError("resource tree contains an unsupported entry");
-          }
-          const childPath = path.join(relativePath, child.name);
-          await executionRoot.resolve(childPath);
-          if (child.isDirectory) {
-            await visit(childPath);
-          }
-        }
-      };
-      await visit(directory.entry.relativePath);
+      await recordingFiles(executionRoot, directory.entry.relativePath);
       return directory.path;
     },
     async captureFiles(handle) {
       assertActive();
+      if (resources.get(handle)?.kind === "recording") {
+        const directory = await requireEntry(resources, executionRoot, handle, "recording");
+        return (await recordingFiles(executionRoot, directory.entry.relativePath)).map((file) =>
+          register("file", file),
+        );
+      }
       const directory = await requireEntry(resources, executionRoot, handle, "browser-download");
       const handles: string[] = [];
       for (const child of await executionRoot.list(directory.entry.relativePath, {

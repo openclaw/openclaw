@@ -27,6 +27,7 @@ import { createWorkerRetainedLifecycle } from "./provider-retained-lifecycle.js"
 import { createWorkerRuntimeRefresher } from "./provider-runtime-refresh.js";
 import { createWorkerSshBootstrap } from "./provider-ssh-bootstrap.js";
 import * as check from "./service-validation.js";
+import { requireSessionGuestProvider, sessionGuestLeaseTransportError } from "./session-guest.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
@@ -147,6 +148,7 @@ export function createWorkerProviderLifecycle(
       | undefined;
     try {
       const profile = check.requireWorkerProfile(record.profileSnapshot.settings);
+      const guest = requireSessionGuestProvider(record, provider);
       if (record.resourceReceipt && !provider.supportsResourceReceipts) {
         throw new Error("Worker provider cannot honor the recorded resource receipt");
       }
@@ -247,6 +249,7 @@ export function createWorkerProviderLifecycle(
         );
       }
       const provisionOptions = {
+        ...(guest ? { untrustedWorkload: true as const } : {}),
         nodeBootstrapTimeoutMs,
         profileId: record.profileId,
         assertCurrent,
@@ -277,8 +280,9 @@ export function createWorkerProviderLifecycle(
         ...(enrollmentOperation
           ? {
               beginNodeEnrollment: enrollmentOperation.begin,
-              prepareNodeRuntime: enrollmentOperation.prepareRuntime,
-              nodeRuntimeIdentity,
+              ...(guest
+                ? {}
+                : { prepareNodeRuntime: enrollmentOperation.prepareRuntime, nodeRuntimeIdentity }),
             }
           : {}),
         signal: workSignal,
@@ -392,11 +396,9 @@ export function createWorkerProviderLifecycle(
       await move(requireCurrentOwner(record), "draining", patch);
       cancellation.assertActive();
     }
-    const leaseModeError = check.resolveWorkerLeaseTransportError(
-      provider,
-      lease.node ? "node" : "ssh",
-      executionMode,
-    );
+    const leaseModeError =
+      sessionGuestLeaseTransportError(record, lease) ??
+      check.resolveWorkerLeaseTransportError(provider, lease.node ? "node" : "ssh", executionMode);
     if (leaseModeError) {
       return await failBootstrap(
         record,
@@ -576,7 +578,11 @@ export function createWorkerProviderLifecycle(
         record.destroyRequestedAtMs !== null
           ? finishDestroy(record, provider, workSignal)
           : resumeProvision(record, provider, signal, retainProviderSettlement, beforeProvision)
-      ).catch(() => undefined);
+      ).catch((error: unknown) => {
+        if (record.profileSnapshot.sessionGuest) {
+          throw error;
+        }
+      });
       return;
     }
     if (

@@ -108,6 +108,10 @@ export function parseInspectJson(
     throw new Error("Crabbox retained running resource has no qualified receipt");
   }
   return {
+    ...(nonEmptyString(value.provider) ? { provider: nonEmptyString(value.provider) } : {}),
+    ...(nonEmptyString(value.serverId)
+      ? { providerResourceId: nonEmptyString(value.serverId) }
+      : {}),
     id,
     state,
     tailscaleEnabled,

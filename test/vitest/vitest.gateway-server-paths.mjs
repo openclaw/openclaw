@@ -491,6 +491,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/service-reconcile-backoff.test.ts",
   "src/gateway/worker-environments/service.plugin-create.test.ts",
   "src/gateway/worker-environments/session-attachment-service.test.ts",
+  "src/gateway/worker-environments/session-guest-lifecycle.test.ts",
   "src/gateway/worker-environments/session-repository-checkpoints.test.ts",
   "src/gateway/worker-environments/store-change-events.test.ts",
   "src/gateway/worker-environments/store-node-enrollment.test.ts",

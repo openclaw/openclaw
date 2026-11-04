@@ -1,7 +1,14 @@
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stopCrabboxLease, type LeaseCommandContext } from "./crabbox-worker-command.js";
+import {
+  isGatewayAwsGuestReceipt,
+  deleteGatewayAwsGuestResource,
+  captureGatewayAwsGuestCustody,
+} from "./crabbox-worker-gateway-aws.js";
 import type { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
+import { loadCrabboxConfigShow } from "./crabbox-worker-preflight.js";
 import {
   assertCrabboxLeaseId,
   parseCrabboxCleanupProfile,
@@ -15,7 +22,10 @@ export function createCrabboxWorkerTeardown(dependencies: {
   warmImages: ReturnType<typeof createCrabboxWarmImageManager>;
   providerSignal: AbortSignal;
   warn: (message: string) => void;
-  resolveLeaseContext: (lease: Parameters<WorkerProvider["inspect"]>[0]) => Promise<{
+  resolveLeaseContext: (
+    lease: Parameters<WorkerProvider["inspect"]>[0],
+    requireGuestAccess?: boolean,
+  ) => Promise<{
     context: LeaseCommandContext;
     profile: ReturnType<typeof parseCrabboxCleanupProfile>;
   }>;
@@ -28,6 +38,24 @@ export function createCrabboxWorkerTeardown(dependencies: {
   ): Promise<void> => {
     await heartbeats.stop(context.id);
     context.assertCurrent?.();
+    if (context.untrustedWorkload && !isGatewayAwsGuestReceipt(context.resourceReceipt)) {
+      throw new Error("Guest cleanup has no durable launch custody; allocation must remain owned");
+    }
+    if (context.resourceReceipt && isGatewayAwsGuestReceipt(context.resourceReceipt)) {
+      if (!context.assertCurrent) {
+        throw new Error("Gateway AWS guest cleanup requires current allocation authority");
+      }
+      await deleteGatewayAwsGuestResource({
+        receipt: context.resourceReceipt,
+        env: context.env,
+        signal,
+        assertCurrent: context.assertCurrent,
+        onCleanupAccepted,
+      });
+      // AWS is the resource owner. Crabbox's host-local claim is a derived projection
+      // and may remain stale until its next released-CLI status refresh.
+      return;
+    }
     // Cleanup has its own deadline. Confirmed stop or absence releases allocation/image ownership.
     await stopCrabboxLease({
       ...context,
@@ -40,7 +68,8 @@ export function createCrabboxWorkerTeardown(dependencies: {
   };
   return {
     stopLease,
-    async destroy(this: void, lease: Parameters<WorkerProvider["destroy"]>[0]): Promise<void> {
+    async destroy(this: void, input: Parameters<WorkerProvider["destroy"]>[0]): Promise<void> {
+      let lease = input;
       lease.signal?.throwIfAborted();
       assertCrabboxLeaseId(lease.leaseId);
       // An admitted image capture still owns the source. Plain teardown fences
@@ -48,12 +77,52 @@ export function createCrabboxWorkerTeardown(dependencies: {
       if (parseCrabboxCleanupProfile(lease.profile).warmImage === false) {
         await heartbeats.stop(lease.leaseId);
       }
-      const { context, profile } = await resolveLeaseContext(lease).catch(
+      const { context, profile } = await resolveLeaseContext(lease, false).catch(
         async (error: unknown) => {
           await heartbeats.stop(lease.leaseId);
           throw error;
         },
       );
+      if (lease.untrustedWorkload) {
+        if (profile.provider !== "aws") {
+          throw new Error("Guest cleanup provider has no qualified custody recovery");
+        }
+        context.untrustedWorkload = true;
+        if (lease.resourceReceipt && !isGatewayAwsGuestReceipt(lease.resourceReceipt)) {
+          throw new Error("Guest cleanup receipt is malformed or belongs to a different provider");
+        }
+        if (!lease.resourceReceipt) {
+          if (!lease.assertCurrent || !lease.recordResourceReceipt) {
+            throw new Error(
+              "Receiptless guest cleanup requires durable current-owner custody recovery",
+            );
+          }
+          lease.assertCurrent();
+          const config = await loadCrabboxConfigShow({ ...context, signal: lease.signal });
+          lease.assertCurrent();
+          const region =
+            isRecord(config) && isRecord(config.aws) && typeof config.aws.region === "string"
+              ? config.aws.region
+              : "";
+          const observed = await inspectWithContext({ ...context, signal: lease.signal });
+          lease.assertCurrent();
+          if (!observed?.providerResourceId) {
+            throw new Error("Guest launch inventory unavailable; cleanup remains pending");
+          }
+          const custody = await captureGatewayAwsGuestCustody({
+            ...context,
+            region,
+            leaseId: lease.leaseId,
+            resourceId: observed.providerResourceId,
+            signal: lease.signal,
+            assertCurrent: lease.assertCurrent,
+          });
+          await lease.recordResourceReceipt(custody.receipt);
+          lease.assertCurrent();
+          lease = { ...lease, resourceReceipt: custody.receipt };
+          context.resourceReceipt = custody.receipt;
+        }
+      }
       if (lease.resourceReceipt) {
         if (
           !lease.assertCurrent ||

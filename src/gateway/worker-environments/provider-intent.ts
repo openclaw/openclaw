@@ -15,6 +15,7 @@ import {
 } from "./preparation-identity.js";
 import * as prep from "./preparation-identity.schema.js";
 import * as projects from "./project-preparation.js";
+import { allocationSnapshot } from "./provider-allocation-snapshot.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { WorkerProviderRepositorySource } from "./provider-project-preparation.js";
 import {
@@ -46,6 +47,8 @@ type WorkerProviderIntentOptions = Pick<
 };
 
 export type WorkerProviderIntentPreparationOptions = {
+  resources?: import("../../plugins/types.js").WorkerMachineResources;
+  sessionGuest?: import("./session-guest.js").SessionGuestBinding;
   retainedPolicy?: import("../../plugins/worker-retention.types.js").WorkerRetentionPolicy;
   inherited?: { providerId: string; profileSnapshot: WorkerProfile };
   machineClass?: string;
@@ -73,20 +76,6 @@ export type WorkerProviderIntentPreparationOptions = {
   readNativeCredential?: GitHubCredentialReader;
   retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
 };
-
-function allocationSnapshot(
-  profile: WorkerProfile,
-  { machineClass, os, executionMode }: WorkerProviderIntentPreparationOptions,
-): WorkerProfile {
-  // A new allocation admits its own project, even when it inherits provider settings.
-  const { project: _project, runtimePreparation: _runtimePreparation, ...snapshot } = profile;
-  return {
-    ...snapshot,
-    ...(machineClass === undefined ? {} : { machineClass }),
-    ...(os === undefined ? {} : { os }),
-    ...(executionMode === undefined ? {} : { executionMode }),
-  };
-}
 
 export async function failUnallocatedImageIntent(
   options: Pick<WorkerProviderLifecycleOptions, "store" | "move">,
@@ -180,7 +169,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       providerId = normalizeCapabilityProviderId(provider.id) ?? provider.id;
       profileSnapshot = validation.snapshotWorkerAllocationProfile(configuredProfile);
     }
-    const snapshot = allocationSnapshot(profileSnapshot, createOptions);
+    const snapshot = allocationSnapshot(profileSnapshot, createOptions, provider);
     validation.requireWorkerProfile(snapshot);
     return {
       provider,
@@ -220,16 +209,21 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
   ): Promise<WorkerProviderPreparedIntent> => {
     const resolved = resolveProfile(profileId, createOptions);
     const { provider, providerId } = resolved;
+    if (createOptions.sessionGuest && !provider.supportsUntrustedWorkloads) {
+      throw new Error("This provider does not support isolated guest tool workloads");
+    }
     const { signal, projectPath } = createOptions;
     let profileSnapshot: WorkerProviderPreparedIntent["profileSnapshot"] = resolved.profileSnapshot;
-    const retainedPolicy = prepareWorkerRetentionPolicy({
-      projectNamespace: options.projectNamespace,
-      workspaceId: createOptions.repository?.workspaceId,
-      imageReserve: createOptions.imageReserve,
-      profileSnapshot,
-      provider,
-      retainedPolicy: createOptions.retainedPolicy,
-    });
+    const retainedPolicy = createOptions.sessionGuest
+      ? undefined
+      : prepareWorkerRetentionPolicy({
+          projectNamespace: options.projectNamespace,
+          workspaceId: createOptions.repository?.workspaceId,
+          imageReserve: createOptions.imageReserve,
+          profileSnapshot,
+          provider,
+          retainedPolicy: createOptions.retainedPolicy,
+        });
     const machineClass =
       typeof profileSnapshot.machineClass === "string" ? profileSnapshot.machineClass : undefined;
     const os = typeof profileSnapshot.os === "string" ? profileSnapshot.os : undefined;
@@ -254,7 +248,9 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     }
     // A session-private retained disk cannot consume a fixed-lease prepared image/reserve.
     const supportsProjectPreparation =
-      !retainedPolicy && provider.supportsProjectPreparation?.(profile, machineClass, os);
+      !createOptions.sessionGuest &&
+      !retainedPolicy &&
+      provider.supportsProjectPreparation?.(profile, machineClass, os);
     if (
       (projectPath ||
         createOptions.repository ||

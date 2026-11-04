@@ -1,5 +1,9 @@
 import type { SecretRef } from "../../config/types.secrets.js";
-import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
+import {
+  WorkerProviderError,
+  type WorkerProvider,
+  type WorkerResourceReceipt,
+} from "../../plugins/types.js";
 import { assertWorkerResourceReceiptMatch } from "../../plugins/worker-resource-receipt.js";
 import { measureGatewayRestartTrace } from "../restart-trace.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
@@ -19,6 +23,7 @@ import {
   requireWorkerProfile,
   resolveWorkerLeaseTransportError,
 } from "./service-validation.js";
+import { readSessionGuestBinding } from "./session-guest.js";
 import type {
   WorkerEnvironmentRecord,
   WorkerEnvironmentTransitionPatch as TransitionPatch,
@@ -56,6 +61,9 @@ export function createWorkerProviderOwnerLifecycle(
   const lifecycleLease = (record: WorkerEnvironmentRecord, leaseId: string) => ({
     leaseId,
     profile: requireWorkerProfile(record.profileSnapshot.settings),
+    ...(readSessionGuestBinding(record.profileSnapshot)
+      ? { untrustedWorkload: true as const }
+      : {}),
     ...(record.resourceReceipt ? { resourceReceipt: record.resourceReceipt } : {}),
     ...(record.retention ? { retention: record.retention.policy } : {}),
   });
@@ -239,7 +247,28 @@ export function createWorkerProviderOwnerLifecycle(
             }
           };
           assertCurrent();
-          await provider.destroy({ ...lease, signal, assertCurrent });
+          await provider.destroy({
+            ...lease,
+            signal,
+            assertCurrent,
+            ...(lease.untrustedWorkload
+              ? {
+                  recordResourceReceipt: async (receipt: WorkerResourceReceipt) => {
+                    assertCurrent();
+                    if (!provider.supportsResourceReceipts || !record.provisionOperationId) {
+                      throw new Error("Worker cleanup resource custody cannot be persisted");
+                    }
+                    await store.recordResourceReceipt({
+                      environmentId: record.environmentId,
+                      provisionOperationId: record.provisionOperationId,
+                      receipt,
+                      assertCurrent,
+                    });
+                    assertCurrent();
+                  },
+                }
+              : {}),
+          });
           // Drain can cancel new effects, not discard an already confirmed deletion.
           if (requireCurrentOwner(record).state !== record.state) {
             throw serviceError("invalid_state", "Worker teardown owner changed");

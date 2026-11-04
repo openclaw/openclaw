@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { WorkerMachineResourcesSchema } from "./worker-machine-resources.js";
 
 const sessionTarget = {
   sessionKey: Type.Optional(NonEmptyString),
@@ -10,6 +11,7 @@ const sessionTarget = {
 export const EnvironmentsSessionCreateParamsSchema = closedObject({
   ...sessionTarget,
   profileId: NonEmptyString,
+  resources: Type.Optional(WorkerMachineResourcesSchema),
   idempotencyKey: Type.String({ minLength: 1, maxLength: 256 }),
   machineClass: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   os: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),

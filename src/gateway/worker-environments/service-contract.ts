@@ -111,14 +111,22 @@ export type WorkerEnvironmentServiceContract = {
   getDedicatedNodeLeaseSignal(environmentId: string): AbortSignal | undefined;
   captureSessionAttachment(identity: WorkerEnvironmentSessionIdentity): {
     binding: WorkerEnvironmentAttachment;
+    signal?: AbortSignal;
     assertCurrent(): void;
     touch(): Promise<void>;
   };
   getSessionAttachment(sessionId: string): WorkerEnvironmentAttachment | undefined;
   findSessionAttachment(
-    identity: Pick<WorkerEnvironmentSessionIdentity, "agentId" | "sessionKey">,
+    identity: Pick<
+      WorkerEnvironmentSessionIdentity,
+      "agentId" | "sessionKey" | "principalId" | "requiresIsolatedEnvironment"
+    >,
   ): WorkerEnvironmentAttachment | undefined;
-  getSessionAttachmentStatus(sessionId: string):
+  getSessionAttachmentStatus(
+    sessionId: string,
+    principalId?: string,
+    requiresIsolatedEnvironment?: true,
+  ):
     | {
         attachment: WorkerEnvironmentAttachmentRecord & { ownerEpoch: number };
         environment: WorkerEnvironmentServiceRecord;
@@ -141,7 +149,12 @@ export type WorkerEnvironmentServiceContract = {
     reused: boolean;
   }>;
   destroySessionAttachment(
-    request: { sessionId: string; environmentId?: string },
+    request: {
+      sessionId: string;
+      environmentId?: string;
+      principalId?: string;
+      requiresIsolatedEnvironment?: true;
+    },
     authorize: () => void,
   ): Promise<WorkerEnvironmentServiceRecord | undefined>;
   prepareAttachedComputer?: (

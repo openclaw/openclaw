@@ -101,7 +101,10 @@ function createRpc(
         ? { profileId: request.profileId, idempotencyKey: request.idempotencyKey, ...params }
         : params,
     context,
-    client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "crabbox" }),
+    client: createSyntheticPluginRuntimeClient({
+      pluginRuntimeOwnerId: "crabbox",
+      scopes: ["operator.admin"],
+    }),
     isWebchatConnect: () => false,
     respond,
   };
@@ -122,6 +125,23 @@ beforeEach(() => {
   makeService();
 });
 afterEach(() => closeOpenClawAgentDatabases());
+
+it("does not infer administrator authority for an unclassified session-write caller", async () => {
+  const { options } = createRpc();
+  const narrowed = {
+    ...options,
+    client: createSyntheticPluginRuntimeClient({
+      pluginRuntimeOwnerId: "crabbox",
+      scopes: ["operator.sessions.write"],
+    }),
+  };
+  await runAsCaller(async () => {
+    await expect(resolveSessionEnvironmentCaller(narrowed)).rejects.toThrow(
+      "current authenticated admission authority",
+    );
+  });
+  expect(provision).not.toHaveBeenCalled();
+});
 
 it("admits the actual plugin RPC through ambient run authority and fences a retained caller after revocation", async () => {
   const { options, respond, invoke } = createRpc();

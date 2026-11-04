@@ -34,6 +34,7 @@ import {
   DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
   BUNDLE_NODE_TOOLCHAIN_SETUP_SH,
 } from "./node-toolchain.js";
+import { readSessionGuestBinding } from "./session-guest.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import type { WorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
@@ -270,7 +271,10 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       const prepared = await prepare(record, enrollmentSignal);
       let workerCodex: WorkerNodeEnrollment["workerCodex"];
       // Only the prepared runtime's plugin inventory may opt into private Codex inputs.
-      if (prepared.artifact.enabledPluginIds.includes("codex")) {
+      if (
+        !readSessionGuestBinding(record.profileSnapshot) &&
+        prepared.artifact.enabledPluginIds.includes("codex")
+      ) {
         const { readCodexWorkerProvisioningBundle } = loadBundledPluginPublicArtifactModuleSync<{
           readCodexWorkerProvisioningBundle: () => WorkerNodeEnrollment["workerCodex"];
         }>({ dirName: "codex", artifactBasename: "worker-provisioning-api.js" });

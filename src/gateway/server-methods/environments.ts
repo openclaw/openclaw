@@ -47,6 +47,7 @@ import type { WorkerEnvironmentServiceRecord } from "../worker-environments/serv
 import { formatForLog } from "../ws-log.js";
 import { listWorkerProfilesWithMachines } from "./environments.profiles.js";
 import { environmentsSessionExecHandlers } from "./environments.session-exec.js";
+import { environmentsSessionInvokeHandlers } from "./environments.session-invoke.js";
 import { environmentsSessionHandlers } from "./environments.session.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -468,6 +469,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
   ...environmentsSessionHandlers,
   "environments.adoptSuggestedProfile": adoptSuggestedWorkerProfile,
   ...environmentsSessionExecHandlers,
+  ...environmentsSessionInvokeHandlers,
   "environments.list": async (options) => {
     const { params, respond, client, context } = options;
     if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {

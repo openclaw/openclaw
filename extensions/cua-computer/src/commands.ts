@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -8,6 +8,7 @@ import {
   type ComputerUseProvider,
 } from "openclaw/plugin-sdk/computer-use";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createRastermill } from "rastermill";
@@ -480,6 +481,28 @@ export function createCuaComputerProvider(): ComputerUseProvider {
         }
       };
       return {
+        readResource: async (handle, maxBytes, signal) => {
+          assertOpen();
+          signal?.throwIfAborted();
+          const read = await resources.readFile(handle, maxBytes, signal);
+          try {
+            assertOpen();
+            signal?.throwIfAborted();
+            const mimeType = await detectMime({ buffer: read.buffer, filePath: read.name });
+            assertOpen();
+            signal?.throwIfAborted();
+            return JSON.stringify({
+              ok: true,
+              path: "resource:" + handle + "/" + read.name,
+              size: read.buffer.length,
+              mimeType: mimeType ?? "application/octet-stream",
+              sha256: createHash("sha256").update(read.buffer).digest("hex"),
+              base64: read.buffer.toString("base64"),
+            });
+          } finally {
+            read.buffer.fill(0);
+          }
+        },
         snapshot: async (paramsJSON, signal) =>
           await queue.enqueue("execution", async () => {
             assertOpen();

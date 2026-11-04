@@ -180,7 +180,7 @@ export async function executeBrowserTabAction(context: {
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
   nodeRoute?: Parameters<typeof createBrowserToolSessionTabs>[0]["nodeRoute"];
-  sessionTabs: ReturnType<typeof createBrowserToolSessionTabs>;
+  sessionTabs?: ReturnType<typeof createBrowserToolSessionTabs>;
   capabilities: BrowserToolCapabilities;
   isUserBrowserProfile: boolean;
   boundTargetId?: string;
@@ -208,7 +208,7 @@ export async function executeBrowserTabAction(context: {
     opts,
   } = context;
   const touchTab = async (targetId: string | undefined) => {
-    await sessionTabs.touch(targetId);
+    await sessionTabs?.touch(targetId);
     await context.onTabActivity(targetId);
   };
   const trackedTabResult = async (
@@ -396,9 +396,9 @@ export async function executeBrowserTabAction(context: {
       const aborted = result.aborted;
       const onTabResult =
         effectiveRequest.kind === "close" || aborted?.reason === "closed"
-          ? sessionTabs.untrack
+          ? sessionTabs?.untrack
           : touchTab;
-      await onTabResult(resolvedTargetId);
+      await onTabResult?.(resolvedTargetId);
       let formatted = formatBrowserExternalToolResult({ kind: "act", payload: result });
       if (aborted) {
         // Navigation aborts get fresh page state (or an unavailable hint) appended by
@@ -518,7 +518,7 @@ export async function executeBrowserTabAction(context: {
           timeoutMs: toolTimeoutMs,
         });
       };
-      await sessionTabs.trackOpened(opened, closeOpenedTab);
+      await sessionTabs?.trackOpened(opened, closeOpenedTab);
       await context.onTabActivity(
         readStringValue(opened.targetId),
         readStringValue(opened.resolvedProfile),
@@ -541,7 +541,7 @@ export async function executeBrowserTabAction(context: {
       const result = targetId
         ? await browserCloseTab(target, targetId, clientOptions)
         : await browserAct(target, { kind: "close" }, clientOptions);
-      await sessionTabs.untrack(readStringValue(result.targetId) ?? targetId);
+      await sessionTabs?.untrack(readStringValue(result.targetId) ?? targetId);
       return jsonResult(result);
     }
     case "snapshot":

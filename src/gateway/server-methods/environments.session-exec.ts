@@ -53,7 +53,16 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
           }),
         );
         const service = context.workerEnvironmentService;
-        const binding = service?.getSessionAttachment(caller.identity.sessionId);
+        const attached = service?.getSessionAttachment(caller.identity.sessionId);
+        const binding = attached
+          ? {
+              ...attached,
+              principalId: caller.identity.principalId,
+              ...(caller.identity.requiresIsolatedEnvironment
+                ? { requiresIsolatedEnvironment: true as const }
+                : {}),
+            }
+          : undefined;
         if (
           !service ||
           !binding ||
@@ -111,7 +120,10 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
                 "Attached environment commands cannot inherit this host's executable allowlist",
               );
             }
-            if (defaults.effectiveHost !== "gateway") {
+            if (
+              defaults.effectiveHost !== "gateway" &&
+              !(binding.guest && defaults.effectiveHost === "sandbox")
+            ) {
               throw new Error("The conversation's exec policy binds commands to a different host");
             }
           }

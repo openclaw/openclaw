@@ -102,6 +102,30 @@ Node and SSH workspace access and reconciliation outlive worker RPC credential e
 
 <a id="coordinator-backed-crabbox" />
 
+### Session-owned guest machines
+
+Admitted guests can use the `crabbox` tool for a secondary, disposable development
+machine without receiving administrator scope. Machine class and operating system
+selection use the provider's existing typed catalog. Shell commands, background
+processes, and attached computer/browser workflows target that conversation's
+lease; another guest or a view-only participant cannot reuse its attachment.
+The agent and model authentication remain on the Gateway, not on the guest machine.
+
+Crabbox guest allocation remains unavailable until its control plane can attest an
+isolated network boundary for the actual allocated resource before bootstrap.
+Public SSH routing and an empty instance profile do not prove that boundary.
+This does not restrict the existing administrator workflow. Guest allocation ignores operator setup scripts and setup secrets,
+disables shared cache volumes and mutable prepared images, and never releases
+worker-inference credentials. It does not accept raw CLI flags or control-plane
+configuration from the guest.
+
+The original admission grant owns access for the machine's lifetime. Revocation
+or expiry blocks new and pending work and hands teardown to the existing trusted
+environment cleanup owner. Persisted ownership is recovered after a Gateway
+restart; unavailable admission remains pending rather than being mistaken for a
+new grant or a definite revocation. No additional invitation, role change,
+per-machine approval, or usage-limit system is introduced.
+
 ### Crabbox provider support
 
 A fresh allocation that exits with the exact `provider=<backend> does not support fixed idempotent lease IDs` capability refusal fails permanently without scheduling cleanup for a nonexistent lease. Choose a backend with fixed lease ID support. The same refusal during replay cannot disprove an earlier allocation, so its cleanup responsibility remains until release or absence is confirmed.
@@ -164,3 +188,104 @@ the page that now holds the content.
 - [`openclaw worker`](/cli/worker) — the restricted runtime entry point a Gateway-owned launcher starts inside a prepared worker environment
 - [Gateway RPC methods](/gateway/protocol/rpc-methods) — RPC method families, discovery, and event families
 - [Operator scopes](/gateway/operator-scopes) — the scopes these worker calls are authorized against
+
+### Explicit attached-browser I/O
+
+For a ready dedicated attachment, pass its `environmentId` to each `browser`
+action instead of a `target`, `node`, or Gateway dashboard/tab selector. The
+Gateway derives the node from the current conversation and checks its live
+principal, lease epoch, and attachment generation. This route never falls back
+to the Gateway browser and does not grant general paired-node access.
+
+Attachment-targeted uploads authorize their source independently of the destination.
+Non-admin sources must be accepted attachments or trusted execution artifacts
+referenced by the current authorized conversation; a shared inbound path is not
+read authority. Uploads reuse the existing inbound-file staging protocol; downloads
+reuse the browser binary-artifact codec and media store. Staging is pinned to
+the same attachment epoch through dispatch and publication. Browser tabs on
+the dedicated machine are VM-owned rather than Gateway-dashboard-owned.
+
+This does not qualify a provider's guest network boundary. Crabbox guest
+admission stays fail-closed unless the Gateway-owned AWS qualification below succeeds.
+CUA recording handles are execution-local. Stop the recording, then use
+`file_fetch` with the same `environmentId` and its `resourceHandle` to export
+a single MP4. For multi-file captures, use one of the `fileResourceHandles`
+returned by `stop_recording`. Reads remain confined to the current node and
+computer execution; stale handles must be refreshed, never interpreted as
+paths or URLs. Exported bytes use the existing binary media pipeline.
+
+## Disposable guest network qualification
+
+The Gateway's Crabbox plugin initially supports automated, direct AWS Linux guest
+allocation with an unchanged released Crabbox CLI. It does not require a patched
+Crabbox server, a guest-network protocol, or an allocator-advertised receipt.
+Managed-coordinator routes, other providers, Windows, IPv6, and prepared or
+retained guest disks are not qualified by this path. Unsupported selections fail
+before guest bootstrap; they never fall back to a static or manually provisioned
+box. Existing machine classes and allowed CPU, RAM, Linux OS, region, and disk
+selections still drive per-request allocation.
+
+A trusted operator must select a released Crabbox executable and configure an
+explicit trusted AMI, AWS subnet, and existing security group in the ordinary Crabbox AWS
+configuration. The Gateway also needs AWS CLI access to the same AWS account.
+No network changes or cloud provisioning are performed merely by enabling a
+profile or reading this configuration. Development/candidate executables and
+implicit or managed routing are rejected for guest allocation.
+
+Before allocation, the Gateway independently reads the caller account, subnet,
+and security-group rules through the AWS control plane. Both ingress and egress
+rules must use wholly public IPv4 CIDRs. Rules overlapping private, link-local,
+loopback, shared, multicast, or reserved space fail closed, as do IPv6 rules,
+security-group peers, and unresolved prefix lists. The VPC must use only private
+RFC1918 IPv4 CIDRs, and the subnet's effective route table may contain only local
+VPC routes and routes through one independently verified, same-account attached
+internet gateway. Peering, VPN, transit, NAT, and appliance routes are not qualified.
+This prevents numerically public CIDRs from disguising private VPC routing. A
+default unrestricted egress
+security group is not a guest boundary. These network selectors are trusted
+operator configuration, not guest machine-resource controls.
+
+Crabbox performs ordinary fixed-ID allocation and trusted SSH initialization.
+Before delivering guest node enrollment or running guest-access setup, the
+Gateway verifies the exact AWS instance, account, VPC, subnet, network interface,
+and security group; rejects instance profiles; disables the instance metadata
+HTTP endpoint; and waits for effective API readback. It records the resource and
+semantic network-rule and effective-topology digest through the existing Gateway resource-receipt owner
+before node bootstrap. The explicit AMI must expose a complete EBS root mapping and
+all additional EBS mappings must request deletion on termination before allocation;
+the released CLI forces root deletion. The Gateway records bounded instance-observed launch volume IDs durably before
+any per-volume qualification read. This immutable launch-custody receipt is not
+proof of volume ownership or permission to run guest tools; independent attachment
+and lease-tag checks still precede guest access or resource deletion. Actual
+nondeleting or unknown mappings reject guest access but keep disk custody for cleanup.
+Subsequent guest access rechecks live AWS facts against
+that durable identity and digest. The session and allocation owners recheck
+current grant, attachment, and owner epoch after awaited qualification and before
+node effects. Missing, conflicting, changed, or unavailable facts do not authorize
+access.
+
+Guest mode disables configured environment forwarding and all Crabbox caches and
+cache volumes, skips configured command profiles and repository synchronization,
+and does not reuse operator warm images or setup secrets. Harness, model, and
+provider credentials remain on the Gateway; only the existing lease-scoped node
+bootstrap material is delivered. Ordinary trusted worker flows are unchanged.
+
+Trusted cleanup uses the recorded AWS account and exact instance identity, not
+current guest network permission or a revoked guest grant. AWS confirms instance and every recorded launch-volume absence. A retained data
+volume is deleted only by its recorded ID after independent lease-tag and detached
+state checks; borrowed or unknown volumes are never detached or deleted. Missing
+volume facts or partial deletion retain cleanup ownership. Receiptless guest
+cleanup cannot fall back to ordinary Crabbox stop. The trusted current cleanup
+owner can recover an exact launch inventory and persist its first immutable
+cleanup-custody receipt before any deletion. Unavailable inventory or persistence
+keeps the allocation pending, including after service restart or guest revocation. AWS confirms deletion;
+Crabbox's host-local claim is a derived projection that can remain stale until its
+next status refresh. A missing original account credential or unconfirmed deletion
+retains cleanup ownership instead of claiming success.
+
+Mock control-plane tests and local released-CLI flag/configuration checks are not
+live provider-isolation, deny-egress, tamper, guest bootstrap, or captured-video
+playback qualification. An operator must qualify the real network and provider
+before live adoption. AWS-provided network services that are outside security-group
+filtering are not asserted blocked by CIDR rule inspection; the instance metadata
+endpoint is independently disabled.

@@ -52,7 +52,7 @@ export function createDirFetchTool(): AnyAgentTool {
         hardMax: DIR_FETCH_HARD_MAX_BYTES,
       });
 
-      const { audit, payload } = await invokeNodeToolPayload({
+      const { audit, payload, assertCurrent } = await invokeNodeToolPayload({
         node,
         params,
         command: "dir.fetch",
@@ -71,6 +71,7 @@ export function createDirFetchTool(): AnyAgentTool {
       } = decodeFetchPayload("dir.fetch", payload);
 
       // Keep the tarball and extracted paths under the same managed tool namespace.
+      await assertCurrent?.();
       const savedTar = await saveMediaBuffer(
         tarBuffer,
         "application/gzip",
@@ -158,6 +159,7 @@ export function createDirFetchTool(): AnyAgentTool {
         },
         fallback: `Fetched ${files.length} files. Saved paths omitted: rootDir cannot be represented safely within the 8192-byte text limit. No usable local path is shown.`,
       });
+      await assertCurrent?.();
       return textResult(text, {
         path: canonicalPath,
         rootDir,

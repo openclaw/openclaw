@@ -3,7 +3,9 @@ import path from "node:path";
 import {
   WorkerProviderError,
   type WorkerMachineOption,
+  type WorkerMachineResources,
   type WorkerProfile,
+  type WorkerProvider,
   type WorkerRetentionPolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isSecretRef, isValidSecretRef } from "openclaw/plugin-sdk/secret-input";
@@ -12,7 +14,15 @@ import {
   asOptionalRecord,
   normalizeOptionalString as nonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CRABBOX_HEARTBEAT_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
+import {
+  crabboxResourceArgs,
+  parseCrabboxRequestedResources,
+} from "./crabbox-worker-resource-options.js";
+import {
+  resolveCrabboxDestroyTimeoutMs,
+  resolveCrabboxProvisionCallTimeoutMs,
+  CRABBOX_HEARTBEAT_TIMEOUT_MS,
+} from "./crabbox-worker-timeouts.js";
 
 const PROFILE_KEYS = new Set([
   "azureSandboxDiskId",
@@ -28,6 +38,7 @@ const PROFILE_KEYS = new Set([
   "ttl",
   "target",
   "warmImage",
+  "requestedResources",
 ]);
 const GO_DURATION_PATTERN = /^\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/u;
 const GO_DURATION_TOKEN_PATTERN = /(\d+(?:\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h)/gu;
@@ -60,6 +71,7 @@ type CrabboxProfile = {
   setup?: string;
   setupSecrets?: Record<string, SecretRef & { source: "store" }>;
   warmImage?: boolean;
+  requestedResources?: WorkerMachineResources;
 };
 
 const MAX_CRABBOX_MACHINE_CLASS_LENGTH = 128;
@@ -195,6 +207,7 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
     );
   }
   const setupSecrets = parseCrabboxSetupSecrets(profile.setupSecrets);
+  const requestedResources = parseCrabboxRequestedResources(provider, profile.requestedResources);
   const azureSandboxDiskId = nonEmptyString(profile.azureSandboxDiskId);
   if (
     profile.azureSandboxDiskId !== undefined &&
@@ -234,7 +247,8 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
     setupSecrets,
     ttl,
     target,
-    warmImage,
+    warmImage: requestedResources ? false : warmImage,
+    ...(requestedResources ? { requestedResources } : {}),
   };
 }
 
@@ -317,7 +331,10 @@ export function resolveCrabboxWarmImageProfile(
     ...profile,
     class: machineClass,
     target,
-    warmImage: target === "linux" && (profile.warmImage ?? machineClass !== undefined),
+    warmImage:
+      !profile.requestedResources &&
+      target === "linux" &&
+      (profile.warmImage ?? machineClass !== undefined),
   };
 }
 
@@ -525,6 +542,7 @@ export function buildCrabboxAllocationArgs(
     "public",
     "--tailscale=false",
     ...(profile.class ? ["--class", profile.class] : []),
+    ...crabboxResourceArgs(profile.provider, profile.requestedResources),
     ...(profile.target === "linux" ? ["--target", "linux"] : []),
     ...(profile.target === "windows/wsl2" ? ["--target", "windows", "--windows-mode", "wsl2"] : []),
     ...(profile.target === "windows/normal"
@@ -594,3 +612,69 @@ export function operationLeaseId(operationId: string): string {
     .digest("hex")
     .slice(0, 12)}`;
 }
+
+/** Guest workloads never execute operator setup or reuse mutable prepared disks. */
+export function resolveCrabboxGuestProvisionProfile(
+  profile: WorkerProfile,
+  machineClass?: string,
+  os?: string,
+): ReturnType<typeof resolveCrabboxProvisionProfile> {
+  const {
+    setup: _setup,
+    setupSecrets: _setupSecrets,
+    setupEnv: _setupEnv,
+    warmImage: _warmImage,
+    project: _project,
+    azureSandboxDiskId: _azureSandboxDiskId,
+    ...settings
+  } = profile;
+  return resolveCrabboxProvisionProfile({ ...settings, warmImage: false }, machineClass, os);
+}
+
+/** Select only provider settings appropriate to the host-captured workload trust. */
+export function resolveCrabboxWorkloadProfile(
+  profile: WorkerProfile,
+  options: Parameters<WorkerProvider["provision"]>[2],
+) {
+  if (options?.untrustedWorkload && (options.project || options.retention)) {
+    throw new WorkerProviderError(
+      "Guest tool environments cannot reuse prepared or retained disks",
+    );
+  }
+  return (
+    options?.untrustedWorkload
+      ? resolveCrabboxGuestProvisionProfile
+      : resolveCrabboxProvisionProfile
+  )(profile, options?.machineClass, options?.os);
+}
+
+/** Profile policy stays with the parser rather than the provisioning coordinator. */
+export const crabboxWorkerProfileCapabilities = {
+  supportedExecutionModes: ["worker-turn", "remote-exec"],
+  supportsCleanupAcceptance: true,
+  provisionBeforeInstallation: true,
+  requiresNodeEnrollment: true,
+  supportsProjectPreparation: supportsCrabboxProjectPreparation,
+  resolvePreparedIdleTimeoutMs: resolveCrabboxPreparedIdleTimeoutMs,
+  resolvePreparationTarget: resolveCrabboxPreparationTarget,
+  resolveProvisionTimeoutMs(profile, options) {
+    return resolveCrabboxProvisionCallTimeoutMs(
+      parseCrabboxProfile(profile),
+      options?.nodeBootstrapTimeoutMs,
+    );
+  },
+  resolveDestroyTimeoutMs(profile) {
+    return resolveCrabboxDestroyTimeoutMs(parseCrabboxCleanupProfile(profile));
+  },
+} satisfies Pick<
+  WorkerProvider,
+  | "supportedExecutionModes"
+  | "supportsCleanupAcceptance"
+  | "provisionBeforeInstallation"
+  | "requiresNodeEnrollment"
+  | "supportsProjectPreparation"
+  | "resolvePreparedIdleTimeoutMs"
+  | "resolvePreparationTarget"
+  | "resolveProvisionTimeoutMs"
+  | "resolveDestroyTimeoutMs"
+>;

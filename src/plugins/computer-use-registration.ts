@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { NODE_COMPUTER_RESOURCE_FETCH_COMMAND } from "../../packages/gateway-protocol/src/environment-node-capabilities.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import {
   COMPUTER_EXECUTION_ID_PATTERN,
@@ -15,6 +16,7 @@ type ComputerUseExecution = {
   snapshot(paramsJSON: string | null | undefined, signal?: AbortSignal): Promise<string>;
   act(paramsJSON: string | null | undefined, signal?: AbortSignal): Promise<string>;
   close(reason: string): Promise<void>;
+  readResource?(handle: string, maxBytes: number, signal?: AbortSignal): Promise<string>;
 };
 
 export type ComputerUseProvider = {
@@ -42,7 +44,9 @@ export function registerComputerUseProvider(
   api: ComputerUseRegistrationApi,
   provider: ComputerUseProvider,
 ): void {
-  let execution: { id: string; promise: Promise<ComputerUseExecution> } | undefined;
+  let execution:
+    | { id: string; sessionKey?: string; promise: Promise<ComputerUseExecution> }
+    | undefined;
   let closingPromise: Promise<void> | undefined;
   let pendingClose: Promise<void> | undefined;
   const hasActiveWork = () =>
@@ -89,7 +93,7 @@ export function registerComputerUseProvider(
           execution = undefined;
         }
       });
-      execution = { id: executionId, promise: opened };
+      execution = { id: executionId, sessionKey: context?.sessionKey, promise: opened };
     }
     return execution.promise;
   };
@@ -216,6 +220,60 @@ export function registerComputerUseProvider(
       return await (
         await getExecution(envelope.executionId, context)
       ).act(paramsJSON, context?.signal);
+    },
+  });
+  api.registerNodeHostCommand({
+    command: NODE_COMPUTER_RESOURCE_FETCH_COMMAND,
+    cap: "file-transfer",
+    dangerous: false,
+    isAvailable: () => true,
+    hasActiveWork,
+    handle: async (paramsJSON, _io, context) => {
+      const value: unknown = JSON.parse(paramsJSON ?? "null");
+      if (
+        !isRecord(value) ||
+        Object.keys(value).some((key) => key !== "resourceHandle" && key !== "maxBytes") ||
+        typeof value.resourceHandle !== "string" ||
+        !value.resourceHandle.trim() ||
+        typeof value.maxBytes !== "number" ||
+        !Number.isSafeInteger(value.maxBytes) ||
+        value.maxBytes <= 0
+      ) {
+        throw new Error(
+          "COMPUTER_INVALID_RESOURCE: resourceHandle and bounded maxBytes are required",
+        );
+      }
+      const captured = execution;
+      const assertCurrent = () => {
+        context?.signal?.throwIfAborted();
+        if (
+          !captured ||
+          execution !== captured ||
+          closingPromise ||
+          !context?.sessionKey ||
+          captured.sessionKey !== context.sessionKey
+        ) {
+          throw new Error(
+            "COMPUTER_INVALID_RESOURCE: current provider execution owner is required; refresh recording state",
+          );
+        }
+      };
+      assertCurrent();
+      if (!captured) {
+        throw new Error("COMPUTER_INVALID_RESOURCE: no provider execution");
+      }
+      const opened = await captured.promise;
+      assertCurrent();
+      if (!opened.readResource) {
+        throw new Error("COMPUTER_RESOURCE_UNAVAILABLE: provider does not export resource bytes");
+      }
+      const result = await opened.readResource(
+        value.resourceHandle,
+        value.maxBytes,
+        context?.signal,
+      );
+      assertCurrent();
+      return result;
     },
   });
   // The provider plugin must also register its dangerous `computer.act` invoke

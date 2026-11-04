@@ -99,9 +99,36 @@ describe("Crabbox conversation tool", () => {
         "- desktop: desktop enabled; linux; macos (unavailable: No host available); small (linux)",
       ),
     });
-    expect(result.details).toEqual({ profiles: [{ ...profile, desktop: true }] });
+    expect(result.details).toEqual({
+      profiles: [{ ...profile, desktop: true, supportedResources: { fields: [] } }],
+    });
     request.mockResolvedValueOnce({ profiles: [] });
     expectText(await execute("profiles"), "No Crabbox profiles are currently available.");
+  });
+
+  it("offers sandboxed guests typed machine selection without requesting administrator scope", async () => {
+    const guest = fixture({ ...context, sandboxed: true });
+    expect(guest.tool).not.toBeNull();
+    await guest.tool?.execute("guest-create", {
+      action: "create",
+      profileId: "desktop",
+      machineClass: "small",
+      os: "linux",
+    });
+    expect(guest.request).toHaveBeenCalledWith(
+      "environments.session.create",
+      expect.objectContaining({ profileId: "desktop", machineClass: "small", os: "linux" }),
+      expect.objectContaining({ scopes: ["operator.sessions.write"] }),
+    );
+    await guest.tool?.execute("guest-exec", {
+      action: "exec",
+      argv: ["sh", "-lc", "printf guest-ok"],
+    });
+    expect(guest.request).toHaveBeenLastCalledWith(
+      "environments.session.exec",
+      expect.objectContaining({ argv: ["sh", "-lc", "printf guest-ok"] }),
+      expect.objectContaining({ scopes: ["operator.sessions.write"] }),
+    );
   });
 
   it.each([
@@ -226,7 +253,6 @@ describe("Crabbox conversation tool", () => {
     expect(request).not.toHaveBeenCalled();
   });
   it.each([
-    { ...context, sandboxed: true },
     { ...context, sessionId: undefined },
     { ...context, config: { cloudWorkers: { profiles: { other: { provider: "other" } } } } },
   ])("requires a permitted conversation and provider", (toolContext) => {
@@ -254,6 +280,34 @@ describe("Crabbox conversation tool", () => {
     expect(keys[0]).toEqual(expect.any(String));
     expect(keys[1]).toBe(keys[0]);
     expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it("forwards closed sizing resources and includes them in replay identity", async () => {
+    const selections = [
+      { machineType: "m7i.large", region: "eu-west-2", diskSizeGb: 80 },
+      { diskSizeGb: 80, region: "eu-west-2", machineType: "m7i.large" },
+      { machineType: "m7i.xlarge", region: "eu-west-2", diskSizeGb: 80 },
+    ];
+    const keys = [];
+    for (const resources of selections) {
+      request.mockClear();
+      request.mockResolvedValueOnce({ attachment: null });
+      request.mockResolvedValueOnce({ attachment, environment, reused: false });
+      await tool.execute("resource-create", { action: "create", resources });
+      const create = request.mock.calls.find(
+        ([method]) => method === "environments.session.create",
+      );
+      expect(create?.[1].resources).toEqual(resources);
+      keys.push(create?.[1].idempotencyKey);
+    }
+    expect(keys[0]).toEqual(expect.any(String));
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    request.mockClear();
+    await expect(
+      tool.execute("invalid", { action: "create", resources: { env: { AWS_PROFILE: "other" } } }),
+    ).rejects.toThrow("Invalid machine resource selection");
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("replays allocation identity without trusting caller ownership", async () => {

@@ -105,16 +105,21 @@ describe("worker node enrollment", () => {
     managers.push(manager);
     return manager;
   };
-  const createRequested = async (profileId = "test-profile") =>
+  const createRequested = async (profileId = "test-profile", guest = false) =>
     await store.createIntent({
       environmentId: "worker-enrollment",
       providerId: "fake-provider",
       profileId,
-      profileSnapshot: { settings: {} },
+      profileSnapshot: {
+        settings: {},
+        ...(guest
+          ? { sessionGuest: { profileId: "guest-a", sessionId: "session-a", grant: null } }
+          : {}),
+      },
       provisionOperationId: "provision:worker-enrollment",
     });
-  const createProvisioning = async (nodeDeviceId?: string) => {
-    const record = await createRequested();
+  const createProvisioning = async (nodeDeviceId?: string, guest = false) => {
+    const record = await createRequested(undefined, guest);
     return await store.transition({
       environmentId: record.environmentId,
       from: "requested",
@@ -172,6 +177,23 @@ describe("worker node enrollment", () => {
       "Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://localhost:19821, from plugins.entries.device-pair.config.publicUrl)",
     );
     expect(prepareArtifact).not.toHaveBeenCalled();
+  });
+
+  it("keeps model-helper canaries outside a guest node bootstrap even with Codex inventory", async () => {
+    const directory = path.join(root, "worker-provisioning", "codex");
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    await fs.writeFile(path.join(directory, "config.toml"), "GATEWAY_MODEL_AUTH_CANARY");
+    await fs.writeFile(path.join(directory, "token.mjs"), "GATEWAY_AUTH_HELPER_CANARY");
+    const record = await createProvisioning(undefined, true);
+    const manager = createManager({
+      prepareArtifact: async () => ({ ...artifact(), enabledPluginIds: ["codex"] }),
+    });
+    const runtime = await manager.prepareRuntime(record, bundle());
+    const enrollment = await manager.begin(record);
+    expect(runtime).not.toHaveProperty("workerCodex");
+    expect(enrollment).not.toHaveProperty("workerCodex");
+    expect(JSON.stringify([runtime, enrollment])).not.toContain("GATEWAY_MODEL_AUTH_CANARY");
+    expect(JSON.stringify([runtime, enrollment])).not.toContain("GATEWAY_AUTH_HELPER_CANARY");
   });
 
   it.each(["codex", "runtime-plugin"])(

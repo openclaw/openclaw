@@ -1758,6 +1758,11 @@ export function isCatalogSearchKeywordsParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").CatalogSearchKeywordsParamsSchema
 >;
+export function isEnvironmentsSessionInvokeParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").EnvironmentsSessionInvokeParamsSchema
+>;
 export function isSessionPortalListParams(
   value: unknown,
 ): value is import("typebox").Static<

@@ -26,6 +26,18 @@ afterEach(() => {
   syncBuiltinESMExports();
 });
 
+it("keeps persisted native region and disk inputs on teardown", async () => {
+  const env = { CRABBOX_AWS_REGION: "eu-west-2", CRABBOX_AWS_ROOT_GB: "96" };
+  const runCommand = vi
+    .spyOn(processRunner, "runCrabboxProcess")
+    .mockResolvedValue(commandResult({ stdout: "stopped" }));
+  await stopCrabboxLease({ binary: "crabbox", id: LEASE_ID, provider: "aws", warn: vi.fn(), env });
+  expect(runCommand).toHaveBeenCalledWith(
+    expect.arrayContaining(["stop", "--provider", "aws"]),
+    expect.objectContaining({ env }),
+  );
+});
+
 const stopLease = (warn = vi.fn(), provider = "aws") =>
   stopCrabboxLease({ binary: "crabbox", id: LEASE_ID, provider, warn });
 const retryStop = (signal?: AbortSignal) =>

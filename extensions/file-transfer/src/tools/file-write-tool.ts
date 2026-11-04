@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
+import path from "node:path";
+import { withGatewayToolAttachmentRead } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { getMediaDir } from "openclaw/plugin-sdk/media-runtime";
 import { readMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { asBoolean, asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
@@ -29,10 +32,13 @@ function decodeStrictBase64(value: string): Buffer {
   return buffer;
 }
 
-async function readSourceBytes(input: {
-  contentBase64?: string;
-  sourceMediaId?: string;
-}): Promise<{ buffer: Buffer; contentBase64: string; source: "inline" | "media" }> {
+async function readSourceBytes(
+  input: {
+    contentBase64?: string;
+    sourceMediaId?: string;
+  },
+  assertSourceCurrent: () => void,
+): Promise<{ buffer: Buffer; contentBase64: string; source: "inline" | "media" }> {
   const sourceMediaId = input.sourceMediaId?.trim();
   if (sourceMediaId) {
     const { buffer } = await readMediaBuffer(
@@ -40,6 +46,12 @@ async function readSourceBytes(input: {
       FILE_TRANSFER_SUBDIR,
       FILE_WRITE_HARD_MAX_BYTES,
     );
+    try {
+      assertSourceCurrent();
+    } catch (error) {
+      buffer.fill(0);
+      throw error;
+    }
     return { buffer, contentBase64: buffer.toString("base64"), source: "media" };
   }
   if (input.contentBase64 === undefined) {
@@ -71,42 +83,64 @@ export function createFileWriteTool(): AnyAgentTool {
 
       // Compute the integrity hash from the sent bytes rather than trusting a
       // caller-supplied expectedSha256 that could reject an otherwise valid write.
-      const sourceBytes = await readSourceBytes({ contentBase64, sourceMediaId });
-      const buffer = sourceBytes.buffer;
-      const expectedSha256 = crypto.createHash("sha256").update(buffer).digest("hex");
+      const execute = async (assertSourceCurrent: () => void = () => {}) => {
+        assertSourceCurrent();
+        const sourceBytes = await readSourceBytes(
+          { contentBase64, sourceMediaId },
+          assertSourceCurrent,
+        );
+        try {
+          assertSourceCurrent();
+          const buffer = sourceBytes.buffer;
+          const expectedSha256 = crypto.createHash("sha256").update(buffer).digest("hex");
 
-      const { audit, payload } = await invokeNodeToolPayload({
-        node: nodeQuery,
-        params: raw,
-        command: "file.write",
-        commandParams: {
-          path: filePath,
-          contentBase64: sourceBytes.contentBase64,
-          overwrite,
-          createParents,
-          expectedSha256,
-        },
-        invalidPayloadMessage: "unexpected response from node",
-        invalidPayloadError: "unexpected file.write response from node",
-        errorAuditExtra: { sizeBytes: buffer.byteLength },
-        requireOk: true,
-        requestedPath: filePath,
-      });
+          const { audit, payload, assertCurrent } = await invokeNodeToolPayload({
+            node: nodeQuery,
+            params: raw,
+            command: "file.write",
+            assertDispatchCurrent:
+              raw.environmentId && sourceMediaId ? assertSourceCurrent : undefined,
+            commandParams: {
+              path: filePath,
+              contentBase64: sourceBytes.contentBase64,
+              overwrite,
+              createParents,
+              expectedSha256,
+            },
+            invalidPayloadMessage: "unexpected response from node",
+            invalidPayloadError: "unexpected file.write response from node",
+            errorAuditExtra: { sizeBytes: buffer.byteLength },
+            requireOk: true,
+            requestedPath: filePath,
+          });
 
-      const typed = payload as FileWriteSuccess;
+          const typed = payload as FileWriteSuccess;
 
-      await audit({
-        canonicalPath: typed.path,
-        decision: "allowed",
-        sizeBytes: typed.size,
-        sha256: typed.sha256,
-      });
+          await audit({
+            canonicalPath: typed.path,
+            decision: "allowed",
+            sizeBytes: typed.size,
+            sha256: typed.sha256,
+          });
 
-      const overwriteNote = typed.overwritten ? " (overwrote existing file)" : "";
-      return textResult(
-        `Wrote ${typed.path} (${humanSize(typed.size)}, sha256:${typed.sha256.slice(0, 12)})${overwriteNote}`,
-        { ...typed, source: sourceBytes.source },
-      );
+          const overwriteNote = typed.overwritten ? " (overwrote existing file)" : "";
+          await assertCurrent?.();
+          assertSourceCurrent();
+          return textResult(
+            `Wrote ${typed.path} (${humanSize(typed.size)}, sha256:${typed.sha256.slice(0, 12)})${overwriteNote}`,
+            { ...typed, source: sourceBytes.source },
+          );
+        } finally {
+          sourceBytes.buffer.fill(0);
+        }
+      };
+      return raw.environmentId && sourceMediaId
+        ? await withGatewayToolAttachmentRead(
+            [path.resolve(getMediaDir(), FILE_TRANSFER_SUBDIR, sourceMediaId)],
+            execute,
+            "file_write",
+          )
+        : await execute();
     },
   };
 }

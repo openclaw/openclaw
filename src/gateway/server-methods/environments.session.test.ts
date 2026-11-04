@@ -67,7 +67,10 @@ function fixture() {
             idempotencyKey: "open-preview",
             ...(presentation ? { presentation } : {}),
           },
-          client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "crabbox" }),
+          client: createSyntheticPluginRuntimeClient({
+            pluginRuntimeOwnerId: "crabbox",
+            scopes: ["operator.admin"],
+          }),
           context,
           isWebchatConnect: () => false,
           respond,

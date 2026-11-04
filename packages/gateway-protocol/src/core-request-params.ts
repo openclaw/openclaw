@@ -12,6 +12,7 @@ import type {
   EnvironmentsSessionStatusParams,
   EnvironmentsSessionDestroyParams,
   EnvironmentsSessionExecParams,
+  EnvironmentsSessionInvokeParams,
   EnvironmentsAdoptSuggestedProfileParams,
 } from "./schema/environments.js";
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
@@ -65,6 +66,7 @@ export type GatewayCoreRequestParams = {
   "environments.session.status": EnvironmentsSessionStatusParams;
   "environments.session.destroy": EnvironmentsSessionDestroyParams;
   "environments.session.exec": EnvironmentsSessionExecParams;
+  "environments.session.invoke": EnvironmentsSessionInvokeParams;
   "environments.adoptSuggestedProfile": EnvironmentsAdoptSuggestedProfileParams;
   "conversations.list": AgentSchema.ConversationListParams;
   "conversations.send": AgentSchema.ConversationSendParams;

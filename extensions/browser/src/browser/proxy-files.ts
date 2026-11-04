@@ -2,6 +2,7 @@ import {
   canonicalizeBase64,
   estimateBase64DecodedBytes,
   saveMediaBuffer,
+  unlinkIfExists,
 } from "openclaw/plugin-sdk/media-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -63,30 +64,52 @@ function decodeBrowserProxyFileBase64(file: BrowserProxyFile, totalBytes: number
 }
 
 /** Validate, persist, and rewrite every route-owned file in a node result. */
-export async function persistBrowserProxyResultFiles(result: unknown, files: unknown) {
+export async function persistBrowserProxyResultFiles(
+  result: unknown,
+  files: unknown,
+  options?: { assertCurrent: () => Promise<void> | void },
+) {
   const validatedFiles = validateBrowserProxyFiles(result, files);
-  if (validatedFiles.length === 0) {
-    return result;
-  }
   const decoded: Array<{ file: BrowserProxyFile; buffer: Buffer }> = [];
+  const created: string[] = [];
   let totalBytes = 0;
-  for (const file of validatedFiles) {
-    const buffer = decodeBrowserProxyFileBase64(file, totalBytes);
-    totalBytes += buffer.byteLength;
-    decoded.push({ file, buffer });
-  }
-
-  const mapping = new Map<string, string>();
-  for (const { file, buffer } of decoded) {
-    const saved = await saveMediaBuffer(
-      buffer,
-      file.mimeType,
-      "browser",
-      BROWSER_PROXY_MAX_FILE_BYTES,
-      file.path,
+  try {
+    for (const file of validatedFiles) {
+      const buffer = decodeBrowserProxyFileBase64(file, totalBytes);
+      totalBytes += buffer.byteLength;
+      decoded.push({ file, buffer });
+    }
+    const mapping = new Map<string, string>();
+    for (const { file, buffer } of decoded) {
+      await options?.assertCurrent();
+      // saveMediaBuffer creates an exclusive, UUID-named file; existing references are not adopted.
+      const saved = await saveMediaBuffer(
+        buffer,
+        file.mimeType,
+        "browser",
+        BROWSER_PROXY_MAX_FILE_BYTES,
+        file.path,
+      );
+      created.push(saved.path);
+      mapping.set(file.path, saved.path);
+    }
+    await options?.assertCurrent();
+    visitBrowserProxyFilePaths(result, (filePath) => mapping.get(filePath));
+    return result;
+  } catch (error) {
+    const settled = await Promise.allSettled(created.map((file) => unlinkIfExists(file)));
+    const cleanupFailures = settled.flatMap((item) =>
+      item.status === "rejected" ? [item.reason] : [],
     );
-    mapping.set(file.path, saved.path);
+    if (cleanupFailures.length) {
+      throw new AggregateError([error, ...cleanupFailures], "Browser export rollback failed", {
+        cause: error,
+      });
+    }
+    throw error;
+  } finally {
+    for (const { buffer } of decoded) {
+      buffer.fill(0);
+    }
   }
-  visitBrowserProxyFilePaths(result, (filePath) => mapping.get(filePath));
-  return result;
 }

@@ -40,7 +40,12 @@ import { BrowserServiceError } from "./browser/client-fetch.js";
 
 function createSessionProxy(
   options: {
-    node?: Partial<Parameters<typeof createBrowserNodeProxyRequest>[0]["nodeTarget"]>;
+    node?: Partial<
+      Extract<
+        Parameters<typeof createBrowserNodeProxyRequest>[0],
+        { nodeTarget: unknown }
+      >["nodeTarget"]
+    >;
     fallback?: boolean;
     signal?: AbortSignal;
   } = {},

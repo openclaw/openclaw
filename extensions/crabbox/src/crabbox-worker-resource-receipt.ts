@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { WorkerResourceReceipt } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isGatewayAwsGuestReceipt } from "./crabbox-worker-gateway-aws.js";
 
 /** Azure Sandbox status carries provider-observed identity labels, not local inventory guesses. */
 export function readCrabboxResourceReceipt(
@@ -47,6 +48,10 @@ export function assertCrabboxResourceReceipt(
 }
 
 export function crabboxResourceIdentityArgs(receipt: WorkerResourceReceipt): string[] {
+  // Gateway AWS identity is checked through AWS, not invented upstream CLI flags.
+  if (isGatewayAwsGuestReceipt(receipt)) {
+    return [];
+  }
   if (
     receipt.version !== 1 ||
     receipt.identity.provider !== "azure-sandbox" ||

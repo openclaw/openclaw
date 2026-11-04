@@ -542,3 +542,8 @@ export const validateCatalogSearchKeywordsParams = createProtocolValidator(
   S.CatalogSearchKeywordsParamsSchema,
   Checks.isCatalogSearchKeywordsParams,
 );
+
+export const validateEnvironmentsSessionInvokeParams = createProtocolValidator(
+  S.EnvironmentsSessionInvokeParamsSchema,
+  Checks.isEnvironmentsSessionInvokeParams,
+);

@@ -29,7 +29,7 @@ export function createDirListTool(): AnyAgentTool {
           ? params.pageToken.trim()
           : undefined;
 
-      const { audit, payload } = await invokeNodeToolPayload({
+      const { audit, payload, assertCurrent } = await invokeNodeToolPayload({
         node,
         params,
         command: "dir.list",
@@ -87,6 +87,7 @@ export function createDirListTool(): AnyAgentTool {
         fallback:
           "Directory listing omitted: the resolved path or continuation metadata cannot be represented safely within the 8192-byte text limit. No usable paths or continuation token are shown; use available node-local directory capabilities.",
       });
+      await assertCurrent?.();
       return textResult(text, { path: canonicalPath, entries, nextPageToken, truncated });
     },
   };
