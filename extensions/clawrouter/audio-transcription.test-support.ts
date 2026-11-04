@@ -18,6 +18,7 @@ export type AudioCatalog = {
   authType?: string;
   upstream?: string;
   endpoint?: string;
+  routeKind?: "native" | "manifest";
 };
 export async function withClawRouterAudioFixture(
   run: (p: {
@@ -111,8 +112,12 @@ export async function withClawRouterAudioFixture(
                           endpoint,
                           modelId: `${catalog.provider}/${catalog.model}`,
                           transport: "http",
-                          routeKind: "native",
-                          route: catalog.route ?? `/v1/native/${catalog.provider}${path}`,
+                          routeKind: catalog.routeKind ?? "native",
+                          route:
+                            catalog.route ??
+                            (catalog.routeKind === "manifest"
+                              ? `/v1/proxy/${catalog.provider}/${endpoint}`
+                              : `/v1/native/${catalog.provider}${path}`),
                           eligible: catalog.eligible,
                           affordability: "request-dependent",
                         },
@@ -187,6 +192,8 @@ export async function withClawRouterAudioFixture(
         OPENAI_API_KEY: "fixture-upstream-never-router",
         SENSEAUDIO_API_KEY: "fixture-senseaudio-never-router",
         DEEPGRAM_API_KEY: "fixture-deepgram-never-router",
+        GROQ_API_KEY: "fixture-groq-never-router",
+        MISTRAL_API_KEY: "fixture-mistral-never-router",
       },
     },
   );

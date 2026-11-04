@@ -540,6 +540,30 @@ failure. Request-dependent affordability still needs the Worker's current grant
 and billing decision; unknown duration or pricing never becomes a free request.
 JSON OpenRouter transcription needs a separate native consumer.
 
+### Groq and Mistral multipart offers
+
+The same registered audio consumer also recognizes the exact selections
+`groq/whisper-large-v3-turbo` and `mistral/voxtral-mini-latest` when the current
+proxy key's catalog grants their paired `groq.transcription` or
+`mistral.transcription` request and response formats. The default transcription
+model is unchanged. Client support alone does not activate a provider declaration.
+
+Both use multipart uploads through the singular catalog endpoint `transcription`.
+Native offers use `/v1/native/<provider>/v1/audio/transcriptions` with the upstream
+model ID. Manifest offers use their unchanged `/v1/proxy/<provider>/transcription`
+URL with the full catalog model ID in the form; there is no JSON envelope. Groq's
+upstream `/openai` prefix belongs to the server destination, not the client URL.
+
+These profiles accept at most 25,000,000 file bytes, supported original filename
+and MIME pairs, and a lowercase two-letter language. Groq prompt text is bounded
+to 4 KiB locally; its native token limit remains server validation. Mistral prompt
+and arbitrary query options are rejected before upload. Unsupported AAC is not
+renamed or relabeled. Complete UTF-8 JSON is bounded to 1 MiB under the original
+deadline and caller cancellation. Malformed, partial or failed dispatched output
+does not trigger another paid provider attempt. The returned model remains the
+selected catalog identity; observed serving models and audio usage do not imply
+a tariff or a free request.
+
 ### Native Deepgram files
 
 Select `deepgram/nova-3` in the same audio model configuration to use a qualified
