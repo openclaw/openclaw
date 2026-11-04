@@ -41,15 +41,14 @@ function metadataHost(
   const client = createTestGatewayClient(request);
   const harness = createGatewayHarness(client);
   const sessions = createTestSessionCapability(harness.gateway, "work");
-  const state = {
-    ...makeChatHost(),
+  const state = Object.assign(makeChatHost(), {
     client,
     sessions,
     sessionKey,
     assistantAgentId: "work",
     connected: true,
     ...overrides,
-  } as unknown as ChatPageHost;
+  }) as unknown as ChatPageHost;
   onTestFinished(() => retireChatMetadataRequests(state));
   return { client, sessions, state, ...harness };
 }
@@ -161,7 +160,8 @@ it.each(["agent:work:current", "global"])(
         expectedSessionId: before.sessionId,
       }),
     );
-    expect(state.chatError).toContain("Couldn't change permissions");
+    expect(state.chatError).toBe(t("chat.permissionControls.updateFailed"));
+    expect(state.lastErrorDetail).toEqual(new Error("Permission application failed"));
     const view = mountSolid(ChatPermissionPicker, controls().permissionPicker, container);
     const picker = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
     expect(picker.getAttribute("aria-label")).toContain(
