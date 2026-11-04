@@ -25,6 +25,12 @@
   font-weight: 600;
 }
 
+/* The pending reply names its author like its sent reply line. */
+.chat-reply-preview__label {
+  color: var(--muted);
+  font-weight: 400;
+}
+
 .composer-context-strip__label-text,
 .composer-context-strip__text,
 .composer-context-strip__person-name {

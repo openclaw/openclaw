@@ -43,7 +43,7 @@ The built-in GPT-5-family prompt contribution (`resolveGpt5SystemPromptContribut
 The prompt is compact, with fixed sections:
 
 - **Tooling**: structured-tool source-of-truth reminder plus runtime tool-use guidance. When `progress_card` is enabled (`tools.updatePlan`, on by default), its own description explains how to maintain one durable plan and status note, keep at most one step `in_progress`, and skip routine updates that do not change the picture.
-- **Execution Bias**: act in-turn on actionable requests, continue until done or blocked, recover from weak tool results, check mutable state live, and verify before finalizing. A requested action with an available tool is authorized: tool policy, sandboxing, and exec approvals gate risk at runtime, so the prompt does not ask the model to pre-refuse, warn, or seek extra permission.
+- **Execution Bias**: act in-turn on actionable requests, continue until done or blocked, recover from weak tool results, check mutable state live, and verify before finalizing. Explicit skill workflow gates take precedence over this generic bias; user instructions, prior authorization, safety, and tool policy remain authoritative. A requested action with an available tool is authorized: tool policy, sandboxing, and exec approvals gate risk at runtime, so the prompt does not ask the model to pre-refuse, warn, or seek extra permission.
 - **Promised Work**: promising future, background, delegated, or continued work creates follow-through ownership: arrange an available completion or watch path before ending the turn, proactively return with the result or a concrete blocker, and never treat progress (like `running`) as completion.
 - **Care**: inspect and merge before editing existing config or scheduler files, use or store credentials the user shares as asked, private delivery of short-lived login codes in groups, and a terminal setup route when no control tools are available. For security, permission, or authentication blocks, briefly explain what was blocked and why; offer only verified recovery steps with the exact UI path or configuration key and who can make the change. Prefer scoped access or approval, omit unverified remedies, and never invent settings or bypass restrictions. This shared safety guidance stays outside provider section overrides and is also used by native Codex, Copilot, and Agents API prompts. It does not change permissions or guarantee model behavior.
 - **Runtime Context**: common guidance for all providers above the cache boundary; tool-specific instructions stay below it with the current tool capabilities. OpenClaw attaches a separate, typed runtime-context message for the current request. This includes the local date and time zone, compact facts about active exec sessions, active subagents, and media-generation progress, plus advisory approved-executable hints on Windows when `exec` is available. [Runtime context and provider roles](/concepts/context#runtime-context-and-provider-roles) explains the native operator channel, user-role compatibility carriers, and quoted-data boundary. Each current snapshot supersedes older snapshots of the same fact family and scope. An empty snapshot reports no items for its scope and time; it does not prove unqueried work is absent, establish global inactivity, or show whether earlier work ran. Use it without replying to or describing it, keep its internal details private, and continue without waiting for another message.
@@ -222,6 +222,15 @@ See [Timezones](/concepts/timezone) and [Date & Time](/date-time) for full behav
 ## Skills
 
 When eligible skills exist, OpenClaw injects a compact `<available_skills>` list (`formatSkillsForPrompt`) with the **file path** for each skill. The prompt instructs the model to use `read` to load the SKILL.md at the listed location (workspace, managed, or bundled). If no skills are eligible, the Skills section is omitted.
+
+In Code Mode, when installed skill search and reading are both available, the
+prompt keeps discovery instructions and omits the static catalog. The agent uses
+`skills.search(query)` for an unfamiliar workflow or `skills.read(name)` for a
+known skill. This preserves the eligible catalog and complete instruction reads
+while avoiding repeated catalog text. Without search, Code Mode retains the
+listing. A new workflow may require a discovery call; known names need no search.
+Existing pinned conversation prefixes remain intact; the full size reduction
+appears when a new session or compaction starts a fresh prompt series.
 
 Managed native Codex turns receive this list through parent-local model request instructions instead of per-turn user input, except lightweight cron turns that preserve the exact scheduled prompt. Connections without that relay use thread developer instructions so model-owned collaboration instructions cannot replace the catalog. Other harnesses keep the normal prompt section.
 

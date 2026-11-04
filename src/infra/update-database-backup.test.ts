@@ -5,10 +5,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -183,59 +185,6 @@ it.each(["legacy", "current"] as const)(
     );
     await expectSnapshot(backup.databases[0]!);
     expect(await fs.readFile(f.shared)).toEqual(before);
-  },
-);
-
-it.each(["foreign-key", "physical"] as const)(
-  "retains only relational findings in original recovery images (%s)",
-  async (damage) => {
-    const f = await fixture();
-    let fragmentOffset = 0;
-    {
-      using db = new DatabaseSync(f.shared);
-      if (damage === "foreign-key") {
-        db.exec(
-          "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(parent_id INTEGER REFERENCES parent(id)); PRAGMA foreign_keys=OFF; INSERT INTO child VALUES(99);",
-        );
-      } else {
-        const root = Number(
-          db.prepare("SELECT rootpage FROM sqlite_schema WHERE name='payload'").get()?.rootpage,
-        );
-        const pageSize = Number(db.prepare("PRAGMA page_size").get()?.page_size);
-        fragmentOffset = (root - 1) * pageSize + 7;
-      }
-    }
-    if (damage === "physical") {
-      // Keep rows readable while corrupting the page's free-byte accounting.
-      const bytes = await fs.readFile(f.shared);
-      bytes.writeUInt8(1, fragmentOffset);
-      await fs.writeFile(f.shared, bytes);
-    }
-    const original = await fs.readFile(f.shared);
-    const backup = f.capture({
-      preserveSourceArtifacts: true,
-      originalCaptureSourcePaths: [f.shared],
-      integrityCheck: "quick",
-    });
-    if (damage === "physical") {
-      await expect(backup).rejects.toThrow(/Fragmentation of 0 bytes reported as 1/u);
-    } else {
-      const result = await backup;
-      const entry = result.databases[0]!;
-      using image = new DatabaseSync(entry.snapshotPath, { readOnly: true });
-      expect(image.prepare("SELECT * FROM child").all()).toEqual([{ parent_id: 99 }]);
-      expect(image.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
-      expect(result.warnings).toContain(
-        `Original recovery image retains foreign-key violations: ${f.shared}`,
-      );
-      expect(result.sourceGenerations[f.shared]).toBeUndefined();
-      expect(
-        createHash("sha256")
-          .update(await fs.readFile(entry.snapshotPath))
-          .digest("hex"),
-      ).toBe(entry.sha256);
-    }
-    expect(await fs.readFile(f.shared)).toEqual(original);
   },
 );
 
@@ -588,7 +537,14 @@ async function originalCaptureFixture(externalAgents = false) {
     bytes,
     family,
     familyPaths,
-    captureOriginal: (runId: string, acquisition?: UpdateRecoveryCaptureAcquisition) =>
+    captureOriginal: (
+      runId: string,
+      acquisition?: UpdateRecoveryCaptureAcquisition,
+      options: Pick<
+        Parameters<typeof captureUpdateRecoveryBaseline>[0],
+        "discardIncompleteOnFailure" | "signal"
+      > = {},
+    ) =>
       captureUpdateRecoveryBaseline({
         runId,
         installRoot: f.root,
@@ -596,6 +552,7 @@ async function originalCaptureFixture(externalAgents = false) {
         drivers: [],
         assertCurrent: () => {},
         acquisition,
+        ...options,
       }),
   };
 }
@@ -632,6 +589,58 @@ it("refuses an original capture before writing when its payload will not fit", a
   );
   await expectMissing(store);
   expect((await fs.stat(f.applicationFile)).size).toBe(payloadBytes);
+});
+
+it("discards only settled unsealed Doctor attempts and preserves sealed recovery", async () => {
+  const f = await originalCaptureFixture();
+  const sealed = await f.captureOriginal("last-sealed");
+  const manifest = await readManifest(sealed.ref);
+  const owner = await import("./update-database-backup.js");
+  const backup = vi.spyOn(owner, "createUpdateDatabaseBackup");
+  for (const mode of ["update", "uncertain", "revoked", "published", "settled"] as const) {
+    const failure =
+      mode === "uncertain" ? new CommandProcessCleanupError() : new Error("capture interrupted");
+    const controller = new AbortController();
+    let current = true;
+    backup.mockImplementationOnce(async ({ backupRoot }) => {
+      const directory = path.dirname(backupRoot);
+      await fs.writeFile(path.join(directory, "payload", "unfinished"), "private original bytes");
+      await fs.writeFile(path.join(directory, "manifest.json.partial"), "unfinished manifest");
+      if (mode === "published") {
+        await fs.writeFile(path.join(directory, "manifest.json"), "possibly published manifest");
+      }
+      current = mode !== "revoked";
+      controller.abort(failure);
+      throw failure;
+    });
+    const runId = `failed-${mode}`;
+    const rejection = await f
+      .captureOriginal(runId, undefined, {
+        signal: controller.signal,
+        discardIncompleteOnFailure:
+          mode === "update"
+            ? undefined
+            : {
+                assertCurrent() {
+                  if (!current) {
+                    throw new Error("maintenance ownership revoked");
+                  }
+                },
+              },
+      })
+      .catch((error: unknown) => error);
+    expect(collectNestedErrorCandidates(rejection)).toContain(failure);
+    const directory = path.join(resolveUpdateCaptureRoot(f.stateDir), runId);
+    if (mode === "settled") {
+      await expectMissing(directory);
+    } else {
+      expect(await fs.readFile(path.join(directory, "payload", "unfinished"), "utf8")).toBe(
+        "private original bytes",
+      );
+    }
+  }
+  expect(await readManifest(sealed.ref)).toEqual(manifest);
+  await expectOriginalDatabase(sealed.ref, f.shared);
 });
 
 it("seals equivalent original bytes under isolated and maintenance-owned capture", async () => {

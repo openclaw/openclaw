@@ -202,7 +202,7 @@ describe("Startup entries", () => {
           listeners: [{ pid: 4343, commandLine: foreignCommand }],
           hints: [],
         });
-        vi.spyOn(gatewayProcesses, "findVerifiedGatewayListenerPidsOnPortSync").mockReturnValue([
+        vi.spyOn(gatewayProcesses, "findVerifiedGatewayListenerPidsOnPort").mockResolvedValue([
           4343,
         ]);
       }

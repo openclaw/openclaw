@@ -6,6 +6,7 @@ import type {
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
+import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
@@ -19,6 +20,7 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 export async function loadSessionTranscriptEvents(
   scope: SessionTranscriptReadScope,
 ): Promise<TranscriptEvent[]> {
+  const caller = getSessionTranscriptHydrationCaller("raw-events");
   const memory = captureSessionActorTranscriptRead(scope);
   if (memory) {
     if (memory.missing) {
@@ -63,6 +65,7 @@ export async function loadSessionTranscriptEvents(
       };
       try {
         const result = await owner.readTranscript({
+          caller,
           target: captured,
           resolvedScope: target,
           admission,

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { testApi } from "openclaw/plugin-sdk/tts-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTtsTool } from "../agents/tools/tts-tool.js";
 import { handleTtsCommands } from "../auto-reply/reply/commands-tts.js";
@@ -183,6 +184,10 @@ describe("TTS real synthesis owner to public output entries", () => {
         voice ? { synthesisTarget: "voice-note", transcodesAudio: true } : fileDelivery,
         !voice,
       );
+      expect(testApi.supportsNativeVoiceNoteTts(CHANNEL)).toBe(true);
+      expect(testApi.supportsNativeVoiceNoteTts(CHANNEL.toUpperCase())).toBe(true);
+      expect(testApi.supportsNativeVoiceNoteTts("slack")).toBe(false);
+      expect(testApi.supportsNativeVoiceNoteTts(undefined)).toBe(false);
       await observeEntries(voice);
       expect(requests).toEqual(Array(4).fill(voice ? "voice-note" : "audio-file"));
       expect(converter.count).toBe(voice ? 0 : 4);

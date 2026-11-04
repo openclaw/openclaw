@@ -1464,6 +1464,11 @@ export function isMcpAuthLoginParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").McpAuthLoginParamsSchema
 >;
+export function isMcpAuthLogoutParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").McpAuthLogoutParamsSchema
+>;
 export function isWizardNextParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2083,6 +2088,11 @@ export function isSessionsGroupsDefaultsResult(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsGroupsDefaultsResultSchema
 >;
+export function isSessionsGroupsCreateParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsGroupsCreateParamsSchema
+>;
 export function isSessionsGroupsPutParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2207,6 +2217,11 @@ export function isSessionsFilesPreviewReleaseParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsFilesPreviewReleaseParamsSchema
+>;
+export function isUsersChannelIdentityParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema/users.js").UsersChannelIdentityParamsSchema
 >;
 export function isConnectParams(
   value: unknown,

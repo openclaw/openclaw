@@ -35,7 +35,7 @@ import type {
 import { MODEL_FALLBACK_NOTICE_KIND } from "../../../shared/model-fallback-notice.js";
 import {
   isOpenClawDeliveryMirrorAssistantMessage,
-  SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
+  PLUGIN_NOTICE_KIND,
 } from "../../../shared/transcript-only-openclaw-assistant.js";
 import {
   AGENT_RUN_RESTART_ABORT_ERROR,
@@ -79,10 +79,7 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
     ? asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"))
     : undefined;
   // Operational notices do not complete the foreground user turn.
-  if (
-    delivery?.kind === SKILL_WORKSHOP_CHANGE_NOTICE_KIND ||
-    delivery?.kind === MODEL_FALLBACK_NOTICE_KIND
-  ) {
+  if (delivery?.kind === PLUGIN_NOTICE_KIND || delivery?.kind === MODEL_FALLBACK_NOTICE_KIND) {
     return true;
   }
   if (Reflect.get(message, "__openclaw")?.runId !== runId) {

@@ -6,12 +6,8 @@ import {
 import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
-  uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import {
-  normalizeCommandDescriptorName,
-  sanitizeCommandDescriptorDescription,
-} from "../cli/program/command-descriptor-utils.js";
+import { normalizePluginCliRegistrationMetadata } from "../cli/program/command-descriptor-utils.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
   isPrivateNodeInvokeCommand,
@@ -29,13 +25,14 @@ import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { WidgetPresenter } from "./plugin-registration.types.js";
+import type { LearnContribution } from "./registry-contribution-types.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
+import { hasKind } from "./slots.js";
 import type {
   OpenClawGatewayDiscoveryService,
   OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
-  OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginCommandDefinition,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -127,56 +124,13 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registrar: OpenClawPluginCliRegistrar,
     opts?: OpenClawPluginCliRegistrationOptions,
   ) => {
-    const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
-      const normalized = normalizeCommandDescriptorName(raw);
-      if (!normalized) {
-        reportRegistrationError(
-          record,
-          `invalid cli ${source} name: ${JSON.stringify(raw.trim())}`,
-        );
-      }
-      return normalized;
-    };
-    const parentPath = (opts?.parentPath ?? []).map((segment) =>
-      normalizeCommandRoot(segment, "command"),
+    const metadata = normalizePluginCliRegistrationMetadata(opts, (message) =>
+      reportRegistrationError(record, message),
     );
-    if (parentPath.some((segment) => segment === null)) {
+    if (!metadata) {
       return;
     }
-    const normalizedParentPath = parentPath as string[];
-    const rootRegistration = normalizedParentPath.length === 0;
-    const descriptors = (opts?.descriptors ?? [])
-      .map((descriptor) => {
-        const name = normalizeCommandRoot(descriptor.name, "descriptor");
-        const description = sanitizeCommandDescriptorDescription(descriptor.description);
-        const machineOutput = rootRegistration
-          ? (descriptor as OpenClawPluginCliRootCommandDescriptor).machineOutput
-          : undefined;
-        if (!name || !description) {
-          return null;
-        }
-        const normalized: OpenClawPluginCliRootCommandDescriptor = {
-          name,
-          description,
-          hasSubcommands: descriptor.hasSubcommands,
-        };
-        if (machineOutput) {
-          normalized.machineOutput = machineOutput;
-        }
-        return normalized;
-      })
-      .filter(
-        (descriptor): descriptor is OpenClawPluginCliRootCommandDescriptor => descriptor !== null,
-      );
-    const commands = uniqueStrings(
-      [...(opts?.commands ?? []), ...descriptors.map((descriptor) => descriptor.name)]
-        .map((command) => normalizeCommandRoot(command, "command"))
-        .filter((command): command is string => command !== null),
-    );
-    if (commands.length === 0) {
-      reportRegistrationError(record, "cli registration missing explicit commands metadata");
-      return;
-    }
+    const { parentPath: normalizedParentPath, commands, descriptors } = metadata;
     const serializeCommandPath = (command: string) => [...normalizedParentPath, command].join(" ");
     const commandPaths = commands.map(serializeCommandPath);
     const commandPathSet = new Set(commandPaths);
@@ -522,6 +476,45 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     record.commands.push(name);
   };
 
+  const registerLearnContribution = (record: PluginRecord, contribution: LearnContribution) => {
+    if (typeof contribution?.buildGuidance !== "function" || !contribution.toolNames?.length) {
+      reportRegistrationError(record, "learn contribution missing toolNames or buildGuidance");
+      return;
+    }
+    // Memory lessons go to the selected provider only, like its recall grant.
+    if (
+      contribution.medium === "memory" &&
+      !(hasKind(record.kind, "memory") && record.memorySlotSelected === true)
+    ) {
+      reportRegistrationWarning(
+        record,
+        "memory learn contribution skipped: only the selected memory slot owner may contribute memory lessons",
+      );
+      return;
+    }
+    // The dispatcher calls these callbacks after registration and runs plugin code (skill
+    // writes, state reads), so each one enters the registering instance's call scope. Bind each
+    // callable: values read back out of a wrapped array (e.g. by `find`) are the raw originals.
+    const instance = getPluginInstance(record);
+    const bind = <T>(callback: T): T => (instance ? instance.wrap(callback) : callback);
+    registry.learnContributions.push({
+      pluginId: record.id,
+      contribution: {
+        ...contribution,
+        buildGuidance: bind(contribution.buildGuidance),
+        ...(contribution.subcommands
+          ? {
+              subcommands: contribution.subcommands.map((subcommand) => ({
+                ...subcommand,
+                handle: bind(subcommand.handle),
+                ...(subcommand.matchArgs ? { matchArgs: bind(subcommand.matchArgs) } : {}),
+              })),
+            }
+          : {}),
+      },
+    });
+  };
+
   return {
     registerWidgetPresenter,
     registerCli,
@@ -534,5 +527,6 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerService,
     registerGatewayDiscoveryService,
     registerCommand,
+    registerLearnContribution,
   };
 }

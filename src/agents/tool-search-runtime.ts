@@ -25,12 +25,12 @@ import {
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
 import { markToolContractFailure } from "./tool-contract-error.js";
 import { readToolExecutionRefusal } from "./tool-effect-receipt.js";
-import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
-  isToolResultError,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
-} from "./tool-result-error.js";
+} from "./tool-execution-error.js";
+import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
+import { isToolResultError } from "./tool-result-error.js";
 import { runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,

@@ -28,7 +28,7 @@ import {
 } from "../loading/workspace-skill-sources.js";
 import { resolveSkillFileHost } from "../skill-file-host.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import * as remoteRefresh from "./refresh-remote.js";
 import { getSkillsSnapshotVersion as versionOf } from "./refresh-state.js";
 import * as refresh from "./refresh.js";
@@ -166,7 +166,7 @@ async function remoteFixture(options: { finishOnAbort?: boolean } = {}) {
     ),
   };
   const release = registerAgentWorkspaceAccess(gateway, access);
-  const config = { plugins: { enabled: false } };
+  const config = { plugins: { allow: ["skill-workshop"] } };
   releases.push(release);
   const params = { workspaceDir: gateway, config };
   const remoteParams = {
@@ -224,7 +224,10 @@ it.each(["replacement", "watch disablement", "shutdown"] as const)(
           ? refresh.ensureSkillsWatcher({
               ...params,
               sourcePlan: remoteParams.sourcePlan,
-              config: { plugins: { enabled: false }, skills: { load: { watch: false } } },
+              config: {
+                plugins: { allow: ["skill-workshop"] },
+                skills: { load: { watch: false } },
+              },
             })
           : remoteRefresh.closeRemoteSkillsWatchers();
     try {

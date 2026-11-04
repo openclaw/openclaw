@@ -137,7 +137,7 @@ describe("renderChatComposer context usage", () => {
         contextBudgetStatus: contextBudgetStatusFixture(),
       },
     });
-    expect(contextRingFor(container)?.getAttribute("title")).toBe("Open context usage details");
+    expect(contextRingFor(container)?.getAttribute("title")).toBe("Context: 89% used");
     expect(part(container, "context-value")?.textContent).toContain("180k");
     expect(part(container, "title")?.textContent).toBe("Prompt budget");
     expect(contextRingFor(container)?.classList.contains("context-ring--warning")).toBe(true);
@@ -188,7 +188,7 @@ describe("renderChatComposer context usage", () => {
       expect(part(container, "context-value")).toBeNull();
       const ring = contextRingFor(container);
       if (withPlanUsage) {
-        expect(ring?.getAttribute("aria-label")).toBe("Usage Remaining");
+        expect(ring?.getAttribute("aria-label")).toBe("Usage remaining");
         expect(part(container, "limit")?.textContent).toContain("72%");
       } else {
         expect(ring).toBeNull();
@@ -393,7 +393,7 @@ describe("renderChatComposer context usage", () => {
       filled: false,
       disabled: false,
       busy: null,
-      title: "Replaces older context with a summary.",
+      title: "Summarizes older messages to free up space.",
     };
 
     expect(compactButton(renderComposer({ session: { totalTokens: 190_000 } }))).toBeNull();
@@ -408,7 +408,7 @@ describe("renderChatComposer context usage", () => {
     expect(state(render({ session: { totalTokens: 190_000 }, runActive: true }))).toEqual({
       ...ready,
       disabled: true,
-      title: "Available when the current run finishes.",
+      title: "Available after this reply finishes.",
     });
     expect(state(render({ session: { totalTokens: 190_000 }, connected: false }))).toEqual({
       ...ready,

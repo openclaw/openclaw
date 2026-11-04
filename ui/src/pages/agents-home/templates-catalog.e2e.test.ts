@@ -266,7 +266,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       expect(await gateway.getRequests("templates.catalog.preview")).toHaveLength(0);
       await page.keyboard.press("Escape");
       await detail.getByRole("heading", { name: "Workspace files" }).click();
-      const fileDescriptions = workspace.locator(".plugin-capability__copy > span");
+      const fileDescriptions = workspace.locator(".settings-row__desc");
       expect(await fileDescriptions.allTextContents()).toEqual([soulExcerpt]);
       await expectClamped(fileDescriptions.first());
       expect(await detail.getByText("Research trips.", { exact: true }).count()).toBe(1);
@@ -290,6 +290,17 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       );
     },
   );
+
+  it("distinguishes an empty catalog from no matching templates", async () => {
+    const { page, gateway } = await fixture();
+    await page.locator("[data-templates-featured] [data-templates-entry]").first().waitFor();
+    await gateway.setMethodResponse("templates.catalog.search", { entries: [] });
+    const search = page.getByPlaceholder("Search templates");
+    await search.fill("unmatched");
+    await page.getByText("No templates match your search.", { exact: true }).waitFor();
+    await search.fill("");
+    await page.getByText("No templates yet.", { exact: true }).waitFor();
+  });
 
   it("uses the accepted publisher to add a personal Template and start chat despite pending setup", async () => {
     const community = {

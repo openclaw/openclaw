@@ -26,12 +26,12 @@ const suite = createControlUiE2eSuite({ name: "Complete sidebar roster handoff" 
 
 suite.define(() => {
   it.each([
-    { face: "chat", cap: false, rootLast: false },
-    { face: "chat", cap: true, rootLast: false },
-    { face: "dashboard", cap: false, rootLast: true },
+    { face: "chat", changes: false, rootLast: false },
+    { face: "chat", changes: true, rootLast: false },
+    { face: "dashboard", changes: false, rootLast: true },
   ] as const)(
-    "releases the $face sidebar when complete or capped (cap=$cap, rootLast=$rootLast)",
-    async ({ face, cap, rootLast }) => {
+    "keeps cached $face rows until the roster settles (changes=$changes, rootLast=$rootLast)",
+    async ({ face, changes, rootLast }) => {
       const fixture = createControlUiTeamScaleFixture({
         baseUrl: suite.server.baseUrl,
         sidebarPersistentChildren: true,
@@ -47,6 +47,21 @@ suite.define(() => {
       for (const row of [...ownedRoots, ...children]) {
         row.owner = owner;
       }
+      const collapsedParentKey = fixture.pinnedKeys[1]!;
+      const collapsedChildKey = "agent:main:chat:00000000-0000-4000-8000-000000009998";
+      fixture.sidebarListInput.rows.find((row) => row.key === collapsedParentKey)!.childSessions = [
+        collapsedChildKey,
+      ];
+      fixture.sidebarListInput.rows.push({
+        ...children[0]!,
+        key: collapsedChildKey,
+        sessionId: "collapsed-pin-child",
+        spawnedBy: collapsedParentKey,
+        parentSessionKey: collapsedParentKey,
+        childOwnerSessionKeys: [collapsedParentKey],
+        hasActiveRun: false,
+        status: "done",
+      });
       const lists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 1000 } },
@@ -109,7 +124,7 @@ suite.define(() => {
           const sidebar = page.locator("aside.sidebar");
           const viewport = sidebar.locator(".sidebar-shell__body");
           const geometry = () =>
-            sidebar.evaluate((element) => {
+            sidebar.evaluate((element, titleKey) => {
               const scroller = element.querySelector<HTMLElement>(".sidebar-shell__body")!;
               return {
                 scrollTop: scroller.scrollTop,
@@ -121,10 +136,22 @@ suite.define(() => {
                     key: row.getAttribute("data-session-key"),
                     top: row.getBoundingClientRect().top,
                     height: row.getBoundingClientRect().height,
+                    aside: row
+                      .querySelector(".session-row-aside")!
+                      .getBoundingClientRect()
+                      .toJSON(),
+                    // This pin has stable display facts; the selected row gains live viewers.
+                    title:
+                      row.getAttribute("data-session-key") === titleKey
+                        ? row
+                            .querySelector(".sidebar-recent-session__title-row")!
+                            .getBoundingClientRect()
+                            .toJSON()
+                        : undefined,
                   }),
                 ),
               };
-            });
+            }, fixture.pinnedKeys[1]!);
           const capture = async (stage: string) => {
             const frame = await takeControlUiScreenshotFrame(page, sidebar, [sidebar], {
               animations: "disabled",
@@ -135,6 +162,13 @@ suite.define(() => {
           const saved = () =>
             page.locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]');
           await saved().waitFor();
+          const collapsedToggle = sidebar.locator(
+            `[data-child-session-toggle="${collapsedParentKey}"]`,
+          );
+          await revealSidebarTarget(viewport, collapsedToggle);
+          if ((await collapsedToggle.getAttribute("aria-expanded")) === "true") {
+            await collapsedToggle.click();
+          }
           const toggle = sidebar.locator(`[data-child-session-toggle="${parentKey}"]`);
           await revealSidebarTarget(viewport, toggle);
           if ((await toggle.getAttribute("aria-expanded")) !== "true") {
@@ -177,6 +211,8 @@ suite.define(() => {
           // row to prove the scroll event has published the new visible window.
           await sidebar.locator(`[data-session-key="${fixture.pinnedKeys[1]}"]`).waitFor();
           await sidebar.locator(".session-row-badge--pull-request").nth(6).waitFor();
+          await page.mouse.move(1000, 700);
+          await page.locator("#sidebar-session-owner-title").focus();
           const beforeReload = await geometry();
           const indicators = () =>
             sidebar.locator(".sidebar-recent-session").evaluateAll((rows) =>
@@ -199,6 +235,14 @@ suite.define(() => {
 
           await page.reload();
           await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
+          await collapsedToggle.waitFor();
+          expect(await collapsedToggle.count()).toBe(1);
+          expect(await collapsedToggle.isDisabled()).toBe(true);
+          await collapsedToggle.evaluate((button: HTMLButtonElement) => button.click());
+          expect(await collapsedToggle.getAttribute("aria-expanded")).toBe("false");
+          expect(await sidebar.locator(`[data-session-key="${collapsedChildKey}"]`).count()).toBe(
+            0,
+          );
           await capture("cached");
           const cachedGeometry = await geometry();
           // Connection status owns a footer while the Gateway reconnects. Keep
@@ -270,6 +314,9 @@ suite.define(() => {
             .toBeGreaterThan(0);
           const childRequest = await gateway.waitForRequest("sessions.list", { match: childMatch });
           const childResult = lists.list(asRecord(childRequest.params)!).result;
+          await page.clock.runFor(3200);
+          await capture("awaiting-live");
+          expect(await sidebar.getAttribute("data-snapshot-state")).toBe("cached");
           let childReleased = false;
           const releaseChildren = async () => {
             if (!childReleased) {
@@ -277,14 +324,24 @@ suite.define(() => {
               await gateway.resolveDeferred("sessions.list", childResult, { match: childMatch });
             }
           };
-          const cachedVisibleRows = await sidebar.evaluateHandle(
-            (element, keys) =>
-              [
-                ...element.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
-              ].filter((row) => keys.includes(row.getAttribute("data-session-key"))),
-            expected,
-          );
+          const cachedVisibleRows = await sidebar.evaluateHandle((element, keys) => {
+            const rows = [
+              ...element.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+            ].filter((row) => keys.includes(row.getAttribute("data-session-key")));
+            const host = element.closest("openclaw-app-sidebar")!;
+            const parent = host.parentNode!;
+            const next = host.nextSibling;
+            // Native layout moves preserve the same host and its cached children.
+            host.remove();
+            parent.insertBefore(host, next);
+            return rows;
+          }, expected);
           try {
+            expect(await sidebar.getAttribute("data-snapshot-state")).toBe("cached");
+            expect(await rowKeys()).toEqual(expected);
+            expect(
+              await cachedVisibleRows.evaluate((rows) => rows.every((row) => row.isConnected)),
+            ).toBe(true);
             if (rootLast) {
               await releaseChildren();
             }
@@ -307,22 +364,15 @@ suite.define(() => {
             ).not.toHaveLength(0);
 
             const readinessDiagnostic = JSON.stringify(beforeChildren);
-            expect(beforeChildren.elapsedMs, readinessDiagnostic).toBeLessThan(3000);
+            expect(beforeChildren.elapsedMs, readinessDiagnostic).toBeGreaterThan(3000);
             expect(beforeChildren.foregroundReady, readinessDiagnostic).toBe(true);
             expect(beforeChildren.state, readinessDiagnostic).toBe("cached");
             expect(beforeChildren.rows).toEqual(expected);
-            if (cap) {
-              await pauseVirtualClock(page);
-              await page.clock.runFor(3001);
+            if (changes) {
+              await releaseChildren();
               await page.clock.resume();
-              await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
+              await saved().waitFor();
               await revealSidebarTarget(viewport, toggle);
-              for (const key of childKeys) {
-                await sidebar.locator(`[data-session-key="${key}"]`).waitFor({ state: "detached" });
-              }
-              await capture("cap");
-            }
-            if (cap) {
               const now = fixture.sidebarListInput.now + 1000;
               const renamed = {
                 ...fixture.sidebarListInput.rows[1]!,
@@ -456,7 +506,7 @@ suite.define(() => {
                 2,
               ),
             );
-            if (cap) {
+            if (changes) {
               expect(finalRows).not.toContain(parentKey);
               for (const key of childKeys) {
                 expect(finalRows).not.toContain(key);
@@ -466,7 +516,7 @@ suite.define(() => {
               expect(visibleGeometry(await geometry())).toEqual(expectedGeometry);
             }
             expect(first).toBeGreaterThanOrEqual(0);
-            if (!cap) {
+            if (!changes) {
               expect(
                 frames.every((frame) => {
                   const visible = frame.rowIds.filter((key) => expected.includes(key));
@@ -486,7 +536,7 @@ suite.define(() => {
                 (frame, index) => index > 0 && frame.cached !== frames[index - 1]!.cached,
               ),
             ).toHaveLength(1);
-            if (!cap) {
+            if (!changes) {
               await revealSidebarTarget(viewport, toggle);
               expect(await toggle.getAttribute("aria-expanded")).toBe("true");
               await sidebar.locator(`[data-session-key="${childKeys[0]}"]`).waitFor();
