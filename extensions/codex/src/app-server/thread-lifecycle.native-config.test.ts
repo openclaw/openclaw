@@ -22,6 +22,7 @@ import {
 } from "./inference-routing.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import {
+  createAgentLifecycleHarness,
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   setupRunAttemptTestHooks,
@@ -36,7 +37,6 @@ import {
 } from "./session-binding.test-helpers.js";
 import {
   createAppServerOptions,
-  createLeasedCodexLifecycleHarness,
   nativeQuestionConfigFixture,
   startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -81,8 +81,7 @@ describe("Codex native configuration lifecycle", () => {
     "loaded unowned",
   ] as const)("continues a managed conversation with a lost inference route: %s", async (state) => {
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond: async (method) => {
         if (method === "account/read") {
           return { account: { type: "apiKey" } };
@@ -157,8 +156,7 @@ describe("Codex native configuration lifecycle", () => {
     async (authored) => {
       let enabled = authored;
       const native = threadStartResult("question-thread", { cwd: workspaceDir });
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond: async (method) => {
           if (method === "thread/start" || method === "thread/resume") {
             return native;
@@ -216,8 +214,7 @@ describe("Codex native configuration lifecycle", () => {
 
   it("resumes the bound thread after replacing the inference proxy client", async () => {
     const createClient = (persistedThreads: string[] = []) =>
-      createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      createAgentLifecycleHarness({
         persistedThreads,
         respond: async (method) => {
           if (method === "account/read") {
@@ -273,8 +270,7 @@ describe("Codex native configuration lifecycle", () => {
           ? { "features.tool_suggest": true, "features.recommended_plugins": true }
           : {}),
       };
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond: async (method) => {
           if (method === "thread/start" || method === "thread/resume") {
             return native;
@@ -313,8 +309,7 @@ describe("Codex native configuration lifecycle", () => {
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
       const native = threadStartResult("operator-base-thread", { cwd: workspaceDir });
       const value = key === "instructions" ? "Operator policy" : "/synthetic/codex/policy.md";
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond: async (method) => {
           if (method === "thread/start" || method === "thread/resume") {
             return native;
@@ -346,8 +341,7 @@ describe("Codex native configuration lifecycle", () => {
   it("refuses warm incognito reuse when OpenClaw's base changes beside an authored native base", async () => {
     params.sessionKey = "agent:main:dashboard:incognito-operator-base";
     registerCodexTestSessionIdentity(sessionFile, "session-1", params.sessionKey);
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond: async (method) => {
         if (method === "thread/start") {
           return threadStartResult("incognito-operator-thread", { cwd: workspaceDir });
@@ -382,8 +376,7 @@ describe("Codex native configuration lifecycle", () => {
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
     async (overridden) => {
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond: async (method) => {
           if (method === "account/read") {
             return { account: { type: "apiKey" } };
@@ -441,8 +434,7 @@ describe("Codex native configuration lifecycle", () => {
     "routes the final native provider after %s without reusing the injected URL as upstream",
     async (recovery) => {
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         persistedThreads: ["old-thread"],
         respond: async (method) => {
           if (method === "account/read") {
@@ -505,8 +497,7 @@ describe("Codex native configuration lifecycle", () => {
   it.each(["missing issuer", "policy introduced during preparation"] as const)(
     "refuses an unowned route before native dispatch when %s",
     async (restriction) => {
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond: async (method) => {
           if (method === "thread/start") {
             return threadStartResult("unexpected-thread");
@@ -560,8 +551,7 @@ describe("Codex native configuration lifecycle", () => {
       ...threadStartResult("native-provider-thread", { cwd: workspaceDir }),
       modelProvider: nativeProvider,
     };
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond: async (method) => {
         if (method === "thread/start" || method === "thread/resume") {
           return native;
@@ -625,8 +615,7 @@ describe("Codex native configuration lifecycle", () => {
         }
         return readNativeConfig(method);
       });
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond,
         persistedThreads: ["thread-reused"],
       });

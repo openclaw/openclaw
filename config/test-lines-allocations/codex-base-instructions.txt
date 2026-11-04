@@ -1,0 +1,2 @@
+# Codex threads carry OpenClaw's base prompt: harness base rendering, native base retention, provider guidance.
+222

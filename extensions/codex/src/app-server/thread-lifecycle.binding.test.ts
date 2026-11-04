@@ -35,6 +35,7 @@ import type {
   RpcRequest,
 } from "./protocol.js";
 import {
+  createAgentLifecycleHarness,
   bindProductionHarnessHostCapabilitiesForTest,
   createParams as createRunAttemptParams,
   setupRunAttemptTestHooks,
@@ -129,8 +130,7 @@ function createSequentialLifecycleHarness(
   origins: Record<string, JsonObject> = {},
 ) {
   let starts = 0;
-  return createLeasedCodexLifecycleHarness({
-    agentDir: path.join(tempDir, "agent"),
+  return createAgentLifecycleHarness({
     respond: async (method: string, requestParams?: unknown) => {
       if (method === "config/read") {
         return { config: effectiveConfig, origins, layers: [] };
@@ -646,8 +646,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     await upsertSessionEntry({ ...scope, entry: { sessionId: previous.sessionId, updatedAt: 1 } });
     await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
     const native = threadStartResult("recovered-native-thread");
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond: createLifecycleRequest(async (method) => {
         if (method === "thread/resume") {
           return native;
@@ -694,8 +693,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const threadId = "parallel-policy-a";
     const siblingId = "parallel-policy-b";
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond: createLifecycleRequest(async (method) => {
         if (method === "thread/resume") {
           const reader = await getLeasedSharedCodexAppServerClient(fixture.acquireOptions);
@@ -792,8 +790,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
           await proceed.promise;
         }
       };
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond: createLifecycleRequest(async (method) => {
           if (method === "thread/start") {
             return threadStartResult("warm-revoked");
@@ -893,8 +890,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const sessionFile = path.join(tempDir, "warm-cleared-hooks-session.jsonl");
     const workspaceDir = path.join(tempDir, "warm-cleared-hooks-workspace");
     const params = createParams(sessionFile, workspaceDir);
-    const fake = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fake = await createAgentLifecycleHarness({
       respond: createFixedThreadRequest("thread-warm-cleared-hooks", [
         "thread/start",
         "thread/resume",
@@ -958,8 +954,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "thread/start",
       "thread/resume",
     ]);
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond,
     });
     const { client, request } = fixture;
@@ -1455,8 +1450,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "thread/start",
       "thread/resume",
     ]);
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond,
     });
     const { client, request } = fixture;
@@ -1520,8 +1514,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.authProfileId = "openai:before";
     const respond = createFixedThreadRequest("thread-warm-auth", ["thread/start", "thread/resume"]);
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond,
     });
     const { client, request } = fixture;
@@ -2172,8 +2165,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         }
         throw new Error(`unexpected method: ${method}`);
       });
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
+      const fixture = await createAgentLifecycleHarness({
         respond,
         unsubscribe: async () => {
           if (pauseCleanup) {
@@ -2353,8 +2345,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond,
     });
 
@@ -2800,8 +2791,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond,
       persistedThreads: ["thread-existing"],
     });
@@ -3085,8 +3075,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     params.contextTokenBudget = 400_000;
 
     const respond = createFixedThreadRequest("thread-existing", ["thread/resume"]);
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond,
       persistedThreads: ["thread-existing"],
     });
@@ -3184,8 +3173,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond,
       persistedThreads: ["thread-existing"],
     });
@@ -3295,8 +3283,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond,
       persistedThreads: ["thread-existing"],
     });
@@ -3363,8 +3350,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond,
     });
     const { client, request } = fixture;
@@ -3460,8 +3446,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
+    const fixture = await createAgentLifecycleHarness({
       respond,
       persistedThreads: ["thread-existing"],
     });
