@@ -224,6 +224,9 @@ export function Config(props: ConfigProps) {
       analysis,
       unsupportedActivePaths,
       rawAvailable,
+      activeTabLabel: showSectionTabs
+        ? topTabs.find((tab) => tab.key === props.activeSection)?.label
+        : undefined,
       openRaw: showModeToggle && rawAvailable ? () => props.onFormModeChange("raw") : undefined,
       rawDraftPending,
       formMode,
@@ -384,9 +387,7 @@ export function Config(props: ConfigProps) {
               >
                 {saving() ? (
                   <>
-                    <span class="config-action-spinner" aria-hidden="true">
-                      <Icon name="loader" />
-                    </span>
+                    <span class="btn__spinner" aria-hidden="true" />
                     {t("common.saving")}
                   </>
                 ) : (
@@ -457,6 +458,7 @@ export function Config(props: ConfigProps) {
         value={props.formValue}
         embedded={props.embeddedEditor === true || state().showSetup}
         rawAvailable={state().rawAvailable}
+        repeatedHeadings={[props.navRootLabel, state().activeTabLabel]}
         onOpenRaw={state().openRaw}
         disabled={state().formBusy || !props.formValue || !state().mutationAllowed}
         unsupportedPaths={state().analysis.unsupportedPaths}
@@ -492,6 +494,7 @@ export function Config(props: ConfigProps) {
           ) : undefined
         }
         showSectionDocs={props.showSectionDocs}
+        sectionTitle={props.sectionTitle}
         sectionPrelude={props.sectionPrelude}
         curatedSections={props.curatedSections}
         revealSensitive={props.activeSection === "env" && view().envRevealed}
@@ -656,7 +659,7 @@ export function Config(props: ConfigProps) {
               >
                 <Loading
                   on={hasSchema() ? undefined : schemaRead()}
-                  fallback={<ConfigReadLoading message={t("configView.loadingSchema")} />}
+                  fallback={<ConfigReadLoading message={t("common.loading")} />}
                 >
                   <Show when={readSchemaReady()}>
                     {(message) => (
@@ -667,7 +670,7 @@ export function Config(props: ConfigProps) {
                     )}
                   </Show>
                   <span class="sr-only" role="status">
-                    {isPending(schemaReady) ? t("configView.loadingSchema") : ""}
+                    {isPending(schemaReady) ? t("common.loading") : ""}
                   </span>
                   <FormEditor />
                   {state().showSetup ? (

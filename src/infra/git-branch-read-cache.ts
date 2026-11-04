@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { ManagedWorktreeBranchesResult } from "../agents/worktrees/types.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type { GitReadOperations, GitReadOptions } from "./git-read-operations.js";
 import { runGitWorkerOperation } from "./git-worker.js";
 import { observeOwnedDirectory } from "./owned-directory-observation.js";
@@ -49,7 +50,7 @@ export function createBranchReadCache(environment: () => unknown) {
       const selected = entry;
       if (
         !entry.pending &&
-        (options.refresh || entry.dirty || (entry.retryAt > 0 && Date.now() >= entry.retryAt))
+        (options.refresh || entry.dirty || (entry.retryAt > 0 && monotonicNow() >= entry.retryAt))
       ) {
         entry.dirty = false;
         const controller = new AbortController();
@@ -123,7 +124,7 @@ export function createBranchReadCache(environment: () => unknown) {
               value.repositoryStatus === "not_git" ||
               value.repositoryStatus === "unavailable" ||
               value.branchesUnavailable
-                ? Date.now() + 5_000
+                ? monotonicNow() + 5_000
                 : 0;
           } catch {
             selected.value = {
@@ -131,7 +132,7 @@ export function createBranchReadCache(environment: () => unknown) {
               branchesUnavailable: true,
             };
             // A later user request can retry a failed read; there is no background polling.
-            selected.retryAt = Date.now() + 5_000;
+            selected.retryAt = monotonicNow() + 5_000;
           } finally {
             clearTimeout(timeout);
             selected.pending = undefined;

@@ -302,26 +302,24 @@ export async function prepareModelsListResult({
       manifestPlugins: metadataSnapshot,
     });
     draft?.assertCurrent();
-    const defaultModels =
-      (params.params.includeDefaultModels ??
-      (view === "configured" && !params.params.sessionKey && !params.params.authProfileId))
-        ? await resolveDefaultModelsPreview({
-            cfg,
-            agentId,
-            agentDir: sourceOwner?.agentDir,
-            workspaceDir,
-            metadataSnapshot,
-            preparedAuthStore,
-            preparedRuntimeAuthModes: preparedProjectionOwner?.authModes,
-            preparedRuntimeAuthMaterializations: preparedProjectionOwner?.authMaterializations,
-            pluginRegistry: preparedPluginRegistry,
-            snapshot,
-            isCurrent,
-          })
-        : undefined;
+    const modelPreviews = await resolveDefaultModelsPreview({
+      cfg,
+      agentId,
+      agentDir: sourceOwner?.agentDir,
+      workspaceDir,
+      metadataSnapshot,
+      preparedAuthStore,
+      preparedRuntimeAuthModes: preparedProjectionOwner?.authModes,
+      preparedRuntimeAuthMaterializations: preparedProjectionOwner?.authMaterializations,
+      pluginRegistry: preparedPluginRegistry,
+      snapshot,
+      isCurrent,
+      request: params.params,
+      view,
+    });
     draft?.assertCurrent();
     const outcomeProjection = {
-      ...(defaultModels ? { defaultModels } : {}),
+      ...modelPreviews,
       ...(publicProviderOutcomes?.length ? { providerOutcomes: publicProviderOutcomes } : {}),
     };
     const readAccountSelection =

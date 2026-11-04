@@ -255,24 +255,35 @@ const enPluginManagement = {
         "The credential could not be saved. Your draft is still available; try saving again.",
     },
     detailCapabilities: "Capabilities",
+    detailExtensions: "Extensions",
     uiCapabilities: {
-      page: { name: "Pages", description: "Adds pages to OpenClaw." },
-      navigation: { name: "Navigation", description: "Adds links to OpenClaw navigation." },
-      panel: { name: "Panels", description: "Adds interface panels." },
-      action: { name: "Actions", description: "Adds buttons or menu actions." },
+      page: { name: "Pages", description: "Adds dedicated plugin pages." },
+      navigation: { name: "Navigation", description: "Adds destinations to the app sidebar." },
+      panel: { name: "Panels", description: "Adds panels you can open beside a conversation." },
+      action: {
+        name: "Actions",
+        description: "Adds buttons or menu items in the composer, session header, or session menu.",
+      },
       accessory: {
         name: "Session accessories",
-        description: "Adds information or controls alongside sessions.",
+        description: "Shows information or controls in the session header.",
       },
-      widget: { name: "Dashboard widgets", description: "Adds widgets to the dashboard." },
-      inline: { name: "Inline views", description: "Shows native plugin views in conversations." },
+      widget: {
+        name: "Dashboard widgets",
+        description: "Adds widgets you can place on session dashboards.",
+      },
+      inline: {
+        name: "Inline views",
+        description: "Shows interactive plugin content within chat messages.",
+      },
       replacement: {
         name: "Interface replacements",
-        description: "Replaces supported parts of the interface.",
+        description:
+          "Offers alternate app views. Choose them in Plugins → Advanced → Customize UI.",
       },
       "link-reader": {
         name: "Link previews",
-        description: "Shows previews and details for supported links.",
+        description: "Opens supported links in a plugin-provided reader.",
       },
     },
     capabilityFamilies: {
@@ -523,6 +534,7 @@ const enPluginManagement = {
     disabled: "Disabled",
     available: "Available",
     needsAttention: "Needs attention",
+    needsSetup: "Needs setup",
     included: "Included",
     global: "Global",
     workspace: "Workspace",

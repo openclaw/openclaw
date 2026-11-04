@@ -9,6 +9,7 @@ import {
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
 import { configValuesEqual, defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
+import { configLabelInContext } from "./config-form.label-context.ts";
 import {
   configChildRenderOptions,
   createCollectionFocus,
@@ -93,13 +94,14 @@ function ConfigMapRow(
         controlIdentity: props.params.value,
         searchCriteria: props.params.searchCriteria,
         showLabel: false,
+        contextLabel: props.params.contextLabel,
         onPatch: props.params.onPatch,
       }) satisfies ConfigNodeRenderParams,
     { lazy: true },
   );
   return (
     <>
-      <div class="settings-row">
+      <div class="settings-row cfg-collection-row">
         <div class="settings-row__text">
           <input
             type="text"
@@ -240,7 +242,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
   return (
     <Show when={content().visible}>
       <div class="cfg-block cfg-map">
-        <div class="settings-row">
+        <div class="settings-row cfg-collection-row">
           <Show
             when={props.heading}
             fallback={
@@ -262,7 +264,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
               return (
                 <div class="settings-row__text">
                   <span class="settings-row__title">
-                    {heading().label}
+                    {configLabelInContext(heading().label, props.params.contextLabel)}
                     <Show when={copy().hasHelp}>
                       <ConfigFieldHelp
                         path={props.params.path}
@@ -304,7 +306,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
                 }
               }}
             >
-              {t("configForm.addEntry")}
+              {t("configForm.add")}
             </button>
           </div>
         </div>
