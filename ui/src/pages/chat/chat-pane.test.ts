@@ -191,6 +191,7 @@ describe("chat pane header state", () => {
       // operator needs a distinct, visible outcome or their lost intent reads
       // as a click that simply did nothing.
       expect(showToast).toHaveBeenCalledWith({
+        severity: "error",
         message: t("sessionsView.deleteSessionStale", { session: "Current session" }),
       });
     } finally {
@@ -275,9 +276,12 @@ describe("chat pane header state", () => {
 
     pane.handleHeaderMenuAction("copy-path", workspaceSession, "/src/openclaw", "feature/header");
 
-    await vi.waitFor(() => expect(state.chatError).toBe("Copy failed"));
+    await vi.waitFor(() => expect(state.chatError).toBe("Couldn’t copy. Try again."));
     flush();
-    expect(errors()).toEqual({ lastError: "Copy failed", chatError: "Copy failed" });
+    expect(errors()).toEqual({
+      lastError: "Couldn’t copy. Try again.",
+      chatError: "Couldn’t copy. Try again.",
+    });
   });
 
   it("does not query gateway-local branches for exec-node sessions", async () => {

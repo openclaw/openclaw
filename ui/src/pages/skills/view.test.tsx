@@ -453,7 +453,7 @@ describe("renderSkills", () => {
     const dialog = expectDefined(query(".skill-reader-dialog"), "skill dialog");
     const labels = Array.from(dialog.querySelectorAll(".oc-dialog__row-label")).map(normalizeText);
     expect(labels).toEqual(expect.arrayContaining(["Package", "Security check", "Source"]));
-    expect(normalizeText(dialog)).toContain("Changing this skill needs operator.admin access.");
+    expect(normalizeText(dialog)).toContain("You need admin access to change this skill.");
     expect(container.querySelector(".skill-reader-dialog input[type=checkbox]")).toHaveProperty(
       "disabled",
       true,

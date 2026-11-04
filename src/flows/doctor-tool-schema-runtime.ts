@@ -1,10 +1,8 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import type { McpToolCatalogDiagnostic } from "../agents/agent-bundle-mcp-catalog.types.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../agents/agent-bundle-mcp-runtime-config.js";
-import type {
-  BundleMcpToolRuntime,
-  McpToolCatalogDiagnostic,
-} from "../agents/agent-bundle-mcp-types.js";
+import type { BundleMcpToolRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "../agents/embedded-agent-runner/effective-tool-policy.js";

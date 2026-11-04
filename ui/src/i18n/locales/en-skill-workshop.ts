@@ -3,7 +3,7 @@ import { en } from "./en.ts";
 
 const enSkillWorkshop = {
   skillWorkshop: {
-    loadError: "Couldn’t load the workshop. Try again.",
+    loadError: "Couldn’t load the Workshop. Try again.",
     retry: "Retry",
     mode: {
       label: "Learning",

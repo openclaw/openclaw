@@ -80,6 +80,7 @@ describe("attachment frame admission", () => {
       expect(host.chatQueue).toEqual([]);
       expect(listStoredChatOutboxes(host)).toEqual([]);
       expect(showToast).toHaveBeenCalledExactlyOnceWith({
+        severity: "error",
         message: "Too large to send: brief.pdf",
       });
     },
@@ -567,7 +568,7 @@ describe("handleSendChat immediate local commands", () => {
           ? [
               expect.objectContaining({
                 role: "system",
-                content: "There are no messages to export yet.",
+                content: "No messages to export yet.",
               }),
             ]
           : [],

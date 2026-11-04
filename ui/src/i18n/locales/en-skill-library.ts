@@ -41,10 +41,11 @@ const enSkillLibrary = {
     addFile: "Add file",
     deleteFile: "Delete file",
     deleteFileConfirm: "Remove {path} from the next saved bundle?",
+    deleteFileBody: "The file stays until you save.",
     fileExists: "That file already exists. Select it to edit its contents.",
     binary: "Binary attachment. Its original bytes are preserved when you save.",
     binaryRead: registerSessionSkillLibraryEnglish.catalog.skillLibrary.binaryRead,
-    readOnly: "You can view this skill, but only its owner or an admin can change it.",
+    readOnly: "You can view this skill, but only its owner or an authorized admin can edit it.",
     personalTarget:
       "My skills. Save to your personal library; existing session selections change only when you explicitly attach or refresh.",
     technicalDetails: registerSessionSkillLibraryEnglish.catalog.skillLibrary.technicalDetails,
@@ -70,6 +71,8 @@ const enSkillLibrary = {
     selectRevision: "Select a revision",
     rollback: "Restore revision",
     discard: "Discard your unsaved skill changes?",
+    discardBody: "Your edits since the last save are lost.",
+    discardAction: "Discard",
     conflict:
       "This skill changed since you opened it. Your draft is preserved. Copy your changes, then close and reopen the skill to review the current revision before saving.",
     signIn: "Sign in with a Gateway profile to create personal skills.",
@@ -90,7 +93,11 @@ const enSkillLibrary = {
     clearSelection: "Clear",
     confirm: {
       remove: "Remove {slug} from the library?",
-      transfer: "Transfer {slug} to team ownership? Team admins will manage it.",
+      transfer: "Transfer {slug} to team ownership?",
+    },
+    confirmBody: {
+      remove: "New sessions can’t attach it.",
+      transfer: "Team admins will manage it.",
     },
     receipt: {
       published: "Saved {slug} to {target} library (owner: {owner}).",

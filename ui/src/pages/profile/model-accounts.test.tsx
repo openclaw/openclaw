@@ -233,6 +233,51 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each(["identity", "write", "profile", "disconnected"] as const)(
+  "explains the %s restriction without changing saved accounts",
+  async (reason) => {
+    const h = await mount(undefined, { accounts: [personal] });
+    if (reason === "identity") {
+      h.emit({ selfUser: null });
+    } else if (reason === "write") {
+      h.emit({
+        hello: {
+          type: "hello-ok",
+          protocol: 3,
+          auth: { role: "operator", scopes: ["operator.read"] },
+        },
+      });
+    } else if (reason === "profile") {
+      h.setProfileId("");
+    } else {
+      h.emit({ phase: "reconnecting" });
+    }
+    await waitForSolid(() => expect(h.text()).toContain(copy(`unavailable.${reason}`)));
+    for (const other of ["identity", "write", "profile", "disconnected"]) {
+      if (other !== reason) {
+        expect(h.text()).not.toContain(copy(`unavailable.${other}`));
+      }
+    }
+    expect(h.calls("users.authConnect.start")).toHaveLength(0);
+    expect(h.calls("users.unlinkAuthProfile")).toHaveLength(0);
+    if (reason === "disconnected") {
+      expect(h.button(auth("add-account")).disabled).toBe(true);
+      expect(h.current()).toContain(personal.label);
+    } else {
+      expect(h.query(auth("add-account"))).toBeNull();
+    }
+  },
+);
+
+it("offers personal sign-in with write access, without requiring admin access", async () => {
+  const h = await mount();
+  expect(h.text()).toContain("Saved accounts");
+  expect(h.text()).toContain("New sessions use the shared default account.");
+  await h.openSignIn();
+  expect(h.query(auth("link-input"))).toBeNull();
+  expect(h.button(auth("provider .picker-select__trigger")).disabled).toBe(false);
+});
+
 it.each([12, 100])("does not rescan %s unchanged accounts on status publications", async (size) => {
   const accounts = Array.from({ length: size }, (_, index) => ({
     ...personal,
@@ -338,6 +383,14 @@ it.each(["select", "link"] as const)(
     expect(h.query(ui.host)?.getAttribute("aria-busy")).toBe("true");
     unlinkReply.resolve({ links: [] });
     await waitForSolid(() => expect(h.text()).toContain(copy("notices.cleared")));
+    expect(h.text()).toContain(
+      "New sessions use the shared default for this provider. Saved accounts and existing sessions are unchanged.",
+    );
+    const savedChoices = (await h.accountChoices()).join(" ");
+    expect(savedChoices).toContain(work.label);
+    if (action === "select") {
+      expect(savedChoices).toContain(personal.label);
+    }
     h.expectCall("users.unlinkAuthProfile", { provider: "openai" });
     expect(
       h.request.mock.calls.some(
@@ -578,12 +631,14 @@ it("keeps repeated failed status checks retryable and retains the answer while c
   });
   await h.start();
   await advance(2_000);
+  expect(h.error()).toContain(copy("statusFailed"));
   expect(h.error()).toContain("Gateway disconnected");
   await vi.advanceTimersByTimeAsync(10_000);
   expect(polls).toBe(1);
   const answer = await h.input(ui.answer, "https://example.test/callback");
   h.button(auth("connect-check")).click();
   await waitForSolid(() => {
+    expect(h.error()).toContain(copy("actionFailed"));
     expect(h.error()).toContain("Gateway disconnected");
     expect(h.button(auth("connect-check")).disabled).toBe(false);
   });
