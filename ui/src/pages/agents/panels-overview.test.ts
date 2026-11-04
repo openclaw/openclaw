@@ -78,7 +78,7 @@ it.each([
     });
     await waitForSolid(() => {
       expect(contextValue(container, "Workspace")).toBe(resolvedAgentWorkspace);
-      expect(contextValue(container, "Primary Model")).toBe(expectedModel);
+      expect(contextValue(container, "Primary model")).toBe(expectedModel);
       expect(contextValue(container, "Skills filter")).toBe("2 selected");
     });
   },

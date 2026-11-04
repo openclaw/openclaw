@@ -238,6 +238,7 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
         "vitest.{workspace,projects}.{js,mjs,ts,cjs,mts,cts,json}",
         "scripts/control-ui-parity/vitest.config.ts",
         "scripts/control-ui-retention/vitest.config.ts",
+        "test/vitest.codex-worker-authority.config.ts",
       ],
     });
   });

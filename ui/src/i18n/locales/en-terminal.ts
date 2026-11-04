@@ -8,6 +8,7 @@ const enTerminal = {
     availableSessions: "Available sessions",
     inputLabel: "Terminal input",
     sendInput: "Send terminal input",
+    closeSessionTitle: "Close this terminal session?",
     closeSessionMessage: "Its running process will end.",
     sessionsLabel: "Sessions",
     addFilesLabel: "Add files",

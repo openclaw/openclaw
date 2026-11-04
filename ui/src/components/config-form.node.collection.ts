@@ -45,7 +45,7 @@ function unwrapNullable(schema: JsonSchema): JsonSchema {
   return variants.length === 1 && variants[0] ? unwrapNullable(variants[0]) : schema;
 }
 
-export function configFieldShape(input: JsonSchema): ConfigFieldShape {
+function configFieldShape(input: JsonSchema): ConfigFieldShape {
   const schema = unwrapNullable(input);
   const type = schemaType(schema);
   if (type === "array") {

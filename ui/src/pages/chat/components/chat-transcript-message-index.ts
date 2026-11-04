@@ -266,12 +266,17 @@ function messageRevision(message: object): string {
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
-  props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName" | "messageReactions">,
+  props: Pick<
+    ChatThreadProps,
+    "assistantName" | "currentAgentId" | "agents" | "userId" | "userName" | "messageReactions"
+  >,
 ): TranscriptIndex {
   const cacheKey = [
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     props.assistantName,
+    props.currentAgentId,
+    props.agents,
     props.userId,
     props.userName,
     props.messageReactions,
@@ -335,7 +340,11 @@ export function projectTranscriptIndex(
           transcriptMessageKeys.set(part.key, item.key);
         }
         for (const group of chatItemGroups(part)) {
-          const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, props);
+          const senderLabel = resolveMessageGroupSenderLabel(
+            firstGroup ?? group,
+            props,
+            props.currentAgentId,
+          );
           const rowKey =
             item.kind === "work-group" && expandedToolCards.get(item.key)
               ? item.key + ":" + group.key

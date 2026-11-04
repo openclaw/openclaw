@@ -348,7 +348,6 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.appearance.tabIcon.title",
     searchKeys: [
       "configView.appearance.tabIcon.agent",
-      "configView.appearance.tabIcon.shape",
       "configView.appearance.tabIcon.square",
       "configView.appearance.tabIcon.rounded",
       "configView.appearance.tabIcon.circle",
@@ -436,14 +435,11 @@ export const SETTINGS_SEARCH_TARGETS = {
     ],
     aliases: "voice audio input dictation dictate",
   },
-  appearanceConnection: {
-    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.connection),
+  gatewayConnection: {
+    routeId: "connection",
     labelKey: "configView.connection.title",
-    searchKeys: [
-      "configView.connection.gateway",
-      "configView.connection.status",
-      "configView.connection.assistant",
-    ],
+    hash: "",
+    searchKeys: ["configView.connection.gateway", "configView.connection.status"],
     aliases: "version",
   },
   notifications: {
@@ -456,6 +452,9 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.notifications.status",
       "configView.notifications.subscribed",
       "configView.notifications.notSubscribed",
+      "configView.notifications.localSubscription",
+      "configView.notifications.blocked",
+      "configView.notifications.gatewayAccess",
       "configView.notifications.enable",
       "configView.notifications.nativeTitle",
       "configView.notifications.openSystemSettings",

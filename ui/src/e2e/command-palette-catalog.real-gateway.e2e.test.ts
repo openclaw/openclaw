@@ -685,7 +685,7 @@ suite.define(() => {
           await expect.poll(() => rejectedCatalogReplies).toBeGreaterThan(0);
           const status = page
             .locator(".cmd-palette [role=status]")
-            .filter({ hasText: "Model search unavailable" });
+            .filter({ hasText: "Couldn’t search models" });
           await status.waitFor({ state: "visible" });
           expect(await published.count()).toBe(1);
           if (captureEnabled) {

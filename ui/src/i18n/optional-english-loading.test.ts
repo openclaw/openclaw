@@ -339,7 +339,7 @@ it("keeps sidebar and chat actions readable until the session management dialog 
   expect(manager.t("sessionsView.personalGroupEdit")).toBe("sessionsView.personalGroupEdit");
   expect(manager.t("sessionsView.archiveReasonManual")).toBe("Archived manually");
   expect(manager.t("sessionsView.stopCloudWorkerConfirm", { session: "Build" })).toBe(
-    'Stop the cloud worker for "Build"?',
+    "Stop this cloud device?",
   );
   expect(manager.t("sessionsView.goal")).toBe("Ziel");
   expect(en.sessionsView).toBe(sessionsView);
@@ -389,7 +389,7 @@ it("loads workspace actions with the session menu before session management", as
   await import("../components/session-menu-solid.tsx");
 
   expect(manager.t("sessionsView.openPullRequest")).toBe("Open PR");
-  expect(manager.t("sessionsView.stopCloudWorker")).toBe("Stop cloud worker…");
+  expect(manager.t("sessionsView.stopCloudWorker")).toBe("Stop cloud device…");
   expect(manager.t("sessionsView.groupDefaultsTitle")).toBe("sessionsView.groupDefaultsTitle");
 });
 
@@ -423,7 +423,7 @@ it.each([false, true])(
     expect(manager.t("sessionsView.communication.send")).toBe("Send messages");
     expect(manager.t("sessionsView.personalGroupEdit")).toBe("Edit section");
     expect(manager.t("sessionsView.groupDefaultsTitle", { group: "Build" })).toBe(
-      'New session defaults for "Build"',
+      "New session defaults for “Build”",
     );
     expect(manager.getLocale()).toBe("de");
     expect(en.sessionsView).toBe(namespace);
@@ -528,7 +528,7 @@ it("loads optional chat copy with its view while keeping admission errors synchr
   registerEnglishCatalog(registerChatSessionEnglish);
   await manager.setLocale("de");
   expect(manager.t("chat.composer.menu.offlineBlocked")).toBe(
-    "Reconnect to change tools for this chat.",
+    "Reconnect to change tools for this session.",
   );
   expect(manager.t("chat.workspaceFiles.showFiles")).toBe("Show session files");
   expect(manager.t("chat.workspaceFiles.search")).toBe("chat.workspaceFiles.search");
