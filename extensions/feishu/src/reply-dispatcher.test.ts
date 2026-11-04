@@ -294,7 +294,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.objectContaining(expected),
     ]);
   }
-
   function gate<T>() {
     const entered = createDeferred<void>();
     const { promise, resolve, reject } = createDeferred<T>();
@@ -304,28 +303,22 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     };
     return { started: entered.promise, resolve, reject, wait };
   }
-
   function expectNoStaticReply() {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   }
-
   function expectClosed(text: string, index = 0) {
     expect(stream(index).closeWithResult).toHaveBeenCalledWith(text, { note: "Agent: agent" });
   }
-
   function accepted(content: string, messageIds: string[]) {
     return { visibleReplySent: true, content, messageIds };
   }
-
   function partialDelivery(content: string, messageIds: string[]) {
     return { code: "CHANNEL_PARTIAL_DELIVERY", deliveryResult: accepted(content, messageIds) };
   }
-
   function createRuntimeLogger() {
     return { log: vi.fn(), error: vi.fn() } as never;
   }
-
   function createDispatcherHarness(overrides: Partial<ReplyDispatcherArgs> = {}) {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,
@@ -368,7 +361,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
     return { options, firstMedia, secondMedia, firstPending, secondPending };
   }
-
   function toTypingDispatcherOptions(result: ReplyDispatcherPlan): TypingDispatcherOptions {
     return {
       ...result.dispatcherOptions,
@@ -377,12 +369,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       block: (payload) => result.delivery.deliver(payload, { kind: "block" }),
     };
   }
-
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
     expect(isRecord(value), `${label} must be an object`).toBe(true);
     return value as Record<string, unknown>;
   }
-
   function firstMockArg(mock: ReturnType<typeof vi.fn>, label: string, argIndex = 0) {
     const call = mock.mock.calls[0];
     if (!call) {
@@ -390,7 +380,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     }
     return call[argIndex];
   }
-
   function stream(instanceIndex: number): StreamingSessionStub {
     const instance = streamingInstances[instanceIndex];
     if (!instance) {
@@ -398,12 +387,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     }
     return instance;
   }
-
   function firstStreamingCloseText(instanceIndex = 0): string {
     const close = stream(instanceIndex).closeWithResult;
     return String(firstMockArg(close, "streaming close"));
   }
-
   function streamingUpdateTexts(instanceIndex = 0): string[] {
     return stream(instanceIndex).update.mock.calls.map((call: unknown[]) =>
       typeof call[0] === "string" ? call[0] : "",
@@ -1074,7 +1061,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   );
 
   // Strings preview, [text] blocks, [text, true] error finals. null idles, true holds, false rejects.
-  // 0 idles after the close and the first static send fail.
+  // Numbers close invisibly: 0 fails recovery, 1 succeeds. Prefix recovers A1.; cut retains a line.
   it.each([
     ["delta blocks", ["hello", ["lo world"]], ["hellolo world"]],
     ["covered tail", ["First.\n\nLast.", ["First."], ["\n\nLast."]], ["First.\n\nLast."]],
@@ -1089,10 +1076,21 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["late error", [["A."], "A. X.", true, "A. X. E.", ["E.F", true], false], ["A. X.", "E.F"]],
     ["failed recovery", ["A. B.", ["A."], ["B."], 0, "A. B. C."], ["A. B.", "A. B. C."]],
     ["indent", ["    a", ["    a"], null, "    a\n\n    b", ["\n\n    b"]], ["    a", "    b"]],
+    ["recover", ["A. B.", ["A."], ["B."], 1, "A. B. C."], ["A. B.", "C."]],
+    ["gap passes", ["A.", ["A."], 0, "A. B.", ["B."], 1, "A. B. C."], ["A.", "A. B.", "A. B. C."]],
+    ["cut", ["    a\n    b", true, false, "    a\n    b\n    c"], ["    a\n    b", "    b\n    c"]],
+    ["prefix", ["A1.A2.", ["A1.A2."], 0, "A1.A2.C."], ["A1.A2.", "A2.C."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
     const close = gate<StreamingCloseResult>();
+    if (name === "prefix") {
+      getFeishuRuntimeMock().channel.text.chunkMarkdownTextWithMode.mockReturnValueOnce([
+        "A1.",
+        "A2.",
+      ]);
+      sendStructuredCardFeishuMock.mockResolvedValueOnce(undefined);
+    }
     await options.onReplyStart?.();
     for (const event of events) {
       if (event === null) {
@@ -1101,15 +1099,21 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         stream(0).closeWithResult.mockImplementationOnce(close.wait);
         await Promise.race([options.onIdle?.(), close.started]);
       } else if (event === false) {
-        const shown = { visibleReplySent: true, content: "A.", finalTextAccepted: false };
+        const content = name === "cut" ? "    a\n" : "A.";
+        const shown = { visibleReplySent: true, content, finalTextAccepted: false };
         close.reject(streamingFailure(new Error("no"), shown));
         await expect(options.onIdle?.()).rejects.toThrow("no");
-        expectSend(sendStructuredCardFeishuMock, { text: "A." });
-        expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
-        expect(streamingInstances).toHaveLength(name === "rejection" ? 1 : 2);
-      } else if (event === 0) {
-        sendStructuredCardFeishuMock.mockRejectedValueOnce(new Error("no"));
-        stream(0).closeWithResult.mockResolvedValueOnce({ visibleReplySent: false });
+        if (name !== "cut") {
+          expectSend(sendStructuredCardFeishuMock, { text: "A." });
+          expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+          expect(streamingInstances).toHaveLength(name === "rejection" ? 1 : 2);
+        }
+      } else if (typeof event === "number") {
+        if (event === 0) {
+          sendStructuredCardFeishuMock.mockRejectedValueOnce(new Error("no"));
+        }
+        const current = stream(streamingInstances.length - 1);
+        current.closeWithResult.mockResolvedValueOnce({ visibleReplySent: false });
         await options.onIdle?.();
       } else if (typeof event === "string") {
         result.replyOptions.onPartialReply?.({ text: event });
@@ -1586,6 +1590,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(fallbackText).toBe("spoken reply\n\nMedia upload failed. Please try again.");
   });
 
+  const code = "```ts\ncode\n```";
   it.each([
     {
       name: "reasoning and answer",
@@ -1596,12 +1601,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       duplicate: true,
     },
     { name: "reasoning only", reasoning: ["deep thought"], expected: "> deep thought" },
-    {
-      name: "empty reasoning",
-      reasoning: [""],
-      partial: "```ts\ncode\n```",
-      final: "```ts\ncode\n```",
-    },
+    { name: "empty reasoning", reasoning: [""], partial: code, final: code },
   ])(
     "renders $name in the reasoning-enabled stream",
     async ({ reasoning, partial, final, expected, duplicate }) => {
