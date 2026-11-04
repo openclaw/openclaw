@@ -571,18 +571,10 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
       "Codex native code mode requires shell_tool, but the effective shell setting cannot be overridden. Ask your administrator to allow the shell, or select a tool policy that disables native code mode; no automation authority was captured.",
     );
   }
-  // Legacy managed layers can also pin delegation on outside requirements.
+  // Legacy managed layers can also pin delegation on outside requirements, as a
+  // boolean, an alias such as collab, or a table such as [features.multi_agent_v2].
   if (nativeDelegationDenied && isJsonObject(features)) {
-    for (const feature of ["multi_agent", "multi_agent_v2"] as const) {
-      if (
-        features[feature] === true &&
-        !CODEX_SESSION_OVERRIDABLE_LAYER_TYPES.has(
-          effectiveConfig?.origins?.[`features.${feature}`]?.name.type ?? "",
-        )
-      ) {
-        throw new Error(`Codex tool policy cannot override managed feature ${feature}`);
-      }
-    }
+    assertCodexManagedConfigDoesNotPinNativeDelegation(features, effectiveConfig?.origins);
   }
   const ringZeroConfigFingerprint = ringZeroActive
     ? fingerprintJsonObject({
@@ -634,5 +626,30 @@ export async function withCodexThreadWriteCurrent(
     await params.authority.withCurrent(write);
   } else {
     write();
+  }
+}
+
+const CODEX_NATIVE_DELEGATION_FEATURE_KEYS: ReadonlyMap<string, string> = new Map([
+  ["multi_agent", "multi_agent"],
+  ["collab", "multi_agent"],
+  ["multi_agent_v2", "multi_agent_v2"],
+]);
+
+/** Rejects a non-overridable effective setting that enables native delegation. */
+function assertCodexManagedConfigDoesNotPinNativeDelegation(
+  features: JsonObject,
+  origins: Record<string, { name: { type: string } } | undefined> | undefined,
+): void {
+  for (const [key, feature] of CODEX_NATIVE_DELEGATION_FEATURE_KEYS) {
+    const value = features[key];
+    const enabled = value === true || (isJsonObject(value) && value.enabled === true);
+    if (!enabled) {
+      continue;
+    }
+    // Codex reports a table's (and a boolean's) origin on its enabled field.
+    const origin = origins?.[`features.${key}.enabled`] ?? origins?.[`features.${key}`];
+    if (!CODEX_SESSION_OVERRIDABLE_LAYER_TYPES.has(origin?.name.type ?? "")) {
+      throw new Error(`Codex tool policy cannot override managed feature ${feature}`);
+    }
   }
 }
