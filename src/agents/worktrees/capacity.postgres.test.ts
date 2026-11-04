@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import {
@@ -15,9 +17,28 @@ import {
   WORKTREE_MUTATION_LEASE_SCOPE,
 } from "./capacity-contract.js";
 import { reserveWorktreeCapacityInWorker } from "./capacity.worker.js";
+import { ManagedWorktreeService } from "./service.js";
+import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
 
 describe.skipIf(!mixedAgentConnection)("PostgreSQL worktree capacity reservation", () => {
-  useMixedAgentPair("postgres", "postgres");
+  const state = useMixedAgentPair("postgres", "postgres");
+
+  it("creates and registers a real Git checkout through PostgreSQL-backed allocation", async () => {
+    const repo = await initializeManagedWorktreeTestRepository(path.join(state.root, "checkout"));
+    const service = new ManagedWorktreeService({
+      getConfig: () => ({ worktreeAcceleration: false }),
+    });
+    const created = await service.create({
+      repoRoot: repo,
+      name: "postgres-proof",
+      baseRef: "HEAD",
+    });
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    expect(await service.list()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: created.id, path: created.path })]),
+    );
+    // The suite retires database workers before deleting its isolated state and Git roots.
+  });
 
   it("admits and renews only the current owner capacity reservation", () =>
     withEngineStoreAdmission(() => {

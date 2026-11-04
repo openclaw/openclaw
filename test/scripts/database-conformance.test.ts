@@ -24,6 +24,7 @@ beforeAll(() => {
     "scripts/lib/postgres-conformance-shards.mts",
     path.join(scripts, "lib/postgres-conformance-shards.mts"),
   );
+  write("../package.json", JSON.stringify({ type: "module" }));
   write(
     "../config/postgres-conformance-timings.json",
     JSON.stringify({
