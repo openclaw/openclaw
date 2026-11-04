@@ -185,23 +185,27 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `e28ef12fb6a3`: qualify the assistant-reply oracle in
-`test/clawrouter-managed-gateway.e2e.test.ts`. The existing whole-JSON marker
-check can accept the prompt echoed in result metadata without proving that an
-assistant payload was delivered.
+Pinned main `e28ef12fb6a3`: strengthen the assistant-reply oracle in
+`test/clawrouter-managed-gateway.e2e.test.ts`. The whole-JSON marker check
+accepted the prompt echoed in result metadata when the actual CLI assistant
+payload was wrong. The existing case now requires the exact payload text.
 
-The intended repair retains the single full managed-Gateway case, its physical
-SecretRef configuration, catalog/readiness checks, provider request and header
-assertions, correlation/session identity, and log privacy. Require the assistant
-payload text at the actual CLI result boundary. The fixture cleanup nomination
-is separate. No production, helper, public contract or case-count change is
-planned.
+The single full managed-Gateway case retains its physical SecretRef
+configuration, catalog/readiness checks, provider requests and attribution
+headers, correlation/session identity, and log privacy. One assertion changes;
+test LF count, case count, production, helpers and public contracts are unchanged.
 
-Build, untouched baseline, actual producer-fault control, repaired proof, scoped
-checks, fresh review and CI are pending. The managed checkout is code-only after
-the dependency owner rejected an incompatible workspace link. The native PR
-workflow will qualify an isolated installation before execution; no runtime
-success is claimed by this source closure.
+The untouched baseline and repaired normal case pass through an isolated
+Gateway and loopback provider. An actual CLI JSON-writer fault passes the old
+assertion and fails the repaired assertion with the wrong payload text. Both
+controls consumed the same compiled artifact. Producer bytes were restored
+exactly; the normal owner rebuild removed the compiled fault and passed.
+The related discovery sibling passes both rows. Scoped types, typed lint and the
+unchanged line budget pass; fresh review, publication and CI are tracked in the
+[qualification PR](https://github.com/openclaw/openclaw/pull/192466).
+
+The managed checkout remains code-only; execution uses the native PR checkout's
+physical frozen installation. The fixture cleanup nomination is separate.
 
 ## Completed source review
 
