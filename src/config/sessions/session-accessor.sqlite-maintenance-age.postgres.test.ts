@@ -1,5 +1,5 @@
 import { serialize } from "node:v8";
-import { receiveMessageOnPort } from "node:worker_threads";
+import * as workerThreads from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission as admit } from "../../infra/database-engine/admission-scope.js";
 import {
@@ -22,6 +22,7 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import { measurePostgresMaintenanceAgePair } from "./session-accessor.sqlite-maintenance-age-pair.test-support.js";
 import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
 import { recordSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
@@ -29,13 +30,15 @@ import type { SessionEntry } from "./types.js";
 
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
-  return { ...actual, receiveMessageOnPort: vi.fn(actual.receiveMessageOnPort) };
+  return { ...actual };
 });
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 describe.skipIf(!mixedAgentConnection)("PostgreSQL session maintenance age bounds", () => {
   useMixedAgentPair("postgres", "postgres");
+
+  it("measures paired warm PostgreSQL maintenance plans", measurePostgresMaintenanceAgePair);
 
   it.each([
     { name: "alias", protectedCount: 129 },
@@ -306,6 +309,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL session maintenance age bound
   it("reports query transfer while preserving maintenance age deadlines", async () => {
     const actual =
       await vi.importActual<typeof import("node:worker_threads")>("node:worker_threads");
+    const receive = vi.spyOn(workerThreads, "receiveMessageOnPort");
     const create = bridgePrestart.createPostgresBridge;
     let bridge: PostgresBridge | undefined;
     const created = vi
@@ -346,7 +350,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL session maintenance age bound
       );
       const sent = vi.spyOn(port, "postMessage");
       try {
-        vi.mocked(receiveMessageOnPort).mockImplementation((source) => {
+        receive.mockImplementation((source) => {
           const received = actual.receiveMessageOnPort(source);
           const request: BridgeRequest | undefined = sent.mock.calls.at(-1)?.[0];
           const reply: BridgeReply | undefined = received?.message;
@@ -458,7 +462,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL session maintenance age bound
       }
     } finally {
       created.mockRestore();
-      vi.mocked(receiveMessageOnPort).mockImplementation(actual.receiveMessageOnPort);
+      receive.mockRestore();
     }
   });
 });
