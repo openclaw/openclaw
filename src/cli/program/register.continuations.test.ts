@@ -3,7 +3,7 @@
 // it must hold none: counted read-only on the stopped store, drained by the product itself. Real:
 // the custody store and its worker, the claim and the fence writer, the session-delivery queue, the
 // Gateway lock and offline state ownership, the read-only snapshot. Observed: the commands' output
-// and exit codes, the store's files, and the turns the reply owner is asked to run (none).
+// and exit codes, and the store's files and records.
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,17 +14,21 @@ import {
   hydrateContinuationCustody,
   listContinuationRecords,
   newContinuationRecordId,
+  requestContinuationRecordCancel,
 } from "../../auto-reply/continuation/custody/custody-store.js";
 import { encodeWorkState } from "../../auto-reply/continuation/work-flow-state.js";
 import {
   consumePendingWork,
+  interruptStartedWorkRecord,
   listPendingTerminalNoticeWork,
   listPendingWorkSessionKeysForRecovery,
+  markPendingWorkDelivered,
   markPendingWorkTurnStarted,
 } from "../../auto-reply/continuation/work-store.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadPendingSessionDeliveries } from "../../infra/session-delivery-queue-storage.js";
+import { isContinuationSessionDelivery } from "../../infra/session-delivery-queue.records.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { useLocalStateOwnerFixture } from "../local-state-owner.fixture.test-support.js";
@@ -33,22 +37,12 @@ import { registerContinuationsCommand } from "./register.continuations.js";
 
 const world = vi.hoisted(() => ({
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-  /** Turns the reply owner was asked to run. */
-  turns: 0,
   /** Decode as a build without the fence does. */
   preFenceCodec: false,
 }));
 vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: world.runtime,
-}));
-// The reply owner is where a wake's turn runs.
-vi.mock("../../auto-reply/reply/get-reply.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../auto-reply/reply/get-reply.js")>()),
-  getReplyFromConfig: async () => {
-    world.turns += 1;
-    return undefined;
-  },
 }));
 // The pre-fence codec: an older build decodes the same state and drops `turnStart` (its schema
 // strips unknown keys). Recovery's selection and claim are otherwise unchanged since the fence
@@ -78,7 +72,6 @@ beforeEach(async () => {
   world.runtime.log.mockReset();
   world.runtime.error.mockReset();
   world.runtime.exit.mockReset();
-  world.turns = 0;
   world.preFenceCodec = false;
   await captureRuntimeConfigAsyncReader()();
   await hydrateContinuationCustody();
@@ -119,12 +112,15 @@ async function dueWake(sessionKey: string): Promise<string> {
 }
 
 /** A wake claimed and fenced by the real writers, whose Gateway then died before delivery. */
-async function fencedWake(sessionKey: string): Promise<{ recordId: string; runId: string }> {
+async function fencedWake(sessionKey: string) {
   const recordId = await dueWake(sessionKey);
   const [claimed] = await consumePendingWork(sessionKey);
   const runId = `run-${recordId}`;
-  expect(await markPendingWorkTurnStarted(claimed!, runId)).toMatchObject({ allowed: true });
-  return { recordId, runId };
+  const fenced = await markPendingWorkTurnStarted(claimed!, runId);
+  if (!fenced.allowed) {
+    throw new Error(`fence refused: ${fenced.reason}`);
+  }
+  return { recordId, runId, work: fenced.work };
 }
 
 const readRecord = async (recordId: string) =>
@@ -154,9 +150,23 @@ describe("openclaw continuations", () => {
   it("counts fenced, undelivered wakes read-only, drains them once with one notice each, and never runs a turn", async () => {
     const a = await fencedWake("agent:main:fence-a");
     const b = await fencedWake("agent:main:fence-b");
-    // A due, unfenced wake: recovery would claim and drive it. The drain must leave it alone.
-    const unfenced = await dueWake("agent:main:fence-c");
-    const unfencedBefore = await readRecord(unfenced);
+    // Interrupted by recovery, which crashed before handing off the notice: still owed.
+    const owed = await fencedWake("agent:main:fence-owed");
+    expect(await interruptStartedWorkRecord((await readRecord(owed.recordId))!)).toBeDefined();
+    // Not counted, not drained: due and unfenced (recovery would claim and drive it), cancel-fenced
+    // (no build drives it), and delivered (done).
+    const untouched = [await dueWake("agent:main:fence-unfenced")];
+    const cancelled = await fencedWake("agent:main:fence-cancelled");
+    const current = (await readRecord(cancelled.recordId))!;
+    await requestContinuationRecordCancel({
+      ...current,
+      expectedRevision: current.revision,
+      now: 1,
+    });
+    const delivered = await fencedWake("agent:main:fence-delivered");
+    expect(await markPendingWorkDelivered(delivered.work)).toMatchObject({ applied: true });
+    untouched.push(cancelled.recordId, delivered.recordId);
+    const untouchedBefore = await listContinuationRecords({ recordIds: untouched });
     // The Gateway is stopped: no process holds the store open.
     resetContinuationCustodyProjection();
     await closeOpenClawStateDatabaseAsync();
@@ -165,41 +175,41 @@ describe("openclaw continuations", () => {
     const counted = await run("fence-status");
     expect(counted.exitCode).toBe(0);
     expect(counted.output).toEqual({
+      databasePath: expect.stringMatching(/state[/\\]openclaw\.sqlite$/),
       fencedUndelivered: 2,
       records: expect.arrayContaining([
         expect.objectContaining({ recordId: a.recordId, status: "running", runId: a.runId }),
         expect.objectContaining({ recordId: b.recordId, status: "running", runId: b.runId }),
       ]),
-      owedInterruptNotices: 0,
-      owedNoticeRecordIds: [],
+      owedInterruptNotices: 1,
+      owedNoticeRecordIds: [owed.recordId],
     });
     // The count never writes: the store's bytes, and which sidecars exist, are unchanged.
     expect(storeFiles()).toEqual(stopped);
 
     const drained = await run("interrupt-fenced");
     expect(drained.exitCode).toBe(0);
-    expect(drained.output).toMatchObject({ interrupted: 2, noticesSettled: 2 });
-    for (const { recordId } of [a, b]) {
+    expect(drained.output).toMatchObject({ interrupted: 2, noticesSettled: 3 });
+    for (const { recordId, runId } of [a, b, owed]) {
       const record = await readRecord(recordId);
       expect(record).toMatchObject({ status: "failed", failureReason: INTERRUPTED });
       expect(record?.terminalNoticePending).toBeUndefined();
       const rows = (await interruptedNoticeRows()).filter((row) => row.text.includes(recordId));
       // Exactly one notice row, named in the receipt, naming the record and its run.
       expect(rows).toHaveLength(1);
+      expect(rows[0]?.text).toContain(runId);
       expect(drained.output.records).toContainEqual({
         recordId,
         ownerSessionKey: record?.ownerSessionKey,
         status: "failed",
         failureReason: INTERRUPTED,
-        interruptedNow: true,
+        interruptedNow: recordId !== owed.recordId,
         noticeDeliveryId: rows[0]?.id,
         noticeDeliveryStatus: "pending",
       });
-      expect(rows[0]?.text).toContain(`run-${recordId}`);
     }
-    // Never a turn, never a claim: the unfenced wake is exactly as it was.
-    expect(world.turns).toBe(0);
-    expect(await readRecord(unfenced)).toEqual(unfencedBefore);
+    // Never a claim, so never a turn; excluded records are exactly as they were.
+    expect(await listContinuationRecords({ recordIds: untouched })).toEqual(untouchedBefore);
 
     resetContinuationCustodyProjection();
     await closeOpenClawStateDatabaseAsync();
@@ -211,10 +221,10 @@ describe("openclaw continuations", () => {
     // Idempotent: a second drain changes nothing and reports nothing.
     const drainedRecords = await listContinuationRecords({});
     const drainedRows = await interruptedNoticeRows();
-    expect(drainedRows).toHaveLength(2);
+    expect(drainedRows).toHaveLength(3);
     resetContinuationCustodyProjection();
     await closeOpenClawStateDatabaseAsync();
-    expect((await run("interrupt-fenced")).output).toEqual({
+    expect((await run("interrupt-fenced")).output).toMatchObject({
       interrupted: 0,
       noticesSettled: 0,
       records: [],
@@ -222,6 +232,21 @@ describe("openclaw continuations", () => {
     expect(await listContinuationRecords({})).toEqual(drainedRecords);
     expect(await interruptedNoticeRows()).toEqual(drainedRows);
   });
+
+  it.each(["fence-status", "interrupt-fenced"] as const)(
+    "%s fails by name, creating nothing, when the selected root has no state database",
+    async (command) => {
+      const emptyRoot = fixture.roots.make("openclaw-fence-wrong-root-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", emptyRoot);
+
+      const failed = await run(command);
+      expect(failed).toMatchObject({
+        exitCode: 1,
+        output: { ok: false, error: { code: "STATE_DATABASE_MISSING" } },
+      });
+      expect(fs.existsSync(path.join(emptyRoot, "state"))).toBe(false);
+    },
+  );
 
   it("counts a wake a crashed Gateway left only in the WAL, without touching the WAL", async () => {
     const { recordId } = await fencedWake("agent:main:fence-wal");
@@ -278,7 +303,6 @@ describe("openclaw continuations", () => {
       });
       // Nothing read through a writer, nothing ended: the fenced record's bytes are as they were.
       expect(storeFiles()).toEqual(stored);
-      expect(world.turns).toBe(0);
       expect(fixture.transport.request).not.toHaveBeenCalled();
     },
   );
@@ -319,17 +343,18 @@ describe("openclaw continuations", () => {
     expect(await preFenceRecovery("agent:main:fence-drained")).toEqual([]);
     expect(await readRecord(drained.recordId)).toEqual(after);
     // Nothing is left owed for the older build to word as retry-exhausted: the notice is already a
-    // queue row, and startup delivery recovery replays a row with the text it holds.
+    // queue row with its text, of the kind startup delivery recovery replays (unchanged since the
+    // fence landed).
     expect(await listPendingTerminalNoticeWork()).toEqual([]);
     const row = (await interruptedNoticeRows()).find((entry) =>
       entry.text.includes(drained.recordId),
     );
     expect(row?.text).toContain(`started its turn as run ${drained.runId}`);
+    expect(row && isContinuationSessionDelivery(row)).toBe(true);
     expect(after).toMatchObject({ status: "failed", failureReason: INTERRUPTED });
     expect(receipt.output).toMatchObject({
       interrupted: 1,
       records: [expect.objectContaining({ recordId: drained.recordId, noticeDeliveryId: row?.id })],
     });
-    expect(world.turns).toBe(0);
   });
 });

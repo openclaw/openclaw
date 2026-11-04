@@ -9,7 +9,7 @@ import { runWithLocalStateOwner } from "../local-state-owner.js";
 
 type ContinuationsOutputOptions = { json?: boolean };
 
-/** Exit 2: a Gateway or another state owner is running, or could not be ruled out. */
+/** Exit 2: offline ownership was refused: an owner is running, could not be ruled out, or could not be displaced. */
 const EXIT_OWNER_REFUSED = 2;
 /** The refusal code both commands report, the drain's through LocalStateOwnerError. */
 const OWNER_UNAVAILABLE = "OWNER_UNAVAILABLE";
@@ -26,8 +26,10 @@ class ContinuationsStateOwnerRunningError extends Error {
   }
 }
 
-function isOwnerRefusal(error: unknown): error is Error & { code: string } {
-  return error instanceof Error && "code" in error && error.code === OWNER_UNAVAILABLE;
+function errorCode(error: unknown): string | undefined {
+  return error instanceof Error && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
 }
 
 /**
@@ -54,17 +56,17 @@ async function assertNoStateOwner(env: NodeJS.ProcessEnv): Promise<void> {
 }
 
 function writeContinuationsError(error: unknown, json: boolean): void {
-  const refused = isOwnerRefusal(error);
+  const code = errorCode(error);
   if (json) {
     const failure = formatCliJsonFailure(error);
     writeRuntimeJson(
       defaultRuntime,
-      refused ? { ...failure, error: { ...failure.error, code: error.code } } : failure,
+      code ? { ...failure, error: { ...failure.error, code } } : failure,
     );
   } else {
     defaultRuntime.error(error instanceof Error ? error.message : String(error));
   }
-  defaultRuntime.exit(refused ? EXIT_OWNER_REFUSED : 1);
+  defaultRuntime.exit(code === OWNER_UNAVAILABLE ? EXIT_OWNER_REFUSED : 1);
 }
 
 export function registerContinuationsCommand(program: Command): void {
@@ -91,6 +93,7 @@ export function registerContinuationsCommand(program: Command): void {
         writeRuntimeStdout(
           defaultRuntime,
           [
+            `State database: ${status.databasePath}`,
             `Fenced, undelivered continue_work wakes: ${status.fencedUndelivered}`,
             ...status.records.map(
               (record) =>
@@ -114,14 +117,16 @@ export function registerContinuationsCommand(program: Command): void {
     .option("--json", "emit machine-readable JSON", false)
     .action(async (options: ContinuationsOutputOptions) => {
       try {
-        const { drainUndeliveredTurnFences } =
+        const { drainUndeliveredTurnFences, requireContinuationStateDatabase } =
           await import("../../auto-reply/continuation/work-fence-drain.js");
+        // Before ownership: taking it opens the store, which would create one under a wrong root.
+        requireContinuationStateDatabase(process.env);
         const receipt = await runWithLocalStateOwner({
           method: "continuations.interrupt-fenced",
           params: {},
           target: "openclaw continuations interrupt-fenced",
           onForeignOwner: "refuse",
-          runLocal: () => drainUndeliveredTurnFences(),
+          runLocal: ({ env }) => drainUndeliveredTurnFences(env),
         });
         if (options.json) {
           writeRuntimeJson(defaultRuntime, receipt);
@@ -130,6 +135,7 @@ export function registerContinuationsCommand(program: Command): void {
         writeRuntimeStdout(
           defaultRuntime,
           [
+            `State database: ${receipt.databasePath}`,
             `Interrupted ${receipt.interrupted} fenced, undelivered continue_work wakes; settled ${receipt.noticesSettled} notices.`,
             ...receipt.records.map(
               (record) =>

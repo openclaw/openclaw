@@ -489,25 +489,27 @@ export function listContinuationRecords(
 }
 
 /**
- * The same listing over an existing store with no worker and no writer: an artifact-preserving
- * read-only snapshot, so the store's bytes and its WAL and shared-memory files stay as they were.
- * For offline inspection of a stopped store (`openclaw continuations fence-status`); a missing state
- * database lists nothing.
+ * The same listing over an existing store with no worker and no writer: a CLI one-shot read of an
+ * artifact-preserving snapshot, so the store's bytes and its WAL and shared-memory files stay as they
+ * were (`openclaw continuations fence-status`, refused while a Gateway owns the state). Undefined
+ * when the state database does not exist.
  */
 export async function listContinuationRecordsReadOnly(
   query: ContinuationRecordQuery,
   options?: ContinuationCustodyStoreOptions,
-): Promise<ContinuationRecord[]> {
-  const [{ withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync }, worker] =
-    await Promise.all([
-      import("../../../state/openclaw-state-db-readonly.js"),
-      import("./custody-store.worker.js"),
-    ]);
-  return (
-    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
-      ({ db }) => worker.listContinuationRecordsInDatabase(db, query),
-      { env: options?.env ?? process.env },
-    )) ?? []
+): Promise<ContinuationRecord[] | undefined> {
+  const [
+    { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync },
+    { tableExists },
+    { CONTINUATION_RECORDS_TABLE, selectRecords },
+  ] = await Promise.all([
+    import("../../../state/openclaw-state-db-readonly.js"),
+    import("../../../state/openclaw-state-db-schema-helpers.js"),
+    import("./custody-store.kernel.js"),
+  ]);
+  return await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+    ({ db }) => (tableExists(db, CONTINUATION_RECORDS_TABLE) ? selectRecords(db, query) : []),
+    { env: options?.env ?? process.env },
   );
 }
 

@@ -1,3 +1,7 @@
+import {
+  existingPathOrUndefined,
+  resolveOpenClawStateSqlitePath,
+} from "../../state/openclaw-state-db.paths.js";
 /**
  * The fence drain (RFC docs/design/continue-work-signal-v2.md §5.4.2, "Moving a seat below the
  * fence"). A build without the turn-start fence strips `turnStart` on decode and re-drives a fenced,
@@ -23,7 +27,33 @@ import {
 } from "./work-store.js";
 import { settlePendingTerminalNotice } from "./work-terminal-notice.js";
 
+/** The selected state root has no state database: wrong environment, or nothing to read. */
+export class ContinuationStateDatabaseMissingError extends Error {
+  readonly code = "STATE_DATABASE_MISSING";
+
+  constructor(databasePath: string) {
+    super(
+      `No OpenClaw state database at ${databasePath}, so nothing was read or changed. Run this with the seat's service environment (its OPENCLAW_STATE_DIR or --profile).`,
+    );
+    this.name = "ContinuationStateDatabaseMissingError";
+  }
+}
+
+/**
+ * The state database both commands work on. A missing one is an error, never a count of zero: a run
+ * under the wrong environment must not pass the drain gate, nor create a fresh store.
+ */
+export function requireContinuationStateDatabase(env: NodeJS.ProcessEnv): string {
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  if (existingPathOrUndefined(databasePath) === undefined) {
+    throw new ContinuationStateDatabaseMissingError(databasePath);
+  }
+  return databasePath;
+}
+
 export type ContinuationFenceStatus = {
+  /** The state database counted. */
+  databasePath: string;
   /** Live wakes a build without the fence would re-drive; a seat may move to one only at 0. */
   fencedUndelivered: number;
   records: Array<{
@@ -42,6 +72,8 @@ export type ContinuationFenceStatus = {
 };
 
 export type ContinuationFenceDrainReceipt = {
+  /** The state database drained. */
+  databasePath: string;
   /** Wakes this run ended as interrupted. */
   interrupted: number;
   /** Interrupted-turn notices this run settled into the delivery queue, one row per record. */
@@ -80,10 +112,14 @@ function readUndeliveredTurnFence(
 export async function readContinuationFenceStatus(
   env: NodeJS.ProcessEnv,
 ): Promise<ContinuationFenceStatus> {
+  const databasePath = requireContinuationStateDatabase(env);
   const records = await listContinuationRecordsReadOnly(
     { kinds: ["work"], statuses: ["queued", "running", "failed"] },
     { env },
   );
+  if (!records) {
+    throw new ContinuationStateDatabaseMissingError(databasePath);
+  }
   const fenced = records.flatMap((record) => {
     const turnStart = readUndeliveredTurnFence(record);
     return turnStart
@@ -102,6 +138,7 @@ export async function readContinuationFenceStatus(
     .filter((record) => toNoticeWork(record)?.terminalNoticePending === "turn-interrupted")
     .map((record) => record.recordId);
   return {
+    databasePath,
     fencedUndelivered: fenced.length,
     records: fenced,
     owedInterruptNotices: owed.length,
@@ -115,7 +152,10 @@ export async function readContinuationFenceStatus(
  * notice still owed is settled: this run's, and any an earlier pass left owed. It never claims,
  * requeues or drives a record, and a second run changes nothing.
  */
-export async function drainUndeliveredTurnFences(): Promise<ContinuationFenceDrainReceipt> {
+export async function drainUndeliveredTurnFences(
+  env: NodeJS.ProcessEnv,
+): Promise<ContinuationFenceDrainReceipt> {
+  const databasePath = requireContinuationStateDatabase(env);
   const interruptedNow = new Set<string>();
   for (const record of await listContinuationRecords({
     kinds: ["work"],
@@ -144,5 +184,10 @@ export async function drainUndeliveredTurnFences(): Promise<ContinuationFenceDra
       noticeDeliveryStatus: settled.entryStatus,
     });
   }
-  return { interrupted: interruptedNow.size, noticesSettled: records.length, records };
+  return {
+    databasePath,
+    interrupted: interruptedNow.size,
+    noticesSettled: records.length,
+    records,
+  };
 }
