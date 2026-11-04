@@ -503,17 +503,22 @@ export async function dispatchPendingContinuationWork(
     await finalizeAnchorPendingWork(params.sessionKey, Date.now(), { matureOverdueAnchors: true });
   }
   const interrupted: PendingContinuationWork[] = [];
-  const works = await consumePendingWork(params.sessionKey, {
-    includeRunning: recoverRunning && !runningRecoveryBlockedByActiveReply,
-    includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
-    includeIdleRetry: params.includeIdleRetry === true,
-    includeRunningIdleRetry: params.includeRunningIdleRetry === true,
-    onInterrupted: (work) => interrupted.push(work),
-  });
-  // A started wake whose delivery was never confirmed ended interrupted, owing one notice. A driver
-  // still running it keeps its custody and idle retry until it returns; a crash left none.
-  for (const work of interrupted) {
-    await deliverPendingTerminalNoticeWithRetry(work);
+  let works: PendingContinuationWork[];
+  try {
+    works = await consumePendingWork(params.sessionKey, {
+      includeRunning: recoverRunning && !runningRecoveryBlockedByActiveReply,
+      includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
+      includeIdleRetry: params.includeIdleRetry === true,
+      includeRunningIdleRetry: params.includeRunningIdleRetry === true,
+      onInterrupted: (work) => interrupted.push(work),
+    });
+  } finally {
+    // A started wake whose delivery was never confirmed ended interrupted, owing one notice, handed
+    // off even when a later record fails the pass: no pass visits a failed record again. A driver
+    // still running it keeps its custody and idle retry until it returns; a crash left none.
+    for (const work of interrupted) {
+      await deliverPendingTerminalNoticeWithRetry(work);
+    }
   }
   // Guard 2: fold a stale backlog. Only matured works reach here, so a
   // batch of >1 means they piled up (the session was busy through the window);

@@ -271,8 +271,9 @@ async function driveContinuationTurn(
   // every effect.
   const turnRunId = randomUUID();
   const turnFence = await markPendingWorkTurnStarted(work, turnRunId);
-  // The fence write yielded; a reset in that window aborted this claim. Accepted edge (see
-  // session-reset.ts): its committed fence makes recovery interrupt a turn that never ran.
+  // The fence write yielded; a reset or lifecycle rotation in that window aborted this claim.
+  // Accepted edge (see session-reset.ts): its committed fence makes recovery interrupt a turn that
+  // never ran.
   if (signal.aborted) {
     return { status: "skipped", reason: CONTINUATION_TURN_RESET_REASON };
   }

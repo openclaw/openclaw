@@ -178,7 +178,8 @@ async function elect(): Promise<{ recordId: string; dueAt: number }> {
     config: resolveContinuationRuntimeConfig(),
   });
   expect(result.scheduled).toBe(true);
-  const [record] = await listContinuationRecords({ ownerSessionKey: KEY, kinds: ["work"] });
+  // Listed in creation order: the newest election is last.
+  const record = (await listContinuationRecords({ ownerSessionKey: KEY, kinds: ["work"] })).at(-1);
   if (!record?.dueAt) {
     throw new Error("expected one queued continue_work record");
   }
@@ -400,6 +401,33 @@ describe("a wake whose turn started but whose delivery was never confirmed", () 
   });
 });
 
+describe("an interrupted wake's notice", () => {
+  // Two due wakes; the Gateway dies inside the first one's turn, so the second stays claimed
+  // without a fence. Recovery interrupts the first, then the second's claim write fails the pass.
+  it("is handed off even when a later record fails the recovery pass", async () => {
+    await withSession(async () => {
+      const first = await elect();
+      vi.setSystemTime(Date.now() + 1);
+      const second = await elect();
+      world.dieAfterEffect = true;
+      const claimedAt = await dispatchInDyingGateway(second.dueAt);
+      expect(await readWork(second.recordId)).toMatchObject({ status: "running" });
+
+      restart(claimedAt + RUNNING_RECOVERY_STALE_MS + 1);
+      let secondClaimFails = true;
+      workDispatchCustodyHooks.beforeUpdate = (updates) => {
+        if (secondClaimFails && updates.some((u) => u.recordId === second.recordId)) {
+          secondClaimFails = false;
+          throw new Error("state database busy");
+        }
+      };
+      await expect(boot()).rejects.toThrow("state database busy");
+      await settleWorkDispatchCustody();
+      await expectInterruptedOnce(first.recordId);
+    });
+  });
+});
+
 // In process, too: once the run reported its start, the claim is never requeued.
 describe("a run that started in a live Gateway", () => {
   it("is never requeued when its delivered mark fails; recovery interrupts it once", async () => {
@@ -459,7 +487,11 @@ describe("controls", () => {
 
       await restartAndBoot(Date.now() + RUNNING_RECOVERY_STALE_MS + 1);
       expect(wakeTurns()).toEqual([]);
-      expect(await readWork(recordId)).toMatchObject({ status: "failed" });
+      expect(await readWork(recordId)).toMatchObject({
+        status: "failed",
+        failureReason: "Pending continuation work payload could not be decoded.",
+      });
+      expect(await interruptedNotices()).toEqual({ rows: [], events: 0, wakes: 0 });
     });
   });
 
