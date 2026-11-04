@@ -146,7 +146,7 @@ function ViewportContent(
           presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("browser.loadFailed")}
-          description={props.controller.errorText!.split("\n")[0] ?? ""}
+          description={props.controller.errorText!.split("\n", 1).join("")}
           details={
             <ErrorDetails error={props.controller.errorText!.split("\n").slice(1).join("\n")} />
           }
