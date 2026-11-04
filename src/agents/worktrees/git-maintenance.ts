@@ -299,7 +299,8 @@ async function consolidatePacks(
   const present = new Set(names);
   const packs = [];
   for (const name of names) {
-    if (!/^pack-[a-f0-9]+\.pack$/.test(name)) {
+    // Git also publishes indexed loose-* packs; dot-temporary packs stay excluded.
+    if (!/^(?:pack|loose)-[a-f0-9]+\.pack$/.test(name)) {
       continue;
     }
     const stem = name.slice(0, -5);
