@@ -13,6 +13,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import * as workerCpu from "../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -55,7 +56,6 @@ function expectHeaders(response: Response, headers: Record<string, string | null
     expect(response.headers.get(name), name).toBe(value);
   }
 }
-
 function holdIconRead(root: string) {
   const reading = createDeferredCore();
   const release = createDeferredCore();
@@ -73,9 +73,7 @@ function holdIconRead(root: string) {
   });
   return { reading: reading.promise, release: release.resolve };
 }
-
 const roots = useAutoCleanupTempDirTracker(afterEach);
-
 async function makeWorkspace(files: Record<string, Buffer | string>): Promise<string> {
   // Match fs-safe's canonical spelling, including macOS /var -> /private/var.
   const root = await fs.realpath(roots.make("openclaw-ws-icon-"));
@@ -86,7 +84,6 @@ async function makeWorkspace(files: Record<string, Buffer | string>): Promise<st
   }
   return root;
 }
-
 afterEach(() => vi.restoreAllMocks());
 
 describe("handleWorkspaceIconHttpRequest", () => {
@@ -175,7 +172,6 @@ describe("handleWorkspaceIconHttpRequest", () => {
         ),
       );
   });
-
   const iconRoute = (sessionKey: string) =>
     `${origin}/__openclaw__/workspace-icon/${encodeURIComponent(sessionKey)}`;
   async function requestIcon(status = 200, key = "agent:main:one") {
@@ -192,7 +188,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
     expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
   }
 
-  it("serves a cold canonical session while HTTP progresses during native filesystem observation", async (test) => {
+  it("serves a cold canonical session through the packaged worker while HTTP progresses", async (test) => {
     const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
     seedSession(root, "agent:main:main");
     // Native blocking probe: run on Testbox/CI, never the production Gateway host.
@@ -218,11 +214,15 @@ describe("handleWorkspaceIconHttpRequest", () => {
               const root = ${JSON.stringify(root)}, progress = new Int32Array(workerData.iconProgress);
               const lstat = fs.lstatSync;
               fs.lstatSync = ${delay.toString()};
-              await import(${JSON.stringify(String(entry))});
+              await import(${JSON.stringify(new URL(`../../dist/${runtimeProcessEntrypoints.workspaceIcon.distWorkerPath}`, import.meta.url).href)});
             `),
             )
           : entry,
-        { ...options, workerData: { ...options?.workerData, iconProgress: progress.buffer } },
+        {
+          ...options,
+          execArgv: String(entry).includes("workspace-icon.worker") ? [] : options?.execArgv,
+          workerData: { ...options?.workerData, iconProgress: progress.buffer },
+        },
         classify,
       ),
     );
