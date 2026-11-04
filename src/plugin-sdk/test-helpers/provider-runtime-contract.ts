@@ -7,6 +7,7 @@ import type { ProviderRuntimeModel } from "../plugin-entry.js";
 import { registerProviderPlugin, requireRegisteredProvider } from "../plugin-test-runtime.js";
 import { buildManifestModelProviderConfig } from "../provider-catalog-shared.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
+import { describeOpenRouterRoutingCapabilitiesContract } from "./openrouter-routing-capabilities.test-support.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
@@ -574,6 +575,7 @@ export function describeOpenRouterProviderRuntimeContract(
       });
     });
   });
+  describeOpenRouterRoutingCapabilitiesContract(load);
 }
 
 export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContractPluginLoader) {
