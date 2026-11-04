@@ -7,6 +7,7 @@ import type {
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { runCrabboxProcess } from "./crabbox-process.js";
+import type { GuestNetworkBinding } from "./crabbox-worker-guest-network.js";
 import { crabboxResourceIdentityArgs } from "./crabbox-worker-resource-receipt.js";
 import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
@@ -21,6 +22,9 @@ export type LeaseCommandContext = {
   binary: string;
   id: string;
   provider: string;
+  untrustedWorkload?: true;
+  guestNetwork?: GuestNetworkBinding;
+  env?: NodeJS.ProcessEnv;
   resourceReceipt?: WorkerResourceReceipt;
   retention?: WorkerRetentionPolicy;
   assertCurrent?: () => void;
@@ -44,6 +48,7 @@ export function leaseRunArgs(
     // Workspace transfer is owned by the worker tunnel; lease scripts must not
     // rsync the gateway checkout into the box just to execute setup or diagnostics.
     "--no-sync",
+    ...(context.untrustedWorkload ? ["--profile="] : []),
     ...forwardedEnvNames.flatMap((name) => ["--allow-env", name]),
     ...(envProfilePath ? ["--env-from-profile", envProfilePath] : []),
     "--script-stdin",
@@ -293,6 +298,7 @@ export function isUnrecognizedLease(
 
 export async function stopCrabboxLease(params: {
   binary: string;
+  env?: NodeJS.ProcessEnv;
   id: string;
   provider: string;
   warn: (message: string) => void;
@@ -314,6 +320,7 @@ export async function stopCrabboxLease(params: {
     params.assertCurrent?.();
     let result = await runCrabboxCommandWithCoordinatorRetry({
       action: "stop",
+      env: params.env,
       assertCurrent: params.assertCurrent,
       args: [
         "stop",
@@ -353,6 +360,7 @@ export async function stopCrabboxLease(params: {
       }
       result = await runCrabboxCommandWithCoordinatorRetry({
         action: "stop recovery",
+        env: params.env,
         assertCurrent: params.assertCurrent,
         args: [
           "stop",

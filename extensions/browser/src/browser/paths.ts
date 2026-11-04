@@ -192,3 +192,16 @@ export async function resolveStrictExistingUploadPaths(
 ): Promise<StrictExistingPathsResult> {
   return resolveUploadPaths({ ...options, strict: true });
 }
+
+/** Lexical source identities for authorization; do not inspect or open files here. */
+export function browserUploadSourcePaths(paths: readonly string[]): string[] {
+  return paths.map((source) => {
+    const managed = resolveManagedInboundMediaRef(source);
+    if (managed && !managed.ok) {
+      throw new Error(managed.error);
+    }
+    return managed?.ok
+      ? managed.path
+      : path.resolve(DEFAULT_UPLOAD_DIR, normalizeUploadPathSource(source));
+  });
+}

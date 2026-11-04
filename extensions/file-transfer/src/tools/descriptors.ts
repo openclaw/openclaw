@@ -19,12 +19,30 @@ const PAIRED_NODE_DESCRIPTION =
   "Existing paired node id, display name, or IP shown by nodes status. Do not use local, host, gateway, or auto; use local file/exec tools for local workspace paths.";
 
 const FileFetchToolSchema = Type.Object({
-  node: Type.String({
-    description: PAIRED_NODE_DESCRIPTION,
-  }),
-  path: Type.String({
-    description: "Absolute path to the file on the node. Canonicalized server-side.",
-  }),
+  node: Type.Optional(
+    Type.String({
+      description: PAIRED_NODE_DESCRIPTION,
+    }),
+  ),
+  environmentId: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "Current conversation-owned dedicated environment; mutually exclusive with node.",
+    }),
+  ),
+  path: Type.Optional(
+    Type.String({
+      description: "Absolute path to the file on the node. Canonicalized server-side.",
+    }),
+  ),
+  resourceHandle: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "Owned computer recording/download resource; requires environmentId instead of path.",
+    }),
+  ),
   maxBytes: optionalPositiveIntegerSchema({
     description: "Max bytes to fetch. Default 8 MB, hard ceiling 16 MB (single round-trip).",
   }),
@@ -42,9 +60,18 @@ export const FILE_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
 };
 
 const DirListToolSchema = Type.Object({
-  node: Type.String({
-    description: PAIRED_NODE_DESCRIPTION,
-  }),
+  node: Type.Optional(
+    Type.String({
+      description: PAIRED_NODE_DESCRIPTION,
+    }),
+  ),
+  environmentId: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "Current conversation-owned dedicated environment; mutually exclusive with node.",
+    }),
+  ),
   path: Type.String({
     description: "Absolute path to the directory on the node. Canonicalized server-side.",
   }),
@@ -71,9 +98,18 @@ export const DIR_LIST_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
 };
 
 const DirFetchToolSchema = Type.Object({
-  node: Type.String({
-    description: PAIRED_NODE_DESCRIPTION,
-  }),
+  node: Type.Optional(
+    Type.String({
+      description: PAIRED_NODE_DESCRIPTION,
+    }),
+  ),
+  environmentId: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "Current conversation-owned dedicated environment; mutually exclusive with node.",
+    }),
+  ),
   path: Type.String({
     description: "Absolute path to the directory on the node to fetch. Canonicalized server-side.",
   }),
@@ -95,7 +131,8 @@ export const DIR_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
 };
 
 const FileWriteToolSchema = Type.Object({
-  node: Type.String({ description: PAIRED_NODE_DESCRIPTION }),
+  node: Type.Optional(Type.String({ description: PAIRED_NODE_DESCRIPTION })),
+  environmentId: Type.Optional(Type.String({ minLength: 1 })),
   path: Type.String({
     description: "Absolute path on the node to write. Canonicalized server-side.",
   }),

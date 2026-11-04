@@ -2,14 +2,20 @@ import { createHash } from "node:crypto";
 import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
+import {
+  WorkerMachineResourcesSchema,
+  parseWorkerMachineResources,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
   OpenClawPluginToolContext,
   WorkerMachineOption,
+  WorkerMachineResources,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
+import { crabboxSupportedResources } from "./crabbox-worker-resource-options.js";
 
 // These are the fields used for presentation, not replacements for Gateway receipts.
 type CrabboxEnvironment = {
@@ -83,6 +89,7 @@ const CRABBOX_TOOL_PARAMETERS = {
       description: "Target attached to this conversation. Omit to use its current attachment.",
     },
     os: { type: "string", description: "create: an operating system advertised by the profile." },
+    resources: WorkerMachineResourcesSchema,
     machineClass: {
       type: "string",
       description: "create: a machine class advertised by the profile.",
@@ -130,14 +137,22 @@ function operationId(
   sessionId: string,
   toolCallId: string,
   previousEnvironmentId?: string,
+  resources?: WorkerMachineResources,
 ): string {
   return createHash("sha256")
     .update(
-      JSON.stringify(
-        previousEnvironmentId
-          ? [sessionId, toolCallId, previousEnvironmentId]
-          : [sessionId, toolCallId],
-      ),
+      JSON.stringify([
+        sessionId,
+        toolCallId,
+        ...(previousEnvironmentId ? [previousEnvironmentId] : []),
+        ...(resources
+          ? [
+              Object.fromEntries(
+                Object.entries(resources).toSorted(([a], [b]) => a.localeCompare(b)),
+              ),
+            ]
+          : []),
+      ]),
     )
     .digest("hex");
 }
@@ -148,10 +163,13 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
     Object.entries(config()?.cloudWorkers?.profiles ?? {}).filter(
       ([, profile]) => profile.provider === "crabbox",
     );
-  if (context.sandboxed || !context.sessionKey || !context.sessionId || profiles().length === 0) {
+  if (!context.sessionKey || !context.sessionId || profiles().length === 0) {
     return null;
   }
   const sessionId = context.sessionId;
+  const mutationScopes: ["operator.sessions.write"] | ["operator.admin"] = context.sandboxed
+    ? ["operator.sessions.write"]
+    : ["operator.admin"];
   return {
     name: "crabbox",
     label: "Crabbox",
@@ -187,6 +205,9 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
             machineProfiles.push({
               ...profile,
               desktop: configured.get(profile.id)?.settings?.desktop === true,
+              supportedResources: crabboxSupportedResources(
+                readStringParam(configured.get(profile.id)?.settings ?? {}, "provider") ?? "",
+              ),
             });
           }
         }
@@ -221,6 +242,10 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
         }
         const os = readStringParam(params, "os");
         const machineClass = readStringParam(params, "machineClass");
+        const resources =
+          params.resources === undefined
+            ? undefined
+            : parseWorkerMachineResources(params.resources);
         const presentation = readStringParam(params, "presentation");
         if (presentation !== undefined && presentation !== "desktop" && presentation !== "portal") {
           throw new Error("presentation must be desktop or portal");
@@ -237,12 +262,18 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
           "environments.session.create",
           {
             profileId,
-            idempotencyKey: operationId(sessionId, toolCallId, status.attachment?.environmentId),
+            idempotencyKey: operationId(
+              sessionId,
+              toolCallId,
+              status.attachment?.environmentId,
+              resources,
+            ),
             ...(os ? { os } : {}),
             ...(machineClass ? { machineClass } : {}),
+            ...(resources ? { resources } : {}),
             ...(presentation ? { presentation } : {}),
           },
-          { timeoutMs: 20 * 60_000, scopes: ["operator.admin"] },
+          { timeoutMs: 20 * 60_000, scopes: mutationScopes },
         );
         return textResult(
           `${result.reused ? "Reusing" : "Created"} Crabbox ${result.attachment.environmentId}.\n${crabboxEnvironmentText(result.environment)}`,
@@ -270,7 +301,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
         const result = await gateway.request<{ stopped: true; environment?: CrabboxEnvironment }>(
           "environments.session.destroy",
           target,
-          { timeoutMs: 10 * 60_000, scopes: ["operator.admin"] },
+          { timeoutMs: 10 * 60_000, scopes: mutationScopes },
         );
         return textResult(
           result.environment
@@ -310,7 +341,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
               },
               {
                 timeoutMs: 30 * 60_000 + (timeoutMs ?? 120_000) + 15_000,
-                scopes: ["operator.admin"],
+                scopes: mutationScopes,
               },
             ),
           );
@@ -339,7 +370,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
               action: action === "process_status" ? "status" : "stop",
               processId,
             },
-            { timeoutMs: 60_000, scopes: ["operator.admin"] },
+            { timeoutMs: 60_000, scopes: mutationScopes },
           ),
         );
       }

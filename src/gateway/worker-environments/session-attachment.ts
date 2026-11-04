@@ -1,3 +1,4 @@
+import type { WorkerMachineResources } from "../../plugins/types.js";
 export class WorkerSessionAlreadyAttachedError extends Error {
   constructor(
     readonly sessionId: string,
@@ -12,6 +13,10 @@ export type WorkerEnvironmentSessionIdentity = {
   sessionKey: string;
   agentId: string;
   sessionLifecycleRevision?: string;
+  /** Authenticated human principal, never accepted from request parameters. */
+  principalId?: string;
+  /** Host-derived restriction; never accepted from a machine request. */
+  requiresIsolatedEnvironment?: true;
 };
 
 /** A secondary machine owned by a conversation, independent of its execution placement. */
@@ -19,6 +24,8 @@ export type WorkerEnvironmentAttachment = WorkerEnvironmentSessionIdentity & {
   environmentId: string;
   ownerEpoch: number;
   generation: number;
+  /** Tool-only disposable guest lease; never an inference placement. */
+  guest?: true;
 };
 
 export type WorkerEnvironmentAttachmentRecord = Omit<WorkerEnvironmentAttachment, "ownerEpoch"> & {
@@ -31,7 +38,9 @@ export type WorkerEnvironmentSessionCreateRequest = WorkerEnvironmentSessionIden
   profileId: string;
   idempotencyKey: string;
   machineClass?: string;
+  resources?: WorkerMachineResources;
   os?: string;
+  guest?: import("./session-guest.js").SessionGuestBinding;
 };
 
 /** Requester presentation must succeed before a newly reserved machine can be allocated. */

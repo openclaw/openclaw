@@ -783,3 +783,13 @@ export function classifyAgentHarnessTerminalOutcome(
 }
 
 export const toolPolicy = Object.freeze({ createToolPolicyMatcher, expandToolGroups });
+
+/** Read only accepted input resources under the current tool caller and live conversation scope. */
+export async function withGatewayToolAttachmentRead<T>(
+  paths: readonly string[],
+  consume: (assertCurrent: () => void) => Promise<T>,
+  sourceTool: "browser" | "file_write" = "browser",
+): Promise<T> {
+  const owner = await import("../agents/tools/attachment-source-read.js");
+  return await owner.withGatewayToolAttachmentRead(paths, consume, sourceTool);
+}

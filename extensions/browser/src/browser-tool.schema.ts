@@ -156,6 +156,13 @@ function buildBrowserToolSchema(capabilities: BrowserToolCapabilities) {
         }
       : {}),
     node: Type.Optional(Type.String()),
+    environmentId: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Current conversation-owned dedicated environment; pass for every action instead of target, node, or dashboard.",
+      }),
+    ),
     profile: Type.Optional(
       Type.String({
         description: capabilities.tabBound ? "Run-bound browser profile." : "default if omitted.",

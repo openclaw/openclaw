@@ -173,7 +173,15 @@ export async function handleRecordingAct(
       );
       return JSON.stringify({
         ok: true,
-        details: projectRecordingState(native, active.resourceHandle),
+        details: {
+          ...projectRecordingState(native, active.resourceHandle),
+          ...(await resources.captureFiles(active.resourceHandle).then(
+            (handles) => (handles.length ? { fileResourceHandles: handles } : {}),
+            () => ({
+              resourceExportError: "Recording stopped, but files could not be inspected safely",
+            }),
+          )),
+        },
       });
     }
     case "replay_trajectory": {

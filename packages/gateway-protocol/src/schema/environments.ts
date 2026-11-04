@@ -412,3 +412,8 @@ export type WorkerDesktopObserveParams = Static<typeof WorkerDesktopObserveParam
 export type WorkerDesktopObserveResult = Static<typeof WorkerDesktopObserveResultSchema>;
 export type WorkerDesktopLaunchParams = Static<typeof WorkerDesktopLaunchParamsSchema>;
 export type WorkerDesktopLaunchResult = Static<typeof WorkerDesktopLaunchResultSchema>;
+
+export {
+  EnvironmentsSessionInvokeParamsSchema,
+  type EnvironmentsSessionInvokeParams,
+} from "./environments-session-invoke.js";

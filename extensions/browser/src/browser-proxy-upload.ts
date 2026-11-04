@@ -18,7 +18,11 @@ import {
   type BrowserProxyUploadFile,
   type BrowserProxyUploadV1,
 } from "./browser-proxy-envelope.js";
-import { DEFAULT_UPLOAD_DIR, resolveExistingUploadPaths } from "./browser/paths.js";
+import {
+  browserUploadSourcePaths,
+  DEFAULT_UPLOAD_DIR,
+  resolveExistingUploadPaths,
+} from "./browser/paths.js";
 
 const logger = createSubsystemLogger("browser");
 const BROWSER_PROXY_UPLOAD_ROOT_NAME = ".proxy-uploads";
@@ -92,17 +96,21 @@ function readUploadPaths(body: Record<string, unknown>): string[] | null {
 async function readBrowserProxyUploadFiles(
   paths: string[],
   signal?: AbortSignal,
+  assertSourceCurrent?: () => void,
 ): Promise<BrowserProxyUploadFile[]> {
   const files: BrowserProxyUploadFile[] = [];
   let totalBytes = 0;
   for (const filePath of paths) {
+    assertSourceCurrent?.();
     signal?.throwIfAborted();
     const stat = await fs.stat(filePath).catch(() => null);
     if (!stat?.isFile()) {
       throw new Error(`browser proxy upload file not found: ${filePath}`);
     }
     assertBrowserProxyFileBytesWithinLimits(stat.size, totalBytes + stat.size);
+    assertSourceCurrent?.();
     const buffer = await fs.readFile(filePath, signal ? { signal } : undefined);
+    assertSourceCurrent?.();
     assertBrowserProxyFileBytesWithinLimits(buffer.byteLength, totalBytes + buffer.byteLength);
     totalBytes += buffer.byteLength;
     files.push({
@@ -119,6 +127,7 @@ export async function prepareBrowserProxyUploadRequest(params: {
   path: string;
   body: unknown;
   signal?: AbortSignal;
+  assertSourceCurrent?: () => void;
 }): Promise<PreparedBrowserProxyUploadRequest> {
   params.signal?.throwIfAborted();
   const body = isFileChooserRequest(params.method, params.path)
@@ -137,7 +146,11 @@ export async function prepareBrowserProxyUploadRequest(params: {
   }
   const upload: BrowserProxyUploadV1 = {
     envelope: BROWSER_PROXY_UPLOAD_ENVELOPE,
-    files: await readBrowserProxyUploadFiles(resolved.paths, params.signal),
+    files: await readBrowserProxyUploadFiles(
+      resolved.paths,
+      params.signal,
+      params.assertSourceCurrent,
+    ),
   };
   const { paths: _paths, ...bodyWithoutPaths } = body;
   return { body: bodyWithoutPaths, upload };
@@ -463,4 +476,17 @@ export async function discardStagedBrowserProxyUpload(
   if (staged.directory) {
     await removeStagedUpload(staged.directory);
   }
+}
+
+/** Inspect source identities without opening a shared-root file. */
+export function browserProxyUploadSourcePaths(params: {
+  method: string;
+  path: string;
+  body?: unknown;
+}): string[] {
+  const body = isFileChooserRequest(params.method, params.path)
+    ? asNullableRecord(params.body)
+    : null;
+  const paths = body && readUploadPaths(body);
+  return paths ? browserUploadSourcePaths(paths) : [];
 }

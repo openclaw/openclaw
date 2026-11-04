@@ -4,20 +4,15 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import * as ts from "typescript/ast";
-import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import {
+  classifyMethodSpecs,
+  collectSnapshotMethodSpecs,
+  snapshotReader,
+} from "./lib/protocol-since-specs.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const descriptorPath = "src/gateway/methods/core-descriptors.ts";
-
-type MethodSpec = {
-  line: number;
-  name: string;
-  since: string | undefined;
-  compatibilityRestored: boolean;
-};
 
 function runGit(args: string[]): string {
   const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8" });
@@ -61,117 +56,8 @@ function resolveBaseCommit(): string {
   );
 }
 
-function unwrapExpression(expression: ts.Expression): ts.Expression {
-  let current = expression;
-  while (
-    ts.isAsExpression(current) ||
-    ts.isSatisfiesExpression(current) ||
-    ts.isParenthesizedExpression(current)
-  ) {
-    current = current.expression;
-  }
-  return current;
-}
-
-function stringProperty(object: ts.ObjectLiteralExpression, key: string): string | undefined {
-  for (const property of object.properties) {
-    if (!ts.isPropertyAssignment(property)) {
-      continue;
-    }
-    const name = getPropertyNameText(property.name);
-    if (name === key && ts.isStringLiteralLikeNode(property.initializer)) {
-      return property.initializer.text;
-    }
-  }
-  return undefined;
-}
-
-function trueProperty(object: ts.ObjectLiteralExpression, key: string): boolean {
-  return object.properties.some((property) => {
-    if (!ts.isPropertyAssignment(property)) {
-      return false;
-    }
-    const name = getPropertyNameText(property.name);
-    return name === key && property.initializer.kind === ts.SyntaxKind.TrueKeyword;
-  });
-}
-
-function collectMethodSpec(
-  element: ts.Expression,
-  sourceFile: ts.SourceFile,
-  fileName: string,
-): MethodSpec {
-  const line = sourceFile.getLineAndCharacterOfPosition(element.getStart(sourceFile)).line + 1;
-  if (ts.isObjectLiteralExpression(element)) {
-    const name = stringProperty(element, "name");
-    if (!name) {
-      throw new Error(
-        `${fileName}:${line} core method spec names must be string literals so additions can be compared with origin/main.`,
-      );
-    }
-    return {
-      name,
-      since: stringProperty(element, "since"),
-      compatibilityRestored: trueProperty(element, "compatibilityRestored"),
-      line,
-    };
-  }
-  if (ts.isArrayLiteralExpression(element)) {
-    const name = element.elements[0];
-    const since = element.elements[3];
-    if (
-      !name ||
-      !since ||
-      !ts.isStringLiteralLikeNode(name) ||
-      !ts.isStringLiteralLikeNode(since)
-    ) {
-      throw new Error(
-        `${fileName}:${line} core method spec rows must use string literal names and vintage metadata.`,
-      );
-    }
-    const policy = element.elements[4];
-    const compatibilityRestored =
-      policy !== undefined && ts.isObjectLiteralExpression(policy)
-        ? trueProperty(policy, "compatibilityRestored")
-        : false;
-    return { name: name.text, since: since.text, compatibilityRestored, line };
-  }
-  throw new Error(
-    `${fileName}:${line} core method specs must be inline object literals or labeled rows so vintage metadata can be enforced.`,
-  );
-}
-
-function collectMethodSpecs(sourceFile: ts.SourceFile, fileName: string): MethodSpec[] {
-  let specs: MethodSpec[] | undefined;
-
-  function visit(node: ts.Node): void {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.name.text === "CORE_GATEWAY_METHOD_SPECS" &&
-      node.initializer
-    ) {
-      const initializer = unwrapExpression(node.initializer);
-      if (ts.isArrayLiteralExpression(initializer)) {
-        specs = initializer.elements.map((element) =>
-          collectMethodSpec(element, sourceFile, fileName),
-        );
-      }
-    }
-    node.forEachChild(visit);
-  }
-
-  visit(sourceFile);
-  if (!specs) {
-    throw new Error(`Could not find CORE_GATEWAY_METHOD_SPECS in ${fileName}.`);
-  }
-  return specs;
-}
-
-function currentTrain(): string {
-  const packageJson: unknown = JSON.parse(
-    fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"),
-  );
+function currentTrain(read: (file: string) => string): string {
+  const packageJson: unknown = JSON.parse(read("package.json"));
   if (!isRecord(packageJson)) {
     throw new Error("Root package.json must contain an object.");
   }
@@ -184,29 +70,21 @@ function currentTrain(): string {
 }
 
 try {
-  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
-  const train = currentTrain();
   const mergeBase = resolveBaseCommit();
-  const currentSource = fs.readFileSync(path.join(repoRoot, descriptorPath), "utf8");
-  const currentSpecs = collectMethodSpecs(
-    parser.parseSourceFile(descriptorPath, currentSource),
-    descriptorPath,
+  const readCurrent = snapshotReader(
+    process.argv.includes("--staged") ? { kind: "index" } : { kind: "worktree" },
+    (file) => fs.readFileSync(path.join(repoRoot, file), "utf8"),
+    runGit,
   );
-  const baseSource = runGit(["show", `${mergeBase}:${descriptorPath}`]);
-  const baseNames = new Set(
-    collectMethodSpecs(
-      parser.parseSourceFile(descriptorPath, baseSource),
-      `${descriptorPath}@${mergeBase}`,
-    ).map((s) => s.name),
+  const readBase = snapshotReader(
+    { kind: "tree", ref: mergeBase },
+    (file) => fs.readFileSync(path.join(repoRoot, file), "utf8"),
+    runGit,
   );
-  const added = currentSpecs.filter((spec) => !baseNames.has(spec.name));
-  const restored = added.filter((spec) => spec.compatibilityRestored);
-  const newMethods = added.filter((spec) => !spec.compatibilityRestored);
-  // Restored shipped methods retain their historical vintage so discovery and
-  // generated clients see the original availability contract, not a new API.
-  const violations = added.filter((spec) =>
-    spec.compatibilityRestored ? !spec.since?.startsWith("<=") : spec.since !== train,
-  );
+  const train = currentTrain(readCurrent);
+  const currentSpecs = collectSnapshotMethodSpecs(descriptorPath, readCurrent);
+  const baseSpecs = collectSnapshotMethodSpecs(descriptorPath, readBase);
+  const { restored, newMethods, violations } = classifyMethodSpecs(currentSpecs, baseSpecs, train);
 
   if (violations.length > 0) {
     console.error(`Protocol since guard failed for current train ${train}:`);

@@ -10,7 +10,10 @@ import {
   getGatewayToolCallerIdentity,
   resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
+import { captureNodePairingGeneration } from "../../infra/device-pairing-node-state.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import {
@@ -20,6 +23,7 @@ import {
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import type { WorkerEnvironmentSessionIdentity } from "../worker-environments/session-attachment.js";
+import type { SessionGuestBinding } from "../worker-environments/session-guest.js";
 import { captureSessionEnvironmentToolPolicy } from "./environments.session-tool-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { dispatchUiCommandToRequester } from "./ui-command.js";
@@ -31,6 +35,7 @@ export async function resolveSessionEnvironmentCaller(
   requested: { sessionKey?: string; agentId?: string } = {},
 ): Promise<{
   identity: WorkerEnvironmentSessionIdentity;
+  guest?: SessionGuestBinding;
   assertCurrent: () => void;
   signal?: AbortSignal;
   release: () => void;
@@ -85,7 +90,9 @@ export async function resolveSessionEnvironmentCaller(
     sessionKey,
     agentId: selected.agentId,
   });
+  let source: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
   try {
+    source = await captureGatewayOperatorRunAuthority(options);
     const target = read.readCurrent(context.getRuntimeConfig()).target;
     if (!target || target.entry.incognito === true) {
       throw new Error("A persistent conversation is required for an attached environment");
@@ -94,6 +101,7 @@ export async function resolveSessionEnvironmentCaller(
       sessionId: target.entry.sessionId,
       sessionKey: target.canonicalKey,
       agentId: selected.agentId,
+      ...(source ? { principalId: source.authority.profileId } : {}),
       ...(target.entry.lifecycleRevision
         ? { sessionLifecycleRevision: target.entry.lifecycleRevision }
         : {}),
@@ -102,10 +110,12 @@ export async function resolveSessionEnvironmentCaller(
       options.signal,
       client.connectionSignal,
       ...(ambient?.approvalSignals ?? []),
+      source?.authority.signal,
     ].filter((signal): signal is AbortSignal => signal !== undefined);
     const signal = signals.length ? AbortSignal.any(signals) : undefined;
     const assertCurrent = () => {
       signal?.throwIfAborted();
+      source?.authority.assertCurrent();
       options.sessionMutationCommitGuard?.();
       options.sessionMutationAuthorization?.assertCurrent();
       if (client.invalidated || options.hasCurrentClientAuthority?.() === false) {
@@ -148,8 +158,34 @@ export async function resolveSessionEnvironmentCaller(
       }
     };
     assertCurrent();
-    return { identity, assertCurrent, signal, release: read.release };
+    const administrative = roleScopesAllow({
+      role: "operator",
+      requestedScopes: ["operator.admin"],
+      allowedScopes: source?.authority.scopes ?? client.connect.scopes ?? [],
+    });
+    let guest: SessionGuestBinding | undefined;
+    if (!administrative) {
+      if (!source || source.authority.gatewayAccessGrant === undefined) {
+        throw new Error("Guest environments require current authenticated admission authority");
+      }
+      guest = {
+        profileId: source.authority.profileId,
+        sessionId: identity.sessionId,
+        grant: source.authority.gatewayAccessGrant,
+      };
+    }
+    return {
+      identity: guest ? { ...identity, requiresIsolatedEnvironment: true } : identity,
+      guest,
+      assertCurrent,
+      signal,
+      release: () => {
+        source?.release();
+        read.release();
+      },
+    };
   } catch (error) {
+    source?.release();
     read.release();
     throw error;
   }
@@ -190,7 +226,7 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
           throw new Error("Cloud worker environments are not configured");
         }
         const result = await service.createSessionAttachment(
-          { ...request, ...caller.identity },
+          { ...request, ...caller.identity, ...(caller.guest ? { guest: caller.guest } : {}) },
           assertAllowed,
           caller.signal,
           presentation
@@ -235,9 +271,37 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
       try {
         const result = context.workerEnvironmentService?.getSessionAttachmentStatus(
           caller.identity.sessionId,
+          caller.identity.principalId,
+          caller.identity.requiresIsolatedEnvironment,
         );
         if (params.environmentId && result?.attachment.environmentId !== params.environmentId) {
           throw new Error("Conversation environment target changed");
+        }
+        let connected: ReturnType<typeof context.nodeRegistry.getForPairingGeneration>;
+        if (result?.environment.nodeDeviceId && result.attachment.closedAtMs === null) {
+          const paired = await captureNodePairingGeneration(result.environment.nodeDeviceId);
+          caller.assertCurrent();
+          const current = context.workerEnvironmentService?.getSessionAttachmentStatus(
+            caller.identity.sessionId,
+            caller.identity.principalId,
+            caller.identity.requiresIsolatedEnvironment,
+          );
+          if (
+            !current ||
+            current.attachment.closedAtMs !== null ||
+            current.attachment.environmentId !== result.attachment.environmentId ||
+            current.attachment.ownerEpoch !== result.attachment.ownerEpoch ||
+            current.attachment.generation !== result.attachment.generation ||
+            current.environment.nodeDeviceId !== result.environment.nodeDeviceId
+          ) {
+            throw new Error("Conversation environment target changed");
+          }
+          connected = paired
+            ? context.nodeRegistry?.getForPairingGeneration(
+                result.environment.nodeDeviceId,
+                paired.key,
+              )
+            : undefined;
         }
         caller.assertCurrent();
         respond(
@@ -245,6 +309,9 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
           result
             ? {
                 attachment: result.attachment,
+                ...(connected
+                  ? { connection: { nodeId: connected.nodeId, connectionId: connected.connId } }
+                  : {}),
                 closed: result.attachment.closedAtMs !== null,
                 environment: summarizeWorkerEnvironment(result.environment),
               }
@@ -268,7 +335,12 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
           throw new Error("Cloud worker environments are not configured");
         }
         const result = await service.destroySessionAttachment(
-          { sessionId: caller.identity.sessionId, environmentId: params.environmentId },
+          {
+            sessionId: caller.identity.sessionId,
+            principalId: caller.identity.principalId,
+            requiresIsolatedEnvironment: caller.identity.requiresIsolatedEnvironment,
+            environmentId: params.environmentId,
+          },
           caller.assertCurrent,
         );
         caller.assertCurrent();

@@ -13,6 +13,7 @@ import {
 } from "./core-descriptor-options.js";
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
 import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./read-share-keys.js";
+import { SESSION_ENVIRONMENT_METHOD_SPECS } from "./session-environment-descriptors.js";
 
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
 // This is the canonical core method policy table: every core handler must appear here so
@@ -629,10 +630,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["desktop.release", "environments", "operator.admin", "2026.9", { startup: true }],
   ["mcp.authLogin", "mcp-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["mcp.authLogout", "mcp-auth-logout", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
-  ["environments.session.status", "environments", "operator.read", "2026.9"],
-  ["environments.session.create", "environments", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
-  ["environments.session.destroy", "environments", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
-  ["environments.session.exec", "environments", "operator.admin", "2026.9"],
+  ...SESSION_ENVIRONMENT_METHOD_SPECS,
   ["sessions.setInvolvement", "sessions-mutations", "operator.read", "2026.9"],
   ["transcripts.summarize", "transcripts", "operator.write", "2026.9"],
   ["controlUi.linkPreview", "control-ui", "operator.read", "2026.9"],

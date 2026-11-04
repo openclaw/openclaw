@@ -8,6 +8,7 @@ import {
 import {
   crabboxCommandError,
   crabboxCommandOutput,
+  parseCrabboxJson,
   isFixedLeaseIdUnsupported,
   isUnrecognizedLease,
   leaseRunArgs,
@@ -21,6 +22,11 @@ import {
   createCrabboxWorkerDesktopSetup,
 } from "./crabbox-worker-desktop-setup.js";
 import { withCrabboxWorkerEnvProfile } from "./crabbox-worker-env-profile.js";
+import {
+  verifyGuestAcquisition,
+  verifyGuestInspect,
+  verifyLiveGuestInspect,
+} from "./crabbox-worker-guest-network.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import { buildCrabboxAllocationArgs, type parseCrabboxProfile } from "./crabbox-worker-profile.js";
 import { assertCrabboxResourceReceipt } from "./crabbox-worker-resource-receipt.js";
@@ -137,6 +143,14 @@ export async function inspectWithContext(
     if (inspect.id !== params.id) {
       throw new WorkerProviderError("Crabbox inspect returned a different lease id");
     }
+    if (params.guestNetwork) {
+      params.assertCurrent?.();
+      if (params.guestNetwork.acquisition) {
+        verifyGuestInspect(inspect, params.guestNetwork, params.id, params.provider);
+      } else {
+        verifyLiveGuestInspect(inspect, params.guestNetwork.expected, params.id, params.provider);
+      }
+    }
     return inspect;
   }
   // Ordinary callers accept lost-custody diagnostics; reconciliation requires
@@ -193,11 +207,21 @@ export async function runProvisionWarmup(
     action: "warmup",
     args: [
       "warmup",
+      ...(params.guestNetwork ? ["--timing-json"] : []),
       ...buildCrabboxAllocationArgs(params.profile, params.id, params.slug, params.retention),
     ],
     timeoutMs: params.timeoutMs(),
   });
   if (result.termination === "exit" && result.code === 0) {
+    params.assertCurrent?.();
+    if (params.guestNetwork) {
+      params.guestNetwork.acquisition = verifyGuestAcquisition(
+        parseCrabboxJson(result.stderr, "guest acquisition timing"),
+        params.guestNetwork,
+        params.id,
+        params.provider,
+      );
+    }
     return;
   }
   // Crabbox internal/cli/run.go rejects this capability before Warmup/Acquire.
@@ -317,6 +341,17 @@ export async function runProvisionSetup(
     assertCurrent?: () => void;
   },
 ): Promise<void> {
+  if (params.guestNetwork) {
+    params.assertCurrent?.();
+    const current = await inspectWithContext({
+      ...params,
+      id: params.inspect.id,
+      waitForReady: false,
+    });
+    params.assertCurrent?.();
+    verifyGuestInspect(current, params.guestNetwork, params.inspect.id, params.provider);
+  }
+
   try {
     const run =
       params.phase === "profile setup" ||
@@ -348,7 +383,7 @@ export async function runProvisionSetup(
               action: params.phase,
               args: leaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
               binary: params.binary,
-              env: childEnv,
+              env: { ...childEnv, ...params.env },
               input: params.setup,
               signal: params.signal,
               timeoutMs: remainingProvisionTimeout(

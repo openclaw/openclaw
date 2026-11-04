@@ -81,6 +81,7 @@ export function createWorkerLeaseInspection(
     leaseId: string;
     assertCurrent: () => void;
     signal?: AbortSignal;
+    sessionAccess?: true;
   }): Promise<void> => {
     const assertCurrent = () => {
       options.ownerSignal.throwIfAborted();
@@ -92,7 +93,9 @@ export function createWorkerLeaseInspection(
         !current ||
         current.ownerEpoch !== params.ownerEpoch ||
         current.leaseId !== params.leaseId ||
-        current.state !== "attached" ||
+        (params.sessionAccess
+          ? current.state !== "ready" && current.state !== "idle"
+          : current.state !== "attached") ||
         current.destroyRequestedAtMs !== null
       ) {
         throw serviceError("invalid_state", "Worker lease changed during turn admission");

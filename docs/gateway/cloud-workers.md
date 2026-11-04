@@ -102,6 +102,30 @@ Node and SSH workspace access and reconciliation outlive worker RPC credential e
 
 <a id="coordinator-backed-crabbox" />
 
+### Session-owned guest machines
+
+Admitted guests can use the `crabbox` tool for a secondary, disposable development
+machine without receiving administrator scope. Machine class and operating system
+selection use the provider's existing typed catalog. Shell commands, background
+processes, and attached computer/browser workflows target that conversation's
+lease; another guest or a view-only participant cannot reuse its attachment.
+The agent and model authentication remain on the Gateway, not on the guest machine.
+
+Crabbox guest allocation remains unavailable until its control plane can attest an
+isolated network boundary for the actual allocated resource before bootstrap.
+Public SSH routing and an empty instance profile do not prove that boundary.
+This does not restrict the existing administrator workflow. Guest allocation ignores operator setup scripts and setup secrets,
+disables shared cache volumes and mutable prepared images, and never releases
+worker-inference credentials. It does not accept raw CLI flags or control-plane
+configuration from the guest.
+
+The original admission grant owns access for the machine's lifetime. Revocation
+or expiry blocks new and pending work and hands teardown to the existing trusted
+environment cleanup owner. Persisted ownership is recovered after a Gateway
+restart; unavailable admission remains pending rather than being mistaken for a
+new grant or a definite revocation. No additional invitation, role change,
+per-machine approval, or usage-limit system is introduced.
+
 ### Crabbox provider support
 
 A fresh allocation that exits with the exact `provider=<backend> does not support fixed idempotent lease IDs` capability refusal fails permanently without scheduling cleanup for a nonexistent lease. Choose a backend with fixed lease ID support. The same refusal during replay cannot disprove an earlier allocation, so its cleanup responsibility remains until release or absence is confirmed.
@@ -164,3 +188,34 @@ the page that now holds the content.
 - [`openclaw worker`](/cli/worker) — the restricted runtime entry point a Gateway-owned launcher starts inside a prepared worker environment
 - [Gateway RPC methods](/gateway/protocol/rpc-methods) — RPC method families, discovery, and event families
 - [Operator scopes](/gateway/operator-scopes) — the scopes these worker calls are authorized against
+
+### Explicit attached-browser I/O
+
+For a ready dedicated attachment, pass its `environmentId` to each `browser`
+action instead of a `target`, `node`, or Gateway dashboard/tab selector. The
+Gateway derives the node from the current conversation and checks its live
+principal, lease epoch, and attachment generation. This route never falls back
+to the Gateway browser and does not grant general paired-node access.
+
+Attachment-targeted uploads authorize their source independently of the destination.
+Non-admin sources must be accepted attachments or trusted execution artifacts
+referenced by the current authorized conversation; a shared inbound path is not
+read authority. Uploads reuse the existing inbound-file staging protocol; downloads
+reuse the browser binary-artifact codec and media store. Staging is pinned to
+the same attachment epoch through dispatch and publication. Browser tabs on
+the dedicated machine are VM-owned rather than Gateway-dashboard-owned.
+
+This does not qualify a provider's guest network boundary. Crabbox guest
+admission stays fail-closed pending the enforced network-receipt integration.
+CUA recording handles are execution-local. Stop the recording, then use
+`file_fetch` with the same `environmentId` and its `resourceHandle` to export
+a single MP4. For multi-file captures, use one of the `fileResourceHandles`
+returned by `stop_recording`. Reads remain confined to the current node and
+computer execution; stale handles must be refreshed, never interpreted as
+paths or URLs. Exported bytes use the existing binary media pipeline.
+
+## Disposable guest network qualification
+
+Guest allocation is limited to AWS routes implementing the versioned guest-network-v1 contract. Direct routes require operator-owned configured policy; managed-coordinator routes must first complete the authenticated versioned server-policy handshake. Discovery advertisements alone do not authorize allocation. The client pins policy identity, revision, digest, and bootstrap mode to allocation timing and fresh inspection of the exact lease, provider resource, and network boundary. Missing, conflicting, unknown, or changed enforcement facts fail closed before bootstrap. Stored guest access contexts requalify current policy and inspection before workspace or access preparation. Cleanup does not depend on this access qualification.
+
+The managed bootstrap mode is ssh-public-key-v1; direct AWS requires disabled instance metadata. Neither route permits an instance profile or IPv6, and observed egress/platform-exception facts must match the supported contract. Policy files, rules, and authority selection are not guest machine-resource controls. Other providers and unqualified/legacy coordinator routes remain unavailable for guest workloads. Ordinary trusted flows are unchanged. Synthetic fixture validation is not live provider-isolation or captured-video playback proof.

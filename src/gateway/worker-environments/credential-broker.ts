@@ -18,6 +18,7 @@ import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 import { WorkerSessionAlreadyAttachedError } from "./session-attachment.js";
+import { readSessionGuestBinding } from "./session-guest.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   PreparedEnvironmentPlacementBinding,
@@ -106,6 +107,10 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
     request: WorkerCredentialBinding,
     claim?: WorkerSessionTurnClaim,
   ): Promise<MintedWorkerCredential> => {
+    const environment = store.get(request.environmentId);
+    if (environment && readSessionGuestBinding(environment.profileSnapshot)) {
+      throw new Error("Guest tool environments cannot receive worker inference credentials");
+    }
     const previous = store.getCredential(request.environmentId);
     if (previous) {
       await options.cancelInferenceEnvironment(request.environmentId);
@@ -137,6 +142,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
     assertCurrent?: () => void,
   ) => {
     const material = credentialMaterial();
+    const guest = readSessionGuestBinding(record.profileSnapshot);
     // Receipt, owner epoch, and credential hash commit together. A failed write leaves the
     // durable lease retryable without ever admitting a partial identity.
     const ready = await move(
@@ -154,12 +160,15 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       },
       assertCurrent,
     );
-    stageCredential(
-      grantFrom({
-        credential: material.credential,
-        record: store.getCredential(record.environmentId),
-      }),
-    );
+    // Ready-state integrity retains a hash; guest leases never receive or stage its plaintext.
+    if (!guest) {
+      stageCredential(
+        grantFrom({
+          credential: material.credential,
+          record: store.getCredential(record.environmentId),
+        }),
+      );
+    }
     return ready;
   };
 

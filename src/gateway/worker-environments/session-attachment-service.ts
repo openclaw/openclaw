@@ -8,14 +8,19 @@ import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import type { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
+import {
+  createSessionAttachmentAccess,
+  selectReusableSessionAttachment,
+} from "./session-attachment-access.js";
 import { prepareWorkerEnvironmentAttachmentSession } from "./session-attachment-session.js";
 import type {
   WorkerEnvironmentAttachment,
-  WorkerEnvironmentAttachmentRecord,
   WorkerEnvironmentSessionCreateRequest,
   WorkerEnvironmentSessionIdentity,
   WorkerEnvironmentSessionReservationHandler,
 } from "./session-attachment.js";
+import { createSessionGuestAuthorityOwner } from "./session-guest-authority-owner.js";
+import { readSessionGuestBinding } from "./session-guest.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -49,6 +54,16 @@ export function createWorkerEnvironmentSessionAttachments(
   const creations = new Map<string, Set<AbortController>>();
   const closingAttachments = new Map<string, number>();
   const cleanups = new KeyedAsyncQueue();
+  const guestAuthorities = createSessionGuestAuthorityOwner({
+    getConfig: options.getConfig,
+    getProfile: (id) => store.get(id)?.profileSnapshot,
+    retire: (binding, environmentId) =>
+      options.trackOperation(close(binding.sessionId, () => {}, environmentId)),
+    warn: options.warn,
+  });
+  const releaseGuestAuthority = guestAuthorities.release;
+  const assertGuestPrincipal = guestAuthorities.assertPrincipal;
+  const ensureGuestAuthority = guestAuthorities.retain;
   const sessionFacts = new Map<
     string,
     {
@@ -182,73 +197,15 @@ export function createWorkerEnvironmentSessionAttachments(
     const prepared = sessionFacts.get(identity.sessionId);
     return Boolean(prepared && matchesSession(prepared, identity));
   };
-  const project = (
-    record: WorkerEnvironmentAttachmentRecord | undefined,
-    prepared?: WorkerEnvironmentSessionIdentity,
-  ): WorkerEnvironmentAttachment | undefined => {
-    if (
-      !record ||
-      record.closedAtMs !== null ||
-      closingAttachments.has(record.sessionId) ||
-      options.isStopping() ||
-      !(prepared
-        ? record.sessionId === prepared.sessionId &&
-          record.sessionKey === prepared.sessionKey &&
-          record.agentId === prepared.agentId &&
-          record.sessionLifecycleRevision === prepared.sessionLifecycleRevision
-        : currentSession(record))
-    ) {
-      return undefined;
-    }
-    const environment = store.get(record.environmentId);
-    if (
-      !environment ||
-      (environment.state !== "ready" && environment.state !== "idle") ||
-      environment.destroyRequestedAtMs !== null
-    ) {
-      return undefined;
-    }
-    return {
-      sessionId: record.sessionId,
-      sessionKey: record.sessionKey,
-      agentId: record.agentId,
-      ...(record.sessionLifecycleRevision
-        ? { sessionLifecycleRevision: record.sessionLifecycleRevision }
-        : {}),
-      environmentId: record.environmentId,
-      generation: record.generation,
-      ownerEpoch: environment.ownerEpoch,
-    };
-  };
-  const assertSessionAttachment = (
-    binding: WorkerEnvironmentAttachment,
-    prepared?: WorkerEnvironmentSessionIdentity,
-  ) => {
-    const current = project(store.getSessionAttachmentRecord(binding.sessionId), prepared);
-    if (
-      !current ||
-      current.environmentId !== binding.environmentId ||
-      current.ownerEpoch !== binding.ownerEpoch ||
-      current.generation !== binding.generation ||
-      current.agentId !== binding.agentId ||
-      current.sessionKey !== binding.sessionKey ||
-      current.sessionLifecycleRevision !== binding.sessionLifecycleRevision
-    ) {
-      throw new Error("Conversation environment attachment is no longer current");
-    }
-  };
-  const touchSessionAttachment = async (
-    binding: WorkerEnvironmentAttachment,
-    assertCurrent: () => void = () => assertSessionAttachment(binding),
-  ) => {
-    await store.ready();
-    assertCurrent();
-    await store.touchSessionAttachment(
-      store.getSessionAttachmentRecord(binding.sessionId)!,
-      assertCurrent,
-    );
-    assertCurrent();
-  };
+  const { project, assertSessionAttachment, touchSessionAttachment, captureSessionAttachment } =
+    createSessionAttachmentAccess({
+      store,
+      closingAttachments,
+      currentSession,
+      guestAuthorities,
+      inspectLease: providerLifecycle.inspectTurnLease,
+      isStopping: options.isStopping,
+    });
   const close = async (
     sessionId: string,
     authorize: () => void,
@@ -276,6 +233,7 @@ export function createWorkerEnvironmentSessionAttachments(
       if (!closed) {
         return undefined;
       }
+      releaseGuestAuthority(closed.environmentId);
       return await destroyEnvironment(closed.environmentId, explicit);
     } finally {
       const remaining = closingAttachments.get(sessionId)! - 1;
@@ -289,21 +247,9 @@ export function createWorkerEnvironmentSessionAttachments(
   const attachments = {
     getCleanupError: (record: WorkerEnvironmentRecord): string | undefined =>
       cleanupRetry(record)?.parked,
-    captureSessionAttachment(identity: WorkerEnvironmentSessionIdentity) {
-      // Admission already read the canonical session. Its identity plus synchronous
-      // retirement fences avoid repeating that SQLite read on each proxy connection.
-      const binding = project(store.getSessionAttachmentRecord(identity.sessionId), identity);
-      if (!binding) {
-        throw new Error("No current environment is attached to this conversation");
-      }
-      const assertCurrent = () => assertSessionAttachment(binding, identity);
-      return {
-        binding,
-        assertCurrent,
-        touch: () => touchSessionAttachment(binding, assertCurrent),
-      };
-    },
+    captureSessionAttachment,
     cancelSessionAttachmentCreations() {
+      guestAuthorities.releaseAll();
       for (const sessionId of sessionFacts.keys()) {
         releaseSessionFacts(sessionId);
       }
@@ -318,14 +264,48 @@ export function createWorkerEnvironmentSessionAttachments(
         ? undefined
         : project(store.getSessionAttachmentRecord(sessionId)),
     findSessionAttachment: (
-      identity: Pick<WorkerEnvironmentSessionIdentity, "agentId" | "sessionKey">,
-    ) => project(store.findSessionAttachmentRecord(identity)),
-    getSessionAttachmentStatus(sessionId: string) {
+      identity: Pick<
+        WorkerEnvironmentSessionIdentity,
+        "agentId" | "sessionKey" | "principalId" | "requiresIsolatedEnvironment"
+      >,
+    ) => {
+      const record = store.findSessionAttachmentRecord(identity);
+      if (!record) {
+        return undefined;
+      }
+      assertGuestPrincipal(
+        record.environmentId,
+        record.sessionId,
+        identity.principalId,
+        identity.requiresIsolatedEnvironment,
+      );
+      const binding = project(record);
+      return binding
+        ? {
+            ...binding,
+            principalId: identity.principalId,
+            ...(identity.requiresIsolatedEnvironment
+              ? { requiresIsolatedEnvironment: true as const }
+              : {}),
+          }
+        : undefined;
+    },
+    getSessionAttachmentStatus(
+      sessionId: string,
+      principalId?: string,
+      requiresIsolatedEnvironment?: true,
+    ) {
       const record = store.getSessionAttachmentRecord(sessionId);
       if (!record) {
         return undefined;
       }
       const environment = store.get(record.environmentId);
+      assertGuestPrincipal(
+        record.environmentId,
+        sessionId,
+        principalId,
+        requiresIsolatedEnvironment,
+      );
       return environment
         ? {
             attachment: { ...record, ownerEpoch: environment.ownerEpoch },
@@ -354,9 +334,18 @@ export function createWorkerEnvironmentSessionAttachments(
           : creation.signal;
         let prepared: Awaited<ReturnType<typeof prepareSession>> | undefined;
         let retained = false;
+        let guestAuthority: Awaited<ReturnType<typeof guestAuthorities.retain>> | undefined;
         try {
           const selected = await prepareSession(input);
           prepared = selected;
+          if (
+            input.guest &&
+            (input.guest.profileId !== input.principalId || input.guest.sessionId !== sessionId)
+          ) {
+            throw new Error(
+              "Guest environment ownership does not match the authenticated conversation",
+            );
+          }
           const session = selected.current;
           const request = {
             ...input,
@@ -365,6 +354,7 @@ export function createWorkerEnvironmentSessionAttachments(
           };
           const assertCurrent = () => {
             signal?.throwIfAborted();
+            guestAuthority?.assertCurrent();
             authorize();
             if (options.isStopping() || !matchesSession(selected, request)) {
               throw new Error("Conversation environment requester is no longer current");
@@ -383,29 +373,17 @@ export function createWorkerEnvironmentSessionAttachments(
             attachment = store.getSessionAttachmentRecord(request.sessionId);
             environment = attachment && store.get(attachment.environmentId);
           }
-          const reused = Boolean(
-            attachment &&
-            environment &&
-            attachment.closedAtMs === null &&
-            !["destroyed", "failed", "orphaned"].includes(environment.state),
-          );
-          if (reused && attachment && environment) {
-            if (
-              environment.profileId !== request.profileId ||
-              (request.machineClass !== undefined &&
-                environment.profileSnapshot.machineClass !== request.machineClass) ||
-              (request.os !== undefined && environment.profileSnapshot.os !== request.os)
-            ) {
-              throw new Error(
-                "Conversation already owns a different environment; stop it before selecting another profile or machine",
-              );
-            }
-            if (environment.destroyRequestedAtMs !== null) {
-              throw new Error("Conversation environment is stopping");
-            }
+          const reusable = selectReusableSessionAttachment(attachment, environment, request);
+          const reused = Boolean(reusable);
+          if (reusable) {
+            ({ attachment, environment } = reusable);
             await store.touchSessionAttachment(attachment, assertCurrent);
             // Recovery needs the stored environment identity, not a newly supplied retry key.
             const environmentId = environment.environmentId;
+            const guest = reusable.guest;
+            if (guest) {
+              guestAuthority = await ensureGuestAuthority(guest, environmentId);
+            }
             await options.withLock(environmentId, async () => {
               assertCurrent();
               await onReserved?.({ environmentId, reused: true });
@@ -423,13 +401,21 @@ export function createWorkerEnvironmentSessionAttachments(
               request.idempotencyKey,
             ]);
             const intent = await providerLifecycle.prepareIntent(request.profileId, {
+              ...(request.guest ? { sessionGuest: request.guest } : {}),
               machineClass: request.machineClass,
+              resources: request.resources,
               os: request.os,
               signal,
             });
             assertCurrent();
             providerLifecycle.assertPreparedIntentCurrent(request.profileId, intent);
             const environmentIntent = deriveEnvironmentIntent(allocationKey);
+            if (request.guest) {
+              guestAuthority = await ensureGuestAuthority(
+                request.guest,
+                environmentIntent.environmentId,
+              );
+            }
             let reservationCreated = false;
             const reserved = await options
               .withLock(environmentIntent.environmentId, async () => {
@@ -542,14 +528,34 @@ export function createWorkerEnvironmentSessionAttachments(
       });
     },
     destroySessionAttachment(
-      request: { sessionId: string; environmentId?: string },
+      request: {
+        sessionId: string;
+        environmentId?: string;
+        principalId?: string;
+        requiresIsolatedEnvironment?: true;
+      },
       authorize: () => void,
     ) {
       // Close the durable relation before waiting for provisioning or transport cleanup.
       return options.trackOperation(
-        close(request.sessionId, authorize, request.environmentId, undefined, true).then(
-          (record) => (record ? options.environmentAccess.project(record) : undefined),
-        ),
+        close(
+          request.sessionId,
+          () => {
+            authorize();
+            const record = store.getSessionAttachmentRecord(request.sessionId);
+            if (record) {
+              assertGuestPrincipal(
+                record.environmentId,
+                request.sessionId,
+                request.principalId,
+                request.requiresIsolatedEnvironment,
+              );
+            }
+          },
+          request.environmentId,
+          undefined,
+          true,
+        ).then((record) => (record ? options.environmentAccess.project(record) : undefined)),
       );
     },
     async reconcileSessionAttachments() {
@@ -569,6 +575,10 @@ export function createWorkerEnvironmentSessionAttachments(
         const environment = store.get(record.environmentId);
         if (!environment || environment.state === "destroyed" || environment.state === "failed") {
           releaseSessionFacts(record.sessionId);
+          continue;
+        }
+        const guest = readSessionGuestBinding(environment.profileSnapshot);
+        if (guest && !(await guestAuthorities.recover(guest, record.environmentId))) {
           continue;
         }
         if (!currentSession(record)) {
@@ -665,8 +675,13 @@ export function createWorkerEnvironmentSessionAttachments(
       }
       await attachments.touchSessionAttachment(binding);
       command.assertCurrent?.();
+      const signals = [
+        command.signal,
+        guestAuthorities.get(binding.environmentId)?.authority.signal,
+      ].filter((signal): signal is AbortSignal => signal !== undefined);
       const result = await options.runSessionEnvironmentCommand(binding, {
         ...command,
+        ...(signals.length ? { signal: AbortSignal.any(signals) } : {}),
         assertCurrent: () => {
           attachments.assertSessionAttachment(binding);
           command.assertCurrent?.();

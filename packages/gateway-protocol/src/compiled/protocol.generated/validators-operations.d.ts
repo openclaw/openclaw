@@ -134,4 +134,5 @@ export {
   isThemesImportParams,
   isCatalogBrowseParams,
   isCatalogSearchKeywordsParams,
+  isEnvironmentsSessionInvokeParams,
 } from "./predicates.js";

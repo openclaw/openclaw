@@ -1,4 +1,8 @@
-import type { WorkerProvider, WorkerLeaseStatus } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  WorkerProvider,
+  WorkerLeaseStatus,
+  WorkerProfile,
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   crabboxCommandOutput,
   runCrabboxCommand,
@@ -6,12 +10,17 @@ import {
 } from "./crabbox-worker-command.js";
 import type { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import {
+  createCrabboxGuestCommandEnv,
+  prepareCrabboxGuestNetwork,
+} from "./crabbox-worker-preflight.js";
+import {
   assertCrabboxLeaseId,
   parseCrabboxCleanupProfile,
   type parseCrabboxProfile,
 } from "./crabbox-worker-profile.js";
 import type { createCrabboxWorkerBinaryResolver } from "./crabbox-worker-provider-binary.js";
 import { inspectWithContext, isNonRunnableState } from "./crabbox-worker-provision-commands.js";
+import { crabboxResourceEnv } from "./crabbox-worker-resource-options.js";
 import {
   assertCrabboxResourceReceipt,
   crabboxResourceIdentityArgs,
@@ -35,6 +44,7 @@ export function createCrabboxWorkerLeaseLifecycle(options: {
   const { resolveBinary, heartbeats } = options;
   const resolveLeaseContext = async (
     lease: Parameters<WorkerProvider["inspect"]>[0],
+    requireGuestAccess = true,
   ): Promise<{ context: LeaseHeartbeatContext; profile: CrabboxProfile }> => {
     const profile = parseCrabboxCleanupProfile(lease.profile);
     assertCrabboxLeaseId(lease.leaseId);
@@ -42,7 +52,7 @@ export function createCrabboxWorkerLeaseLifecycle(options: {
     if (retention && (!lease.resourceReceipt || lease.resourceReceipt.leaseId !== lease.leaseId)) {
       throw new Error("Crabbox retained lifecycle requires the original resource receipt");
     }
-    return {
+    const resolved = {
       context: {
         binary: (await resolveBinary(profile.binary, lease.signal)).binary,
         heartbeatIntervalMs: profile.heartbeatIntervalMs,
@@ -50,11 +60,45 @@ export function createCrabboxWorkerLeaseLifecycle(options: {
         id: lease.leaseId,
         idleTimeout: profile.idleTimeout,
         provider: profile.provider,
+        env: crabboxResourceEnv(profile.provider, profile.requestedResources),
         ...(retention ? { retention } : {}),
         ...(lease.resourceReceipt ? { resourceReceipt: lease.resourceReceipt } : {}),
       },
       profile,
     };
+    if (lease.profile.sessionGuest && requireGuestAccess) {
+      const assertCurrent = () => {
+        options.signal.throwIfAborted();
+        lease.signal?.throwIfAborted();
+      };
+      assertCurrent();
+      const env = createCrabboxGuestCommandEnv(resolved.context.env);
+      const guestNetwork = await prepareCrabboxGuestNetwork({
+        binary: resolved.context.binary,
+        provider: profile.provider,
+        env,
+        signal: lease.signal,
+        assertCurrent,
+      });
+      assertCurrent();
+      const context: LeaseHeartbeatContext = {
+        ...resolved.context,
+        env,
+        untrustedWorkload: true,
+        guestNetwork,
+      };
+      const observed = await inspectWithContext({
+        ...context,
+        signal: lease.signal,
+        assertCurrent,
+      });
+      assertCurrent();
+      if (!observed) {
+        throw new Error("Crabbox guest network inspection is unavailable");
+      }
+      return { context, profile };
+    }
+    return resolved;
   };
 
   return {
@@ -171,4 +215,43 @@ export function createCrabboxWorkerLeaseLifecycle(options: {
       return observed;
     },
   };
+}
+
+/** Coalesce maintenance without tying lease cleanup to a provision request. */
+export function createCrabboxWorkerMaintenance(params: {
+  signal: AbortSignal;
+  resolveBinaries: (profiles: readonly WorkerProfile[], signal: AbortSignal) => Promise<string[]>;
+  maintainImages: (params: {
+    binaries: string[];
+    signal: AbortSignal;
+    assertCurrent: () => void;
+  }) => Promise<void>;
+}) {
+  let maintenanceInFlight: Promise<void> | undefined;
+  const maintain: NonNullable<WorkerProvider["maintain"]> = (context) => {
+    context.assertCurrent();
+    params.signal.throwIfAborted();
+    return (maintenanceInFlight ??= Promise.resolve()
+      .then(async () => {
+        const signal = AbortSignal.any([context.signal, params.signal]);
+        const assertCurrent = () => {
+          signal.throwIfAborted();
+          context.assertCurrent();
+        };
+        assertCurrent();
+        // Records have no binary owner: try sorted executables until deletion or all report absent.
+        // Crabbox prints `checkpoint absent id=<id>` with exit 0 (internal/cli/checkpoint.go).
+        const resolvedBinaries = await params.resolveBinaries(context.profiles, signal);
+        assertCurrent();
+        await params.maintainImages({
+          binaries: resolvedBinaries,
+          signal,
+          assertCurrent,
+        });
+      })
+      .finally(() => {
+        maintenanceInFlight = undefined;
+      }));
+  };
+  return { maintain, settle: () => maintenanceInFlight?.catch(() => {}) };
 }

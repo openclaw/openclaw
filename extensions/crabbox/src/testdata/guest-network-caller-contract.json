@@ -1,0 +1,269 @@
+{
+  "fixtureVersion": 1,
+  "purpose": "Synthetic minimum parsed fields, never live isolation evidence. Other ordinary output fields may also be present.",
+  "discovery": {
+    "provider": "aws",
+    "capabilities": {
+      "features": [
+        "guest-network-v1"
+      ],
+      "guestNetwork": {
+        "version": 1,
+        "allocationRoutes": [
+          "direct",
+          "managed-coordinator"
+        ],
+        "receiptOutputs": [
+          "warmup-timing",
+          "inspect"
+        ],
+        "controllerIdentityProtocol": "lease-identity-v1"
+      }
+    }
+  },
+  "directConfig": {
+    "provider": "aws",
+    "guestNetworkCapability": {
+      "version": 1,
+      "allocationRoute": "direct",
+      "state": "implemented"
+    },
+    "guestNetworkPolicy": {
+      "version": 1,
+      "policyId": "example-egress",
+      "policyRevision": "fixture-v1",
+      "policyDigest": "15358111854d9c8f5e54fc42ee72cc8415936e03e9f1a7b0c8b7ccbbde2508f6"
+    }
+  },
+  "managedCoordinatorConfig": {
+    "provider": "aws",
+    "guestNetworkCapability": {
+      "version": 1,
+      "allocationRoute": "managed-coordinator",
+      "state": "server-qualification-required",
+      "reason": "requires authenticated versioned server policy/enforcement handshake"
+    },
+    "guestNetworkPolicy": {
+      "version": 1,
+      "policyId": "example-egress",
+      "policyRevision": "fixture-v1",
+      "policyDigest": "15358111854d9c8f5e54fc42ee72cc8415936e03e9f1a7b0c8b7ccbbde2508f6"
+    }
+  },
+  "operatorPolicy": {
+    "version": 1,
+    "id": "example-egress",
+    "revision": "fixture-v1",
+    "egress": [
+      {
+        "cidr": "93.184.216.34/32",
+        "ports": [
+          443
+        ]
+      }
+    ],
+    "sshSources": [
+      "198.51.100.7/32"
+    ],
+    "platformExceptions": [
+      "aws-platform-services-v1"
+    ]
+  },
+  "expectedAllocatorBinding": {
+    "leaseId": "cbx_0123456789ab",
+    "provider": "aws",
+    "resourceId": "i-11111111"
+  },
+  "acquisitionTiming": {
+    "provider": "aws",
+    "leaseId": "cbx_0123456789ab",
+    "exitCode": 0,
+    "guestNetwork": {
+      "version": 1,
+      "policyId": "example-egress",
+      "policyRevision": "fixture-v1",
+      "policyDigest": "15358111854d9c8f5e54fc42ee72cc8415936e03e9f1a7b0c8b7ccbbde2508f6",
+      "leaseId": "cbx_0123456789ab",
+      "provider": "aws",
+      "resourceId": "i-11111111",
+      "boundaryId": "sg-11111111",
+      "facts": {
+        "subnetId": "subnet-11111111",
+        "vpcId": "vpc-11111111",
+        "networkInterfaceId": "eni-11111111",
+        "imds": "disabled",
+        "instanceProfile": "none",
+        "ipv6": "absent",
+        "egress": "operator-public-ipv4-tcp-allowlist",
+        "amazonProvidedDNS": "aws-resolver-exception",
+        "platformExceptionsPolicy": "aws-platform-services-v1",
+        "awsPlatformExceptions": "dns,dhcp,time-sync,vpc-router,windows-license-activation,ecs-task-metadata"
+      }
+    }
+  },
+  "inspect": {
+    "id": "cbx_0123456789ab",
+    "provider": "aws",
+    "providerResourceId": "i-11111111",
+    "guestNetwork": {
+      "version": 1,
+      "policyId": "example-egress",
+      "policyRevision": "fixture-v1",
+      "policyDigest": "15358111854d9c8f5e54fc42ee72cc8415936e03e9f1a7b0c8b7ccbbde2508f6",
+      "leaseId": "cbx_0123456789ab",
+      "provider": "aws",
+      "resourceId": "i-11111111",
+      "boundaryId": "sg-11111111",
+      "facts": {
+        "subnetId": "subnet-11111111",
+        "vpcId": "vpc-11111111",
+        "networkInterfaceId": "eni-11111111",
+        "imds": "disabled",
+        "instanceProfile": "none",
+        "ipv6": "absent",
+        "egress": "operator-public-ipv4-tcp-allowlist",
+        "amazonProvidedDNS": "aws-resolver-exception",
+        "platformExceptionsPolicy": "aws-platform-services-v1",
+        "awsPlatformExceptions": "dns,dhcp,time-sync,vpc-router,windows-license-activation,ecs-task-metadata"
+      }
+    }
+  },
+  "controllerIdentity": {
+    "leaseId": "cbx_0123456789ab",
+    "slug": "example-lease",
+    "provider": "aws",
+    "resourceId": "i-11111111"
+  },
+  "managedOperatorPolicy": {
+    "bootstrapMode": "ssh-public-key-v1",
+    "version": 1,
+    "id": "example-egress",
+    "revision": "fixture-v1",
+    "egress": [
+      {
+        "cidr": "93.184.216.34/32",
+        "ports": [
+          443
+        ]
+      }
+    ],
+    "sshSources": [
+      "198.51.100.7/32"
+    ],
+    "platformExceptions": [
+      "aws-platform-services-v1",
+      "aws-roleless-imdsv2-public-bootstrap-v1"
+    ]
+  },
+  "managedServerCapability": {
+    "version": 1,
+    "provider": "aws",
+    "allocationRoute": "managed-coordinator",
+    "state": "implemented",
+    "policy": {
+      "version": 1,
+      "policyId": "example-egress",
+      "policyRevision": "fixture-v1",
+      "policyDigest": "5dcc85a2264ab4290534a16c7d065a1ac48b703650a55b15daef2ee4b4e998f3",
+      "bootstrapMode": "ssh-public-key-v1"
+    }
+  },
+  "managedCreateRequest": {
+    "provider": "aws",
+    "target": "linux",
+    "os": "ubuntu-24.04",
+    "untrustedWorkload": true,
+    "expectedGuestNetworkPolicy": {
+      "version": 1,
+      "policyId": "example-egress",
+      "policyRevision": "fixture-v1",
+      "policyDigest": "5dcc85a2264ab4290534a16c7d065a1ac48b703650a55b15daef2ee4b4e998f3",
+      "bootstrapMode": "ssh-public-key-v1"
+    },
+    "sshPort": "22"
+  },
+  "managedAcquisitionResponse": {
+    "lease": {
+      "id": "cbx_0123456789ab",
+      "provider": "aws",
+      "cloudID": "i-11111111",
+      "untrustedWorkload": true,
+      "sshHostKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+      "guestNetwork": {
+        "version": 1,
+        "policyId": "example-egress",
+        "policyRevision": "fixture-v1",
+        "policyDigest": "5dcc85a2264ab4290534a16c7d065a1ac48b703650a55b15daef2ee4b4e998f3",
+        "leaseId": "cbx_0123456789ab",
+        "provider": "aws",
+        "resourceId": "i-11111111",
+        "boundaryId": "sg-11111111",
+        "facts": {
+          "subnetId": "subnet-11111111",
+          "vpcId": "vpc-11111111",
+          "networkInterfaceId": "eni-11111111",
+          "imds": "roleless-v2",
+          "instanceProfile": "none",
+          "ipv6": "absent",
+          "egress": "operator-public-ipv4-tcp-allowlist",
+          "amazonProvidedDNS": "aws-resolver-exception",
+          "platformExceptionsPolicy": "aws-platform-services-v1",
+          "awsPlatformExceptions": "dns,dhcp,time-sync,vpc-router,windows-license-activation,ecs-task-metadata",
+          "bootstrapMode": "ssh-public-key-v1",
+          "bootstrapSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sshHostKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB"
+        },
+        "bootstrapMode": "ssh-public-key-v1"
+      }
+    },
+    "policy": {
+      "version": 1,
+      "policyId": "example-egress",
+      "policyRevision": "fixture-v1",
+      "policyDigest": "5dcc85a2264ab4290534a16c7d065a1ac48b703650a55b15daef2ee4b4e998f3",
+      "bootstrapMode": "ssh-public-key-v1"
+    }
+  },
+  "managedInspectResponse": {
+    "lease": {
+      "id": "cbx_0123456789ab",
+      "provider": "aws",
+      "cloudID": "i-11111111",
+      "untrustedWorkload": true,
+      "sshHostKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+      "guestNetwork": {
+        "version": 1,
+        "policyId": "example-egress",
+        "policyRevision": "fixture-v1",
+        "policyDigest": "5dcc85a2264ab4290534a16c7d065a1ac48b703650a55b15daef2ee4b4e998f3",
+        "leaseId": "cbx_0123456789ab",
+        "provider": "aws",
+        "resourceId": "i-11111111",
+        "boundaryId": "sg-11111111",
+        "facts": {
+          "subnetId": "subnet-11111111",
+          "vpcId": "vpc-11111111",
+          "networkInterfaceId": "eni-11111111",
+          "imds": "roleless-v2",
+          "instanceProfile": "none",
+          "ipv6": "absent",
+          "egress": "operator-public-ipv4-tcp-allowlist",
+          "amazonProvidedDNS": "aws-resolver-exception",
+          "platformExceptionsPolicy": "aws-platform-services-v1",
+          "awsPlatformExceptions": "dns,dhcp,time-sync,vpc-router,windows-license-activation,ecs-task-metadata",
+          "bootstrapMode": "ssh-public-key-v1",
+          "bootstrapSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sshHostKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB"
+        },
+        "bootstrapMode": "ssh-public-key-v1"
+      }
+    },
+    "policy": {
+      "version": 1,
+      "policyId": "example-egress",
+      "policyRevision": "fixture-v1",
+      "policyDigest": "5dcc85a2264ab4290534a16c7d065a1ac48b703650a55b15daef2ee4b4e998f3",
+      "bootstrapMode": "ssh-public-key-v1"
+    }
+  }
+}

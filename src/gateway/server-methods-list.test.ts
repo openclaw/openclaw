@@ -31,10 +31,10 @@ it.each([
   ["environments.session.status", "operator.read", { since: "2026.9" }],
   [
     "environments.session.create environments.session.destroy",
-    "operator.admin",
+    "operator.sessions.write",
     { since: "2026.9", controlPlaneWrite: true },
   ],
-  ["environments.session.exec", "operator.admin", { since: "2026.9" }],
+  ["environments.session.exec", "operator.sessions.write", { since: "2026.9" }],
 ] as const)("applies discovery and authority policy to %s", (names, scope, policy) => {
   const methods = listGatewayMethods();
   for (const name of names.split(" ")) {

@@ -5,6 +5,7 @@ import type {
   WorkerOperatingSystem as ProtocolWorkerOperatingSystem,
   WorkerEnvironmentStartStatus,
 } from "../../packages/gateway-protocol/src/schema/environments.js";
+import type { WorkerMachineResources as ProtocolWorkerMachineResources } from "../../packages/gateway-protocol/src/schema/worker-machine-resources.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ImageGenerationProvider } from "../image-generation/provider-types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
@@ -69,6 +70,8 @@ export type {
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 
 /** Provider-authored picker metadata for one machine class or exact machine type. */
+export type WorkerMachineResources = ProtocolWorkerMachineResources;
+
 export type WorkerMachineOption = Readonly<SchemaContract<ProtocolWorkerMachineOption>>;
 
 /**
@@ -332,6 +335,13 @@ export type WorkerProvider = {
   id: string;
   /** Honors exact receipts during provision replay, inspection and confirmed destruction. */
   supportsResourceReceipts?: true;
+  /** Disposable tool-only workloads with no host/model credentials or shared writable images. */
+  supportsUntrustedWorkloads?: true;
+  /** Pure resource selection. Returns effective settings without changing authority-bearing configuration. */
+  selectMachineResources?: (
+    profile: WorkerProfile,
+    resources: WorkerMachineResources,
+  ) => WorkerProfile;
   /**
    * Nonsecret backend display ID, never a routing or allocation identity.
    * Synchronous local presentation only: no commands, network, or credential reads.
@@ -399,6 +409,8 @@ export type WorkerProvider = {
     profile: WorkerProfile,
     operationId: string,
     options?: {
+      /** Host-owned session guest admission; never a provider configuration passthrough. */
+      untrustedWorkload?: true;
       /** Configured profile id for display; settings and operation id own allocation identity. */
       profileId?: string;
       /** Attempt-scoped display facts; the host rejects reports after provisioning closes. */

@@ -15,7 +15,10 @@ export function createCrabboxWorkerTeardown(dependencies: {
   warmImages: ReturnType<typeof createCrabboxWarmImageManager>;
   providerSignal: AbortSignal;
   warn: (message: string) => void;
-  resolveLeaseContext: (lease: Parameters<WorkerProvider["inspect"]>[0]) => Promise<{
+  resolveLeaseContext: (
+    lease: Parameters<WorkerProvider["inspect"]>[0],
+    requireGuestAccess?: boolean,
+  ) => Promise<{
     context: LeaseCommandContext;
     profile: ReturnType<typeof parseCrabboxCleanupProfile>;
   }>;
@@ -48,7 +51,7 @@ export function createCrabboxWorkerTeardown(dependencies: {
       if (parseCrabboxCleanupProfile(lease.profile).warmImage === false) {
         await heartbeats.stop(lease.leaseId);
       }
-      const { context, profile } = await resolveLeaseContext(lease).catch(
+      const { context, profile } = await resolveLeaseContext(lease, false).catch(
         async (error: unknown) => {
           await heartbeats.stop(lease.leaseId);
           throw error;

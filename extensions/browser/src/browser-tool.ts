@@ -17,6 +17,10 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  readBrowserAttachmentTarget,
+  withBrowserAttachmentDetails,
+} from "./browser-attachment-target.js";
 import type { BrowserDashboardResponse } from "./browser-dashboard.types.js";
 import {
   createBrowserNodeProxyRequest,
@@ -223,9 +227,13 @@ export function createBrowserTool(
     ...metadata,
     execute: async (_toolCallId, args, signal) => {
       opts?.assertInvocationCurrent?.();
+      const environmentId = readBrowserAttachmentTarget(args, Boolean(binding));
       let params = binding
         ? applyBrowserTabToolBinding(args as Record<string, unknown>, binding)
         : (args as Record<string, unknown>);
+      if (environmentId) {
+        params = { ...params, target: "node" };
+      }
       const action = readStringParam(params, "action", { required: true });
       if (!capabilities.actions.some((candidate) => candidate === action)) {
         throw new Error(
@@ -417,21 +425,23 @@ export function createBrowserTool(
       }
 
       let nodeTarget: Awaited<ReturnType<typeof resolveBrowserToolNodeTarget>> = null;
-      try {
-        nodeTarget = await resolveBrowserToolNodeTarget({
-          requestedNode: requestedNode ?? undefined,
-          profile: requestedProfile,
-          target,
-          sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-          allowHostControl: opts?.allowHostControl,
-          signal,
-        });
-      } catch (error) {
-        signal?.throwIfAborted();
-        // Keep the logged-in user browser usable on the host when auto-discovery
-        // of browser nodes fails transiently. Explicit node requests still fail.
-        if (!(isUserBrowserProfile && !target && !requestedNode && !configuredNode)) {
-          throw error;
+      if (!environmentId) {
+        try {
+          nodeTarget = await resolveBrowserToolNodeTarget({
+            requestedNode: requestedNode ?? undefined,
+            profile: requestedProfile,
+            target,
+            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+            allowHostControl: opts?.allowHostControl,
+            signal,
+          });
+        } catch (error) {
+          signal?.throwIfAborted();
+          // Keep the logged-in user browser usable on the host when auto-discovery
+          // of browser nodes fails transiently. Explicit node requests still fail.
+          if (!(isUserBrowserProfile && !target && !requestedNode && !configuredNode)) {
+            throw error;
+          }
         }
       }
       if (isUserBrowserProfile && !target && !requestedNode && !nodeTarget) {
@@ -439,13 +449,14 @@ export function createBrowserTool(
       }
 
       const resolvedTarget = target === "node" ? undefined : target;
-      const baseUrl = nodeTarget
-        ? undefined
-        : resolveBrowserBaseUrl({
-            target: resolvedTarget,
-            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-            allowHostControl: opts?.allowHostControl,
-          });
+      const baseUrl =
+        nodeTarget || environmentId
+          ? undefined
+          : resolveBrowserBaseUrl({
+              target: resolvedTarget,
+              sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+              allowHostControl: opts?.allowHostControl,
+            });
 
       const allowAutomaticHostFallback = Boolean(
         nodeTarget &&
@@ -454,9 +465,15 @@ export function createBrowserTool(
         !configuredNode &&
         opts?.allowHostControl !== false,
       );
-      const proxyRequest = nodeTarget
-        ? createBrowserNodeProxyRequest({ nodeTarget, allowAutomaticHostFallback, signal })
-        : null;
+      const proxyRequest = environmentId
+        ? createBrowserNodeProxyRequest({
+            environmentId,
+            allowAutomaticHostFallback: false,
+            signal,
+          })
+        : nodeTarget
+          ? createBrowserNodeProxyRequest({ nodeTarget, allowAutomaticHostFallback, signal })
+          : null;
       if (proxyRequest) {
         // The node resolves omissions against its own config; Gateway defaults
         // never cross this execution-owner boundary.
@@ -490,20 +507,22 @@ export function createBrowserTool(
           toolTimeoutMs = resolvedBrowser.actionTimeoutMs;
         }
       }
-      const sessionTabs = createBrowserToolSessionTabs({
-        agentId: opts?.agentId,
-        sessionKey: opts?.agentSessionKey,
-        requestedProfile: profile,
-        defaultProfile: resolvedBrowser.defaultProfile,
-        baseUrl,
-        nodeRoute,
-        routeProfile: () => {
-          const route = proxyRequest?.route();
-          return route?.status === "resolved" ? route.profile : undefined;
-        },
-        isHostFallbackActive: proxyRequest?.isHostFallbackActive,
-        registry: { touchSessionBrowserTab, trackSessionBrowserTab, untrackSessionBrowserTab },
-      });
+      const sessionTabs = environmentId
+        ? undefined
+        : createBrowserToolSessionTabs({
+            agentId: opts?.agentId,
+            sessionKey: opts?.agentSessionKey,
+            requestedProfile: profile,
+            defaultProfile: resolvedBrowser.defaultProfile,
+            baseUrl,
+            nodeRoute,
+            routeProfile: () => {
+              const route = proxyRequest?.route();
+              return route?.status === "resolved" ? route.profile : undefined;
+            },
+            isHostFallbackActive: proxyRequest?.isHostFallbackActive,
+            registry: { touchSessionBrowserTab, trackSessionBrowserTab, untrackSessionBrowserTab },
+          });
       if (isBrowserLifecycleAction(action)) {
         switch (action) {
           case "doctor":
@@ -519,6 +538,14 @@ export function createBrowserTool(
             return jsonResult(await browserStatus(proxyRequest ?? baseUrl, options));
           }
           case "profiles": {
+            if (environmentId) {
+              if (!proxyRequest) {
+                throw new Error("Attached browser transport unavailable");
+              }
+              return jsonResult(
+                await proxyRequest({ method: "GET", path: "/profiles", timeoutMs: toolTimeoutMs }),
+              );
+            }
             // Importable system profiles are host-local (import runs on the host),
             // so read them from the host regardless of the profiles action target;
             // never let a node proxy or sandbox describe the wrong Chrome profiles.
@@ -608,6 +635,7 @@ export function createBrowserTool(
             // Bridge/sandbox tabs have no operator browser.request route. Identity must
             // remain exact: truncation could address another tab, profile, or node.
             if (
+              !environmentId &&
               !baseUrl &&
               isBrowserRouteIdentifier(targetId, 128) &&
               isBrowserRouteIdentifier(identityProfile, 128)
@@ -664,6 +692,9 @@ export function createBrowserTool(
       if (browserDashboard) {
         // Dashboard presentation owns this tab; ordinary preview metadata would steal its panel.
         return { ...result, details: { ...asNullableRecord(result.details), browserDashboard } };
+      }
+      if (environmentId) {
+        return withBrowserAttachmentDetails(result, environmentId);
       }
       return [
         "open",

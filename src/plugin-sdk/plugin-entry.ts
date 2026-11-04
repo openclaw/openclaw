@@ -7,6 +7,12 @@ import type {
 } from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 
+export {
+  WorkerMachineResourcesSchema,
+  parseWorkerMachineResources,
+} from "../../packages/gateway-protocol/src/schema/worker-machine-resources.js";
+export { NODE_COMPUTER_RESOURCE_FETCH_COMMAND } from "../../packages/gateway-protocol/src/environment-node-capabilities.js";
+
 export type {
   StorageProvider,
   StorageProviderOpenParams,
@@ -166,6 +172,7 @@ export type {
   WorkerRetentionOperation,
   WorkerRetentionPolicy,
   WorkerMachineOption,
+  WorkerMachineResources,
   WorkerProfile,
   WorkerProvider,
   WorkerSshEndpoint,
