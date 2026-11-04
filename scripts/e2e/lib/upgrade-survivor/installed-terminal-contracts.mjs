@@ -32,20 +32,98 @@ export function readInstalledTerminalReference(role, encoded) {
 const applications = {
   "sqlite-session": {
     entry: "dist/infra/sqlite-readonly-location.worker.js",
-    entrySha256: "4e2eec39324ab211ab28b0c758096cc9a271723c2f2ec108866b2298ba8678cd",
-    sha256: "9d607904af9259839f69fcb10574851eca7f4aba5b40ef0c57cf0fda4aea17fa",
-    dynamic: [29629, 29790, 29968, 30140, 30281, 44974, 45103],
+    entrySha256: "3567231dc54d04a5b8a22df640cfff43f5b202ebd4a772db7f75bb6fdbb075b3",
+    sha256: "4f98f670025bac6c3991bdad503319724b7ae10a6518d5ebd7c0b4366e35ee63",
+    dynamic: {
+      "dist/infra/sqlite-readonly-location.worker.js": {
+        sha256: "3567231dc54d04a5b8a22df640cfff43f5b202ebd4a772db7f75bb6fdbb075b3",
+        imports: [
+          [
+            29982,
+            30056,
+            "./sqlite-readonly-startup-metadata-live-read.worker-qR6iY__p.mjs",
+            "dist/infra/sqlite-readonly-startup-metadata-live-read.worker-qR6iY__p.mjs",
+          ],
+          [
+            30143,
+            30230,
+            "./sqlite-readonly-deferred-plugin-session-transcript-read.worker-CGdhZqwB.mjs",
+            "dist/infra/sqlite-readonly-deferred-plugin-session-transcript-read.worker-CGdhZqwB.mjs",
+          ],
+          [
+            30321,
+            30402,
+            "./sqlite-readonly-agent-delete-session-store-safety.kernel-DaCFk0MH.mjs",
+            "dist/infra/sqlite-readonly-agent-delete-session-store-safety.kernel-DaCFk0MH.mjs",
+          ],
+          [
+            30493,
+            30558,
+            "./sqlite-readonly-sqlite-page-cache.worker-CXR43xtW.mjs",
+            "dist/infra/sqlite-readonly-sqlite-page-cache.worker-CXR43xtW.mjs",
+          ],
+          [
+            30634,
+            30710,
+            "./sqlite-readonly-package-update-activation-immutable-CAPWIInM.mjs",
+            "dist/infra/sqlite-readonly-package-update-activation-immutable-CAPWIInM.mjs",
+          ],
+          [
+            37443,
+            37511,
+            "./sqlite-readonly-sqlite-snapshot-reclamation-DKDr8AXw.mjs",
+            "dist/infra/sqlite-readonly-sqlite-snapshot-reclamation-DKDr8AXw.mjs",
+          ],
+          [
+            47433,
+            47485,
+            "./sqlite-readonly-sqlite-json-C7fKJvoB.mjs",
+            "dist/infra/sqlite-readonly-sqlite-json-C7fKJvoB.mjs",
+          ],
+          [
+            47562,
+            47625,
+            "./sqlite-readonly-sqlite-snapshot-source-CbiWomKB.mjs",
+            "dist/infra/sqlite-readonly-sqlite-snapshot-source-CbiWomKB.mjs",
+          ],
+        ],
+      },
+      "dist/infra/sqlite-readonly-startup-metadata-live-read.worker-qR6iY__p.mjs": {
+        sha256: "d5278adfb366e1acb80ed10f98bb252ce4fb9ba3af5aaa33dd32e23e18a73c80",
+        imports: [
+          [
+            5885,
+            5951,
+            "./sqlite-readonly-update-run-admission.read-CTz0dcoy.mjs",
+            "dist/infra/sqlite-readonly-update-run-admission.read-CTz0dcoy.mjs",
+          ],
+        ],
+      },
+    },
   },
   "finalizer-check": {
     entry: "dist/infra/update-migrated-finalize.worker.js",
-    entrySha256: "3dac12104758991f942ab594c4ab4c558299489c383ce55e0d62f6d5effd7300",
-    sha256: "3c51876ecff21574825f8efc1520cc8aabd774b14c432a51419dcf263ae956f2",
-    dynamic: [10643],
+    entrySha256: "b7781dbb5039c37c3b72bf3f1bea6cd1e13954e3881e953e7a9acdebbb2d1e1c",
+    sha256: "4115d02171e53ff4868d36ba117bee8149fa0bd626d01beb878badfb20fb17e3",
+    dynamic: {
+      "dist/infra/update-migrated-finalize.worker.js": {
+        sha256: "b7781dbb5039c37c3b72bf3f1bea6cd1e13954e3881e953e7a9acdebbb2d1e1c",
+        imports: [[10739, 10769, "../cli/daemon-cli.js", "dist/cli/daemon-cli.js"]],
+      },
+    },
+  },
+  "heartbeat-sqlite": {
+    entry: "dist/state/openclaw-state-lease-heartbeat.worker.js",
+    entrySha256: "2316d7d37ab745598aa49fcfcdb1d999fc9a75bc510a1d1507001b57f00dd2f8",
+    sha256: "c4c7200db2052f13d8cb60bf6e7c76bf5e0323c35010b000b508c5c6a8768c4e",
+    // The observed clone-safe SQLite selection excludes the PostgreSQL loader.
+    // No nested Worker initiates the GC-profile request/response callback.
+    dynamic: {},
   },
 };
 
 const schemas = {
-  agent: "2128dea3741ffc56965af58ef1642b7fd2d5704492f3f8237087a61fc62d7ccb",
+  agent: "0dfe3020147043dd0d80ec9c982ef7e8824883e35ba95f6fa75a7ad0cca7a791",
   client: "961a307699f42a614abd5a5abcccf5df3a6d3c1ad660a8c8072372aef856a729",
   daemon: "2ae987e7ab0f92db7c248fc7da3acd6ef80050b52302a037fbaf71f6b3602ba4",
   memory: "ba6a348ded1aa0f141926fa848a0c867bc31eeeab388fda927cdde85e0f34219",
@@ -108,16 +186,18 @@ export function assertInstalledTerminalDependencyTree(root, expected) {
 export function readInstalledTerminalMetadata(root, identity) {
   const files = {};
   const contents = {};
-  // The exact VERSION and loaded-commit candidate paths in both emitted roots.
+  // Exact VERSION and loaded-commit candidates in the three emitted root depths.
   // An earlier foreign candidate must not override the tarball's provenance.
   for (const relative of [
     "package.json",
     "dist/package.json",
     "dist/infra/package.json",
+    "dist/state/package.json",
     "../package.json",
     "../../package.json",
     "dist/build-info.json",
     "dist/infra/build-info.json",
+    "dist/state/build-info.json",
     "build-info.json",
     "../build-info.json",
     ".buildstamp",
@@ -126,6 +206,8 @@ export function readInstalledTerminalMetadata(root, identity) {
     "dist/.runtime-postbuildstamp",
     "dist/infra/.buildstamp",
     "dist/infra/.runtime-postbuildstamp",
+    "dist/state/.buildstamp",
+    "dist/state/.runtime-postbuildstamp",
   ]) {
     const file = path.resolve(root, relative);
     let stat;
@@ -190,22 +272,34 @@ export async function prepareInstalledTerminalApplication(root, identity) {
         continue;
       }
       selected.add(file);
+      const calls = contract.dynamic[file];
+      if (calls) {
+        assert.equal(identity.files[file]?.sha256, calls.sha256, "Selected importer changed");
+      }
+      const observedCalls = new Set();
       collectPackageDistImports({
         files: [file],
         packageJsons: new Map([["package.json", read("package.json")]]),
         readText: read,
         onImportOccurrence(occurrence) {
           const eager = ["static-import", "static-export"].includes(occurrence.kind);
-          const selectedCall =
-            file === contract.entry &&
-            occurrence.kind === "dynamic-import" &&
-            contract.dynamic.includes(occurrence.start);
+          const selectedCall = calls?.imports.find(([start]) => start === occurrence.start);
+          if (selectedCall) {
+            assert.deepEqual(
+              [occurrence.kind, occurrence.end, occurrence.specifier, occurrence.importedPath],
+              ["dynamic-import", ...selectedCall.slice(1)],
+              "Selected dynamic edge changed",
+            );
+            observedCalls.add(occurrence.start);
+          }
           if ((eager || selectedCall) && occurrence.importedPath) {
             pending.push(occurrence.importedPath);
           }
         },
       });
+      assert.equal(observedCalls.size, calls?.imports.length ?? 0, "Selected call is absent");
     }
+    assert(Object.keys(contract.dynamic).every((file) => selected.has(file)));
     const files = [...selected]
       .toSorted(ordered)
       .map((file) => [file, identity.files[file].size, identity.files[file].sha256]);

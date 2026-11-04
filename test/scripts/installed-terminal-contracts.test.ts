@@ -145,7 +145,7 @@ it("rejects a freshly self-certified application closure", () => {
       {
         roles: {
           "sqlite-session": {
-            sha256: "9d607904af9259839f69fcb10574851eca7f4aba5b40ef0c57cf0fda4aea17fa",
+            sha256: "4f98f670025bac6c3991bdad503319724b7ae10a6518d5ebd7c0b4366e35ee63",
             files: [],
           },
         },
@@ -173,6 +173,33 @@ it("binds finite initialization metadata and refuses foreign, changed or oversiz
   expect(result.build).toEqual(build);
   expect(result.files["dist/infra/package.json"]).toBeNull();
   expect(result.files["dist/infra/build-info.json"]).toBeNull();
+  fs.mkdirSync(path.join(root, "dist/state"));
+  for (const name of [
+    "package.json",
+    "build-info.json",
+    ".buildstamp",
+    ".runtime-postbuildstamp",
+  ]) {
+    const relative = `dist/state/${name}`;
+    const file = path.join(root, relative);
+    expect(result.files[relative], relative).toBeNull();
+    const bytes = Buffer.from("{}\n");
+    fs.writeFileSync(file, bytes);
+    expect(() => readInstalledTerminalMetadata(root, identity), relative).toThrow("Uninventoried");
+    files[relative] = { size: bytes.length, sha256: hash(bytes) };
+    expect(readInstalledTerminalMetadata(root, identity).files[relative], relative).toBe(
+      hash(bytes),
+    );
+    fs.appendFileSync(file, " ");
+    expect(() => readInstalledTerminalMetadata(root, identity), relative).toThrow();
+    fs.unlinkSync(file);
+    if (process.platform !== "win32") {
+      fs.symlinkSync("../build-info.json", file);
+      expect(() => readInstalledTerminalMetadata(root, identity), relative).toThrow();
+      fs.unlinkSync(file);
+    }
+    delete files[relative];
+  }
   writeJson(path.join(parent, "package.json"), { version: "foreign" });
   expect(() => readInstalledTerminalMetadata(root, identity)).toThrow("Uninventoried");
   fs.unlinkSync(path.join(parent, "package.json"));
