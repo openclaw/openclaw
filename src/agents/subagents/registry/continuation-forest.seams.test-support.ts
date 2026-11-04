@@ -24,6 +24,7 @@ import type {
 } from "../../../infra/session-delivery-queue-storage.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { sleep } from "../../../utils/sleep.js";
+import type { runEmbeddedAgent } from "../../embedded-agent.js";
 import type { spawnSubagentDirect } from "../spawn/subagent-spawn.js";
 import type { markContinuationRunsRetainedByReset } from "./subagent-continuation-reset-retention.js";
 
@@ -33,6 +34,10 @@ export type ContinuationForestSeams = {
   spawn?: typeof spawnSubagentDirect;
   /** The reply owner: a continue_work wake turn. */
   reply?: typeof getReplyFromConfig;
+  /** A room whose turns run the real reply owner instead; its provider is the edge. */
+  realReplyRoom?: (sessionKey: string) => boolean;
+  /** The provider behind the real reply owner's turns. */
+  provider?: typeof runEmbeddedAgent;
   /** Continuation return wakes are process-external; the world records them. */
   wake?: typeof requestContinuationWake;
   /** Runs after a durable session-delivery row is written, before its producer continues. */
@@ -63,8 +68,19 @@ export function spawnOwner(actual: { spawnSubagentDirect: typeof spawnSubagentDi
 
 export function replyOwner(actual: { getReplyFromConfig: typeof getReplyFromConfig }) {
   return {
-    getReplyFromConfig: (...args: Parameters<typeof getReplyFromConfig>) =>
-      (continuationForestSeams.reply ?? actual.getReplyFromConfig)(...args),
+    getReplyFromConfig: (...args: Parameters<typeof getReplyFromConfig>) => {
+      const real = continuationForestSeams.realReplyRoom?.(args[0].SessionKey ?? "") === true;
+      return ((real ? undefined : continuationForestSeams.reply) ?? actual.getReplyFromConfig)(
+        ...args,
+      );
+    },
+  };
+}
+
+export function providerEdge(actual: { runEmbeddedAgent: typeof runEmbeddedAgent }) {
+  return {
+    runEmbeddedAgent: (...args: Parameters<typeof runEmbeddedAgent>) =>
+      (continuationForestSeams.provider ?? actual.runEmbeddedAgent)(...args),
   };
 }
 

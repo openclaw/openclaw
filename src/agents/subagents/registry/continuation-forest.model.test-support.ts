@@ -119,6 +119,13 @@ export function reportText(election: AnnexElection): string {
 
 export const REPORT_TAG = /\[annex:report ([^\]]+)\]/g;
 
+/** A user's message to a room whose turns run the real reply owner: `[annex:user <who>] …`. */
+export function userText(who: string): string {
+  return `[annex:user ${who}] is the attic all right?`;
+}
+
+export const USER_TAG = /\[annex:user ([^\]]+)\]/;
+
 /** Wall time, which the fake clock does not move. */
 export function realNowMs(): number {
   return Number(process.hrtime.bigint()) / 1e6;

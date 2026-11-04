@@ -1,7 +1,8 @@
 // Continuation (karmaterminal/openclaw#1271): trouble in the burning annex, each through its real
 // entry point: a prince's chat /new, the Gateway's sessions.reset, a room handed over (its row
 // deleted and recreated, or its owner changed), a Gateway restart booting as production schedules
-// it, a Gateway that dies inside the attic's turn, and the owner's explicit cancel.
+// it, a Gateway that dies inside the attic's turn, the owner's explicit cancel, and a user's message
+// to a room running the real reply owner.
 import { expect } from "vitest";
 import { runContinuationCustodyBoot } from "../../../auto-reply/continuation/custody-boot.js";
 import { resetContinuationCustodyProjection } from "../../../auto-reply/continuation/custody/custody-projection.js";
@@ -12,6 +13,7 @@ import {
   dispatchPendingContinuationWork,
   resetContinuationWorkDispatchForTests,
 } from "../../../auto-reply/continuation/work-dispatch.js";
+import { getReplyFromConfig } from "../../../auto-reply/reply/get-reply.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { initSessionState } from "../../../auto-reply/reply/session.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -33,6 +35,7 @@ import {
   type Handover,
   OWNER_A,
   OWNER_B,
+  userText,
 } from "./continuation-forest.model.test-support.js";
 import type { ContinuationForest } from "./continuation-forest.test-support.js";
 
@@ -183,6 +186,24 @@ export async function crashMidWake(
   forest.dying = undefined;
   expect(died.at, `the Gateway never reached ${attic.name}'s ${mark}`).toBe(attic.dueAt);
   await restartGateway(forest);
+}
+
+/**
+ * A user's message to a room running the real reply owner, as a world operation: its turn runs now,
+ * or queues as a follow-up behind a running one.
+ */
+export function userSays(forest: ContinuationForest, node: AnnexNode, who: string) {
+  return forest.run(() =>
+    getReplyFromConfig(
+      finalizeInboundContext({
+        Provider: "webchat",
+        Surface: "webchat",
+        ChatType: "direct",
+        SessionKey: node.sessionKey,
+        Body: userText(who),
+      }),
+    ),
+  );
 }
 
 /** The owner's explicit `/continuations cancel <id...>`, through its decision owner. */
