@@ -57,7 +57,7 @@ const enMemoryImport = {
       "Existing destination files will be backed up in the migration report before replacement.",
     confirmBackup: "OpenClaw creates a verified pre-import backup before copying memory.",
     confirmImport: "Import memory",
-    disconnected: "Connect to the gateway to import memory.",
+    disconnected: "Reconnect to import memory.",
     adminRequired: "Memory import requires operator.admin access.",
     title: "Import assistant memory",
     subtitle:

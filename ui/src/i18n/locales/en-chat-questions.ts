@@ -37,7 +37,7 @@ const enChatQuestions = {
       answeredElsewhere: "Answered elsewhere",
       unavailable: "Unavailable",
       expired: "Expired",
-      disconnected: "Reconnect to answer this question.",
+      disconnected: "Reconnect to try again.",
       loadFailed: "Couldn’t load this question. Try again.",
     },
   },

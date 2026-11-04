@@ -288,7 +288,7 @@ const catalog = {
       workspaceStopped:
         "Saved changed files are shown. Start the cloud session to load full diffs and line counts.",
       workspaceStoppedFile: "Start the cloud session to load this diff.",
-      disconnected: "Reconnect to view workspace files.",
+      disconnected: "Reconnect to view changes.",
       allChanges: "All changes",
       uncommitted: "Uncommitted",
       commitsAhead: "{count} commits ahead of {base}",

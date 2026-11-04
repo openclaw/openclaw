@@ -27,12 +27,12 @@ describe("sidebar agent creation access", () => {
       name: "disconnected browser with a previous handshake",
       hello: gatewayHelloForMethods(["agents.create"]),
       phase: "reconnecting" as const,
-      reason: "Connect to the Gateway to perform this action",
+      reason: "Reconnect to create an agent.",
     },
     {
       name: "unpaired browser",
       hello: null,
-      reason: "Connect to the Gateway to perform this action",
+      reason: "Reconnect to create an agent.",
     },
   ])("explains $name and recovers", async ({ hello, phase, reason }) => {
     const request = vi.fn().mockResolvedValue({});
