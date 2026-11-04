@@ -79,36 +79,4 @@ describe("amazon-bedrock config migration", () => {
       "Merged models.bedrockDiscovery → plugins.entries.amazon-bedrock.config.discovery (filled missing fields from legacy; kept explicit plugin config values).",
     ]);
   });
-
-  it("declares the aws-sdk auth profile for a legacy provider auth override", () => {
-    const result = migrateAmazonBedrockLegacyConfig({
-      models: { providers: { "amazon-bedrock": { auth: "aws-sdk" } } },
-    });
-
-    expect(result.config).toEqual({
-      models: { providers: { "amazon-bedrock": { auth: "aws-sdk" } } },
-      auth: {
-        profiles: {
-          "amazon-bedrock:aws-sdk": { provider: "amazon-bedrock", mode: "aws-sdk" },
-        },
-      },
-    });
-    expect(result.changes).toEqual([
-      'Declared auth.profiles.amazon-bedrock:aws-sdk for models.providers.amazon-bedrock.auth="aws-sdk" (AWS SDK default credential chain; no credential is stored).',
-    ]);
-  });
-
-  it("keeps an already declared aws-sdk profile and other auth modes unchanged", () => {
-    const declared = {
-      models: { providers: { "amazon-bedrock": { auth: "aws-sdk" } } },
-      auth: { profiles: { "bedrock-prod": { provider: "amazon-bedrock", mode: "aws-sdk" } } },
-    };
-    expect(migrateAmazonBedrockLegacyConfig(declared)).toEqual({
-      config: declared,
-      changes: [],
-    });
-
-    const apiKey = { models: { providers: { "amazon-bedrock": { apiKey: "env:KEY" } } } };
-    expect(migrateAmazonBedrockLegacyConfig(apiKey)).toEqual({ config: apiKey, changes: [] });
-  });
 });

@@ -56,7 +56,7 @@ import {
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
   resolveAuthProfileOrderWithMetadata,
-  resolveConfiguredAwsSdkAuthProfileId,
+  resolveStoredAwsSdkAuthProfileId,
 } from "./order.js";
 import { markAuthProfileSuccess } from "./profiles.js";
 
@@ -66,6 +66,12 @@ function storeWith(
 ): AuthProfileStore {
   return { version: 1, profiles, ...rest };
 }
+
+const awsSdkMarker = {
+  type: "api_key",
+  provider: "amazon-bedrock",
+  key: "aws-sdk-credentials",
+} as const;
 
 describe("resolveAuthProfileOrder", () => {
   beforeEach(() => {
@@ -151,17 +157,38 @@ describe("resolveAuthProfileOrder", () => {
     expect(resolveAuthProfileOrder({ cfg, store, provider: "amazon-bedrock" })).toEqual([
       "amazon-bedrock:default",
     ]);
-    // Schedulers record this declaration as the account for the AWS SDK route.
-    expect(resolveConfiguredAwsSdkAuthProfileId({ cfg, provider: "amazon-bedrock" })).toBe(
-      "amazon-bedrock:default",
-    );
+    // A route declared before it had an account now names that account's marker record.
     expect(
-      resolveConfiguredAwsSdkAuthProfileId({ cfg, provider: "fixture-provider" }),
-    ).toBeUndefined();
-    expect(
-      resolveConfiguredAwsSdkAuthProfileId({
-        cfg: { auth: cfg.auth },
+      resolveAuthProfileEligibility({
+        cfg,
+        store: storeWith({ "amazon-bedrock:default": awsSdkMarker }),
         provider: "amazon-bedrock",
+        profileId: "amazon-bedrock:default",
+      }),
+    ).toEqual({ eligible: true, reasonCode: "ok" });
+  });
+
+  it("resolves the stored marker account schedulers record for an AWS SDK route", () => {
+    const cfg = {
+      models: { providers: { "amazon-bedrock": { auth: "aws-sdk", models: [] } } },
+    } satisfies OpenClawConfig;
+    const resolve = (params: { cfg: OpenClawConfig; store: AuthProfileStore }) =>
+      resolveStoredAwsSdkAuthProfileId({ ...params, provider: "amazon-bedrock" });
+
+    expect(resolve({ cfg, store: storeWith({ "amazon-bedrock:aws-sdk": awsSdkMarker }) })).toBe(
+      "amazon-bedrock:aws-sdk",
+    );
+    // A route the provider config does not declare has no account to record.
+    expect(
+      resolve({ cfg: {}, store: storeWith({ "amazon-bedrock:aws-sdk": awsSdkMarker }) }),
+    ).toBeUndefined();
+    // A real key is a credential, not an AWS SDK account.
+    expect(
+      resolve({
+        cfg,
+        store: storeWith({
+          "amazon-bedrock:key": createApiKeyCredential("amazon-bedrock", "sk-live"),
+        }),
       }),
     ).toBeUndefined();
   });

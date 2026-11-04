@@ -3,11 +3,10 @@
  *
  * Bedrock accepts no API key: credentials come from the AWS SDK default chain
  * (environment variables, shared config/SSO profiles, container or instance
- * roles). This method therefore saves no credential. It declares the route in
- * config — `models.providers.amazon-bedrock.auth: "aws-sdk"` plus the
- * `amazon-bedrock:aws-sdk` auth profile — so surfaces that must record which
- * account a run used, such as scheduled automations, have a durable profile id
- * to bind instead of an anonymous ambient credential.
+ * roles). This method therefore stores no credential — the saved account holds
+ * the host's non-secret AWS SDK marker. The record still matters: surfaces that
+ * must record which account a run used, such as scheduled automations, bind its
+ * lifetime, so signing the account out revokes those bindings.
  */
 import type {
   ProviderAuthContext,
@@ -18,13 +17,16 @@ import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-run
 import {
   applyAuthProfileConfig,
   applyProviderAuthConfigPatch,
+  buildApiKeyCredential,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-auth";
+import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
   asNullableRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  AWS_SDK_CREDENTIALS_MARKER,
   BEDROCK_AWS_SDK_AUTH_METHOD_ID,
   BEDROCK_AWS_SDK_PROFILE_ID,
   BEDROCK_PROVIDER_ID,
@@ -49,25 +51,24 @@ function resolveConfiguredRegion(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): s
   );
 }
 
-/**
- * Declare the AWS SDK route. The profile entry carries no credential material,
- * and the provider's `auth: "aws-sdk"` is what makes the host resolve it through
- * the default chain, so both are written together.
- */
-export function buildBedrockAwsSdkAuthResult(params: {
-  config: OpenClawConfig;
-  region?: string;
-}): ProviderAuthResult {
-  const region = normalizeRegion(params.region);
-  const declared = applyAuthProfileConfig(params.config, {
-    profileId: BEDROCK_AWS_SDK_PROFILE_ID,
-    provider: BEDROCK_PROVIDER_ID,
-    mode: "aws-sdk",
-  });
+/** The account record for the AWS SDK route: a marker, never AWS key material. */
+function buildBedrockAwsSdkProfile() {
   return {
-    profiles: [],
+    profileId: BEDROCK_AWS_SDK_PROFILE_ID,
+    credential: buildApiKeyCredential(BEDROCK_PROVIDER_ID, AWS_SDK_CREDENTIALS_MARKER),
+  };
+}
+
+/**
+ * Save the AWS SDK account. The credential is a marker, and the provider's
+ * `auth: "aws-sdk"` is what makes the host resolve each request through the
+ * default chain, so both are written together.
+ */
+export function buildBedrockAwsSdkAuthResult(params: { region?: string }): ProviderAuthResult {
+  const region = normalizeRegion(params.region);
+  return {
+    profiles: [buildBedrockAwsSdkProfile()],
     configPatch: {
-      auth: declared.auth,
       models: { providers: { [BEDROCK_PROVIDER_ID]: { auth: "aws-sdk" } } },
       // Hosts without AWS env markers (instance roles, SSO profiles) need the
       // explicit discovery opt-in before any Bedrock model is listed.
@@ -120,14 +121,24 @@ export const awsSdkAuthMethod: ProviderAuthMethod = {
           ? undefined
           : "Enter an AWS region such as us-east-1.",
     });
-    return buildBedrockAwsSdkAuthResult({ config: ctx.config, region: answer });
+    return buildBedrockAwsSdkAuthResult({ region: answer });
   },
-  runNonInteractive: async (ctx): Promise<OpenClawConfig> =>
-    applyProviderAuthConfigPatch(
-      ctx.config,
-      buildBedrockAwsSdkAuthResult({
-        config: ctx.config,
-        region: resolveConfiguredRegion(ctx.config, process.env),
-      }).configPatch,
-    ),
+  runNonInteractive: async (ctx): Promise<OpenClawConfig> => {
+    // Interactive setup lets the host persist the returned profiles; this path
+    // writes the record itself, so a non-interactive install also gets the
+    // account that scheduled runs bind.
+    await upsertAuthProfileWithLockOrThrow({
+      ...buildBedrockAwsSdkProfile(),
+      agentDir: ctx.agentDir,
+    });
+    return applyAuthProfileConfig(
+      applyProviderAuthConfigPatch(
+        ctx.config,
+        buildBedrockAwsSdkAuthResult({
+          region: resolveConfiguredRegion(ctx.config, process.env),
+        }).configPatch,
+      ),
+      { profileId: BEDROCK_AWS_SDK_PROFILE_ID, provider: BEDROCK_PROVIDER_ID, mode: "api_key" },
+    );
+  },
 };

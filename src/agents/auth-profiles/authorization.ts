@@ -14,7 +14,6 @@ import { enrollOwnedAuthProfileAuthorization } from "./authorization-enrollment-
 import { readAuthProfileAuthorizationLifetime } from "./authorization-lifetime.js";
 import { retainAuthProfileAuthorizationObservation } from "./authorization-observation.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
-import { captureDeclaredAuthProfileAuthorization } from "./declared-authorization.js";
 import { assertAuthProfileMigrationCandidates } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
 import {
@@ -53,11 +52,6 @@ export async function captureAuthProfileAuthorization(params: {
 }): Promise<AuthProfileAuthorization> {
   if (isUserModelAuthProfileId(params.profileId)) {
     return capturePersonalAuthProfileAuthorization(params);
-  }
-  // A declared AWS SDK account has no stored row to observe; config owns its lifetime.
-  const declared = params.cfg?.auth?.profiles?.[params.profileId];
-  if (declared?.mode === "aws-sdk") {
-    return captureDeclaredAuthProfileAuthorization({ ...params, provider: declared.provider });
   }
   let cleanup: (() => Promise<void>) | undefined;
   const sanitize = (error: unknown): Error =>

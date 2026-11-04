@@ -12,6 +12,7 @@ import {
   type ProviderAuthAliasLookupParams,
   resolveProviderIdForAuth,
 } from "../provider-auth-aliases.js";
+import { isAwsSdkAuthProfileCredential } from "./aws-sdk-account.js";
 import {
   evaluateStoredCredentialEligibility,
   resolveTokenExpiryState,
@@ -92,20 +93,34 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
 }
 
 /**
- * Profile id config declares for a provider's AWS SDK route, if any.
+ * Stored account for a provider's AWS SDK route, if one exists.
  *
- * The route stores no credential, so this declaration is the only durable name a
- * recorded account can use. Ids are scanned in sorted order; selecting among
- * several declared accounts is a separate concern.
+ * The route resolves credentials from the host's chain, so the stored record
+ * holds a marker only — but it is a real account whose lifetime a recorded
+ * automation can bind and whose removal revokes that binding. Only a provider
+ * config that routes through `aws-sdk` can select one, so an undeclared route
+ * still has no account to record. Ids are scanned in sorted order; selecting
+ * among several accounts is a separate concern.
  */
-export function resolveConfiguredAwsSdkAuthProfileId(params: {
+export function resolveStoredAwsSdkAuthProfileId(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
+  store: AuthProfileStore;
 }): string | undefined {
-  return Object.keys(params.cfg?.auth?.profiles ?? {})
-    .toSorted()
-    .find((profileId) => isConfiguredAwsSdkAuthProfileForProvider({ ...params, profileId }));
+  const { providerAuthKey, matchesStoredProvider } = prepareProviderCompatibility(params);
+  if (
+    findNormalizedProviderValue(params.cfg?.models?.providers, providerAuthKey)?.auth !== "aws-sdk"
+  ) {
+    return undefined;
+  }
+  return Object.entries(params.store.profiles)
+    .filter(
+      ([, credential]) =>
+        matchesStoredProvider(credential.provider) && isAwsSdkAuthProfileCredential(credential),
+    )
+    .map(([profileId]) => profileId)
+    .toSorted()[0];
 }
 
 /** Resolves whether a profile can be used for a provider right now. */
@@ -147,7 +162,11 @@ export function resolveAuthProfileEligibility(params: {
     }
     if (profileConfig.mode !== cred.type) {
       const oauthCompatible = profileConfig.mode === "oauth" && cred.type === "token";
-      if (!oauthCompatible) {
+      // A route declared before it had a stored account now names that account's
+      // marker record; both describe the same AWS SDK chain.
+      const awsSdkCompatible =
+        profileConfig.mode === "aws-sdk" && isAwsSdkAuthProfileCredential(cred);
+      if (!oauthCompatible && !awsSdkCompatible) {
         return { eligible: false, reasonCode: "mode_mismatch" };
       }
     }

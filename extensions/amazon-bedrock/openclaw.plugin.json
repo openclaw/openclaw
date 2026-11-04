@@ -78,7 +78,7 @@
     }
   },
   "configContracts": {
-    "compatibilityMigrationPaths": ["models.bedrockDiscovery", "models.providers.amazon-bedrock.auth"]
+    "compatibilityMigrationPaths": ["models.bedrockDiscovery"]
   },
   "uiHints": {
     "discovery": {
