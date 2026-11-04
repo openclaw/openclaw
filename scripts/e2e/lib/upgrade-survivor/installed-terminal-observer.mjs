@@ -53,13 +53,12 @@ const publishedWorkerRoots = {
 const publishedSqliteWorkerSha256 =
   "59e299b2d4e33c5cc0aef06eb87fc986906d69cae24d2f72daa0f179da75a322";
 const publishedProgressSha256 = "3f74e8b47c704a23722b1d6d444bfc189b15b36c88314a7e92d1943bcbc284c0";
-const reviewedRevision = "23ce62a0035a78be5050c5d9305ddb47168e6675";
+const reviewedRevision = "aedae9dc410202f22504c6183823fd411699f723";
 const publishedRevision = "8b18b5578f66eab1501cba4cef2310d88bfb9a41";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const workerUrlDescriptors = Object.getOwnPropertyDescriptors(URL.prototype);
 const workerSearchParamsDescriptors = Object.getOwnPropertyDescriptors(URLSearchParams.prototype);
 const nativeArraySpecies = Object.getOwnPropertyDescriptor(Array, Symbol.species);
-
 function nativePrototypeMatches(prototype, expected) {
   const actual = Object.getOwnPropertyDescriptors(prototype);
   return (
@@ -214,13 +213,7 @@ function isolatedWorkerLaunch(data) {
     !execArgv ||
     execArgv.length !== 0 ||
     (data.eval !== undefined && typeof data.eval !== "boolean") ||
-    [data.stdout, data.stderr].some((value) => value !== undefined && typeof value !== "boolean") ||
-    keys.some(
-      (key) =>
-        !["eval", "env", "execArgv", "workerData", "transferList", "stdout", "stderr"].includes(
-          key,
-        ),
-    )
+    keys.some((key) => !["eval", "env", "execArgv", "workerData"].includes(key))
   ) {
     return undefined;
   }
@@ -240,10 +233,7 @@ function publishedWorkerOptions(data) {
 }
 
 function isolatedWorkerRole(launch, role) {
-  const allowed =
-    role === "heartbeat"
-      ? ["eval", "env", "execArgv", "workerData", "transferList", "stdout", "stderr"]
-      : ["eval", "env", "execArgv", "workerData"];
+  const allowed = ["eval", "env", "execArgv", "workerData"];
   return (
     launch?.environment === "empty" &&
     Array.isArray(launch.execArgv) &&
@@ -919,32 +909,10 @@ function install(spec) {
         ) {
           packageHasher = { kind: "published-inline", sha256: historicalHasherSha256, launch };
         }
-        let packageHeartbeat;
-        if (
-          isolatedWorkerRole(launch, "heartbeat") &&
-          spec.heartbeatWorkers &&
-          locationOf(entry).endsWith(`/${heartbeatRelativePath}`)
-        ) {
-          const file = locationOf(entry);
-          const stat = fs.lstatSync(file);
-          assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 4 * 1024 * 1024);
-          assert.equal(fs.realpathSync(file), file);
-          const sha256 = digest(fs.readFileSync(file));
-          const root = file.slice(0, -heartbeatRelativePath.length - 1);
-          assert(
-            isHeartbeatPackageRoot(root, spec),
-            "Heartbeat package root is outside task custody",
-          );
-          const facts = heartbeatFacts(root);
-          const receipt = readHeartbeatReceipt(root, facts);
-          assert.equal(sha256, receipt.sha256);
-          packageHeartbeat = { root, ...receipt, launch };
-        }
         report("thread", {
           childThread,
           entry: entry ?? "unknown",
           packageHasher,
-          packageHeartbeat,
           packageEntry: entry === undefined ? undefined : publishedWorker(entry, publishedOptions),
         });
         child.once("exit", (code) => report("thread-exit", { childThread, code }));
@@ -1848,41 +1816,6 @@ function readObservation(directory, spec = {}) {
       row.packageHasher?.kind === "published-inline" &&
       row.packageHasher.sha256 === historicalHasherSha256 &&
       digest(row.entry) === historicalHasherSha256;
-    const heartbeat = spec.heartbeatWorkers?.find(
-      (contract) =>
-        isolatedWorkerRole(row.packageHeartbeat?.launch, "heartbeat") &&
-        contract.relativePath === heartbeatRelativePath &&
-        row.packageHeartbeat &&
-        /^[a-f0-9]{64}$/u.test(row.packageHeartbeat.dependencySha256) &&
-        /^[a-f0-9]{64}$/u.test(row.packageHeartbeat.dependencyReferenceSha256) &&
-        /^\d+:\d+$/u.test(row.packageHeartbeat.dependencyIdentity) &&
-        isHeartbeatPackageRoot(row.packageHeartbeat.root, spec) &&
-        /^\d+:\d+$/u.test(row.packageHeartbeat.rootIdentity) &&
-        locationFromEntry(row.entry) ===
-          path.join(row.packageHeartbeat.root, heartbeatRelativePath) &&
-        row.packageHeartbeat.sha256 === contract.sha256 &&
-        row.packageHeartbeat.inventorySha256 === contract.inventorySha256 &&
-        row.packageHeartbeat.dependencySha256 === contract.dependencies?.sha256 &&
-        row.packageHeartbeat.dependencyReferenceSha256 === contract.dependencyReferenceSha256 &&
-        row.packageHeartbeat.sourceCommit === contract.sourceCommit &&
-        rows.some(
-          (qualified) =>
-            qualified.event === "heartbeat-package" &&
-            BigInt(qualified.time) < BigInt(row.time) &&
-            [
-              "qualifiedRoot",
-              "rootIdentity",
-              "manifestIdentity",
-              "manifestSha256",
-              "sha256",
-              "inventorySha256",
-              "sourceCommit",
-              "dependencyIdentity",
-              "dependencySha256",
-              "dependencyReferenceSha256",
-            ].every((key) => qualified[key] === row.packageHeartbeat[key]),
-        ),
-    );
     const entry = row.packageEntry;
     const rootEntry = entry?.rootEntry;
     const expectedRoot = publishedWorkerRoots[entry?.role];
@@ -1926,13 +1859,6 @@ function readObservation(directory, spec = {}) {
         reason: "settled-before-handoff",
         sourceCommit: publishedRevision,
         sha256: rootEntry.sha256,
-      });
-    } else if (heartbeat && (before || candidate.has(row.pid))) {
-      heartbeatCoverage.set(row, {
-        role: "state-lease-heartbeat",
-        reason: before ? "settled-before-handoff" : "candidate-subtree",
-        sourceCommit: heartbeat.sourceCommit,
-        sha256: heartbeat.sha256,
       });
     } else {
       assert(admittedFile || admittedInline, "Missing worker-thread preload coverage");
