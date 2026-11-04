@@ -313,7 +313,7 @@ function EmbeddedSettingsHeader(props: SettingsSidebarProps) {
           onClick={() => props.onExit()}
         >
           <Icon name="chevronLeft" />
-          <span class="native-embed-header__back-label">{t("common.back")}</span>
+          <span>{t("common.back")}</span>
         </button>
       </Show>
       <h1 class="page-title">

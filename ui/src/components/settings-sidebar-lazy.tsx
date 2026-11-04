@@ -89,7 +89,7 @@ function SettingsSidebarFallback(props: {
                 type="button"
                 onClick={() => props.sidebarProps.onExit()}
               >
-                <span class="native-embed-header__back-label">{t("common.back")}</span>
+                <span>{t("common.back")}</span>
               </button>
             </Show>
             <h1 class="page-title">
