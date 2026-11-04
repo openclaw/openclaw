@@ -337,9 +337,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (next === closedPreviewText || epoch !== previewEpoch) {
       return;
     }
+    const shown = `${snapshotBaseText}${continuedPreview(previewText)}`;
     closedPreviewText = next;
-    if (lastPartial && (streaming || streamingStartPromise)) {
-      streamText = `${snapshotBaseText}${continuedPreview(previewText)}`;
+    // Rebuild only the preview part of an open card; text appended after it stays.
+    if (lastPartial && (streaming || streamingStartPromise) && streamText.startsWith(shown)) {
+      const appended = streamText.slice(shown.length);
+      streamText = `${snapshotBaseText}${continuedPreview(previewText)}${appended}`;
       flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
     }
   };

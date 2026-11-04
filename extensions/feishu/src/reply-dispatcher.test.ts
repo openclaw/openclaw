@@ -1073,8 +1073,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     },
   );
 
-  // Strings are previews, [text] is a completed block, null is an idle close and false is one
-  // whose card rejects its final write after showing only "A.", then recovers it statically.
+  // Strings are previews, [text] is a completed block and null is an idle close. Core does not
+  // await idle, so true holds one in flight; false rejects it after the card showed only "A.".
   it.each([
     ["delta blocks", ["hello", ["lo world"]], ["hellolo world"]],
     ["covered tail", ["First.\n\nLast.", ["First."], ["\n\nLast."]], ["First.\n\nLast."]],
@@ -1084,22 +1084,26 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["corrected snapshots", ["Old draft answer.", "Corrected answer.", "Old draft"], ["Old draft"]],
     ["private reasoning", ["<thinking>private</thinking>\nvisible answer"], ["visible answer"]],
     ["idle-closed cards", ["One.", ["One."], null, "One.\n\nTwo.", ["\n\nTwo."]], ["One.", "Two."]],
-    ["rejected close", ["A.", ["A."], "A. X.", false, "A. X. E.", [" X. E."]], ["A. X.", "X. E."]],
+    ["rejection", ["A.", ["A."], "A. X.", true, false, "A. X. E.", [" X. E."]], ["A. X.", "X. E."]],
+    ["late rejection", [["A."], "A. X.", true, "A. X. E.", ["Z."], false], ["A. X.", "X. E.Z."]],
   ] as const)("streams %s", async (_name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
+    const close = gate<StreamingCloseResult>();
     await options.onReplyStart?.();
     for (const event of events) {
       if (event === null) {
         await options.onIdle?.();
+      } else if (event === true) {
+        stream(0).closeWithResult.mockImplementationOnce(close.wait);
+        await Promise.race([options.onIdle?.(), close.started]);
       } else if (event === false) {
         // The block recovery resends "A."; "X." was never shown, so the next card must keep it.
         const shown = { visibleReplySent: true, content: "A.", finalTextAccepted: false };
-        stream(0).closeWithResult.mockRejectedValueOnce(streamingFailure(new Error("no"), shown));
+        close.reject(streamingFailure(new Error("no"), shown));
         await expect(options.onIdle?.()).rejects.toThrow("no");
         expectSend(sendStructuredCardFeishuMock, { text: "A." });
         expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
-        expect(streamingInstances).toHaveLength(1);
       } else if (typeof event === "string") {
         result.replyOptions.onPartialReply?.({ text: event });
       } else {
@@ -1584,11 +1588,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expected: "> thinking step",
       duplicate: true,
     },
-    {
-      name: "reasoning only",
-      reasoning: ["deep thought"],
-      expected: "> deep thought",
-    },
+    { name: "reasoning only", reasoning: ["deep thought"], expected: "> deep thought" },
     {
       name: "empty reasoning",
       reasoning: [""],
