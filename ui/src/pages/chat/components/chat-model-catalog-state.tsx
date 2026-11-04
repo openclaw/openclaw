@@ -1,10 +1,10 @@
 import { createMemo, onSettled, Show } from "solid-js";
-import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
+import "../../../components/tooltip.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { useProviderDisplayLabel } from "../../../lib/reactive/provider-presentation.tsx";
 import { restoreChatModelRefreshFocus } from "./chat-model-picker-search-view.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
@@ -20,6 +20,7 @@ type ChatModelCatalogStateProps = {
 };
 
 export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | undefined }) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const label = createMemo(() => {
     if (
       !props.state ||

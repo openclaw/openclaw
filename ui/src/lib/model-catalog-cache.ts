@@ -82,6 +82,30 @@ export type ModelCatalogEntry = {
 
 // Application lifecycle invalidation must not eagerly load catalog readers or presentation.
 export const modelCatalogCache = new WeakMap<ModelCatalogClient, ModelCatalogCache>();
+
+/** Presentation is derived from this connection's admitted catalog, never routing state. */
+export function readCachedProviderPresentation(
+  client: ModelCatalogClient | null | undefined,
+  provider: string,
+): NonNullable<ModelCatalogResult["providerPresentations"]>[string] | undefined {
+  const cache = client ? modelCatalogCache.get(client) : undefined;
+  if (!cache) {
+    return undefined;
+  }
+  for (const entry of [...cache.entries.values()].toReversed()) {
+    if (!entry.invalidated) {
+      const presentation = entry.result?.providerPresentations?.[provider];
+      if (presentation) {
+        return presentation;
+      }
+      const model = entry.result?.models.find((row) => row.provider === provider);
+      if (model) {
+        return model;
+      }
+    }
+  }
+  return undefined;
+}
 export const modelCatalogObservers = new WeakMap<
   ModelCatalogClient,
   Set<(update: ModelCatalogCacheUpdate) => void>
@@ -377,4 +401,27 @@ export function invalidateModelCatalogCache(
     matches,
   });
   return matches;
+}
+
+export function subscribeModelCatalogCache(
+  client: ModelCatalogClient,
+  listener: (update: ModelCatalogCacheUpdate) => void,
+  readScope?: () => ModelCatalogReadScope,
+): () => void {
+  const scopedListener = readScope
+    ? (update: ModelCatalogCacheUpdate) => {
+        const scope = modelCatalogParams(readScope());
+        if (update.matches(scope, modelCatalogKey(scope))) {
+          listener(update);
+        }
+      }
+    : listener;
+  const listeners = modelCatalogObservers.get(client) ?? new Set();
+  modelCatalogObservers.set(client, listeners);
+  listeners.add(scopedListener);
+  return () => {
+    if (listeners.delete(scopedListener) && listeners.size === 0) {
+      modelCatalogObservers.delete(client);
+    }
+  };
 }

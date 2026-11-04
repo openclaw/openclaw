@@ -317,6 +317,82 @@ async function expectDemoAvailability(available: boolean, runtimeConfig?: OpenCl
 }
 
 describe("models.list", () => {
+  it("publishes current provider presentation without changing model identity or leaking sources", async () => {
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      { id: "local-model", name: "Local model", provider: "workstation" },
+    ]);
+    for (const [name, icon] of [
+      ["Workstation", { source: "file", path: "/private/icons/workstation.png" }],
+      ["Studio", { source: "url", url: "https://images.example.com/studio.png" }],
+      ["Studio server", { source: "builtin", name: "server" }],
+    ] as const) {
+      const respond = await listModels({
+        view: "all",
+        loadGatewayModelCatalog,
+        runtimeConfig: {
+          models: {
+            providers: {
+              workstation: {
+                baseUrl: "https://models.example.com/v1",
+                auth: "none",
+                models: [],
+                name,
+                icon,
+              },
+              hidden: {
+                baseUrl: "https://hidden.example.com/v1",
+                models: [],
+                name: "Hidden provider",
+              },
+            },
+          },
+        },
+      });
+      const payload = respond.mock.calls[0]?.[1];
+      expect(payload).toMatchObject({
+        models: [
+          {
+            id: "local-model",
+            name: "Local model",
+            provider: "workstation",
+            providerName: name,
+            providerIcon:
+              icon.source === "builtin" ? icon : { source: "asset", url: expect.any(String) },
+          },
+        ],
+        providerPresentations: { workstation: { providerName: name } },
+      });
+      expect(JSON.stringify(payload)).not.toContain("/private/icons");
+      expect(JSON.stringify(payload)).not.toContain("images.example.com");
+      expect(JSON.stringify(payload)).not.toContain("Hidden provider");
+    }
+    const settings = await listModels({
+      view: "provider-config",
+      loadGatewayModelCatalog: vi.fn(async () => []),
+      runtimeConfig: {
+        models: {
+          providers: {
+            workstation: {
+              baseUrl: "https://models.example.com/v1",
+              models: [],
+              name: "Workstation",
+              icon: { source: "builtin", name: "server" },
+            },
+          },
+        },
+      },
+    });
+    expect(settings.mock.calls[0]?.[1]).toMatchObject({
+      models: [],
+      providerPresentations: {
+        workstation: {
+          providerName: "Workstation",
+          providerIcon: { source: "builtin", name: "server" },
+        },
+      },
+    });
+  });
+
   it.each(["claude-fable-5-1", "Claude Gateway/claude-fable-5-1"])(
     "publishes the native Fable effort ladder for %s on a custom Messages provider",
     async (id) => {

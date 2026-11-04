@@ -1,3 +1,4 @@
+import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
 import {
   formatRawProviderLabel,
   providerDisplayLabel,
@@ -9,7 +10,7 @@ import type { ModelRuntimeEntry } from "../../../lib/model-runtime-choice.ts";
 
 registerModelControlsEnglish();
 
-export type ChatModelPickerOption = {
+export type ChatModelPickerOption = ProviderPresentation & {
   agentRuntimeId?: string;
   /** Null is an unknown configured base; undefined is an ordinary model-only row. Both clear a prior pin. */
   agentRuntime?: string | null;
@@ -72,11 +73,11 @@ export type ChatModelPickerTargetGroup = {
 };
 
 export function formatModelLabel(
-  option: Pick<ChatModelPickerOption, "label" | "provider">,
+  option: Pick<ChatModelPickerOption, "label" | "provider" | "providerName">,
 ): string {
   const prefixes = [
     formatRawProviderLabel(option.provider),
-    providerDisplayLabel(option.provider),
+    providerDisplayLabel(option.provider, option),
   ].toSorted((left, right) => right.length - left.length);
   for (const prefix of prefixes) {
     if (option.label.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) {

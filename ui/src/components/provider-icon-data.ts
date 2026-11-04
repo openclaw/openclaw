@@ -157,7 +157,18 @@ export function formatRawProviderLabel(provider: string): string {
 }
 
 /** Brand display name for a (normalized, lowercase) provider id. */
-export function providerDisplayLabel(provider: string): string {
+export type ProviderPresentation = {
+  providerName?: string;
+  providerIcon?: { source: "builtin"; name: string } | { source: "asset"; url: string };
+};
+
+export function providerDisplayLabel(
+  provider: string,
+  presentation?: Pick<ProviderPresentation, "providerName">,
+): string {
+  if (presentation?.providerName) {
+    return presentation.providerName;
+  }
   if (Object.hasOwn(PROVIDER_DISPLAY_LABELS, provider)) {
     return PROVIDER_DISPLAY_LABELS[provider]!;
   }

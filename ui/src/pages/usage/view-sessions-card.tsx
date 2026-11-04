@@ -2,12 +2,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
-import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSection, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import "../../components/tooltip.ts";
 import { formatAnalysisCost, formatUsageTokens } from "./metrics.ts";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
@@ -21,7 +21,10 @@ const SESSION_SORT_OPTIONS = [
 ] as const;
 
 /** Plain facts for a session row: where it ran, on what, and how much happened. */
-const buildSessionMeta = (session: UsageSessionEntry): string[] => {
+const buildSessionMeta = (
+  session: UsageSessionEntry,
+  providerDisplayLabel: (provider: string) => string,
+): string[] => {
   const provider = session.modelProvider ?? session.providerOverride;
   const counts = session.usage?.messageCounts;
   const tools = session.usage?.toolUsage?.totalCalls;
@@ -234,6 +237,7 @@ function SessionRows(props: {
   onRowSelected?: (key: string, row: HTMLElement, button: HTMLElement) => void;
   onRowMounted?: (key: string, row: HTMLElement, button: HTMLElement) => void;
 }) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const orderedKeys = createMemo(() => props.sessions.map((session) => session.key));
   return (
     <For each={props.sessions} keyed={(session) => session.key}>
@@ -247,7 +251,7 @@ function SessionRows(props: {
         };
         const meta = createMemo(() => {
           i18nRevision();
-          return buildSessionMeta(session());
+          return buildSessionMeta(session(), providerDisplayLabel);
         });
         const valueLabel = createMemo(() => {
           i18nRevision();

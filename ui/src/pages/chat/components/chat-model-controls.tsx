@@ -26,6 +26,7 @@ import {
   resolveModelRuntimeEntry,
 } from "../../../lib/model-runtime-choice.ts";
 import { i18nRevision, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ProviderPresentationScope } from "../../../lib/reactive/provider-presentation.tsx";
 import { ChatEffortPicker, type ChatEffortPickerParams } from "./chat-effort-picker.tsx";
 import {
   normalizeChatModelProviderGroupId,
@@ -241,6 +242,8 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         contextWindow: catalogEntry?.contextWindow,
         supportsTools: catalogEntry?.supportsTools,
         recommended: catalogEntry?.recommended,
+        ...(catalogEntry?.providerName ? { providerName: catalogEntry.providerName } : {}),
+        ...(catalogEntry?.providerIcon ? { providerIcon: catalogEntry.providerIcon } : {}),
         disabled: option.disabled,
         unavailableReason: option.disabled ? option.unavailableReason : undefined,
         provider: catalog.provider(
@@ -667,9 +670,11 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
 export function ChatModelControls(props: ChatModelControlsProps) {
   const controls = createChatModelControls(props);
   return (
-    <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
-      <ChatModelPicker {...controls().model} />
-      <ChatEffortPicker {...controls().effort} />
-    </div>
+    <ProviderPresentationScope models={props.modelCatalog ?? []}>
+      <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
+        <ChatModelPicker {...controls().model} />
+        <ChatEffortPicker {...controls().effort} />
+      </div>
+    </ProviderPresentationScope>
   );
 }

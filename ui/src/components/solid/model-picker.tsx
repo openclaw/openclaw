@@ -1,7 +1,7 @@
 import { createMemo, For, Show } from "solid-js";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import { modelPickerOptions, type ModelPickerParams } from "../model-picker-options.ts";
-import { providerDisplayLabel } from "../provider-icon-data.ts";
 import { Picker, type PickerParams } from "../select-picker.ts";
 import { ProviderBrandIcon } from "./provider-icon.tsx";
 
@@ -10,6 +10,7 @@ export type { ModelPickerOption, ModelPickerParams } from "../model-picker-optio
 type ModelSelectOption = ReturnType<typeof modelPickerOptions>["options"][number];
 
 export function ModelPicker(props: ModelPickerParams & { windowed?: boolean }) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const options = createMemo(() => props.options);
   const selectedValue = createMemo(() => props.value);
   const customLabel = createMemo(() => props.custom?.label);

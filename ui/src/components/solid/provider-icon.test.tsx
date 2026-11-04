@@ -1,11 +1,15 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { CloudProfileIdentity } from "../provider-icon-data.ts";
 import { Icon } from "./icon.tsx";
 import { CloudProfileIcon, ProviderBrandIcon, ProviderFallbackIcon } from "./provider-icon.tsx";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 function svgGeometry(element: Element | null): unknown {
   return element
@@ -79,4 +83,78 @@ it.each([
   );
   expect(actual.container.querySelector("svg")?.closest('[aria-hidden="true"]')).not.toBeNull();
   expect(actual.container.querySelector("[data-provider-icon]")).toBeNull();
+});
+
+it("lets a bundled symbol override the provider brand and keeps invalid symbols usable", () => {
+  const [presentation, setPresentation] = createSignal<
+    import("../provider-icon-data.ts").ProviderPresentation
+  >({
+    providerName: "Workstation",
+    providerIcon: { source: "builtin", name: "server" },
+  });
+  const { container } = render(() => (
+    <ProviderBrandIcon provider="openai" presentation={presentation()} />
+  ));
+  expect(container.querySelector("svg")).not.toBeNull();
+  expect(container.querySelector("[data-provider-icon]")).toBeNull();
+  setPresentation({
+    providerName: "Workstation",
+    providerIcon: { source: "builtin", name: "not-an-icon" },
+  });
+  flush();
+  expect(container.querySelector("[data-provider-icon]")?.getAttribute("data-provider-icon")).toBe(
+    "codex",
+  );
+});
+
+it("loads artwork through the Gateway and falls through to the effective-name initial", async () => {
+  const revoke = vi.spyOn(URL, "revokeObjectURL");
+  const fetch = vi.fn().mockResolvedValue(
+    new Response(
+      Uint8Array.from(
+        atob(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jM5sAAAAASUVORK5CYII=",
+        ),
+        (char) => char.charCodeAt(0),
+      ),
+      { headers: { "Content-Type": "image/png" } },
+    ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  const { container } = render(() => (
+    <ProviderBrandIcon
+      provider="rtx-pro-workstation"
+      presentation={{
+        providerName: "Workstation",
+        providerIcon: { source: "asset", url: "/__openclaw__/provider-icon/workstation?v=opaque" },
+      }}
+    />
+  ));
+  await expect.poll(() => container.querySelector("img")).not.toBeNull();
+  expect(fetch.mock.calls[0]?.[0]).toContain("/__openclaw__/provider-icon/workstation?v=opaque");
+  const imageUrl = container.querySelector("img")?.src;
+  container.querySelector("img")?.dispatchEvent(new Event("error"));
+  flush();
+  expect(container.querySelector("img")).toBeNull();
+  expect(container.textContent).toBe("W");
+  expect(revoke).toHaveBeenCalledWith(imageUrl);
+});
+
+it("keeps the built-in brand if configured artwork cannot be loaded", async () => {
+  const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+  vi.stubGlobal("fetch", fetch);
+  const { container } = render(() => (
+    <ProviderBrandIcon
+      provider="openai"
+      presentation={{
+        providerName: "Workstation",
+        providerIcon: { source: "asset", url: "/__openclaw__/provider-icon/missing" },
+      }}
+    />
+  ));
+  await expect.poll(() => fetch.mock.calls.length).toBe(1);
+  await expect
+    .poll(() => container.querySelector("[data-provider-icon]")?.getAttribute("data-provider-icon"))
+    .toBe("codex");
+  expect(container.querySelector("img")).toBeNull();
 });

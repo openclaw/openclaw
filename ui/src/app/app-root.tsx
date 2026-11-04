@@ -28,6 +28,7 @@ import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { connectedElementRef, elementRef } from "../lib/reactive/element-ref.ts";
 import { projectI18n } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
+import { ProviderPresentationProvider } from "../lib/reactive/provider-presentation.tsx";
 import { projectTheme } from "../lib/reactive/theme.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -576,132 +577,134 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
   }
   return (
     <ApplicationProvider value={context} host={host}>
-      <Show when={readinessRequest()} keyed>
-        {(request) => {
-          try {
-            readiness = request.create(host, runtime, trackRoot, () => ({
-              login: login.read() ?? undefined,
-              shell,
-              terminal: shell?.element.isConnected
-                ? shell.terminalPanel
-                : (terminalElement.read() ?? undefined),
-            }));
-          } catch (error) {
-            readinessFailed(error);
-          }
-          return null;
-        }}
-      </Show>
-      <openclaw-tooltip-provider>
-        <Switch>
-          <Match when={runtime.focusLocation?.status === "unsupported"}>
-            <main class="connect-splash" role="alert">
-              <div class="stack">
-                <span class="connect-splash__status">{t("focus.unsupported")}</span>
-                <Escape label={t("common.back")} />
-              </div>
-            </main>
-          </Match>
-          <Match when={focusTarget?.kind === "browser" ? focusTarget : null}>
-            {(target) => (
-              <LazyRootBoundary
-                label="browser panel"
-                fallback={<DocumentLoading />}
-                onClose={closeDocument}
-              >
-                <BrowserDocument
-                  props={{
-                    context,
-                    target: target(),
-                    renderEscape: renderFocusEscape,
-                  }}
-                />
-              </LazyRootBoundary>
-            )}
-          </Match>
-          <Match when={panelTarget}>{(target) => <FocusPanels target={target()} />}</Match>
-          <Match when={focusTarget?.kind === "dashboard"}>
-            <LazyRootBoundary
-              label="dashboard document"
-              fallback={<Splash />}
-              onClose={closeDocument}
-            >
-              <FocusDashboard
-                route={focusDashboardRoute.promise}
-                onReady={() => readiness?.invalidate()}
-                snapshot={snapshot()}
-                renderSplash={Splash}
-                renderEscape={() => <Escape label={t("dashboardDocument.close")} />}
-                renderDocument={(documentProps) => (
-                  <BoardDocument
-                    {...documentProps}
-                    gatewaySnapshot={snapshot()}
-                    sessions={context.sessions}
-                    onDocumentClose={isNativeWebChromeHost() ? null : closeDocument}
-                    ref={notifyMounted}
-                  />
-                )}
-              />
-            </LazyRootBoundary>
-          </Match>
-          <Match when={coldPending()}>
-            <Splash />
-          </Match>
-          <Match when={showLoginGate()}>
-            <Login />
-          </Match>
-          <Match when={runtime.documentMode} keyed>
-            {(documentMode) => (
-              <Show when={!(documentMode.kind === "approval" && pendingGatewayUrl())}>
+      <ProviderPresentationProvider gateway={context.gateway}>
+        <Show when={readinessRequest()} keyed>
+          {(request) => {
+            try {
+              readiness = request.create(host, runtime, trackRoot, () => ({
+                login: login.read() ?? undefined,
+                shell,
+                terminal: shell?.element.isConnected
+                  ? shell.terminalPanel
+                  : (terminalElement.read() ?? undefined),
+              }));
+            } catch (error) {
+              readinessFailed(error);
+            }
+            return null;
+          }}
+        </Show>
+        <openclaw-tooltip-provider>
+          <Switch>
+            <Match when={runtime.focusLocation?.status === "unsupported"}>
+              <main class="connect-splash" role="alert">
+                <div class="stack">
+                  <span class="connect-splash__status">{t("focus.unsupported")}</span>
+                  <Escape label={t("common.back")} />
+                </div>
+              </main>
+            </Match>
+            <Match when={focusTarget?.kind === "browser" ? focusTarget : null}>
+              {(target) => (
                 <LazyRootBoundary
-                  label={
-                    documentMode.kind === "approval" ? "approval page" : "openclaw-question-page"
-                  }
+                  label="browser panel"
                   fallback={<DocumentLoading />}
                   onClose={closeDocument}
                 >
-                  {documentMode.kind === "approval" ? (
-                    <ApprovalPage approvalId={documentMode.approvalId ?? ""} />
-                  ) : (
-                    <QuestionPage questionId={documentMode.questionId ?? ""} />
-                  )}
+                  <BrowserDocument
+                    props={{
+                      context,
+                      target: target(),
+                      renderEscape: renderFocusEscape,
+                    }}
+                  />
                 </LazyRootBoundary>
-              </Show>
-            )}
-          </Match>
-          <Match when={true}>
-            <Shell />
-          </Match>
-        </Switch>
-        <Show when={pendingGatewayUrl()}>
-          {(url) => (
-            <Errored
-              fallback={(error, reset) => (
-                <LazyViewError
-                  error={error()}
-                  onRetry={reset}
-                  onClose={cancelPendingGatewayConnection}
-                />
               )}
-            >
-              <Loading fallback={<LoadingState />}>
-                <GatewayUrlConfirmation
-                  props={{
-                    pendingGatewayUrl: url(),
-                    currentGatewayUrl: context.gateway.connection.gatewayUrl,
-                    linkCarriesToken: Boolean(runtime.pendingGatewayConnection?.token),
-                    onConfirm: () => {
-                      runtime.confirmPendingGatewayConnection();
-                      setPendingGatewayUrl(null);
-                    },
-                    onCancel: cancelPendingGatewayConnection,
-                  }}
+            </Match>
+            <Match when={panelTarget}>{(target) => <FocusPanels target={target()} />}</Match>
+            <Match when={focusTarget?.kind === "dashboard"}>
+              <LazyRootBoundary
+                label="dashboard document"
+                fallback={<Splash />}
+                onClose={closeDocument}
+              >
+                <FocusDashboard
+                  route={focusDashboardRoute.promise}
+                  onReady={() => readiness?.invalidate()}
+                  snapshot={snapshot()}
+                  renderSplash={Splash}
+                  renderEscape={() => <Escape label={t("dashboardDocument.close")} />}
+                  renderDocument={(documentProps) => (
+                    <BoardDocument
+                      {...documentProps}
+                      gatewaySnapshot={snapshot()}
+                      sessions={context.sessions}
+                      onDocumentClose={isNativeWebChromeHost() ? null : closeDocument}
+                      ref={notifyMounted}
+                    />
+                  )}
                 />
-              </Loading>
-            </Errored>
-          )}
-        </Show>
-      </openclaw-tooltip-provider>
+              </LazyRootBoundary>
+            </Match>
+            <Match when={coldPending()}>
+              <Splash />
+            </Match>
+            <Match when={showLoginGate()}>
+              <Login />
+            </Match>
+            <Match when={runtime.documentMode} keyed>
+              {(documentMode) => (
+                <Show when={!(documentMode.kind === "approval" && pendingGatewayUrl())}>
+                  <LazyRootBoundary
+                    label={
+                      documentMode.kind === "approval" ? "approval page" : "openclaw-question-page"
+                    }
+                    fallback={<DocumentLoading />}
+                    onClose={closeDocument}
+                  >
+                    {documentMode.kind === "approval" ? (
+                      <ApprovalPage approvalId={documentMode.approvalId ?? ""} />
+                    ) : (
+                      <QuestionPage questionId={documentMode.questionId ?? ""} />
+                    )}
+                  </LazyRootBoundary>
+                </Show>
+              )}
+            </Match>
+            <Match when={true}>
+              <Shell />
+            </Match>
+          </Switch>
+          <Show when={pendingGatewayUrl()}>
+            {(url) => (
+              <Errored
+                fallback={(error, reset) => (
+                  <LazyViewError
+                    error={error()}
+                    onRetry={reset}
+                    onClose={cancelPendingGatewayConnection}
+                  />
+                )}
+              >
+                <Loading fallback={<LoadingState />}>
+                  <GatewayUrlConfirmation
+                    props={{
+                      pendingGatewayUrl: url(),
+                      currentGatewayUrl: context.gateway.connection.gatewayUrl,
+                      linkCarriesToken: Boolean(runtime.pendingGatewayConnection?.token),
+                      onConfirm: () => {
+                        runtime.confirmPendingGatewayConnection();
+                        setPendingGatewayUrl(null);
+                      },
+                      onCancel: cancelPendingGatewayConnection,
+                    }}
+                  />
+                </Loading>
+              </Errored>
+            )}
+          </Show>
+        </openclaw-tooltip-provider>
+      </ProviderPresentationProvider>
     </ApplicationProvider>
   );
 }
