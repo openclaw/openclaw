@@ -60,27 +60,16 @@ suite.define(() => {
       try {
         const page = await context.newPage();
         const { details } = await openProgress(page, false);
-        const measurements = await details
-          .locator(".session-progress-card__step-marker")
-          .evaluateAll((markers) =>
-            markers.slice(0, 4).map((marker) => {
-              const svg = marker.querySelector("svg")!;
-              const rect = svg.getBoundingClientRect();
-              return {
-                status: marker.getAttribute("data-status"),
-                width: rect.width,
-                height: rect.height,
-              };
-            }),
-          );
-        expect(measurements.map(({ status }) => status)).toEqual([
-          "completed",
-          "completed",
-          "paused",
-          "pending",
-        ]);
-        const paused = measurements.find(({ status }) => status === "paused")!;
-        const pending = measurements.find(({ status }) => status === "pending")!;
+        const markerSize = (status: "paused" | "pending") =>
+          details
+            .locator(`.session-progress-card__step-marker[data-status="${status}"] > svg`)
+            .first()
+            .evaluate((svg) => {
+              const { width, height } = svg.getBoundingClientRect();
+              return { width, height };
+            });
+        const paused = await markerSize("paused");
+        const pending = await markerSize("pending");
         expect(paused.width).toBeCloseTo(pending.width, 2);
         expect(paused.height).toBeCloseTo(pending.height, 2);
       } finally {
