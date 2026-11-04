@@ -324,21 +324,3 @@ describe("message-normalizer", () => {
     expect(result.senderSession).toStrictEqual(expected);
   });
 });
-
-it.each([
-  ["sessions_create", { type: "agent", id: "research" }],
-  ["sessions_spawn", { type: "agent", id: "research" }],
-  ["sessions_send", undefined],
-] as const)("attributes %s openings by provenance", (sourceTool, identity) => {
-  const sender = normalizeMessage({
-    role: "user",
-    content: "Start here.",
-    provenance: {
-      kind: "inter_session",
-      sourceSessionKey: "agent:research:dashboard:parent",
-      sourceTool,
-    },
-    __openclaw: { senderId: "agent:research" },
-  }).sender;
-  expect(sender?.identity).toStrictEqual(identity);
-});

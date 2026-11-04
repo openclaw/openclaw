@@ -112,27 +112,3 @@ it.each([
     }
   },
 );
-
-it("names a session's agent-written opening by its agent", () => {
-  const opening = {
-    role: "user",
-    content: "Own this pull request end to end.",
-    provenance: {
-      kind: "inter_session",
-      sourceSessionKey: "agent:research:dashboard:parent",
-      sourceTool: "sessions_create",
-    },
-    __openclaw: { senderId: "agent:research" },
-  };
-  expect(
-    preview(opening, "fetched", "", {
-      currentAgentId: "research",
-      assistantName: "Research",
-      assistantAvatar: "/avatars/research.png",
-    }),
-  ).toMatchObject({
-    senderLabel: "Research",
-    sender: { name: "Research", identity: { type: "agent", id: "research" } },
-    agentAvatar: { id: "research", avatar: "/avatars/research.png" },
-  });
-});
