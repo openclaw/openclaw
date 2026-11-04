@@ -17,6 +17,7 @@ import {
   reportText,
 } from "./continuation-forest.model.test-support.js";
 import type { ContinuationForest } from "./continuation-forest.test-support.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
@@ -47,8 +48,10 @@ export async function reportElection(
 ): Promise<void> {
   const runId = forest.runIdOf(election);
   const entry = subagentRuns.get(runId);
-  if (!entry) {
-    throw new Error(`${election.name} has no registry row (${runId})`);
+  // A child the Gateway stopped never completes: its report is never made.
+  if (!entry || entry.killIntent || entry.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
+    forest.stopped.set(election.id, entry ? "its run was killed" : "its registry row is gone");
+    return;
   }
   const text = reportText(election);
   forest.reports.set(election.id, {

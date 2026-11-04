@@ -147,6 +147,8 @@ export class ContinuationForest {
   /** The crane bits: 1 once a fold committed. Never the oracle on its own. */
   readonly bits = new Map<string, 0 | 1>();
   readonly reports = new Map<string, Report>();
+  /** Elections whose child the Gateway stopped before it could report, with why. */
+  readonly stopped = new Map<string, string>();
   readonly adoptions: Adoption[] = [];
   readonly adoptionCounts = new Map<string, number>();
   /** Every block a head adopted, with its room and time. */

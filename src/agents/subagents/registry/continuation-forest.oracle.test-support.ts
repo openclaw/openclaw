@@ -101,6 +101,10 @@ function electionStories(
         }${bit ? "; its bit still reads 1" : ""}`,
       );
     }
+    if (effects.length > 0 && election.kind !== "attic" && !forest.reports.has(election.id)) {
+      const stopped = forest.stopped.get(election.id);
+      stories.push(`${election.name} never reported${stopped ? ` (${stopped})` : ""}`);
+    }
   } else if (attempts.length > 0) {
     stories.push(`${election.name} should have been ${outcome} but ran (at ${times(attempts)})`);
   }
