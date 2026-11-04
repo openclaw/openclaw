@@ -1,2 +1,2 @@
 # Mattermost media posts split long captions into ordered thread posts and keep posted chunks on a later failure.
-84
+54

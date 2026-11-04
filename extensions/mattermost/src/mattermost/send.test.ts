@@ -86,7 +86,10 @@ beforeEach(() => {
   setMattermostRuntime(
     createPluginRuntimeMock({
       config: { current: mockState.currentConfig },
-      channel: { activity: { record: mockState.recordActivity } },
+      channel: {
+        activity: { record: mockState.recordActivity },
+        text: { chunkMarkdownTextWithMode, resolveChunkMode, resolveTextChunkLimit },
+      },
     }),
   );
   mockState.normalizeMattermostBaseUrl.mockImplementation(normalizeBaseUrl);
@@ -175,58 +178,35 @@ describe("sendMessageMattermost", () => {
   });
 
   describe("long media captions", () => {
-    const cfg = { channels: { mattermost: { textChunkLimit: 12 } } };
     const caption = "first part\nsecond part\nthird part";
+    const send = (opts: Partial<Parameters<typeof sendMessageMattermost>[2]> = {}) =>
+      sendMessageMattermost("channel:town-square", caption, {
+        cfg: { channels: { mattermost: { textChunkLimit: 12 } } },
+        mediaUrl: "https://example.com/report.pdf",
+        ...opts,
+      });
 
     beforeEach(() => {
-      setMattermostRuntime(
-        createPluginRuntimeMock({
-          config: { current: mockState.currentConfig },
-          channel: {
-            activity: { record: mockState.recordActivity },
-            text: { chunkMarkdownTextWithMode, resolveChunkMode, resolveTextChunkLimit },
-          },
-        }),
-      );
-      mockState.loadOutboundMediaFromUrl.mockResolvedValue({
-        buffer: Buffer.from("file"),
-        fileName: "report.pdf",
-        contentType: "application/pdf",
-      });
+      mockState.loadOutboundMediaFromUrl.mockResolvedValue({ buffer: Buffer.from("file") });
+      mockState.createMattermostPost.mockImplementation(async () => ({
+        id: `post-${mockState.createMattermostPost.mock.calls.length}`,
+      }));
     });
 
     it("posts the first chunk with the file and the rest as thread replies", async () => {
-      mockState.createMattermostPost
-        .mockResolvedValueOnce({ id: "post-1" })
-        .mockResolvedValueOnce({ id: "post-2" })
-        .mockResolvedValueOnce({ id: "post-3" });
       const onDeliveryResult = vi.fn();
+      const result = await send({ replyToId: "root", onDeliveryResult });
 
-      const result = await sendMessageMattermost("channel:town-square", caption, {
-        cfg,
-        mediaUrl: "https://example.com/report.pdf",
-        replyToId: "root-post",
-        onDeliveryResult,
-      });
-
-      expect(
-        mockState.createMattermostPost.mock.calls.map(([, post]) => ({
-          message: post.message,
-          rootId: post.rootId,
-          fileIds: post.fileIds,
-        })),
-      ).toStrictEqual([
-        { message: "first part", rootId: "root-post", fileIds: ["file-1"] },
-        { message: "second part", rootId: "root-post", fileIds: undefined },
-        { message: "third part", rootId: "root-post", fileIds: undefined },
+      const calls = mockState.createMattermostPost.mock.calls;
+      expect(calls.map(([, p]) => [p.message, p.rootId, p.fileIds])).toStrictEqual([
+        ["first part", "root", ["file-1"]],
+        ["second part", "root", undefined],
+        ["third part", "root", undefined],
       ]);
-      expect(onDeliveryResult.mock.calls.map(([sent]) => sent.messageId)).toStrictEqual([
-        "post-1",
-        "post-2",
-        "post-3",
-      ]);
+      const ids = ["post-1", "post-2", "post-3"];
+      expect(onDeliveryResult.mock.calls.map(([sent]) => sent.messageId)).toStrictEqual(ids);
       expect(result).toMatchObject({ messageId: "post-1", content: caption });
-      expect(result.receipt.platformMessageIds).toStrictEqual(["post-1", "post-2", "post-3"]);
+      expect(result.receipt.platformMessageIds).toStrictEqual(ids);
     });
 
     it("keeps posted chunks when a later chunk fails", async () => {
@@ -235,19 +215,9 @@ describe("sendMessageMattermost", () => {
         .mockResolvedValueOnce({ id: "post-1" })
         .mockRejectedValueOnce(failure);
 
-      const caught: unknown = await sendMessageMattermost("channel:town-square", caption, {
-        cfg,
-        mediaUrl: "https://example.com/report.pdf",
-      }).catch((error: unknown) => error);
-
-      if (!isChannelPartialDeliveryError(caught)) {
-        throw new Error("expected a partial Mattermost delivery error");
-      }
-      expect(caught.cause).toBe(failure);
-      expect(caught.deliveryResult).toMatchObject({
-        messageIds: ["post-1"],
-        visibleReplySent: true,
-        content: "first part",
+      await expect(send()).rejects.toMatchObject({
+        cause: failure,
+        deliveryResult: { messageIds: ["post-1"], visibleReplySent: true, content: "first part" },
       });
       expect(mockState.createMattermostPost).toHaveBeenCalledTimes(2);
     });
