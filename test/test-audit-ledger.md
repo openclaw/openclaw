@@ -199,13 +199,16 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `f7257f2c6688`: qualify the terminal-page capability fixture in
-`ui/src/e2e/terminal-page.e2e.test.ts`. Both existing disabled/admin and
-enabled/read-only rows omit the advertised `terminal.open` capability, so its
-absence can mask the configuration and admin guards. The primary is unchanged
-in this prerequisite draft. Baseline, independent owner-fault controls, actual
-open positive control and repaired browser proof remain pending. All existing
-recovery, zero-open-RPC, New session navigation and composer assertions remain.
+Pinned main `f7257f2c6688`: advertise `terminal.open` alongside the default
+capabilities in both terminal-page recovery rows. The unchanged official
+baseline passes both cases. Independently omitting the configuration or admin
+guard leaves the original fixture green; the repaired fixture fails only the
+corresponding recovery row. A separate temporary enabled/admin browser probe
+issues one actual `terminal.open` request. Production is restored byte-for-byte,
+and the repaired official suite passes both original cases. All recovery,
+zero-open-RPC, New session navigation and composer assertions remain. The
+fixture adds four test lines with an exact four-line allocation; the shared
+ceiling and production sources are unchanged.
 
 Separate retained batch: [192672](https://github.com/openclaw/openclaw/pull/192672)
 qualifies first-case worker-probe cleanup. Its identical early-failure controls
