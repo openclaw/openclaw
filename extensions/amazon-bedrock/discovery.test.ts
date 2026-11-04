@@ -1,7 +1,9 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { BedrockDiscoveryConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { discoverBedrockModels, resolveImplicitBedrockProvider } from "./api.js";
+import amazonBedrockPlugin from "./index.js";
 
 const { sendMock, destroyMock } = vi.hoisted(() => ({
   sendMock: vi.fn(),
@@ -413,3 +415,53 @@ it("resolves au. and apac. prefixes for regional inference profiles", async () =
     });
   }
 });
+
+it.each([undefined, 64_000])(
+  "emits Grok 4.6 context through discovery and the registered catalog (fallback %s)",
+  async (defaultContextWindow) => {
+    const grokId = "xai.grok-4.6";
+    const unknownId = "xai.unknown-model";
+    const summaries = [
+      foundation(grokId, { modelName: "Grok 4.6", providerName: "xAI" }),
+      foundation(unknownId, { providerName: "xAI" }),
+      foundation(),
+    ];
+    const profiles = [profile("us." + grokId, [grokId]), profile("global." + grokId, [grokId])];
+    const config = { enabled: true, refreshInterval: 0, defaultContextWindow };
+    mockDiscovery(summaries, profiles);
+    const discovered = await discoverBedrockModels({ region: "us-east-1", config });
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    mockDiscovery(summaries, profiles);
+    const catalog = await provider.catalog?.run({
+      config: { plugins: { entries: { "amazon-bedrock": { config: { discovery: config } } } } },
+      env: {},
+    } as never);
+    if (!catalog || !("provider" in catalog)) {
+      throw new Error("expected registered Bedrock provider catalog");
+    }
+    expect(catalog.provider).toMatchObject({
+      api: "bedrock-converse-stream",
+      auth: "aws-sdk",
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+    });
+    const metadata = (models: typeof discovered) =>
+      models
+        .map(({ id, contextWindow, maxTokens }) => ({ id, contextWindow, maxTokens }))
+        .toSorted((a, b) => a.id.localeCompare(b.id));
+    const expected = [
+      ...[grokId, "us." + grokId, "global." + grokId].map((modelId) => ({
+        id: modelId,
+        contextWindow: 500_000,
+        maxTokens: 4096,
+      })),
+      { id: unknownId, contextWindow: defaultContextWindow ?? 32_000, maxTokens: 4096 },
+      { id: activeFoundation.modelId, contextWindow: 200_000, maxTokens: 4096 },
+    ].toSorted((a, b) => a.id.localeCompare(b.id));
+    expect({ discovery: metadata(discovered), catalog: metadata(catalog.provider.models) }).toEqual(
+      {
+        discovery: expected,
+        catalog: expected,
+      },
+    );
+  },
+);
