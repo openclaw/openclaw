@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
 import { createMemo, createSignal, lazy, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
@@ -34,6 +33,7 @@ import { createComposerMobileInteraction } from "./chat-composer-mobile-interact
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
+import { ComposerReplyPreview } from "./chat-composer-reply-preview.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
@@ -484,33 +484,16 @@ export function renderChatComposerView(
                 }}
                 avatarUrls={context().state.mentionMenu.selectedAvatarUrls}
               />
-              {props.replyTarget ? (
-                <div class="chat-reply-preview composer-context-strip">
-                  <span class="chat-reply-preview__label composer-context-strip__label">
-                    <span class="chat-reply-preview__icon composer-context-strip__icon">
-                      {<Icon name="messageSquare" />}
-                    </span>
-                    <span class="composer-context-strip__label-text">
-                      {t("chat.messages.replyingTo", {
-                        name: props.replyTarget.senderLabel ?? t("chat.messages.message"),
-                      })}
-                    </span>
-                  </span>
-                  <span class="chat-reply-preview__text composer-context-strip__text">
-                    {truncateUtf16Safe(props.replyTarget.text, 120)}
-                    {props.replyTarget.text.length > 120 ? "..." : ""}
-                  </span>
-                  <button
-                    type="button"
-                    class="chat-reply-preview__dismiss composer-context-strip__dismiss"
-                    onClick={() => props.onClearReply?.()}
-                    aria-label={t("chat.composer.cancelReply")}
-                    title={t("chat.composer.cancelReply")}
-                  >
-                    {<Icon name="x" />}
-                  </button>
-                </div>
-              ) : undefined}
+              <Show when={props.replyTarget}>
+                {(target) => (
+                  <ComposerReplyPreview
+                    target={target()}
+                    line={props.replyLine}
+                    mediaReadAllowed={props.mediaReadAllowed}
+                    onClear={() => props.onClearReply?.()}
+                  />
+                )}
+              </Show>
               {props.sessionAdmitted === false ? undefined : (
                 <McpAppContextStrip sessionKey={props.sessionKey} agentId={props.currentAgentId} />
               )}

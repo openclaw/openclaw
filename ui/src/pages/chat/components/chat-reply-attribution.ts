@@ -1,6 +1,10 @@
 import "./chat-attribution.css";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
-import type { MessageGroup, NormalizedMessage } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatReplyTarget,
+  MessageGroup,
+  NormalizedMessage,
+} from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel, type SenderIdentity } from "../../../lib/chat/sender-label.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -149,6 +153,32 @@ export function resolveMessageReplyLine(
     line.name = resolveLocalUserName();
   }
   return line;
+}
+
+/**
+ * The composer's pending reply, named as its sent message will be: your own
+ * originals read "You", and a loaded original lends its author's avatar.
+ */
+export function resolveComposerReplyLine(
+  target: Pick<ChatReplyTarget, "senderLabel" | "sourceMessageId" | "text">,
+  lookup: ReplyPreviewLookup | undefined,
+  userId: string | null | undefined,
+): ReplyLine {
+  const id = target.sourceMessageId;
+  const preview = id ? foundPreview(lookup?.(id)) : undefined;
+  const sender = preview?.sender;
+  const label = preview?.senderLabel || formatSenderLabel(sender) || target.senderLabel?.trim();
+  if (!label) {
+    return NO_REPLY_LINE;
+  }
+  const own = sender?.identity?.type === "profile" && sender.identity.id === userId;
+  return {
+    state: "named",
+    name: own ? resolveLocalUserName() : label,
+    text: target.text,
+    sender: sender ? { ...sender, name: label } : undefined,
+    agentAvatar: preview?.agentAvatar,
+  };
 }
 
 /**

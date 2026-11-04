@@ -49,6 +49,7 @@ import type { ChatComposerCapabilityMenuSource } from "./chat-composer-plus-menu
 import type { SkillMenu } from "./chat-composer-skill-menu-state.ts";
 import type { SlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
+import type { ReplyLine } from "./chat-reply-attribution.ts";
 
 type ChatQueuedEditProps = {
   editingId: string | null;
@@ -192,6 +193,9 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   attachmentReadRevision?: number;
   getPendingAttachmentReads?: () => number;
   replyTarget?: ChatReplyTarget | null;
+  /** The reply target's author, resolved by the owning thread. */
+  replyLine?: ReplyLine | null;
+  mediaReadAllowed?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   chatMessageMaxWidth?: string | null;
   onComposerWidthChange?: (value: string | undefined) => void;

@@ -25,6 +25,17 @@
   font-weight: 600;
 }
 
+/* The pending reply names its author with the same muted label and avatar
+   span its sent message shows. */
+.composer-context-strip--reply .composer-context-strip__label {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.chat-reply-preview__person {
+  overflow: hidden;
+}
+
 .composer-context-strip__label-text,
 .composer-context-strip__text,
 .composer-context-strip__person-name {
