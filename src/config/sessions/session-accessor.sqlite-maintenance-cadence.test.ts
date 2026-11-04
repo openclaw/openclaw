@@ -358,6 +358,48 @@ it("reports a maintenance deadline without an unused revision snapshot", () => {
 });
 
 it.each([
+  [null, null],
+  [0, null],
+  [null, 7 * DAY_MS],
+  [0, 7 * DAY_MS],
+])(
+  "skips disabled dashboard expiry scans (%s) with recent protection %s",
+  (dashboardAge, recentAge) => {
+    const now = Date.now();
+    const { database, options } = createStore(1, now - 2 * DAY_MS);
+    runOpenClawAgentWriteTransaction((current) => {
+      writeSessionEntry(current, "agent:main:dashboard:disabled", {
+        sessionId: "disabled-dashboard",
+        updatedAt: now - 3 * DAY_MS,
+        lastActivityAt: now - DAY_MS,
+      });
+    }, options);
+    const maintenance: ResolvedSessionMaintenanceConfig = {
+      ...resolveMaintenanceConfigFromInput(),
+      pruneAfterMs: 0,
+      archiveDashboardAfterMs: dashboardAge,
+      preserveRecentMs: recentAge,
+    };
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["dashboard", "activity"],
+      (sql) =>
+        /\bage_namespaces\b/.test(sql) ? "dashboard" : /\bage_rows\b/.test(sql) ? "activity" : null,
+    );
+    try {
+      const fact = runOpenClawAgentWriteTransaction(
+        (current) => ageFacts.recordSessionEntryMaintenanceAgeFact(current, maintenance, now),
+        options,
+      );
+      expect(fact.next.at).toBe(recentAge == null ? Infinity : now + 5 * DAY_MS + 1);
+      expect(queries.counts).toEqual({ dashboard: 0, activity: recentAge == null ? 0 : 1 });
+    } finally {
+      queries.restore();
+    }
+  },
+);
+
+it.each([
   { scenario: "a write crosses the cap", count: 2, maxEntries: 2, force: false },
   {
     scenario: "forced maintenance bypasses ordinary-write slack",
