@@ -1,2 +1,2 @@
-9
+12
 # Preserve the shared chat error owner and verify permission summaries retain diagnostic detail.

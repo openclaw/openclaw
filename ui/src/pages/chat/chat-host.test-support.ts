@@ -346,9 +346,12 @@ export function makeChatHost(
   const resolvedSessions = pendingSettingsPatches
     ? createPendingSettingsSessionCapability(sessions, pendingSettingsPatches)
     : sessions;
-  const resolvedHost = Object.assign(createChatErrorState(), host, {
-    sessions: resolvedSessions,
-  }) as TestChatHost;
+  // Fixture copies must retain a real page's error owner rather than overwrite it.
+  const resolvedHost = Object.assign(
+    Object.create(createChatErrorState()) as ChatErrorState,
+    host,
+    { sessions: resolvedSessions },
+  ) as TestChatHost;
   for (const sessionKey of Object.keys(pendingSettingsPatches ?? {})) {
     void patchChatSessionSettings(resolvedHost, sessionKey, {}).catch(() => undefined);
   }
