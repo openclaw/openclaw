@@ -86,6 +86,8 @@ const catalog = {
     markUnreadCount: "Mark {count} as unread",
     markReadCount: "Mark {count} as read",
     forkSession: "Fork session",
+    newNestedSession: "New Nested Session",
+    creatingNestedSession: "Creating nested session…",
     forkFromLastCompleted: "Fork from last completed message",
     copySessionId: "Session ID",
     copySessionPreviewLink: "Preview link",

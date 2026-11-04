@@ -49,7 +49,11 @@ import { projectHealthSummary } from "../../health/presentation.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
-import { resolveOperatorRolePolicy } from "../../operator-role-policy.js";
+import {
+  resolveGatewayOperatorRoleActor,
+  resolveOperatorRolePolicy,
+  resolveOperatorRolePolicyForProfile,
+} from "../../operator-role-policy.js";
 import { broadcastRejectedNodePairing } from "../../pairing-events.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
 import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
@@ -58,6 +62,7 @@ import {
   TICK_INTERVAL_MS,
   WEBSOCKET_OPEN_READY_STATE,
 } from "../../server-constants.js";
+import { resolveProfileActivityViewerId } from "../../session-profile-activity-policy.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
@@ -184,6 +189,20 @@ export async function sendGatewayHello(
       ? resolveOperatorRolePolicy(context.handler.getClient(), context.configSnapshot)
       : undefined;
   const sessionCap = rolePolicy?.sessions.others;
+  const activityClient = context.handler.getClient();
+  const profileActivityViewerId =
+    role === "operator" && activityClient
+      ? resolveProfileActivityViewerId(
+          activityClient,
+          resolveGatewayOperatorRoleActor(activityClient)?.kind === "system"
+            ? undefined
+            : resolveOperatorRolePolicyForProfile(
+                activityClient.authenticatedUserProfile?.profileId,
+                buildRequestContext().getCommittedRuntimeConfig?.() ?? context.configSnapshot,
+              )?.scopes,
+          activityClient.authenticatedUserProfile?.profileId,
+        )
+      : undefined;
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
@@ -281,6 +300,7 @@ export async function sendGatewayHello(
         ? { roleAllowsAdmin: !rolePolicy || rolePolicy.scopes.includes(ADMIN_SCOPE) }
         : {}),
       ...(sessionCap !== undefined ? { sessionCap } : {}),
+      ...(profileActivityViewerId !== undefined ? { profileActivityViewerId } : {}),
       ...(recoveryScope ? { recoveryScope } : {}),
       ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),
       ...(deviceToken
@@ -302,6 +322,11 @@ export async function sendGatewayHello(
       hasMultipleSessionSharingIdentities: hasMultipleResidentSessionSharingIdentities(),
     },
   };
+  // Capture the advertised fact before bootstrap bookkeeping can await. Committed
+  // policy changes must retire this hello, never overwrite it with a newer claim.
+  if (role === "operator" && activityClient) {
+    activityClient.profileActivity = { viewerId: profileActivityViewerId };
+  }
   context.recordAttachTiming?.("helloDescriptorsMs", descriptorsStartedAt);
   advanceHandshakePhase("hello_payload_prepared");
 
