@@ -5,12 +5,15 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../../../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../../../src/config/types.openclaw.js";
+import { createContext } from "../../../../../src/gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createNodeWorkerRepositoryPreparation } from "../../../../../src/gateway/worker-environments/node-worker-repository-preparation.js";
 import { NodeWorkerWorkspaceRuntime } from "../../../../../src/node-host/node-worker-workspace.js";
 import { runCommandWithTimeout } from "../../../../../src/process/exec.js";
 import { useAutoCleanupTempDirTracker } from "../../../../../test/helpers/temp-dir.js";
 import { prepareAppGitHubIdentity } from "../../../app-identity-api.js";
 import type { GitHubAppSelection } from "../../../credential-reader-api.js";
+import { controlUiGitHubHandlers } from "../../../src/control-ui-github.js";
+import { toolsGitHubHandlers } from "../../../src/tools-github.js";
 import {
   resolveGitHubToolIdentityStatus,
   prepareGitHubPublicationIdentity,
@@ -133,16 +136,19 @@ it("settles invalid-token revocation and retires token reads", async () => {
   await expect(issued.revoke()).resolves.toBeUndefined();
   await expect(issued.readToken()).rejects.toThrow("changed");
 });
-it("reports the selected App contract without minting an execution token during status", async () => {
+it("verifies App status with request-owned cleanup and reuses only verified display facts", async () => {
   expect(
     (await resolveGitHubToolIdentityStatus({ config, agentId: "main", selectedScope: "system" }))
       .effective,
   ).toMatchObject({
     source: "system-configured",
     credentialKind: "app-installation",
-    credentialState: "configured_unavailable",
-    account: null,
+    credentialState: "available",
+    account: { login: "factory[bot]" },
   });
+  expect(fetcher.mock.calls.at(-1)?.[1].method).toBe("DELETE");
+  fetcher.mockClear();
+  await resolveGitHubToolIdentityStatus({ config, agentId: "main", selectedScope: "system" });
   expect(fetcher).not.toHaveBeenCalled();
 });
 it.each([
@@ -317,6 +323,114 @@ it.each(["allowed", "forbidden", "revoked-after-seed"] as const)(
       }
     } finally {
       await identity?.revoke?.();
+    }
+  },
+);
+
+it.each(["public", "private", "retired"] as const)(
+  "settles an App-only public detail request and token cleanup: %s",
+  async (outcome) => {
+    config.plugins!.entries!["github-repositories"]!.config = {
+      host: "github.com",
+      apiBaseUrl: "https://api.github.com",
+      system: selected,
+    };
+    setRuntimeConfigSnapshot(config);
+    const appTransport = fetcher.getMockImplementation()!;
+    let current = true;
+    fetcher.mockImplementation(async (url, init) => {
+      if (url.startsWith("https://api.github.com/repos/")) {
+        expect(new Headers(init.headers).get("authorization")).toBe(
+          "Bearer synthetic-installation",
+        );
+        if (url === "https://api.github.com/repos/example/project") {
+          if (outcome === "retired") {
+            current = false;
+          }
+          return Response.json({
+            id: 404,
+            private: outcome === "private",
+            visibility: outcome === "private" ? "private" : "public",
+          });
+        }
+        if (url.endsWith("/issues/7")) {
+          return Response.json({
+            title: "Public App issue",
+            body: "Read-only fixture",
+            user: { login: "reader" },
+            state: "open",
+            created_at: "2026-10-10T00:00:00Z",
+            updated_at: "2026-10-10T00:00:00Z",
+            comments: 0,
+          });
+        }
+        throw new Error("Unexpected item request");
+      }
+      return appTransport(url.replace("https://api.github.com", apiBaseUrl), init);
+    });
+    const respond = vi.fn();
+    await controlUiGitHubHandlers["controlUi.githubDetail"]!({
+      req: { type: "req", id: "app-read", method: "controlUi.githubDetail" },
+      params: {
+        agentId: "main",
+        kind: "issue",
+        owner: "example",
+        repo: "project",
+        number: 7,
+        refresh: true,
+      },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: createContext([], () => config),
+      hasCurrentClientAuthority: () => current,
+    });
+    expect(respond).toHaveBeenCalledOnce();
+    expect(respond.mock.calls[0]?.[0]).toBe(outcome === "public");
+    if (outcome === "public") {
+      expect(respond.mock.calls[0]?.[1]).toMatchObject({ title: "Public App issue" });
+    }
+    expect(fetcher.mock.calls.at(-1)?.[1].method).toBe("DELETE");
+    const mint = fetcher.mock.calls.find(([url]) => url.endsWith("/access_tokens"));
+    const body = mint?.[1].body;
+    if (typeof body !== "string") {
+      throw new Error("App issuance must send a JSON grant");
+    }
+    expect(JSON.parse(body)).toMatchObject({ repository_ids: [404] });
+    expect(fetcher.mock.calls.some(([url]) => url.endsWith("/user"))).toBe(false);
+  },
+);
+
+it.each(["/app", "/app/installations/202/access_tokens"])(
+  "ends App status issuance when its Gateway caller retires after %s",
+  async (endpoint) => {
+    const controller = new AbortController();
+    const transport = fetcher.getMockImplementation()!;
+    fetcher.mockImplementation(async (url, init) => {
+      const result = await transport(url, init);
+      if (url === `${apiBaseUrl}${endpoint}`) {
+        controller.abort(new Error("status caller retired"));
+      }
+      return result;
+    });
+    const respond = vi.fn();
+    await expect(
+      toolsGitHubHandlers["tools.github.status"]!({
+        req: { type: "req", id: "app-status", method: "tools.github.status" },
+        params: { agentId: "main", selectedScope: "system" },
+        client: null,
+        context: createContext([], () => config),
+        isWebchatConnect: () => false,
+        respond,
+        signal: controller.signal,
+        hasCurrentClientAuthority: () => !controller.signal.aborted,
+      }),
+    ).rejects.toThrow("status caller retired");
+    expect(respond).not.toHaveBeenCalled();
+    if (endpoint === "/app") {
+      expect(fetcher.mock.calls.some(([url]) => url.endsWith("/access_tokens"))).toBe(false);
+    } else {
+      expect(fetcher.mock.calls.at(-1)?.[1].method).toBe("DELETE");
     }
   },
 );

@@ -46,20 +46,29 @@ const handleGitHubRead: GatewayRequestHandlers[string] = async (options) => {
       context,
       invocation.agentId,
       assertActive,
-    );
-    const document =
       operation.type === "read"
-        ? await gitHubPublicApi.loadGitHubDetail(
-            operation.params,
-            identity,
-            undefined,
-            params.refresh === true,
-            { assertActive: assertSelected, signal },
-          )
-        : await gitHubPublicApi.searchPublicGitHubItems(operation.params, identity, undefined, {
-            assertActive: assertSelected,
-            signal,
-          });
+        ? `${operation.params.owner}/${operation.params.repo}`
+        : operation.params.repository,
+    );
+    let document;
+    try {
+      document =
+        operation.type === "read"
+          ? await gitHubPublicApi.loadGitHubDetail(
+              operation.params,
+              identity,
+              undefined,
+              params.refresh === true,
+              { assertActive: assertSelected, signal },
+            )
+          : await gitHubPublicApi.searchPublicGitHubItems(operation.params, identity, undefined, {
+              assertActive: assertSelected,
+              signal,
+            });
+      assertSelected();
+    } finally {
+      await identity?.revoke?.();
+    }
     assertSelected();
     respond(true, document, undefined);
   } catch (error) {

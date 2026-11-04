@@ -2,7 +2,6 @@ import { createRoot, createSignal } from "solid-js";
 import { showConfirmDialog } from "../../../../ui/src/components/confirm-dialog.ts";
 import { t } from "../../../../ui/src/i18n/index.ts";
 import { formatUiError } from "../../../../ui/src/lib/format-error.ts";
-import { projectOwner } from "../../../../ui/src/lib/reactive/projection.ts";
 import { registerControlUiEnglish } from "../../../../ui/src/plugins/control-ui-english.ts";
 import { trackSolidRoot } from "../../../../ui/src/test-helpers/solid-cleanup.ts";
 import { readGitHubConfig } from "../../config-api.js";
@@ -19,7 +18,6 @@ export function createGitHubIdentityForTest(
 ) {
   return createRoot((dispose) => {
     const identity = createGitHubIdentityView({
-      projectOwner: (source) => projectOwner(source, (owner) => owner.read()),
       translate: t,
       confirm: showConfirmDialog,
       formatError: formatUiError,
@@ -120,7 +118,6 @@ export function createGitHubIdentityViewForTest(
   deps: Partial<Parameters<typeof createGitHubIdentityView>[0]> = {},
 ) {
   return createGitHubIdentityView({
-    projectOwner: (source) => projectOwner(source, (owner) => owner.read()),
     translate: t,
     confirm: showConfirmDialog,
     formatError: formatUiError,

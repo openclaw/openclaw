@@ -204,10 +204,18 @@ it("bounds declaration keys and separates every ownership dimension and action",
 });
 
 const instructions = {
-  autoFix: ["must not merge or close the PR"],
+  autoFix: [
+    "must not merge or close the PR",
+    'github_publish with {action: "edit"}',
+    "without pullRequestUrl or publishingSessionKey",
+    "read the captured target through the existing authenticated repository workflow",
+  ],
   autoMerge: [
     "must not fix code or comments",
     "A passing CI rollup alone is not readiness",
+    'github_publish with {action: "edit"}',
+    "without pullRequestUrl or publishingSessionKey",
+    "read the captured target through the existing authenticated repository workflow",
     "neither authorize merging them nor block this PR",
   ],
   autoArchive: [
@@ -262,6 +270,9 @@ it.each(["autoFix", "autoMerge", "autoArchive"] as const)(
     expect(matchesJob(spec, { ...target, number: 124 }, option)).toBe(false);
     expect(matchesJob(spec, { ...target, sessionId: "replacement-session" }, option)).toBe(
       option !== "autoArchive",
+    );
+    expect(spec.payload.message).toContain(
+      "Authentication, permission, network, inspection, and checkout failures are blockers, not completion",
     );
     for (const instruction of instructions[option]) {
       expect(spec.payload.message).toContain(instruction);

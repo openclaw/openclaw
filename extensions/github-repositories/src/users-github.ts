@@ -51,6 +51,10 @@ export const usersGitHubHandlers: GatewayRequestHandlers = {
         const system = await resolveSystemGitHubIdentityStatus({
           config,
           sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
+          assertActive() {
+            options.signal?.throwIfAborted();
+            action.assertCurrent();
+          },
         });
         const personal = await service.status(action);
         return {

@@ -21,6 +21,7 @@ import { consumeGitHubSetupHandoff } from "openclaw/plugin-sdk/native-github-acc
 import { readRepositoryServices } from "../account-runtime-api.js";
 import { GitHubCliUnavailableError } from "../cli-preflight-api.js";
 import {
+  GitHubIdentityError,
   createManagedGitHubProfileId,
   installManagedGitHubProfile,
   resolveConfiguredGitHubToolIdentity,
@@ -34,7 +35,14 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
   "tools.github.status": defineValidatedGatewayHandler(
     "tools.github.status",
     validateToolsGitHubStatusParams,
-    async ({ params, respond, context }) => {
+    async ({ params, respond, context, signal, hasCurrentClientAuthority }) => {
+      const assertActive = () => {
+        signal?.throwIfAborted();
+        if (hasCurrentClientAuthority?.() === false) {
+          throw new GitHubIdentityError("changed");
+        }
+      };
+      assertActive();
       const resolved = resolveAgentIdOrRespondError({
         rawAgentId: params.agentId,
         respond,
@@ -43,15 +51,15 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
       if (!resolved) {
         return;
       }
-      respond(
-        true,
-        await resolveGitHubToolIdentityStatus({
-          config: resolved.cfg,
-          sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? resolved.cfg,
-          agentId: resolved.agentId,
-          selectedScope: params.selectedScope,
-        }),
-      );
+      const result = await resolveGitHubToolIdentityStatus({
+        config: resolved.cfg,
+        sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? resolved.cfg,
+        agentId: resolved.agentId,
+        selectedScope: params.selectedScope,
+        assertActive,
+      });
+      assertActive();
+      respond(true, result);
     },
   ),
   "tools.github.configure": defineValidatedGatewayHandler(

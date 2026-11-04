@@ -729,10 +729,13 @@ Native details rows, disclosures, and section-help mounts keep their open state 
 
 Use `readConfig(path)` to read the existing config owner, and
 `runConfigMutation` to delegate serialization and refresh to that same owner. Its
-admitted client can settle accepted work after the view retires. Use
-`projectOwner({ read, subscribe })` to project a Settings owner through the host
-reactive runtime without importing that runtime into the plugin. Dispose the
-projection with the owner; the Settings lifetime also retires it automatically.
+admitted client can settle accepted work after the view retires.
+`projectOwner({ read, subscribe })` projects a Settings owner in the host's
+reactive runtime. Self-contained plugin bundles have their own runtime: subscribe
+to the plain owner and invalidate a plugin-local reactive read instead of relying
+on the host projection to track plugin computations. Keep authoritative state in
+the plain owner and unsubscribe when the view retires. Dispose host projections
+with their owner; the Settings lifetime also retires them automatically.
 The host does not create a second config cache or grant new backend write permissions.
 Accepted configuration work can settle and clean up after its view closes; new
 view callbacks cannot dispatch after retirement. Shared controls include secret

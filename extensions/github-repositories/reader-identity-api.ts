@@ -17,6 +17,7 @@ export async function prepareGitHubReaderIdentity(
   context: GatewayRequestContext,
   agentId: string,
   assertActive: () => void,
+  requestedRepository?: string,
 ) {
   const config = context.getRuntimeConfig();
   const configuredIdentity = () => {
@@ -41,6 +42,8 @@ export async function prepareGitHubReaderIdentity(
         sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
         agentId,
         allowStale: true,
+        allowAppInstallation: requestedRepository !== undefined,
+        requestedRepository,
         getCurrentConfig: () => context.getRuntimeConfig(),
         assertActive: () => {
           assertActive();
@@ -73,6 +76,7 @@ export class GitHubReadRequestInactiveError extends Error {
 export async function prepareControlUiGitHubIdentity(
   { context, client, signal, hasCurrentClientAuthority }: GatewayRequestHandlerOptions,
   agentId: string,
+  requestedRepository?: string,
 ) {
   // Nested plugin requests may decorate the client; transport authority retains its owner.
   const assertActive = () => {
@@ -86,5 +90,5 @@ export async function prepareControlUiGitHubIdentity(
       throw new GitHubReadRequestInactiveError();
     }
   };
-  return prepareGitHubReaderIdentity(context, agentId, assertActive);
+  return prepareGitHubReaderIdentity(context, agentId, assertActive, requestedRepository);
 }

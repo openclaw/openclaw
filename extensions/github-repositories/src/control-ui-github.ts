@@ -81,10 +81,17 @@ function createGitHubReadHandler<
       const { identity, assertSelected } = await prepareControlUiGitHubIdentity(
         options,
         resolved.agentId,
+        `${target.owner}/${target.repo}`,
       );
-      assertSelected();
-      preparedAt = performance.now();
-      const result = await load(target, identity, undefined, params.refresh === true, section);
+      let result;
+      try {
+        assertSelected();
+        preparedAt = performance.now();
+        result = await load(target, identity, undefined, params.refresh === true, section);
+        assertSelected();
+      } finally {
+        await identity?.revoke?.();
+      }
       assertSelected();
       respond(true, result, undefined);
     } catch (error) {

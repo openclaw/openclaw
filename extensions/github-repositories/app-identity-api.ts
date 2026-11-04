@@ -5,9 +5,11 @@ import { assertSecretOwnerAvailable } from "openclaw/plugin-sdk/channel-secret-o
 import { formatConcreteConfigPath } from "openclaw/plugin-sdk/config-contracts";
 import { registerSecretValueForRedaction } from "openclaw/plugin-sdk/logging-core";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { z } from "zod";
+import { readGitHubConfig, readGitHubAgentIdentity } from "./config-api.js";
 import type { GitHubAppSelection, GitHubCredentialReader } from "./credential-reader-api.js";
 import { resolveGitHubHost, resolveGitHubApiBaseUrl } from "./host-runtime-api.js";
 import { GitHubIdentityError, type GitHubIdentityPreparation } from "./read-identity-api.js";
@@ -407,6 +409,50 @@ export async function prepareAppGitHubIdentity(
     await issued.revoke().catch(() => {});
     throw error;
   }
+}
+
+/** Verify display facts through the same issuer; no token survives a status request. */
+export async function verifyAppGitHubIdentityFacts(
+  params: GitHubIdentityPreparation & { assertActive?: () => void },
+  selection: GitHubAppSelection,
+  source: "system-configured" | "agent-override",
+): Promise<GitHubIdentityFacts> {
+  const assertCurrent = () => {
+    params.assertActive?.();
+    const config = getRuntimeConfigSnapshot() ?? params.config;
+    const current =
+      source === "system-configured"
+        ? readGitHubConfig(config).system
+        : readGitHubAgentIdentity(config, params.agentId);
+    if (!isDeepStrictEqual(current, selection)) {
+      throw new GitHubIdentityError("changed");
+    }
+  };
+  assertCurrent();
+  const host = resolveGitHubHost();
+  const apiBaseUrl = resolveGitHubApiBaseUrl();
+  if (!readGitHubAppInstallationMetadata(selection, host, apiBaseUrl)) {
+    let issued;
+    try {
+      issued = await prepareAppGitHubIdentity(
+        { ...params, allowAppInstallation: true, assertCurrent },
+        selection,
+        source,
+        {},
+        host,
+        apiBaseUrl,
+      );
+    } catch (error) {
+      assertCurrent();
+      if (!(error instanceof GitHubIdentityError) || error.reason === "changed") {
+        throw error;
+      }
+      return configuredAppGitHubIdentityFacts(selection, source);
+    }
+    await issued.prepared.revoke();
+  }
+  assertCurrent();
+  return configuredAppGitHubIdentityFacts(selection, source);
 }
 
 export function configuredAppGitHubIdentityFacts(

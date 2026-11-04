@@ -9,11 +9,11 @@ title: "Configuration — GitHub identity for agent tools"
 
 The [GitHub plugin](/plugins/github#configuration-and-upgrade) owns these settings. `plugins.entries.github-repositories.config.system` selects the shared managed GitHub CLI identity used by agent execution, and defines which execution paths receive its credential.
 
-## Session GitHub App reader
+## GitHub App reads
 
 A configured `plugins.entries.github-repositories.config.system` (or complete agent override) with
 `kind: "app-installation"` selects a GitHub App installation for explicitly
-admitted session reads. The `app` object specifies `appId`, `installationId`,
+admitted session reads and foreground public GitHub readers. The `app` object specifies `appId`, `installationId`,
 `accountId`, exact `repositories` (`id` and `fullName`), `permissions`,
 `privateKey` (a SecretRef or resolved signing key), and `keyVersion`.
 The existing managed `profileId` identifies the selection.
@@ -22,9 +22,18 @@ This reader verifies the configured issuer, App, installation, permissions, bot,
 and exact repository set before returning a short-lived token. The request owns
 revocation and must finish cleanup before returning private content. Existing
 publication, background, and shell execution paths do not acquire App tokens.
-Select a native or OAuth identity to run agent tools; App selections support
-foreground session reads only. OAuth and native GitHub selections retain their
-existing behavior.
+Select a native or OAuth identity for shell execution or publication. App selections
+also work with `github_read`, `github_search`, and public link previews, while those
+readers retain their public-only contract: an App's private repository access does
+not make private content available through a public reader. Each request narrows
+the installation token to its configured target repository and revokes it before
+returning, including on refusal or caller retirement. A selected but unavailable
+App never falls back to a native or anonymous identity.
+
+Status verifies the selected App through the same issuer and revokes its temporary
+token before returning secret-free account facts. Validated display facts may be
+reused for up to five minutes; this cache grants no execution authority. OAuth and
+native GitHub selections retain their existing behavior.
 
 An individual repository read can select one configured repository by its full
 name. Admission and the installation token cover only that repository, even

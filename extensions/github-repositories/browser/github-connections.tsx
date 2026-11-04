@@ -37,7 +37,6 @@ export function createIdentityDependencies(context: ControlUiSettingsContext) {
     confirm: context.confirm,
     formatError: context.formatError,
     runExternalMutation,
-    projectOwner: context.projectOwner,
   };
 }
 export function GitHubConnections(props: {

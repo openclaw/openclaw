@@ -175,6 +175,7 @@ describe("tools.github handlers", () => {
       sourceConfig: {},
       agentId: "main",
       selectedScope: "system",
+      assertActive: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, status);
   });

@@ -16,7 +16,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseDocument } from "yaml";
 import {
   prepareAppGitHubIdentity,
-  configuredAppGitHubIdentityFacts,
+  verifyAppGitHubIdentityFacts,
   configuredAppGitHubOptionsIdentity,
 } from "./app-identity-api.js";
 import type { GitHubToolIdentityConfig } from "./config-api.js";
@@ -243,7 +243,10 @@ async function readManagedGitHubToken(profileDir: string): Promise<string | unde
 }
 
 export async function resolveGitHubToolIdentityStatus(
-  params: GitHubIdentityPreparation & { selectedScope: "system" | "agent" },
+  params: GitHubIdentityPreparation & {
+    selectedScope: "system" | "agent";
+    assertActive?: () => void;
+  },
 ): Promise<ToolsGitHubStatusResult> {
   const effectiveIdentity = resolveGitHubToolIdentity(params);
   const selectedIdentity =
@@ -253,6 +256,7 @@ export async function resolveGitHubToolIdentityStatus(
   const probe = {
     config: params.config,
     sourceConfig: params.sourceConfig,
+    assertActive: params.assertActive,
     cwd: resolveAgentWorkspaceDir(params.config, params.agentId),
     agentId: params.agentId,
     env: params.env,
@@ -281,7 +285,9 @@ export async function resolveGitHubToolIdentityStatus(
 }
 
 export async function resolveSystemGitHubIdentityStatus(
-  params: Pick<GitHubIdentityPreparation, "config" | "sourceConfig" | "env">,
+  params: Pick<GitHubIdentityPreparation, "config" | "sourceConfig" | "env"> & {
+    assertActive?: () => void;
+  },
 ): Promise<GitHubIdentityFacts> {
   // Profile settings have no agent owner. Probe the shared identity outside agent workspaces.
   return resolveGitHubIdentityFacts({
@@ -296,12 +302,13 @@ async function resolveGitHubIdentityFacts(
   params: Pick<GitHubIdentityPreparation, "config" | "sourceConfig" | "env" | "agentId"> & {
     cwd: string;
     identity: ResolvedGitHubToolIdentity;
+    assertActive?: () => void;
   },
 ): Promise<GitHubIdentityFacts> {
   const identity = params.identity;
   const managed = identity.source !== "system-detected";
   if (managed && identity.config.kind === "app-installation") {
-    return configuredAppGitHubIdentityFacts(identity.config, identity.source);
+    return verifyAppGitHubIdentityFacts(params, identity.config, identity.source);
   }
   const probeEnv = githubIdentityProbeEnvironment(params, identity);
   const host = resolveGitHubHost();

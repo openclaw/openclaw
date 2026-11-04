@@ -2,11 +2,11 @@
 
 import type { GitHubIdentityFacts } from "@openclaw/gateway-protocol";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import type { ControlUiSettingsContextV2 } from "openclaw/plugin-sdk/control-ui";
 import {
   action,
   createMemo,
   createOptimistic,
+  createSignal,
   onSettled,
   Errored,
   isPending,
@@ -32,16 +32,15 @@ const EXTERNAL_LINK_TARGET = "_blank";
 const buildExternalLinkRel = () => "noreferrer noopener";
 
 /** The owner admits work synchronously; Solid presents only published snapshots and completion. */
-export function createGitHubIdentityView(
-  deps: Parameters<typeof createGitHubIdentity>[0] &
-    Pick<ControlUiSettingsContextV2, "projectOwner">,
-) {
+export function createGitHubIdentityView(deps: Parameters<typeof createGitHubIdentity>[0]) {
   const owner = createGitHubIdentity(deps);
-  const projection = deps.projectOwner(owner);
-  const dispose = () => {
-    projection.dispose();
-    owner.dispose();
+  // The plugin bundle owns its Solid runtime; host projections cannot track its readers.
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const read = () => {
+    revision();
+    return owner.read();
   };
+  const dispose = () => owner.dispose();
   const [saving, setSaving] = createOptimistic(false, { equals: false });
   const showSaving = action(function* (completion: Promise<void>) {
     setSaving(true);
@@ -50,6 +49,7 @@ export function createGitHubIdentityView(
   onSettled(() => {
     let previous: Promise<void> | undefined;
     const observe = () => {
+      setRevision((value) => value + 1);
       const completion = owner.read().mutationCompletion;
       if (completion && completion !== previous) {
         void Promise.resolve()
@@ -67,7 +67,7 @@ export function createGitHubIdentityView(
       dispose();
     };
   });
-  return { ...owner, read: projection.read, saving, dispose };
+  return { ...owner, read, saving, dispose };
 }
 type GitHubIdentityView = ReturnType<typeof createGitHubIdentityView>;
 
