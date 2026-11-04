@@ -150,7 +150,7 @@ describe("session workspace artifacts", () => {
     const show = vi.spyOn(toast, "showToast").mockReturnValue(true);
     openSessionWorkspaceManagedArtifact(fixture.state, managedHref);
     expect(show).toHaveBeenCalledWith({
-      message: "Disconnected. Reconnect to open this attachment link.",
+      message: "Reconnect, then open this attachment link again.",
       severity: "error",
     });
     expect(fixture.request).not.toHaveBeenCalled();

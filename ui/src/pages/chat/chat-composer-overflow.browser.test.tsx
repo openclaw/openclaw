@@ -165,6 +165,7 @@ it.each([
     onDraftChange: () => dismissed.push("mentions"),
   });
   drawComposer({ ...props });
+  await waitForSolid(() => expect(query(".chat-reply-preview:not([role])")).not.toBeNull());
   await afterLayout();
   await waitForSolid(() => expect(query(".chat-attachment-thumb")).not.toBeNull());
   const attachmentBox = rect(".chat-attachment-thumb", rail());

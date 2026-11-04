@@ -551,7 +551,7 @@ describe("Canvas widget view", () => {
     view.preferredHeight = 520;
     await settle(view);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(notice(view)).toContain("recover automatically");
+    expect(notice(view)).toContain("reconnects automatically");
     expect(view.querySelector<HTMLElement>('[role="status"]')?.style.minHeight).toBe("520px");
     await vi.advanceTimersByTimeAsync(5_000);
     slowRead.resolve(documentView);

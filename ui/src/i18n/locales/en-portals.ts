@@ -13,7 +13,7 @@ const enPortals = {
     unavailable: "This portal is no longer available. Ask the agent to reopen the app.",
     environmentStarting: "Starting your device…",
     waitingForApp: "Device ready. Waiting for your app…",
-    environmentUnavailable: "Couldn’t start the device. Ask the agent to check it or try again.",
+    environmentUnavailable: "Couldn’t start this device. Ask the agent to check it or try again.",
     promptShow: "Show me in a portal.",
     promptStart: "Start the application in a portal.",
     promptMakeAvailable: "Make the server available in a portal.",

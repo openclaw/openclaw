@@ -454,6 +454,18 @@ cloud-worker profiles require Crabbox 0.80.0 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
 Testboxes alive. Missing or older binaries use a verified managed 0.80.0 release
 before provider discovery or lease work. The original binary stays untouched.
+
+For native Linux/WSL command-lifecycle or cancellation proof, verify the selected
+binary's runtime pack before allocating a lease. Use a complete matching Crabbox
+distribution, or set `CRABBOX_RUNTIME_ARTIFACTS` to a verified manifest. The
+companions must come from the same frozen source, and the manifest must bind the
+exact controller binary. Follow Crabbox's
+[runtime artifact instructions](https://github.com/openclaw/crabbox/blob/main/scripts/runtime-artifacts/README.md)
+for preparation and verification. A development CLI without a runtime pack uses
+legacy SSH supervision; its version string alone does not establish native
+supervision. Keep CLI-only results separate from native lifecycle and
+cancellation evidence.
+
 Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;

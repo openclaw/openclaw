@@ -311,7 +311,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
 
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
@@ -430,7 +430,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
       await expectRunCount(page, "Initial history", 1);
 
       await gateway.deferNext("cron.runs");
@@ -582,7 +582,7 @@ suite.define(() => {
         .toBe("control-ui-main");
 
       const tasksTab = page.getByRole("tab", { name: "All", exact: true });
-      const activityTab = page.getByRole("tab", { name: "Run history", exact: true });
+      const activityTab = page.getByRole("tab", { name: "Activity history", exact: true });
       await tasksTab.focus();
       await pressKeys(page, "ArrowRight", "ArrowRight", "ArrowRight");
       await expect
@@ -591,7 +591,7 @@ suite.define(() => {
       await page.keyboard.press("Enter");
       await expect.poll(() => activityTab.getAttribute("aria-selected")).toBe("true");
       await expect
-        .poll(() => page.getByRole("tabpanel", { name: "Run history" }).isVisible())
+        .poll(() => page.getByRole("tabpanel", { name: "Activity history" }).isVisible())
         .toBe(true);
     });
   });

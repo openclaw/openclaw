@@ -70,12 +70,12 @@ const enLinkReader = {
     patchTruncated: "This diff was shortened. Open the original for the full patch.",
     patchUnavailable:
       "No text diff available in this view. Open the original to inspect this file.",
-    unavailableTitle: "Couldn’t load this item.",
-    previewUnavailable: "Couldn’t load this preview.",
+    unavailableTitle: "Couldn’t load this item",
+    previewUnavailable: "Couldn’t load preview",
     previewPullRequest: "PR {reference}",
     previewIssue: "Issue {reference}",
     unavailable: "Try again or open the original.",
-    disconnected: "Disconnected. Reconnect or open the original.",
+    disconnected: "Reconnect to view this item, or open the original.",
     retry: "Retry",
   },
 } satisfies TranslationMap;

@@ -12,6 +12,7 @@ import {
 import { containerHasTerminated } from "./container-inspect.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { hashTextSha256 } from "./hash.js";
+import { capturePodmanBuilderCgroup } from "./podman-cgroup.js";
 import {
   bindPodmanSandboxEngine,
   resolvePodmanSandboxRuntimeInfo,
@@ -32,12 +33,27 @@ const CONTAINER_PREFIX = "openclaw-deps-";
 const SCOPE_PREFIX = "worktree-dependencies:";
 const DEPENDENCY_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency";
 
+type StartedBuilder = {
+  containerName: string;
+  containerId: string;
+  cgroup: NonNullable<Awaited<ReturnType<typeof capturePodmanBuilderCgroup>>>;
+};
+
 function dependencyDockerConfig(cfg: SandboxConfig, image: string): SandboxDockerConfig {
   return {
     ...cfg.docker,
     image,
     containerPrefix: CONTAINER_PREFIX,
-    env: { CI: "1" },
+    // Builder state must be writable even with a missing image HOME, and never staged.
+    tmpfs: [...cfg.docker.tmpfs, "/tmp/openclaw-deps:mode=1777"],
+    env: {
+      CI: "1",
+      HOME: "/tmp/openclaw-deps",
+      XDG_CONFIG_HOME: "/tmp/openclaw-deps/config",
+      XDG_DATA_HOME: "/tmp/openclaw-deps/data",
+      XDG_STATE_HOME: "/tmp/openclaw-deps/state",
+      XDG_CACHE_HOME: "/tmp/openclaw-deps/cache",
+    },
     setupCommand: undefined,
     binds: undefined,
   };
@@ -92,6 +108,7 @@ export async function resolveSandboxDependencyTemplateIdentity(
 export async function retireSandboxDependencyTemplate(
   directory: string,
   rollbackGuard: () => void,
+  started?: StartedBuilder,
 ): Promise<void> {
   using phases = observeDiagnosticsTimelinePhases(`${DEPENDENCY_PHASE}.retire.registry`);
   const context = captureOpenClawStateWorkerContext();
@@ -108,7 +125,7 @@ export async function retireSandboxDependencyTemplate(
   phases.mark(`${DEPENDENCY_PHASE}.retire.builders`);
   for (const entry of entries) {
     if (entry.sessionKey.startsWith(SCOPE_PREFIX)) {
-      await retireSandboxDependencyBuilder(entry, assertOwner);
+      await retireSandboxDependencyBuilder(entry, assertOwner, false, started);
     }
   }
 }
@@ -118,6 +135,7 @@ export async function retireSandboxDependencyBuilder(
   candidate: SandboxRegistryEntry,
   assertOwner: () => void,
   remove = false,
+  started?: StartedBuilder,
 ): Promise<void> {
   using phases = observeDiagnosticsTimelinePhases(`${DEPENDENCY_PHASE}.retire.lock`);
   const context = captureOpenClawStateWorkerContext();
@@ -152,21 +170,25 @@ export async function retireSandboxDependencyBuilder(
       assertCurrent();
       const signal = AbortSignal.timeout(120_000);
       phases.mark(`${DEPENDENCY_PHASE}.retire.inspect`);
-      const inspected = await execContainer(
-        engine,
-        ["inspect", "--format", "{{.Id}}", entry.containerName],
-        {
-          allowFailure: true,
-          signal,
-        },
-      );
-      assertCurrent();
-      const id = inspected.code === 0 ? inspected.stdout.trim() : null;
-      if (
-        (id !== null && !/^[a-f0-9]{64}$/u.test(id)) ||
-        (id === null && !/no such (?:container|object)|does not exist/iu.test(inspected.stderr))
-      ) {
-        throw new Error("Dependency template builder removal is unconfirmed; template retained");
+      const captured = started?.containerName === entry.containerName ? started : undefined;
+      let id: string | null = captured?.containerId ?? null;
+      if (!captured) {
+        const inspected = await execContainer(
+          engine,
+          ["inspect", "--format", "{{.Id}}", entry.containerName],
+          {
+            allowFailure: true,
+            signal,
+          },
+        );
+        assertCurrent();
+        id = inspected.code === 0 ? inspected.stdout.trim() : null;
+        if (
+          (id !== null && !/^[a-f0-9]{64}$/u.test(id)) ||
+          (id === null && !/no such (?:container|object)|does not exist/iu.test(inspected.stderr))
+        ) {
+          throw new Error("Dependency template builder removal is unconfirmed; template retained");
+        }
       }
       if (remove) {
         phases.mark(`${DEPENDENCY_PHASE}.retire.remove`);
@@ -194,14 +216,19 @@ export async function retireSandboxDependencyBuilder(
           assertCurrent,
         });
         assertCurrent();
-        if (killed.code === 0) {
-          phases.mark(`${DEPENDENCY_PHASE}.retire.wait`);
-          await execContainer(engine, ["wait", id], { signal, assertCurrent });
-        }
-        assertCurrent();
-        phases.mark(`${DEPENDENCY_PHASE}.retire.verify`);
-        if (!(await containerHasTerminated(engine, id, signal))) {
-          throw new Error("Dependency template builder is still running; template retained");
+        if (captured) {
+          phases.mark(`${DEPENDENCY_PHASE}.retire.verify`);
+          await captured.cgroup.waitStopped();
+        } else {
+          if (killed.code === 0) {
+            phases.mark(`${DEPENDENCY_PHASE}.retire.wait`);
+            await execContainer(engine, ["wait", id], { signal, assertCurrent });
+          }
+          assertCurrent();
+          phases.mark(`${DEPENDENCY_PHASE}.retire.verify`);
+          if (!(await containerHasTerminated(engine, id, signal))) {
+            throw new Error("Dependency template builder is still running; template retained");
+          }
         }
         assertCurrent();
       }
@@ -240,31 +267,40 @@ export async function prepareSandboxDependencyTemplate(params: {
       context,
     );
     let timeout: AbortSignal | undefined;
+    let started: StartedBuilder | undefined;
     try {
       phases.mark(`${DEPENDENCY_PHASE}.container`);
       const { ensureSandboxContainer } = await import("./docker.js");
       assertCurrent();
-      const { containerId } = await timeWorktreePreparationPhase("containerStart", () =>
-        ensureSandboxContainer({
-          engine: identity.engine,
-          podmanTarget: identity.podmanTarget,
-          scopeKey: `${SCOPE_PREFIX}${params.scopeKey}`,
-          workspaceDir: directory,
-          agentWorkspaceDir: directory,
-          workspaceSource: "managed-worktree",
-          readOnlyResourceMounts: [
-            {
-              hostPath: path.join(directory, ".git"),
-              containerPath: path.posix.join(docker.workdir, ".git"),
-            },
-          ],
-          cfg: { ...params.cfg, scope: "session", workspaceAccess: "rw", docker },
-          assertCurrent,
-        }),
+      const { containerId, containerName } = await timeWorktreePreparationPhase(
+        "containerStart",
+        () =>
+          ensureSandboxContainer({
+            engine: identity.engine,
+            podmanTarget: identity.podmanTarget,
+            scopeKey: `${SCOPE_PREFIX}${params.scopeKey}`,
+            workspaceDir: directory,
+            agentWorkspaceDir: directory,
+            workspaceSource: "managed-worktree",
+            readOnlyResourceMounts: [
+              {
+                hostPath: path.join(directory, ".git"),
+                containerPath: path.posix.join(docker.workdir, ".git"),
+              },
+            ],
+            cfg: { ...params.cfg, scope: "session", workspaceAccess: "rw", docker },
+            assertCurrent,
+          }),
       );
       assertCurrent();
       phases.mark(`${DEPENDENCY_PHASE}.validate_target`);
       await validateSandboxContainerEngineTarget(identity.engine, identity.podmanTarget);
+      assertCurrent();
+      phases.mark(`${DEPENDENCY_PHASE}.capture_cgroup`);
+      const cgroup = await capturePodmanBuilderCgroup(identity.engine, containerId);
+      if (cgroup) {
+        started = { containerName, containerId, cgroup };
+      }
       assertCurrent();
       const installTimeout = AbortSignal.timeout(15 * 60_000);
       timeout = installTimeout;
@@ -279,9 +315,7 @@ export async function prepareSandboxDependencyTemplate(params: {
             containerId,
             "/bin/sh",
             "-c",
-            docker.network === "none"
-              ? "exec pnpm install --offline --frozen-lockfile"
-              : "exec pnpm install --frozen-lockfile",
+            `exec pnpm install ${docker.network === "none" ? "--offline " : ""}--frozen-lockfile --store-dir "$XDG_DATA_HOME/pnpm/store"`,
           ],
           {
             allowFailure: true,
@@ -319,10 +353,14 @@ export async function prepareSandboxDependencyTemplate(params: {
       // Cleanup outlives cancellation. A failed retirement must preserve the template
       // reservation rather than publish or delete bytes a live builder can still write.
       try {
-        await retireSandboxDependencyTemplate(directory, params.rollbackGuard);
+        await retireSandboxDependencyTemplate(directory, params.rollbackGuard, started);
       } finally {
-        use[Symbol.dispose]();
-        scheduleSandboxPrune(() => context.admission.assertCurrent(), true);
+        try {
+          await started?.cgroup.close();
+        } finally {
+          use[Symbol.dispose]();
+          scheduleSandboxPrune(() => context.admission.assertCurrent(), true);
+        }
       }
     }
   });

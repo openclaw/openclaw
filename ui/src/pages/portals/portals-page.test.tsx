@@ -155,7 +155,7 @@ it.each(["portal", "environment"] as const)("retries initial %s read", async (ki
   if (isPortal) {
     await waitForFrame(page);
   } else {
-    await waitForText(page, "Waiting for your application");
+    await waitForText(page, "Waiting for your app");
     expect(frameOf(page)).toBeNull();
   }
 });
@@ -379,7 +379,7 @@ it("waits for machine startup and an explicitly opened app", async () => {
   environment = { ...environment, status: "available" };
   await vi.advanceTimersByTimeAsync(2_000);
   await page.updateComplete;
-  expectText(page).toContain("Waiting for your application");
+  expectText(page).toContain("Waiting for your app");
   await expectNoPolling(source);
   expect(frameOf(page)).toBeNull();
   toggle(page, { portalId: portal.id });
@@ -400,7 +400,7 @@ it("pauses machine startup polling in a hidden browser tab and catches up on ret
   environment = { ...environment, status: "available" };
   visibility = "visible";
   document.dispatchEvent(new Event("visibilitychange"));
-  await waitForText(page, "Waiting for your application");
+  await waitForText(page, "Waiting for your app");
   expect(callsTo(source, "environments.status")).toHaveLength(2);
   await expectNoPolling(source);
   page.remove();
@@ -420,7 +420,7 @@ it("loads only the final environment from same-turn target writes", async () => 
     expect(source.request.mock.calls).toEqual([
       ["environments.status", { environmentId: environment.id }],
     ]);
-    expectText(page).toContain("Waiting for your application");
+    expectText(page).toContain("Waiting for your app");
     expect(frameOf(page)).toBeNull();
   });
 });
@@ -454,7 +454,7 @@ it.each(["success", "failure"] as const)("retired %s keeps current polling", asy
     expectText(page).toContain("Starting your device");
     replacement = { ...replacement, status: "error" };
     await updatePage(page, { presented: true });
-    await waitForText(page, "The machine could not start");
+    await waitForText(page, "Couldn’t start this device");
   } else {
     retired.reject(new Error("Previous machine failed"));
     await retired.promise.catch(() => undefined);
@@ -463,7 +463,7 @@ it.each(["success", "failure"] as const)("retired %s keeps current polling", asy
     replacement = { ...replacement, status: "available" };
     await vi.advanceTimersByTimeAsync(2_000);
     await page.updateComplete;
-    expectText(page).toContain("Waiting for your application");
+    expectText(page).toContain("Waiting for your app");
   }
   expect(frameOf(page)).toBeNull();
   page.remove();
