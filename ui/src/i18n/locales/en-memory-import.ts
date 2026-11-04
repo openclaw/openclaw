@@ -17,7 +17,7 @@ const enMemoryImport = {
       providerResult: "Imported {migrated}, skipped {skipped}",
       providerIncomplete:
         "Imported {migrated}, skipped {skipped}, {errors} failed, {conflicts} conflicts",
-      providerError: "Couldn’t import memory. Try again. {error}",
+      providerError: "Couldn’t import memory. Continue setup, then try importing again.\n{error}",
       connectionChanged:
         "Import skipped because the Gateway connection changed. Reconnect and try again.",
       unknownError: "No error details available",
