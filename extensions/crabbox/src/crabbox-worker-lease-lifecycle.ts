@@ -60,6 +60,7 @@ export function createCrabboxWorkerLeaseLifecycle(options: {
         heartbeatIntervalMs: profile.heartbeatIntervalMs,
         heartbeatTimeoutMs: profile.heartbeatTimeoutMs,
         id: lease.leaseId,
+        ...(lease.untrustedWorkload ? { untrustedWorkload: true as const } : {}),
         idleTimeout: profile.idleTimeout,
         provider: profile.provider,
         env: crabboxResourceEnv(profile.provider, profile.requestedResources),
@@ -70,6 +71,13 @@ export function createCrabboxWorkerLeaseLifecycle(options: {
     };
     // Guest allocation persists this provider-owned receipt before enrollment.
     // It selects mandatory readback even though core passes only provider settings.
+    if (
+      lease.untrustedWorkload &&
+      requireGuestAccess &&
+      !isGatewayAwsGuestReceipt(lease.resourceReceipt)
+    ) {
+      throw new Error("Guest access has no qualified durable launch custody");
+    }
     if (isGatewayAwsGuestReceipt(lease.resourceReceipt) && requireGuestAccess) {
       const assertCurrent = () => {
         options.signal.throwIfAborted();

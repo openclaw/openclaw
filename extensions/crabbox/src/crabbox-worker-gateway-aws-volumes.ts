@@ -31,17 +31,32 @@ export function assertDisposableAwsImage(value: unknown, imageId: string): void 
       }
     }
   }
+  const projected = image.BlockDeviceMappings.filter(
+    (item) => requireAwsRecord(item, "AMI device").Ebs !== undefined,
+  ).map((item) => ({
+    device: requireAwsRecord(item, "AMI device").DeviceName,
+    volumeId: "vol-00000000000000000",
+  }));
+  if (JSON.stringify(projected).length > 2048) {
+    throw new WorkerProviderError(
+      "AWS guest AMI volume inventory exceeds durable custody capacity before allocation",
+    );
+  }
   if (!root) {
     throw new WorkerProviderError("AWS guest AMI root mapping is missing");
   }
 }
 export function launchVolumeMappings(instance: Record<string, unknown>): AwsLaunchVolume[] {
-  if (!Array.isArray(instance.BlockDeviceMappings) || !instance.BlockDeviceMappings.length) {
+  if (
+    !Array.isArray(instance.BlockDeviceMappings) ||
+    !instance.BlockDeviceMappings.length ||
+    instance.BlockDeviceMappings.length > 128
+  ) {
     throw new WorkerProviderError("AWS guest launch volume mappings are missing");
   }
   const devices = new Set<string>(),
     ids = new Set<string>();
-  return instance.BlockDeviceMappings.map((item) => {
+  const volumes = instance.BlockDeviceMappings.map((item) => {
     const mapping = requireAwsRecord(item, "instance block device"),
       ebs = requireAwsRecord(mapping.Ebs, "instance EBS mapping");
     if (
@@ -57,6 +72,10 @@ export function launchVolumeMappings(instance: Record<string, unknown>): AwsLaun
     ids.add(ebs.VolumeId);
     return { device: mapping.DeviceName, volumeId: ebs.VolumeId };
   }).toSorted((a, b) => a.device.localeCompare(b.device));
+  if (JSON.stringify(volumes).length > 2048) {
+    throw new WorkerProviderError("AWS guest volume inventory exceeds durable custody capacity");
+  }
+  return volumes;
 }
 export function assertOwnedLaunchVolume(
   value: unknown,

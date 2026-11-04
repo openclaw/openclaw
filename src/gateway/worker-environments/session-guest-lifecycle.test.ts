@@ -459,3 +459,59 @@ it("rejects a retained command when its lease changes during network qualificati
     read.mockRestore();
   }
 });
+
+it("carries guest trust and first-write immutable custody into cleanup, retaining ownership after a partial failure", async () => {
+  let confirmCleanup = false;
+  const cleanup = vi.fn<NonNullable<typeof provider.destroy>>(async (lease) => {
+    expect(lease.untrustedWorkload).toBe(true);
+    expect(lease.recordResourceReceipt).toBeTypeOf("function");
+    const receipt = {
+      version: 1 as const,
+      leaseId: lease.leaseId,
+      identity: {
+        provider: "aws",
+        custodyStage: "cleanup-observed",
+        resourceId: "i-0123456789abcdef0",
+        launchVolumes: '[{"device":"/dev/sda1","volumeId":"vol-0123456789abcdef0"}]',
+      },
+    };
+    if (!lease.resourceReceipt) {
+      await lease.recordResourceReceipt!(receipt);
+    } else {
+      expect(lease.resourceReceipt).toEqual(receipt);
+    }
+    if (!confirmCleanup) {
+      throw new Error("known volume absence unavailable");
+    }
+  });
+  provider = { ...provider, supportsResourceReceipts: true, destroy: cleanup };
+  start();
+  const created = await create();
+  const captured = service.captureSessionAttachment(identity);
+  guest.revoked = true;
+  guest.controller.abort();
+  expect(() => captured.assertCurrent()).toThrow();
+  await support.waitForFast(() => expect(cleanup).toHaveBeenCalled());
+  await support.waitForFast(() =>
+    expect(
+      support.testState.store.get(created.environment.environmentId)?.resourceReceipt?.identity
+        .custodyStage,
+    ).toBe("cleanup-observed"),
+  );
+  expect(support.testState.store.get(created.environment.environmentId)?.state).not.toBe(
+    "destroyed",
+  );
+  await service.stop();
+  await support.reopenWorkerEnvironmentStore();
+  support.testState.nowMs += 60_000;
+  confirmCleanup = true;
+  start();
+  await service.reconcileSessionAttachments();
+  await support.waitForFast(() =>
+    expect(support.testState.store.get(created.environment.environmentId)?.state).toBe("destroyed"),
+  );
+  expect(cleanup.mock.calls.at(-1)?.[0]).toMatchObject({
+    untrustedWorkload: true,
+    resourceReceipt: { identity: { custodyStage: "cleanup-observed" } },
+  });
+});

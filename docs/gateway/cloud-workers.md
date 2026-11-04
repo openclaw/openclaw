@@ -253,8 +253,10 @@ HTTP endpoint; and waits for effective API readback. It records the resource and
 semantic network-rule and effective-topology digest through the existing Gateway resource-receipt owner
 before node bootstrap. The explicit AMI must expose a complete EBS root mapping and
 all additional EBS mappings must request deletion on termination before allocation;
-the released CLI forces root deletion. The Gateway records the exact attached,
-lease-tagged launch volume IDs durably before postallocation qualification. Actual
+the released CLI forces root deletion. The Gateway records bounded instance-observed launch volume IDs durably before
+any per-volume qualification read. This immutable launch-custody receipt is not
+proof of volume ownership or permission to run guest tools; independent attachment
+and lease-tag checks still precede guest access or resource deletion. Actual
 nondeleting or unknown mappings reject guest access but keep disk custody for cleanup.
 Subsequent guest access rechecks live AWS facts against
 that durable identity and digest. The session and allocation owners recheck
@@ -272,7 +274,11 @@ Trusted cleanup uses the recorded AWS account and exact instance identity, not
 current guest network permission or a revoked guest grant. AWS confirms instance and every recorded launch-volume absence. A retained data
 volume is deleted only by its recorded ID after independent lease-tag and detached
 state checks; borrowed or unknown volumes are never detached or deleted. Missing
-volume facts or partial deletion retain cleanup ownership. AWS confirms deletion;
+volume facts or partial deletion retain cleanup ownership. Receiptless guest
+cleanup cannot fall back to ordinary Crabbox stop. The trusted current cleanup
+owner can recover an exact launch inventory and persist its first immutable
+cleanup-custody receipt before any deletion. Unavailable inventory or persistence
+keeps the allocation pending, including after service restart or guest revocation. AWS confirms deletion;
 Crabbox's host-local claim is a derived projection that can remain stale until its
 next status refresh. A missing original account credential or unconfirmed deletion
 retains cleanup ownership instead of claiming success.

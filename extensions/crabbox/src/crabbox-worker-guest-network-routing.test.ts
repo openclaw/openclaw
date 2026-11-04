@@ -23,6 +23,8 @@ function fixture(
     managed?: boolean;
     unsafeImage?: boolean;
     actualDataNondelete?: boolean;
+    volumeReadDenied?: boolean;
+    incompleteInventory?: boolean;
   } = {},
 ) {
   let allocated = false,
@@ -70,6 +72,9 @@ function fixture(
           ],
         };
       } else if (op === "describe-volumes") {
+        if (options.volumeReadDenied) {
+          return reply(255, "", "An error occurred (AccessDenied) when calling DescribeVolumes");
+        }
         const id = argv[argv.indexOf("--volume-ids") + 1]!;
         if (
           (id === "vol-11111111111111111" && !retainedDataVolume) ||
@@ -179,20 +184,25 @@ function fixture(
                 {
                   InstanceId: resourceId,
                   ImageId: "ami-0123456789abcdef0",
-                  BlockDeviceMappings: [
-                    {
-                      DeviceName: "/dev/sda1",
-                      Ebs: { VolumeId: "vol-0123456789abcdef0", DeleteOnTermination: true },
-                    },
-                    ...(options.actualDataNondelete
-                      ? [
-                          {
-                            DeviceName: "/dev/sdf",
-                            Ebs: { VolumeId: "vol-11111111111111111", DeleteOnTermination: false },
-                          },
-                        ]
-                      : []),
-                  ],
+                  BlockDeviceMappings: options.incompleteInventory
+                    ? undefined
+                    : [
+                        {
+                          DeviceName: "/dev/sda1",
+                          Ebs: { VolumeId: "vol-0123456789abcdef0", DeleteOnTermination: true },
+                        },
+                        ...(options.actualDataNondelete
+                          ? [
+                              {
+                                DeviceName: "/dev/sdf",
+                                Ebs: {
+                                  VolumeId: "vol-11111111111111111",
+                                  DeleteOnTermination: false,
+                                },
+                              },
+                            ]
+                          : []),
+                      ],
                   Tags: [{ Key: "lease", Value: leaseId }],
                   SubnetId: subnetId,
                   VpcId: vpcId,
@@ -286,6 +296,12 @@ function fixture(
     throw new Error("Unexpected released CLI operation " + action);
   };
   return {
+    allowVolumeReads: () => {
+      options.volumeReadDenied = false;
+    },
+    restoreInventory: () => {
+      options.incompleteInventory = false;
+    },
     deny: () => {
       options.denied = true;
     },
@@ -396,4 +412,135 @@ it("persists launch data volume custody before actual-map rejection and a restar
     assertCurrent: () => {},
   });
   expect(f.events).toContain("aws:delete-volume");
+});
+
+it("persists bounded partial custody before the first DescribeVolumes denial; restarted trusted cleanup cannot fall back to CLI stop", async () => {
+  const f = fixture({ actualDataNondelete: true, volumeReadDenied: true });
+  const provider = createProvider({ runCommand: f.run });
+  let receipt: import("openclaw/plugin-sdk/plugin-entry").WorkerResourceReceipt | undefined;
+  await expect(
+    provider.provision!(
+      profile,
+      "volume-read-denied",
+      options(async (value) => {
+        receipt = structuredClone(value);
+      }),
+    ),
+  ).rejects.toThrow("allocation preserved");
+  if (!receipt) {
+    throw new Error("trusted actual launch inventory was lost before a volume read");
+  }
+  expect(receipt.identity).toMatchObject({
+    custodyStage: "launch-observed",
+    resourceId,
+    accountId: account,
+  });
+  expect(receipt.identity.launchVolumes).toContain("vol-11111111111111111");
+  await provider.dispose();
+  const restarted = createProvider({ runCommand: f.run });
+  await expect(
+    restarted.destroy!({
+      leaseId: receipt.leaseId,
+      profile,
+      untrustedWorkload: true,
+      resourceReceipt: receipt,
+      assertCurrent: () => {},
+    }),
+  ).rejects.toThrow();
+  expect(f.events).not.toContain("cbx:stop");
+  expect(f.events).not.toContain("aws:terminate-instances");
+  f.allowVolumeReads();
+  await restarted.destroy!({
+    leaseId: receipt.leaseId,
+    profile,
+    untrustedWorkload: true,
+    resourceReceipt: receipt,
+    assertCurrent: () => {},
+  });
+  expect(f.events).toContain("aws:delete-volume");
+  expect(f.events).not.toContain("cbx:stop");
+});
+it("failed custody persistence retains receiptless allocation fence; cleanup recovery persists before any mutation", async () => {
+  const f = fixture({ actualDataNondelete: true });
+  const provider = createProvider({ runCommand: f.run });
+  await expect(
+    provider.provision!(
+      profile,
+      "custody-write-failed",
+      options(async () => {
+        throw new Error("custody write unavailable");
+      }),
+    ),
+  ).rejects.toThrow("custody write unavailable");
+  expect(f.events).not.toContain("aws:modify-instance-metadata-options");
+  await provider.dispose();
+  const restarted = createProvider({ runCommand: f.run });
+  const lease = {
+    leaseId: f.leaseId,
+    profile,
+    untrustedWorkload: true as const,
+    assertCurrent: () => {},
+  };
+  await expect(
+    restarted.destroy!({
+      ...lease,
+      recordResourceReceipt: async () => {
+        throw new Error("still unavailable");
+      },
+    }),
+  ).rejects.toThrow("still unavailable");
+  expect(f.events).not.toContain("cbx:stop");
+  expect(f.events).not.toContain("aws:terminate-instances");
+  let recovered: import("openclaw/plugin-sdk/plugin-entry").WorkerResourceReceipt | undefined;
+  await restarted.destroy!({
+    ...lease,
+    recordResourceReceipt: async (value) => {
+      recovered = structuredClone(value);
+      f.events.push("recovery:durable");
+    },
+  });
+  expect(recovered?.identity.custodyStage).toBe("cleanup-observed");
+  expect(f.events.indexOf("recovery:durable")).toBeLessThan(
+    f.events.indexOf("aws:terminate-instances"),
+  );
+  expect(f.events).toContain("aws:delete-volume");
+});
+it("incomplete launch inventory cannot erase the fence; a later trusted cleanup recovers exact inventory", async () => {
+  const f = fixture({ actualDataNondelete: true, incompleteInventory: true });
+  const provider = createProvider({ runCommand: f.run });
+  await expect(provider.provision!(profile, "inventory-unavailable", options())).rejects.toThrow();
+  await provider.dispose();
+  const restarted = createProvider({ runCommand: f.run });
+  const lease = {
+    leaseId: f.leaseId,
+    profile,
+    untrustedWorkload: true as const,
+    assertCurrent: () => {},
+    recordResourceReceipt: async () => {},
+  };
+  await expect(restarted.destroy!(lease)).rejects.toThrow();
+  expect(f.events).not.toContain("cbx:stop");
+  expect(f.events).not.toContain("aws:terminate-instances");
+  f.restoreInventory();
+  await restarted.destroy!(lease);
+  expect(f.events).toContain("aws:delete-volume");
+});
+it("malformed or legacy guest receipt cannot downgrade to receiptless CLI cleanup", async () => {
+  const f = fixture();
+  const provider = createProvider({ runCommand: f.run });
+  await expect(
+    provider.destroy!({
+      leaseId: "cbx_fixture",
+      profile,
+      untrustedWorkload: true,
+      resourceReceipt: {
+        version: 1,
+        leaseId: "cbx_fixture",
+        identity: { provider: "aws", gatewayOwner: "openclaw-gateway-aws-network-v1" },
+      },
+      assertCurrent: () => {},
+    }),
+  ).rejects.toThrow();
+  expect(f.events).not.toContain("cbx:stop");
+  expect(f.events).not.toContain("aws:terminate-instances");
 });

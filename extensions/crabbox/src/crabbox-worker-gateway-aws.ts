@@ -254,6 +254,69 @@ async function readInstance(
     boundary,
   );
 }
+/** Observation is custody, not guest qualification. It is bounded and never scans tags. */
+export async function captureGatewayAwsGuestCustody(
+  params: GatewayAwsAuthority & {
+    region: string;
+    leaseId: string;
+    resourceId: string;
+    boundary?: GatewayAwsBoundary;
+  },
+) {
+  const resourceId = requiredId(params.resourceId, /^i-[a-f0-9]{8,17}$/u, "AWS instance identity");
+  const region = requiredId(params.region, /^[a-z]{2}-[a-z]+-\d$/u, "AWS region");
+  const account = await awsJson(params, region, "sts", "get-caller-identity");
+  const accountId = requiredId(account.Account, /^\d{12}$/u, "AWS account");
+  if (params.boundary && accountId !== params.boundary.accountId) {
+    throw new WorkerProviderError("AWS custody account changed");
+  }
+  const result = await awsJson(params, region, "ec2", "describe-instances", [
+    "--instance-ids",
+    resourceId,
+  ]);
+  const instance = onlyAwsRecord(
+    onlyAwsRecord(result.Reservations, "reservation").Instances,
+    "instance",
+  );
+  const tags = Array.isArray(instance.Tags)
+    ? instance.Tags.filter((tag) => requireAwsRecord(tag, "instance tag").Key === "lease")
+    : [];
+  if (
+    instance.InstanceId !== resourceId ||
+    tags.length !== 1 ||
+    requireAwsRecord(tags[0], "lease tag").Value !== params.leaseId
+  ) {
+    throw new WorkerProviderError(
+      "AWS instance identity does not match the exact Gateway allocation lease",
+    );
+  }
+  const imageId = requiredId(instance.ImageId, /^ami-[a-f0-9]{8,17}$/u, "observed AMI identity");
+  const volumes = launchVolumeMappings(instance);
+  const receipt: WorkerResourceReceipt = {
+    version: 1,
+    leaseId: params.leaseId,
+    identity: {
+      gatewayOwner: RECEIPT_OWNER,
+      provider: "aws",
+      custodyStage: params.boundary ? "launch-observed" : "cleanup-observed",
+      resourceId,
+      accountId,
+      region,
+      imageId,
+      launchVolumes: JSON.stringify(volumes),
+      ...(params.boundary
+        ? {
+            securityGroupId: params.boundary.groupId,
+            subnetId: params.boundary.subnetId,
+            vpcId: params.boundary.vpcId,
+            rulesDigest: params.boundary.rulesDigest,
+          }
+        : {}),
+    },
+  };
+  return { receipt, instance, volumes };
+}
+
 /** Core's held allocation authority binds this readback to the lease and owner epoch. */
 export async function qualifyGatewayAwsGuestResource(
   params: GatewayAwsAuthority & {
@@ -266,54 +329,15 @@ export async function qualifyGatewayAwsGuestResource(
   },
 ): Promise<WorkerResourceReceipt> {
   const resourceId = requiredId(params.resourceId, /^i-[a-f0-9]{8,17}$/u, "AWS instance identity");
-  // Released Crabbox applies its exact lease tag to instances and RunInstances
-  // volumes. Capture only those exact attached IDs, never a tag-wide volume scan.
-  const result = await awsJson(params, params.boundary.region, "ec2", "describe-instances", [
-    "--instance-ids",
-    resourceId,
-  ]);
-  let instance = onlyAwsRecord(
-    onlyAwsRecord(result.Reservations, "reservation").Instances,
-    "instance",
-  );
-  const leaseTags = Array.isArray(instance.Tags)
-    ? instance.Tags.filter((tag) => requireAwsRecord(tag, "instance tag").Key === "lease")
-    : [];
-  if (
-    instance.InstanceId !== resourceId ||
-    instance.ImageId !== params.boundary.imageId ||
-    leaseTags.length !== 1 ||
-    requireAwsRecord(leaseTags[0], "lease tag").Value !== params.leaseId
-  ) {
-    throw new WorkerProviderError(
-      "AWS instance identity does not match the exact Gateway allocation lease and AMI",
-    );
+  if (params.expected && params.expected.identity.custodyStage !== "launch-observed") {
+    throw new WorkerProviderError("Partial cleanup custody does not authorize guest access");
   }
-  const volumes = launchVolumeMappings(instance);
-  for (const volume of volumes) {
-    const observed = await awsJson(params, params.boundary.region, "ec2", "describe-volumes", [
-      "--volume-ids",
-      volume.volumeId,
-    ]);
-    assertOwnedLaunchVolume(observed.Volumes, volume, params.leaseId, resourceId, true);
-  }
-  const receipt: WorkerResourceReceipt = {
-    version: 1,
-    leaseId: params.leaseId,
-    identity: {
-      gatewayOwner: RECEIPT_OWNER,
-      provider: "aws",
-      resourceId,
-      accountId: params.boundary.accountId,
-      region: params.boundary.region,
-      securityGroupId: params.boundary.groupId,
-      subnetId: params.boundary.subnetId,
-      vpcId: params.boundary.vpcId,
-      rulesDigest: params.boundary.rulesDigest,
-      imageId: params.boundary.imageId,
-      launchVolumes: JSON.stringify(volumes),
-    },
-  };
+  const custody = await captureGatewayAwsGuestCustody({
+    ...params,
+    region: params.boundary.region,
+  });
+  const { receipt, volumes } = custody;
+  let instance = custody.instance;
   if (params.expected) {
     if (!isDeepStrictEqual(receipt, params.expected)) {
       throw new WorkerProviderError("Gateway-owned AWS guest resource receipt changed");
@@ -324,8 +348,20 @@ export async function qualifyGatewayAwsGuestResource(
         "AWS guest launch volumes require durable custody before qualification",
       );
     }
+    // Immutable partial identity is settled before ANY per-volume/network read.
+    // It never attests qualification; every guest access still performs live checks.
     await params.recordResourceReceipt(receipt);
     params.assertCurrent();
+  }
+  for (const volume of volumes) {
+    const observed = await awsJson(params, params.boundary.region, "ec2", "describe-volumes", [
+      "--volume-ids",
+      volume.volumeId,
+    ]);
+    assertOwnedLaunchVolume(observed.Volumes, volume, params.leaseId, resourceId, true);
+  }
+  if (instance.ImageId !== params.boundary.imageId) {
+    throw new WorkerProviderError("AWS guest observed AMI changed");
   }
   assertInstance(instance, resourceId, params.boundary);
   // Qualification failures after custody settlement retain exact disks for trusted
@@ -381,7 +417,11 @@ export async function deleteGatewayAwsGuestResource(
   params: GatewayAwsAuthority & { receipt: WorkerResourceReceipt; onCleanupAccepted?: () => void },
 ): Promise<void> {
   const receipt = params.receipt;
-  if (!isGatewayAwsGuestReceipt(receipt) || receipt.identity.provider !== "aws") {
+  if (
+    !isGatewayAwsGuestReceipt(receipt) ||
+    receipt.identity.provider !== "aws" ||
+    !["launch-observed", "cleanup-observed"].includes(receipt.identity.custodyStage ?? "")
+  ) {
     throw new WorkerProviderError("Gateway AWS cleanup receipt is unavailable");
   }
   const region = requiredId(receipt.identity.region, /^[a-z]{2}-[a-z]+-\d$/u, "cleanup region");

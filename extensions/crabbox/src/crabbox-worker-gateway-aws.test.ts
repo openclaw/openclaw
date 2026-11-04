@@ -697,3 +697,49 @@ it("keeps cleanup unresolved when deletion succeeded but the required absence ob
   hook = undefined;
   await expect(deleteGatewayAwsGuestResource({ ...authority(), receipt })).resolves.toBeUndefined();
 });
+
+it("settles partial identity before foreign-volume qualification but never permits deleting that disk", async () => {
+  const boundary = await prepareGatewayAwsGuestBoundary(config, authority());
+  const id = addDataVolume(false);
+  volumes.get(id)!.Tags = [{ Key: "lease", Value: "foreign-lease" }];
+  let receipt: import("openclaw/plugin-sdk/plugin-entry").WorkerResourceReceipt | undefined;
+  await expect(
+    qualifyGatewayAwsGuestResource({
+      ...authority(),
+      recordResourceReceipt: async (value) => {
+        receipt = structuredClone(value);
+      },
+      boundary,
+      leaseId: "cbx_gateway_fixture",
+      resourceId,
+      configureMetadata: true,
+    }),
+  ).rejects.toThrow("ownership");
+  if (!receipt) {
+    throw new Error("partial custody must precede foreign qualification");
+  }
+  expect(receipt.identity.custodyStage).toBe("launch-observed");
+  run.mockClear();
+  await expect(deleteGatewayAwsGuestResource({ ...authority(), receipt })).rejects.toThrow(
+    "ownership",
+  );
+  expect(
+    run.mock.calls.every(([argv]) => !["terminate-instances", "delete-volume"].includes(argv[2]!)),
+  ).toBe(true);
+});
+it("cleanup-observed partial custody cannot grant guest access or replace existing identity", async () => {
+  const receipt = await provision();
+  const boundary = await prepareGatewayAwsGuestBoundary(config, authority());
+  const record = vi.fn(async () => {});
+  await expect(
+    qualifyGatewayAwsGuestResource({
+      ...authority(),
+      recordResourceReceipt: record,
+      boundary,
+      leaseId: receipt.leaseId,
+      resourceId,
+      expected: { ...receipt, identity: { ...receipt.identity, custodyStage: "cleanup-observed" } },
+    }),
+  ).rejects.toThrow("does not authorize");
+  expect(record).not.toHaveBeenCalled();
+});

@@ -536,6 +536,8 @@ export type WorkerProvider = {
   inspect: (lease: {
     leaseId: string;
     profile: WorkerProfile;
+    /** Host-captured trust; retained through failed provisioning and cleanup. */
+    untrustedWorkload?: true;
     resourceReceipt?: WorkerResourceReceipt;
     retention?: WorkerRetentionPolicy;
     signal?: AbortSignal;
@@ -575,10 +577,14 @@ export type WorkerProvider = {
   destroy: (lease: {
     leaseId: string;
     profile: WorkerProfile;
+    /** Host-captured trust; retained through failed provisioning and cleanup. */
+    untrustedWorkload?: true;
     resourceReceipt?: WorkerResourceReceipt;
     retention?: WorkerRetentionPolicy;
     /** Recheck current authority after waits and immediately before effects. */
     assertCurrent?: () => void;
+    /** First-write immutable resource custody recovery under the current cleanup owner. */
+    recordResourceReceipt?: (receipt: WorkerResourceReceipt) => Promise<void>;
     /** Cancel commands, await their settlement, and reject while teardown remains unconfirmed. */
     signal?: AbortSignal;
     /**
