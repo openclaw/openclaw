@@ -151,11 +151,7 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
 export function renderWikiMarkdown(params: {
   frontmatter: Record<string, unknown>;
   body: string;
-  /**
-   * Current page text. When it carries mapping frontmatter, keys the caller left
-   * alone keep the source the page was written with instead of being re-serialized
-   * from parsed values; only changed keys are rewritten.
-   */
+  /** Current page text; ordinary mappings preserve untouched source, other graphs render values. */
   original?: string;
 }): string {
   const frontmatter = renderWikiFrontmatter(params.frontmatter, params.original);

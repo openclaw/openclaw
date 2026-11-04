@@ -2,16 +2,11 @@ import { isDeepStrictEqual } from "node:util";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import YAML, { type Document, type Scalar, type ScalarTag } from "yaml";
 
-/**
- * The frontmatter half of {@link renderWikiMarkdown}: a page that already carries readable
- * mapping frontmatter is patched key by key so untouched keys keep the source they were
- * written with, and only pages this patching cannot represent fall back to value rendering.
- */
-
 export const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const NUMERIC_FRONTMATTER_TAGS = new Set(["tag:yaml.org,2002:int", "tag:yaml.org,2002:float"]);
 type FrontmatterNumericSource = { value: number; source: string };
 
+/** Preserve untouched source in ordinary mappings; unsupported graphs retain value rendering. */
 export function renderWikiFrontmatter(
   frontmatter: Record<string, unknown>,
   original?: string,
@@ -88,14 +83,8 @@ function readFrontmatterDocument(source: string): Document.Parsed | null {
   return document;
 }
 
-/**
- * Two source-level contracts this patcher cannot re-derive, so a page carrying either is not
- * patched and renders from values — which is what the published CLI writes for that page today.
- * `&ref` ties a node to a name and `*ref` reads through it, so replacing or removing the node a
- * write targets can dangle an untouched reader. An explicit tag survives the same way in the
- * other direction: yaml reuses the old node for a new scalar value, so the tag's schema then
- * serializes that value and `!!bool true` set to `review` re-emits `true`.
- */
+// Anchors and aliases can dangle when their owners change. Explicit tags can coerce replacement
+// values (`!!bool` turns "review" back into true), so these graphs retain value rendering.
 function holdsAnAnchorOrExplicitTag(node: unknown): boolean {
   if (YAML.isAlias(node)) {
     return true;
