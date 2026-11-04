@@ -205,17 +205,13 @@ describe("cron agent setup watchdog", () => {
     vi.useRealTimers();
   });
 
-  function makeWatchdog(
-    timeoutMultiplier = 3,
-    executionKind: "agent" | "command" = "agent",
-    jobTimeoutMs = CRON_AGENT_SETUP_WATCHDOG_MS * timeoutMultiplier,
-  ) {
+  function makeWatchdog(timeoutMultiplier = 3, executionKind: "agent" | "command" = "agent") {
     vi.useFakeTimers();
     const triggerTimeout = vi.fn();
     const watchdog = createCronAgentWatchdog({
       executionKind,
       deferUntilRunner: true,
-      jobTimeoutMs,
+      jobTimeoutMs: CRON_AGENT_SETUP_WATCHDOG_MS * timeoutMultiplier,
       triggerTimeout,
     });
     const jobId = "watchdog-job";
@@ -231,12 +227,7 @@ describe("cron agent setup watchdog", () => {
     };
     watchdog.start();
     dispose = watchdog.dispose;
-    const fallback = () => {
-      phase("model_call_started");
-      runner(true);
-      phase("runtime_plugins");
-    };
-    return { triggerTimeout, watchdog, runner, phase, fallback, advance };
+    return { triggerTimeout, watchdog, runner, phase, advance };
   }
 
   it.each(["setup", "execution"] as const)(
@@ -253,18 +244,28 @@ describe("cron agent setup watchdog", () => {
         );
       } else {
         expect(triggerTimeout).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS * 2);
+        // A wall-clock correction must not change the paused execution budget.
+        vi.setSystemTime(Date.now() + 60 * 60_000);
+        watchdog.noteLaneWait();
+        watchdog.noteLaneAdmitted();
+        await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS * 2 - 1);
+        expect(triggerTimeout).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
         expect(triggerTimeout).toHaveBeenCalledExactlyOnceWith("cron: job execution timed out");
       }
       expect(isCronTimeoutErrorText(triggerTimeout.mock.calls[0]?.[0])).toBe(true);
     },
   );
 
-  it("keeps the pre-execution watchdog armed before initial progress", async () => {
+  it.each([false, true])("keeps runner guard fresh (fallback=%s)", async (isFallback) => {
     const { runner, advance } = makeWatchdog();
     runner();
+    if (isFallback) {
+      await advance(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
+      runner(true);
+    }
     await advance(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
-    await advance(1, { phase: "runner_entered" });
+    await advance(1, { phase: "runner_entered", isFallback });
   });
 
   it("starts a fresh setup deadline after lane admission", async () => {
@@ -281,34 +282,14 @@ describe("cron agent setup watchdog", () => {
   });
 
   it("keeps the fallback watchdog armed across later setup progress", async () => {
-    const { runner, phase, fallback, advance } = makeWatchdog();
+    const { runner, phase, advance } = makeWatchdog();
     runner();
-    fallback();
+    phase("model_call_started");
+    runner(true);
+    phase("runtime_plugins");
     await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS / 2);
     phase("model_resolution");
     phase("auth");
     await advance(CRON_AGENT_SETUP_WATCHDOG_MS / 2, { phase: "auth" });
-  });
-
-  it("gives a fallback a fresh guard when the initial runner made no progress", async () => {
-    const { runner, advance } = makeWatchdog();
-    runner();
-    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
-    runner(true);
-    await advance(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
-    await advance(1, { phase: "runner_entered", isFallback: true });
-  });
-
-  it("keeps the lane-wait budget on the monotonic clock", async () => {
-    const { triggerTimeout, watchdog } = makeWatchdog(1, "agent", 400);
-    await vi.advanceTimersByTimeAsync(30);
-    // The wall clock is corrected; the monotonic clock that setTimeout uses is not.
-    vi.setSystemTime(Date.now() + 60 * 60_000);
-    watchdog.noteLaneWait();
-    watchdog.noteLaneAdmitted();
-    await vi.advanceTimersByTimeAsync(369);
-    expect(triggerTimeout).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(triggerTimeout).toHaveBeenCalledTimes(1);
   });
 });
