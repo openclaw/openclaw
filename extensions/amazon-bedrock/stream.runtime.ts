@@ -562,6 +562,7 @@ export function createConverseStreamFn(transport: ConverseProxyTransportFactory)
       throw new Error("Converse transport requires the bedrock-converse-stream API");
     }
     return streamSimpleBedrockWithTransport(
+      // SAFETY: The API check above narrows the generic model to the native Converse model contract.
       model as Model<"bedrock-converse-stream">,
       context,
       options,
