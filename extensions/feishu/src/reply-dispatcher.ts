@@ -900,6 +900,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               const fallbackPartial = isChannelPartialDeliveryError(fallbackError)
                 ? fallbackError.deliveryResult
                 : undefined;
+              const covered = completion.previewCovered;
+              const sent = fallbackPartial?.content;
+              const content = completion.result.content;
+              if (
+                fallbackPartial?.visibleReplySent &&
+                sent &&
+                content?.startsWith(sent) &&
+                covered &&
+                covered.from <= closedPreviewText.length &&
+                covered.text.startsWith(closedPreviewText)
+              ) {
+                const accepted = covered.text.slice(0, -content.length) + sent;
+                if (accepted.length > closedPreviewText.length) {
+                  setClosedPreview(accepted, covered.epoch);
+                }
+              }
               const fallbackCause =
                 fallbackPartial && fallbackError instanceof Error
                   ? (fallbackError.cause ?? fallbackError)
