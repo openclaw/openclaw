@@ -172,22 +172,37 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         self.layout(webView, size: CGSize(width: job.request.width, height: 1))
         job.phase = .rendering
         self.trace("javascript-started", job: job)
+        #if DEBUG
+        // Return only an entry timestamp; keep the render promise's existing lifetime.
+        let functionBody = if ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode") {
+            "const enteredAtMs = Date.now(); void window.renderMermaid(job); return enteredAtMs;"
+        } else {
+            "void window.renderMermaid(job);"
+        }
+        #else
+        let functionBody = "void window.renderMermaid(job);"
+        #endif
         webView.callAsyncJavaScript(
-            "void window.renderMermaid(job);",
+            functionBody,
             arguments: ["job": job.request.arguments(id: job.id)],
             in: nil,
             in: .page)
         { [weak self, weak webView, weak job] result in
-            guard case let .failure(error) = result,
-                  let self, let webView, let job, self.isCurrent(job, webView: webView)
+            guard let self, let webView, let job, self.isCurrent(job, webView: webView)
             else { return }
-            self.trace("javascript-failed", job: job, error: error)
-            self.retireDocument()
-            self.finish(job, result: .failure(.unavailable))
+            switch result {
+            case let .success(value):
+                self.trace("javascript-returned", job: job, javascriptEnteredAtMs: value as? Double)
+            case let .failure(error):
+                self.trace("javascript-failed", job: job, error: error)
+                self.retireDocument()
+                self.finish(job, result: .failure(.unavailable))
+            }
         }
     }
 
     private func receive(_ message: WKScriptMessage) {
+        if message.webView === self.webView { self.trace("bridge-received") }
         // WebKit exposes handlers to all frames. Accept results only from the
         // exact current top-level document; the opaque diagram frame has no authority.
         guard message.name == Self.bridgeName, message.world == .page,
@@ -196,9 +211,13 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
               let webView = self.webView, message.webView === webView,
               let job = self.active, job.phase == .rendering,
               self.isCurrent(job, webView: webView), let body = message.body as? String
-        else { return }
+        else {
+            if message.webView === self.webView { self.trace("bridge-context-rejected") }
+            return
+        }
         do {
             guard let response = try ChatMermaidResponse(body: body, expectedID: job.id, request: job.request) else {
+                self.trace("bridge-job-rejected", job: job)
                 return
             }
             job.phase = .snapshot
@@ -376,7 +395,12 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
     }
 
     /// Temporary incident trace for Debug screenshot fixtures; never retain diagram content or error descriptions.
-    private func trace(_ event: String, job: Job? = nil, error: (any Error)? = nil) {
+    private func trace(
+        _ event: String,
+        job: Job? = nil,
+        error: (any Error)? = nil,
+        javascriptEnteredAtMs: Double? = nil)
+    {
         #if DEBUG
         guard ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode"),
               let job = job ?? self.active
@@ -391,6 +415,7 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
             "queued": self.queued.count, "subscribers": job.completions.count,
             "documentReady": self.documentReady,
         ]
+        if let javascriptEnteredAtMs { record["javascriptEnteredAtMs"] = javascriptEnteredAtMs }
         if let error = error as NSError? {
             record["errorCode"] = error.code
             switch error.domain {
