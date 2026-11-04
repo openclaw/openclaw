@@ -54,8 +54,8 @@ struct ChatTalkActivityStrip: View {
                     }
                     if let toggleMicrophone = self.control.toggleMicrophone {
                         Button(action: toggleMicrophone) {
-                            Image(systemName: self.control.isMicrophoneMuted ? "mic.slash.fill" : "mic.fill")
-                                .font(.system(size: 18, weight: .semibold))
+                            Image(systemName: "mic.slash")
+                                .font(.system(size: OpenClawChatTypography.scaled(17), weight: .medium))
                                 .foregroundStyle(self.control.isMicrophoneMuted ? Color.orange : Color.secondary)
                                 .frame(minWidth: 44, minHeight: 44)
                                 .contentShape(Rectangle())
@@ -93,7 +93,7 @@ struct ChatTalkActivityStrip: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, self.control.toggleMicrophone == nil || self.isExpanded ? 7 : 2)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(OpenClawChatTheme.subtleCard))
@@ -105,13 +105,22 @@ struct ChatTalkActivityStrip: View {
         }
     }
 
+    private var statusText: String {
+        if self.control.isMicrophoneMuted,
+           self.control.statusText == String(localized: "Listening (Realtime)")
+        {
+            return String(localized: "Connected (Realtime)")
+        }
+        return self.control.statusText
+    }
+
     private func header(model: ChatTalkTranscriptStripModel, showsDisclosure: Bool) -> some View {
         HStack(spacing: 7) {
             Circle()
                 .fill(OpenClawChatTheme.accent)
                 .frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 2) {
-                Text(self.control.statusText)
+                Text(self.statusText)
                     .font(OpenClawChatTypography.captionSemiBold)
                     .lineLimit(1)
                 if self.control.isMicrophoneMuted {
