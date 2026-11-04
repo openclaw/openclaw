@@ -244,6 +244,7 @@ extension DashboardManager {
                         allowTOFU: false,
                         storeKey: storeKey),
                     allowsTrustedPinReplacement: true),
+                enablesPrimaryPersonalIdentity: endpoint.enablesPrimaryPersonalIdentity,
                 routeAuthority: endpoint.routeAuthority,
                 deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
                 revision: endpoint.revision,
