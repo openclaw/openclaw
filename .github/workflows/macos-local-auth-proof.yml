@@ -66,6 +66,8 @@ jobs:
           test -z "$(git status --porcelain)"
       - name: Exact-head Core auth regressions and consumer tests
         working-directory: candidate
+        env:
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
         run: |
           set -euo pipefail
           # Cold worker compilation took 116s inside a 120s credential test on run 41909368162.
