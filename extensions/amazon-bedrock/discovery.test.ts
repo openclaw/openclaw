@@ -393,6 +393,16 @@ it("uses the plugin default when both region env overrides are blank", async () 
   expectModel(provider?.models ?? [], "xai.grok-4.6", { contextWindow: 500_000, maxTokens: 4096 });
 });
 
+it("uses the documented Kimi K2.5 context window for base and prefixed profile ids", async () => {
+  const models = await discoverFixture(
+    [foundation("moonshotai.kimi-k2.5")],
+    [profile("us.moonshotai.kimi-k2.5", ["moonshotai.kimi-k2.5"])],
+    { region: "us-east-1" },
+  );
+  expectModel(models, "moonshotai.kimi-k2.5", { contextWindow: 256_000, maxTokens: 4096 });
+  expectModel(models, "us.moonshotai.kimi-k2.5", { contextWindow: 256_000, maxTokens: 4096 });
+});
+
 // Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix
 it("resolves au. and apac. prefixes for regional inference profiles", async () => {
   const models = await discoverFixture(
