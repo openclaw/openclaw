@@ -2,7 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { isExecApprovalFollowupSessionRebound } from "../../agents/bash-tools.exec-approval-followup-state.js";
-import { resolveExistingSessionKeyForRequest } from "../../agents/command/session.js";
+import {
+  resolveExistingSessionKeyForRequest,
+  resolveSessionKeyForRequestCore,
+} from "../../agents/command/session.js";
 import { resolveExplicitAgentSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -91,13 +94,17 @@ export async function prepareAgentRequestRouting(params: {
   if (requestedSessionId && !requestedSessionKeyRaw) {
     try {
       params.reserveDedupe(undefined, agentId);
-      sessionIdTarget = await resolveExistingSessionKeyForRequest({
+      const resolveSessionId = params.request.createSessionIfMissing
+        ? resolveSessionKeyForRequestCore
+        : resolveExistingSessionKeyForRequest;
+      sessionIdTarget = await resolveSessionId({
         cfg: params.cfg,
         sessionId: requestedSessionId,
         agentId,
       });
       agentId = sessionIdTarget.agentId ?? agentId;
     } catch (error) {
+      params.assertCurrent?.();
       params.clearDedupe();
       return rejectInvalidRequest(formatForLog(error));
     }
@@ -124,9 +131,14 @@ export async function prepareAgentRequestRouting(params: {
         threadId: params.request.threadId,
       });
     } catch (error) {
+      params.assertCurrent?.();
       params.clearDedupe();
       return rejectInvalidRequest(formatForLog(error));
     }
+  }
+  // A route result cannot revive a request canceled while its provider was pending.
+  if (sessionIdTarget || explicitRecipient) {
+    params.assertCurrent?.();
   }
   if (explicitRecipientSession?.error) {
     params.clearDedupe();

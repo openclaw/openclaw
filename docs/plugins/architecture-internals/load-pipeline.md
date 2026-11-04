@@ -27,6 +27,11 @@ At startup, OpenClaw does roughly this:
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
+The asynchronous host loader prepares up to four independent external plugin source
+captures at a time. Module evaluation, registration, and diagnostics remain in
+manifest order; readiness waits for the complete registry. Each capture keeps its
+existing artifact and worker owner. Synchronous CLI loads acquire sources inline.
+
 Native plugin imports evaluate each requested SDK entry synchronously before
 linking the plugin's asynchronous module graph. This lets CommonJS bundles
 `require()` the same SDK entry during concurrent channel startup without seeing
@@ -56,6 +61,10 @@ one is known (including ids resolved from a manifest inside an
 otherwise-rejected directory), so config referencing that id sees a blocked
 plugin tied to a path-safety warning instead of an unrelated "unknown plugin"
 error.
+
+When every candidate is rejected, installation and capability inspection surface
+the discovery warning, including the unsafe path, so you can correct permissions
+or ownership before retrying.
 
 ### Manifest-first behavior
 
@@ -90,23 +99,9 @@ loading before broader registry materialization:
   imports; plugins without startup metadata load only through narrower
   activation triggers
 
-The activation planner exposes both an ids-only API for existing callers and a
-plan API for diagnostics. Plan entries report why a plugin was selected,
-separating explicit `activation.*` hints from manifest-ownership fallback:
-
-| Reason (from `activation.*` hints)   | Reason (from manifest ownership)                                                             |
-| ------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `activation-agent-harness-hint`      | —                                                                                            |
-| `activation-capability-hint`         | —                                                                                            |
-| `activation-channel-hint`            | `manifest-channel-owner` (`channels`)                                                        |
-| `activation-command-hint`            | `manifest-cli-command-owner` (`cliCommands`), `manifest-command-alias` (`commandAliases`)    |
-| `activation-provider-hint`           | `manifest-provider-owner` (`providers`), `manifest-setup-provider-owner` (`setup.providers`) |
-| `activation-route-hint`              | —                                                                                            |
-| — (hook trigger has no hint variant) | `manifest-hook-owner` (`hooks`), `manifest-tool-contract` (`contracts.tools`)                |
-
-That reason split is the compatibility boundary: existing plugin metadata
-keeps working, while new code can detect broad hints or fallback behavior
-without changing runtime loading semantics.
+The activation planner returns unique, sorted plugin ids selected by explicit
+`activation.*` hints or existing manifest ownership metadata. Both paths respect
+plugin policy and the caller's requested scope without importing runtime modules.
 
 Request-time runtime preloads that ask for the broad `all` scope still derive
 an explicit effective plugin id set from config, startup planning, configured
@@ -143,7 +138,9 @@ or an explicit manifest registry. Plugin scopes are in-memory projections;
 ordinary lookups, account changes, and run workspace changes do not trigger
 filesystem scanning, `stat`/`realpath` freshness polling, manifest rereads, or
 hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
-generation. Account health and authentication state are not part of the
+generation. Gateway runtime work after a lifecycle commit, including config
+reload listeners and owners started by the reload, reads the published
+generation instead. Account health and authentication state are not part of the
 immutable package inventory.
 
 Gateway model admission uses the configured agent's workspace and plugin inventory,
@@ -197,6 +194,13 @@ registration. Both keys share the existing bounded cache and are removed when
 the registry retires or the load cache is cleared.
 Validation, full registration, and CLI metadata loads have separate cache entries;
 validating a module cannot satisfy a later request for its registrations.
+
+An uncached inspection releases its execution authority immediately, while borrowed
+registrations keep physical resources alive until the last claim releases them.
+After registration cleanup, instance retirement, work drains, and donor releases
+finish, the inspection drops its retirement callback, registry, and cleanup captures.
+Keeping a released handle does not keep those completed discovery graphs alive.
+Pending disposal and failures that retain resource custody keep their references.
 
 Outbound channel bootstrap remembers successful and unavailable senders within
 the selected plugin cache and metadata scope. Inventory replacement or metadata

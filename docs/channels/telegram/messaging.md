@@ -31,6 +31,12 @@ again. Version-1 cache entries, retained group history, and session transcripts
 remain supported. Transcript deduplication uses recorded message identities;
 markerless assistant replies may appear in both reply context and the transcript.
 
+When Telegram context is restored from the session transcript, confirmed final
+replies sent with the `message` tool are included alongside the user requests they
+answered. An interrupted tool result does not hide a reply whose final delivery
+was already recorded. Progress updates and ordinary delivery bookkeeping are
+excluded from this restored context.
+
 <Note>
   **Upgrade note: Telegram's default preview changed in 2026.8.1.** With `channels.telegram.streaming` unset, Telegram keeps one editable status draft during the turn (the agent's current status plus its tool lines) and sends the final answer as a normal message. It previously streamed the answer text itself into the preview. No config becomes invalid and no `doctor --fix` is needed; to keep the previous behavior, set:
 
@@ -81,6 +87,8 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
     Tool-progress lines are the short status updates shown while tools run (command execution, file reads, planning updates, patch summaries, Codex preamble/commentary in app-server mode). `partial` and `block` previews show them by default; the `progress` draft shows them only with `streaming.progress.toolProgress: true`. Compaction status follows the same settings and appears as soon as compaction starts, including before the first model output.
 
     In default `progress` mode, `/verbose on` sends separate tool summaries and `/verbose full` also sends completed tool output. An explicit `toolProgress: false` wins over `/verbose`; `streaming.mode: "off"` also suppresses these diagnostics.
+
+    Native questions keep their buttons and remain visible when a progress update is retired at the same time. Progress cleanup and question delivery share the draft's ordering, so cleanup cannot discard a pending question or delete an accepted one.
 
     Keep answer-preview edits but hide tool-progress lines:
 
@@ -258,6 +266,7 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
     - Inbound albums in one chat or topic reach the agent in arrival order, and an album waiting behind an earlier one keeps its delivery claim alive while the earlier album is still being processed.
     - When an inbound attachment cannot be downloaded and the message proceeds to the agent, its body includes a `[media unavailable: ...]` notice. Oversize notices include the effective size limit; partial albums include the failed and total attachment counts. This also applies to admitted channel posts, even when their separate chat warning is suppressed.
     - automatic group context uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables the automatic window, not retained history.
+    - Replies to downloaded media keep the saved attachment kind and MIME type. An image sent as a file reaches the agent as an image; genuine documents stay documents. Selected quote text is preserved.
     - reply/quote/forward supplemental context normalizes into one selected conversation context window when the gateway has observed the parent messages; the observed-message cache lives in OpenClaw SQLite plugin state. To import pre-June cache sidecars, [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions) and run its Doctor first. Telegram only includes one shallow `reply_to_message` per update, so chains older than the cache are limited to that payload.
     - Telegram allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
     - DM history: `channels.telegram.dmHistoryLimit`, `channels.telegram.dms["<user_id>"].historyLimit`. Automatic observed-DM context defaults to 10 messages and is capped at 200; `0` disables that extra context, and the JSON integer maximum selects the default.

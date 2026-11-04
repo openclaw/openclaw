@@ -49,17 +49,6 @@ function parseNodeParams(paramsJSON?: string | null): unknown {
   }
 }
 
-function fullConfigCatalogEnabled(config: unknown): boolean {
-  if (!isRecord(config) || !isRecord(config.plugins) || !isRecord(config.plugins.entries)) {
-    return true;
-  }
-  const entry = config.plugins.entries.opencode;
-  if (!isRecord(entry) || !isRecord(entry.config) || !isRecord(entry.config.sessionCatalog)) {
-    return true;
-  }
-  return entry.config.sessionCatalog.enabled !== false;
-}
-
 function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean {
   return (
     !isRecord(pluginConfig) ||
@@ -83,16 +72,13 @@ function assertOpenCodeLocalAccess(hostId: string, allowProcessHomeFallback?: bo
 }
 
 function currentOpenCodeCatalogConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
+  return api.runtime.config.current() as OpenClawConfig;
 }
 
-async function loadContinuableOpenCodeSession(
-  api: OpenClawPluginApi,
-  threadId: string,
-): Promise<SessionCatalogSession> {
+async function loadContinuableOpenCodeSession(threadId: string): Promise<SessionCatalogSession> {
   const page = await listLocalOpenCodeSessionPage(
     { searchTerm: threadId, limit: MAX_PAGE_LIMIT },
-    { configIdentity: currentOpenCodeCatalogConfig(api), forceRefresh: true },
+    { forceRefresh: true },
   ).catch(() => undefined);
   const session = page?.sessions.find((candidate) => candidate.threadId === threadId);
   if (!session) {
@@ -101,9 +87,9 @@ async function loadContinuableOpenCodeSession(
   return session;
 }
 
-function createOpenCodeNodeHostBindings(api: OpenClawPluginApi) {
-  const available = ({ config, env }: { config: unknown; env: NodeJS.ProcessEnv }) =>
-    fullConfigCatalogEnabled(config) &&
+function createOpenCodeNodeHostBindings() {
+  const available = ({ config, env }: { config: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
+    isOpenCodeSessionCatalogEnabled(config.plugins?.entries?.opencode?.config) &&
     Boolean(
       resolveNodeHostExecutable("opencode", {
         env: { ...env, PATHEXT: env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM" },
@@ -124,10 +110,7 @@ function createOpenCodeNodeHostBindings(api: OpenClawPluginApi) {
     listAvailable: available,
     terminalAvailable: available,
     parseParams: parseNodeParams,
-    list: (params) =>
-      listLocalOpenCodeSessionPage(params, {
-        configIdentity: currentOpenCodeCatalogConfig(api),
-      }),
+    list: listLocalOpenCodeSessionPage,
     read: readLocalOpenCodeTranscriptPage,
     requireSession: requireLocalOpenCodeSession,
     terminalIoRequiredMessage: "OpenCode terminal command requires duplex transport",
@@ -165,14 +148,11 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
             strategy: "fallback",
           }) !== undefined,
         list: (query) =>
-          listLocalOpenCodeSessionPage(
-            {
-              limit: query.limitPerHost,
-              ...(query.search ? { searchTerm: query.search } : {}),
-              cursor: query.cursors?.[LOCAL_HOST_ID],
-            },
-            { configIdentity: currentOpenCodeCatalogConfig(api) },
-          ),
+          listLocalOpenCodeSessionPage({
+            limit: query.limitPerHost,
+            ...(query.search ? { searchTerm: query.search } : {}),
+            cursor: query.cursors?.[LOCAL_HOST_ID],
+          }),
         read: (request) =>
           readLocalOpenCodeTranscriptPage({
             threadId: request.threadId,
@@ -229,7 +209,7 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
             agentId: OPENCODE_ACP_AGENT_ID,
           }),
         listAdopted: (agentId, sessionEntries) => adoption.listAdopted(agentId, sessionEntries),
-        loadSession: (threadId) => loadContinuableOpenCodeSession(api, threadId),
+        loadSession: loadContinuableOpenCodeSession,
         validateSession: () => undefined,
         create: (params) => adoption.create(params),
         complete: (continued, threadId) =>
@@ -262,7 +242,7 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
     supportsProcessHomeIsolation: true,
     ...provider,
   });
-  const nodeHost = createOpenCodeNodeHostBindings(api);
+  const nodeHost = createOpenCodeNodeHostBindings();
   for (const command of nodeHost.commands) {
     api.registerNodeHostCommand(command);
   }

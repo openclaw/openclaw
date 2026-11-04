@@ -5,7 +5,6 @@ import {
   createStructuredOutboundPayloadPlan,
   createMessageReceiptFromOutboundResults,
   projectOutboundPayloadPlanForDelivery,
-  type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayloadDelivery } from "openclaw/plugin-sdk/interactive-runtime";
@@ -205,9 +204,6 @@ function createReplyDeliverer(
         if (config.thread?.id !== undefined) {
           await reportAcceptedPart(part);
         }
-        config.runtime.log?.(
-          `telegram text delivery ok chat=${config.chatId} message=${messageId}`,
-        );
         await recordMessageId(messageId);
         await replyProgress.promptContext?.accept({ messageId, text: plainText });
       },
@@ -547,9 +543,7 @@ type DeliverRepliesParams = {
   onMediaAccepted?: (mediaUrls: readonly string[]) => void;
 };
 
-export async function deliverReplies(
-  params: DeliverRepliesParams,
-): Promise<{ delivered: boolean; receipt?: MessageReceipt }> {
+export async function deliverReplies(params: DeliverRepliesParams) {
   return deliverReplyPlan(params, (replies) =>
     createOutboundPayloadPlan(replies, {
       cfg: params.cfg,
@@ -559,16 +553,14 @@ export async function deliverReplies(
   );
 }
 
-export async function deliverStructuredReplies(
-  params: DeliverRepliesParams,
-): Promise<{ delivered: boolean; receipt?: MessageReceipt }> {
+export async function deliverStructuredReplies(params: DeliverRepliesParams) {
   return deliverReplyPlan(params, createStructuredOutboundPayloadPlan);
 }
 
 async function deliverReplyPlan(
   params: DeliverRepliesParams,
   createPlan: (replies: ReplyPayload[]) => ReturnType<typeof createOutboundPayloadPlan>,
-): Promise<{ delivered: boolean; receipt?: MessageReceipt }> {
+) {
   const progress: DeliveryProgress = {
     hasReplied: false,
     ...(params.promptContextSequence ? { promptContext: params.promptContextSequence } : {}),

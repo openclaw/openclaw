@@ -1,3 +1,4 @@
+import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
@@ -9,11 +10,7 @@ import type { AuthProfileStore, OAuthCredential, RuntimeAuthProfileStore } from 
 
 export { hasOAuthIdentity } from "./oauth-identity.js";
 
-export type RuntimeExternalOAuthProfile = {
-  profileId: string;
-  credential: OAuthCredential;
-  persistence?: "runtime-only" | "persisted";
-};
+export type RuntimeExternalOAuthProfile = ProviderExternalAuthProfile;
 
 export function areOAuthCredentialsEquivalent(
   a: OAuthCredential | undefined,

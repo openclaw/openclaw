@@ -30,6 +30,7 @@ import type { TranscriptSummaryWriteGuard } from "./store-types.js";
 
 type TranscriptSessionValues = Pick<
   MeetingTranscriptSessionRow,
+  | "started_at_ms"
   | "selector"
   | "export_key"
   | "session_slug"
@@ -82,8 +83,9 @@ export function writeMeetingTranscriptSessionInDatabase(
     }
     sessionValues.metadata_json = metadata ? JSON.stringify(metadata) : null;
   }
+  const { started_at_ms, ...mutableValues } = sessionValues;
   const values = {
-    ...sessionValues,
+    ...mutableValues,
     ...deriveMeetingTranscriptSessionColumns(
       sessionValues.source_json,
       sessionValues.metadata_json,
@@ -96,6 +98,7 @@ export function writeMeetingTranscriptSessionInDatabase(
       .values({
         session_id: session.sessionId,
         started_at: session.startedAt,
+        started_at_ms,
         ...values,
         export_manifest_json: "{}",
         export_pending_json: "[]",

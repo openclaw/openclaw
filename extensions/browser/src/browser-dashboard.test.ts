@@ -27,10 +27,8 @@ const browser = vi.hoisted(() => ({
   ownership: vi.fn(),
   closeOwned: vi.fn(),
 }));
-vi.mock("./browser/client.js", () => ({
-  browserOpenTab: browser.open,
-  browserTabs: browser.tabs,
-}));
+// mock-isolation: Drive dashboard lifetime through synthetic tabs without opening a browser.
+vi.mock("./browser/client.js", () => ({ browserOpenTab: browser.open, browserTabs: browser.tabs }));
 vi.mock("./browser/cdp.helpers.js", () => ({
   resolveCdpTabOwnership: browser.ownership,
   closeTrackedCdpTarget: browser.closeOwned,
@@ -70,9 +68,20 @@ import {
 
 const sessionKey = "agent:main:browser-dashboard-proof";
 const request = { sessionKey, agentId: "main", name: "service" };
+const changedEvent = [
+  "dashboard_changed",
+  { sessionKey, name: "service", instanceId: "instance-one" },
+  { scope: "operator.admin" },
+];
 
 describe("Browser dashboard lifetime", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
+
+  const boardSnapshot = () => structuredClone({ sessionKey, widgets: fixture.widgets });
+
+  function failClose(reason: string) {
+    browser.closeOwned.mockResolvedValueOnce({ status: "unavailable", reason });
+  }
 
   it("retains cold activity through dashboard Stop and retires it after final deletion", async () => {
     await requestBrowserDashboard(request);
@@ -168,12 +177,10 @@ describe("Browser dashboard lifetime", () => {
     const error = new Error("Resume cancelled");
     browser.open.mockImplementationOnce(async () => {
       const tab = fixture.openedTab();
-      fixture.readBoard.mockImplementationOnce(async () =>
-        structuredClone({ sessionKey, widgets: fixture.widgets }),
-      );
+      fixture.readBoard.mockImplementationOnce(async () => boardSnapshot());
       fixture.readBoard.mockImplementationOnce(async () => {
         controller.abort(error);
-        return structuredClone({ sessionKey, widgets: fixture.widgets });
+        return boardSnapshot();
       });
       return tab;
     });
@@ -241,10 +248,7 @@ describe("Browser dashboard lifetime", () => {
         await requestBrowserDashboard(request);
       }
       if (state === "stopping") {
-        browser.closeOwned.mockResolvedValueOnce({
-          status: "unavailable",
-          reason: "browser-identity-lookup-failed",
-        });
+        failClose("browser-identity-lookup-failed");
         await expect(stopBrowserDashboard(request)).rejects.toThrow(/paused/);
       } else {
         await stopBrowserDashboard(request);
@@ -296,7 +300,7 @@ describe("Browser dashboard lifetime", () => {
     const reading = createDeferred<void>();
     const finish = createDeferred<void>();
     fixture.readBoard.mockImplementationOnce(async () => {
-      const snapshot = structuredClone({ sessionKey, widgets: fixture.widgets });
+      const snapshot = boardSnapshot();
       reading.resolve();
       await finish.promise;
       return snapshot;
@@ -500,10 +504,7 @@ describe("Browser dashboard lifetime", () => {
       fixture.widgets = [];
       return tab;
     });
-    browser.closeOwned.mockResolvedValueOnce({
-      status: "unavailable",
-      reason: "target-close-failed",
-    });
+    failClose("target-close-failed");
     await expect(requestBrowserDashboard(request)).rejects.toThrow(
       /close its newly opened tab manually/,
     );
@@ -524,10 +525,7 @@ describe("Browser dashboard lifetime", () => {
       .spyOn(Date, "now")
       .mockReturnValue(Date.now() + BROWSER_TAB_UNREACHABLE_RETIRE_MS * 2);
     try {
-      browser.closeOwned.mockResolvedValueOnce({
-        status: "unavailable",
-        reason: "target-close-failed",
-      });
+      failClose("target-close-failed");
       fixture.widgets = [];
       await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(0);
       expect(fixture.tabs.map((tab) => tab.targetId)).toEqual(["target-1"]);
@@ -637,29 +635,14 @@ describe("Browser dashboard lifetime", () => {
     await requestBrowserDashboard(request);
     expect(await stopBrowserDashboard(request)).toMatchObject({ paused: true, stopping: false });
     await requestBrowserDashboard({ ...request, resume: true });
-    expect(emit.mock.calls).toEqual(
-      Array.from({ length: 4 }, () => [
-        "dashboard_changed",
-        { sessionKey, name: "service", instanceId: "instance-one" },
-        { scope: "operator.admin" },
-      ]),
-    );
-    browser.closeOwned.mockResolvedValueOnce({
-      status: "unavailable",
-      reason: "target-close-failed",
-    });
+    expect(emit.mock.calls).toEqual(Array.from({ length: 4 }, () => changedEvent));
+    failClose("target-close-failed");
     await expect(stopBrowserDashboard(request)).rejects.toThrow(/could not close/);
     expect(await inspectBrowserDashboard(request)).toMatchObject({ paused: true, stopping: true });
     emit.mockClear();
     await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(1);
     expect(await inspectBrowserDashboard(request)).toMatchObject({ paused: true, stopping: false });
-    expect(emit.mock.calls).toEqual([
-      [
-        "dashboard_changed",
-        { sessionKey, name: "service", instanceId: "instance-one" },
-        { scope: "operator.admin" },
-      ],
-    ]);
+    expect(emit.mock.calls).toEqual([changedEvent]);
     await requestBrowserDashboard({ ...request, resume: true });
     const started = createDeferred<void>();
     const finish = createDeferred<void>();

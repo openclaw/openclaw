@@ -188,29 +188,23 @@ export class ReefTransportClient {
     try {
       result = await this.signed("POST", "/v1/friends/respond", request, signal);
     } catch (error) {
-      if (
-        error instanceof ReefRelayError &&
-        error.status === 400 &&
-        error.code === "invalid_request"
-      ) {
-        throw new ReefProtocolCompatibilityError(
-          400,
-          error.code,
-          "reef-relay",
-          "The Reef relay is likely incompatible or outdated. Update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.",
-        );
-      }
-      if (
-        error instanceof ReefRelayError &&
-        error.status === 409 &&
-        error.code === "client_upgrade_required"
-      ) {
-        throw new ReefProtocolCompatibilityError(
-          409,
-          error.code,
-          "openclaw-client",
-          "OpenClaw is outdated for this Reef relay. Update OpenClaw, then approve the fresh pairing challenge again.",
-        );
+      if (error instanceof ReefRelayError) {
+        if (error.status === 400 && error.code === "invalid_request") {
+          throw new ReefProtocolCompatibilityError(
+            400,
+            error.code,
+            "reef-relay",
+            "The Reef relay is likely incompatible or outdated. Update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.",
+          );
+        }
+        if (error.status === 409 && error.code === "client_upgrade_required") {
+          throw new ReefProtocolCompatibilityError(
+            409,
+            error.code,
+            "openclaw-client",
+            "OpenClaw is outdated for this Reef relay. Update OpenClaw, then approve the fresh pairing challenge again.",
+          );
+        }
       }
       throw error;
     }

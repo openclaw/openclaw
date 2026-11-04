@@ -3,13 +3,14 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import { readReplySourceInput } from "../auto-reply/reply/reply-source-binding.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
@@ -30,7 +31,7 @@ import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-it("retains committed initial turns through fencing and denies their final write after grant revocation", async () => {
+it("retains committed initial turns through fencing and denies inference after grant revocation", async () => {
   process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
   testState.gatewayAuth = undefined;
   const token = "initial-turn-source-fixture-token";
@@ -40,10 +41,33 @@ it("retains committed initial turns through fencing and denies their final write
     ...configIO.getRuntimeConfig(),
     gateway: { ...configIO.getRuntimeConfig().gateway, auth: { mode: "token", token } },
   });
-  const gateway = await createGatewaySuiteHarness({ serverOptions: { bind: "loopback" } });
-  const applyConfig = async (config: Parameters<typeof configIO.writeConfigFile>[0]) => {
+  const postAttach = await import("./server-startup-post-attach.js");
+  const startPostAttach = postAttach.startGatewayPostAttachRuntime;
+  const startupReady = createDeferredCore();
+  const captureStartup = vi
+    .spyOn(postAttach, "startGatewayPostAttachRuntime")
+    .mockImplementation(async (params) => {
+      const unlockStartupMethods = params.unlockStartupMethods;
+      return startPostAttach({
+        ...params,
+        unlockStartupMethods: () => {
+          unlockStartupMethods();
+          startupReady.resolve();
+        },
+      });
+    });
+  const gateway = await createGatewaySuiteHarness({
+    serverOptions: { bind: "loopback" },
+  }).finally(() => captureStartup.mockRestore());
+  const applyConfig = async (
+    gatewayPatch: NonNullable<Parameters<typeof configIO.writeConfigFile>[0]["gateway"]>,
+  ) => {
     const application = createRuntimeConfigWriteApplication();
-    await configIO.writeConfigFile(config, attachRuntimeConfigWriteApplication({}, application));
+    const current = configIO.getRuntimeConfig();
+    await configIO.writeConfigFile(
+      { ...current, gateway: { ...current.gateway, ...gatewayPatch } },
+      attachRuntimeConfigWriteApplication({}, application),
+    );
     expect(application.claimed).toBe(true);
     expect(await application.result).toBe("applied");
   };
@@ -67,7 +91,6 @@ it("retains committed initial turns through fencing and denies their final write
         dispatchEntered: createDeferredCore(),
         dispatchFinished: createDeferredCore(),
         provider: vi.fn(),
-        writeAttempt: vi.fn(),
         turnEntered: false,
         dispatchStarted: false,
       };
@@ -83,11 +106,7 @@ it("retains committed initial turns through fencing and denies their final write
       scenario.turnEntered = true;
       scenario.beforeTurn.resolve(options);
       await resumeTurns.promise;
-      try {
-        await originalSend(options);
-      } finally {
-        scenario.finishTurn.resolve();
-      }
+      await originalSend(options).finally(scenario.finishTurn.resolve);
     });
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   const registry = getTestPluginRegistry();
@@ -95,38 +114,48 @@ it("retains committed initial turns through fencing and denies their final write
     pluginId: "initial-turn-source-fixture",
     hookName: "before_message_write",
     source: "test",
-    // Keep input pending until the real approval writer promotes it before inference.
+    // Initial input approval runs through the real writer before dispatch.
     handler: () => {},
   };
   registry.typedHooks.push(hook);
   initializeGlobalHookRunner(registry);
-  dispatchInboundMessageMock.mockClear();
-  dispatchInboundMessageMock.mockImplementation(
-    async (params: Parameters<typeof dispatchInboundMessage>[0]) => {
+  dispatchInboundMessageMock
+    .mockClear()
+    .mockImplementation(async (params: Parameters<typeof dispatchInboundMessage>[0]) => {
       const scenario = cases.find(({ key }) => key === params.ctx.SessionKey);
       assert(scenario);
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
       assert(recorder);
+      const input = readReplySourceInput(params.replyOptions);
+      assert(input);
+      const authority = input.sourceAdapter?.authority;
+      assert(authority);
+      expect(recorder.getPersistedMessage?.()).toBeDefined();
       scenario.dispatchStarted = true;
       scenario.dispatchEntered.resolve();
       await scenario.allowWrite.promise;
       try {
-        scenario.writeAttempt();
-        if (await recorder.persistApproved()) {
+        const persisted = await recorder.persistApproved();
+        input.abortSignal.throwIfAborted();
+        authority.assertCurrent();
+        if (persisted) {
           scenario.provider();
         }
         return {};
       } finally {
         scenario.dispatchFinished.resolve();
       }
-    },
-  );
+    });
   const sockets: Awaited<ReturnType<typeof gateway.openWs>>[] = [];
   const requests: Promise<unknown>[] = [];
   const waitForRelease = (scenario: (typeof cases)[number]) =>
-    getSessionWorkAdmissionRelease({ scope: scenario.scope.storePath, identities: [scenario.key] });
+    captureSessionControllerSettlement({
+      scope: scenario.scope.storePath,
+      identities: [scenario.key],
+    });
   try {
     await gateway.server.startupSettled;
+    await startupReady.promise;
     for (const scenario of cases) {
       const ws = await gateway.openWs({ origin: `http://127.0.0.1:${gateway.port}` });
       sockets.push(ws);
@@ -153,15 +182,12 @@ it("retains committed initial turns through fencing and denies their final write
       expect(loadSessionEntry(scenario.scope)?.sessionId).toBeTruthy();
     }
     const closed = sockets.map((ws) => once(ws, "close"));
-    const current = configIO.getRuntimeConfig();
     await applyConfig({
-      ...current,
-      gateway: { ...current.gateway, allowRealIpFallback: !current.gateway?.allowRealIpFallback },
+      allowRealIpFallback: !configIO.getRuntimeConfig().gateway?.allowRealIpFallback,
     });
     for (const close of closed) {
       const [code, reason] = await close;
-      expect(code).toBe(4001);
-      expect(String(reason)).toBe("gateway policy changed");
+      expect([code, String(reason)]).toEqual([4001, "gateway policy changed"]);
     }
     resumeTurns.resolve();
     for (const scenario of cases) {
@@ -176,19 +202,11 @@ it("retains committed initial turns through fencing and denies their final write
     for (const scenario of cases) {
       const revoke = scenario === cases[1];
       if (revoke) {
-        const config = configIO.getRuntimeConfig();
-        await applyConfig({
-          ...config,
-          gateway: {
-            ...config.gateway,
-            auth: { mode: "token", token: "initial-turn-revoked-fixture-token" },
-          },
-        });
+        await applyConfig({ auth: { mode: "token", token: "initial-turn-revoked-fixture-token" } });
       }
       scenario.allowWrite.resolve();
       await scenario.dispatchFinished.promise;
       await waitForRelease(scenario);
-      expect(scenario.writeAttempt).toHaveBeenCalledOnce();
       expect(scenario.provider).toHaveBeenCalledTimes(revoke ? 0 : 1);
       const entry = loadSessionEntry(scenario.scope);
       assert(entry?.sessionId);
@@ -202,12 +220,8 @@ it("retains committed initial turns through fencing and denies their final write
           isRecord(event.message) &&
           event.message.role === "user",
       );
-      expect(userMessages).toHaveLength(revoke ? 0 : 1);
-      console.info(
-        `[initial-turn-grant] session=${scenario.key} outcome=${revoke ? "denied (transcript absent)" : "accepted (transcript written)"}`,
-      );
+      expect(userMessages).toHaveLength(1);
     }
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
   } finally {
     resumeTurns.resolve();
     for (const scenario of cases) {

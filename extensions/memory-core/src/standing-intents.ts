@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { getDatabaseEngineInput } from "openclaw/plugin-sdk/database-engine-runtime";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import { pathEntryExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  openOpenClawAgentSqliteWorkerStoreV2,
+  runQueuedStoreWrite,
+  type SqliteWorkerCommand,
+  type StoreWriterQueue,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import { captureMemoryAgentDatabaseOptions } from "./memory-agent-database.js";
 import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
 import {
@@ -18,7 +26,20 @@ import {
 } from "./standing-intents-model.js";
 
 type DatabaseOptions = ReturnType<typeof captureMemoryAgentDatabaseOptions>;
-const lifecycleListeners = new Set<(path: string, nextDueAt: number | null) => void>();
+type MaintenanceSchedule = (path: string, nextDueAt: number | null) => void;
+// Queue, committed-absence facts, and the selected scheduler share one process owner.
+const maintenance = resolveGlobalSingleton<{
+  schedule: MaintenanceSchedule | undefined;
+  owners: Map<MaintenanceSchedule, () => void>;
+  lifecycleFacts: Map<string, { empty: boolean }>;
+  operationQueues: Map<string, StoreWriterQueue>;
+}>(Symbol.for("openclaw.memoryCore.standingIntents"), () => ({
+  schedule: undefined,
+  owners: new Map<MaintenanceSchedule, () => void>(),
+  lifecycleFacts: new Map<string, { empty: boolean }>(),
+  operationQueues: new Map<string, StoreWriterQueue>(),
+}));
+const { lifecycleFacts, operationQueues } = maintenance;
 
 export {
   DEFAULT_INTENT_COOLDOWN_SECONDS,
@@ -34,39 +55,66 @@ export {
   type StandingIntentStatus,
 } from "./standing-intents-model.js";
 
-async function executeStandingIntent<Key extends keyof StandingIntentOperations>(
+async function isMissingSqliteAgentDatabase(path: string): Promise<boolean> {
+  return getDatabaseEngineInput("agent") === undefined && !(await pathEntryExists(path));
+}
+
+function executeStandingIntent<Key extends keyof StandingIntentOperations>(
   params: { agentId: string; assertCurrent?: () => void },
   command: { type: Key; input: StandingIntentOperations[Key]["input"] },
+  options?: DatabaseOptions,
+): Promise<StandingIntentOperations[Key]["output"]>;
+async function executeStandingIntent(
+  params: { agentId: string; assertCurrent?: () => void },
+  command: SqliteWorkerCommand<StandingIntentOperations>,
   options: DatabaseOptions = captureMemoryAgentDatabaseOptions(params.agentId),
-): Promise<StandingIntentOperations[Key]["output"]> {
+): Promise<StandingIntentOperations[keyof StandingIntentOperations]["output"]> {
   const assertCurrent = params.assertCurrent;
-  assertCurrent?.();
-  const capturedCommand = structuredClone(command);
-  const worker = await openOpenClawAgentSqliteWorkerStoreV2<StandingIntentWorkerOperations>(
-    options,
-    { version: 2, assertCurrent: () => assertCurrent?.() },
-    {
-      moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.standingIntents),
-      input: undefined,
+  return runQueuedStoreWrite({
+    queues: operationQueues,
+    storePath: options.path,
+    label: "Standing intent",
+    async fn() {
+      assertCurrent?.();
+      const facts = lifecycleFacts.get(options.path);
+      if (command.type === "match" && facts?.empty) {
+        return [];
+      }
+      // Sweeps only maintain stored rows. Opening a missing SQLite agent database would
+      // create and prepare it during Gateway startup, before any agent has used it.
+      if (command.type === "sweep" && (await isMissingSqliteAgentDatabase(options.path))) {
+        assertCurrent?.();
+        if (facts) {
+          facts.empty = true;
+        }
+        maintenance.schedule?.(options.path, Infinity);
+        return undefined;
+      }
+      // Keep committed absence in owner order with creates and lifecycle transitions.
+      if (facts) {
+        facts.empty = false;
+      }
+      const worker = await openOpenClawAgentSqliteWorkerStoreV2<StandingIntentWorkerOperations>(
+        options,
+        { version: 2, assertCurrent: () => assertCurrent?.() },
+        {
+          moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.standingIntents),
+          input: undefined,
+        },
+      );
+      try {
+        await worker.prepare();
+        const result = await worker.execute(command, () => assertCurrent?.());
+        if (facts) {
+          facts.empty = result.nextDueAt === Infinity;
+        }
+        maintenance.schedule?.(options.path, result.nextDueAt);
+        return result.value;
+      } finally {
+        await worker.close();
+      }
     },
-  );
-  try {
-    await worker.prepare();
-    let result = await worker.execute(capturedCommand, () => assertCurrent?.());
-    if (result.kind === "schema-prepared") {
-      // Only confirmed schema-only completion permits the separate business dispatch.
-      result = await worker.execute(capturedCommand, () => assertCurrent?.());
-    }
-    if (result.kind === "schema-prepared") {
-      throw new Error("Standing-intent schema changed before its business operation");
-    }
-    for (const listener of lifecycleListeners) {
-      listener(options.path, result.nextDueAt);
-    }
-    return result.value;
-  } finally {
-    await worker.close();
-  }
+  });
 }
 
 export function startStandingIntentMaintenance(params: {
@@ -78,13 +126,13 @@ export function startStandingIntentMaintenance(params: {
   const targets = new Map(
     params.agentIds.map((agentId) => {
       const options = captureMemoryAgentDatabaseOptions(agentId);
-      return [options.path, { agentId, options }] as const;
+      return [options.path, { agentId, options, facts: { empty: false } }] as const;
     }),
   );
   const jobs = new Map<string, ReturnType<PluginServiceSchedulerV1["schedule"]>>();
   const schedule = (path: string, nextDueAt: number | null) => {
     const target = targets.get(path);
-    if (!target || scheduler.signal.aborted) {
+    if (!target || !maintenance.owners.has(schedule) || scheduler.signal.aborted) {
       return;
     }
     jobs.get(path)?.cancel();
@@ -114,15 +162,31 @@ export function startStandingIntentMaintenance(params: {
       }),
     );
   };
-  lifecycleListeners.add(schedule);
+  maintenance.owners.set(schedule, () => {
+    for (const path of targets.keys()) {
+      schedule(path, null);
+    }
+  });
+  maintenance.schedule = schedule;
   // Restart must process overdue expiry/cooldown before trusting a retained deadline.
-  for (const path of targets.keys()) {
+  for (const [path, { facts }] of targets) {
+    lifecycleFacts.set(path, facts);
     schedule(path, null);
   }
   return () => {
-    lifecycleListeners.delete(schedule);
+    maintenance.owners.delete(schedule);
+    if (maintenance.schedule === schedule) {
+      const predecessor = [...maintenance.owners].at(-1);
+      maintenance.schedule = predecessor?.[0];
+      predecessor?.[1]();
+    }
     for (const job of jobs.values()) {
       job.cancel();
+    }
+    for (const [path, { facts }] of targets) {
+      if (lifecycleFacts.get(path) === facts) {
+        lifecycleFacts.delete(path);
+      }
     }
   };
 }

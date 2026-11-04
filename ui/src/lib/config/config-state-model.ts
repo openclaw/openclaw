@@ -49,8 +49,14 @@ export function createInitialConfigState(
     configSaving: false,
     configApplying: false,
     configAutoSaveStatus: initialConfigValue<ConfigAutoSaveStatus>("idle"),
+    /** A form autosave waits on its debounce or behind another write. */
+    configAutoSaveScheduled: false,
     configRecoveryError: initialConfigValue<string | null>(null),
     configNeedsApply: false,
+    configApplyPromptHeld: false,
+    configApplyPromptAfter: 0,
+    configSaveReceipts: 0,
+    configSavedNotice: false,
     configSnapshot: initialConfigValue<ConfigSnapshot | null>(null),
     configDraftBaseHash: initialConfigValue<string | null>(null),
     configSchema: initialConfigValue<unknown>(null),
@@ -74,10 +80,18 @@ export type RuntimeConfigState = Omit<
     chatError?: string | null;
   };
 
-const requestVersionsByState = new WeakMap<
-  RuntimeConfigState,
-  { config: number; schema: number }
->();
+// The Gateway applies most writes itself within moments of accepting them.
+const CONFIG_APPLY_PROMPT_GRACE_MS = 2_000;
+
+/** A write is saved but not yet applied; only a later read can say it needs an Apply. */
+export function markConfigAwaitingApply(state: RuntimeConfigState) {
+  state.configNeedsApply = true;
+  state.configApplyPromptAfter = Date.now() + CONFIG_APPLY_PROMPT_GRACE_MS;
+  // A Gateway that doesn't report applied revisions never sends that read.
+  state.configApplyPromptHeld = state.configSnapshot?.appliedConfigHash !== undefined;
+}
+
+const requestVersionsByState = new WeakMap<RuntimeConfigState, number>();
 const connectionEpochsByState = new WeakMap<object, number>();
 const staleConfigSnapshots = new WeakSet<object>();
 export type ConfigRead = {
@@ -86,6 +100,7 @@ export type ConfigRead = {
   connectionEpoch: number;
   completion: Deferred<Result<void, string>>;
   invalidated: Deferred<Result<void, string>>;
+  settled: Promise<Result<void, string>>;
 };
 const configReadsByState = new WeakMap<object, ConfigRead>();
 
@@ -103,12 +118,16 @@ export function beginConfigRead(
   state: RuntimeConfigState,
   client: GatewayBrowserClient,
 ): ConfigRead {
+  const completion = createDeferredCore<Result<void, string>>();
+  const invalidated = createDeferredCore<Result<void, string>>();
   const read: ConfigRead = {
-    version: nextRequestVersion(state, "config"),
+    version: nextRequestVersion(state),
     client,
     connectionEpoch: currentConfigConnectionEpoch(state),
-    completion: createDeferredCore(),
-    invalidated: createDeferredCore(),
+    completion,
+    invalidated,
+    // Share the race: per-view races retain disposed views on the losing promise.
+    settled: Promise.race([completion.promise, invalidated.promise]),
   };
   // Register before request dispatch can synchronously start a successor read.
   configReadsByState.set(state, read);
@@ -129,19 +148,11 @@ export type ConfigGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
 
-type ConfigConnectionState = {
-  client: ConfigGatewayClient | null;
-  connected: boolean;
-};
-
-export function nextRequestVersion(state: RuntimeConfigState, key: "config" | "schema"): number {
-  if (key === "config") {
-    invalidateConfigRead(state);
-  }
-  const current = requestVersionsByState.get(state) ?? { config: 0, schema: 0 };
-  const next = { ...current, [key]: current[key] + 1 };
+export function nextRequestVersion(state: RuntimeConfigState): number {
+  invalidateConfigRead(state);
+  const next = (requestVersionsByState.get(state) ?? 0) + 1;
   requestVersionsByState.set(state, next);
-  return next[key];
+  return next;
 }
 
 export function clearConfigRequestVersions(state: RuntimeConfigState): void {
@@ -165,7 +176,7 @@ export function invalidateConfigConnection(state: object): void {
 }
 
 export function isCurrentConfigConnection(
-  state: ConfigConnectionState,
+  state: { client: ConfigGatewayClient | null; connected: boolean },
   client: ConfigGatewayClient,
   connectionEpoch: number,
 ): boolean {
@@ -178,14 +189,13 @@ export function isCurrentConfigConnection(
 
 export function isCurrentRequest(
   state: RuntimeConfigState,
-  key: "config" | "schema",
   version: number,
   client: GatewayBrowserClient,
   connectionEpoch: number,
 ): boolean {
   return (
     isCurrentConfigConnection(state, client, connectionEpoch) &&
-    requestVersionsByState.get(state)?.[key] === version
+    requestVersionsByState.get(state) === version
   );
 }
 
@@ -224,6 +234,14 @@ export function currentDisplayRuntimeConfig(
     state.bootstrapConfig ??
     null
   );
+}
+
+/** Speech's full-read fallback also accepts config-only snapshots. */
+export function currentDisplaySpeechConfig(
+  state: RuntimeConfigState,
+): Record<string, unknown> | null {
+  const snapshot = !staleConfigSnapshots.has(state) ? state.configSnapshot : null;
+  return snapshot?.runtimeConfig ?? snapshot?.config ?? state.bootstrapConfig ?? null;
 }
 export type AgentConfigEntryTarget = {
   path: ["agents", "entries", string];

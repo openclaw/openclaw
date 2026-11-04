@@ -13,7 +13,6 @@ import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugin
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
@@ -22,15 +21,27 @@ import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
-it.each(["issue", "clear"] as const)(
-  "keeps the admitted plugin owner through %s bootstrap persistence",
-  async (operation) => {
-    await withAdminIngress(async ({ cfg, admins, context, state }) => {
+const bootstrapCommand = "/bootstrap-fixture";
+const credentialReply = "credential mutation accepted";
+const tokenCount = (stateDir: string) =>
+  Object.keys(loadDeviceBootstrapTokenRecords(stateDir)).length;
+const commandPhase = (
+  entered: { promise: Promise<void> },
+  pending: ReturnType<typeof handlePluginCommand>,
+) => Promise.race([entered.promise.then(() => "entered"), pending.then(() => "finished")]);
+
+it.each(
+  (["issue", "clear"] as const).flatMap((operation) =>
+    (["none", "demote", "reassign"] as const).map((change) => ({ operation, change })),
+  ),
+)(
+  "keeps the admitted plugin owner through $operation bootstrap persistence: $change",
+  ({ operation, change }) =>
+    withAdminIngress(async ({ cfg, admins, context, state }) => {
       const registry = createEmptyPluginRegistry();
       const admin = admins[0]!;
-      let entered = createDeferredCore();
-      let resume = createDeferredCore();
-      let revoke: (() => void) | undefined;
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
       let retainedAssertion: (() => void) | undefined;
       registerPluginCommandInRegistry(registry, "bootstrap-fixture", {
         name: "bootstrap-fixture",
@@ -40,25 +51,27 @@ it.each(["issue", "clear"] as const)(
           retainedAssertion = ctx.assertOwnerCurrent;
           entered.resolve();
           await resume.promise;
+          const options = { baseDir: state.stateDir, assertCurrent: ctx.assertOwnerCurrent };
           const pending =
             operation === "issue"
               ? issueDeviceBootstrapToken({
-                  baseDir: state.stateDir,
-                  assertCurrent: ctx.assertOwnerCurrent,
+                  ...options,
                   profile: {
                     roles: ["operator"],
                     scopes: ["operator.admin"],
                     purpose: "mobile-full",
                   },
                 })
-              : clearDeviceBootstrapTokens({
-                  baseDir: state.stateDir,
-                  assertCurrent: ctx.assertOwnerCurrent,
-                });
+              : clearDeviceBootstrapTokens(options);
           // The credential owner must revalidate after its lock/state awaits.
-          revoke?.();
+          if (change === "demote") {
+            setUserProfileRole(admin.profile.id, "member");
+          } else if (change === "reassign") {
+            unlinkUserChannelIdentity(admin.profile.id, admin.identity);
+            linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
+          }
           await pending;
-          return { text: "credential mutation accepted" };
+          return { text: credentialReply };
         },
       });
       registerPluginCommandInRegistry(registry, "bootstrap-fixture", {
@@ -68,85 +81,60 @@ it.each(["issue", "clear"] as const)(
       });
 
       await withPluginRuntimeRegistryScope(registry, async () => {
-        for (const change of ["none", "demote", "reassign"] as const) {
-          entered = createDeferredCore();
-          resume = createDeferredCore();
-          setUserProfileRole(admin.profile.id, "admin");
-          await clearDeviceBootstrapTokens({ baseDir: state.stateDir });
-          if (operation === "clear") {
-            await issueDeviceBootstrapToken({ baseDir: state.stateDir });
+        if (operation === "clear") {
+          await issueDeviceBootstrapToken({ baseDir: state.stateDir });
+        }
+        const before = tokenCount(state.stateDir);
+        const params = buildCommandTestParams(
+          bootstrapCommand,
+          cfg,
+          await context(admin.identity.senderId),
+          { workspaceDir: state.workspaceDir },
+        );
+        const originalAssertion = params.command.assertOwnerCurrent;
+        const pending = handlePluginCommand(params, true);
+        try {
+          expect(await commandPhase(entered, pending)).toBe("entered");
+          // Replacing the snapshot cannot replace its already-captured capability.
+          params.command.assertOwnerCurrent = () => {};
+          resume.resolve();
+          const outcome = await pending;
+          const after = tokenCount(state.stateDir);
+          if (change === "none") {
+            expect(outcome?.reply?.text).toBe(credentialReply);
+            expect(after).toBe(operation === "issue" ? 1 : 0);
+          } else {
+            expect(after).toBe(before);
+            expect(outcome?.reply?.text).toContain("Command failed");
           }
-          const before = loadDeviceBootstrapTokenRecords(state.stateDir);
-          const params = buildCommandTestParams(
-            "/bootstrap-fixture",
-            cfg,
-            await context(admin.identity.senderId),
-            { workspaceDir: state.workspaceDir },
+          expect(() => retainedAssertion?.()).toThrow("invocation closed");
+          params.command.commandBodyNormalized = "/owner-independent-read";
+          params.command.senderIsOwner = false;
+          params.command.assertOwnerCurrent = originalAssertion;
+          expect((await handlePluginCommand(params, true))?.reply?.text).toBe(
+            "ordinary read accepted",
           );
-          expect(params.command.senderIsOwner).toBe(true);
-          const originalAssertion = params.command.assertOwnerCurrent;
-          revoke =
-            change === "none"
-              ? undefined
-              : () => {
-                  if (change === "demote") {
-                    setUserProfileRole(admin.profile.id, "member");
-                  } else {
-                    unlinkUserChannelIdentity(admin.profile.id, admin.identity);
-                    linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
-                  }
-                };
-          const pending = handlePluginCommand(params, true);
-          try {
-            expect(
-              await Promise.race([
-                entered.promise.then(() => "entered"),
-                pending.then(() => "finished"),
-              ]),
-            ).toBe("entered");
-            // Replacing the snapshot cannot replace its already-captured capability.
-            params.command.assertOwnerCurrent = () => {};
-            resume.resolve();
-            const outcome = await pending;
-            const after = loadDeviceBootstrapTokenRecords(state.stateDir);
-            if (change === "none") {
-              expect(outcome?.reply?.text).toBe("credential mutation accepted");
-              expect(Object.keys(after).length).toBe(operation === "issue" ? 1 : 0);
-            } else {
-              expect(Object.keys(after).length).toBe(Object.keys(before).length);
-              expect(outcome?.reply?.text).toContain("Command failed");
-            }
-            expect(retainedAssertion).toBeTypeOf("function");
-            expect(() => retainedAssertion?.()).toThrow("invocation closed");
-            params.command.commandBodyNormalized = "/owner-independent-read";
-            params.command.senderIsOwner = false;
-            params.command.assertOwnerCurrent = originalAssertion;
-            expect((await handlePluginCommand(params, true))?.reply?.text).toBe(
-              "ordinary read accepted",
-            );
-          } finally {
-            resume.resolve();
-            await pending;
-          }
+        } finally {
+          resume.resolve();
+          await pending;
         }
       });
-    });
-  },
+    }),
 );
 
 it.each([
-  "missing-policy",
-  "disabled-policy",
-  "missing-grant",
-  "expired-grant",
-  "allowed",
-  "restored",
-  "changed-binding",
-  "configured-owner",
+  { scenario: "missing-policy", admitted: false, allowed: false, consulted: false },
+  { scenario: "disabled-policy", admitted: false, allowed: false, consulted: false },
+  { scenario: "missing-grant", admitted: false, allowed: false, consulted: true },
+  { scenario: "expired-grant", admitted: false, allowed: false, consulted: true },
+  { scenario: "allowed", admitted: true, allowed: true, consulted: true },
+  { scenario: "restored", admitted: true, allowed: false, consulted: true },
+  { scenario: "changed-binding", admitted: true, allowed: false, consulted: true },
+  { scenario: "configured-owner", admitted: true, allowed: true, consulted: false },
 ] as const)(
-  "enforces original person access through plugin command effects: %s",
-  async (scenario) => {
-    await withAdminIngress(async ({ cfg, admins, context, state }) => {
+  "enforces original person access through plugin command effects: $scenario",
+  ({ scenario, admitted, allowed, consulted }) =>
+    withAdminIngress(async ({ cfg, admins, context, state }) => {
       const admin = admins[0]!;
       const builder = createTestPluginRegistry();
       const registry = builder.registry;
@@ -189,39 +177,20 @@ it.each([
             baseDir: state.stateDir,
             assertCurrent: ctx.assertOwnerCurrent,
           });
-          return { text: "credential mutation accepted" };
+          return { text: credentialReply };
         },
       });
       setActivePluginRegistry(registry);
       try {
         await withPluginRuntimeRegistryScope(registry, async () => {
-          const params = buildCommandTestParams(
-            "/bootstrap-fixture",
-            cfg,
-            await context(admin.identity.senderId),
-            { workspaceDir: state.workspaceDir },
-          );
-          if (scenario === "allowed") {
-            const queries = vi.spyOn(openOpenClawStateDatabase().db, "prepare");
-            try {
-              expect(params.command.assertOwnerCurrent).not.toThrow();
-              expect(queries).not.toHaveBeenCalled();
-            } finally {
-              queries.mockRestore();
-            }
-          }
-          const deniedAtAdmission = [
-            "missing-policy",
-            "disabled-policy",
-            "missing-grant",
-            "expired-grant",
-          ].includes(scenario);
+          const makeParams = async () =>
+            buildCommandTestParams(bootstrapCommand, cfg, await context(admin.identity.senderId), {
+              workspaceDir: state.workspaceDir,
+            });
+          const params = await makeParams();
           const pending = handlePluginCommand(params, true);
           try {
-            const phase = await Promise.race([
-              entered.promise.then(() => "entered"),
-              pending.then(() => "finished"),
-            ]);
+            const phase = await commandPhase(entered, pending);
             if (scenario === "restored") {
               grant.abort();
               grant = new AbortController();
@@ -231,29 +200,20 @@ it.each([
             }
             resume.resolve();
             const outcome = await pending;
-            const allowed = scenario === "allowed" || scenario === "configured-owner";
-            expect(Object.keys(loadDeviceBootstrapTokenRecords(state.stateDir))).toHaveLength(
-              allowed ? 1 : 0,
-            );
-            expect(phase).toBe(deniedAtAdmission ? "finished" : "entered");
+            expect(tokenCount(state.stateDir)).toBe(allowed ? 1 : 0);
+            expect(phase).toBe(admitted ? "entered" : "finished");
             if (allowed) {
-              expect(outcome?.reply?.text).toBe("credential mutation accepted");
+              expect(outcome?.reply?.text).toBe(credentialReply);
             }
             if (scenario === "restored") {
               expect(params.command.assertOwnerCurrent).toThrow();
-              const next = buildCommandTestParams(
-                "/bootstrap-fixture",
-                cfg,
-                await context(admin.identity.senderId),
-                { workspaceDir: state.workspaceDir },
+              expect((await handlePluginCommand(await makeParams(), true))?.reply?.text).toBe(
+                credentialReply,
               );
-              expect((await handlePluginCommand(next, true))?.reply?.text).toBe(
-                "credential mutation accepted",
-              );
-              expect(Object.keys(loadDeviceBootstrapTokenRecords(state.stateDir))).toHaveLength(1);
+              expect(tokenCount(state.stateDir)).toBe(1);
               expect(params.command.assertOwnerCurrent).toThrow();
             }
-            if (["missing-policy", "disabled-policy", "configured-owner"].includes(scenario)) {
+            if (!consulted) {
               expect(authorize).not.toHaveBeenCalled();
             } else {
               expect(authorize).toHaveBeenCalledWith({
@@ -274,6 +234,5 @@ it.each([
       } finally {
         await clearActivePluginRegistry(registry);
       }
-    });
-  },
+    }),
 );

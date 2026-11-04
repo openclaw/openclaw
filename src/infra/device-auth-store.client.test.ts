@@ -10,18 +10,15 @@ import { observeDeviceAuthHostSql } from "./device-auth-store.sql.test-support.j
 import { holdDeviceAuthWriterForTest } from "./device-auth-store.test-support.js";
 
 let GatewayClient: typeof GatewayClientInstance;
-let prepareGatewayClientDeviceAuth: typeof import("../gateway/client.js").prepareGatewayClientDeviceAuth;
 beforeAll(async () => {
-  ({ GatewayClient, prepareGatewayClientDeviceAuth } = await import("../gateway/client.js"));
+  ({ GatewayClient } = await import("../gateway/client.js"));
 });
 
 class FixtureSocket extends EventEmitter {
   static readonly OPEN = 1;
   static instances: FixtureSocket[] = [];
   readyState = 0;
-  readonly send = vi.fn((data: string) => {
-    this.emit("sent", data);
-  });
+  readonly send = vi.fn((data: string) => void this.emit("sent", data));
   constructor() {
     super();
     FixtureSocket.instances.push(this);
@@ -29,31 +26,22 @@ class FixtureSocket extends EventEmitter {
   open() {
     this.readyState = FixtureSocket.OPEN;
     this.emit("open");
-    this.emit(
-      "message",
-      JSON.stringify({
-        type: "event",
-        event: "connect.challenge",
-        payload: { nonce: "synthetic-nonce", ts: 1_800_000_000_000 },
-      }),
-    );
-  }
-  async waitForConnectFrame() {
-    if (this.send.mock.calls.length === 0) {
-      await once(this, "sent");
-    }
-    return this.connectFrame();
+    this.message({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "synthetic-nonce", ts: 1_800_000_000_000 },
+    });
   }
   connectFrame() {
     const sent = this.send.mock.calls[0];
     assert(sent);
-    return JSON.parse(sent[0]) as { id: string; params: { auth: { deviceToken?: string } } };
+    return JSON.parse(sent[0]) as { id: string; params: { auth?: { deviceToken?: string } } };
   }
-  respond(payload: unknown, error?: unknown) {
-    this.emit(
-      "message",
-      JSON.stringify({ type: "res", id: this.connectFrame().id, ok: !error, payload, error }),
-    );
+  message(frame: unknown) {
+    this.emit("message", JSON.stringify(frame));
+  }
+  respond(payload: unknown) {
+    this.message({ type: "res", id: this.connectFrame().id, ok: true, payload });
   }
   close(code = 1000, reason = "") {
     this.readyState = 3;
@@ -82,6 +70,23 @@ const hostDeps = {
   logDebug: () => {},
 };
 
+function clientOptions(env: NodeJS.ProcessEnv) {
+  return { url: "ws://127.0.0.1:18789", env, deviceIdentity, hostDeps };
+}
+function openSocket(index = 0) {
+  const socket = FixtureSocket.instances[index];
+  assert(socket);
+  socket.open();
+  return socket;
+}
+async function expectTokenFrame(socket: FixtureSocket, token: string) {
+  if (socket.send.mock.calls.length === 0) {
+    await once(socket, "sent");
+  }
+  expect(socket.send).toHaveBeenCalledOnce();
+  expect(socket.connectFrame()).toMatchObject({ params: { auth: { deviceToken: token } } });
+}
+
 it.each([
   { origin: false, completion: "stop" },
   { origin: true, completion: "reconnect" },
@@ -94,35 +99,28 @@ it.each([
       const load = () =>
         origin ? tokens.loadOriginDeviceToken(originLookup) : tokens.loadDeviceAuthToken(lookup);
       const storeSpy = vi.spyOn(tokens, origin ? "storeOriginDeviceToken" : "storeDeviceAuthToken");
-      if (origin) {
-        await tokens.storeOriginDeviceToken({ ...originLookup, token: "synthetic-initial" });
-      } else {
-        await tokens.storeDeviceAuthToken({ ...lookup, token: "synthetic-initial" });
-      }
+      const store = origin ? tokens.storeOriginDeviceToken : tokens.storeDeviceAuthToken;
+      // An unscoped facade must ignore the reusable lookup's surplus origin.
+      await store({ ...originLookup, token: "synthetic-initial" });
       storeSpy.mockClear();
       await closeOpenClawStateDatabaseAsync();
-      const sql = observeDeviceAuthHostSql(state.statePath("state", "openclaw.sqlite"));
+      const sql = observeDeviceAuthHostSql(state.statePath("client", "credentials.sqlite"));
       const onHelloOk = vi.fn();
       const onConnectError = vi.fn();
       const client = new GatewayClient({
-        url: "ws://127.0.0.1:18789",
-        env: state.env,
+        ...clientOptions(state.env),
         ...(origin ? { deviceAuthScope: originLookup.gatewayScope } : {}),
-        deviceIdentity,
-        hostDeps,
         onHelloOk,
         onConnectError,
       });
       let release: (() => Promise<void>) | undefined;
       try {
         client.start();
-        const socket = FixtureSocket.instances[0];
-        assert(socket);
-        socket.open();
-        await socket.waitForConnectFrame();
-        expect(socket.send).toHaveBeenCalledOnce();
-        expect(socket.connectFrame().params.auth.deviceToken).toBe("synthetic-initial");
-        release = await holdDeviceAuthWriterForTest(state.statePath("state", "openclaw.sqlite"));
+        const socket = openSocket();
+        await expectTokenFrame(socket, "synthetic-initial");
+        release = await holdDeviceAuthWriterForTest(
+          state.statePath("client", "credentials.sqlite"),
+        );
         socket.respond({
           type: "hello-ok",
           protocol: 4,
@@ -131,12 +129,10 @@ it.each([
         await vi.waitFor(() => expect(storeSpy).toHaveBeenCalledOnce());
         expect(onHelloOk).not.toHaveBeenCalled();
         if (completion === "stop") {
-          let stopped = false;
-          const stopping = client.stopAndWait().then(() => {
-            stopped = true;
-          });
+          const stopped = vi.fn<() => void>();
+          const stopping = client.stopAndWait().then(stopped);
           await Promise.resolve();
-          expect(stopped).toBe(false);
+          expect(stopped).not.toHaveBeenCalled();
           await release();
           await stopping;
         } else {
@@ -144,14 +140,10 @@ it.each([
           await vi.waitFor(() => expect(FixtureSocket.instances).toHaveLength(2), {
             timeout: 3000,
           });
-          const replacement = FixtureSocket.instances[1];
-          assert(replacement);
-          replacement.open();
+          const replacement = openSocket(1);
           expect(replacement.send).not.toHaveBeenCalled();
           await release();
-          await replacement.waitForConnectFrame();
-          expect(replacement.send).toHaveBeenCalledOnce();
-          expect(replacement.connectFrame().params.auth.deviceToken).toBe("synthetic-issued");
+          await expectTokenFrame(replacement, "synthetic-issued");
         }
         expect(onHelloOk).not.toHaveBeenCalled();
         expect(onConnectError).not.toHaveBeenCalled();
@@ -173,31 +165,21 @@ it.each([
   },
 );
 
-it("keeps connection token facts fresh after preparation without duplicate reads", async () => {
-  await withOpenClawTestState({ label: "client-token-preparation" }, async (state) => {
-    const options = {
-      url: "ws://127.0.0.1:18789",
-      env: state.env,
-      deviceIdentity,
-      hostDeps,
-    };
+it("loads current token facts when a connection starts without duplicate reads", async () => {
+  await withOpenClawTestState({ label: "client-token-connection" }, async (state) => {
+    const options = clientOptions(state.env);
     const load = vi.spyOn(tokens, "loadDeviceAuthToken");
-    await prepareGatewayClientDeviceAuth(options);
+    const client = new GatewayClient(options);
     expect(load).not.toHaveBeenCalled();
     await tokens.storeDeviceAuthToken({
       env: state.env,
       deviceId: options.deviceIdentity.deviceId,
       role: "operator",
-      token: "synthetic-after-preparation",
+      token: "synthetic-after-construction",
     });
-    const client = new GatewayClient(options);
     try {
       client.start();
-      const socket = FixtureSocket.instances[0];
-      assert(socket);
-      socket.open();
-      await socket.waitForConnectFrame();
-      expect(socket.connectFrame().params.auth.deviceToken).toBe("synthetic-after-preparation");
+      await expectTokenFrame(openSocket(), "synthetic-after-construction");
       expect(load).toHaveBeenCalledOnce();
     } finally {
       await client.stopAndWait();
@@ -222,19 +204,32 @@ it.each([
   { name: "invalid transport", url: "ws://synthetic.example" },
   { name: "invalid edge transport", edgeAuthHeaders: { "x-synthetic": "synthetic-value" } },
 ])("does not create token storage for $name", async ({ name, ...overrides }) => {
-  await withOpenClawTestState({ label: "client-token-skipped-preparation" }, async (state) => {
+  await withOpenClawTestState({ label: "client-token-skipped-connection" }, async (state) => {
     if (name !== "read-only missing state") {
       // A skipped storage path must not even consult the legacy migration guard.
       await state.writeJson("identity/device-auth.json", { synthetic: true });
     }
-    await prepareGatewayClientDeviceAuth({
-      url: "ws://127.0.0.1:18789",
-      env: state.env,
-      deviceIdentity,
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      ...clientOptions(state.env),
+      onConnectError,
       ...overrides,
     });
-    await expect(fs.stat(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    try {
+      client.start();
+      if (name.startsWith("invalid")) {
+        await vi.waitFor(() => expect(onConnectError).toHaveBeenCalledOnce());
+        expect(FixtureSocket.instances).toHaveLength(0);
+      } else {
+        const socket = openSocket();
+        await vi.waitFor(() => expect(socket.send).toHaveBeenCalledOnce());
+        expect(onConnectError).not.toHaveBeenCalled();
+      }
+      await expect(fs.stat(state.statePath("client", "credentials.sqlite"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await client.stopAndWait();
+    }
   });
 });

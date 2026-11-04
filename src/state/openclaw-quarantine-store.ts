@@ -9,20 +9,18 @@ import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
   invalidateSqliteDatabaseCleanClose,
+  prepareSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
-  revokeSqliteDatabaseAdmissionsForPath,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
 import { readSqliteFileGenerationSync } from "../infra/sqlite-file-generation-worker.js";
 import {
   parseSqliteFileGeneration,
   sameSqliteFileGeneration,
-  serializeSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { VERSION } from "../version.js";
 import {
   OpenClawQuarantineReadCleanupError,
   type OpenClawDatabaseKind,
@@ -31,7 +29,7 @@ import {
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db-contract.js";
 import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
-const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 2;
+export const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 2;
 const OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS = 5_000;
 const OPENCLAW_QUARANTINE_DIR_MODE = 0o700;
 const OPENCLAW_QUARANTINE_FILE_MODE = 0o600;
@@ -39,6 +37,7 @@ const quarantineSchemaAdmission: SqliteDatabaseAdmissionKey<{
   version: number;
 }> = {
   name: "openclaw.quarantine.schema",
+  lifetime: "process",
   schemaDependent: true,
   read(value) {
     if (
@@ -60,6 +59,7 @@ function quarantineDecisionAdmission(
 ): SqliteDatabaseAdmissionKey<QuarantineDecision | null> {
   return {
     name: `openclaw.quarantine.decision:${path.resolve(pathname)}`,
+    lifetime: "process",
     read: (value) => (value === null || isQuarantineDecision(value) ? value : undefined),
   };
 }
@@ -185,9 +185,13 @@ export function ensureOpenClawQuarantineStore(env: NodeJS.ProcessEnv): void {
 /** Runtime guards share the owner's decision; explicit repair may inspect disk. */
 function readOpenClawDatabaseQuarantine(
   pathname: string,
-  options: { env?: NodeJS.ProcessEnv; fresh?: true } = {},
+  options: { env?: NodeJS.ProcessEnv; fresh?: true; refreshIdentity?: true } = {},
 ): OpenClawDatabaseQuarantine | undefined {
   const storePath = resolveQuarantineStorePath(options.env ?? process.env);
+  if (options.refreshIdentity) {
+    // Worker readers refresh the binding before using a retained auxiliary generation.
+    prepareSqliteDatabaseAdmission(storePath);
+  }
   const load = () => readPersistedQuarantineDecision(pathname, storePath, options.fresh) ?? null;
   const decision = options.fresh
     ? load()
@@ -311,7 +315,7 @@ function resolveQuarantineDecision(
 export function readOpenClawDatabaseQuarantineFailure(
   kind: OpenClawDatabaseKind,
   pathname: string,
-  options: { env?: NodeJS.ProcessEnv; fresh?: true } = {},
+  options: { env?: NodeJS.ProcessEnv; fresh?: true; refreshIdentity?: true } = {},
 ): Error | undefined {
   let quarantine: OpenClawDatabaseQuarantine | undefined;
   let cleanupFailure: OpenClawQuarantineReadCleanupError | undefined;
@@ -343,65 +347,38 @@ export function readOpenClawDatabaseQuarantineFailure(
   return failure;
 }
 
-export function recordOpenClawDatabaseQuarantine(options: {
-  env?: NodeJS.ProcessEnv;
-  generation?: SqliteFileGeneration;
-  kind: OpenClawDatabaseKind;
-  path: string;
-  reason: string;
-}): boolean {
-  const serializedGeneration = options.generation
-    ? serializeSqliteFileGeneration(options.generation)
-    : null;
-  const quarantinedAt = Date.now();
-  try {
-    const recorded = withQuarantineWriter(options.env ?? process.env, (database) =>
-      runSqliteImmediateTransactionSync(
-        database,
-        () => {
-          database
-            .prepare(
-              `
-              INSERT INTO quarantined_databases (
-                path, kind, reason, quarantined_at, writer_app_version, verified_generation
-              ) VALUES (?, ?, ?, ?, ?, ?)
-              ON CONFLICT(path) DO UPDATE SET
-                kind = excluded.kind,
-                reason = excluded.reason,
-                quarantined_at = excluded.quarantined_at,
-                writer_app_version = excluded.writer_app_version,
-                verified_generation = excluded.verified_generation
-            `,
-            )
-            .run(
-              path.resolve(options.path),
-              options.kind,
-              options.reason,
-              quarantinedAt,
-              VERSION,
-              serializedGeneration,
-            );
-          publishSqliteDatabaseAdmission(database, quarantineDecisionAdmission(options.path), {
-            kind: options.kind,
-            quarantinedAt,
-            reason: options.reason,
-            verifiedGenerationJson: serializedGeneration,
-          });
-          return true;
-        },
-        {
-          databaseLabel: resolveQuarantineStorePath(options.env ?? process.env),
-          operationLabel: "quarantine.record",
-        },
-      ),
-    );
-    if (recorded) {
-      revokeSqliteDatabaseAdmissionsForPath(options.path);
-    }
-    return recorded;
-  } catch {
-    return false;
-  }
+/** A background integrity verdict survives later writes and restarts until Doctor clears it. */
+export function recordOpenClawDatabaseQuarantine(
+  pathname: string,
+  reason: string,
+  options: { env?: NodeJS.ProcessEnv; assertCurrent: () => void },
+): void {
+  const env = options.env ?? process.env;
+  options.assertCurrent();
+  invalidateSqliteDatabaseCleanClose(pathname);
+  withQuarantineWriter(env, (database) =>
+    runSqliteImmediateTransactionSync(
+      database,
+      () => {
+        options.assertCurrent();
+        const decision: QuarantineDecision = {
+          kind: "agent",
+          reason,
+          quarantinedAt: Date.now(),
+          verifiedGenerationJson: null,
+        };
+        database
+          .prepare(`INSERT INTO quarantined_databases
+            (path, kind, reason, quarantined_at, verified_generation)
+            VALUES (?, 'agent', ?, ?, NULL)
+            ON CONFLICT(path) DO UPDATE SET kind=excluded.kind, reason=excluded.reason,
+              quarantined_at=excluded.quarantined_at, verified_generation=NULL`)
+          .run(path.resolve(pathname), reason, decision.quarantinedAt);
+        publishSqliteDatabaseAdmission(database, quarantineDecisionAdmission(pathname), decision);
+      },
+      { databaseLabel: resolveQuarantineStorePath(env), operationLabel: "quarantine.record" },
+    ),
+  );
 }
 
 export function clearOpenClawDatabaseQuarantine(

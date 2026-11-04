@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout } from "node:timers/promises";
@@ -134,7 +135,7 @@ async function main() {
           JSON.parse(
             await readGh([
               "api",
-              `repos/${repo}/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100&page=${page}`,
+              `repos/${repo}/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=50&page=${page}`,
             ]),
           ),
         );
@@ -219,10 +220,15 @@ async function main() {
       const attemptLogs: CiTimingRun["logs"] = [];
       for (const job of timingJobs) {
         console.error(`[ci-timings] ${run.id} attempt ${attempt}: ${job.name}`);
+        const text = await readGh([
+          "api",
+          `repos/${repo}/actions/jobs/${job.id}/logs`,
+          ...logFlags,
+        ]);
         attemptLogs.push({
           kind: job.kind,
           labels: job.labels,
-          text: await readGh(["api", `repos/${repo}/actions/jobs/${job.id}/logs`, ...logFlags]),
+          text,
         });
       }
       const { contributingRunIds } = refitTestTimings([
@@ -236,11 +242,29 @@ async function main() {
       );
       logs.push(...attemptLogs);
     }
+    // Both rename endpoints changed; similarity detection would fetch historical
+    // blobs from the filtered checkout and omit the old path from exclusion.
+    const changedUiFiles = logs.some((log) => log.kind === "uiE2e")
+      ? execFileSync(
+          "git",
+          ["diff", "--no-renames", "--name-only", "-z", run.head_sha, "--", "ui", "extensions"],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        )
+          .split("\0")
+          .filter((file) => /\.e2e\.test\.[cm]?[jt]sx?$/u.test(file))
+      : [];
+    if (changedUiFiles.length > 0) {
+      console.log(`UI file samples excluded after source changes: ${changedUiFiles.length}`);
+    }
     return {
       id: run.id,
       createdAt: run.created_at,
       logs,
       completeInventory,
+      changedUiFiles,
       ...(source === "pull-request" ? { pullRequestMergeRef: true } : {}),
     };
   }
@@ -358,6 +382,9 @@ async function main() {
         throw new Error(`Requested tooling run ${id} returned run ${run.id}`);
       }
       const timingRun = await readRun(run, "tooling");
+      if (timingRun === undefined) {
+        throw new Error(`Requested tooling run ${id} is a runtime trial. No timing file written.`);
+      }
       if (timingRun === null) {
         throw new Error(
           `Requested tooling run ${id} has jobs completed after frozen UTC cutoff ${upper}.`,

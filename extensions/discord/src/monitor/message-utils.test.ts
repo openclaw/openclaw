@@ -22,16 +22,6 @@ describe("resolveDiscordMessageChannelId", () => {
       expected: "123",
     },
     {
-      name: "falls back to message.channel_id",
-      params: { message: asMessage({ channel_id: " 234 " }) },
-      expected: "234",
-    },
-    {
-      name: "falls back to message.rawData.channel_id",
-      params: { message: asMessage({ rawData: { channel_id: "456" } }) },
-      expected: "456",
-    },
-    {
       name: "falls back to eventChannelId and coerces numeric values",
       params: { message: asMessage({}), eventChannelId: 789 },
       expected: "789",

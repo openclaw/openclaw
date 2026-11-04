@@ -10,17 +10,15 @@ import type {
 import { hasErrnoCode } from "../../infra/errno.js";
 import { safeParseWithSchema } from "../../utils/zod-parse.js";
 
-type ConfigSummary = {
-  path: string;
-  exists: boolean;
-  valid: boolean;
-  issues?: Array<{ path: string; message: string }>;
-  warnings?: ConfigFileSnapshot["warnings"];
-  controlUi?: GatewayControlUiConfig;
-};
-
 type StatusConfigRead = {
-  summary: ConfigSummary;
+  summary: {
+    path: string;
+    exists: boolean;
+    valid: boolean;
+    issues?: Array<{ path: string; message: string }>;
+    warnings?: ConfigFileSnapshot["warnings"];
+    controlUi?: GatewayControlUiConfig;
+  };
   cfg: OpenClawConfig;
   mode: "fast" | "full";
 };

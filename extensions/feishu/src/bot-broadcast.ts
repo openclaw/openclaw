@@ -1,6 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { claimUnprocessedFeishuMessage } from "./dedup.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 
 export function createFeishuBroadcastIngressSettlement(params: {
@@ -211,13 +212,40 @@ export function createFeishuBroadcastIngressSettlement(params: {
   };
 }
 
-export function resolveBroadcastAgents(cfg: ClawdbotConfig, peerId: string): string[] | null {
-  const broadcast = (cfg as Record<string, unknown>).broadcast;
-  if (!broadcast || typeof broadcast !== "object") {
-    return null;
+export async function claimFeishuBroadcastAgentMessage(params: {
+  messageId: string;
+  agentId: string;
+  log: (...args: unknown[]) => void;
+  onPending: () => void;
+}) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const claim = await claimUnprocessedFeishuMessage({
+      messageId: params.messageId,
+      namespace: `broadcast:${params.agentId}`,
+      log: params.log,
+    });
+    if (claim.kind === "duplicate") {
+      return undefined;
+    }
+    if (claim.kind !== "inflight") {
+      return claim;
+    }
+    params.onPending();
+    try {
+      await claim.pending;
+      return undefined;
+    } catch (err) {
+      if (attempt === 1) {
+        throw err;
+      }
+    }
   }
-  const agents = (broadcast as Record<string, unknown>)[peerId];
-  return Array.isArray(agents) && agents.length > 0 ? (agents as string[]) : null;
+  return undefined;
+}
+
+export function resolveBroadcastAgents(cfg: ClawdbotConfig, peerId: string): string[] | null {
+  const agents = cfg.broadcast?.[peerId];
+  return Array.isArray(agents) && agents.length > 0 ? agents : null;
 }
 
 export function buildBroadcastSessionKey(

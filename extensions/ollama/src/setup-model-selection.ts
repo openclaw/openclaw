@@ -1,8 +1,13 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { selectPreferredLocalModelId } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  selectPreferredLocalModelId,
+  type ModelDefinitionConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { isHostedOllamaCloud } from "./defaults.js";
 import { getOllamaLatestDedupeKey } from "./model-id.js";
 import {
   buildOllamaModelDefinition,
+  capLocalOllamaModelContext,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   isOllamaEmbeddingOnlyModel,
@@ -12,13 +17,15 @@ import {
   readOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
+  type OllamaModelShowInfo,
+  type OllamaTagModel,
 } from "./provider-models.js";
 
 export { findAvailableOllamaModelName } from "./model-id.js";
 
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const OLLAMA_TOOLS_SCAN_CONCURRENCY = 8;
-export const OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
+const OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
 
 export function normalizeOllamaModelName(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -88,6 +95,44 @@ export function selectAppGuidedOllamaModelFromDiscovery(
   return orderPreferredOllamaModelIds(fastest.map((model) => model.name))[0];
 }
 
+export function buildAppGuidedOllamaModel(params: {
+  baseUrl: string;
+  model: OllamaTagModel;
+  showInfo: OllamaModelShowInfo;
+  configuredCloudModel?: ModelDefinitionConfig;
+}): ModelDefinitionConfig | undefined {
+  const { baseUrl, model, showInfo, configuredCloudModel } = params;
+  const contextWindow = showInfo.contextWindow ?? configuredCloudModel?.contextWindow;
+  const supportsTools =
+    showInfo.capabilities?.includes("tools") ?? configuredCloudModel?.compat?.supportsTools;
+  const supportsCompletion =
+    showInfo.capabilities?.includes("completion") ?? Boolean(configuredCloudModel);
+  if (
+    !supportsTools ||
+    !supportsCompletion ||
+    contextWindow === undefined ||
+    contextWindow < OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS
+  ) {
+    return undefined;
+  }
+  const definition =
+    configuredCloudModel ??
+    buildOllamaModelDefinition(model.name, contextWindow, showInfo.capabilities, {
+      ...showInfo,
+      remote: isHostedOllamaCloud(baseUrl) || isOllamaRemoteModel(model),
+    });
+  return capLocalOllamaModelContext(
+    {
+      ...definition,
+      ...(showInfo.parameterCount !== undefined ? { parameterCount: showInfo.parameterCount } : {}),
+      thinkingLevelMap: definition.thinkingLevelMap ?? showInfo.thinkingLevelMap,
+      contextWindow,
+      compat: { ...definition.compat, supportsTools: true },
+    },
+    baseUrl,
+  );
+}
+
 export function buildOllamaModelsConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
@@ -97,14 +142,13 @@ export function buildOllamaModelsConfig(
     if (discovered && isOllamaEmbeddingOnlyModel(discovered)) {
       return [];
     }
-    return [
-      buildOllamaModelDefinition(
-        name,
-        discovered?.contextWindow,
-        discovered?.capabilities,
-        discovered,
-      ),
-    ];
+    const { parameterCount: _parameterCount, ...model } = buildOllamaModelDefinition(
+      name,
+      discovered?.contextWindow,
+      discovered?.capabilities,
+      discovered ? { ...discovered, remote: isOllamaRemoteModel(discovered) } : undefined,
+    );
+    return [model];
   });
 }
 

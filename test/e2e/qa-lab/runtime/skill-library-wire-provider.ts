@@ -97,6 +97,19 @@ function catalogSkills(instructions: string): CatalogSkill[] {
   });
 }
 
+function catalogContext(text: string) {
+  const summary = {
+    characters: text.length,
+    catalogBlocks: [...text.matchAll(/<available_skills>/gu)].length,
+    limitNotices: text.split("\n").filter((line) => line.startsWith("⚠️ Skills ")),
+  };
+  try {
+    return { ...summary, skills: catalogSkills(text) };
+  } catch (error) {
+    return { ...summary, parseError: String(error) };
+  }
+}
+
 function sse(response: ServerResponse, event: unknown) {
   response.write(`data: ${JSON.stringify(event)}\n\n`);
 }
@@ -183,8 +196,9 @@ export async function startSkillLibraryWireProvider() {
     string,
     { promise: Promise<void>; release: () => void; entered: boolean }
   >();
-  const errors: Error[] = [];
+  const errors: Array<{ message: string; stack?: string; request: unknown }> = [];
   const server = createServer((request, response) => {
+    let requestContext: () => unknown = () => ({ method: request.method, url: request.url });
     void (async () => {
       if (request.method === "GET" && request.url === "/v1/models") {
         response.writeHead(200, { "content-type": "application/json" });
@@ -211,6 +225,22 @@ export async function startSkillLibraryWireProvider() {
           .filter((item) => item.role === "user")
           .map((item) => contentText(item.content))
           .findLast((text) => /SKILL-LIBRARY-(?:PROBE|AUTHOR):[a-z0-9-]+/u.test(text)) ?? "";
+      requestContext = () => ({
+        method: request.method,
+        url: request.url,
+        scenario: user.match(
+          /SKILL-LIBRARY-(?:PROBE|AUTHOR):[a-z0-9-]+(?: name=[a-z0-9_-]+)?/u,
+        )?.[0],
+        tools: body.tools?.map(({ name }) => name),
+        instructions: catalogContext(body.instructions ?? ""),
+        input: input.map(({ type, role, name, call_id, content }) => ({
+          type,
+          role,
+          name,
+          call_id,
+          catalog: catalogContext(contentText(content)),
+        })),
+      });
       const match = user.match(/SKILL-LIBRARY-PROBE:([a-z0-9-]+)(?: name=([a-z0-9_-]+))?/u);
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
       const emitTool = (callId: string, name: string, args: unknown) => {
@@ -265,7 +295,7 @@ export async function startSkillLibraryWireProvider() {
         const { draft, updatedContent } = scenario;
         const observation = authorOutputs.get(authorMarker) ?? {};
         authorOutputs.set(authorMarker, observation);
-        let workshop = body.tools?.find((tool) => tool.name === "skill_workshop");
+        let workshop = body.tools?.find((tool) => tool.name === "skill_library");
         let catalogId: string | undefined;
         const advertisedCall = (callId: string, name: string, args: unknown) => {
           const tool = body.tools?.find((candidate) => candidate.name === name);
@@ -282,7 +312,7 @@ export async function startSkillLibraryWireProvider() {
           const describeId = `${authorMarker}_describe_workshop`;
           const described = output(describeId);
           if (described === undefined) {
-            advertisedCall(describeId, "tool_describe", { id: "skill_workshop" });
+            advertisedCall(describeId, "tool_describe", { id: "skill_library" });
             return;
           }
           const descriptor = JSON.parse(described) as {
@@ -290,8 +320,8 @@ export async function startSkillLibraryWireProvider() {
             name: string;
             parameters: TSchema;
           };
-          if (descriptor.name !== "skill_workshop" || !descriptor.id || !descriptor.parameters) {
-            throw new Error("Tool discovery did not return the personal Workshop schema");
+          if (descriptor.name !== "skill_library" || !descriptor.id || !descriptor.parameters) {
+            throw new Error("Tool discovery did not return the skill_library schema");
           }
           workshop = descriptor;
           catalogId = descriptor.id;
@@ -299,11 +329,11 @@ export async function startSkillLibraryWireProvider() {
         }
         const invoke = (callId: string, args: unknown) => {
           if (!workshop.parameters || !Value.Check(workshop.parameters, args)) {
-            throw new Error("Workshop schema does not accept the requested action");
+            throw new Error("skill_library schema does not accept the requested action");
           }
           advertisedCall(
             callId,
-            catalogId ? "dispatch_action" : "skill_workshop",
+            catalogId ? "dispatch_action" : "skill_library",
             catalogId ? { id: catalogId, args } : args,
           );
         };
@@ -440,7 +470,7 @@ export async function startSkillLibraryWireProvider() {
       reply(response, `TOOL-RESULT:${marker}\n${execOutput}`);
     })().catch((error: unknown) => {
       const failure = error instanceof Error ? error : new Error(String(error));
-      errors.push(failure);
+      errors.push({ message: failure.message, stack: failure.stack, request: requestContext() });
       console.error(`[skill-library-wire-provider] ${failure.message}`);
       if (!response.headersSent) {
         response.writeHead(500);

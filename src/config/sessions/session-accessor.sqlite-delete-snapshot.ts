@@ -33,7 +33,7 @@ type SessionStateDeleteSnapshotDatabase = Pick<
 
 /** Captures the owner window and canonical child state writable outside the lifecycle queue. */
 export function readSessionStateDeleteSnapshot(
-  database: import("node:sqlite").DatabaseSync,
+  database: import("../../infra/sql-connection.js").EngineConnection,
   sessionId: string,
 ): SessionStateDeleteSnapshot {
   const db = getNodeSqliteKysely<SessionStateDeleteSnapshotDatabase>(database);

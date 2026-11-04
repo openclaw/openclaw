@@ -5,12 +5,25 @@ import {
   type ErrorShape,
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import type { CreatedGatewaySession } from "../session-create-service.types.js";
 import {
   normalizeRpcAttachmentsToChatAttachments,
   type RpcAttachmentInput,
 } from "./attachment-normalize.js";
-import { normalizeChatSendRequest } from "./chat-send-request.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import { normalizeChatSendRequest, type NormalizedChatSendRequest } from "./chat-send-request.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "./types.js";
+
+const loadChatSendInternalEntry = createLazyRuntimeModule(() => import("./chat-send-handler.js"));
+const loadChatSendExternalEntry = createLazyRuntimeModule(
+  () => import("./chat-send-external-entry.js"),
+);
 
 export function resolveSessionCreateInitialTurn(params: {
   attachments?: unknown[];
@@ -30,6 +43,57 @@ export function resolveSessionCreateInitialTurn(params: {
     hasInitialTurn: message !== undefined || attachments !== undefined,
     message,
   };
+}
+
+export async function dispatchSessionCreateInitialTurn(
+  options: GatewayRequestHandlerOptions,
+  params: {
+    opening: {
+      client: GatewayClient | null;
+      internalInput?: Pick<
+        NormalizedChatSendRequest,
+        "systemInputProvenance" | "suppressCommandInterpretation"
+      >;
+    };
+    session: Pick<CreatedGatewaySession, "key" | "agentId">;
+    initialTurn: NonNullable<ReturnType<typeof resolveSessionCreateInitialTurn>>;
+    request: Pick<SessionsCreateParams, "timeoutMs" | "mentions">;
+    runId: string;
+    assertCurrent: () => void;
+    respond: GatewayRequestHandlerOptions["respond"];
+  },
+): Promise<void> {
+  const { opening, session, initialTurn, request } = params;
+  const sendOptions = bindGatewayRequestHandlerMutationAuthority(
+    options,
+    {
+      ...options,
+      client: opening.client,
+      params: {
+        sessionKey: session.key,
+        agentId: session.agentId,
+        message: initialTurn.message ?? "",
+        idempotencyKey: params.runId,
+        ...opening.internalInput,
+        ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+        ...(request.mentions ? { mentions: request.mentions } : {}),
+        ...(initialTurn.attachments ? { attachments: initialTurn.attachments } : {}),
+      },
+      respond: params.respond,
+    },
+    undefined,
+  );
+  params.assertCurrent();
+  // The initial turn must acquire its own writer, not the requesting session's.
+  await runWithoutOwnedSessionTranscriptWrites(async () => {
+    if (opening.internalInput) {
+      const { handleTrustedInternalChatSend } = await loadChatSendInternalEntry();
+      await handleTrustedInternalChatSend(sendOptions, undefined, { stageCreatedInput: true });
+    } else {
+      const { handleDirectExternalChatSend } = await loadChatSendExternalEntry();
+      await handleDirectExternalChatSend(sendOptions);
+    }
+  });
 }
 
 export function isFreshChatSendStarted(params: { cached?: boolean; payload: unknown }): boolean {

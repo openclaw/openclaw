@@ -70,7 +70,7 @@ function captureProcess(
   }
   try {
     const startedAt = getProcessInstanceStartTime(row.pid);
-    const observed = readDarwinProcessCommand(row.pid, row.uid);
+    const observed = readDarwinProcessCommand(row.pid, "same");
     if (
       !observed ||
       !("argv" in observed) ||
@@ -191,9 +191,9 @@ export async function reapOrphanedProcesses(params: {
     };
     const alive = () => [...captured.values()].filter(isCapturedProcessAlive);
     const waitForExit = async () => {
-      const deadline = Date.now() + 5_000;
-      while (alive().length > 0 && Date.now() < deadline) {
-        await sleepWithAbort(Math.min(25, deadline - Date.now()));
+      const deadline = performance.now() + 5_000;
+      while (alive().length > 0 && performance.now() < deadline) {
+        await sleepWithAbort(Math.min(25, deadline - performance.now()));
       }
     };
     params.signal?.throwIfAborted();

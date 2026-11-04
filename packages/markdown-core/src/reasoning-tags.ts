@@ -12,11 +12,9 @@ import {
 } from "./reasoning-tag-parser.js";
 
 export {
-  findMarkdownCodeSpans,
   findMarkdownCodeRegions,
   parseMarkdownOwnership,
   scanReasoningTags,
-  stripReasoningTagsFromMarkdown,
 } from "./reasoning-tag-parser.js";
 export type { ReasoningTagTextDelta } from "./reasoning-tag-parser.js";
 

@@ -73,7 +73,7 @@ function parts(input: string[]): string[][] {
   return result;
 }
 
-type Expression = { sql: string; type: string };
+type Expression = { sql: string; type: string; nonNullColumns?: string[] };
 const navigationMembers = [
   "version",
   "modelBytes",
@@ -349,12 +349,17 @@ function expression(source: string, columns: Map<string, string>, table?: string
       const negate = take("NOT");
       const right = atom();
       compatible(left, right);
+      const name = identifier(left.sql);
       return {
         sql:
           right.type === "null"
             ? `${left.sql} IS ${negate ? "NOT " : ""}NULL`
             : `${left.sql} IS ${negate ? "" : "NOT "}DISTINCT FROM ${right.sql}`,
         type: "boolean",
+        nonNullColumns:
+          negate && right.type === "null" && columns.has(name) && left.sql === quote(name)
+            ? [name]
+            : undefined,
       };
     }
     const negate = take("NOT");
@@ -411,14 +416,28 @@ function expression(source: string, columns: Map<string, string>, table?: string
   function and(): Expression {
     let value = not();
     while (take("AND")) {
-      value = { sql: `${boolean(value)} AND ${boolean(not())}`, type: "boolean" };
+      const right = not();
+      value = {
+        sql: `${boolean(value)} AND ${boolean(right)}`,
+        type: "boolean",
+        nonNullColumns: [
+          ...new Set([...(value.nonNullColumns ?? []), ...(right.nonNullColumns ?? [])]),
+        ],
+      };
     }
     return value;
   }
   function or(): Expression {
     let value = and();
     while (take("OR")) {
-      value = { sql: `${boolean(value)} OR ${boolean(and())}`, type: "boolean" };
+      const right = and();
+      value = {
+        sql: `${boolean(value)} OR ${boolean(right)}`,
+        type: "boolean",
+        nonNullColumns: value.nonNullColumns?.filter((name) =>
+          right.nonNullColumns?.includes(name),
+        ),
+      };
     }
     return value;
   }
@@ -480,14 +499,15 @@ export function portTables(data: Catalog) {
   }));
 }
 
-function indexExpressions(indexSource: string, cols: Map<string, string>, table: string): string {
+function indexExpressions(
+  indexSource: string,
+  cols: Map<string, string>,
+  table: string,
+  columns: readonly Column[],
+): string {
   const ts = tokens(indexSource);
   const on = ts.findIndex((token) => keyword(token, "ON"));
   const keys = group(ts, ts.indexOf("(", on));
-  const terms = parts(keys.body).map((term) => {
-    const order = /^(ASC|DESC)$/i.test(term.at(-1)!) ? term.pop()!.toUpperCase() : "ASC";
-    return `(${expression(term.join(" "), cols, table).sql}) ${order} NULLS ${order === "DESC" ? "LAST" : "FIRST"}`;
-  });
   const where = ts.slice(keys.end + 1);
   if (where.length && !keyword(where.shift(), "WHERE")) {
     throw new Error("Unsupported index suffix");
@@ -496,6 +516,16 @@ function indexExpressions(indexSource: string, cols: Map<string, string>, table:
   if (predicate && predicate.type !== "boolean") {
     throw new Error("Non-boolean index predicate");
   }
+  const terms = parts(keys.body).map((term) => {
+    const order = /^(ASC|DESC)$/i.test(term.at(-1)!) ? term.pop()!.toUpperCase() : "ASC";
+    const notNull =
+      term.length === 1 &&
+      (columns.some((column) => column.name === identifier(term[0]!) && !column.nullable) ||
+        predicate?.nonNullColumns?.includes(identifier(term[0]!)));
+    // Schema or predicate-proven non-null keys match PostgreSQL's default ORDER BY.
+    const nulls = notNull ? "" : ` NULLS ${order === "DESC" ? "LAST" : "FIRST"}`;
+    return `(${expression(term.join(" "), cols, table).sql}) ${order}${nulls}`;
+  });
   return `(${terms.join(", ")})${predicate ? ` WHERE ${predicate.sql}` : ""}`;
 }
 
@@ -666,12 +696,14 @@ function mapChecks(ctx: Context, mapping: TableMapping, sqlTokens: string[]): vo
         const value = member.split(".").reduce(firstJsonMember, "document");
         return `${value} AS ${quote(`j_${member}`)}`;
       });
+      // STRICT skips absent metadata; a fixed builtin path also avoids parsing this
+      // CTE on every INSERT just to discover that SQL-function inlining is impossible.
       ctx.record(
         "function",
         name,
         functionName,
         item.source,
-        `CREATE FUNCTION ${quote(functionName)}(navigation_json text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $navigation$\nWITH input AS (SELECT CASE WHEN navigation_json IS JSON THEN navigation_json::json END AS document),\nmembers AS (SELECT ${members.join(",\n")} FROM input)\nSELECT ${item.sql} FROM members;\n$navigation$;`,
+        `CREATE FUNCTION ${quote(functionName)}(navigation_json text) RETURNS boolean LANGUAGE sql IMMUTABLE STRICT SET search_path = pg_catalog AS $navigation$\nWITH input AS (SELECT CASE WHEN navigation_json IS JSON THEN navigation_json::json END AS document),\nmembers AS (SELECT ${members.join(",\n")} FROM input)\nSELECT ${item.sql} FROM members;\n$navigation$;`,
       );
       item.sql = `${quote(functionName)}("navigation_json")`;
     }
@@ -719,7 +751,7 @@ function mapIndexes(ctx: Context, mapping: TableMapping, indexes: Row[]): void {
       table.indexes++;
     } else {
       try {
-        sql = `CREATE ${Number(index.unique) ? "UNIQUE " : ""}INDEX ${quote(indexName)} ON ${qualified(ctx, name)} ${indexExpressions(source, cols, name)};`;
+        sql = `CREATE ${Number(index.unique) ? "UNIQUE " : ""}INDEX ${quote(indexName)} ON ${qualified(ctx, name)} ${indexExpressions(source, cols, name, table.columns)};`;
         table.indexes++;
       } catch (error) {
         reason = `Index omitted: ${error instanceof Error ? error.message : String(error)}`;

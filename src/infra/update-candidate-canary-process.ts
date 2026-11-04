@@ -1,15 +1,23 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
-import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
+import {
+  parsePublicConfigDiagnosticLines,
+  redactSupportDiagnosticLine,
+} from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { signalProcessTree } from "../process/kill-tree.js";
-import { resolveRuntimeArgs } from "./runtime-worker-url.js";
+import { resolveRuntimeArgs, resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
+import type { UpdateCanaryTarget } from "./update-candidate-canary-commands.js";
 import { UPDATE_CANARY_PROGRESS_PREFIX } from "./update-candidate-canary-progress.js";
+import { createUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts.js";
+import { warnOnUpdateCleanupFailure } from "./update-maintenance.js";
+import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "./update-preflight-details.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export function launchCanary(params: {
-  entry: string;
+  target: UpdateCanaryTarget;
   args: string[];
   root: string;
   env: NodeJS.ProcessEnv;
@@ -22,16 +30,26 @@ export function launchCanary(params: {
   hidesLine?: (line: string) => boolean;
   onStdout?: (stdout: string) => void;
 }) {
-  const { entry, args, env, capture } = params;
+  const { target, args, env, capture } = params;
   params.assertCurrent?.();
   const runtime = params.nodeRunner ?? process.execPath;
-  const child = spawn(runtime, [...resolveRuntimeArgs(runtime), entry, ...args], {
+  const invocation =
+    target.kind === "worker"
+      ? { command: runtime, args: [...resolveRuntimeWorkerArgv(target.url, runtime), ...args] }
+      : resolveOpenClawCliInvocation({
+          execPath: runtime,
+          execArgv: resolveRuntimeArgs(runtime),
+          entryPath: target.entryPath,
+          args,
+        });
+  const child = spawn(invocation.command, invocation.args, {
     cwd: params.root,
     env,
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+  const failureFacts: UpdateFailureFact[] = [];
   let stdout = "";
   let lastStderrLine: string | undefined;
   const stderrLines: string[] = [];
@@ -41,6 +59,30 @@ export function launchCanary(params: {
   const captureStderr = (line: string) => {
     if (!line.trim() || line.startsWith(UPDATE_CANARY_PROGRESS_PREFIX)) {
       return;
+    }
+    const condition = UPDATE_CANDIDATE_STARTUP_FAILURES.find(([pattern]) => pattern.test(line));
+    const issue = failureFacts.some((fact) => fact.message === "Invalid configuration field")
+      ? parsePublicConfigDiagnosticLines(line)[0]
+      : undefined;
+    const message = issue?.message ?? condition?.[1];
+    if (
+      message &&
+      failureFacts.length < 5 &&
+      !failureFacts.some((fact) => fact.message === message && fact.affectedKey === issue?.path)
+    ) {
+      const match = condition?.[0].exec(line);
+      failureFacts.push(
+        createUpdateFailureFact(
+          {
+            check: issue ? "config" : "startupz",
+            code: issue ? "invalid-config" : "candidate-startup-failed",
+            message,
+            affectedKey: issue?.path,
+            pluginId: message === "plugin load failed" ? (match?.[1] ?? match?.[2]) : undefined,
+          },
+          env,
+        ),
+      );
     }
     const safe = redactSupportDiagnosticLine(
       line,
@@ -151,6 +193,7 @@ export function launchCanary(params: {
   });
   return {
     child,
+    failureFacts,
     result,
     closed,
     hasExited: () => exited,
@@ -234,6 +277,6 @@ export async function stopCanary(params: {
         { cause: cleanupError },
       );
     }
-    throw cleanupError;
+    await warnOnUpdateCleanupFailure(cleanupError, params.root, console.warn);
   }
 }

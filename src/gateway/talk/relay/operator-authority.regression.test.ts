@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -27,7 +26,6 @@ it("fences awaited native replies with the retained device-source authority", as
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const context = createContext();
-    context.chatAbortControllers = new Map();
     context.resolveGatewayContext = () => context;
     const client = createOperatorClient({
       profileName: "native-revocation",
@@ -54,10 +52,7 @@ it("fences awaited native replies with the retained device-source authority", as
       sessionTarget,
       controlSource: "delegation",
       context: controlContext(),
-      operatorAuthority: expectDefined(
-        runAuthority.operatorAuthority,
-        "retained operator authority",
-      ),
+      assertConnectionOpen: () => runAuthority.assertCurrent(),
       runToolAgentConsult: vi.fn(async () => ({ text: "unexpected" })),
       runAgentConsult: vi.fn(async () => ({ text: "unexpected" })),
       appendTranscript: vi.fn(async () => undefined),

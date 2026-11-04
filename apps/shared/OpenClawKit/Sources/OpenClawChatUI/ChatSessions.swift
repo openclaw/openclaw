@@ -359,19 +359,27 @@ public struct OpenClawChatSessionSettingsExpectation: Codable, Hashable, Sendabl
     }
 }
 
+public enum OpenClawChatQueueMode: String, Codable, Hashable, Sendable {
+    case steer
+    case followup
+}
+
 public struct OpenClawChatSendTarget: Hashable, Sendable {
     public let agentID: String?
     public let expectedSessionRoutingContract: String?
     public let expectedSessionSettings: OpenClawChatSessionSettingsExpectation?
+    public let queueMode: OpenClawChatQueueMode?
 
     public init(
         agentID: String?,
         expectedSessionRoutingContract: String?,
-        expectedSessionSettings: OpenClawChatSessionSettingsExpectation?)
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation?,
+        queueMode: OpenClawChatQueueMode? = nil)
     {
         self.agentID = agentID
         self.expectedSessionRoutingContract = expectedSessionRoutingContract
         self.expectedSessionSettings = expectedSessionSettings
+        self.queueMode = queueMode
     }
 }
 
@@ -659,9 +667,11 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var systemSent: Bool?
     public var abortedLastRun: Bool?
     public var thinkingLevel: String?
+    public var reasoningLevel: String?
     public var verboseLevel: String?
     public var fastMode: OpenClawChatFastMode?
     public var effectiveFastMode: OpenClawChatFastMode?
+    public var effectiveQueueMode: String?
     public var permissionMode: OpenClawChatPermissionMode?
     public var toolOverrides: OpenClawChatSessionToolOverrides?
 
@@ -747,7 +757,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         endedAt: Double? = nil,
         runtimeMs: Double? = nil,
         agentRuntime: OpenClawChatAgentRuntime? = nil,
-        derivedTitle: String? = nil)
+        derivedTitle: String? = nil,
+        effectiveQueueMode: String? = nil)
     {
         self.key = key
         self.kind = kind
@@ -804,9 +815,11 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.systemSent = systemSent
         self.abortedLastRun = abortedLastRun
         self.thinkingLevel = thinkingLevel
+        self.reasoningLevel = nil
         self.verboseLevel = verboseLevel
         self.fastMode = fastMode
         self.effectiveFastMode = effectiveFastMode
+        self.effectiveQueueMode = effectiveQueueMode
         self.permissionMode = permissionMode
         self.toolOverrides = toolOverrides
         self.inputTokens = inputTokens

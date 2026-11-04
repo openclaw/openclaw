@@ -12,10 +12,6 @@ import { captureSessionEventTargetForHost as captureSessionEventTarget } from ".
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import {
-  buildSessionCreationStamp,
-  inheritSessionGitContributorProfileIds,
-} from "../../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
   sessionEntryCommitGuardOptions,
@@ -38,6 +34,7 @@ import { isIncognitoSessionKey, normalizeOptionalAgentId } from "../../../routin
 import { recordSessionCreated } from "../../../sessions/session-created.js";
 import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
+import { resolveConfiguredAcpSubagentTargetIds } from "../../agent-roster.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agent-tool-source-execution-guard.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
@@ -49,6 +46,7 @@ import {
   inheritedToolAllowPatch,
   inheritedToolDenyPatch,
 } from "../../inherited-tool-deny.js";
+import { requesterCreatorProfileId } from "../../requester-origin.js";
 import { runSpawnPipeline, type SpawnBackendAdapter } from "../../spawn-pipeline.js";
 import {
   mintSpawnSessionKey,
@@ -57,8 +55,10 @@ import {
   resolveSpawnMode,
   type PreparedSpawnThreadBinding,
 } from "../../spawn-plan.js";
+import type { SpawnRequesterConversationSource } from "../../spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
 import { countUntrackedActiveAcpRunsForOwner } from "./acp-spawn-admission.js";
 import {
@@ -66,6 +66,7 @@ import {
   toGatewayImageAttachments,
   type AcpSpawnBootstrapDeliveryPlan,
 } from "./acp-spawn-bootstrap-delivery.js";
+import { prepareAcpSpawnCreation } from "./acp-spawn-creation.js";
 import { launchAcpChildThroughGateway } from "./acp-spawn-gateway.js";
 import {
   startAcpSpawnParentStreamRelay,
@@ -94,12 +95,8 @@ import {
   resolveRuntimeCwdForAcpSpawn,
   type AcpSpawnInitializedRuntime,
 } from "./acp-spawn-runtime.js";
-import {
-  resolveConfiguredAcpSubagentTargetIds,
-  resolveTargetAcpAgentId,
-} from "./acp-spawn-target.js";
+import { resolveTargetAcpAgentId } from "./acp-spawn-target.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
-import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -131,22 +128,19 @@ type SpawnAcpParams = {
   attachments?: AcpTurnAttachment[];
 };
 
-type SpawnAcpContext = {
+type SpawnAcpContext = SpawnRequesterConversationSource & {
   onSpawnEffectsStart?: () => void;
   assertActive?: SessionSourceAssertion;
   agentSessionKey?: string;
   /** Trusted parent tool construction facts; never read from model arguments. */
   senderIsOwner?: boolean;
+  gitContributorProfileId?: string;
   expectedParentSessionId?: string;
   requesterTurnRunId?: string;
   completionOwnerKey?: string;
   requesterAgentIdOverride?: string;
   agentChannel?: string;
   agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  currentMessagingTarget?: string;
-  currentChannelId?: string;
   currentMessageId?: string | number;
   /** Group chat ID for channels that distinguish group vs. topic (e.g. Telegram). */
   agentGroupId?: string;
@@ -172,6 +166,9 @@ export async function spawnAcpDirect(
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
   const cfg = getRuntimeConfig();
+  const creatorProfileId = requesterCreatorProfileId(
+    getGatewayToolCallerIdentity()?.requesterOrigin,
+  );
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
@@ -320,7 +317,7 @@ export async function spawnAcpDirect(
       requesterAgentId,
       targetAgentId,
       requestedAgentId: params.agentId,
-      configuredAgentIds: resolveConfiguredAcpSubagentTargetIds(cfg),
+      configuredAgentIds: Array.from(resolveConfiguredAcpSubagentTargetIds(cfg)),
       additionalActiveChildren: hasSubagentEnvelope
         ? countUntrackedActiveAcpRunsForOwner(requesterInternalKey, pendingChildSessionKeys) +
           pendingChildren
@@ -428,7 +425,6 @@ export async function spawnAcpDirect(
           resolveEventSessionKeyForPolicy(parentSessionKey, parentEventRouting),
         )
       : undefined;
-  ctx.assertActive?.();
   const gatewayAttachments = toGatewayImageAttachments(params.attachments);
   const requesterOrigin = requesterState.origin;
   const progressOrigin = {
@@ -473,15 +469,16 @@ export async function spawnAcpDirect(
         ? undefined
         : await readParentEntry();
       // Incognito parents are never read here, so like rowless parents they record no incarnation.
-      const parentLineage = captureSpawnParentLineage({
+      const creation = prepareAcpSpawnCreation({
+        cfg,
         parentEntry,
+        requesterAgentId,
+        requesterSessionKey: requesterInternalKey,
+        creatorProfileId,
+        gitContributorProfileId: ctx.gitContributorProfileId,
         expectedParentSessionId: ctx.expectedParentSessionId,
         senderIsOwner: ctx.senderIsOwner,
-      });
-      const creationStamp = buildSessionCreationStamp({
-        via: "spawn",
-        actor: { type: "agent", id: requesterAgentId },
-        inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(parentEntry),
+        assertActive: ctx.assertActive,
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: ownerAgentId });
       const childSessionPatch = admission.childSessionPatch
@@ -498,7 +495,7 @@ export async function spawnAcpDirect(
         (await upsertSessionEntryCore(
           { storePath, sessionKey, agentId: ownerAgentId },
           {
-            ...creationStamp,
+            ...creation.stamp,
             spawnedBy: requesterInternalKey,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
             // Navigation parent is stamped at creation so the durable tree edge
@@ -521,9 +518,9 @@ export async function spawnAcpDirect(
               : {}),
             ...(params.label ? { label: params.label } : {}),
             // Same trust rules as native spawn: stamped last, from trusted host facts only.
-            ...parentLineage,
+            ...creation.parentPatch,
           },
-          sessionEntryCommitGuardOptions(ctx.assertActive),
+          sessionEntryCommitGuardOptions(creation.assertCurrent),
         )) ?? undefined;
       const initializedSession = await withAcpResumeSessionAuthorization(
         resumeOwnership,

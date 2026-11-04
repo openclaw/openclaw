@@ -5,7 +5,7 @@ import { Command } from "commander";
 import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerMatrixDoctorCommands } from "../cli-doctor.js";
 import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
@@ -25,16 +25,47 @@ let storageRootDir: string;
 let snapshotPath: string;
 let markerPath: string;
 
+const database = { name: "crypto", version: 1, stores: [] };
+const keyStore = { name: "keys", keyPath: null, autoIncrement: false, indexes: [] };
+const keysSnapshot = (records: unknown[], indexes: unknown[] = []) => [
+  { ...database, stores: [{ ...keyStore, records, indexes }] },
+];
+const recover = (acceptSnapshotRollback = true) =>
+  recoverMatrixCryptoUnsafeState({ storageRootDir, acceptSnapshotRollback });
+const inspect = () => listMatrixCryptoUnsafeState(stateDir);
+function writeSnapshot(root = storageRootDir, databases: unknown[] = [database]) {
+  return writeMatrixIdbSnapshotJson({
+    storageRootDir: root,
+    snapshotJson: JSON.stringify(databases),
+    databaseCount: databases.length,
+  });
+}
+function snapshotStore() {
+  return getMatrixRuntime().state.openKeyedStoreV2<Record<string, unknown>>(
+    openMatrixIdbSnapshotStoreOptions(storageRootDir),
+  );
+}
+function doctor() {
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  const command = new Command();
+  registerMatrixDoctorCommands(command);
+  return {
+    recover: () =>
+      command.parseAsync(
+        ["doctor", "recover", "--account", "default", "--accept-snapshot-rollback"],
+        { from: "user" },
+      ),
+    inspect: async () => {
+      await command.parseAsync(["doctor", "inspect", "--json"], { from: "user" });
+      return JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+    },
+  };
+}
+
 beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "matrix-unsafe-doctor-"));
-  storageRootDir = path.join(
-    stateDir,
-    "matrix",
-    "accounts",
-    "default",
-    "example.org__bot",
-    "0123456789abcdef",
-  );
+  storageRootDir = path.join(stateDir, "matrix/accounts/default/example.org__bot/0123456789abcdef");
   await fs.mkdir(storageRootDir, { recursive: true });
   snapshotPath = path.join(storageRootDir, MATRIX_IDB_SNAPSHOT_FILENAME);
   markerPath = `${snapshotPath}.owner.poisoned`;
@@ -50,205 +81,107 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-describe("Matrix crypto unsafe-state Doctor", () => {
-  it("inspects and explicitly recovers the default snapshot through the Doctor CLI", async () => {
-    const defaultRoot = path.join(stateDir, "matrix");
-    const defaultSnapshot = path.join(defaultRoot, MATRIX_IDB_SNAPSHOT_FILENAME);
-    await fs.writeFile(`${defaultSnapshot}.owner.poisoned`, "unsafe\n");
-    await writeMatrixIdbSnapshotJson({
-      storageRootDir: defaultRoot,
-      snapshotJson: JSON.stringify([{ name: "crypto", version: 1, stores: [] }]),
-      databaseCount: 1,
+it.each(["default", "account"])(
+  "inspects and recovers a missing guard for a sealed %s snapshot through the Doctor CLI",
+  async (layout) => {
+    const root = layout === "default" ? path.join(stateDir, "matrix") : storageRootDir;
+    const snapshot = path.join(root, MATRIX_IDB_SNAPSHOT_FILENAME);
+    const guard = `${snapshot}.owner.poisoned`;
+    await fs.writeFile(guard, "unsafe\n");
+    await writeSnapshot(root);
+    const cli = doctor();
+    expect(await cli.inspect()).toEqual({ blocked: [{ account: "default", rootDir: root }] });
+    await cli.recover();
+    expect((await fs.stat(guard)).isFile()).toBe(true);
+    expect(await cli.inspect()).toEqual({ blocked: [] });
+
+    await fs.unlink(guard);
+    expect(await cli.inspect()).toEqual({
+      blocked: [{ account: "default", rootDir: root }],
     });
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const command = new Command();
-    registerMatrixDoctorCommands(command);
-    await command.parseAsync(["doctor", "inspect", "--json"], { from: "user" });
-    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
-      blocked: [{ account: "default", rootDir: defaultRoot }],
-    });
-    await command.parseAsync(
-      ["doctor", "recover", "--account", "default", "--accept-snapshot-rollback"],
-      { from: "user" },
-    );
-    const owner = await acquireMatrixCryptoStoreOwnership(defaultSnapshot);
+    await cli.recover();
+    expect((await fs.stat(guard)).isFile()).toBe(true);
+    expect(await inspect()).toEqual([]);
+    const owner = await acquireMatrixCryptoStoreOwnership(snapshot);
     await owner.release();
-    expect(await listMatrixCryptoUnsafeState(stateDir)).toEqual([]);
-  });
+  },
+);
 
-  it.each(["default", "account"])(
-    "inspects and recovers a missing guard for a sealed %s snapshot through the Doctor CLI",
-    async (layout) => {
-      const root = layout === "default" ? path.join(stateDir, "matrix") : storageRootDir;
-      const snapshot = path.join(root, MATRIX_IDB_SNAPSHOT_FILENAME);
-      const guard = `${snapshot}.owner.poisoned`;
-      await fs.writeFile(guard, "unsafe\n");
-      await writeMatrixIdbSnapshotJson({
-        storageRootDir: root,
-        snapshotJson: JSON.stringify([{ name: "crypto", version: 1, stores: [] }]),
-        databaseCount: 1,
-      });
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const log = vi.spyOn(console, "log").mockImplementation(() => {});
-      const command = new Command();
-      registerMatrixDoctorCommands(command);
-      const recover = () =>
-        command.parseAsync(
-          ["doctor", "recover", "--account", "default", "--accept-snapshot-rollback"],
-          { from: "user" },
-        );
-      await recover();
-      expect((await fs.stat(guard)).isFile()).toBe(true);
-      await command.parseAsync(["doctor", "inspect", "--json"], { from: "user" });
-      expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toEqual({ blocked: [] });
+it("inspects refusal without clearing it and requires explicit rollback acceptance", async () => {
+  await fs.writeFile(markerPath, "unsafe\n");
+  expect(await inspect()).toEqual([storageRootDir]);
+  await expect(recover(false)).rejects.toThrow("explicit");
+  await expect(recover()).rejects.toThrow("absent");
+  expect(await inspect()).toEqual([storageRootDir]);
+});
 
-      await fs.unlink(guard);
-      await command.parseAsync(["doctor", "inspect", "--json"], { from: "user" });
-      expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toEqual({
-        blocked: [{ account: "default", rootDir: root }],
-      });
-      await recover();
-      expect((await fs.stat(guard)).isFile()).toBe(true);
-      expect(await listMatrixCryptoUnsafeState(stateDir)).toEqual([]);
-      const owner = await acquireMatrixCryptoStoreOwnership(snapshot);
-      await owner.release();
-    },
-  );
-
-  it("inspects refusal without clearing it and requires explicit rollback acceptance", async () => {
-    await fs.writeFile(markerPath, "unsafe\n");
-    expect(await listMatrixCryptoUnsafeState(stateDir)).toEqual([storageRootDir]);
-    await expect(
-      recoverMatrixCryptoUnsafeState({ storageRootDir, acceptSnapshotRollback: false }),
-    ).rejects.toThrow("explicit");
-    await expect(
-      recoverMatrixCryptoUnsafeState({ storageRootDir, acceptSnapshotRollback: true }),
-    ).rejects.toThrow("absent");
-    expect(await listMatrixCryptoUnsafeState(stateDir)).toEqual([storageRootDir]);
-  });
-
-  it("does not report an armed marker while its crypto owner is live", async () => {
-    const owner = await acquireMatrixCryptoStoreOwnership(snapshotPath);
-    try {
-      await owner.armUnsafeState();
-      expect(await listMatrixCryptoUnsafeState(stateDir)).toEqual([]);
-    } finally {
-      await owner.release();
-    }
-    expect(await listMatrixCryptoUnsafeState(stateDir)).toEqual([storageRootDir]);
-  });
-
-  it("refuses recovery while a live owner holds the crypto store", async () => {
-    await fs.writeFile(markerPath, "unsafe\n");
-    const owner = await acquireMatrixCryptoStoreOwnership(snapshotPath).catch(() => null);
-    // The normal owner correctly refuses an existing marker; use the Doctor lock itself.
-    expect(owner).toBeNull();
-    await writeMatrixIdbSnapshotJson({
-      storageRootDir,
-      snapshotJson: JSON.stringify([{ name: "crypto", version: 1, stores: [] }]),
-      databaseCount: 1,
-    });
-    const { withMatrixCryptoStoreRecoveryLock } = await import("./sdk/crypto-store-ownership.js");
-    await withMatrixCryptoStoreRecoveryLock(snapshotPath, async () => {
-      await expect(
-        recoverMatrixCryptoUnsafeState({ storageRootDir, acceptSnapshotRollback: true }),
-      ).rejects.toThrow();
-      expect(await listMatrixCryptoUnsafeState(stateDir)).toEqual([]);
-    });
-  });
-
-  it("clears refusal only after validating the canonical SQLite snapshot", async () => {
-    await fs.writeFile(markerPath, "unsafe\n");
-    await writeMatrixIdbSnapshotJson({
-      storageRootDir,
-      snapshotJson: JSON.stringify([{ name: "crypto", version: 1, stores: [] }]),
-      databaseCount: 1,
-    });
-    const store = getMatrixRuntime().state.openKeyedStoreV2<Record<string, unknown>>(
-      openMatrixIdbSnapshotStoreOptions(storageRootDir),
-    );
-    const meta = await store.lookup("current:meta");
-    if (!meta) {
-      throw new Error("Snapshot fixture has no metadata");
-    }
-    await store.register("current:meta", { ...meta, digest: "incorrect" });
-    const corruptRows = await store.entries();
-    await expect(
-      recoverMatrixCryptoUnsafeState({ storageRootDir, acceptSnapshotRollback: true }),
-    ).rejects.toMatchObject({ code: "matrix-idb-snapshot-invalid" });
-    expect(await fs.readFile(markerPath, "utf8")).toBe("unsafe\n");
-    expect(await store.entries()).toEqual(corruptRows);
-    await store.register("current:meta", meta);
-    await recoverMatrixCryptoUnsafeState({ storageRootDir, acceptSnapshotRollback: true });
-    expect(await listMatrixCryptoUnsafeState(stateDir)).toEqual([]);
-    const owner = await acquireMatrixCryptoStoreOwnership(snapshotPath);
+it("does not report an armed marker while its crypto owner is live", async () => {
+  const owner = await acquireMatrixCryptoStoreOwnership(snapshotPath);
+  try {
+    await owner.armUnsafeState();
+    expect(await inspect()).toEqual([]);
+  } finally {
     await owner.release();
-  });
+  }
+  expect(await inspect()).toEqual([storageRootDir]);
+});
 
-  it.each([
-    {
-      label: "duplicate database names",
-      databases: [
-        { name: "crypto", version: 1, stores: [] },
-        { name: "crypto", version: 1, stores: [] },
-      ],
-    },
-    {
-      label: "invalid record keys",
-      databases: [
-        {
-          name: "crypto",
-          version: 1,
-          stores: [
-            {
-              name: "keys",
-              keyPath: null,
-              autoIncrement: false,
-              indexes: [],
-              records: [{ key: {}, value: "synthetic" }],
-            },
-          ],
-        },
-      ],
-    },
-    {
-      label: "unique index conflicts",
-      databases: [
-        {
-          name: "crypto",
-          version: 1,
-          stores: [
-            {
-              name: "keys",
-              keyPath: null,
-              autoIncrement: false,
-              indexes: [{ name: "unique", keyPath: "name", unique: true, multiEntry: false }],
-              records: [
-                { key: "first", value: { name: "same" } },
-                { key: "second", value: { name: "same" } },
-              ],
-            },
-          ],
-        },
-      ],
-    },
-  ])("refuses recovery for $label without changing durable state", async ({ databases }) => {
-    await fs.writeFile(markerPath, "unsafe\n");
-    await writeMatrixIdbSnapshotJson({
-      storageRootDir,
-      snapshotJson: JSON.stringify(databases),
-      databaseCount: databases.length,
-    });
-    const store = getMatrixRuntime().state.openKeyedStoreV2<Record<string, unknown>>(
-      openMatrixIdbSnapshotStoreOptions(storageRootDir),
-    );
-    const rows = await store.entries();
-    await expect(
-      recoverMatrixCryptoUnsafeState({ storageRootDir, acceptSnapshotRollback: true }),
-    ).rejects.toThrow("cannot be replayed");
-    expect(await fs.readFile(markerPath, "utf8")).toBe("unsafe\n");
-    expect(await store.entries()).toEqual(rows);
-    expect(await listMatrixCryptoUnsafeState(stateDir)).toEqual([storageRootDir]);
+it("refuses recovery while a live owner holds the crypto store", async () => {
+  await fs.writeFile(markerPath, "unsafe\n");
+  const owner = await acquireMatrixCryptoStoreOwnership(snapshotPath).catch(() => null);
+  // The normal owner correctly refuses an existing marker; use the Doctor lock itself.
+  expect(owner).toBeNull();
+  await writeSnapshot();
+  const { withMatrixCryptoStoreRecoveryLock } = await import("./sdk/crypto-store-ownership.js");
+  await withMatrixCryptoStoreRecoveryLock(snapshotPath, async () => {
+    await expect(recover()).rejects.toThrow();
+    expect(await inspect()).toEqual([]);
   });
 });
+
+it("clears refusal only after validating the canonical SQLite snapshot", async () => {
+  await fs.writeFile(markerPath, "unsafe\n");
+  await writeSnapshot();
+  const store = snapshotStore();
+  const meta = await store.lookup("current:meta");
+  if (!meta) {
+    throw new Error("Snapshot fixture has no metadata");
+  }
+  await store.register("current:meta", { ...meta, digest: "incorrect" });
+  const corruptRows = await store.entries();
+  await expect(recover()).rejects.toMatchObject({ code: "matrix-idb-snapshot-invalid" });
+  expect(await fs.readFile(markerPath, "utf8")).toBe("unsafe\n");
+  expect(await store.entries()).toEqual(corruptRows);
+  await store.register("current:meta", meta);
+  await recover();
+  expect(await inspect()).toEqual([]);
+  const owner = await acquireMatrixCryptoStoreOwnership(snapshotPath);
+  await owner.release();
+});
+
+it.each([
+  ["duplicate database names", [database, database]],
+  ["invalid record keys", keysSnapshot([{ key: {}, value: "synthetic" }])],
+  [
+    "unique index conflicts",
+    keysSnapshot(
+      [
+        { key: "first", value: { name: "same" } },
+        { key: "second", value: { name: "same" } },
+      ],
+      [{ name: "unique", keyPath: "name", unique: true, multiEntry: false }],
+    ),
+  ],
+] satisfies [string, unknown[]][])(
+  "refuses recovery for %s without changing durable state",
+  async (_label, databases) => {
+    await fs.writeFile(markerPath, "unsafe\n");
+    await writeSnapshot(storageRootDir, databases);
+    const store = snapshotStore();
+    const rows = await store.entries();
+    await expect(recover()).rejects.toThrow("cannot be replayed");
+    expect(await fs.readFile(markerPath, "utf8")).toBe("unsafe\n");
+    expect(await store.entries()).toEqual(rows);
+    expect(await inspect()).toEqual([storageRootDir]);
+  },
+);

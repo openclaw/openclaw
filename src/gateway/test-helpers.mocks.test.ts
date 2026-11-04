@@ -2,13 +2,9 @@
 import "./test-helpers.mocks.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  getActiveEmbeddedRunCount,
-  isEmbeddedAgentRunActive,
-} from "../agents/embedded-agent-runner/active-run-projections.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
-import { dispatchInboundMessageMock, embeddedRunMock } from "./test-helpers.runtime-state.js";
+import { dispatchInboundMessageMock } from "./test-helpers.runtime-state.js";
 
 const { dispatchInboundMessageWithProjectedDispatcher } = await import("../auto-reply/dispatch.js");
 
@@ -100,19 +96,4 @@ describe("Gateway projected-dispatch mock ownership", () => {
       expect(getTotalPendingReplies()).toBe(pendingBefore);
     },
   );
-});
-
-it("shares the active-run fake with direct projection readers", () => {
-  const sessionId = "gateway-active-projection-fixture";
-  const activeBefore = getActiveEmbeddedRunCount();
-  expect(isEmbeddedAgentRunActive(sessionId)).toBe(false);
-  try {
-    embeddedRunMock.activeIds.add(sessionId);
-    expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
-    expect(getActiveEmbeddedRunCount()).toBe(activeBefore + 1);
-  } finally {
-    embeddedRunMock.activeIds.delete(sessionId);
-  }
-  expect(isEmbeddedAgentRunActive(sessionId)).toBe(false);
-  expect(getActiveEmbeddedRunCount()).toBe(activeBefore);
 });

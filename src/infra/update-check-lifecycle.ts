@@ -24,8 +24,6 @@ export type UpdateCheckLifecycle = UpdateCheckNotifications & {
     installStatus: StartupInstallStatus,
   ) => Promise<void>;
   isCurrent: () => boolean;
-  /** Shared publication order for background and interactive update discovery. */
-  publicationGeneration: number;
   refreshes: WeakMap<OpenClawConfig, Promise<void>>;
   run: <T>(work: (signal: AbortSignal) => Promise<T>) => Promise<T>;
   initialize: () => Promise<StartupInstallStatus>;
@@ -53,7 +51,7 @@ export function createGatewayUpdateLifecycle(
     });
   const initialize = async () => {
     signal.throwIfAborted();
-    if (lifecycle.installStatus) {
+    if (lifecycle.installStatus && !lifecycle.installStatus.status.error) {
       return lifecycle.installStatus;
     }
     if (!initialization) {
@@ -63,14 +61,18 @@ export function createGatewayUpdateLifecycle(
         const result = await resolveStartupInstallStatus(false, signal);
         signal.throwIfAborted();
         // A fresh interactive probe may have already adopted the installation.
-        return (lifecycle.installStatus ??= result);
+        if (!lifecycle.installStatus || lifecycle.installStatus.status.error) {
+          lifecycle.installStatus = result;
+        }
+        return lifecycle.installStatus;
       });
       initialization = task;
-      void task.catch(() => {
+      const clearInitialization = () => {
         if (initialization === task) {
           initialization = undefined;
         }
-      });
+      };
+      void task.then(clearInitialization, clearInitialization);
     }
     return initialization;
   };
@@ -85,7 +87,11 @@ export function createGatewayUpdateLifecycle(
         run: () =>
           run(work)
             .then((nextDelayMs) => arm(Math.max(1, nextDelayMs)))
-            .catch(() => undefined),
+            .catch((error: unknown) => {
+              if (!signal.aborted) {
+                throw error;
+              }
+            }),
       });
     };
     arm(0);
@@ -95,7 +101,6 @@ export function createGatewayUpdateLifecycle(
     ...notifications,
     signal,
     isCurrent: () => updateCheckLifecycle === lifecycle,
-    publicationGeneration: 0,
     refreshes: new WeakMap(),
     run,
     initialize,

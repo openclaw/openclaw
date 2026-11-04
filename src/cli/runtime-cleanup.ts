@@ -67,15 +67,16 @@ export async function runCliDisposer(
   const token = Symbol(name);
   const operation = Promise.resolve()
     .then(() => (runCleanup ? runCleanup(dispose) : dispose()))
+    .catch(async (error: unknown) => {
+      const { formatErrorMessage } = await import("../infra/errors.js");
+      // Observe failures even after the reporting deadline, without blocking later teardown.
+      console.error(`CLI cleanup failed: ${name}: ${formatErrorMessage(error)}`);
+    })
     .finally(() => pendingDisposers.delete(token));
   pendingDisposers.set(token, { name, operation, deferred: false });
-  try {
-    await raceWithTimeout(operation, timeoutMs, () => {
-      console.error(`CLI cleanup timed out: ${name} after ${timeoutMs}ms`);
-    });
-  } catch {
-    // Teardown cannot mask the command outcome or skip later resources.
-  }
+  await raceWithTimeout(operation, timeoutMs, () => {
+    console.error(`CLI cleanup timed out: ${name} after ${timeoutMs}ms`);
+  });
 }
 
 export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<void> {
@@ -162,6 +163,14 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
       const { closeOpenClawAgentDatabasesAsync } =
         await import("../state/openclaw-agent-db-lifecycle.js");
       await closeOpenClawAgentDatabasesAsync();
+    },
+    "sqlite-snapshots": async () => {
+      // CLI-owned snapshot workers are asynchronous owners. Signal cleanup is too
+      // late for a successful one-shot command, and the synchronous process exit
+      // hook cannot retire a retained native owner safely.
+      const { cleanupSnapshotOperations } =
+        await import("../infra/sqlite-readonly-location-cleanup.js");
+      await cleanupSnapshotOperations();
     },
   };
   for (const [name, finalize] of Object.entries(finalizers)) {

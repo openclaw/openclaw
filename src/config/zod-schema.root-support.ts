@@ -1,3 +1,4 @@
+import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
@@ -137,8 +138,8 @@ export const PluginEntrySchema = z.strictObject({
   enabled: z.boolean().optional(),
   hooks: z
     .strictObject({
-      /** Controls prompt mutation via before_prompt_build. */
-      allowPromptInjection: z.boolean().optional(),
+      /** Controls plugin prompt modification, including hooks, guidance, and steering. */
+      allowPromptModification: z.boolean().optional(),
       /**
        * Controls access to raw conversation content from conversation hooks including
        * before_agent_run, before_model_resolve, before_agent_reply, llm_input, llm_output,
@@ -199,7 +200,7 @@ function validateTalkProviderSelection(
 ): void {
   const provider = normalizeLowercaseStringOrEmpty(value.provider ?? "");
   const providers = value.providers ? Object.keys(value.providers) : [];
-  if (provider && providers.length > 0 && !Object.hasOwn(value.providers!, provider)) {
+  if (provider && providers.length > 0 && !findNormalizedProviderKey(value.providers, provider)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["provider"],
@@ -218,7 +219,19 @@ function validateTalkProviderSelection(
 const TalkRealtimeSchema = z
   .strictObject({
     provider: z.string().optional(),
-    providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    providers: z
+      .record(
+        z.string(),
+        TalkProviderEntrySchema.extend({
+          inputTranscriptionModel: z
+            .string()
+            .optional()
+            .describe(
+              "Input transcription model or deployment name. Omit to keep the provider default.",
+            ),
+        }),
+      )
+      .optional(),
     model: z.string().optional(),
     speakerVoice: z.string().optional(),
     speakerVoiceId: z.string().optional(),

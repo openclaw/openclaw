@@ -128,6 +128,14 @@ export function definePreparedCallSessionTests({
         role: "assistant",
         text: "Prepared comparison: option A has the shortest commute. Source: the route report.",
       };
+      const originalPreview =
+        mocks.readSessionPreviewItemsFromTranscriptAsync.getMockImplementation();
+      onTestFinished(() => {
+        mocks.readSessionPreviewItemsFromTranscriptAsync.mockReset();
+        if (originalPreview) {
+          mocks.readSessionPreviewItemsFromTranscriptAsync.mockImplementation(originalPreview);
+        }
+      });
       mocks.readSessionPreviewItemsFromTranscriptAsync.mockReturnValueOnce([
         briefing,
         { role: "tool", text: "Private raw tool output is not voice history" },

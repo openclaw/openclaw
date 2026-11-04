@@ -302,11 +302,26 @@ describe("normalizeConfiguredMemoryExtraPaths", () => {
         { path: " notes ", pattern: " runbooks/**/*.md " },
         { path: "notes", pattern: "runbooks/**/*.md" },
         { path: "notes", pattern: "decisions/**/*.md" },
+        { path: "reference", evergreen: true },
+        { path: "archive", pattern: "**/*.md", evergreen: true },
       ]),
     ).toEqual([
       "notes",
       { path: "notes", pattern: "runbooks/**/*.md" },
       { path: "notes", pattern: "decisions/**/*.md" },
+      { path: "reference", evergreen: true },
+      { path: "archive", pattern: "**/*.md", evergreen: true },
     ]);
+  });
+
+  it("lets the last duplicate path policy win", () => {
+    expect(
+      normalizeConfiguredMemoryExtraPaths([
+        "notes",
+        { path: "notes", evergreen: true },
+        { path: "archive", evergreen: true },
+        "archive",
+      ]),
+    ).toEqual([{ path: "notes", evergreen: true }, "archive"]);
   });
 });

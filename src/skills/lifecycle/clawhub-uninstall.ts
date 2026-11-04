@@ -153,10 +153,6 @@ async function planTrackedClawHubSkillState(params: {
 export async function applyClawHubSkillUninstall(
   plan: ClawHubSkillUninstallPlan,
   deps: {
-    readFile?: typeof fs.readFile;
-    removeDir?: typeof fs.rm;
-    rename?: typeof fs.rename;
-    untrack?: typeof untrackClawHubSkill;
     /** Await remote authority, then retain the synchronous local mutation checks. */
     authorizeMutation?: Parameters<typeof untrackClawHubSkill>[4];
   } & Parameters<WorkspaceSkillLifecycle["applyClawHubSkillUninstall"]>[1] = {},
@@ -196,7 +192,6 @@ export async function applyClawHubSkillUninstall(
   let staged = false;
   let removed = false;
   let restoreTracking: (() => Promise<void>) | undefined;
-  const rename = deps.rename ?? fs.rename;
   const sourceIdentity = await fs.lstat(plan.targetDir, { bigint: true });
   const assertRollbackCurrent = () => {
     // Only this operation's unchanged staging may return to an unclaimed destination.
@@ -219,7 +214,7 @@ export async function applyClawHubSkillUninstall(
       await deps.authorizeMutation("rollback");
     }
     assertRollbackCurrent();
-    await rename(stagedDir, plan.targetDir);
+    await fs.rename(stagedDir, plan.targetDir);
     staged = false;
   };
   try {
@@ -227,13 +222,9 @@ export async function applyClawHubSkillUninstall(
       await deps.authorizeMutation("apply");
     }
     deps.beforePersistentApply?.();
-    await rename(plan.targetDir, stagedDir);
+    await fs.rename(plan.targetDir, stagedDir);
     staged = true;
-    const stagedPlan = await checkClawHubSkillPlanAtPath(
-      plan,
-      stagedDir,
-      deps.readFile ?? fs.readFile,
-    );
+    const stagedPlan = await checkClawHubSkillPlanAtPath(plan, stagedDir);
     if (!stagedPlan.ok) {
       await restoreStaged();
       return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during removal.` };
@@ -242,7 +233,7 @@ export async function applyClawHubSkillUninstall(
       await deps.authorizeMutation("apply");
     }
     deps.beforePersistentApply?.();
-    restoreTracking = await (deps.untrack ?? untrackClawHubSkill)(
+    restoreTracking = await untrackClawHubSkill(
       plan.workspaceDir,
       plan.slug,
       deps.beforePersistentApply,
@@ -253,7 +244,7 @@ export async function applyClawHubSkillUninstall(
       await deps.authorizeMutation("apply");
     }
     deps.beforePersistentApply?.();
-    await (deps.removeDir ?? fs.rm)(stagedDir, { recursive: true, force: false });
+    await fs.rm(stagedDir, { recursive: true, force: false });
     removed = true;
     await refreshRemovedSkill(plan.workspaceDir);
     if (shouldDispatchChange) {

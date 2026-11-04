@@ -1,26 +1,26 @@
-// Public media-understanding helpers and types for provider plugins.
-
+export type {
+  AudioTranscriptionResult,
+  ImageDescriptionResult,
+  ImagesDescriptionInput,
+  ImagesDescriptionResult,
+  StructuredExtractionImageInput,
+  StructuredExtractionInput,
+  StructuredExtractionResult,
+  StructuredExtractionTextInput,
+  VideoDescriptionResult,
+} from "../../packages/media-understanding-common/src/types.js";
 export type {
   AudioTranscriptionConfigContext,
   AudioTranscriptionRequest,
-  AudioTranscriptionResult,
   ImageDescriptionRequest,
-  ImageDescriptionResult,
-  ImagesDescriptionInput,
   ImagesDescriptionRequest,
-  ImagesDescriptionResult,
   MediaUnderstandingProvider,
   MediaUnderstandingProviderAuthContext,
   MediaUnderstandingProviderAuthResult,
   MediaUnderstandingProviderRequestAuth,
   MediaUnderstandingProviderSyntheticAuthResult,
-  StructuredExtractionImageInput,
-  StructuredExtractionInput,
   StructuredExtractionRequest,
-  StructuredExtractionResult,
-  StructuredExtractionTextInput,
   VideoDescriptionRequest,
-  VideoDescriptionResult,
 } from "../media-understanding/types.js";
 
 export {

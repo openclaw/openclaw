@@ -56,7 +56,20 @@ export function createWorkboardSessionAccessory(): ControlUiAccessory["mount"] {
             throw new Error("Invalid Workboard session response");
           }
           if (payload.unchanged !== true) {
-            cards = normalizeCardsPayload(payload).cards;
+            const page = normalizeCardsPayload(payload);
+            const nextCards = page.cards;
+            let after = page.nextCursor;
+            while (after) {
+              const next = normalizeCardsPayload(
+                await host.request("workboard.cards.list", { sessionKey: key, after }),
+              );
+              if (load !== token) {
+                return;
+              }
+              nextCards.push(...next.cards);
+              after = next.nextCursor;
+            }
+            cards = nextCards;
           }
           const receipt = isRecord(payload.revision) ? payload.revision : {};
           cardsRevision = normalizeWorkboardChange({

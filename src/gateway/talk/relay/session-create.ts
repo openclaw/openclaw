@@ -156,6 +156,7 @@ export function createTalkRealtimeRelaySession(
         constructionTerminal.current ??= { kind: "error", error: new Error(message) };
       }
     },
+    () => bridgeRef.current?.bridge.outputAudioMode === "continuous",
   );
   const { agentId: relayAgentId, canonicalKey } = params.sessionTarget;
   const transcriptReadiness = createClientVoiceTranscriptReadiness({

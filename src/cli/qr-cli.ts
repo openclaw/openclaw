@@ -15,6 +15,7 @@ import {
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
+import { formatCliCommand } from "./command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getQrRemoteCommandSecretTargetIds } from "./command-secret-targets.js";
 import { formatDocsHelp } from "./help-format.js";
@@ -56,18 +57,6 @@ function shouldResolveLocalGatewayPasswordSecret(
     cfg.secrets?.defaults,
   );
   return !envToken && !configTokenConfigured;
-}
-
-function emitQrSecretResolveDiagnostics(diagnostics: string[], opts: QrCliOptions): void {
-  const toStderr = opts.json === true || opts.setupCodeOnly === true;
-  for (const entry of diagnostics) {
-    const message = theme.warn(`[secrets] ${entry}`);
-    if (toStderr) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  }
 }
 
 export function registerQrCli(program: Command) {
@@ -134,7 +123,15 @@ export function registerQrCli(program: Command) {
             },
           },
         };
-        emitQrSecretResolveDiagnostics(remoteDiagnostics, opts);
+        const toStderr = opts.json === true || opts.setupCodeOnly === true;
+        for (const entry of remoteDiagnostics) {
+          const message = theme.warn(`[secrets] ${entry}`);
+          if (toStderr) {
+            defaultRuntime.error(message);
+          } else {
+            defaultRuntime.log(message);
+          }
+        }
 
         const authToken =
           token || (wantsRemote && !password ? trimToUndefined(cfg.gateway.remote?.token) : "");
@@ -234,8 +231,8 @@ export function registerQrCli(program: Command) {
           `${theme.muted("Source:")} ${resolved.urlSource}`,
           "",
           "Approve after scan with:",
-          `  ${theme.command("openclaw devices list")}`,
-          `  ${theme.command("openclaw devices approve <requestId>")}`,
+          `  ${theme.command(formatCliCommand("openclaw devices list"))}`,
+          `  ${theme.command(formatCliCommand("openclaw devices approve <requestId>"))}`,
         );
 
         defaultRuntime.log(lines.join("\n"));

@@ -24,6 +24,24 @@ struct ChatGatewayRequestTests {
         #expect(Set(request.params.keys) == (expectedOwner == nil ? ["sessionKey"] : ["sessionKey", "agentId"]))
     }
 
+    @Test func `clearing and refreshing a progress card send the target and one extra field`() {
+        let clear = OpenClawChatGatewayRequests.progressCardClear(
+            sessionKey: "agent:main:main",
+            agentID: "main",
+            expectedRevision: 7)
+        #expect(clear.method == "progressCard.put")
+        #expect(clear.params["expectedRevision"]?.value as? Int == 7)
+        #expect(Set(clear.params.keys) == ["sessionKey", "expectedRevision"])
+
+        let refresh = OpenClawChatGatewayRequests.progressCardRefresh(
+            sessionKey: "agent:main:main",
+            agentID: "main",
+            idempotencyKey: "tap-1")
+        #expect(refresh.method == "progressCard.refresh")
+        #expect(refresh.params["idempotencyKey"]?.value as? String == "tap-1")
+        #expect(Set(refresh.params.keys) == ["sessionKey", "idempotencyKey"])
+    }
+
     @Test func `progress payloads validate the captured agent without replacing null`() throws {
         let valid = Data(
             #"{"card":{"sessionKey":"agent:research:global","revision":1,"updatedAt":10,"markdown":"Research","steps":[]}}"#
@@ -788,6 +806,22 @@ struct ChatGatewayRequestTests {
         #expect(json.contains("a.png"))
     }
 
+    @Test func `audio send waits for admission while explicit request deadlines remain caller owned`() {
+        for timeout in [nil, 1200] as [Int?] {
+            let request = OpenClawChatGatewayRequests.sendMessage(
+                sessionKey: "main",
+                agentID: nil,
+                expectedSessionRoutingContract: nil,
+                message: "caption",
+                thinking: nil,
+                idempotencyKey: "audio-send",
+                attachments: [.init(type: "file", mimeType: "audio/wav", fileName: "voice.wav", content: "abc")],
+                requestTimeoutMs: timeout)
+            #expect(request.timeoutMs == Double(timeout ?? 0))
+            #expect(request.params["timeoutMs"] == nil)
+        }
+    }
+
     @Test func `send request omits inherited thinking override`() {
         let inherited = OpenClawChatGatewayRequests.sendMessage(
             sessionKey: "global",
@@ -803,6 +837,28 @@ struct ChatGatewayRequestTests {
         #expect(inherited.params["thinking"] == nil)
         #expect(inherited.params["expectedPermissionMode"] == nil)
         #expect(inherited.params["expectedToolOverrides"] == nil)
+    }
+
+    @Test(arguments: [nil, .steer, .followup] as [OpenClawChatQueueMode?])
+    func `send request preserves a per message queue mode`(mode: OpenClawChatQueueMode?) throws {
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: "agent:main:main",
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            queueMode: mode,
+            message: "Keep the original wording.",
+            thinking: nil,
+            idempotencyKey: "mode-choice",
+            attachments: [])
+        let serialized = try JSONEncoder().encode(request.params)
+        let params = try #require(JSONSerialization.jsonObject(with: serialized) as? [String: Any])
+        let expectedMode: String? = switch mode {
+        case .steer: "steer"
+        case .followup: "followup"
+        case nil: nil
+        }
+        #expect(params["queueMode"] as? String == expectedMode)
+        #expect(params["message"] as? String == "Keep the original wording.")
     }
 
     @Test func `question resolve request uses the gateway answer envelope`() throws {

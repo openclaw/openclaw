@@ -7,6 +7,7 @@ import {
   withAgentProvenancePublication,
 } from "./agent-provenance-publication.js";
 import type { AgentCreatedVia, AgentProvenance } from "./agent-provenance.types.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
@@ -59,16 +60,20 @@ export async function readAgentProvenanceForDisplay(
   }
   const context = captureOpenClawStateWorkerContext(options);
   const requestedIds = agentIds.map(normalizeAgentId);
-  const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
   const records: AgentProvenance[] = [];
   // Canonical IDs are bounded; chunking keeps roster growth below broker input
   // admission limits while preserving caller order and the first read error.
   for (let offset = 0; offset < requestedIds.length; offset += DISPLAY_PROVENANCE_BATCH_SIZE) {
-    const batch = await executeOpenClawStateWorker(context, {
-      type: "agentProvenance.readBatch",
-      input: { agentIds: requestedIds.slice(offset, offset + DISPLAY_PROVENANCE_BATCH_SIZE) },
-    });
-    records.push(...batch);
+    const batch = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      {
+        type: "agentProvenance.readBatch",
+        input: { agentIds: requestedIds.slice(offset, offset + DISPLAY_PROVENANCE_BATCH_SIZE) },
+      },
+      { context, current: true },
+    );
+    context.admission.assertCurrent();
+    records.push(...(batch?.records ?? []));
   }
   return records;
 }
@@ -77,11 +82,13 @@ export async function listAgentProvenance(
   options: AgentProvenanceReadOptions = {},
 ): Promise<AgentProvenance[]> {
   const context = captureOpenClawStateWorkerContext(options);
-  const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
-  return executeOpenClawStateWorker(context, {
-    type: "agentProvenance.list",
-    input: undefined,
-  });
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "agentProvenance.list", input: undefined },
+    { context, current: true },
+  );
+  context.admission.assertCurrent();
+  return reply?.records ?? [];
 }
 
 /** Delete one row inside the caller's authoritative state transaction. */

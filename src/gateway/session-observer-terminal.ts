@@ -20,7 +20,6 @@ export function createSessionObserverTerminalPublisher(params: {
     agentId: string,
   ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   persistDigest: NonNullable<SessionObserverDeps["persistDigest"]>;
-  now: () => number;
   work: Pick<ReturnType<typeof createSessionObserverWork>, "withCurrent" | "closing" | "resetting">;
   runStillCurrent: (runId: string, sessionKey: string, agentId: string) => () => boolean;
   broadcast: (digest: SessionObserverDigest, agentId: string) => void;
@@ -53,7 +52,6 @@ export function createSessionObserverTerminalPublisher(params: {
         // Synthesis only prepares a write; its transaction revalidates the row before commit.
         readSession: reader ? () => reader.withRead((session) => session) : params.readSession,
         persistDigest: (input) => params.persistDigest({ ...input, ...(reader ? { reader } : {}) }),
-        now: params.now,
         stillCurrent,
       });
       if (!digest) {

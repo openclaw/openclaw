@@ -1,6 +1,9 @@
 import { isProxy } from "node:util/types";
 import {
+  markModelPayloadObserver,
   modelRequestBodyState,
+} from "@openclaw/ai/internal/model-request-body";
+import {
   responsesPromptObserver,
   type ResponsesPromptObservation,
 } from "@openclaw/ai/internal/openai";
@@ -8,9 +11,18 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
+import { log } from "./logger.js";
+import {
+  fingerprintMessage,
+  messageFingerprints,
+  type PromptHistoryFingerprint,
+} from "./prompt-cache-history.js";
 import {
   prepareProviderPrompt,
   type ProviderPromptCachePrefix,
@@ -54,10 +66,15 @@ export function clearProviderPromptState(runId: string): void {
   providerPromptStates.delete(runId);
 }
 
+export type PromptPreparationTask = ProviderPromptTask | { history: readonly Message[] };
+export type PromptPreparationResult =
+  | { kind: "history"; fingerprints: PromptHistoryFingerprint[] }
+  | { kind: "provider"; prompt: ReturnType<typeof prepareProviderPrompt> };
+
 const promptHashPool = resolveGlobalSingleton(
   Symbol.for("openclaw.providerPromptHashPool"),
   () =>
-    new WorkerTaskPool<ProviderPromptTask, ReturnType<typeof prepareProviderPrompt>>({
+    new WorkerTaskPool<PromptPreparationTask, PromptPreparationResult>({
       workerUrl: resolveRuntimeProcessEntrypointUrl("providerPromptState"),
       workerClass: "compute",
       sharedCompute: true,
@@ -96,7 +113,8 @@ function providerPromptWorkerBytes(
     return undefined;
   }
   let bytes = 64;
-  for (const [index, key] of keys.entries()) {
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index]!;
     if (array && key !== String(index)) {
       return undefined;
     }
@@ -136,6 +154,12 @@ async function recordProviderPrompt(params: {
     inputBytes !== undefined
       ? await promptHashPool
           .run(() => task, { inputBytes, signal: params.signal })
+          .then((result) => {
+            if (result.kind !== "provider") {
+              throw new Error("Unexpected prompt preparation result");
+            }
+            return result.prompt;
+          })
           .catch((error: unknown) => {
             if (params.signal?.aborted) {
               throw error;
@@ -233,6 +257,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
         await options?.onResponse?.(response, responseModel);
       },
     };
+    markModelPayloadObserver(observedOptions.onPayload!, originalOnPayload);
     modelRequestBodyState(observedOptions).encode = async (payload) => {
       const encoded = await recordProviderPrompt({
         state: params.state,
@@ -258,4 +283,61 @@ export function wrapStreamFnWithProviderPromptState(params: {
     });
     return params.streamFn(model, context, observedOptions);
   };
+}
+
+// Transcript publication already admits plain JSON; count containers and UTF-16
+// lengths for queue admission without revalidating or serializing their contents.
+function promptHistoryInputBytes(value: unknown): number {
+  if (typeof value === "string") {
+    return value.length * 2;
+  }
+  if (value === null || typeof value !== "object") {
+    return 8;
+  }
+  let bytes = 64;
+  for (const [key, member] of Object.entries(value)) {
+    bytes += key.length * 2 + 16 + promptHistoryInputBytes(member);
+  }
+  return bytes;
+}
+
+/** Only new sealed transcript publications need worker preparation. */
+export async function preparePromptCacheHistory(
+  messages: readonly Message[],
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
+  const missing = messages.filter(
+    (message) =>
+      !messageFingerprints.has(message) &&
+      (isOwnedTranscriptPayload(message) || isDeeplyFrozenPlainData(message)),
+  );
+  if (missing.length === 0) {
+    return;
+  }
+  // Bound structured-clone and reply installation work on the Gateway thread.
+  for (let start = 0; start < missing.length; start += 128) {
+    const batch = missing.slice(start, start + 128);
+    let fingerprints: PromptHistoryFingerprint[];
+    try {
+      const result = await promptHashPool.run(
+        { history: batch },
+        { signal, inputBytes: promptHistoryInputBytes(batch) },
+      );
+      if (result.kind !== "history") {
+        throw new Error("Unexpected history preparation result");
+      }
+      fingerprints = result.fingerprints;
+    } catch (error) {
+      if (signal?.aborted) {
+        throw error;
+      }
+      // Diagnostic preparation must not prevent an otherwise valid model request.
+      log.warn("[prompt-cache] history preparation worker unavailable; preparing locally");
+      fingerprints = batch.map((message) => fingerprintMessage(message));
+    }
+    for (let index = 0; index < batch.length; index++) {
+      messageFingerprints.set(batch[index]!, fingerprints[index]!);
+    }
+  }
 }

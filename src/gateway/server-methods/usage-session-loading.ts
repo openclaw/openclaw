@@ -2,24 +2,30 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { UsageOverviewLoad } from "../../infra/session-cost-usage-overview-load.js";
 import { createSessionCostSummaryAccumulator } from "../../infra/session-cost-usage-rollup.js";
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
+  loadSessionUsageOverviewFromCache,
   type DiscoveredSession,
   type SessionCostSummary,
   type UsageDailyBucket,
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { readWithSessionStoreTopology } from "../../sessions/session-row-changes.js";
 import {
   AsyncWorkScope,
   getAsyncWorkSignal,
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
+import type { SessionUsageEntry } from "../../shared/usage-types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { usageOverviewRowKey, type UsageOverviewUsage } from "./usage-overview-report.js";
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
 
@@ -27,12 +33,12 @@ export type UsageSessionSummaryTarget = {
   agentId: string;
   sessionId: string;
   sessionFile: string;
-  instances: Array<Pick<DiscoveredSession, "sessionId" | "sessionFile" | "transcriptFile">>;
+  instances: Array<Pick<DiscoveredSession, "sessionId" | "sessionFile">>;
 };
 
 const USAGE_AGENT_LOAD_CONCURRENCY = 12;
 const USAGE_REPORT_PUBLICATION_WAIT_MS = 100;
-const USAGE_REPORT_INITIAL_BATCH_SIZE = 256;
+const USAGE_REPORT_BATCH_SIZE = 256;
 
 export async function runUsageAgentTasks<T>(tasks: Array<() => Promise<T>>): Promise<T[]> {
   const result = await runTasksWithConcurrency({
@@ -54,22 +60,25 @@ export async function discoverAllSessionsForUsage(params: {
   startMs: number;
   endMs: number;
 }): Promise<DiscoveredSessionWithAgent[]> {
-  const requestedAgentId = normalizeOptionalString(params.agentId);
-  const agents = requestedAgentId
-    ? [{ id: normalizeAgentId(requestedAgentId) }]
-    : (await listGatewayAgentsBasic(params.config)).agents;
-  const discovered = await runUsageAgentTasks(
-    agents.map((agent) => async () => {
-      const agentId = normalizeAgentId(agent.id);
-      const sessions = await discoverAllSessions({
-        agentId,
-        startMs: params.startMs,
-        endMs: params.endMs,
-      });
-      return sessions.map((session) => Object.assign({}, session, { agentId }));
-    }),
-  );
-  return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
+  return readWithSessionStoreTopology(async () => {
+    const requestedAgentId = normalizeOptionalString(params.agentId);
+    const agents = requestedAgentId
+      ? [{ id: normalizeAgentId(requestedAgentId) }]
+      : (await listGatewayAgentsBasic(params.config)).agents;
+    const discovered = await runUsageAgentTasks(
+      agents.map((agent) => async () => {
+        const agentId = normalizeAgentId(agent.id);
+        const sessions = await discoverAllSessions({
+          agentId,
+          startMs: params.startMs,
+          endMs: params.endMs,
+        });
+        return sessions.map((session) => Object.assign({}, session, { agentId }));
+      }),
+    );
+    // oxlint-disable-next-line unicorn/no-array-sort -- flat returns a fresh, private array.
+    return discovered.flat().sort((a, b) => b.mtime - a.mtime);
+  });
 }
 
 export function mergeUsageCacheStatus(
@@ -91,20 +100,12 @@ export function mergeUsageCacheStatus(
         : source.refreshedAt === undefined
           ? target.refreshedAt
           : Math.max(target.refreshedAt, source.refreshedAt),
+    ...((target.partial ?? source.partial) ? { partial: target.partial ?? source.partial } : {}),
   };
 }
 
 export async function loadUsageSessionSummaries(params: {
-  entries: Array<{
-    agentId: string;
-    sessionId?: string;
-    sessionFile?: string;
-    instances: Array<{
-      sessionId?: string;
-      sessionFile: string;
-      transcriptFile?: DiscoveredSession["transcriptFile"];
-    }>;
-  }>;
+  entries: UsageSessionSummaryTarget[];
   read: <T>(load: () => Promise<T>, partial: () => T) => Promise<T>;
   config: OpenClawConfig;
   startMs: number;
@@ -131,21 +132,15 @@ export async function loadUsageSessionSummaries(params: {
   // Batch all included instances by agent so cache reads do not scale with the row limit.
   const sessionsByAgent = new Map<
     string,
-    Array<{
-      entryIndex: number;
-      sessionId?: string;
-      sessionFile: string;
-      transcriptFile?: DiscoveredSession["transcriptFile"];
-    }>
+    Array<UsageSessionSummaryTarget["instances"][number] & { entryIndex: number }>
   >();
   for (const [entryIndex, merged] of mergedEntries.entries()) {
-    for (const { sessionId, sessionFile, transcriptFile } of merged.instances) {
+    for (const { sessionId, sessionFile } of merged.instances) {
       const agentSessions = sessionsByAgent.get(merged.agentId) ?? [];
       agentSessions.push({
         entryIndex,
         sessionId,
         sessionFile,
-        transcriptFile,
       });
       sessionsByAgent.set(merged.agentId, agentSessions);
     }
@@ -155,11 +150,10 @@ export async function loadUsageSessionSummaries(params: {
     Array.from(sessionsByAgent.entries()).map(([agentId, agentSessions]) => async () => {
       let usage: ReturnType<typeof createSessionCostSummaryAccumulator> | undefined;
       let reportBudgetBytes: number | undefined;
+      const publicationDeadline = monotonicNow() + USAGE_REPORT_PUBLICATION_WAIT_MS;
       for (let offset = 0; offset < agentSessions.length;) {
-        const batch = agentSessions.slice(
-          offset,
-          offset === 0 ? USAGE_REPORT_INITIAL_BATCH_SIZE : undefined,
-        );
+        // Concurrent reports share the worker pool's input-byte budget.
+        const batch = agentSessions.slice(offset, offset + USAGE_REPORT_BATCH_SIZE);
         const loaded = await params.read(
           () =>
             loadSessionCostSummariesFromCache({
@@ -170,7 +164,7 @@ export async function loadUsageSessionSummaries(params: {
               endMs,
               includeUntimestamped,
               dayBucket,
-              maxPublicationWaitMs: USAGE_REPORT_PUBLICATION_WAIT_MS,
+              maxPublicationWaitMs: Math.max(0, publicationDeadline - monotonicNow()),
               reportBudgetBytes,
             }),
           () => ({
@@ -194,8 +188,8 @@ export async function loadUsageSessionSummaries(params: {
           if (summary) {
             const merged = expectDefined(mergedEntries[session.entryIndex], "usage entry");
             const identity = {
-              sessionId: merged.sessionId ?? merged.instances[0]?.sessionId,
-              sessionFile: merged.sessionFile ?? merged.instances[0]?.sessionFile,
+              sessionId: merged.sessionId,
+              sessionFile: merged.sessionFile,
             };
             if (merged.instances.length === 1) {
               usageByEntryIndex[session.entryIndex] = { ...summary, ...identity };
@@ -216,6 +210,91 @@ export async function loadUsageSessionSummaries(params: {
   );
 
   return { summaries: usageByEntryIndex, computing, cacheStatus };
+}
+
+/**
+ * Overview usage per entry: private sessions return summaries, quarter folds stay
+ * packed and each entry references its row for the off-thread overview report.
+ */
+export async function loadUsageOverviewSummaries(params: {
+  entries: Array<UsageSessionSummaryTarget & { key: string }>;
+  read: <T>(load: () => Promise<T>, partial: () => T) => Promise<T>;
+  config: OpenClawConfig;
+  startMs: number;
+  endMs: number;
+  includeUntimestamped?: boolean;
+  dayBucket?: UsageDailyBucket;
+}) {
+  const summaries: Array<SessionUsageEntry["usage"]> = Array.from(
+    { length: params.entries.length },
+    () => null,
+  );
+  const usage: UsageOverviewUsage = { packed: [], refs: new Map() };
+  const computing = Array<boolean>(params.entries.length).fill(false);
+  const byAgent = new Map<string, number[]>();
+  for (const [index, entry] of params.entries.entries()) {
+    const indexes = byAgent.get(entry.agentId) ?? [];
+    indexes.push(index);
+    byAgent.set(entry.agentId, indexes);
+  }
+  let cacheStatus: UsageCacheStatus | undefined;
+  let summarizing = 0;
+  let instances = 0;
+  await runUsageAgentTasks(
+    Array.from(byAgent, ([agentId, indexes]) => async () => {
+      const families = indexes.map((index) => params.entries[index]!.instances);
+      const count = families.reduce((sum, family) => sum + family.length, 0);
+      const loaded = await params.read(
+        () =>
+          loadSessionUsageOverviewFromCache({
+            families,
+            config: params.config,
+            agentId,
+            startMs: params.startMs,
+            endMs: params.endMs,
+            includeUntimestamped: params.includeUntimestamped,
+            dayBucket: params.dayBucket,
+          }),
+        (): UsageOverviewLoad => ({
+          kind: "overview",
+          usage: { kind: "rows", rows: families.map(() => null) },
+          computing: families.map(() => true),
+          summarizing: count,
+          staleSessionFiles: [],
+          invalidRows: [],
+          cacheStatus: {
+            status: "partial",
+            cachedFiles: 0,
+            pendingFiles: count,
+            staleFiles: 0,
+          },
+        }),
+      );
+      instances += count;
+      summarizing += loaded.summarizing;
+      cacheStatus = mergeUsageCacheStatus(cacheStatus, loaded.cacheStatus);
+      const loadedUsage = loaded.usage;
+      const packedIndex = loadedUsage.kind === "packed" ? usage.packed.push(loadedUsage) - 1 : -1;
+      for (const [position, index] of indexes.entries()) {
+        const entry = params.entries[index]!;
+        let present: boolean;
+        if (loadedUsage.kind === "packed") {
+          present = loadedUsage.batch.offsets[position]! >= 0;
+          if (present) {
+            usage.refs.set(usageOverviewRowKey(entry), [packedIndex, position]);
+          }
+        } else {
+          const row = loadedUsage.rows[position];
+          summaries[index] = row
+            ? Object.assign(row, { sessionId: entry.sessionId, sessionFile: entry.sessionFile })
+            : null;
+          present = Boolean(row);
+        }
+        computing[index] = loaded.computing[position] === true || !present;
+      }
+    }),
+  );
+  return { summaries, usage, computing, cacheStatus, summarizing, instances };
 }
 
 type UsageRequestBudget = {
@@ -246,8 +325,7 @@ export function withUsageRequestBudget(
       caller.beginClose(parent.reason);
       data.beginClose(parent.reason);
     };
-    const timer = setTimeout(() => data.beginClose(exhausted), 15_000);
-    timer.unref?.();
+    const timer = setTimeout(() => data.beginClose(exhausted), 15_000).unref();
     parent.addEventListener("abort", cancel, { once: true });
     if (parent.aborted) {
       cancel();

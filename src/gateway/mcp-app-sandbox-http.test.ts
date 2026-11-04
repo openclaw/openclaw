@@ -1,134 +1,105 @@
-import { IncomingMessage, ServerResponse } from "node:http";
-import { Socket } from "node:net";
-import type { AddressInfo } from "node:net";
-import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import type { IncomingMessage } from "node:http";
+import { runInNewContext, Script } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
 import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
-import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
-import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import {
   createSandboxHostHttpServer,
   createSandboxHostHttpRequestHandler,
 } from "./mcp-app-sandbox-http.js";
-import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
+const representationHeaders = (response: Response) =>
+  Object.fromEntries(
+    [...response.headers].filter(([name]) => !["date", "connection", "keep-alive"].includes(name)),
+  );
+
+async function getAndHead(url: string | URL) {
+  const get = await fetch(url);
+  const head = await fetch(url, { method: "HEAD" });
+  const body = await get.text();
+  expect(head.status).toBe(get.status);
+  expect(await head.text()).toBe("");
+  expect(get.headers.get("content-length")).toBe(String(Buffer.byteLength(body)));
+  expect(representationHeaders(head)).toEqual(representationHeaders(get));
+  return { get, body };
+}
+
 function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
-  const { res, end, setHeader } = makeMockHttpResponse();
+  const { res, end } = makeMockHttpResponse();
   const server = createSandboxHostHttpServer();
   server.emit("request", { url, method } as IncomingMessage, res);
   server.removeAllListeners();
-  return { res, end, setHeader };
+  return { res, end };
 }
 
-async function withSandboxHost(
-  run: (origin: string) => Promise<void>,
-  resolvePluginRegistry?: () => PluginRegistry,
-): Promise<void> {
-  const server = createSandboxHostHttpServer(undefined, resolvePluginRegistry);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address() as AddressInfo;
-  try {
-    await run(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+async function withSandboxHost(run: (origin: string) => Promise<void>) {
+  await using server = createSandboxHostHttpServer();
+  await run(await listenLoopback(server));
 }
 
-function publicResourceRegistry(
-  readPublicResource: (
-    resourcePath: string,
-  ) => Promise<{ body: Uint8Array; contentType: string } | undefined>,
-) {
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({
-    id: "renderer",
-    source: "fixture",
-    origin: "bundled",
-    enabled: true,
-    configSchema: false,
-  });
-  createPluginBoardWidgetContentKindRegistrar(registry)(record, {
-    kind: "diagram",
-    label: "Diagram",
-    resources: {
-      surface: "renderer",
-      paths: ["/__openclaw__/renderer/app.js"],
-      readPublicResource,
+function bootSandbox(bootstrap: string, origin: string, parentOrigin = "https://control.example") {
+  const posted: unknown[][] = [];
+  const frames: { srcdoc: string }[] = [];
+  const parent = { postMessage: (...args: unknown[]) => posted.push(args) };
+  const location = { href: `${origin}/mcp-app-sandbox`, ancestorOrigins: [parentOrigin] };
+  let receive: (event: unknown) => void = () => {};
+  const window = {
+    parent,
+    location,
+    top: {
+      get document(): never {
+        throw new Error("cross-origin");
+      },
     },
-    validateSource() {},
-    composeDocument: () => "",
+    addEventListener: (_name: string, listener: typeof receive) => (receive = listener),
+  };
+  runInNewContext(bootstrap, {
+    URL,
+    window: Object.assign(window, { self: window }),
+    location,
+    document: {
+      referrer: "",
+      body: { appendChild: () => {} },
+      createElement: () => {
+        const frame = {
+          srcdoc: "",
+          setAttribute: () => {},
+          addEventListener: () => {},
+          replaceWith: () => {},
+        };
+        frames.push(frame);
+        return frame;
+      },
+    },
   });
-  return registry;
+  return {
+    posted,
+    frames,
+    receive: (data: unknown) => receive({ source: parent, origin: parentOrigin, data }),
+  };
 }
 
 describe("MCP App sandbox HTTP origin", () => {
-  it("fences an awaited public renderer resource when the remote grant closes", async () => {
-    const started = createDeferred();
-    const resource = createDeferred<{ body: Uint8Array; contentType: string }>();
-    const registry = publicResourceRegistry(async () => {
-      started.resolve();
-      return await resource.promise;
-    });
-    let current = true;
-    const req = new IncomingMessage(new Socket());
-    req.method = "GET";
-    req.url = "/__openclaw__/renderer/app.js";
-    markGatewayIngressTransport(req, {
-      kind: "remote-forwarded",
-      context: createRemoteControlUiIngressTestContext({
-        operatorScopeCeiling: ["operator.read"],
-        frameAncestors: [],
-        assertCurrent() {
-          if (!current) {
-            throw new Error("grant closed");
-          }
-        },
-      }),
-    });
-    const res = new ServerResponse(req);
-    const serve = createSandboxHostHttpRequestHandler(() => registry)(req, res);
-    await started.promise;
-    current = false;
-    resource.resolve({
-      body: Buffer.from("private-after-close"),
-      contentType: "application/javascript",
-    });
-    await serve;
-    expect(res.destroyed).toBe(true);
-    expect(res.writableEnded).toBe(false);
-    req.destroy();
-  });
-
   it("caches only the exact versioned public shell and separates effective policies", async () => {
     const mutablePolicy = { connectDomains: ["https://original.example"] };
     const originalPath = buildMcpAppSandboxPath(mutablePolicy);
     mutablePolicy.connectDomains[0] = "https://replacement.example";
     const paths = [
-      buildMcpAppSandboxPath(),
-      buildMcpAppSandboxPath({
+      undefined,
+      {
         connectDomains: ["https://api.example.com"],
         resourceDomains: ["https://cdn.example.com"],
-      }),
-      buildMcpAppSandboxPath({ blockDescendantFrames: true }),
-      buildMcpAppSandboxPath({ mediaDomains: ["https://media.example"] }),
-      buildMcpAppSandboxPath({ frameDomains: ["https://frames.example"] }),
-      buildMcpAppSandboxPath({ baseUriDomains: ["https://base.example"] }),
-      originalPath,
-      buildMcpAppSandboxPath(mutablePolicy),
-    ] as const;
+      },
+      { blockDescendantFrames: true },
+      { mediaDomains: ["https://media.example"] },
+      { frameDomains: ["https://frames.example"] },
+      { baseUriDomains: ["https://base.example"] },
+      mutablePolicy,
+    ].map(buildMcpAppSandboxPath);
+    paths.push(originalPath);
     await withSandboxHost(async (origin) => {
       const versions = new Set<string>();
       for (const path of paths) {
@@ -136,10 +107,9 @@ describe("MCP App sandbox HTTP origin", () => {
         const version = url.searchParams.get("v");
         expect(version).toMatch(/^[a-f0-9]{64}$/);
         versions.add(version!);
-        const get = await fetch(url);
+        const { get, body } = await getAndHead(url);
         expect(get.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
         expect(get.headers.get("set-cookie")).toBeNull();
-        const body = await get.text();
         if (path === paths[1]) {
           const csp = get.headers.get("content-security-policy");
           expect(csp).toContain("connect-src https://api.example.com");
@@ -155,23 +125,19 @@ describe("MCP App sandbox HTTP origin", () => {
           );
           expect(body).not.toContain("allow-popups");
         }
-        const head = await fetch(url, { method: "HEAD" });
-        expect(head.headers.get("cache-control")).toBe(get.headers.get("cache-control"));
-        expect(head.headers.get("content-length")).toBe(String(Buffer.byteLength(body)));
-        expect(await head.text()).toBe("");
-
-        url.searchParams.set("v", "stale-version");
-        const stale = await fetch(url);
-        expect(stale.headers.get("cache-control")).toBe("no-store");
-        expect(await stale.text()).toBe(body);
-        url.searchParams.delete("v");
-        const unversioned = await fetch(url);
-        expect(unversioned.headers.get("cache-control")).toBe("no-store");
-        expect(await unversioned.text()).toBe(body);
+        for (const invalidateVersion of [
+          () => url.searchParams.set("v", "stale-version"),
+          () => url.searchParams.delete("v"),
+        ]) {
+          invalidateVersion();
+          const uncached = await fetch(url);
+          expect(uncached.headers.get("cache-control")).toBe("no-store");
+          expect(await uncached.text()).toBe(body);
+        }
       }
       expect(versions.size).toBe(paths.length);
 
-      const altered = new URL(paths[1], origin);
+      const altered = new URL(expectDefined(paths[1], "sandbox policy path"), origin);
       altered.searchParams.delete("csp");
       const response = await fetch(altered);
       expect(response.headers.get("cache-control")).toBe("no-store");
@@ -181,102 +147,57 @@ describe("MCP App sandbox HTTP origin", () => {
     });
   });
 
-  it("serves only explicitly public registered assets without Gateway credentials", async () => {
-    const read = vi.fn(async () => ({
-      body: Buffer.from("window.rendererReady=true"),
-      contentType: "application/javascript",
-    }));
-    const registry = publicResourceRegistry(read);
-    await withSandboxHost(
-      async (origin) => {
-        const url = `${origin}/__openclaw__/renderer/app.js`;
-        const get = await fetch(url);
-        const head = await fetch(url, { method: "HEAD" });
-        expect(get.status).toBe(200);
-        expect(await get.text()).toBe("window.rendererReady=true");
-        expect(head.status).toBe(200);
-        expect(await head.text()).toBe("");
-        expect(head.headers.get("content-length")).toBe(get.headers.get("content-length"));
-        expect(get.headers.get("set-cookie")).toBeNull();
-        expect(read).toHaveBeenCalledWith("/__openclaw__/renderer/app.js");
-        expect((await fetch(url, { method: "POST" })).status).toBe(404);
-        for (const deniedPath of [
-          "/",
-          "/__openclaw__/renderer/private.js",
-          "/__openclaw__/canvas/documents/private/index.html",
-        ]) {
-          expect((await fetch(`${origin}${deniedPath}`)).status).toBe(404);
-        }
-        expect(read).toHaveBeenCalledTimes(2);
-      },
-      () => registry,
-    );
+  it("boots without a referrer and serves executable widget bridges to its bound parent", async () => {
+    await withSandboxHost(async (origin) => {
+      const shell = await (await fetch(new URL(buildMcpAppSandboxPath(), origin))).text();
+      const bootstrap = expectDefined(
+        [...shell.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1],
+        "sandbox bootstrap script",
+      );
+      const { posted, frames, receive } = bootSandbox(bootstrap, origin);
+      // WebKit navigates an already attached iframe without the referrer the host requested.
+      expect(posted).toEqual([
+        [
+          expect.objectContaining({ method: "ui/notifications/sandbox-proxy-ready" }),
+          "https://control.example",
+        ],
+      ]);
+      expect(() => bootSandbox(bootstrap, origin, "null")).toThrow(
+        "invalid MCP App sandbox parent",
+      );
+      receive({
+        method: "ui/notifications/sandbox-resource-ready",
+        params: { html: "<!doctype html><p>Synthetic widget</p>" },
+      });
+      const widget = expectDefined(frames.at(-1), "rendered widget frame").srcdoc;
+      const scripts = [...widget.matchAll(/<script>([\s\S]*?)<\/script>/gu)];
+      expect(scripts.length).toBeGreaterThan(0);
+      for (const [, source] of scripts) {
+        expect(() => new Script(source!)).not.toThrow();
+      }
+    });
   });
 
-  it("does not expose registered assets without the public-reader opt-in", async () => {
-    const registry = publicResourceRegistry(async () => undefined);
-    registry.boardWidgetContentKinds.get("diagram")!.definition.resources.readPublicResource =
-      undefined;
-    await withSandboxHost(
-      async (origin) => {
-        expect((await fetch(`${origin}/__openclaw__/renderer/app.js`)).status).toBe(404);
-      },
-      () => registry,
-    );
-  });
-
-  it("supports HEAD and rejects other paths, methods, and malformed policy", () => {
-    const head = request(buildMcpAppSandboxPath(), "HEAD");
-    expect(head.res.statusCode).toBe(200);
-    expect(head.end).toHaveBeenCalledWith(undefined);
-
+  it("rejects other paths, methods, and malformed policy", () => {
     expect(request("/", "GET").res.statusCode).toBe(404);
     expect(request(buildMcpAppSandboxPath(), "POST").res.statusCode).toBe(404);
-    expect(request(`${SANDBOX_HOST_PATH}?csp=not-json`).res.statusCode).toBe(400);
-    const jsonButNotCsp = Buffer.from("null", "utf8").toString("base64url");
-    expect(request(`${SANDBOX_HOST_PATH}?csp=${jsonButNotCsp}`).res.statusCode).toBe(400);
-    expect(request(`${SANDBOX_HOST_PATH}?csp=`).res.statusCode).toBe(400);
+    const encode = (policy: unknown) => Buffer.from(JSON.stringify(policy)).toString("base64url");
+    for (const policy of [
+      "not-json",
+      encode(null),
+      "",
+      encode({ connectDomains: ["https://api.\nexample.com"] }),
+    ]) {
+      expect(request(`${SANDBOX_HOST_PATH}?csp=${policy}`).res.statusCode).toBe(400);
+    }
     expect(request("http://[", "GET").res.statusCode).toBe(400);
-    const unsafeHeaderPolicy = Buffer.from(
-      JSON.stringify({ connectDomains: ["https://api.\nexample.com"] }),
-      "utf8",
-    ).toString("base64url");
-    expect(request(`${SANDBOX_HOST_PATH}?csp=${unsafeHeaderPolicy}`).res.statusCode).toBe(400);
   });
+});
 
-  it.each([
-    {
-      label: "missing path",
-      path: "/missing",
-      statusCode: 404,
-    },
-  ])(
-    "keeps GET and HEAD representation metadata aligned for $label",
-    async ({ path, statusCode }) => {
-      await withSandboxHost(async (origin) => {
-        const get = await fetch(`${origin}${path}`);
-        const head = await fetch(`${origin}${path}`, { method: "HEAD" });
-        const getBody = await get.text();
-
-        expect(get.status).toBe(statusCode);
-        expect(head.status).toBe(statusCode);
-        expect(getBody).not.toBe("");
-        expect(await head.text()).toBe("");
-        expect(get.headers.get("content-length")).toBe(String(Buffer.byteLength(getBody)));
-        for (const header of [
-          "content-type",
-          "content-length",
-          "cache-control",
-          "content-security-policy",
-          "permissions-policy",
-          "cross-origin-resource-policy",
-          "origin-agent-cluster",
-          "referrer-policy",
-          "x-content-type-options",
-        ]) {
-          expect(head.headers.get(header), header).toBe(get.headers.get(header));
-        }
-      });
-    },
-  );
+it("rejects a malformed resource request without an unhandled URL exception", async () => {
+  const { res, end } = makeMockHttpResponse();
+  const handler = createSandboxHostHttpRequestHandler({ clients: new Set() });
+  await handler({ url: "http://[", method: "GET" } as IncomingMessage, res);
+  expect(res.statusCode).toBe(400);
+  expect(end).toHaveBeenCalledWith("Bad Request");
 });

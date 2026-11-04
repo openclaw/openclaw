@@ -1,17 +1,22 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, createSignal, onSettled } from "solid-js";
+import {
+  normalizeSessionIconValue,
+  SESSION_ICON_SVG_DATA_URL_PREFIX,
+} from "../../../packages/gateway-protocol/src/session-agent-status.ts";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { iconData, type IconName } from "../components/icon-data.ts";
-import type { SidebarMenusController } from "../components/sidebar-menus-controller.tsx";
+import type { SidebarMenus } from "../components/sidebar-menus.tsx";
 import { Icon } from "../components/solid/icon.tsx";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { runControlUiPluginAction } from "./control-ui-actions.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
-import { observePluginProperties, PluginContribution } from "./control-ui-view.solid.tsx";
+import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
+import { PluginContribution } from "./control-ui-view.solid.tsx";
 
 type ContributionsProps = {
   kind: "navigation" | "session-header" | "composer" | "header";
@@ -19,14 +24,14 @@ type ContributionsProps = {
   agentId: string | undefined;
   navigationKey: string;
   navigationChildren: boolean;
-  navigationMenus: SidebarMenusController | undefined;
+  navigationMenus: SidebarMenus | undefined;
   presented: boolean;
 };
 export type ContributionsElement = SolidBridgeElement<ContributionsProps>;
 
 function PluginContributionsContent(props: ContributionsProps, host: ContributionsElement) {
   const context = useApplication();
-  const [actionError, setActionError] = createSignal("");
+  const [actionRead, setActionRead] = createSignal<{ promise: Promise<void> } | null>(null);
   let lifetime = new AbortController();
   const actionLifetimes = new Map<
     AbortSignal,
@@ -61,42 +66,40 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
       }
     }
   };
-  observePluginProperties(host, ["sessionKey", "agentId", "presented"], () => {
+  observeSolidBridgeProperties(host, ["sessionKey", "agentId", "presented"], () => {
     lifetime.abort();
     actionLifetimes.clear();
     lifetime = new AbortController();
   });
-  const source = projectSource(
-    { context, kind: host.kind },
-    {
-      read: (binding) => binding.context?.plugins,
-      subscribe: ({ context: current, kind }, notify) => {
-        const changed = () => {
-          retireHiddenActions();
-          notify();
-        };
-        const stops = [current?.plugins.subscribe(changed)];
-        if (kind === "navigation") {
-          stops.push(current?.router?.subscribe(changed));
-        }
-        if (kind === "header" || kind === "composer") {
-          stops.push(current?.sessions?.subscribe(changed));
-        }
-        return () => stops.forEach((stop) => stop?.());
+  const source = createMemo(() =>
+    projectSource(
+      { context, kind: props.kind },
+      {
+        read: (binding) => binding.context?.plugins,
+        subscribe: ({ context: current, kind }, notify) => {
+          // Retire hidden action authority before publishing the latest presentation.
+          const changed = () => {
+            retireHiddenActions();
+            notify();
+          };
+          const sources = [
+            current?.plugins,
+            ...(kind === "navigation" ? [current?.router] : []),
+            ...(kind === "header" || kind === "composer" ? [current?.sessions] : []),
+          ];
+          const stops = sources.map((owner) => owner?.subscribe(changed));
+          return () => stops.forEach((stop) => stop?.());
+        },
+        equality: "revision",
       },
-      equality: "revision",
-    },
+    ),
   );
-  createEffect(
-    () => props.kind,
-    (kind) => source.replaceSource({ context, kind }),
-  );
-  onCleanup(() => {
+  onSettled(() => () => {
     lifetime.abort();
     actionLifetimes.clear();
   });
   const navigation = createMemo(() => {
-    const runtime = source.read();
+    const runtime = source().read();
     const search = new URLSearchParams(window.location.search);
     return (
       runtime?.registrations("navigation").map((entry) => {
@@ -115,6 +118,14 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     const name = icon && Object.hasOwn(iconData, icon) ? icon : fallback;
     // SAFETY: the own-key check admits only names from the fixed icon registry.
     return Object.hasOwn(iconData, name) ? (name as IconName) : "plug";
+  };
+  // Destinations may carry an emoji appearance instead of an icon name (Workboard boards);
+  // show it as the board page does instead of the fallback icon.
+  const emojiIcon = (entry: Navigation["entry"]) => {
+    const icon = entry.value.icon;
+    const appearance =
+      icon && !Object.hasOwn(iconData, icon) ? normalizeSessionIconValue(icon) : null;
+    return appearance?.startsWith(SESSION_ICON_SVG_DATA_URL_PREFIX) ? null : appearance;
   };
   function NavigationLink(link: { item: Navigation; child?: boolean; fallbackIcon?: string }) {
     const menu: JSX.EventHandler<HTMLAnchorElement, MouseEvent | KeyboardEvent> = (event) => {
@@ -151,23 +162,26 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         aria-haspopup={link.item.entry.value.actions?.length ? "menu" : undefined}
         onContextMenu={menu}
         onKeyDown={menu}
-        onClick={(event) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          link.item.entry.host.navigation.openPage(link.item.entry.value.page);
-        }}
+        onClick={(event) =>
+          handleNavigationClick(event, () => {
+            link.item.entry.host.navigation.openPage(link.item.entry.value.page);
+          })
+        }
       >
         <span class="nav-item__icon" aria-hidden="true">
-          <Icon name={iconName(link.item.entry, link.fallbackIcon)} />
+          <Show
+            when={emojiIcon(link.item.entry)}
+            fallback={<Icon name={iconName(link.item.entry, link.fallbackIcon)} />}
+          >
+            {(icon) => <span class="session-glyph__emoji">{icon()}</span>}
+          </Show>
         </span>
         <span class="nav-item__text">{link.item.entry.value.label}</span>
       </a>
     );
   }
   const actions = createMemo(() => {
-    const runtime = source.read();
+    const runtime = source().read();
     // Target changes retire the invocation before this presentation is recomputed.
     void [props.sessionKey, props.agentId, props.presented];
     return (
@@ -203,46 +217,59 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
           when={props.kind === "session-header"}
           fallback={
             <>
-              <Show when={actionError()}>
-                <span role="alert">{actionError()}</span>
-              </Show>
+              <For each={actionRead() ? [actionRead()!] : []}>
+                {(read) => (
+                  <Errored
+                    fallback={(error) => {
+                      const message = () => {
+                        const failure = error();
+                        return failure instanceof Error ? failure.message : String(failure);
+                      };
+                      return <span role="alert">{message()}</span>;
+                    }}
+                  >
+                    <Loading>
+                      <ActionCompletion promise={read.promise} />
+                    </Loading>
+                  </Errored>
+                )}
+              </For>
               <For each={actions()} keyed={(action) => action.entry.signal}>
                 {(action) => (
                   <button
                     class="btn btn--sm"
                     type="button"
                     disabled={action().state?.disabled ?? false}
-                    onClick={() =>
-                      void (async () => {
-                        const current = action();
-                        const runtime = context?.plugins;
-                        if (
-                          !runtime ||
-                          current.signal.aborted ||
-                          !host.presented ||
-                          !host.isConnected
-                        ) {
-                          return;
+                    onClick={() => {
+                      const current = action();
+                      const runtime = context?.plugins;
+                      if (
+                        !runtime ||
+                        current.signal.aborted ||
+                        !host.presented ||
+                        !host.isConnected
+                      ) {
+                        return;
+                      }
+                      // Keep this outside a Solid action so owner updates render while it is pending.
+                      const promise = runControlUiPluginAction({
+                        runtime,
+                        id: current.entry.key,
+                        placement: current.entry.value.placement,
+                        sessionKey: host.sessionKey,
+                        agentId: host.agentId,
+                        session: currentSession(),
+                        signal: current.signal,
+                        isCurrent: () => host.isConnected && host.presented,
+                      }).catch((error: unknown) => {
+                        if (!current.signal.aborted) {
+                          throw error;
                         }
-                        setActionError("");
-                        try {
-                          await runControlUiPluginAction({
-                            runtime,
-                            id: current.entry.key,
-                            placement: current.entry.value.placement,
-                            sessionKey: host.sessionKey,
-                            agentId: host.agentId,
-                            session: currentSession(),
-                            signal: current.signal,
-                            isCurrent: () => host.isConnected && host.presented,
-                          });
-                        } catch (error) {
-                          if (!current.signal.aborted) {
-                            setActionError(error instanceof Error ? error.message : String(error));
-                          }
-                        }
-                      })()
-                    }
+                      });
+                      // An earlier concurrent invocation can fail after this one starts.
+                      void promise.catch(() => setActionRead({ promise }));
+                      setActionRead({ promise });
+                    }}
                   >
                     {action().state?.label ?? action().entry.value.label}
                   </button>
@@ -252,7 +279,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
           }
         >
           <For
-            each={source
+            each={source()
               .read()
               ?.registrations("accessories")
               .filter((entry) => entry.value.placement === "session-header")}
@@ -319,6 +346,11 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
       </For>
     </Show>
   );
+}
+
+function ActionCompletion(props: { promise: Promise<void> }) {
+  const completion = createMemo(() => props.promise.then(() => null));
+  return <>{completion()}</>;
 }
 
 defineSolidBridge<ContributionsProps>("openclaw-plugin-contributions", PluginContributionsContent, {

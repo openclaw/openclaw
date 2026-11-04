@@ -740,7 +740,9 @@ struct ComputerActionServiceTests {
         #expect(cancellationHop.pendingCount == 0)
         #expect(releaseAttempts == 2)
     }
+}
 
+extension ComputerActionServiceTests {
     @Test func `typing posts exactly one event pair per Swift grapheme`() async throws {
         var posted: [Character] = []
         let service = ComputerActionService(
@@ -942,7 +944,11 @@ struct ComputerActionServiceTests {
             })
 
         do {
-            try await screen.rawDragForTesting()
+            try await screen.rawDrag(
+                from: .zero,
+                to: CGPoint(x: 24, y: 24),
+                flags: [],
+                checkExecutionAllowed: {})
             Issue.record("raw drag unexpectedly succeeded")
         } catch is SyntheticPostError {
             // Expected injected move failure.
@@ -953,6 +959,33 @@ struct ComputerActionServiceTests {
         #expect(postedTypes.first == .leftMouseDown)
         #expect(postedTypes.contains(.leftMouseDragged))
         #expect(postedTypes.last == .leftMouseUp)
+    }
+
+    @Test func `raw drag stops and releases when an approval becomes pending`() async {
+        let approvals = ApprovalPromptState()
+        let prompt = UUID()
+        var postedTypes: [CGEventType] = []
+        let screen = ComputerScreenActionExecutor(mouseEventPoster: { event in
+            postedTypes.append(event.type)
+            if event.type == .leftMouseDown {
+                approvals.setPending(true, source: prompt)
+            } else if event.type == .leftMouseDragged {
+                throw SyntheticPostError.failed
+            }
+        })
+
+        do {
+            try await screen.rawDrag(from: .zero, to: CGPoint(x: 24, y: 24), flags: []) {
+                try approvals.checkComputerAction(.leftClickDrag)
+            }
+            Issue.record("Expected approval refusal")
+        } catch let ComputerActionService.ComputerActionError.refused(message) {
+            #expect(message == "A human approval prompt is open on this Mac; wait for the user to answer it")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        #expect(postedTypes == [.leftMouseDown, .leftMouseUp])
     }
 
     @Test func `raw drag posts release when cancelled between moves`() async {
@@ -976,7 +1009,11 @@ struct ComputerActionServiceTests {
             })
 
         let drag = Task { @MainActor in
-            try await screen.rawDragForTesting()
+            try await screen.rawDrag(
+                from: .zero,
+                to: CGPoint(x: 24, y: 24),
+                flags: [],
+                checkExecutionAllowed: {})
         }
         while !postedTypes.contains(.leftMouseDragged) {
             await Task.yield()

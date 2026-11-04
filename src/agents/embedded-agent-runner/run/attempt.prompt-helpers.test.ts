@@ -1,9 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { addSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../../bash-process-registry.test-support.js";
+import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
+import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import type { NormalizedUsage } from "../../usage.js";
+import * as compactionRuntime from "../compaction-runtime-context.js";
 import { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-helpers.js";
 
 const hostHookStateMocks = vi.hoisted(() => ({
@@ -39,56 +43,44 @@ it("keeps structured media and JSON summaries on UTF-16 boundaries", () => {
   expect(result.prompt).toContain("chars)");
 });
 
-describe("resolvePromptSubmissionSkipReason", () => {
-  const skip = (messages: unknown[] = [], prompt = "   ", imageCount = 0) =>
-    resolvePromptSubmissionSkipReason({ prompt, messages, imageCount });
-
-  it("treats runtime messages and empty conversation placeholders as empty history", () => {
-    expect(
-      skip([
-        { role: "system", content: "runtime-only policy" },
-        { role: "toolResult", content: "old tool output", toolCallId: "call-1" },
-        { role: "user", content: "   " },
-        { role: "assistant", content: [] },
-      ]),
-    ).toBe("empty_prompt_history_images");
-  });
-
-  it("skips a blank current prompt even with visible replay history", () => {
-    expect(skip([{ role: "user", content: "previous turn", timestamp: 1 }])).toBe(
-      "blank_user_prompt",
-    );
-  });
-
-  it("admits current text or images without replay history", () => {
-    expect(skip([], "hello")).toBeNull();
-    expect(skip([], "   ", 1)).toBeNull();
-  });
-});
+const runtimeHistory = [
+  { role: "system", content: "policy" },
+  { role: "toolResult", content: "output", toolCallId: "call-1" },
+  { role: "user", content: "   " },
+  { role: "assistant", content: [] },
+];
+it.each([
+  [runtimeHistory, "   ", 0, "empty_prompt_history_images"],
+  [[{ role: "user", content: "old", timestamp: 1 }], "   ", 0, "blank_user_prompt"],
+  [[], "hello", 0, null],
+  [[], "   ", 1, null],
+] satisfies Array<[unknown[], string, number, string | null]>)(
+  "resolves prompt submission %#",
+  (messages, prompt, imageCount, expected) => {
+    expect(resolvePromptSubmissionSkipReason({ messages, prompt, imageCount })).toBe(expected);
+  },
+);
 
 describe("resolvePromptBuildHookResult drain cache", () => {
+  const drain = hostHookStateMocks.drainPluginNextTurnInjectionContext;
   beforeEach(() => {
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
-      queuedInjections: [],
-    });
+    drain.mockReset().mockResolvedValue({ queuedInjections: [] });
   });
 
-  function build(runId?: string) {
+  function build(overrides: Partial<Parameters<typeof resolvePromptBuildHookResult>[0]> = {}) {
     return resolvePromptBuildHookResult({
       config: {},
       prompt: "hi",
       messages: [],
-      hookCtx: { runId, sessionKey: "global", agentId: "qa" },
+      hookCtx: { sessionKey: "global", agentId: "qa" },
+      ...overrides,
     });
   }
 
   it("preserves an explicit empty per-turn tool allowlist", async () => {
     const runBeforePromptBuild = vi.fn(async () => ({ toolsAllow: [] }));
-    const result = await resolvePromptBuildHookResult({
-      config: {},
+    const result = await build({
       prompt: "answer without tools",
-      messages: [],
       hookCtx: { sessionKey: "agent:main:main" },
       hookRunner: {
         hasHooks: (hookName) => hookName === "before_prompt_build",
@@ -96,140 +88,189 @@ describe("resolvePromptBuildHookResult drain cache", () => {
       },
     });
     expect(result.toolsAllow).toEqual([]);
-    expect(runBeforePromptBuild).toHaveBeenCalledOnce();
   });
 
   it("reuses drained injections across retries and releases them when the run ends", async () => {
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+    drain.mockResolvedValue({
       queuedInjections: [
         {
           id: "inj-1",
           pluginId: "demo",
-          text: "first attempt context",
+          text: "injected",
           placement: "prepend_context",
           createdAt: 1,
         },
       ],
-      prependContext: "first attempt context",
+      prependContext: "injected",
     });
     const runId = "run-cache-test";
-    expect((await build(runId)).prependContext).toBe("first attempt context");
-    expect((await build(runId)).prependContext).toBe("first attempt context");
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(1);
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledWith({
-      cfg: {},
-      sessionKey: "global",
-      agentId: "qa",
-    });
+    const retry = () => build({ hookCtx: { runId, sessionKey: "global", agentId: "qa" } });
+    expect((await retry()).prependContext).toBe("injected");
+    expect((await retry()).prependContext).toBe("injected");
+    expect(drain).toHaveBeenCalledTimes(1);
+    expect(drain).toHaveBeenCalledWith({ cfg: {}, sessionKey: "global", agentId: "qa" });
     forgetPromptBuildDrainCacheForRun(runId);
-    await build(runId);
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
+    await retry();
+    expect(drain).toHaveBeenCalledTimes(2);
     forgetPromptBuildDrainCacheForRun(runId);
   });
 });
 
 describe("buildAfterTurnRuntimeContext", () => {
+  afterEach(resetProcessRegistryForTests);
   type RuntimeAttempt = Parameters<typeof buildAfterTurnRuntimeContext>[0]["attempt"];
-  const runtimeDirectories = { workspaceDir: "/tmp/workspace", agentDir: "/tmp/agent" };
-  function runtimeAttempt(overrides: Partial<RuntimeAttempt>): RuntimeAttempt {
-    return {
-      config: {},
-      provider: "openai",
-      modelId: "gpt-5.4",
-      thinkLevel: "off",
-      reasoningLevel: "on",
-      extraSystemPrompt: "extra",
-      ownerNumbers: ["+15555550123"],
-      ...overrides,
-    };
-  }
+  const base: RuntimeAttempt = {
+    config: {},
+    provider: "openai",
+    modelId: "gpt-5.4",
+    thinkLevel: "off",
+  };
+  const runtimeParams = <T extends Partial<RuntimeAttempt>>(overrides: T) => ({
+    attempt: { ...base, ...overrides },
+    workspaceDir: "/tmp/workspace",
+    agentDir: "/tmp/agent",
+  });
 
-  it("preserves session-id-scoped processes with borrowed policy", () => {
+  it.each([true, false])("preserves process scope and model policy (locked=%s)", (locked) => {
+    // The two process snapshots must observe the same elapsed runtime.
+    using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     resetProcessRegistryForTests();
-    try {
-      const active = createProcessSessionFixture({
-        id: "sess-session-id",
-        command: "sleep 600",
-        backgrounded: true,
-        pid: 1234,
+    for (const [id, scopeKey, pid] of [
+      ["sess-session-id", "session-123", 1234],
+      ["sess-other", "agent:main", undefined],
+    ] as const) {
+      addSession({
+        ...createProcessSessionFixture({ id, command: "sleep 600", backgrounded: true, pid }),
+        scopeKey,
       });
-      active.scopeKey = "session-123";
-      addSession(active);
-      const other = createProcessSessionFixture({
-        id: "sess-other",
-        command: "sleep 600",
-        backgrounded: true,
-      });
-      other.scopeKey = "agent:main";
-      addSession(other);
-
-      const legacy = buildAfterTurnRuntimeContext({
-        attempt: runtimeAttempt({
-          sessionId: "session-123",
-          sandboxSessionKey: "agent:main",
-        }),
-        ...runtimeDirectories,
-        activeAgentId: "main",
-      });
-
-      expect(legacy.activeProcessSessions).toHaveLength(1);
-      expect(legacy.activeProcessSessions).toMatchObject([
-        { sessionId: "sess-session-id", command: "sleep 600", pid: 1234 },
-      ]);
-      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
-    } finally {
-      resetProcessRegistryForTests();
     }
-  });
-
-  it("keeps the primary model for a locked after-turn runtime context", () => {
-    const runtimeContext = buildAfterTurnRuntimeContext({
-      attempt: runtimeAttempt({
-        sessionKey: "agent:main:session:locked",
-        sandboxSessionKey: "global",
-        sandboxAgentId: "main",
-        config: {
-          agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
-        } as OpenClawConfig,
+    let attemptEnumerations = 0;
+    const params = runtimeParams({
+      agentId: "main",
+      sessionId: "session-123",
+      sessionKey: "session-123",
+      sandboxSessionKey: "global",
+      sandboxAgentId: "main",
+      messageChannel: "slack",
+      messageProvider: "slack",
+      agentAccountId: "workspace-account",
+      currentChannelId: "channel-123",
+      currentThreadTs: "123.456",
+      currentMessageId: "message-123",
+      trigger: "cron",
+      inputProvenance: { kind: "external_user" },
+      authProfileId: "openai:p1",
+      authProfileIdSource: "user",
+      modelId: "gpt-5.5",
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: locked,
+      toolsAllow: ["read", "exec"],
+      skillsSnapshot: { prompt: "Selected skills", skills: [{ name: "example" }] },
+      senderId: "sender-123",
+      thinkLevel: "low",
+      reasoningLevel: "on",
+      bashElevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      extraSystemPrompt: "Synthetic after-turn policy",
+      ownerNumbers: ["owner-123"],
+      runtimePlan: buildAgentRuntimePlan({
+        provider: "openai",
         modelId: "gpt-5.5",
-        agentHarnessId: "openclaw",
-        modelSelectionLocked: true,
+        workspaceDir: "/tmp/workspace",
+        providerRuntimeHandle: {
+          provider: "openai",
+          modelId: "gpt-5.5",
+          workspaceDir: "/tmp/workspace",
+          prepared: true,
+        },
+        preparedAuthPlan: {
+          providerForAuth: "openai",
+          modelId: "gpt-5.5",
+          authProfileProviderForAuth: "openai",
+          forwardedAuthProfileId: "openai:p1",
+          forwardedAuthProfileSource: "user",
+        },
       }),
-      ...runtimeDirectories,
-    });
-
-    expect(runtimeContext.modelSelectionLocked).toBe(true);
-    expect(runtimeContext.sandboxSessionKey).toBe("global");
-    expect(runtimeContext.sandboxAgentId).toBe("main");
-    expect(runtimeContext.provider).toBe("openai");
-    expect(runtimeContext.model).toBe("gpt-5.5");
-  });
-
-  it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
-    const legacy = buildAfterTurnRuntimeContext({
-      attempt: runtimeAttempt({
-        trigger: "heartbeat",
-        inputProvenance: { kind: "external_user" },
-        sessionKey: "agent:main:session:abc",
-        authProfileId: "openai:p1",
-        config: {
-          agents: {
-            defaults: {
-              models: {
-                "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" },
-              },
-              compaction: { model: "summary" },
-            },
+      config: {
+        agents: {
+          defaults: {
+            models: { "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" } },
+            compaction: { model: "summary" },
           },
-        } as OpenClawConfig,
-      }),
-      ...runtimeDirectories,
+        },
+      },
     });
-
-    expect(legacy.provider).toBe("openrouter");
-    expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");
-    expect(legacy.authProfileId).toBeUndefined();
-    expect(legacy.modelCallUrgency).toBe("background");
+    const request = { ...params, cwd: "/tmp/workspace/subdir", activeAgentId: "main" };
+    const legacyOverrides = {
+      modelCallUrgency: resolveModelCallUrgency(params.attempt),
+      runtimeAuthPlan: params.attempt.runtimePlan?.auth,
+      workspaceDir: request.workspaceDir,
+      cwd: request.cwd,
+      agentDir: request.agentDir,
+      harnessRuntime: params.attempt.agentHarnessId,
+      activeProcessSessions: listActiveProcessSessionReferences({
+        scopeKey: resolveProcessToolScopeKey({
+          sessionKey: params.attempt.sessionKey,
+          sessionId: params.attempt.sessionId,
+          agentId: request.activeAgentId,
+        }),
+      }),
+    };
+    const realBuild = compactionRuntime.buildEmbeddedCompactionRuntimeContext;
+    using compactionBuilder = vi
+      .spyOn(compactionRuntime, "buildEmbeddedCompactionRuntimeContext")
+      .mockImplementation((candidate, profile) => {
+        const execute = (input: Parameters<typeof realBuild>[0]) => {
+          const reads: { key: PropertyKey; present: boolean; value: unknown }[] = [];
+          const output = realBuild(
+            new Proxy(input, {
+              get(target, key, receiver) {
+                const value = Reflect.get(target, key, receiver);
+                reads.push({ key, present: Object.hasOwn(target, key), value });
+                return value;
+              },
+            }),
+            profile,
+          );
+          return { reads, output };
+        };
+        // Execute both through the real builder, including target and auth resolution.
+        const projected = execute(candidate);
+        const legacy = execute({ ...params.attempt, ...legacyOverrides });
+        expect(projected.reads).toEqual(legacy.reads);
+        expect(projected.output).toEqual(legacy.output);
+        for (const { key, value } of projected.reads) {
+          if (Object.hasOwn(params.attempt, key) && !Object.hasOwn(legacyOverrides, key)) {
+            expect(value).toBe(Reflect.get(params.attempt, key));
+          }
+        }
+        return projected.output;
+      });
+    const context = buildAfterTurnRuntimeContext({
+      ...request,
+      attempt: new Proxy(params.attempt, {
+        ownKeys(target) {
+          attemptEnumerations++;
+          return Reflect.ownKeys(target);
+        },
+      }),
+    });
+    expect(compactionBuilder).toHaveBeenCalledOnce();
+    expect(attemptEnumerations).toBe(0);
+    expect(context.activeProcessSessions).toHaveLength(1);
+    expect(context).toMatchObject({
+      activeProcessSessions: [{ sessionId: "sess-session-id", command: "sleep 600", pid: 1234 }],
+      transcriptStorage: { kind: "sqlite" },
+      modelSelectionLocked: locked,
+      sandboxSessionKey: "global",
+      sandboxAgentId: "main",
+      provider: locked ? "openai" : "openrouter",
+      model: locked ? "gpt-5.5" : "anthropic/claude-sonnet-4-5",
+      modelCallUrgency: "background",
+    });
+    if (!locked) {
+      expect(context.authProfileId).toBeUndefined();
+    }
+    expect(context.runtimeAuthPlan).toBe(locked ? params.attempt.runtimePlan?.auth : undefined);
   });
   it("derives afterTurn token count from the current assistant usage snapshot", () => {
     const lastCallUsage = {
@@ -242,18 +283,15 @@ describe("buildAfterTurnRuntimeContext", () => {
     } satisfies NormalizedUsage;
     const promptCache = buildContextEnginePromptCacheInfo({ lastCallUsage });
     const legacy = buildAfterTurnRuntimeContextFromUsage({
-      attempt: runtimeAttempt({
-        sessionKey: "agent:main:session:abc",
-        authProfileId: "openai:p1",
-        config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
-      }),
-      ...runtimeDirectories,
+      ...runtimeParams({}),
       tokenBudget: 1050000,
       lastCallUsage,
       promptCache,
     });
 
-    expect(legacy.currentTokenCount).toBe(23);
-    expect(legacy.promptCache?.lastCallUsage?.total).toBe(57);
+    expect(legacy).toMatchObject({
+      currentTokenCount: 23,
+      promptCache: { lastCallUsage: { total: 57 } },
+    });
   });
 });

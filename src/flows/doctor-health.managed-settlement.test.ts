@@ -7,6 +7,7 @@ describe("runDoctorHealthFlow managed repair settlement", () => {
     "interactive-ready",
     "interactive-declined",
     "repair-failed",
+    "repair-cancelled",
     "store-close-failed",
     "config-refused",
     "workspace-cleanup-failed",

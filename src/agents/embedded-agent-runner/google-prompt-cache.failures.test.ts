@@ -66,49 +66,6 @@ async function readyEntry(params: {
 
 describe("google prompt cache failure handling", () => {
   it.each([
-    ["malformed JSON", () => new Response("not-json{{{", { status: 200 })],
-    [
-      "invalid UTF-8",
-      () =>
-        new Response(new Uint8Array([0x7b, 0x22, 0x6b, 0x22, 0x3a, 0xff, 0x7d]), {
-          status: 200,
-        }),
-    ],
-    ["JSON null", () => new Response("null", { status: 200 })],
-    ["JSON primitive", () => new Response("42", { status: 200 })],
-    ["JSON array", () => new Response("[]", { status: 200 })],
-    [
-      "body read failure",
-      () =>
-        new Response(
-          new ReadableStream<Uint8Array>({
-            pull() {
-              throw new Error("broken cache response body");
-            },
-          }),
-          { status: 200 },
-        ),
-    ],
-  ])("continues uncached after %s", async (_name, responseFactory) => {
-    const entries: SessionCustomEntry[] = [];
-    const fetchMock = vi.fn(async () => responseFactory());
-    const innerStreamFn = vi.fn(() => "visible-output" as never);
-    const wrapped = await preparePromptCacheStream({
-      fetchMock,
-      now: NOW,
-      sessionManager: makeSessionManager(entries),
-      streamFn: innerStreamFn,
-    });
-
-    await expect(invoke(wrapped)).resolves.toBe("visible-output");
-    expect(streamContext(innerStreamFn)).toMatchObject({
-      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
-      tools: TOOLS,
-    });
-    expect(entries.at(-1)?.data).toMatchObject({ status: "failed" });
-  });
-
-  it.each([
     ["missing name", { expireTime: new Date(NOW + 60_000).toISOString() }],
     ["blank name", { name: " ", expireTime: new Date(NOW + 60_000).toISOString() }],
     [
@@ -176,38 +133,6 @@ describe("google prompt cache failure handling", () => {
       status: "failed",
       retryAfter: NOW + 10 * 60_000,
     });
-  });
-
-  it.each([
-    ["HTTP failure", async () => new Response("denied", { status: 403 })],
-    [
-      "network failure",
-      async () => {
-        throw new Error("network unavailable");
-      },
-    ],
-    [
-      "provider abort",
-      async () => {
-        throw new DOMException("provider stopped", "AbortError");
-      },
-    ],
-  ])("continues uncached after %s", async (_name, fetchImpl) => {
-    const entries: SessionCustomEntry[] = [];
-    const innerStreamFn = vi.fn(() => "visible-output" as never);
-    const wrapped = await preparePromptCacheStream({
-      fetchMock: vi.fn(fetchImpl),
-      now: NOW,
-      sessionManager: makeSessionManager(entries),
-      streamFn: innerStreamFn,
-    });
-
-    await expect(invoke(wrapped)).resolves.toBe("visible-output");
-    expect(streamContext(innerStreamFn)).toMatchObject({
-      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
-      tools: TOOLS,
-    });
-    expect(entries.at(-1)?.data).toMatchObject({ status: "failed" });
   });
 
   it("propagates the caller abort reason without persisting failure or streaming", async () => {

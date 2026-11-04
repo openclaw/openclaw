@@ -4,16 +4,19 @@ import type { ApplicationContext } from "../app/context.ts";
 import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
-import { presenceViewerLastActivity } from "../lib/presence-users.ts";
-import { resolveSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
+import { presenceViewerLastActivity, profilePresenceViewer } from "../lib/presence-users.ts";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { hasSidebarListFilter } from "./session-data-events.ts";
+import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
+import { resolveSidebarOnline, sidebarOnlineOrder } from "./sidebar-online-state.ts";
 import {
   parseSidebarSnapshot,
   snapshotSections,
   snapshotSessions,
+  snapshotIssuesCount,
   type SidebarSnapshotModel,
 } from "./sidebar-snapshot-model.ts";
 
@@ -35,6 +38,27 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
     const pages = host.navigationCatalog.dashboards;
     return pages?.loading === false && (pages.readSucceeded === true || pages.error !== null);
   }
+  const sessions = context.sessions;
+  const rootsSettled =
+    !sessions.state.loading &&
+    (Boolean(host.sessionData.sessionListError ?? sessions.state.error) ||
+      (sessions.canonicalListReady &&
+        Boolean(sessions.presentation.result) &&
+        !sessions.presentation.resultCached));
+  if (host.navigationView === "sessions" && !rootsSettled) {
+    return false;
+  }
+  if (
+    host.sessionData.sessionLineageVisible &&
+    [...host.childSessionParents()].some(
+      (key) =>
+        host.sessionData.loadingChildSessionKeys.has(key) ||
+        (!host.sessionData.loadedChildSessionKeys.has(key) &&
+          !host.sessionData.childSessionErrorsByParent.has(key)),
+    )
+  ) {
+    return false;
+  }
   const people = resolveSidebarOnline(host).users;
   if (
     people.some((person) => person.identity?.type === "profile") &&
@@ -51,11 +75,12 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
       roster.involvingMe === host.sidebarSessionOwnerFilter().involvingMe
     );
   }
-  return (
-    !host.sessionData.sessionsLoading &&
-    (Boolean(host.sessionData.sessionMutationError ?? context.sessions.state.error) ||
-      (Boolean(host.sessionData.sessionsResult) && !context.sessions.presentation.resultCached))
-  );
+  if (hasSidebarListFilter(host)) {
+    const query = host.sessionData.sessionListQuery(host.expandedAgentId());
+    const selected = context.sessions.listSnapshot(query);
+    return !selected.loading && (selected.readSucceeded === true || selected.error !== null);
+  }
+  return rootsSettled && !host.sessionData.sessionsLoading;
 }
 
 export function captureSidebarSnapshotModel(
@@ -75,7 +100,7 @@ export function captureSidebarSnapshotModel(
     host.sidebarSnapshot ||
     (host.navigationView === "pages" &&
       host.navigationCatalog.dashboards?.readSucceeded !== true) ||
-    host.sessionData.sessionMutationError !== null ||
+    host.sessionData.sessionListError !== null ||
     context.sessions.state.error !== null ||
     host.sessionData.ownerCounts.error !== null ||
     (host.sidebarAgentsMode === "roster" && roster.error !== null) ||
@@ -95,17 +120,21 @@ export function captureSidebarSnapshotModel(
     plugins.push({ key, pluginId, id: value.page.id, label: value.label, icon: value.icon });
   }
   const presentation = (row: SidebarRecentSession) => ({
-    childrenDisplayMode: host.sessionProjection.captureChildrenDisplay(row.key),
-    snapshotSubtitle: resolveSidebarSessionRowSubtitle(host, row),
+    childrenDisplayMode: host.sessionProjection.children.capture(row.key),
+    snapshotSubtitle: row.snapshot
+      ? row.snapshotSubtitle
+      : resolveSidebarSessionRowSubtitle(host, row),
+    state: sidebarSessionBadgeFacts(host.sessionPullRequests, row),
   });
-  const sessions = snapshotSessions(rows, presentation);
   return parseSidebarSnapshot({
     routingDefaults: {
       mainKey: agents.mainKey,
       scope: agents.scope,
     },
-    roster: bootRoster,
+    // The read receipt is not a display change.
+    roster: { ...bootRoster, result: { ...bootRoster.result, ts: 0 } },
     mode: host.sidebarAgentsMode,
+    grouping: host.effectiveSessionsGrouping(),
     navigationView: host.navigationView,
     pages: snapshotSessions(
       (host.navigationCatalog.dashboards?.result?.sessions ?? []).map((row) =>
@@ -124,9 +153,12 @@ export function captureSidebarSnapshotModel(
     ),
     entries: zone.sidebarEntries.filter((value) => {
       const entry = parseSidebarEntry(value);
-      return entry?.type !== "session" || !isIncognitoSessionKey(entry.key);
+      return (
+        entry?.type !== "session" ||
+        (!isIncognitoSessionKey(entry.key) && !context.sessions.deletionState(entry.key))
+      );
     }),
-    sessions,
+    issuesCount: snapshotIssuesCount(context.sidebarAttention.entries),
     ...snapshotSections(sections, host.collapsedSessionSections, presentation),
     cards: roster.cards,
     collapsedAgentIds:
@@ -137,13 +169,16 @@ export function captureSidebarSnapshotModel(
       return {
         ...displayUser(user),
         watchedSessions: [],
-        entries: lastActivityAt === undefined ? [] : [{ ts: 0, lastActivityAt }],
+        entries: [{ ts: 0, lastActivityAt }],
       };
     }),
     onlineCounts: [...(online.counts ?? [])],
     peopleSortMode: host.people.sortMode,
     peopleStatusFilter: host.people.statusFilter,
-    onlineExpanded: host.teamOnlineExpanded,
+    peoplePresenceFilter: host.people.presenceFilter,
+    offlineUsers: (host.peopleView?.directory()?.result?.profiles ?? [])
+      .filter((profile) => !profile.mergedInto)
+      .map(profilePresenceViewer),
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
     footer: displayUser(context.gateway.snapshot.selfUser),

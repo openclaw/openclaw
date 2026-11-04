@@ -7,7 +7,11 @@ import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
 import { readCronStoreFingerprints } from "./row-codec.js";
 import { serializeCronSaveError } from "./save-error.js";
 import type { CronStoreSaveWorkerOperations } from "./save-worker.types.js";
-import { saveCronStoreChangesInDatabase, saveCronStoreInDatabase } from "./save.kernel.js";
+import {
+  loadCronStoreForChanges,
+  saveCronStoreChangesInDatabase,
+  saveCronStoreInDatabase,
+} from "./save.kernel.js";
 
 type SaveCommand = {
   [Key in keyof CronStoreSaveWorkerOperations]: {
@@ -28,6 +32,7 @@ export function executeCronStoreSaveCommand(command: SaveCommand, database: Open
             command.input.storeKey,
             command.input.storeKey,
             command.input.changes,
+            loadCronStoreForChanges(db, command.input.storeKey),
             command.input.options,
           );
         } else {

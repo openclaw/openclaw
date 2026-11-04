@@ -6,6 +6,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
@@ -13,12 +14,16 @@ import {
   readSessionTranscriptRunId,
 } from "../../sessions/transcript-events.js";
 import {
+  isAssistantResultEventForRun,
   isVisibleAssistantResultEventForRun,
   isVisibleTranscriptRecord,
 } from "../../sessions/transcript-visible-record.js";
+import {
+  isSilentAssistantTranscriptMessage,
+  readTerminalSourceReplyDeliveryMirror,
+} from "../../shared/chat-message-content.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -46,33 +51,60 @@ import { readSessionTranscriptHeaderStartedAt } from "./transcript-header.js";
 type ArchiveDatabase = Pick<DB, "session_transcript_archives">;
 
 export function listTranscriptArchivesFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "db" | "agentId">,
+  logicalAgentId: string | undefined,
+  selectors: readonly string[],
+  archiveNames: readonly string[],
+) {
+  return readTranscriptArchiveRows(database, logicalAgentId, selectors, archiveNames, true);
+}
+
+/**
+ * Archive identities without creation order. Each row stores archive_blob before
+ * created_at, so reading or ordering by created_at walks the blob's overflow
+ * pages (782 MB for 2.9k archives on one Gateway); identity columns precede it.
+ */
+export function listTranscriptArchiveIdentitiesFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "db" | "agentId">,
+  archiveNames: readonly string[],
+) {
+  return readTranscriptArchiveRows(database, undefined, [], archiveNames, false).map(
+    ({ createdAt: _unread, ...archive }) => archive,
+  );
+}
+
+// One query owner keeps this native read path's SQL surface unchanged.
+function readTranscriptArchiveRows(
   { db, agentId }: Pick<OpenClawAgentDatabase, "db" | "agentId">,
   logicalAgentId: string | undefined,
   selectors: readonly string[],
   archiveNames: readonly string[],
+  ordered: boolean,
 ) {
   // Archive metadata is optional until the first archive write.
   if (!tableExists(db, "session_transcript_archives")) {
     return [];
   }
-  let query = getNodeSqliteKysely<ArchiveDatabase>(db)
+  const selected = sqliteStringSet(selectors);
+  const query = getNodeSqliteKysely<ArchiveDatabase>(db)
     .selectFrom("session_transcript_archives")
-    .select([
+    .select((expression) => [
       "archive_name as archiveName",
       "session_id as sessionId",
       "session_key as sessionKey",
-      "created_at as createdAt",
+      (ordered ? expression.ref("created_at") : expression.lit(0)).as("createdAt"),
     ])
-    .orderBy("created_at")
-    .orderBy("session_id");
-  query = query.where((expression) =>
-    expression.or([
-      ...(selectors.length > 0
-        ? [expression("session_id", "in", selectors), expression("session_key", "in", selectors)]
-        : []),
-      ...(archiveNames.length > 0 ? [expression("archive_name", "in", archiveNames)] : []),
-    ]),
-  );
+    .$if(ordered, (ordering) => ordering.orderBy("created_at").orderBy("session_id"))
+    .where((expression) =>
+      expression.or([
+        ...(selectors.length > 0
+          ? [expression("session_id", "in", selected), expression("session_key", "in", selected)]
+          : []),
+        ...(archiveNames.length > 0
+          ? [expression("archive_name", "in", sqliteStringSet(archiveNames))]
+          : []),
+      ]),
+    );
   const rows = executeSqliteQuerySync(db, query).rows;
   return rows
     .map((row) =>
@@ -97,9 +129,12 @@ function hasTranscriptArchiveInDatabase(
   );
 }
 
-export function readTranscriptArchivePresenceInWorker(
+export async function readTranscriptArchivePresenceInWorker(
   request: TranscriptArchivePresenceRead,
-): boolean {
+): Promise<boolean> {
+  // Final/page archive readers never borrow the writer's retained lifecycle.
+  const { withOpenClawAgentDatabaseReadOnly } =
+    await import("../../state/openclaw-agent-db-readonly.js");
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => {
       const actual = readOpenClawAgentDatabaseIdentity(database);
@@ -175,17 +210,30 @@ export async function readTranscriptArchiveFinalInWorker(
       if (hashSessionArchiveBytes(row.archive_blob) !== row.archive_sha256) {
         throw new Error("Archived transcript bytes do not match their registered hash.");
       }
+      let hasTerminalResult = false;
       await scanArchivedTranscript(
         row.archive_blob,
         row.encoding === "zstd",
         archive.sessionId,
         (event) => {
+          if (!isAssistantResultEventForRun(event, plan.runId)) {
+            return;
+          }
+          hasTerminalResult = true;
           if (isVisibleAssistantResultEventForRun(event, plan.runId)) {
             result.event = event;
+          } else if (isRecord(event) && isSilentAssistantTranscriptMessage(event.message)) {
+            const previousMessage = isRecord(result.event) ? result.event.message : undefined;
+            if (
+              !(isRecord(previousMessage) && previousMessage.display === true) &&
+              !readTerminalSourceReplyDeliveryMirror(previousMessage)
+            ) {
+              result.event = undefined;
+            }
           }
         },
       );
-      if (result.event !== undefined) {
+      if (hasTerminalResult) {
         break;
       }
     }
@@ -229,7 +277,7 @@ async function scanArchivedTranscript(
   let seq = 1;
   const scan = async (source: Readable) => {
     for await (const record of readTranscriptArchiveRecords(source, maxRecordBytes)) {
-      const event: unknown = JSON.parse(record.toString("utf8"));
+      const event: unknown = JSON.parse(record);
       if (!headerRead) {
         if (!isRecord(event) || event.type !== "session" || event.id !== sessionId) {
           throw new Error("Archived transcript header does not match its registered session.");

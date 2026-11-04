@@ -4,6 +4,7 @@ import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
+import { makeCronStreamSandboxTarget } from "./stream-sandbox.test-support.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
 import type { CronJob, CronJobCreate } from "./types.js";
 
@@ -22,7 +23,7 @@ function streamJob(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
 }
 
 async function createCron(triggersEnabled: boolean, deps: Partial<CronServiceDeps> = {}) {
-  const { storePath } = await makeStorePath();
+  const storePath = deps.storePath ?? (await makeStorePath()).storePath;
   const cron = new CronService({
     scheduler: createTestGatewayScheduler(),
     nowMs: () => Date.now(),
@@ -31,7 +32,6 @@ async function createCron(triggersEnabled: boolean, deps: Partial<CronServiceDep
     cronConfig: { triggers: { enabled: triggersEnabled } },
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
@@ -101,32 +101,99 @@ describe("cron stream schedule validation", () => {
     }
   });
 
-  it("rotates logical source identity only when source ownership changes", async () => {
-    const { cron } = await createCron(true);
-    try {
-      const created = await cron.add(streamJob());
-      const initialIdentity = created.state.streamSourceIdentity;
-      expect(initialIdentity).toEqual(expect.any(String));
+  it.each(["gateway", "sandbox"] as const)(
+    "rotates %s logical source identity only when source ownership changes",
+    async (host) => {
+      const { cron } = await createCron(true);
+      const streamSandbox = host === "sandbox" ? makeCronStreamSandboxTarget() : undefined;
+      try {
+        const created = await cron.add(streamJob(), { streamSandbox });
+        const initialIdentity = created.state.streamSourceIdentity;
+        expect(initialIdentity).toEqual(expect.any(String));
 
-      const equivalent = await cron.update(created.id, {
-        schedule: structuredClone(created.schedule),
-      });
-      expect(equivalent.state.streamSourceIdentity).toBe(initialIdentity);
+        const equivalent = await cron.update(created.id, {
+          schedule: structuredClone(created.schedule),
+        });
+        expect(equivalent.state.streamSourceIdentity).toBe(initialIdentity);
 
-      const replaced = await cron.update(created.id, {
-        schedule: { kind: "stream", command: ["replacement-source"] },
-      });
-      expect(replaced.state.streamSourceIdentity).not.toBe(initialIdentity);
+        const enabled = await cron.update(created.id, {
+          enabled: true,
+          state: { streamRestartExhausted: true },
+        });
+        expect(enabled.state.streamRestartExhausted).toBeUndefined();
+        expect(enabled.state.streamSourceIdentity).toBe(initialIdentity);
 
-      const disabled = await cron.update(created.id, { enabled: false });
-      expect(disabled.state.streamSourceIdentity).not.toBe(replaced.state.streamSourceIdentity);
+        const exhausted = await cron.update(created.id, {
+          state: { streamRestartExhausted: true },
+        });
+        const assertedAgain = await cron.update(created.id, {
+          state: { streamRestartExhausted: true },
+        });
+        const exhaustedIdentity = exhausted.state.streamSourceIdentity;
+        if (exhausted.schedule.kind !== "stream" || !exhaustedIdentity) {
+          throw new Error("expected exhausted stream source identity");
+        }
+        expect(exhaustedIdentity).not.toBe(initialIdentity);
+        expect(assertedAgain.state.streamSourceIdentity).not.toBe(exhaustedIdentity);
+        await expect(
+          cron.updateExternalState(
+            created.id,
+            cronStreamScheduleKey(exhausted.schedule, streamSandbox),
+            exhaustedIdentity,
+            { streamRestartExhausted: undefined },
+          ),
+        ).resolves.toBe(false);
+        expect((await cron.readJob(created.id))?.state.streamRestartExhausted).toBe(true);
 
-      const reenabled = await cron.update(created.id, { enabled: true });
-      expect(reenabled.state.streamSourceIdentity).not.toBe(disabled.state.streamSourceIdentity);
-    } finally {
-      cron.stop();
-    }
-  });
+        const replaced = await cron.update(created.id, {
+          schedule: { kind: "stream", command: ["replacement-source"] },
+        });
+        expect(replaced.state.streamSourceIdentity).not.toBe(initialIdentity);
+
+        const disabled = await cron.update(created.id, { enabled: false });
+        expect(disabled.state.streamSourceIdentity).not.toBe(replaced.state.streamSourceIdentity);
+
+        const reenabled = await cron.update(created.id, { enabled: true });
+        expect(reenabled.state.streamSourceIdentity).not.toBe(disabled.state.streamSourceIdentity);
+        if (streamSandbox) {
+          if (reenabled.schedule.kind !== "stream") {
+            throw new Error("expected stream schedule");
+          }
+          expect(reenabled).toHaveProperty("streamSandbox", streamSandbox);
+          const replacement = { ...streamSandbox, sessionId: "replacement-creator" };
+          const retargeted = await cron.update(created.id, {}, { streamSandbox: replacement });
+          const identity = retargeted.state.streamSourceIdentity;
+          if (!identity) {
+            throw new Error("expected replacement stream identity");
+          }
+          expect(identity).not.toBe(reenabled.state.streamSourceIdentity);
+          await expect(
+            cron.updateExternalState(
+              created.id,
+              cronStreamScheduleKey(reenabled.schedule, streamSandbox),
+              identity,
+              { streamStatus: "stopped" },
+            ),
+          ).resolves.toBe(false);
+          await expect(
+            cron.updateExternalState(
+              created.id,
+              cronStreamScheduleKey(reenabled.schedule, replacement),
+              identity,
+              { streamStatus: "stopped" },
+            ),
+          ).resolves.toBe(true);
+          const timer = await cron.update(created.id, {
+            schedule: { kind: "every", everyMs: 60_000 },
+          });
+          expect(timer).not.toHaveProperty("streamSandbox");
+          expect(timer.state.streamSourceIdentity).toBeUndefined();
+        }
+      } finally {
+        cron.stop();
+      }
+    },
+  );
 
   it("ignores stale owner writes after an A-to-B-to-A source replacement", async () => {
     const { cron } = await createCron(true);
@@ -188,15 +255,13 @@ async function withStream(
 ) {
   const { cron, storePath } = await createCron(true, deps);
   try {
-    const job = await cron.add({
-      name: "stream",
-      enabled: true,
-      schedule: { kind: "stream", command: ["echo"] },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "base" },
-      ...input,
-    });
+    const job = await cron.add(
+      streamJob({
+        schedule: { kind: "stream", command: ["echo"] },
+        payload: { kind: "agentTurn", message: "base" },
+        ...input,
+      }),
+    );
     await run(cron, job, storePath);
   } finally {
     cron.stop();
@@ -352,10 +417,11 @@ describe("cron stream trigger composition", () => {
   });
 });
 
-it("skips invalid main jobs with agentTurn payloads loaded from disk", async () => {
+it("skips invalid main jobs with command payloads loaded from disk", async () => {
   const { storePath } = await makeStorePath();
   const enqueueSystemEvent = vi.fn();
-  const requestHeartbeat = vi.fn();
+  const runCommandJob = vi.fn<NonNullable<CronServiceDeps["runCommandJob"]>>();
+  const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>();
   await writeCronStoreSnapshot({
     storePath,
     jobs: [
@@ -368,27 +434,24 @@ it("skips invalid main jobs with agentTurn payloads loaded from disk", async () 
         schedule: { kind: "at", at: "2025-12-13T00:00:01.000Z" },
         sessionTarget: "main",
         wakeMode: "now",
-        payload: { kind: "agentTurn", message: "bad" },
+        payload: { kind: "command", argv: ["echo", "invalid main payload"] },
         state: {},
       },
     ],
   });
-  const cron = new CronService({
-    scheduler: createTestGatewayScheduler(),
-    nowMs: () => Date.now(),
+  const { cron } = await createCron(true, {
     storePath,
-    cronEnabled: true,
-    log: logger,
+    cronConfig: undefined,
     enqueueSystemEvent,
-    requestHeartbeat,
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    runCommandJob,
+    runSessionEvent,
   });
   try {
-    await cron.start();
     vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
     await cron.run("job-1", "due");
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expect(runCommandJob).not.toHaveBeenCalled();
+    expect(runSessionEvent).not.toHaveBeenCalled();
     const [job] = await cron.list({ includeDisabled: true });
     expect(job?.state.lastStatus).toBe("skipped");
     expect(job?.state.lastError).toMatch(/sessionTarget "main" requires payload\.kind/i);

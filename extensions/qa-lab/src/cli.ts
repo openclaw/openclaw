@@ -68,6 +68,7 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
 };
 
 const loadQaLabCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
+const loadQaLabReportRuntime = createLazyRuntimeModule(() => import("./cli-report.runtime.js"));
 
 function tcpPort(flag: string) {
   return (value: string) => {
@@ -346,7 +347,7 @@ export function registerQaLabCli(program: Command) {
     .option("--baseline-label <label>", "Baseline display label", QA_FRONTIER_PARITY_BASELINE_LABEL)
     .option("--output-dir <path>", "Artifact directory for the parity report")
     .action(
-      qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaParityReportCommand(opts)),
+      qaCliAction(async (opts) => (await loadQaLabReportRuntime()).runQaParityReportCommand(opts)),
     );
 
   qa.command("coverage")
@@ -357,13 +358,19 @@ export function registerQaLabCli(program: Command) {
     .option("--tools", "Print runtime tool fixture coverage instead of scenario coverage", false)
     .option("--summary <path>", "Runtime qa-suite-summary.json to overlay on --tools coverage")
     .option(
+      "--evidence <path>",
+      "Report scorecard gaps from an existing qa-evidence.json without running QA",
+    )
+    .option(
       "--match <query>",
       "Search scenario metadata and print matching scenario refs (repeatable)",
       collectString,
       [],
     )
     .action(
-      qaCliAction(async (opts) => (await loadQaLabCliRuntime()).runQaCoverageReportCommand(opts)),
+      qaCliAction(async (opts) =>
+        (await loadQaLabReportRuntime()).runQaCoverageReportCommand(opts),
+      ),
     );
 
   qa.command("confidence-report")

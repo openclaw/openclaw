@@ -1,6 +1,4 @@
 /**
- * Realtime voice provider selection and config resolution.
- *
  * This adapter applies the generic capability-provider resolver to Talk
  * providers, including default model injection and per-call config overrides.
  */
@@ -99,7 +97,7 @@ function resolveRealtimeVoiceProviderCapabilities(
 function isRealtimeVoiceProviderConfigured(params: RealtimeVoiceProviderContext): boolean {
   const internalConfigured =
     params.surface === "browser-session"
-      ? readInternalRealtimeVoiceProviderApi(params.provider)?.isBrowserSessionConfigured({
+      ? readInternalRealtimeVoiceProviderApi(params.provider)?.isBrowserSessionConfigured?.({
           cfg: params.cfg,
           providerConfig: params.providerConfig,
           agentId: params.agentId,
@@ -134,10 +132,19 @@ export async function resolveRealtimeVoiceProviderCapabilitiesAsync(
     model: params.model,
     ...(params.clientControl ? { clientControl: params.clientControl } : {}),
   };
-  const capabilities =
-    params.surface === "browser-session" && internal?.resolveBrowserSessionCapabilitiesAsync
-      ? await internal.resolveBrowserSessionCapabilitiesAsync(context)
-      : resolveRealtimeVoiceProviderCapabilities(params);
+  let capabilities: InternalRealtimeVoiceProviderCapabilities | undefined;
+  if (params.surface === "browser-session" && internal?.resolveBrowserSessionCapabilitiesAsync) {
+    capabilities = await internal.resolveBrowserSessionCapabilitiesAsync(context);
+  } else {
+    if (params.surface === "browser-session" && internal?.resolveBrowserSessionCapabilities) {
+      warnPluginSdkDeprecation({
+        family: "provider-sync-configuration",
+        method: "InternalRealtimeVoiceProviderApi.resolveBrowserSessionCapabilities",
+        replacement: "resolveBrowserSessionCapabilitiesAsync",
+      });
+    }
+    capabilities = resolveRealtimeVoiceProviderCapabilities(params);
+  }
 
   return capabilities || params.provider.capabilities;
 }
@@ -151,16 +158,30 @@ export async function isRealtimeVoiceProviderConfiguredAsync(
     providerConfig: params.providerConfig,
     agentId: params.agentId,
   };
-  const configured =
-    params.surface === "browser-session"
-      ? internal?.isBrowserSessionConfiguredAsync
-        ? await internal.isBrowserSessionConfiguredAsync(context)
-        : internal?.isBrowserSessionConfigured(context)
-      : params.surface === "gateway-relay"
-        ? internal?.isGatewayRelayConfiguredAsync
-          ? await internal.isGatewayRelayConfiguredAsync(context)
-          : internal?.isGatewayRelayConfigured?.(context)
-        : undefined;
+  let configured: boolean | undefined;
+  if (params.surface === "browser-session") {
+    if (internal?.isBrowserSessionConfiguredAsync) {
+      configured = await internal.isBrowserSessionConfiguredAsync(context);
+    } else if (internal?.isBrowserSessionConfigured) {
+      warnPluginSdkDeprecation({
+        family: "provider-sync-configuration",
+        method: "InternalRealtimeVoiceProviderApi.isBrowserSessionConfigured",
+        replacement: "isBrowserSessionConfiguredAsync",
+      });
+      configured = internal.isBrowserSessionConfigured(context);
+    }
+  } else if (params.surface === "gateway-relay") {
+    if (internal?.isGatewayRelayConfiguredAsync) {
+      configured = await internal.isGatewayRelayConfiguredAsync(context);
+    } else if (internal?.isGatewayRelayConfigured) {
+      warnPluginSdkDeprecation({
+        family: "provider-sync-configuration",
+        method: "InternalRealtimeVoiceProviderApi.isGatewayRelayConfigured",
+        replacement: "isGatewayRelayConfiguredAsync",
+      });
+      configured = internal.isGatewayRelayConfigured(context);
+    }
+  }
   if (configured !== undefined) {
     return configured;
   }
@@ -243,7 +264,7 @@ function requireRealtimeVoiceProvider(
   return resolution;
 }
 
-/** @deprecated Use resolveConfiguredRealtimeVoiceProviderAsync for stored-credential providers. */
+/** @deprecated Use resolveConfiguredRealtimeVoiceProviderAsync for stored-credential providers. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveConfiguredRealtimeVoiceProvider(
   params: ResolveConfiguredRealtimeVoiceProviderParams,
 ): ResolvedRealtimeVoiceProvider {

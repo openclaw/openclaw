@@ -18,6 +18,11 @@ const binding = {
   sessionId: identifier("sessionId"),
   ownerEpoch: z.number().int().nonnegative(),
 };
+export const NodeWorkerProcessesChangedSchema = workerProtocolObject({
+  ...binding,
+  placementGeneration: z.number().int().nonnegative(),
+});
+export type NodeWorkerProcessesChanged = z.infer<typeof NodeWorkerProcessesChangedSchema>;
 const operation = z.union([
   workerProtocolObject({ action: z.literal("list") }),
   workerProtocolObject({

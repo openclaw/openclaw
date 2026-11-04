@@ -4,7 +4,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 
 const declarations = import.meta.glob<{
   pluginId: string;
-  memoryAddon: { order: number; labelKey: string };
+  memoryAddon: { order: number; label: string; labelKey: string };
 }>("../../../../extensions/*/control-ui.presentation.json", { eager: true, import: "default" });
 
 describe("bundled memory add-on presentation", () => {
@@ -21,7 +21,11 @@ describe("bundled memory add-on presentation", () => {
         ),
       );
       expect(Object.keys(declaration).toSorted()).toEqual(["memoryAddon", "pluginId"]);
-      expect(Object.keys(declaration.memoryAddon).toSorted()).toEqual(["labelKey", "order"]);
+      expect(Object.keys(declaration.memoryAddon).toSorted()).toEqual([
+        "label",
+        "labelKey",
+        "order",
+      ]);
       expect(declaration.pluginId).toBe(manifest.id);
       expect(ids.has(declaration.pluginId)).toBe(false);
       ids.add(declaration.pluginId);
@@ -35,6 +39,7 @@ describe("bundled memory add-on presentation", () => {
         );
       expect(typeof label).toBe("string");
       expect(label).not.toBe("");
+      expect(label).toBe(declaration.memoryAddon.label);
     }
     expect(ids.size).toBeGreaterThan(0);
   });

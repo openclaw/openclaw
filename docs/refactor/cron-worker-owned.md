@@ -86,10 +86,10 @@ transactions run on the worker side. No second database owner. The existing
 transaction helper itself is synchronous (`src/state/openclaw-state-db.ts:485`).
 
 **Host:** authenticate RPC/tool requests, publish normalized config snapshots
-`{version, config}` on startup/change, and expose committed job/status views.
-Version orders snapshots only; it is not a revocation generation. Job CRUD and
-declarative reconciliation go through the cron worker. The worker installs a
-snapshot between commands, never pulls host policy during a transaction.
+`{config}` on startup/change, and expose committed job/status views. Job CRUD and
+declarative reconciliation go through the cron worker. The worker installs
+snapshots in command arrival order between commands, never pulls host policy
+during a transaction.
 
 **Launcher/run execution:** consume committed requests, perform one cheap final
 live-Gateway/launch-eligibility check, then dispatch to the existing task/session

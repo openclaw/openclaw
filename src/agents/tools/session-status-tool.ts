@@ -58,6 +58,10 @@ import {
   resolveSessionToolTargetAgentId,
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
+import {
+  formatSessionCapabilities,
+  resolveSessionCapabilities,
+} from "./session-status-capabilities.js";
 import { patchSessionStatusModel, withActiveStatusModelIdentity } from "./session-status-model.js";
 import {
   listImplicitDefaultDirectFallbackKeys,
@@ -209,6 +213,7 @@ export function createSessionStatusTool(opts?: {
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const gatewayScoped = opts?.callGateway !== undefined || hasGatewayToolRoutingContext();
       const changesSince = readNonNegativeIntegerParam(params, "changesSince");
+      const includeCapabilities = params.capabilities === true;
       const {
         cfg,
         mainKey,
@@ -690,9 +695,18 @@ ${JSON.stringify(routeDetails, null, 2)}
           const stateChanges = rawStateChanges
             ? compactSessionStateChanges(rawStateChanges)
             : undefined;
+          const capabilities = includeCapabilities
+            ? await resolveSessionCapabilities({
+                callGateway: gatewayCall,
+                agentId,
+                // The Gateway inventory resolves canonical keys, not legacy bare main aliases.
+                sessionKey: normalizeVisibilityTargetSessionKey(scopedResolved.key, agentId),
+              })
+            : undefined;
           const extraBlocks = [
             routeContextText,
             stateChanges ? formatSessionStateChanges({ stateVersion, stateChanges }) : undefined,
+            capabilities ? formatSessionCapabilities(capabilities) : undefined,
           ].filter((block): block is string => Boolean(block));
           const visibleStatusText = [statusText, ...extraBlocks].join("\n\n");
           const modelOverrideForResult =
@@ -722,6 +736,7 @@ ${JSON.stringify(routeDetails, null, 2)}
                 }
               : {}),
             statusText: visibleStatusText,
+            ...(capabilities ? { capabilities } : {}),
             ...routeDetails,
           });
         },

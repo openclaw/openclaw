@@ -29,12 +29,9 @@ for credential topology. A smoke-test artifact with ad-hoc signing proves no
 release readiness. Real publish reuses the successful notarized preflight and
 validation for the same tag/source SHA.
 
-Start the macOS validate and preflight lanes right after the tag push, before
-core npm moves `latest`. The preflight's `pnpm release:check` requires npm
-`latest` and `beta` in the tag's update compatibility inventory, and the tag
-cannot record its own version. If `latest` flips first, record the new version
-on `release/YYYY.M.PATCH` and preflight with that `source_ref`. The real publish
-reuses the preflight and does not rerun the check.
+Start the macOS validate and preflight lanes as soon as the tag and exact source
+are available. Follow the [validation owner](validation.md) for prerequisites;
+the real publish reuses the successful preflight and validation.
 
 The real publish (`openclaw-macos-publish.yml` in `openclaw/releases`) attaches
 assets to the GitHub release whether it is still a draft or public. Let the
@@ -98,8 +95,8 @@ advances the fixed `linux-stable` canonical manifest only forward, and mirrors
 it to the current latest release. Asset completeness and unfinished channel
 publication are separate: retrying complete public assets verifies and reuses
 their bytes and identities, then completes only the remaining metadata work.
-The signed Windows updater manifest exists only in the building run until
-published, so a publication interrupted before `latest-windows.json` recovers by
+When Windows companion publication is enabled (see below), the signed Windows
+updater manifest exists only in the building run until published, so a publication interrupted before `latest-windows.json` recovers by
 rerunning that run's publish job (it passes its signed inputs and refuses any
 byte mismatch); a fresh request reuses public bytes and cannot recreate it.
 
@@ -109,6 +106,19 @@ Windows `.exe` or desktop-test macOS bundles) may be withdrawn by deleting the
 release asset; status and stable closeout then report it as
 `withdrawnCompanionAssets` while the immutable checksum file keeps its row. A
 companion that is still present must match its recorded id, size, and digest.
+
+Windows Tauri companion publication is temporarily disabled by
+`WINDOWS_COMPANION_RELEASE: "false"` in `.github/workflows/linux-app-release.yml`:
+release tags were shipping unplanned Windows installers from sources without
+Windows local Gateway support. Until it is deliberately re-enabled, regular
+releases build, sign, and publish only the AppImage, `.deb`, and
+`SHA256SUMS.linux-app.txt` (a 3-asset Linux publication). Expect no
+`OpenClaw-<version>-windows-x86_64.exe`, `latest-windows.json`, or
+`windows-stable` update; treat any as unplanned and withdraw it. Opt-in
+desktop-test requests still attach their test Windows installer but publish
+no `windows-stable` channel. Re-enable by setting the switch to `"true"` in a
+reviewed `main` PR before dispatching the request. This switch does not
+affect the Windows Hub lane below.
 
 An authorized Linux publication creates the `linux-stable` control release as
 prerelease/non-latest when absent; ordinary PR validation never initializes it.
@@ -129,6 +139,11 @@ post-build publisher share serialization; Linux builds use a separate queue.
 Each write revalidates the active executing writer and original parent attempt
 after preparatory reads, including after a deletion and before its replacement.
 
+Public readback of API-confirmed metadata allows up to 120 seconds of scheduled
+backoff for GitHub CDN convergence. Downloads and API checks add their own time.
+Bundles and assets without an API digest remain fail-fast. On exhaustion, retry
+readback, not uploads or builds.
+
 Verify both canonical and legacy endpoints after publication, including when a
 newer Gateway release appeared during the Linux build. If canonical metadata is
 missing after an interrupted deletion, normal publication refuses recovery.
@@ -144,14 +159,45 @@ The optional parent inputs `windows_node_tag` and
 `windows_node_installer_digests` are supplied together. The source tag must be
 exact and non-prerelease, with candidate-approved digests. The detached Windows
 child runs after GitHub finalization; failure does not keep the release drafted.
-To attach later or recover promotion:
+To attach later or recover promotion, use the original publisher's attested
+`windows-release-approval-<run-id>-<attempt>/approval.json`. Its `release` object
+supplies `parentRunId`, `parentRunAttempt`, `toolingRef`, and `releaseTag` for the
+variables below. The child binds its executing ref and SHA to that approval; the
+attested target is checked against the original signed tag object.
+Keep the original tooling ref; dispatching from current `main` does not recover
+a protected-tag publisher's approval.
+
+The approval must come from a publisher containing this Windows approval
+contract and remain within its 30-day artifact retention. Missing or expired
+approvals cannot be reconstructed from current tooling. If Windows was selected
+originally, reuse the exact source tag and digests. If it was omitted, explicit
+recovery selects the pinned installers under the Windows writer's `npm-release`
+environment approval without republishing npm. Complete that environment review
+before expecting uploads; cancelled or superseded publisher attempts are refused.
+
+With release-owner publication authority:
 
 ```bash
-gh workflow run windows-node-release.yml --repo openclaw/openclaw --ref main \
-  -f tag=vYYYY.M.PATCH \
+ghx workflow run windows-node-release.yml --repo openclaw/openclaw --ref "$RELEASE_TOOLING_REF" \
+  -f tag="$RELEASE_TAG" \
   -f windows_node_tag=vX.Y.Z \
-  -f expected_installer_digests='{"OpenClawCompanion-Setup-x64.exe":"sha256:<approved-x64-sha256>","OpenClawCompanion-Setup-arm64.exe":"sha256:<approved-arm64-sha256>"}'
+  -f expected_installer_digests='{"OpenClawCompanion-Setup-x64.exe":"sha256:<approved-x64-sha256>","OpenClawCompanion-Setup-arm64.exe":"sha256:<approved-arm64-sha256>"}' \
+  -f release_publish_run_id="$RELEASE_PUBLISH_RUN_ID" \
+  -f release_publish_run_attempt="$RELEASE_PUBLISH_RUN_ATTEMPT" \
+  -F direct_release_recovery=true
 ```
+
+A failed-writer retry reuses its successful validation artifact by ID. After
+that artifact's seven-day retention, rerun validation with the still-valid
+original approval.
+
+Windows promotion uploads the two installers and checksum manifest sequentially,
+rechecking current authority before each upload; these writes are not atomic.
+Cancellation is asynchronous, so an in-flight upload may complete and previously
+uploaded assets remain published. After interruption, reconcile the actual asset
+names and digests against the approved bytes before retrying with a still-valid
+original publisher approval. A superseded publisher attempt remains denied;
+replaying its old approval does not authorize recovery.
 
 Verify canonical x64/arm64 installer assets and
 `OpenClawCompanion-SHA256SUMS.txt`, expected Foundation Authenticode signer, and

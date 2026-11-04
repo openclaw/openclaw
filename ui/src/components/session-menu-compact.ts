@@ -7,19 +7,19 @@ export type CompactSessionMenuView =
   | "assign-owner"
   | "icon"
   | "group"
+  | "collections"
   | "snooze"
-  | "advanced"
-  | "archive";
+  | "advanced";
 
 const COMPACT_SESSION_MENU_VIEW_BY_VALUE: Record<string, CompactSessionMenuView> = {
   "compact:back": "root",
   "compact:open-advanced": "advanced",
   "compact:back-advanced": "advanced",
   "compact:open-copy": "copy",
-  "compact:open-archive": "archive",
   "compact:open-snooze": "snooze",
   "compact:open-assign-owner": "assign-owner",
   "compact:open-group": "group",
+  "compact:open-collections": "collections",
   "compact:open-icon": "icon",
   "compact:open-open-in": "open-in",
 };

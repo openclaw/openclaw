@@ -20,10 +20,7 @@ import {
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import {
-  normalizeOptionalString,
-  normalizeStringEntries,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../runtime-api.js";
@@ -168,7 +165,7 @@ function resolveMSTeamsActionMessage(
   const canUseCurrentMessageId =
     allowCurrentMessageIdFallback &&
     msteamsContextTargetsMatch(to, {
-      currentChannelId: ctx.toolContext?.currentChannelId ?? undefined,
+      currentChannelId: ctx.toolContext?.currentChannelId,
       currentMessagingTarget:
         normalizeOptionalString(ctx.toolContext?.currentGraphChannelId) ??
         normalizeOptionalString(ctx.toolContext?.currentMessagingTarget),
@@ -176,7 +173,7 @@ function resolveMSTeamsActionMessage(
   const resolved = canUseCurrentMessageId
     ? resolveReactionMessageId({
         args: ctx.params,
-        toolContext: { currentMessageId: ctx.toolContext?.currentMessageId ?? undefined },
+        toolContext: { currentMessageId: ctx.toolContext?.currentMessageId },
       })
     : (normalizeOptionalString(ctx.params.messageId) ?? "");
   const messageId = resolved == null ? "" : String(resolved).trim();
@@ -747,8 +744,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
           const graph = probe?.graph;
           if (graph) {
-            const roles = Array.isArray(graph.roles) ? normalizeStringEntries(graph.roles) : [];
-            const scopes = Array.isArray(graph.scopes) ? normalizeStringEntries(graph.scopes) : [];
+            const roles = graph.roles ?? [];
+            const scopes = graph.scopes ?? [];
             const formatPermission = (permission: string) => {
               const hint = TEAMS_GRAPH_PERMISSION_HINTS[permission];
               return hint ? `${permission} (${hint})` : permission;

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { writeStableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -29,7 +30,6 @@ import {
   nativeHookRelayState,
 } from "./native-hook-relay-state.js";
 import type {
-  JsonValue,
   NativeHookRelayDeferredApprovalOutcome,
   NativeHookRelayInvocation,
   NativeHookRelayPermissionApprovalRequest,
@@ -46,7 +46,6 @@ type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPlugin
 
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
 const PERMISSION_ALLOW_ALWAYS_TTL_MS = 30 * 60 * 1000;
-const MAX_PERMISSION_FINGERPRINT_SORT_KEYS = 200;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
 const PERMISSION_APPROVAL_WINDOW_MS = 60_000;
 const MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES = 512;
@@ -428,76 +427,8 @@ function permissionRequestContentFingerprint(
   hash.update("\0");
   hash.update(request.cwd ?? "");
   hash.update("\0");
-  updateJsonHash(hash, request.toolInput);
+  writeStableStringify(request.toolInput, (chunk) => hash.update(chunk));
   return hash.digest("hex");
-}
-
-function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): void {
-  if (value === null) {
-    hash.update("null");
-    return;
-  }
-  if (typeof value !== "object") {
-    hash.update(`${typeof value}:`);
-    hash.update(typeof value === "string" ? JSON.stringify(value) : String(value));
-    return;
-  }
-  if (Array.isArray(value)) {
-    hash.update("[");
-    for (const item of value) {
-      updateJsonHash(hash, item);
-      hash.update(",");
-    }
-    hash.update("]");
-    return;
-  }
-  hash.update("{");
-  const { keys, truncated } = readBoundedOwnKeys(value, MAX_PERMISSION_FINGERPRINT_SORT_KEYS);
-  const appendEntry = (key: string) => {
-    hash.update(JSON.stringify(key));
-    hash.update(":");
-    const item = value[key];
-    if (item !== undefined) {
-      updateJsonHash(hash, item);
-    }
-    hash.update(",");
-  };
-  for (const key of keys) {
-    appendEntry(key);
-  }
-  if (truncated) {
-    // Keep ordinary objects order-independent without sorting a broad native
-    // hook payload. The tail remains content-sensitive in traversal order.
-    const sortedKeySet = new Set(keys);
-    hash.update("#object-tail:");
-    for (const key in value) {
-      if (!Object.hasOwn(value, key) || sortedKeySet.has(key)) {
-        continue;
-      }
-      appendEntry(key);
-    }
-  }
-  hash.update("}");
-}
-
-function readBoundedOwnKeys(
-  value: Record<string, unknown>,
-  maxKeys: number,
-): { keys: string[]; truncated: boolean } {
-  const keys: string[] = [];
-  let truncated = false;
-  for (const key in value) {
-    if (!Object.hasOwn(value, key)) {
-      continue;
-    }
-    if (keys.length >= maxKeys) {
-      truncated = true;
-      break;
-    }
-    keys.push(key);
-  }
-  keys.sort();
-  return { keys, truncated };
 }
 
 function consumeNativeHookRelayPermissionBudget(relayId: string, now = Date.now()): boolean {

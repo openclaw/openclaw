@@ -140,7 +140,6 @@ async function withFixture(
     setActivePluginRegistry(registry);
     context = createContext();
     context.getRuntimeConfig = () => cfg;
-    context.chatAbortControllers = new Map();
     context.getClientConnIds = () => new Set([connId!]);
     context.broadcastToConnIds = () => {};
     context.resolveGatewayContext = () => context!;

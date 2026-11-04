@@ -63,7 +63,15 @@ Reconfiguring trusted-proxy mode defaults the loopback prompt to the existing op
 ## Model section
 
 <Note>
-**Model** includes a multi-select for the explicit `agents.defaults.modelPolicy.allow` list (what shows up in `/model` and the model picker). Provider-scoped setup choices merge their selected models into the existing list instead of replacing unrelated providers already in the config. Per-model aliases and parameters remain under `agents.defaults.models`. Those entries do not restrict model overrides by themselves.
+**Model** includes a multi-select of the provider's models. Configure never creates a model allowlist:
+
+- **No `modelPolicy.allow` yet:** the prompt is **Fallback models**. It starts from your primary model and fallbacks, and the models you select become fallbacks. `/model` and the model picker already show the models of every provider with working auth.
+- **An existing `modelPolicy.allow`** (for the defaults or the selected agent): the prompt is **Models in /model picker**. It starts from the models that list already allows, wildcards included. Your selection replaces the provider's entries in that list, and unrelated providers stay as they are.
+  - Configure writes exact `provider/model` refs. It never adds a `<provider>/*` wildcard on its own, because a picker can show fewer models than the provider has.
+  - An existing `<provider>/*` stays while every model shown for that provider stays selected.
+  - Saving credentials for a provider adds `<provider>/*` when the list hides all of that provider's models.
+
+Per-model aliases and parameters stay under `agents.defaults.models`. Configure does not add selected models to that map, and those entries do not restrict model overrides by themselves.
 
 Re-running provider auth from configure preserves an existing `agents.defaults.model.primary`, even when the provider's auth step returns a config patch with its own recommended default model. Adding or reauthing a provider makes its models available without taking over your current primary model. Use `openclaw models auth login --provider <id> --set-default` or `openclaw models set <model>` to intentionally change the default model.
 </Note>
@@ -88,8 +96,12 @@ Shell-only environment variables may not be available to the Gateway service.
 
 Skipping, a failed check, or declining to save leaves the memory section unsaved.
 The flow does not download local models, create an index, or re-index memories.
-Existing per-agent overrides remain unchanged. A provider change drops the old
-memory endpoint, headers, and key so they cannot be sent to the new destination.
+A provider change drops the old shared memory endpoint, headers, and key. Agents
+with their own remote settings, or a pinned provider inheriting shared remote
+settings, keep their previous effective provider, model, endpoint, and credentials
+in explicit per-agent overrides. SecretRefs remain references. Other agents adopt
+the new shared defaults. Skipping, failed checks, and declining save leave all
+agent overrides unchanged.
 An embedding identity change can require an explicit index rebuild afterward;
 see [Memory configuration](/reference/memory-config).
 
@@ -102,6 +114,7 @@ see [Memory configuration](/reference/memory-config).
 
 ## Other notes
 
+- Plugin numeric fields require JSON number syntax; integer fields also require a whole number. Invalid answers show a validation error and stay on the same field so you can correct them.
 - Gateway reconfiguration preserves existing `gateway.auth.allowTailscale`, `gateway.auth.rateLimit`, and `gateway.auth.identityScopes` policies. The selected auth mode replaces its credentials or trusted-proxy settings and removes fields belonging to other auth modes.
 - After local config writes, configure installs selected downloadable plugins when the chosen setup path requires them. Remote gateway config does not install local plugin packages.
 - Channel-oriented services (Slack/Discord/Matrix/Microsoft Teams) prompt for channel/room allowlists during setup. You can enter names or IDs. The wizard resolves names to IDs when possible.

@@ -9,7 +9,6 @@ import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-ru
 import { buildCodexUserMcpServersThreadConfigPatchForRun } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { resolveModelServiceTierContextTokens } from "openclaw/plugin-sdk/provider-model-metadata";
 import { normalizeCodexAppServerBindingModelProvider } from "./auth-profile.js";
-import { getCodexAppServerClientInstanceId } from "./client.js";
 import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
   readCodexEffectiveConfig,
@@ -25,6 +24,7 @@ import {
   getCodexInferenceThread,
   prepareCodexInferenceThreadConfig,
 } from "./inference-routing.js";
+import { assertCodexNativeCommandAuthConfig } from "./native-auth-validation.js";
 import {
   assertCodexNativeHookRelayAllowed,
   CodexManagedHooksOnlyError,
@@ -138,6 +138,14 @@ export async function prepareCodexThreadRequestContext(
     config: params.params.config,
   });
   const startModelProvider = startModelSelection.modelProvider;
+  if (params.params.runtimePlan?.auth.selectedAuthMode === "native-command") {
+    assertCodexNativeCommandAuthConfig({
+      provider: params.params.provider,
+      baseUrl: params.params.model?.baseUrl,
+      effectiveConfig: options.preflight.effectiveConfig.config,
+      threadConfig: options.config,
+    });
+  }
   const nativeProvider = options.preflight.effectiveConfig.config.model_provider;
   const fastMode =
     typeof params.params.fastMode === "function"
@@ -408,10 +416,9 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     }
   }
   // Slow resumes must be diagnosable without enabling a profiler beforehand.
-  const lifecycleTiming = createCodexThreadLifecycleTimingTracker({
-    ...params.timing,
-    enabled: params.timing?.enabled ?? isCodexAppServerProfilerEnabled(params.params.config),
-  });
+  const lifecycleTiming = createCodexThreadLifecycleTimingTracker(
+    isCodexAppServerProfilerEnabled(params.params.config),
+  );
   const legacyDynamicToolsFingerprint = lifecycleTiming.measureSync(
     "legacy-dynamic-tools-fingerprint",
     () => legacyFingerprintDynamicTools(params.dynamicTools),
@@ -500,6 +507,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     );
   }
   params.config = mergeCodexNativeProjectDocThreadConfig(params.config, effectiveConfig);
+  params.nativeQuestionConfig = effectiveConfig;
   if (params.shellEnvironment || params.shellGitConfigParameters) {
     params.config = mergeCodexNativeShellEnvironment(
       params.config,
@@ -559,9 +567,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         )!,
       })
     : undefined;
-  const ringZeroClientInstanceId = ringZeroActive
-    ? getCodexAppServerClientInstanceId(params.client)
-    : undefined;
+  const ringZeroClientInstanceId = ringZeroActive ? params.client.getInstanceId() : undefined;
   return {
     nativeModelInputTools:
       nativeHooksRequired || modelAdmissionAvailable
@@ -588,4 +594,17 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     userMcpServersFingerprint,
     webSearchThreadConfigFingerprint,
   };
+}
+
+/** Refresh async requester facts after lifecycle preparation, before binding write admission. */
+export async function withCodexThreadWriteCurrent(
+  params: CodexStartOrResumeThreadParams,
+  write: () => void,
+): Promise<void> {
+  await params.assertCurrentAsync?.();
+  if (params.authority) {
+    await params.authority.withCurrent(write);
+  } else {
+    write();
+  }
 }

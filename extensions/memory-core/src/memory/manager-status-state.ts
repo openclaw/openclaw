@@ -1,10 +1,15 @@
 import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
-import type {
-  MemoryProviderStatus,
-  MemorySource,
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
+  isPostgresSqlConnection,
+  type MemoryProviderStatus,
+  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  tableExists,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { buildMemorySourceFilter } from "./source-filter.js";
 
 export type MemoryStatusQuery = {
@@ -14,7 +19,7 @@ export type MemoryStatusQuery = {
 };
 
 export function collectMemoryStatusSnapshot(
-  db: DatabaseSync | undefined,
+  db: EngineConnection | undefined,
   databasePath: string,
   query: MemoryStatusQuery,
 ) {
@@ -49,7 +54,7 @@ type StatusAggregateRow = {
 
 /** Read only for explicit diagnostics: retained cache payloads can be large even when disabled. */
 function collectMemoryStorageStatus(
-  db: DatabaseSync | undefined,
+  db: EngineConnection | undefined,
   databasePath: string,
 ): NonNullable<MemoryProviderStatus["storage"]> {
   const query = db
@@ -63,6 +68,31 @@ function collectMemoryStorageStatus(
         ])
     : undefined;
   const cache = db && query ? executeSqliteQuerySync(db, query).rows[0]! : { bytes: 0, entries: 0 };
+  if (db && isPostgresSqlConnection(db)) {
+    // Table presence comes from admission; relation sizes are explicit diagnostics, not schema probes.
+    const tables = [
+      "memory_index_sources",
+      "memory_index_chunks",
+      "memory_index_chunk_provenance",
+      "memory_index_chunk_recall_metadata",
+      "memory_index_meta",
+      "memory_index_state",
+      "memory_embedding_cache",
+      "memory_index_chunks_vec",
+    ].filter((table) => tableExists(db, table));
+    const bytes = db
+      .prepare(
+        "SELECT COALESCE(SUM(pg_total_relation_size(value::regclass)), 0) AS bytes FROM json_array_elements_text(?::json)",
+      )
+      .get(JSON.stringify(tables))?.bytes;
+    return {
+      databaseBytes: Number(bytes ?? 0),
+      walBytes: 0,
+      reusableBytes: 0,
+      embeddingCacheBytes: cache.bytes,
+      embeddingCacheEntries: cache.entries,
+    };
+  }
   const pageSize = db ? Number(db.prepare("PRAGMA page_size").get()?.page_size) : 0;
   const freePages = db ? Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count) : 0;
   return {
@@ -106,7 +136,7 @@ export function resolveStatusProviderInfo(params: {
 }
 
 function collectMemoryStatusAggregate(params: {
-  db: Pick<DatabaseSync, "prepare"> | undefined;
+  db: Pick<EngineConnection, "prepare"> | undefined;
   sources: Iterable<MemorySource>;
   sourceFilterSql?: string;
   sourceFilterParams?: MemorySource[];

@@ -24,7 +24,7 @@ type DiscordThreadBindingLookupRecord = {
   accountId: string;
   channelId: string;
   threadId: string;
-  agentId: string;
+  agentId?: string;
   label?: string;
   webhookId?: string;
   webhookToken?: string;
@@ -32,6 +32,9 @@ type DiscordThreadBindingLookupRecord = {
 
 export type DiscordThreadBindingLookup = {
   listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
+  getByThreadId?: (
+    threadId: string,
+  ) => { webhookId?: string; metadata?: Record<string, unknown> } | undefined;
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
 
@@ -89,13 +92,16 @@ function resolveBindingIdentity(
     return undefined;
   }
   const baseLabel = binding.label?.trim() || binding.agentId;
+  if (!baseLabel) {
+    return undefined;
+  }
   const displayName = `🤖 ${baseLabel}`.trim();
   const identity: OutboundIdentity = {
     name: truncateUtf16Safe(displayName, 80),
   };
   try {
-    const avatar = resolveAgentAvatar(cfg, binding.agentId);
-    if (avatar.kind === "remote") {
+    const avatar = binding.agentId ? resolveAgentAvatar(cfg, binding.agentId) : undefined;
+    if (avatar?.kind === "remote") {
       identity.avatarUrl = avatar.url;
     }
   } catch {

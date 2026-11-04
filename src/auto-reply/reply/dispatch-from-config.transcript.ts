@@ -6,11 +6,14 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
   type ReplyPayload,
   type ReplyPayloadMetadata,
 } from "../reply-payload.js";
+import type { LedgerQueuedSend } from "./dispatch-from-config.turn-ledger.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 type TranscriptMirror = NonNullable<ReplyPayloadMetadata["sourceReplyTranscriptMirror"]> & {
@@ -21,6 +24,9 @@ type TranscriptMirror = NonNullable<ReplyPayloadMetadata["sourceReplyTranscriptM
   deliveryMirror?: SessionTranscriptDeliveryMirror;
   commandText?: string;
   commandId?: string;
+  /** A native command turn already committed this command's input. */
+  commandInputCommitted?: boolean;
+  contextFreeCommand?: true;
 };
 
 function transcriptMirrorExpectations(mirror: TranscriptMirror) {
@@ -54,6 +60,8 @@ export async function mirrorDeliveredReplyToTranscript(params: {
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
         commandText: mirror.commandText,
         commandId: mirror.commandId,
+        ...(mirror.commandInputCommitted ? { commandInputCommitted: true } : {}),
+        ...(mirror.contextFreeCommand ? { contextFreeCommand: true } : {}),
         replyText: mirror.text,
         replyId: mirror.idempotencyKey ?? mirror.text,
       });
@@ -92,12 +100,13 @@ export function transcriptMirrorForDeliveredPayload(
   }
   return {
     ...metadata,
+    ...(getReplyPayloadMetadata(payload)?.contextFreeCommand ? { contextFreeCommand: true } : {}),
     text: sendable.text,
     mediaUrls: sendable.mediaUrls.length > 0 ? sendable.mediaUrls : undefined,
   };
 }
 
-export function captureDeliveredTranscriptMirror(params: {
+function captureDeliveredTranscriptMirror(params: {
   dispatcher: ReplyDispatcher;
   metadata?: TranscriptMirror;
   captureToken?: object;
@@ -144,4 +153,29 @@ export function captureDeliveredTranscriptMirror(params: {
   });
   return () =>
     observedFinal ? deliveredMetadata : metadata.transcriptOwner ? undefined : metadata;
+}
+
+/** Transcript writes belong to dispatcher settlement, not the still-active reply operation. */
+export function sendReplyWithTranscriptMirror(params: {
+  dispatcher: ReplyDispatcher;
+  cfg: OpenClawConfig;
+  metadata?: TranscriptMirror;
+  payload: ReplyPayload;
+  kind?: "block" | "final";
+  send: (payload: ReplyPayload) => LedgerQueuedSend;
+}): LedgerQueuedSend {
+  const captureToken = params.metadata ? {} : undefined;
+  const delivered = captureDeliveredTranscriptMirror({ ...params, captureToken });
+  if (captureToken) {
+    setReplyPayloadMetadata(params.payload, { finalDeliveryCapture: captureToken });
+  }
+  const delivery = params.send(params.payload);
+  if (params.metadata && delivery.queued && delivery.outcome) {
+    registerReplyDispatcherSettledTask(params.dispatcher, async () => {
+      if ((await delivery.outcome) === "delivered") {
+        await mirrorDeliveredReplyToTranscript({ metadata: delivered(), cfg: params.cfg });
+      }
+    });
+  }
+  return delivery;
 }

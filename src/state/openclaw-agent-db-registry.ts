@@ -1,8 +1,8 @@
 import { statSync } from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import {
   assertAgentDeletionPathFence,
@@ -74,7 +74,7 @@ export function registerOpenClawAgentDatabase(
     env?: NodeJS.ProcessEnv;
     schemaVersion?: number;
     /** Supplied only by the opener after integrity and canonical schema admission. */
-    admittedDb?: DatabaseSync;
+    admittedDb?: EngineConnection;
   },
   observer?: OpenClawAgentDatabaseRegistrationObserver,
 ): void {

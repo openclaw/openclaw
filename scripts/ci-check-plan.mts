@@ -8,6 +8,7 @@ import { isRecord } from "./lib/record-shared.mjs";
 import {
   resolveChangedCiTsgoInputs,
   selectTsgoCoreTestStripe,
+  TSGO_ROOT_TEST_SHARDS,
 } from "./lib/tsgo-core-test-shards.mts";
 
 type CheckRow = {
@@ -76,10 +77,11 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
   const production = graphs.filter(({ name }) => ["core", "ui", "extensions"].includes(name));
   const coreTests = graphs.filter(({ name }) => name.startsWith("core-test-"));
   const hosted = ["github", "hybrid"].includes(input.runnerProfile);
+  const rootNames = ["test-root", ...TSGO_ROOT_TEST_SHARDS.map(({ name }) => name)];
   const otherOrder =
     !hosted && !input.changedCoreTestPaths
-      ? ["extensions-test", "test-root", "scripts"]
-      : ["extensions-test", "scripts", "test-root"];
+      ? ["extensions-test", ...rootNames, "scripts"]
+      : ["extensions-test", "scripts", ...rootNames];
   let other = otherOrder.flatMap((name) => graphs.filter((graph) => graph.name === name));
   if (production.length + coreTests.length + other.length !== graphs.length) {
     throw new Error("Every selected compiler graph must have a CI execution owner");
@@ -122,12 +124,30 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
   if (
     !input.preserveFullChecks &&
     coreRows.length >= 4 &&
-    other.some(({ name }) => name === "test-root")
+    other.some(({ name }) => rootNames.includes(name))
   ) {
+    const fullRoot = other.some(({ name }) => name === "test-root");
     for (const [index, row] of coreRows.slice(-4).entries()) {
-      row.root_type_stripe = `${index + 1}/4`;
+      if (fullRoot || other.some(({ name }) => name === TSGO_ROOT_TEST_SHARDS[index]!.name)) {
+        row.root_type_stripe = `${index + 1}/4`;
+      }
     }
-    other = other.filter(({ name }) => name !== "test-root");
+    other = other.filter(({ name }) => !rootNames.includes(name));
+  }
+  // Two single-graph selections fit the existing two-compiler worker budget.
+  // Full stripes and root partitions keep their own timeout/memory boundaries.
+  if (
+    hosted &&
+    typePlan?.mode === "changed" &&
+    coreRows.length === 2 &&
+    coreRows.every(
+      (row) => !row.root_type_stripe && JSON.parse(row.type_graph_names_json!).length === 1,
+    )
+  ) {
+    coreRows[0]!.type_graph_names_json = JSON.stringify(
+      coreRows.flatMap((row) => JSON.parse(row.type_graph_names_json!)),
+    );
+    coreRows.splice(1, 1);
   }
   const checkRows = input.checkMatrix.include.flatMap((row) => {
     if (input.preserveFullChecks) {

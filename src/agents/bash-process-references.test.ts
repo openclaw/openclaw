@@ -27,7 +27,7 @@ describe("bash-process-references", () => {
     session.scopeKey = "scope-a";
     addSession(session);
 
-    const [reference] = listActiveProcessSessionReferences({ scopeKey: "scope-a", now: 2 });
+    const [reference] = listActiveProcessSessionReferences({ scopeKey: "scope-a" });
     expect(reference?.name).toBe(`${"a".repeat(136)}...`);
     expect(reference?.pid).toBe(4242);
   });
@@ -38,9 +38,7 @@ describe("bash-process-references", () => {
     }
 
     expect(
-      listActiveProcessSessionReferences({ scopeKey: "scope-a", now: 2_000 }).map(
-        ({ sessionId }) => sessionId,
-      ),
+      listActiveProcessSessionReferences({ scopeKey: "scope-a" }).map(({ sessionId }) => sessionId),
     ).toEqual(Array.from({ length: 8 }, (_, index) => `session-${9 - index}`));
   });
 
@@ -53,9 +51,7 @@ describe("bash-process-references", () => {
     }
 
     expect(
-      listActiveProcessSessionReferences({ scopeKey: "scope-a", now: 3_000 }).map(
-        ({ sessionId }) => sessionId,
-      ),
+      listActiveProcessSessionReferences({ scopeKey: "scope-a" }).map(({ sessionId }) => sessionId),
     ).toEqual(["later-clock", "earlier-clock"]);
   });
 
@@ -66,9 +62,7 @@ describe("bash-process-references", () => {
     registerScopedSession("removed-first");
 
     expect(
-      listActiveProcessSessionReferences({ scopeKey: "scope-a", now: 2_000 }).map(
-        ({ sessionId }) => sessionId,
-      ),
+      listActiveProcessSessionReferences({ scopeKey: "scope-a" }).map(({ sessionId }) => sessionId),
     ).toEqual(["removed-first", "retained-second"]);
   });
 });

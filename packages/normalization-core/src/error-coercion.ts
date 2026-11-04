@@ -193,6 +193,27 @@ export function formatErrorMessage(
 }
 
 /**
+ * Formats an error's stack so it always names the error. Bun can materialize
+ * `stack` during garbage collection with a bare `Error` header, dropping the
+ * message that V8-style stacks carry.
+ */
+export function formatErrorStackWithMessage(error: Error): string {
+  const name = readErrorText(error, "name") || "Error";
+  const message = readErrorText(error, "message") ?? "";
+  const stack = readProperty(error, "stack");
+  if (typeof stack !== "string" || !stack) {
+    return message || name;
+  }
+  if (!message || stack.includes(message)) {
+    return stack;
+  }
+  const header = `${name}: ${message}`;
+  const lineEnd = stack.indexOf("\n");
+  const firstLine = lineEnd < 0 ? stack : stack.slice(0, lineEnd);
+  return firstLine === name ? header + stack.slice(firstLine.length) : `${header}\n${stack}`;
+}
+
+/**
  * Normalizes an unknown thrown value into an Error. Non-Error objects become
  * the `cause` and have their enumerable fields copied so structured details
  * (codes, statuses) survive the coercion.
@@ -273,6 +294,24 @@ export function stringifyNonErrorCause(value: unknown): string {
   } catch {
     return Object.prototype.toString.call(value);
   }
+}
+
+/** Renders an error and up to eight causes without choosing log formatting or redaction. */
+export function mapErrorCauseChain(error: Error, renderError: (error: Error) => string): string[] {
+  const segments = [renderError(error)];
+  let current: unknown = error.cause;
+  let depth = 0;
+  while (current !== undefined && current !== null && depth < 8) {
+    if (current instanceof Error) {
+      segments.push(renderError(current));
+      current = current.cause;
+    } else {
+      segments.push(stringifyNonErrorCause(current));
+      current = undefined;
+    }
+    depth += 1;
+  }
+  return segments;
 }
 
 export function extractErrorCode(err: unknown): string | undefined {

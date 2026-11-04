@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
@@ -55,8 +54,10 @@ import {
   isRetiredManagedHandoffLeasePayload,
   parseManagedHandoffLeasePayload,
   type ManagedHandoffLeaseAction,
+  type HandoffProcessIdentity,
 } from "./update-managed-service-handoff-schema.js";
 import { createManagedHandoffScopeReader } from "./update-managed-service-handoff-scope.js";
+import { resolveManagedUpdateLeaseTempRoot } from "./update-managed-service-handoff-temp-root.js";
 
 // Identity is earned by this process's original acquisition, not by decoding a
 // row or copying a grant. Survives the executor pinning/reopening the same DB.
@@ -73,10 +74,11 @@ export type {
 
 export function resolveManagedUpdateLeaseDatabasePath(): string {
   const uid = process.getuid?.();
+  const base = resolveManagedUpdateLeaseTempRoot();
   // Other users may own /tmp/openclaw after a reboot; lease placement must not follow it.
-  const preferredDir = path.join(os.tmpdir(), uid === undefined ? "openclaw" : `openclaw-${uid}`);
+  const preferredDir = path.join(base, uid === undefined ? "openclaw" : `openclaw-${uid}`);
   return path.join(
-    resolvePreferredOpenClawTmpDir({ preferredDir }),
+    resolvePreferredOpenClawTmpDir({ preferredDir, tmpdir: () => base, purpose: "coordination" }),
     "managed-update-handoffs.sqlite",
   );
 }
@@ -108,7 +110,8 @@ export async function prepareManagedHandoffLeaseStore(
     options.databasePath,
     options.existingIdentity,
   );
-  return createLeaseStore(options, logger, database);
+  // Original acquisition must retain the writer's admitted path across Windows aliases.
+  return createLeaseStore({ ...options, databasePath: database.databasePath }, logger, database);
 }
 
 function createLeaseStore(
@@ -295,8 +298,23 @@ function createLeaseStore(
     admit,
     originalUpdateAdmissions,
   });
-  const { storedCurrent, originalAllowsMutation, childAliases, mutationCurrent, current } =
-    createManagedHandoffMutationReader({ withDatabase, row, handle, sameRow, currentLegacyParent });
+  const {
+    storedCurrent,
+    originalAllowsMutation,
+    childAliases,
+    mutationCurrent,
+    current,
+    owns,
+    ownsDelegation,
+  } = createManagedHandoffMutationReader({
+    withDatabase,
+    row,
+    handle,
+    sameRow,
+    currentLegacyParent,
+    isProcessIdentityCurrent,
+    acceptSelfIdentity,
+  });
   const cancelUpdate = createManagedHandoffCancellation({
     existingIdentity: options.existingIdentity,
     originalUpdateAdmissions,
@@ -313,18 +331,6 @@ function createLeaseStore(
     deleteRow,
     processState,
   });
-  function owns(lease: ManagedHandoffLease, role: "helper" | "executor" = "helper") {
-    return (
-      current(lease) &&
-      !(
-        lease.action.kind === "triage" &&
-        ["closing", "closed", "uncertain"].includes(lease.action.phase)
-      ) &&
-      lease[role].pid === process.pid &&
-      isProcessIdentityCurrent(lease.helper) &&
-      acceptSelfIdentity(lease[role])
-    );
-  }
   function acceptParentBoundExecutor(lease: ManagedHandoffLease) {
     return (
       current(lease) &&
@@ -408,11 +414,7 @@ function createLeaseStore(
   }
   // Paired original-root/occupied-slot child rows must become bound atomically.
   // A parent dying between separate binds must not expose either installation.
-  function bindUpdateChildren(
-    leases: ManagedHandoffLease[],
-    pid: number,
-    argv?: readonly string[],
-  ) {
+  function bindUpdateChildren(leases: ManagedHandoffLease[], executor: HandoffProcessIdentity) {
     if (
       !leases.length ||
       new Set(leases.map((lease) => lease.key)).size !== leases.length ||
@@ -431,11 +433,10 @@ function createLeaseStore(
     const custody = managedCommandCustody(leases[0]!);
     if (
       leases.some((lease) => managedCommandCustody(lease) !== custody) ||
-      (custody && pid === process.pid)
+      (custody && executor.pid === process.pid)
     ) {
       return null;
     }
-    const executor = processIdentity(pid, argv);
     return withDatabase(true, (db) =>
       transact(db, () => {
         if (
@@ -677,6 +678,7 @@ function createLeaseStore(
     retarget,
     activate,
     owns,
+    ownsDelegation,
     hasUnsettledChildren,
     readCommandChildren,
     acceptParentBoundExecutor,
@@ -699,11 +701,11 @@ function createLeaseStore(
     validFailure: (value: unknown) => triageFailureSchema.safeParse(value).success,
   };
   const prepareRepair = prepareManagedHandoffRepair.bind(null, store, {
-    rows: { handle, updateRow, row, descendants },
+    rows: { handle, updateRow, deleteRow, row, descendants },
     withDatabase,
     processState,
     reclaimable,
-    cas,
+    childAliases,
   });
   return Object.assign(store, { prepareRepair });
 }

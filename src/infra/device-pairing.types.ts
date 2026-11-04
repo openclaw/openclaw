@@ -1,4 +1,3 @@
-// Persisted device pairing and bootstrap-token record shapes.
 // Leaf contract shared by the domain modules (device-pairing.ts,
 // device-bootstrap.ts) and the SQLite row mapper (device-pairing-store.ts);
 // keeping it import-free of both sides prevents module cycles.

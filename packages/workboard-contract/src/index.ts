@@ -1,6 +1,7 @@
 import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
 
 export type WorkboardDatabasePortApi<Database, Input> = {
+  postgres: string;
   inspectWorkboardPortSource(db: Database): {
     version: number;
     migrationRequired: boolean;
@@ -201,8 +202,15 @@ export type WorkboardWorkerLog = {
   runId?: string;
 };
 
+export const WORKBOARD_WORKER_STATES = [
+  "idle",
+  "running",
+  "completed",
+  "blocked",
+  "violated",
+] as const;
 export type WorkboardWorkerProtocol = {
-  state: "idle" | "running" | "completed" | "blocked" | "violated";
+  state: (typeof WORKBOARD_WORKER_STATES)[number];
   updatedAt: number;
   detail?: string;
 };
@@ -221,8 +229,17 @@ export type WorkboardClaim = {
   expiresAt?: number;
 };
 
+export const WORKBOARD_DIAGNOSTIC_ACTION_KINDS = [
+  "claim",
+  "unblock",
+  "promote",
+  "reclaim",
+  "reassign",
+  "add_proof",
+  "open_session",
+] as const;
 export type WorkboardDiagnosticAction = {
-  kind: "claim" | "unblock" | "promote" | "reclaim" | "reassign" | "add_proof" | "open_session";
+  kind: (typeof WORKBOARD_DIAGNOSTIC_ACTION_KINDS)[number];
   label: string;
 };
 
@@ -394,9 +411,16 @@ export type WorkboardCard = {
   metadata?: WorkboardMetadata;
 };
 
+export type WorkboardCardCursor = {
+  position: number;
+  createdAt: number;
+  id: string;
+};
+
 export type WorkboardListResult = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
+  nextCursor?: WorkboardCardCursor;
 };
 export {
   createDefaultWorkboardSessionsBoardSpec,

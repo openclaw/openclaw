@@ -7,8 +7,10 @@ import {
   normalizeGatewayClientId,
   normalizeGatewayClientMode,
 } from "@openclaw/gateway-protocol/client-info";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { generateUUID } from "../lib/uuid.ts";
 
 export type NativeGatewayAuthorization = {
@@ -60,7 +62,7 @@ function readNativeCredential(value: Record<string, unknown>): NativeGatewayAuth
       return { password: value.password };
     }
   }
-  throw new Error("The app returned an invalid Gateway credential. Reconnect in the app.");
+  throw new Error(t("runtimeErrors.nativeCredential"));
 }
 
 function readAuthorization(
@@ -80,15 +82,14 @@ function readAuthorization(
     !mode ||
     typeof client.version !== "string" ||
     typeof client.platform !== "string" ||
-    !Array.isArray(result.scopes) ||
-    !result.scopes.every((scope): scope is string => typeof scope === "string") ||
+    !isStringArray(result.scopes) ||
     typeof device.id !== "string" ||
     typeof device.publicKey !== "string" ||
     typeof device.signature !== "string" ||
     device.nonce !== challenge.nonce ||
     device.signedAt !== challenge.signedAt
   ) {
-    throw new Error("The app returned an invalid Gateway authorization. Reconnect in the app.");
+    throw new Error(t("runtimeErrors.nativeAuthorization"));
   }
   return {
     client: {
@@ -110,7 +111,6 @@ function readAuthorization(
     },
   };
 }
-
 /** Adapts native challenge signing; the app remains the sole credential and grant owner. */
 export function createNativeGatewayConnectAuth(
   gatewayUrl: string,
@@ -123,6 +123,7 @@ export function createNativeGatewayConnectAuth(
   const pending = new Map<string, (reply: Record<string, unknown>) => void>();
   const waitingForPort = new Map<string, string>();
   let port: MessagePort | undefined;
+  let stopPortMessage: (() => void) | undefined;
   let retired = false;
   const accept = (raw: unknown) => {
     let reply: unknown = raw;
@@ -172,9 +173,9 @@ export function createNativeGatewayConnectAuth(
         return;
       }
       port = incomingPort;
-      port.addEventListener("message", (reply) => accept(reply.data));
+      stopPortMessage = listen(port, "message", (reply) => accept(reply.data));
       port.start();
-      host.removeEventListener("message", receivePort);
+      stopPortHandshake();
       for (const [id, message] of waitingForPort) {
         try {
           // MessagePort has a fixed peer, not a Window target origin.
@@ -185,15 +186,17 @@ export function createNativeGatewayConnectAuth(
       }
       waitingForPort.clear();
     };
-    host.addEventListener("message", receivePort);
-    host.addEventListener(
+    const stopPortHandshake = listen(host, "message", receivePort);
+    listen(
+      host,
       "pagehide",
       () => {
         retired = true;
-        host.removeEventListener("message", receivePort);
+        stopPortHandshake();
+        stopPortMessage?.();
         port?.close();
         for (const id of pending.keys()) {
-          accept({ id, error: "Native dashboard document closed" });
+          accept({ id, error: t("runtimeErrors.nativeClosed") });
         }
         waitingForPort.clear();
       },
@@ -202,15 +205,14 @@ export function createNativeGatewayConnectAuth(
   }
 
   return async ({ gatewayUrl: target, nonce, signedAt, signal }) => {
+    const { registerLocalErrorsEnglish } = await import("../i18n/locales/en-local-errors.ts");
+    // This owner publishes resolved error text after registration, not reactive catalog reads.
+    registerLocalErrorsEnglish();
     if (gatewayCredentialScope(target) !== gatewayCredentialScope(gatewayUrl)) {
-      throw new Error(
-        "This dashboard belongs to a different Gateway. Select the Gateway in the app.",
-      );
+      throw new Error(t("runtimeErrors.nativeGateway"));
     }
     if (retired || host.top !== host || (!bridge && !webkit && !options.messagePort)) {
-      throw new Error(
-        "Native Gateway authorization is unavailable. Reopen this dashboard in the app.",
-      );
+      throw new Error(t("runtimeErrors.nativeUnavailable"));
     }
     // Match the supported native challenge representation before dispatch. A
     // malformed challenge cannot recover when the native connection reconnects.
@@ -221,7 +223,7 @@ export function createNativeGatewayConnectAuth(
       !Number.isSafeInteger(signedAt) ||
       signedAt <= 0
     ) {
-      throw new Error("The Gateway did not provide a valid native authentication challenge.");
+      throw new Error(t("runtimeErrors.nativeChallenge"));
     }
     signal.throwIfAborted();
     const request = { id: generateUUID(), nonce, signedAt };
@@ -232,7 +234,7 @@ export function createNativeGatewayConnectAuth(
         }
         waitingForPort.delete(request.id);
         clearTimeout(timer);
-        signal.removeEventListener("abort", abort);
+        stopAbort();
         if (error !== undefined) {
           reject(error);
         } else if (authorization) {
@@ -244,12 +246,7 @@ export function createNativeGatewayConnectAuth(
           new Error(formatUiError(signal.reason ?? "Native Gateway authorization cancelled.")),
         );
       const timer = setTimeout(
-        () =>
-          finish(
-            new NativeGatewayAuthUnavailableError(
-              "The app did not authorize this dashboard in time. Reconnect in the app.",
-            ),
-          ),
+        () => finish(new NativeGatewayAuthUnavailableError(t("runtimeErrors.nativeTimeout"))),
         // Leave half the preauth budget for sending the signed connect and receiving hello.
         DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS / 2,
       );
@@ -263,7 +260,7 @@ export function createNativeGatewayConnectAuth(
           finish(error instanceof Error ? error : new Error(formatUiError(error)));
         }
       });
-      signal.addEventListener("abort", abort, { once: true });
+      const stopAbort = listen(signal, "abort", abort, { once: true });
       try {
         // Native app bridges are not Window.postMessage; their host owns origin checks.
         let result: void | Promise<unknown> = undefined;

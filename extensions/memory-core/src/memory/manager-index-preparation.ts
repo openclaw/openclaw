@@ -94,7 +94,6 @@ export function prepareMemoryIndexChunks({
       chunk.text = [previous.text, ...following].join("\n");
       chunk.startLine = previous.startLine;
       chunk.hash = hashText(chunk.text);
-      chunk.embeddingInput = { text: chunk.text };
       baseChunks.pop();
     }
     chunk.provenance = resolveChunkProvenance(entry, source, chunk, pathClassification.originClass);
@@ -108,6 +107,8 @@ export function prepareMemoryIndexChunks({
       ? enforceEmbeddingMaxInputTokens(provider, baseChunks, hardMaxInputTokens)
       : baseChunks
   ).map((chunk): IndexedMemoryChunk => {
+    // Plain text already lives in chunk.text; repeating it doubles the worker payload.
+    delete chunk.embeddingInput;
     const start = chunk.entryStartLine ?? chunk.startLine;
     const end = chunk.entryEndLine ?? chunk.endLine;
     const span = `${start}:${end}`;

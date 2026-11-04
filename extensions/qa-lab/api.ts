@@ -18,11 +18,13 @@ export { createQaCrablineTransportAdapter } from "./src/crabline-transport.js";
 export { createStaticSshWorkerProvider } from "./src/static-ssh-worker-provider.js";
 export { buildQaGatewayConfig } from "./src/qa-gateway-config.js";
 export { isInternalRuntimeContextCarrierText } from "./src/providers/shared/runtime-context.js";
+export { extractCurrentRuntimeContextTexts } from "./src/providers/mock-openai/mock-openai-input.js";
 export {
   TINY_PNG_BASE64,
   type MockOpenAiRequestSnapshot,
 } from "./src/providers/mock-openai/mock-openai-contracts.js";
 export { startQaMockOpenAiServer } from "./src/providers/mock-openai/server.js";
+export { listMockCodexModelInfos } from "./src/providers/shared/mock-model-config.js";
 export { isQaSelfCheckSuccessful, type QaSelfCheckResult } from "./src/self-check.js";
 export { runQaE2eSelfCheck } from "./src/self-check-runner.js";
 export {
@@ -31,3 +33,8 @@ export {
   type QaGatewayChild,
 } from "./src/gateway-child.js";
 export { runQaSuite } from "./src/suite-launch.runtime.js";
+export {
+  buildQaScorecardGapReport,
+  renderQaScorecardGapMarkdownReport,
+  type QaScorecardGapReport,
+} from "./src/scorecard-gap-report.js";

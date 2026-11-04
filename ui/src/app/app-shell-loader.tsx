@@ -1,13 +1,15 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { Errored, Loading, lazy, onCleanup } from "solid-js";
-import { renderLazyViewError } from "../components/lazy-view-error.ts";
-import { i18n } from "../i18n/index.ts";
-import { projectI18n } from "../lib/reactive/i18n.ts";
+import { Errored, Loading, lazy, onSettled } from "solid-js";
+import { LazyViewError } from "../components/solid/lazy-view-error.tsx";
+import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
+import { t } from "../lib/reactive/i18n.ts";
 import type { OpenClawShellProps } from "./app-host.tsx";
-import { LitRouteHost } from "./lit-route-host.tsx";
+import { bootComposerElement } from "./boot-composer.ts";
 import {
+  cancelStaleChunkRecovery,
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
+  scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
 const LazyShell = lazy(() => import("./app-host.tsx"), { export: "OpenClawShell" });
@@ -23,6 +25,7 @@ export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
           runtime={props.runtime}
           getReadiness={props.getReadiness}
           onboarding={props.onboarding}
+          onShell={props.onShell}
         />
       </Loading>
     </Errored>
@@ -30,10 +33,17 @@ export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
 }
 
 function ShellLoadError(props: { error: unknown; reset: () => void }): SolidJSX.Element {
-  const translations = projectI18n(i18n);
   let active = true;
-  onCleanup(() => {
-    active = false;
+  onSettled(() => {
+    if (isStaleChunkImportError(props.error)) {
+      void scheduleStaleChunkReload({ canReload: () => active });
+    }
+    return () => {
+      active = false;
+      if (isStaleChunkImportError(props.error)) {
+        cancelStaleChunkRecovery();
+      }
+    };
   });
   const retry = async () => {
     const stale = isStaleChunkImportError(props.error);
@@ -43,18 +53,32 @@ function ShellLoadError(props: { error: unknown; reset: () => void }): SolidJSX.
       props.reset();
     }
   };
-  return (
-    <LitRouteHost
-      renderValue={() => {
-        translations.revision();
-        return renderLazyViewError({
-          error: props.error,
-          stale: isStaleChunkImportError(props.error),
-          onRetry: () => {
-            void retry();
-          },
-        });
+  const failure = () => (
+    <LazyViewError
+      error={props.error}
+      stale={isStaleChunkImportError(props.error)}
+      subtitle={
+        bootComposerElement() && isStaleChunkImportError(props.error)
+          ? t("lazyView.bootDraftRecovery")
+          : undefined
+      }
+      onRetry={() => {
+        void retry();
       }}
     />
+  );
+  return (
+    <openclaw-route-fragment style={{ display: "contents" }}>
+      {bootComposerElement() ? (
+        <ConnectingSplash
+          status={t(
+            isStaleChunkImportError(props.error) ? "lazyView.staleTitle" : "lazyView.errorTitle",
+          )}
+          renderContent={failure}
+        />
+      ) : (
+        failure()
+      )}
+    </openclaw-route-fragment>
   );
 }

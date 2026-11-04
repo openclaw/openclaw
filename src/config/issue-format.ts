@@ -16,10 +16,6 @@ type ConfigIssueFormatOptions = {
   sourceFile?: string;
 };
 
-type ConfigIssueSummaryOptions = ConfigIssueFormatOptions & {
-  maxIssues?: number;
-};
-
 /** Return the public config issue shape with a normalized path and non-empty allowed values. */
 function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIssue {
   const hasAllowedValues = Array.isArray(issue.allowedValues) && issue.allowedValues.length > 0;
@@ -98,17 +94,12 @@ export function formatConfigIssueLines(
 /** Build a compact, terminal-safe issue summary for logs and recovery diagnostics. */
 export function formatConfigIssueSummary(
   issues: ReadonlyArray<ConfigIssueLineInput>,
-  opts: ConfigIssueSummaryOptions = {},
 ): string | null {
   if (issues.length === 0) {
     return null;
   }
-  const maxIssueCandidate = Math.floor(opts.maxIssues ?? 5);
-  const maxIssues = Number.isFinite(maxIssueCandidate) ? Math.max(1, maxIssueCandidate) : 5;
-  const visibleIssues = issues.slice(0, maxIssues);
-  const lines = formatConfigIssueLines(visibleIssues, "", {
-    normalizeRoot: opts.normalizeRoot ?? true,
-  });
+  const visibleIssues = issues.slice(0, 5);
+  const lines = formatConfigIssueLines(visibleIssues, "", { normalizeRoot: true });
   const hiddenIssueCount = issues.length - visibleIssues.length;
   if (hiddenIssueCount <= 0) {
     return lines.join("; ");
