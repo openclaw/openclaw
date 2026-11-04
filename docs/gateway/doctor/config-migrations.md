@@ -49,7 +49,9 @@ Doctor preserves explicit `true` and `false` values and leaves an unset grant
 unset. It removes the old key only after copying its value, or confirming both
 keys have the same boolean value. Conflicting or invalid values stop the repair
 before config publication; resolve the reported keys and run Doctor again.
-Ordinary reads reject the retired key instead of ignoring a denial. Existing
+Ordinary reads reject the retired key instead of ignoring a denial. Doctor also
+keeps active legacy prompt policy ahead of last-known-good recovery, so an older
+backup cannot replace a newer grant or denial while an include needs repair. Existing
 include-write constraints still apply, and plugin-owned `config` fields are not
 renamed. No permission default or enforcement changes. Inspection responses keep
 the existing `grants.hooks.allowPromptInjection` field for API compatibility.
