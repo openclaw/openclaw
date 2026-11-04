@@ -207,13 +207,19 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Batch107, pinned main `49f8a60f2278`: qualify seven repeated baseline-
-selection assertion lines in the Docker E2E lane fixture for removal. The existing
-two-lane table retains stable defaults, nonempty overrides and candidate-package
-forwarding; the earlier case retains its distinct scenario, script, published-
-baseline, restart-mode and timeout checks. All five declarations/six expanded
-cases remain. The primary is unchanged while native dependency qualification and
-original/candidate runtime proof are pending. No production or census changes.
+Batch107, pinned main `49f8a60f2278`: remove seven repeated baseline
+assertion lines and their separator from the Docker E2E lane fixture. The official
+unchanged and candidate tooling runs each pass all six cases with identical
+inventories; all five declarations remain. The two-lane table still checks stable
+defaults, nonempty overrides and candidate-package forwarding. The earlier case
+retains its scenario, script, published-baseline, restart-mode and timeout checks.
+The table and following cases are byte-identical. Eight fewer test lines; no
+production or census changes. Scoped E2E types, typed lint, the line ratchet, both
+unused-file phases and all three export phases pass. The sole dependency-scan
+finding is the unchanged unlisted `tokenjuice` import: restoring the original test
+reproduces it, and all seven inspected source/manifest inputs match the frozen
+base. That finding remains unresolved; no passing dependency scan is claimed.
+Fresh review and exact-head CI/security evidence are recorded in the PR.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
