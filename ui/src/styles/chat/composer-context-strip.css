@@ -10,6 +10,12 @@
   font-size: 12px;
 }
 
+.chat-reply-preview.composer-context-strip {
+  padding-inline: var(--chat-composer-editor-inset-inline, 14px);
+  border-bottom-color: color-mix(in srgb, var(--text-strong) 8%, transparent);
+  line-height: 20px;
+}
+
 .composer-context-strip__label {
   display: inline-flex;
   align-items: center;
@@ -20,7 +26,8 @@
 }
 
 .composer-context-strip__label-text,
-.composer-context-strip__text {
+.composer-context-strip__text,
+.composer-context-strip__person-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -47,12 +54,6 @@
 .composer-context-strip__person[hidden],
 .composer-context-strip__more[hidden] {
   display: none;
-}
-
-.composer-context-strip__person-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .composer-context-strip__person .chat-author-avatar {
@@ -85,23 +86,23 @@
 }
 
 .composer-context-strip__dismiss {
-  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  width: var(--chat-stack-trailing-control-size, 24px);
-  height: var(--chat-stack-trailing-control-size, 24px);
   padding: 0;
   color: var(--muted);
   background: none;
   border: none;
   border-radius: var(--radius-sm);
+  position: relative;
+  flex-shrink: 0;
+  width: var(--chat-stack-trailing-control-size, 24px);
+  height: var(--chat-stack-trailing-control-size, 24px);
 }
 
-.composer-context-strip__dismiss:hover {
+.composer-context-strip__dismiss:hover:not(:disabled) {
   color: var(--text);
-  background: color-mix(in srgb, var(--text) 10%, transparent);
+  background: var(--surface-hover);
 }
 
 .composer-context-strip__dismiss svg {

@@ -176,7 +176,7 @@ export function tokenizeIntentText(text: string): string[] {
 
 export type StandingIntentMatchInput = {
   promptTokens: string[];
-  ftsQuery: string;
+  ftsQuery: import("openclaw/plugin-sdk/database-engine-worker-runtime").TextQuery;
   channelScopes: string[];
   senderScope?: string;
   nowMs?: number;
@@ -197,19 +197,15 @@ export function prepareStandingIntentMatch(params: {
   const channel = params.channel?.trim() || undefined;
   const provider = params.provider?.trim().toLowerCase() || undefined;
   const senderId = params.senderId?.trim() || undefined;
-  const channelScopes = new Set<string>();
+  const channelScopes: string[] = [];
   if (provider) {
-    channelScopes.add(
-      encodeStandingIntentChannelScope({
-        scope: "channel",
-        provider,
-        accountId: params.accountId,
-      }),
-    );
-    if (channel) {
-      channelScopes.add(
+    for (const scope of ["channel", "conversation"] as const) {
+      if (scope === "conversation" && !channel) {
+        continue;
+      }
+      channelScopes.push(
         encodeStandingIntentChannelScope({
-          scope: "conversation",
+          scope,
           provider,
           accountId: params.accountId,
           conversationId: channel,
@@ -227,8 +223,8 @@ export function prepareStandingIntentMatch(params: {
       : undefined;
   return {
     promptTokens,
-    ftsQuery: promptTokens.map((token) => `"${token.replaceAll('"', '""')}"`).join(" OR "),
-    channelScopes: [...channelScopes],
+    ftsQuery: { kind: "any", clauses: promptTokens.map((text) => ({ kind: "phrase", text })) },
+    channelScopes,
     senderScope: storedSenderScope,
     nowMs: params.nowMs,
   };
@@ -240,6 +236,16 @@ export type StandingIntentOperations = {
   sweep: { input: { nowMs?: number }; output: void };
   cancel: { input: { id: string }; output: StandingIntent | null };
   match: { input: StandingIntentMatchInput; output: StandingIntent[] };
+};
+
+export type StandingIntentWorkerOperations = {
+  [Key in keyof StandingIntentOperations]: {
+    input: StandingIntentOperations[Key]["input"];
+    output: {
+      value: StandingIntentOperations[Key]["output"];
+      nextDueAt: number | null;
+    };
+  };
 };
 
 function renderStandingIntentContext(intents: StandingIntent[]): string {

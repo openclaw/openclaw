@@ -1,3 +1,5 @@
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isSessionPermissionMode } from "../protocol-validators.generated/session-input.js";
 import type {
   DurableComposerDraft,
   DurableComposerDraftAttachment,
@@ -7,6 +9,7 @@ import type {
 import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { readHumanMentions } from "./human-mentions.ts";
 import { isChatReplyTarget } from "./reply-target.ts";
+import { readChatSelectionAnnotation } from "./selection-annotation.ts";
 
 export type StoredDurableComposerDraft = DurableComposerDraft &
   DurableComposerDraftScope & {
@@ -50,8 +53,7 @@ function isQuestionDraft(value: unknown): value is DurableQuestionDraft {
         answer &&
         typeof answer === "object" &&
         typeof answer.freeText === "string" &&
-        Array.isArray(answer.selected) &&
-        answer.selected.every((option) => typeof option === "string"),
+        isStringArray(answer.selected),
     )
   );
 }
@@ -79,9 +81,17 @@ export function parseStoredDraft(value: unknown): StoredDurableComposerDraft | n
     !Array.isArray(record.attachments) ||
     !record.attachments.every(isStoredAttachment) ||
     (record.questionDrafts !== undefined &&
-      (!Array.isArray(record.questionDrafts) || !record.questionDrafts.every(isQuestionDraft)))
+      (!Array.isArray(record.questionDrafts) || !record.questionDrafts.every(isQuestionDraft))) ||
+    (record.selectionAnnotations !== undefined &&
+      (!Array.isArray(record.selectionAnnotations) ||
+        !record.selectionAnnotations.every((annotation) =>
+          readChatSelectionAnnotation(annotation),
+        )))
   ) {
     return null;
+  }
+  if (record.permissionMode !== undefined && !isSessionPermissionMode(record.permissionMode)) {
+    record.permissionMode = undefined;
   }
   const selection = record.modelSelection;
   if (
@@ -91,7 +101,14 @@ export function parseStoredDraft(value: unknown): StoredDurableComposerDraft | n
       typeof selection.agentId !== "string" ||
       typeof selection.model !== "string" ||
       typeof selection.thinkingLevel !== "string" ||
-      (selection.agentRuntime !== undefined && typeof selection.agentRuntime !== "string"))
+      (selection.agentRuntime !== undefined && typeof selection.agentRuntime !== "string") ||
+      (selection.cyberAccessProgram !== undefined &&
+        selection.cyberAccessProgram !== "standard" &&
+        selection.cyberAccessProgram !== "daybreak_blue" &&
+        selection.cyberAccessProgram !== "daybreak_red") ||
+      (selection.daybreakAccessProgram !== undefined &&
+        selection.daybreakAccessProgram !== "daybreak_blue" &&
+        selection.daybreakAccessProgram !== "daybreak_red"))
   ) {
     record.modelSelection = undefined;
   }

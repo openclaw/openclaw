@@ -8,6 +8,8 @@ export {
   GatewayErrorDetailCodes,
   isMcpAppViewExpiredError,
   readCronJobNotFoundError,
+  readClawHubRiskAcknowledgementRequiredError,
+  readTemplateReviewRequiredError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
 } from "./gateway-error-details.js";
@@ -23,6 +25,8 @@ export type {
   WizardNotFoundErrorDetails,
   SetupAdmissionBusyErrorDetails,
   SessionWorkspaceRecoveryRequiredErrorDetails,
+  ClawHubRiskAcknowledgementRequiredErrorDetails,
+  TemplateReviewRequiredErrorDetails,
 } from "./gateway-error-details.js";
 export {
   CronJobNotFoundErrorDetailsSchema,
@@ -34,6 +38,8 @@ export {
   WizardNotFoundErrorDetailsSchema,
   SetupAdmissionBusyErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
+  ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
+  TemplateReviewRequiredErrorDetailsSchema,
   buildMissingScopeErrorDetails,
   errorShape,
   missingScopeErrorShape,

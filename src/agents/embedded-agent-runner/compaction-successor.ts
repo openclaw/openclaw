@@ -11,11 +11,18 @@ import {
   patchSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionAdmissionTransition } from "../../config/sessions/session-admission-transition.types.js";
 import {
   readSessionEntryReadOnlyInWorker,
   readSessionEntrySummariesInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { sameSessionTranscriptStorePath } from "../../config/sessions/transcript-store-identity.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -158,6 +165,7 @@ export type AcceptedCompactionSuccessor = Awaited<
 > & {
   entry: InternalSessionEntry;
   previousSessionId?: string;
+  readonly admissionTransition?: SessionAdmissionTransition;
 };
 
 type CompactionWriterClaim = Readonly<{
@@ -187,7 +195,7 @@ export async function acceptCompactionSuccessor(params: {
   currentTarget: SessionTranscriptRuntimeTarget;
   currentSessionFile?: string;
   expectedEntry: CompactionWriterClaim;
-  assertActive: () => void;
+  assertActive: SessionSourceAssertion;
   config?: OpenClawConfig;
   onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
 }): Promise<AcceptedCompactionSuccessor> {
@@ -205,24 +213,27 @@ export async function acceptCompactionSuccessor(params: {
     result: params.result,
   });
   params.assertActive();
-  const previousEntry = requireCompactionWriterEntry(
-    await readSessionEntryReadOnlyInWorker(
-      { ...currentTarget, readConsistency: "latest" },
-      params.assertActive,
-    ),
-    expected,
-  );
-  params.assertActive();
   if (successor.sessionId === currentTarget.sessionId) {
-    return { ...successor, entry: previousEntry };
+    const entry = requireCompactionWriterEntry(
+      await readSessionEntryReadOnlyInWorker(
+        { ...currentTarget, readConsistency: "latest" },
+        params.assertActive,
+      ),
+      expected,
+    );
+    params.assertActive();
+    return { ...successor, entry };
   }
   if (!params.result.ok || !params.result.compacted) {
     throw new Error("Cannot accept a successor without a successful completed compaction");
   }
-  const assertCommitAllowed = () => {
-    params.assertActive();
-    assertPlacement({ currentTarget, successorSessionId: successor.sessionId });
-  };
+  const assertCommitAllowed = composeSessionSourceAssertion(
+    [params.assertActive],
+    (assertSource) => {
+      assertSource();
+      assertPlacement({ currentTarget, successorSessionId: successor.sessionId });
+    },
+  );
   assertCommitAllowed();
   let committed: AcceptedCompactionSuccessor | undefined;
   try {
@@ -230,16 +241,42 @@ export async function acceptCompactionSuccessor(params: {
       currentTarget,
       (entry) => {
         requireCompactionWriterEntry(entry, expected);
-        return { sessionId: successor.sessionId };
+        return {
+          sessionId: successor.sessionId,
+        };
       },
       {
         skipMaintenance: true,
-        assertCommitAllowed,
+        ...sessionEntryCommitGuardOptions(assertCommitAllowed),
         onCommitted: (entry) => {
           // Capture the actual commit before identity observers can abort the caller.
           // This sink records facts only; no authority checks or lifecycle hooks.
-          committed = { ...successor, entry, previousSessionId: currentTarget.sessionId };
-          params.onCommitted?.(committed);
+          committed = {
+            ...successor,
+            entry,
+            previousSessionId: currentTarget.sessionId,
+            admissionTransition: Object.freeze({
+              previous: Object.freeze({
+                sessionId: expected.sessionId,
+                lifecycleRevision: expected.lifecycleRevision,
+              }),
+              current: Object.freeze({
+                sessionId: entry.sessionId,
+                lifecycleRevision: entry.lifecycleRevision,
+              }),
+            }),
+          };
+          try {
+            params.onCommitted?.(committed);
+          } finally {
+            // Every committed successor must reach its authority owner, even if another sink fails.
+            if (committed.admissionTransition) {
+              params.assertActive.onSessionCompactionCommitted?.(
+                committed.admissionTransition,
+                entry,
+              );
+            }
+          }
         },
       },
     );
@@ -270,7 +307,7 @@ export async function acceptCompactionSuccessor(params: {
           cfg: params.config,
           sessionKey: currentTarget.sessionKey,
           storePath: currentTarget.storePath,
-          previousEntry,
+          previousSessionId: currentTarget.sessionId,
           nextEntry: committed.entry,
         });
       } catch (error) {
@@ -285,16 +322,15 @@ function emitCompactionSessionLifecycleHooks(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   storePath?: string;
-  previousEntry: InternalSessionEntry;
+  previousSessionId: string;
   nextEntry: InternalSessionEntry;
 }) {
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  if (params.previousEntry.sessionId) {
-    forgetActiveSessionForShutdown(params.previousEntry.sessionId);
+  if (params.previousSessionId) {
+    forgetActiveSessionForShutdown(params.previousSessionId);
   }
   if (params.nextEntry.sessionId && params.storePath) {
     noteActiveSessionForShutdown({
-      cfg: params.cfg,
       sessionKey: params.sessionKey,
       sessionId: params.nextEntry.sessionId,
       storePath: params.storePath,
@@ -316,12 +352,12 @@ function emitCompactionSessionLifecycleHooks(params: {
           })
         : params.storePath;
     const transcript = resolveStableSessionEndTranscript({
-      sessionId: params.previousEntry.sessionId,
+      sessionId: params.previousSessionId,
       storePath,
       agentId,
     });
     const payload = buildSessionEndHookPayload({
-      sessionId: params.previousEntry.sessionId,
+      sessionId: params.previousSessionId,
       sessionKey: params.sessionKey,
       agentId,
       reason: "compaction",
@@ -330,7 +366,7 @@ function emitCompactionSessionLifecycleHooks(params: {
         (agentId && storePath
           ? formatSqliteSessionFileMarker({
               agentId,
-              sessionId: params.previousEntry.sessionId,
+              sessionId: params.previousSessionId,
               storePath,
             })
           : undefined),
@@ -340,7 +376,7 @@ function emitCompactionSessionLifecycleHooks(params: {
         agentId && storePath
           ? createClosedSessionTranscriptSource({
               agentId,
-              sessionId: params.previousEntry.sessionId,
+              sessionId: params.previousSessionId,
               sessionKey: params.sessionKey,
               storePath,
             })
@@ -357,7 +393,7 @@ function emitCompactionSessionLifecycleHooks(params: {
       sessionId: params.nextEntry.sessionId,
       sessionKey: params.sessionKey,
       agentId,
-      resumedFrom: params.previousEntry.sessionId,
+      resumedFrom: params.previousSessionId,
     });
     void runWithGatewayDetachedWorkContinuation(async () => {
       await hookRunner.runSessionStart(payload.event, payload.context);
@@ -375,7 +411,10 @@ function assertSameSessionBinding(
   if (
     successorTarget.agentId !== currentTarget.agentId ||
     successorTarget.sessionKey !== currentTarget.sessionKey ||
-    path.resolve(successorTarget.storePath) !== path.resolve(currentTarget.storePath)
+    !sameSessionTranscriptStorePath(
+      path.resolve(successorTarget.storePath),
+      path.resolve(currentTarget.storePath),
+    )
   ) {
     throw new Error(`${label} successor target changed the active session binding`);
   }

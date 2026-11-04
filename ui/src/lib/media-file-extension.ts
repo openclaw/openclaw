@@ -5,21 +5,17 @@ const SAME_ORIGIN_MEDIA_ROUTE_MARKERS = [
   "/media/inbound/",
 ];
 
-function isSameOriginMediaRoute(value: string): boolean {
-  return (
-    value.startsWith("/") &&
-    SAME_ORIGIN_MEDIA_ROUTE_MARKERS.some((marker) => value.includes(marker))
-  );
-}
-
 /** Returns the final filename after decoding one URL path-segment layer. */
-function getMediaFileName(value: string): string | undefined {
+function getMediaFileName(value: string, decodeInbound = false): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
     return undefined;
   }
   const url =
-    /^https?:\/\//i.test(trimmed) || isSameOriginMediaRoute(trimmed)
+    /^https?:\/\//i.test(trimmed) ||
+    (decodeInbound && trimmed.startsWith(MANAGED_INBOUND_MEDIA_PREFIX)) ||
+    (trimmed.startsWith("/") &&
+      SAME_ORIGIN_MEDIA_ROUTE_MARKERS.some((marker) => trimmed.includes(marker)))
       ? URL.parse(trimmed, "https://openclaw.invalid")
       : null;
   if (!url) {
@@ -62,15 +58,14 @@ export function hasVideoMediaFileExtension(value: string): boolean {
   return extension !== undefined && VIDEO_MEDIA_FILE_EXTENSIONS.has(extension);
 }
 
+function normalizeMediaType(mediaType: unknown): string {
+  return typeof mediaType === "string" ? mediaType.trim().toLowerCase() : "";
+}
+
 export function isImageMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim()) {
-    const normalized = mediaType.trim().toLowerCase();
-    if (normalized.startsWith("image/")) {
-      return true;
-    }
-    if (normalized !== "application/octet-stream") {
-      return false;
-    }
+  const normalized = normalizeMediaType(mediaType);
+  if (normalized && normalized !== "application/octet-stream") {
+    return normalized.startsWith("image/");
   }
   const ext = getMediaFileExtension(path);
   return (
@@ -85,8 +80,26 @@ export function isSvgImageMediaPath(path: string, mediaType: unknown): boolean {
   return normalizedMediaType === "image/svg+xml" || getMediaFileExtension(path) === "svg";
 }
 
+export function isTextAttachment(rawMimeType: string, filename: string): boolean {
+  const mimeType = rawMimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (mimeType.startsWith("text/")) {
+    return true;
+  }
+  if (
+    /^application\/(?:(?:[\w.-]+\+)?(?:json|xml)|javascript|x-javascript|yaml|x-yaml)$/.test(
+      mimeType,
+    )
+  ) {
+    return true;
+  }
+  return (
+    (!mimeType || mimeType === "application/octet-stream") &&
+    /\.(?:txt|md|markdown|html?|log|csv|tsv|json|jsonl|xml|yaml|yml)$/i.test(filename)
+  );
+}
+
 export function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("audio/")) {
+  if (normalizeMediaType(mediaType).startsWith("audio/")) {
     return true;
   }
   const ext = getMediaFileExtension(path);
@@ -97,10 +110,7 @@ export function isAudioTranscriptMediaPath(path: string, mediaType: unknown): bo
 }
 
 export function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("video/")) {
-    return true;
-  }
-  return hasVideoMediaFileExtension(path);
+  return normalizeMediaType(mediaType).startsWith("video/") || hasVideoMediaFileExtension(path);
 }
 
 // Collision-safe managed inbound URIs store the original filename plus a
@@ -115,14 +125,12 @@ const MANAGED_INBOUND_UUID_SUFFIX_PATTERN =
 export function labelForMediaPath(mediaPath: string): string {
   const trimmed = mediaPath.trim();
   if (trimmed.startsWith(MANAGED_INBOUND_MEDIA_PREFIX)) {
-    const basename = trimmed.split("/").pop()?.trim() || trimmed;
+    const basename = getMediaFileName(trimmed, true)?.trim() || trimmed;
     return basename.replace(MANAGED_INBOUND_UUID_SUFFIX_PATTERN, "") || basename;
   }
-  try {
-    if (/^https?:\/\//i.test(trimmed)) {
-      const parsed = new URL(trimmed);
-      return getMediaFileName(trimmed)?.trim() || parsed.hostname || trimmed;
-    }
-  } catch {}
+  const parsed = /^https?:\/\//i.test(trimmed) ? URL.parse(trimmed) : null;
+  if (parsed) {
+    return getMediaFileName(trimmed)?.trim() || parsed.hostname || trimmed;
+  }
   return trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
 }

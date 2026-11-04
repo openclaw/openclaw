@@ -16,13 +16,15 @@ import { initializeMemoryWikiVault } from "./vault.js";
 export type MemoryWikiImportedSourceSyncResult = BridgeMemoryWikiResult & {
   indexesRefreshed: boolean;
   indexUpdatedFiles: string[];
-  indexRefreshReason: RefreshMemoryWikiIndexesResult["reason"];
+  indexRefreshReason: RefreshMemoryWikiIndexesResult["reason"] | "deferred";
 };
 
 type SyncMemoryWikiImportedSourcesParams = {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   signal?: AbortSignal;
+  /** Set when the caller compiles next (compile, lint), so the import does not compile too. */
+  deferIndexRefresh?: boolean;
 };
 
 type ActiveImportedSourceSync = {
@@ -54,6 +56,14 @@ async function syncMemoryWikiImportedSourcesOnce(
     syncResult = emptySourceImportResult();
   }
   params.signal?.throwIfAborted();
+  if (params.deferIndexRefresh) {
+    return {
+      ...syncResult,
+      indexesRefreshed: false,
+      indexUpdatedFiles: [],
+      indexRefreshReason: "deferred",
+    };
+  }
   const refreshResult = await refreshMemoryWikiIndexesAfterImport({
     config: params.config,
     syncResult,
@@ -74,6 +84,7 @@ export async function syncMemoryWikiImportedSources(
   const requestKey = JSON.stringify({
     ...params.config,
     vault: { ...params.config.vault, path: vaultKey },
+    deferIndexRefresh: params.deferIndexRefresh === true,
   });
   const active = activeImportedSourceSyncs.get(vaultKey) ?? new Set<ActiveImportedSourceSync>();
   const matching = [...active].find(

@@ -2,6 +2,17 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import type { HandoffNativeLifetime } from "./update-managed-service-handoff-schema.js";
 
+export function procCgroupMembershipMatches(cgroupFile: string, controlGroup: string): boolean {
+  if (!controlGroup) {
+    return false;
+  }
+  // v1/hybrid requires the systemd controller; v2 uses the unified hierarchy.
+  return cgroupFile.split("\n").some((line) => {
+    const systemd = /^[1-9][0-9]*:name=systemd:(.*)$/.exec(line);
+    return line === "0::" + controlGroup || systemd?.[1] === controlGroup;
+  });
+}
+
 /** Inspect the native scope through the same captured service-manager environment. */
 export function createManagedHandoffScopeReader(serviceManagerEnv: NodeJS.ProcessEnv) {
   const control = (command: string, args: string[], timeout = 5000) =>
@@ -46,13 +57,10 @@ export function createManagedHandoffScopeReader(serviceManagerEnv: NodeJS.Proces
     }
     // Match the manager's complete path, not a unit-name suffix or the last
     // controller record. Keep the sealed handoff's v1/v2 membership semantics.
-    return fs
-      .readFileSync("/proc/self/cgroup", "utf8")
-      .split("\n")
-      .some((line) => {
-        const systemd = /^[1-9][0-9]*:name=systemd:(.*)$/.exec(line);
-        return line === "0::" + scope.ControlGroup || systemd?.[1] === scope.ControlGroup;
-      });
+    return procCgroupMembershipMatches(
+      fs.readFileSync("/proc/self/cgroup", "utf8"),
+      scope.ControlGroup,
+    );
   }
   function nativeClosed(life: HandoffNativeLifetime, scope = nativeScope(life)) {
     // systemd retains populated cgroups even after failed/reset-failed. Its

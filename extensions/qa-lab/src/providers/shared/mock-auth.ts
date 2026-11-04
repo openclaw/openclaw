@@ -3,9 +3,9 @@ import { applyAuthProfileConfig } from "openclaw/plugin-sdk/provider-auth-api-ke
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeQaAuthProfiles } from "./auth-store.js";
 
-const QA_MOCK_AUTH_PROVIDERS = Object.freeze(["openai", "anthropic"] as const);
+const QA_MOCK_AUTH_PROVIDERS = ["openai", "anthropic"] as const;
 
-const QA_MOCK_AUTH_AGENT_IDS = Object.freeze(["main", "qa"] as const);
+const QA_MOCK_AUTH_AGENT_IDS = ["main", "qa"] as const;
 
 export function buildQaMockProfileId(provider: string): string {
   return `qa-mock-${provider}`;

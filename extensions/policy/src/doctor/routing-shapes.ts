@@ -1,6 +1,6 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { hasNonEmptyString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ROUTING_MATCH_KINDS } from "../policy-routing.js";
+import { validPolicyRoutingMatchKinds } from "../policy-routing.js";
 import { createOrderedPolicyShape, firstPolicyShapeFinding } from "./ordered-shape.js";
 import { policyShapeFinding } from "./shape-helpers.js";
 
@@ -112,15 +112,7 @@ function* expectShapeFindings(shape: RoutingShape) {
   yield routingKeys(shape, "expect", ["agentId", "matchedBy"]);
   yield shape.string("expect.agentId", ROUTING_HINT, true);
   const matchedBy = shape.value("expect.matchedBy");
-  if (
-    matchedBy !== undefined &&
-    (!Array.isArray(matchedBy) ||
-      matchedBy.length === 0 ||
-      matchedBy.some(
-        (entry) => typeof entry !== "string" || !ROUTING_MATCH_KINDS.includes(entry as never),
-      ) ||
-      new Set(matchedBy).size !== matchedBy.length)
-  ) {
+  if (matchedBy !== undefined && !validPolicyRoutingMatchKinds(matchedBy)) {
     yield routingFinding(shape, "expect.matchedBy", "must contain unique supported match kinds.");
   }
 }

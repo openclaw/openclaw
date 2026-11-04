@@ -63,7 +63,7 @@ Outcomes are retained past the credential's own expiry.
 ## Approval families
 
 - `approval.history` returns newest-first terminal approvals retained for 30 days for exec, plugin, and system-agent requests (scope `operator.approvals`). It supports cursor pagination plus an optional kind filter; pending approvals are not history rows. Treat each cursor as an opaque server token and return the exact value without padding, rewriting, or adding fields.
-- `approval.get` and `approval.resolve` are the kind-agnostic durable approval methods (scope `operator.approvals`). `approval.get` returns a sanitized pending or retained terminal projection with a stable `urlPath`; `approval.resolve` accepts the canonical approval id, an explicit `kind`, and a decision, applies first-answer-wins resolution, and always returns the recorded canonical result.
+- `approval.get` and `approval.resolve` are the kind-agnostic durable approval methods (scope `operator.approvals`). `approval.get` returns a sanitized pending or retained terminal projection with a stable `urlPath`; `approval.resolve` accepts the stored approval id, an explicit `kind`, and a decision, applies first-answer-wins resolution, and always returns the recorded result.
 - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay. They are protocol-boundary adapters over the same durable approval registry.
 - `exec.approval.waitDecision` waits on one pending exec approval and returns the final decision (or `null` on timeout).
 - `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval policy snapshots.
@@ -103,7 +103,8 @@ exec policy, standing-grant, or execution-authorization semantics.
 
 ## Automation, skills, and tools
 
-- Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.get`, `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
+- Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.get`, `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work; `cron.bind` records the current incarnation of a key-only job's parent conversation and accepts only an owner agent turn in that conversation.
 - `cron.run` enqueues a manual run and acknowledges with `{ ok: true, enqueued: true, runId }`. Pass `waitTimeoutMs` to hold the response until that run records its outcome: the acknowledgement then also carries `run`, the same entry `cron.runs` returns for that `runId`, or `finished: true` when the run ended but its history is not visible to the caller. If the wait ends first, neither is set and the run continues. Agent-runtime callers get the plain acknowledgement immediately for main-session jobs and jobs that run in their own session, because those runs start only after the calling turn.
 - `cron.runs` accepts an optional non-empty `runId` filter so clients can follow one queued manual run without racing against other history entries for the same job.
+- `cron.runs` defaults to `view: "full"`. The Control UI requests `view: "summary"` to omit `diagnostics`, `delivery`, and `failureNotificationDelivery` from each entry. Summary pages retain full summaries, status, usage, and run/session links. Search still matches diagnostic text and delivery channels, and filtering, visibility, totals, and pagination are unchanged.
 - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`, `tools.invoke`. See [Operator helper methods](/gateway/protocol/operator-methods#operator-helper-methods).

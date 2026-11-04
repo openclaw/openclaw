@@ -91,6 +91,7 @@ export function setupGatewaySessionsWorktreeTestHarness() {
       onComplete: vi.fn(),
       onError: vi.fn(),
     });
+    await clock.advanceBy(130_000);
     onTestFinished(async () => {
       await maintenance.stop();
       await scheduler.stop();

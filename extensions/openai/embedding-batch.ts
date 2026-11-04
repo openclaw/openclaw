@@ -69,6 +69,7 @@ async function submitOpenAiBatch(params: {
     headers: buildBatchHeaders(params.openAi, { json: true }),
     ssrfPolicy: params.openAi.ssrfPolicy,
     fetchImpl: params.openAi.fetchImpl,
+    resolveRequestHeaders: params.openAi.resolveRequestHeaders,
     body: {
       input_file_id: inputFileId,
       endpoint: OPENAI_BATCH_ENDPOINT,
@@ -93,12 +94,16 @@ async function fetchOpenAiBatchResource<T>(params: {
     url: resolveEmbeddingEndpointUrl(params.openAi.baseUrl, params.path),
     ssrfPolicy: params.openAi.ssrfPolicy,
     fetchImpl: params.openAi.fetchImpl,
+    resolveRequestHeaders: params.openAi.resolveRequestHeaders,
     signal: params.signal,
     init: {
       headers: buildBatchHeaders(params.openAi, { json: true }),
     },
-    onResponse: async (res) => {
-      await assertOkOrThrowProviderError(res, params.label);
+    onResponse: async (res, requestHeaders) => {
+      await assertOkOrThrowProviderError(res, params.label, {
+        requestHeaders,
+        signal: params.signal,
+      });
       return await params.parse(res);
     },
   });

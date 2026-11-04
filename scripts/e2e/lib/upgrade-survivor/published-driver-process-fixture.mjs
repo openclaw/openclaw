@@ -77,7 +77,21 @@ if (role === "npm") {
   process.send("ready");
 } else if (role === "openclaw") {
   trace("cli", { args });
+  const config = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
+  assert.equal(config.agents.ownership, "explicit");
+  assert.equal(Object.hasOwn(config.agents, "list"), false);
+  assert.deepEqual(Object.keys(config.agents.entries), ["main", "second"]);
+  const orphanSidecar = path.join(
+    process.env.OPENCLAW_STATE_DIR,
+    "credentials/auth-profiles",
+    `${"e".repeat(32)}.json`,
+  );
   if (args[0] === "doctor") {
+    assert.equal(
+      fs.existsSync(orphanSidecar),
+      false,
+      "Baseline Doctor cannot admit retired sidecars",
+    );
     trace("doctor");
   } else if (args[0] === "gateway" && args[1] === "call") {
     // Lifecycle tests model RPC replies only; the update cell uses real packages.
@@ -146,6 +160,7 @@ if (role === "npm") {
       },
     });
   } else if (args[0] === "update") {
+    assert.equal(fs.existsSync(orphanSidecar), true, "Update must exercise the retained sidecar");
     if (mode === "interrupt" || mode === "timeout") {
       const child = spawn(process.execPath, ["/proof/fixture.mjs", "child"], {
         env: process.env,

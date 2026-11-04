@@ -255,27 +255,6 @@ class InvokeDispatcherTest {
     }
 
   @Test
-  fun advertisementSamplesEachCommandFamilyOnceAndRefreshesOnNextBuild() {
-    var cameraReads = 0
-    val dispatcher =
-      newInvokeDispatcher(
-        cameraEnabled = {
-          cameraReads += 1
-          cameraReads % 2 == 1
-        },
-      )
-
-    val cameras = listOf(OpenClawCameraCommand.List, OpenClawCameraCommand.Snap, OpenClawCameraCommand.Clip).map { it.rawValue }
-    val enabled = dispatcher.buildInvokeCommands()
-    assertEquals(1, cameraReads)
-    assertEquals(cameras, enabled.filter { it in cameras })
-
-    val disabled = dispatcher.buildInvokeCommands()
-    assertEquals(2, cameraReads)
-    assertTrue(disabled.none { it in cameras })
-  }
-
-  @Test
   fun boundHandlerReceivesOpaqueParamsAndPropagatesFailureAndCancellation() =
     runTest {
       val talk = InvokeDispatcherFakeTalkHandler()

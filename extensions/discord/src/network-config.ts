@@ -19,11 +19,7 @@ export function createDiscordDnsLookup(): LookupFunction {
     }
 
     const lookupOptions: dns.LookupOptions =
-      typeof options === "number"
-        ? { family: options }
-        : options === undefined
-          ? {}
-          : ({ ...options } as dns.LookupOptions);
+      typeof options === "number" ? { family: options } : { ...options };
 
     if (lookupOptions.family === 4 || lookupOptions.family === 6) {
       return dns.lookup(hostname, lookupOptions, callback as never);
@@ -34,11 +30,6 @@ export function createDiscordDnsLookup(): LookupFunction {
         callback(err, "", 4);
         return;
       }
-      if (!Array.isArray(addresses)) {
-        callback(new Error("Expected all lookup addresses to be an array"), "", 4);
-        return;
-      }
-
       const reordered =
         addresses.length < 2
           ? addresses

@@ -1,11 +1,11 @@
 import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
-  createChannelExecApprovalProfile,
+  createChannelExecApprovalProfileAsync,
   isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
   matchesApprovalRequestFilters,
 } from "openclaw/plugin-sdk/approval-client-runtime";
-import { doesApprovalRequestSelectChannelAccount } from "openclaw/plugin-sdk/approval-native-runtime";
+import { doesApprovalRequestSelectChannelAccountAsync } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
@@ -89,13 +89,13 @@ function isTelegramExecApprovalAccountEligible(params: {
   );
 }
 
-function matchesTelegramRequestAccount(params: {
+async function matchesTelegramRequestAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
-}): boolean {
+}): Promise<boolean> {
   const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
-  return doesApprovalRequestSelectChannelAccount({
+  return doesApprovalRequestSelectChannelAccountAsync({
     ...params,
     channel: "telegram",
     defaultAccountId: resolveDefaultTelegramAccountId(params.cfg),
@@ -105,7 +105,7 @@ function matchesTelegramRequestAccount(params: {
   });
 }
 
-const telegramExecApprovalProfile = createChannelExecApprovalProfile({
+const telegramExecApprovalProfile = createChannelExecApprovalProfileAsync({
   resolveConfig: resolveTelegramExecApprovalConfig,
   resolveApprovers: getTelegramExecApprovalApprovers,
   isTargetRecipient: isTelegramExecApprovalTargetRecipient,

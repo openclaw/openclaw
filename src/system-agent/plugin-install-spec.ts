@@ -1,4 +1,4 @@
-import { isOpenClawTrustedPluginInstallSpec } from "../plugins/install-provenance.js";
+import { resolvePluginInstallSourcePlan } from "../plugins/install-source-plan.js";
 
 export function validateSystemAgentPluginInstallSpec(spec: string): string | null {
   const trimmed = spec.trim();
@@ -12,7 +12,11 @@ export function validateSystemAgentPluginInstallSpec(spec: string): string | nul
     // OpenClaw does not install local paths or URLs; those can execute arbitrary package code.
     return "OpenClaw plugin install accepts npm or ClawHub package specs only.";
   }
-  if (!isOpenClawTrustedPluginInstallSpec(trimmed)) {
+  const plan = resolvePluginInstallSourcePlan({ raw: trimmed, mode: "install" });
+  if (!plan.ok) {
+    return plan.error;
+  }
+  if (plan.acknowledgement) {
     return "OpenClaw installs only ClawHub, bundled, or official-catalog plugins. Use `openclaw plugins install <spec>` in a trusted shell to review an arbitrary executable source.";
   }
   return null;

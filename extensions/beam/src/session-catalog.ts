@@ -22,6 +22,15 @@ function cursorOffset(value: string | undefined): number {
 
 type TranscriptCursor = { revision: string; end: number };
 
+export class BeamTranscriptCursorError extends Error {
+  readonly kind: "invalid" | "stale";
+
+  constructor(kind: "invalid" | "stale") {
+    super(`${kind} Beam transcript cursor`);
+    this.kind = kind;
+  }
+}
+
 function transcriptRevision(session: BeamStoredSession): string {
   return createHash("sha256").update(JSON.stringify(session.items)).digest("base64url");
 }
@@ -46,10 +55,21 @@ function decodeTranscriptCursor(value: string): TranscriptCursor {
   } catch {
     // Reject malformed cursors below.
   }
-  throw new Error("invalid Beam transcript cursor");
+  throw new BeamTranscriptCursorError("invalid");
 }
 
 export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvider {
+  async function requireSession(hostId: string, threadId: string) {
+    if (hostId !== BEAM_HOST_ID) {
+      throw new Error(`unknown Beam host: ${hostId}`);
+    }
+    const session = await store.get(threadId);
+    if (!session) {
+      throw new Error(`unknown Beam session: ${threadId}`);
+    }
+    return session;
+  }
+
   return {
     id: "beam",
     label: "Beam",
@@ -57,7 +77,8 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
     shareRoute: BEAM_SESSION_SHARE_ROUTE,
     supportsProcessHomeIsolation: true,
     async list(params) {
-      const search = params.search?.trim().toLowerCase();
+      // Normalize comparison text only; uploaded titles and stored identities stay original.
+      const search = params.search?.trim().toLowerCase().normalize("NFC");
       const shareId =
         search && isControlUiCatalogShareId(BEAM_SESSION_SHARE_ROUTE, search) ? search : undefined;
       const sessions = (await store.list())
@@ -66,7 +87,10 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
             !search ||
             (shareId
               ? session.beamId.startsWith(shareId)
-              : `${session.title}\n${session.source}`.toLowerCase().includes(search)),
+              : `${session.title}\n${session.source}`
+                  .toLowerCase()
+                  .normalize("NFC")
+                  .includes(search)),
         )
         .toSorted(
           (left, right) =>
@@ -100,13 +124,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
       ];
     },
     async read(params) {
-      if (params.hostId !== BEAM_HOST_ID) {
-        throw new Error(`unknown Beam host: ${params.hostId}`);
-      }
-      const session = await store.get(params.threadId);
-      if (!session) {
-        throw new Error(`unknown Beam session: ${params.threadId}`);
-      }
+      const session = await requireSession(params.hostId, params.threadId);
       const cursor =
         params.cursor === undefined ? undefined : decodeTranscriptCursor(params.cursor);
       const end = Math.min(session.items.length, cursor?.end ?? session.items.length);
@@ -115,7 +133,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
       if (cursor || start > 0) {
         const revision = transcriptRevision(session);
         if (cursor && cursor.revision !== revision) {
-          throw new Error("stale Beam transcript cursor");
+          throw new BeamTranscriptCursorError("stale");
         }
         if (start > 0) {
           nextCursor = encodeTranscriptCursor({ revision, end: start });
@@ -153,13 +171,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
       return { ok: true };
     },
     async copyToGatewaySession(params) {
-      if (params.hostId !== BEAM_HOST_ID) {
-        throw new Error(`unknown Beam host: ${params.hostId}`);
-      }
-      const session = await store.get(params.threadId);
-      if (!session) {
-        throw new Error(`unknown Beam session: ${params.threadId}`);
-      }
+      const session = await requireSession(params.hostId, params.threadId);
       return {
         displayName: session.title,
         ...(session.sourceModel

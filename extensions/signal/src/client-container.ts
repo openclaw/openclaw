@@ -17,9 +17,9 @@ import {
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { startWebSocketKeepalive, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { SignalRpcOptions } from "./client-types.js";
 import type { SignalReceivePayload } from "./monitor/event-handler.types.js";
-import { WebSocket } from "./ws-runtime.js";
 
 type ContainerRpcOptions = SignalRpcOptions & {
   maxAttachmentBytes?: number;
@@ -108,9 +108,9 @@ function signalRestIdleTimeoutError({ chunkTimeoutMs }: { chunkTimeoutMs: number
   return new Error(`Signal REST response body stalled after ${chunkTimeoutMs}ms`);
 }
 
-async function releaseUnreadResponseBody(res: Response | undefined): Promise<void> {
+function releaseUnreadResponseBody(res: Response | undefined): void {
   if (res?.bodyUsed !== true) {
-    await res?.body?.cancel().catch(() => undefined);
+    void res?.body?.cancel().catch(() => undefined);
   }
 }
 
@@ -144,7 +144,7 @@ export async function containerCheck(
       error: coerceErrorMessage(err),
     };
   } finally {
-    await releaseUnreadResponseBody(res);
+    releaseUnreadResponseBody(res);
   }
 }
 
@@ -334,7 +334,7 @@ async function containerFetchAttachment(
         onOverflow: () => new Error("Signal REST attachment exceeded size limit"),
       });
     } finally {
-      await releaseUnreadResponseBody(res);
+      releaseUnreadResponseBody(res);
     }
   });
 }
@@ -408,6 +408,17 @@ export async function streamContainerEvents(params: {
 
     ws.on("open", () => {
       log("[signal-ws] connected");
+      // A network path that dies without a FIN never emits close; the missed pong
+      // ends this stream so the outer loop reconnects. The helper stops on close.
+      startWebSocketKeepalive(ws, () => {
+        // Local receive backpressure can leave the peer's pong unread. The
+        // keepalive keeps checking, and resumes enforcement when reads resume.
+        if (ws.isPaused) {
+          return;
+        }
+        logError("[signal-ws] heartbeat timed out; reconnecting");
+        ws.terminate();
+      });
       params.onStreamOpen?.();
     });
 
@@ -430,8 +441,8 @@ export async function streamContainerEvents(params: {
             ws.close();
           });
         }
-      } catch (err) {
-        logError(`[signal-ws] parse error: ${coerceErrorMessage(err)}`);
+      } catch {
+        logError("[signal-ws] parse error: invalid JSON frame");
       }
     });
 
@@ -448,10 +459,6 @@ export async function streamContainerEvents(params: {
 
     ws.on("ping", () => {
       log("[signal-ws] ping received");
-    });
-
-    ws.on("pong", () => {
-      log("[signal-ws] pong received");
     });
 
     if (params.abortSignal) {

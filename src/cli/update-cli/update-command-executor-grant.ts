@@ -1,48 +1,24 @@
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
-import {
-  childLineageDigest,
-  type UpdateCommandChildGrant,
-} from "./update-command-executor-children.js";
+import { childLineageDigest } from "./update-command-executor-children.js";
+import { readUpdateCommandChildGrant } from "./update-command-executor-grant-input.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 export async function resolveUpdateCommandChildBinding(
-  grant: UpdateCommandChildGrant,
+  input: unknown,
   runId: string,
   root: string,
   onProcessIdentityWarning?: NonNullable<
     Parameters<typeof prepareManagedHandoffLeaseStore>[0]
   >["onProcessIdentityWarning"],
 ) {
+  const grant = readUpdateCommandChildGrant(input);
   const slot = grant.slot;
-  if (
-    Object.hasOwn(grant, "slot") &&
-    (!isRecord(slot) ||
-      !isRecord(slot.parent) ||
-      !isRecord(slot.spawner) ||
-      typeof slot.parent.key !== "string" ||
-      typeof slot.spawner.key !== "string" ||
-      typeof slot.childKey !== "string" ||
-      (Object.hasOwn(slot, "reserver") &&
-        (!isRecord(slot.reserver) || typeof slot.reserver.key !== "string")))
-  ) {
-    throw new UpdateCommandRecoveryPendingError("Candidate occupied slot pair is malformed.");
-  }
-  const retainedFields =
-    Object.hasOwn(grant, "retainedParent") || Object.hasOwn(grant, "retainedChildKey");
-  if (
-    retainedFields &&
-    (!isRecord(grant.retainedParent) ||
-      typeof grant.retainedParent.key !== "string" ||
-      typeof grant.retainedChildKey !== "string")
-  ) {
-    throw new UpdateCommandRecoveryPendingError("Candidate retained owner pair is malformed.");
-  }
+  const retainedFields = grant.retainedParent !== undefined || grant.retainedChildKey !== undefined;
   const original = grant.originalParent ?? grant.parent;
   const spawner = grant.spawner ?? original;
   const slotReserver = slot?.reserver;
@@ -123,6 +99,11 @@ export async function resolveUpdateCommandChildBinding(
   const slotChild = slot ? store.read(slot.childKey) : undefined;
   const retained = retainedFields ? store.read(grant.retainedParent!.key) : undefined;
   const retainedChild = retainedFields ? store.read(grant.retainedChildKey!) : undefined;
+  const parentIsCurrent = (lease: typeof original, version?: 2) =>
+    store.current(lease) &&
+    (version === 2
+      ? lease.version === 2 && lease.action.kind === "update"
+      : lease.action.kind === "update" && lease.version !== 3);
   const childIsCurrent = (
     observed: ReturnType<typeof store.read> | undefined,
     helper: typeof spawner.executor,
@@ -144,24 +125,18 @@ export async function resolveUpdateCommandChildBinding(
   if (
     (slot &&
       (slot.parent.key === original.key ||
-        !store.current(slot.parent) ||
-        slot.parent.version !== 2 ||
-        slot.parent.action.kind !== "update" ||
+        !parentIsCurrent(slot.parent, 2) ||
         slot.parent.owner !== original.owner ||
         !isDeepStrictEqual(slot.parent.helper, slotCreator.executor) ||
         !isDeepStrictEqual(slot.parent.executor, slotCreator.executor) ||
         (slotReserver &&
-          (!store.current(slotReserver) ||
-            slotReserver.version !== 2 ||
-            slotReserver.action.kind !== "update" ||
+          (!parentIsCurrent(slotReserver, 2) ||
             slotReserver.owner !== runId ||
             !slotReserver.key.startsWith(childPrefix) ||
             !isDeepStrictEqual(slotReserver.helper, slotReserver.executor) ||
             (spawner.key !== slotReserver.key &&
               !spawner.key.startsWith(`${slotReserver.key}/.openclaw-update-child-`)))) ||
-        !store.current(slot.spawner) ||
-        slot.spawner.version !== 2 ||
-        slot.spawner.action.kind !== "update" ||
+        !parentIsCurrent(slot.spawner, 2) ||
         !isDeepStrictEqual(slot.spawner.executor, spawner.executor) ||
         (slot.spawner.key !== slot.parent.key &&
           (!slot.spawner.key.startsWith(`${slot.parent.key}/.openclaw-update-child-`) ||
@@ -184,12 +159,8 @@ export async function resolveUpdateCommandChildBinding(
     !isDeepStrictEqual(parent.lease, grant.parent) ||
     parent.lease.action.kind !== "update" ||
     parent.lease.version === 3 ||
-    !store.current(original) ||
-    original.action.kind !== "update" ||
-    original.version === 3 ||
-    !store.current(spawner) ||
-    spawner.action.kind !== "update" ||
-    spawner.version === 3 ||
+    !parentIsCurrent(original) ||
+    !parentIsCurrent(spawner) ||
     (spawner.key !== original.key &&
       (!spawner.key.startsWith(childPrefix) || spawner.owner !== runId)) ||
     (process.platform !== "win32" && process.ppid !== spawner.executor.pid) ||

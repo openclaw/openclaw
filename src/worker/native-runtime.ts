@@ -129,7 +129,7 @@ export async function createNativeRuntime(
       Object.freeze(model.thinkingLevelMap);
     }
     Object.freeze(model);
-    models.set(ref, { model, credential, headers: Object.freeze(headers) });
+    models.set(ref, { model, credential, headers });
     for (const [name, value] of Object.entries(headers)) {
       if (!value) {
         continue;
@@ -157,6 +157,10 @@ export async function createNativeRuntime(
     dev: directory.dev,
     ino: directory.ino,
   };
+  const protocolSpellings = [...protocolSecrets].flatMap((secret) => [
+    secret,
+    JSON.stringify(secret).slice(1, -1),
+  ]);
 
   const hasCredentialPrefix = (value: unknown): boolean => {
     if (typeof value === "string") {
@@ -246,6 +250,7 @@ export async function createNativeRuntime(
           stop: options?.stop,
           serviceTier: options?.serviceTier,
           cacheRetention: options?.cacheRetention,
+          promptCacheTtl: options?.promptCacheTtl,
           timeoutMs: options?.timeoutMs,
           maxRetryDelayMs: options?.maxRetryDelayMs,
           onActiveResponse: options?.onActiveResponse,
@@ -273,20 +278,11 @@ export async function createNativeRuntime(
           assertProtocolSafe: (value) => {
             assertActive();
             const serialized = JSON.stringify(value);
-            if (
-              [...protocolSecrets].some(
-                (secret) =>
-                  serialized.includes(secret) ||
-                  serialized.includes(JSON.stringify(secret).slice(1, -1)),
-              )
-            ) {
+            if (protocolSpellings.some((secret) => serialized.includes(secret))) {
               throw new Error("Native credential appeared in a protocol payload");
             }
           },
         });
-        assertActive();
-        await assertWorkspace(workspace);
-        await assertWorkspace(assignedWorkspace);
         assertActive();
         return result;
       } finally {
@@ -310,6 +306,7 @@ export async function createNativeRuntime(
       }
       models.clear();
       protocolSecrets.clear();
+      protocolSpellings.length = 0;
       runtime.registry.clearApiProviders();
     },
   };

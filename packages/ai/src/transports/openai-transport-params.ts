@@ -1,4 +1,4 @@
-import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
+import type { CacheRetention, Context, Model, ModelRequestHeaders } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
@@ -301,11 +301,11 @@ export function resolveOpenAIStrictToolFlagWithDiagnostics(
 export function buildOpenAIClientHeaders(
   model: Model,
   context: Context,
-  optionHeaders?: Record<string, string>,
-  turnHeaders?: Record<string, string>,
+  optionHeaders?: ModelRequestHeaders,
+  turnHeaders?: ModelRequestHeaders,
   sessionId?: string,
   cacheRetention?: CacheRetention,
-): Record<string, string> {
+): ModelRequestHeaders {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
     Object.assign(
@@ -409,7 +409,6 @@ export function getCompat(model: OpenAIModeModel) {
     ...resolved,
     reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, {}),
     openRouterRouting: (resolved.openRouterRouting as Record<string, unknown> | undefined) ?? {},
-    vercelGatewayRouting: resolved.vercelGatewayRouting as Record<string, unknown>,
     requiresStringContent: compat.requiresStringContent ?? false,
     strictMessageKeys: compat.strictMessageKeys === true,
   };

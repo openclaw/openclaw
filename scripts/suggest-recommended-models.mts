@@ -4,6 +4,7 @@
 // OPENROUTER_API_KEY enables the usage signal. The ranking is LMArena Agent
 // Arena score, then OpenRouter 30-day usage; the newest served family member
 // without its own Arena row takes the slot of its newest ranked older sibling.
+// NVIDIA's featured list is reported, never ranked; its fetch may fail.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -51,6 +52,7 @@ const SOURCES = {
   openRouterModels: "https://openrouter.ai/api/v1/models",
   openRouterRankings: "https://openrouter.ai/api/v1/datasets/rankings-daily",
   vercelModels: "https://ai-gateway.vercel.sh/v1/models",
+  nvidiaFeatured: "https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json",
 };
 
 const arenaSchema = z.object({
@@ -110,6 +112,9 @@ const rankingsSchema = z.object({
   ),
   meta: z.object({ as_of: z.string(), start_date: z.string(), end_date: z.string() }),
 });
+const nvidiaFeaturedSchema = z.object({
+  "featured-models": z.array(z.object({ model: z.string(), "model-name": z.string() })),
+});
 
 type ArenaRow = z.infer<typeof arenaSchema>["rows"][number]["row"];
 type ModelPrice = { input: number; output: number };
@@ -151,7 +156,7 @@ export async function suggestRecommendedModels(args: string[]): Promise<void> {
   const now = Date.now();
 
   const apiKey = process.env.OPENROUTER_API_KEY;
-  const [arenaPage, catalog, openRouter, vercel, rankings] = await Promise.all([
+  const [arenaPage, catalog, openRouter, vercel, rankings, nvidia] = await Promise.all([
     fetchJson(SOURCES.arena, arenaSchema),
     fetchJson(SOURCES.catalog, catalogSchema),
     fetchJson(SOURCES.openRouterModels, openRouterModelsSchema),
@@ -161,6 +166,9 @@ export async function suggestRecommendedModels(args: string[]): Promise<void> {
           Authorization: `Bearer ${apiKey}`,
         })
       : undefined,
+    fetchJson(SOURCES.nvidiaFeatured, nvidiaFeaturedSchema).catch((error: unknown) =>
+      String(error instanceof Error ? error.message : error).replace(/\s+/g, " "),
+    ),
   ]);
   if (arenaPage.num_rows_total > arenaPage.rows.length) {
     throw new Error(
@@ -358,6 +366,9 @@ export async function suggestRecommendedModels(args: string[]): Promise<void> {
       ? `- OpenRouter rankings-daily ${rankings.meta.start_date}..${rankings.meta.end_date}. Source: OpenRouter (openrouter.ai/rankings), as of ${rankings.meta.as_of}. Licensed under CC BY 4.0.`
       : "- OpenRouter usage skipped: OPENROUTER_API_KEY is unset, so curated entries without an Arena score keep their order.",
     `- Catalog v2 generated ${formatDate(catalog.generatedAt)} (${catalog.models.length} rows), OpenRouter models (${openRouter.data.length}), Vercel AI Gateway models (${vercel.data.length}): ${candidates.size} served chat models.`,
+    typeof nvidia === "string"
+      ? `- NVIDIA featured models unavailable: ${nvidia}`
+      : `- NVIDIA featured models (${nvidia["featured-models"].length}).`,
   ];
 
   const newModels = [...candidates]
@@ -406,6 +417,28 @@ export async function suggestRecommendedModels(args: string[]): Promise<void> {
     lines.push(
       `| ${key} | ${formatDate(releasedAt.get(key)!)} | ${rank} | ${formatPrice(price)} | ${predecessor ?? "none"} | ${predecessor ? formatPrice(predecessorPrice) : ""} | ${note} |`,
     );
+  }
+
+  lines.push("", "## NVIDIA featured, not listed", "");
+  if (typeof nvidia === "string") {
+    lines.push("Unavailable; see Sources.");
+  } else {
+    // Featured ids drop the vendor or dash the version (z-ai/glm-5-3); keys fold both.
+    const featured = nvidia["featured-models"]
+      .map((model) => ({
+        id: model.model,
+        key: canonicalModelKey(model.model, model["model-name"]),
+      }))
+      .filter(({ key }) => !curatedKeys.has(key));
+    if (featured.length === 0) {
+      lines.push("None.");
+    } else {
+      lines.push("| model | NVIDIA id | suggested |", "| --- | --- | --- |");
+    }
+    for (const { id, key } of featured) {
+      const rank = suggestedKeys.has(key) ? `#${position(suggested, key)}` : "no signal yet";
+      lines.push(`| ${key} | ${id} | ${rank} |`);
+    }
   }
 
   // Rank among the entries both lists keep, so additions and removals alone

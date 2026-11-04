@@ -1,4 +1,4 @@
-import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
+import { streamFragmentError } from "../transports/transport-utils.js";
 
 // Bound retained frame bytes before allocation; completed frames release the budget.
 const OPENAI_CHATGPT_RESPONSES_SSE_FRAME_MAX_BYTES = 16 * 1024 * 1024;
@@ -76,10 +76,7 @@ export async function* parseOpenAIChatGptResponsesSse(
         try {
           event = JSON.parse(data) as Record<string, unknown>;
         } catch (cause) {
-          if (!(cause instanceof SyntaxError)) {
-            throw cause;
-          }
-          throw new CodexProtocolError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause });
+          throw streamFragmentError(cause, CodexProtocolError);
         }
         // Keep suspension outside the parse catch so consumer failures stay consumer-owned.
         yield event;

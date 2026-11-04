@@ -1,14 +1,28 @@
+import type {
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { GatewayScheduler } from "./gateway-scheduler.js";
 import type { UpdateCampaignController } from "./update-campaign.js";
 import type { StartupInstallStatus } from "./update-install-status.types.js";
 
-export type UpdateCheckLifecycle = {
+type UpdateCheckNotifications = {
+  onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
+  onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
+};
+
+export type UpdateCheckLifecycle = UpdateCheckNotifications & {
   scheduler: GatewayScheduler;
   signal: AbortSignal;
   campaign?: UpdateCampaignController;
   installStatus?: StartupInstallStatus;
+  /** Background owner policy admits the first campaign from an interactive result. */
+  announceDevGitUpdate?: (
+    target: Extract<NonNullable<UpdateScheduleState["target"]>, { kind: "git" }>,
+    installStatus: StartupInstallStatus,
+  ) => Promise<void>;
   isCurrent: () => boolean;
   refreshes: WeakMap<OpenClawConfig, Promise<void>>;
   run: <T>(work: (signal: AbortSignal) => Promise<T>) => Promise<T>;
@@ -18,7 +32,10 @@ export type UpdateCheckLifecycle = {
 };
 let updateCheckLifecycle: UpdateCheckLifecycle | undefined;
 
-export function createGatewayUpdateLifecycle(scheduler: GatewayScheduler): UpdateCheckLifecycle {
+export function createGatewayUpdateLifecycle(
+  scheduler: GatewayScheduler,
+  notifications: UpdateCheckNotifications = {},
+): UpdateCheckLifecycle {
   const predecessor = updateCheckLifecycle?.stop();
   const scope = new AsyncWorkScope();
   const scheduled = scheduler.scope();
@@ -34,7 +51,7 @@ export function createGatewayUpdateLifecycle(scheduler: GatewayScheduler): Updat
     });
   const initialize = async () => {
     signal.throwIfAborted();
-    if (lifecycle.installStatus) {
+    if (lifecycle.installStatus && !lifecycle.installStatus.status.error) {
       return lifecycle.installStatus;
     }
     if (!initialization) {
@@ -43,15 +60,19 @@ export function createGatewayUpdateLifecycle(scheduler: GatewayScheduler): Updat
         signal.throwIfAborted();
         const result = await resolveStartupInstallStatus(false, signal);
         signal.throwIfAborted();
-        lifecycle.installStatus = result;
-        return result;
+        // A fresh interactive probe may have already adopted the installation.
+        if (!lifecycle.installStatus || lifecycle.installStatus.status.error) {
+          lifecycle.installStatus = result;
+        }
+        return lifecycle.installStatus;
       });
       initialization = task;
-      void task.catch(() => {
+      const clearInitialization = () => {
         if (initialization === task) {
           initialization = undefined;
         }
-      });
+      };
+      void task.then(clearInitialization, clearInitialization);
     }
     return initialization;
   };
@@ -66,13 +87,18 @@ export function createGatewayUpdateLifecycle(scheduler: GatewayScheduler): Updat
         run: () =>
           run(work)
             .then((nextDelayMs) => arm(Math.max(1, nextDelayMs)))
-            .catch(() => undefined),
+            .catch((error: unknown) => {
+              if (!signal.aborted) {
+                throw error;
+              }
+            }),
       });
     };
     arm(0);
   };
   const lifecycle: UpdateCheckLifecycle = {
     scheduler,
+    ...notifications,
     signal,
     isCurrent: () => updateCheckLifecycle === lifecycle,
     refreshes: new WeakMap(),

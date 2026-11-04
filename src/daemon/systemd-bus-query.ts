@@ -2,6 +2,26 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
 export type SystemdBusQuery = (args: string[], signatures: string[]) => Promise<unknown[] | null>;
 
+export function isSystemdManagerUid(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value < 0xffffffff;
+}
+
+export function systemdUnitCallArgs(
+  destination: string,
+  unitName: string,
+  method: "GetUnit" | "LoadUnit" | "GetUnitFileState" | "GetUnitProcesses",
+): string[] {
+  return [
+    "call",
+    destination,
+    "/org/freedesktop/systemd1",
+    "org.freedesktop.systemd1.Manager",
+    method,
+    "s",
+    unitName,
+  ];
+}
+
 /** Decode busctl's ordered property replies without accepting mismatched signatures. */
 export function decodeSystemdBusProperties(
   output: string,

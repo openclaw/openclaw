@@ -166,16 +166,17 @@ export function createGatewayComputerService(options: {
     runtime.idleTimer = setTimeout(
       () => retireInBackground(runtime),
       runtime.execution ? 300_000 : 60_000,
-    );
-    runtime.idleTimer.unref?.();
+    ).unref();
+  };
+  const assertAvailable = () => {
+    if (stopped || paused) {
+      throw new Error(
+        stopped ? "Gateway computer service is stopped" : "Gateway computer provider is reloading",
+      );
+    }
   };
   const prepare = async (): Promise<HostRuntime | undefined> => {
-    if (stopped) {
-      throw new Error("Gateway computer service is stopped");
-    }
-    if (paused) {
-      throw new Error("Gateway computer provider is reloading");
-    }
+    assertAvailable();
     const provider = configuredProvider();
     if (current) {
       if (
@@ -271,13 +272,7 @@ export function createGatewayComputerService(options: {
     async status({ probe = true }: { probe?: boolean } = {}): Promise<GatewayComputerStatus> {
       const result: GatewayComputerStatus = { configured: false, available: false };
       try {
-        if (stopped || paused) {
-          throw new Error(
-            stopped
-              ? "Gateway computer service is stopped"
-              : "Gateway computer provider is reloading",
-          );
-        }
+        assertAvailable();
         const runtime = probe ? await prepare() : current;
         if (runtime) {
           assertRuntime(runtime);

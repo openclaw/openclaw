@@ -154,6 +154,7 @@ describe("sessions_spawn visible child thinking", () => {
   it("omits inherited thinking when the prepared child catalog cannot be read", async () => {
     const callGateway = vi.fn(async () => ({
       key: "agent:main:dashboard:child",
+      sessionId: "child-session",
       runStarted: true,
       runId: "run-visible",
     }));

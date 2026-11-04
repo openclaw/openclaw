@@ -43,18 +43,16 @@ function scheduleSameTurnApplyCacheClear(): void {
   handle.unref?.();
 }
 
-function getOrCreateWeakMap<K extends object, V>(
-  parent: WeakMap<K, V>,
+function getOrCreateWeakMap<K extends object, ChildKey extends object, V>(
+  parent: WeakMap<K, WeakMap<ChildKey, V>>,
   key: K,
-  create: () => V,
-): V {
-  const existing = parent.get(key);
-  if (existing) {
-    return existing;
+): WeakMap<ChildKey, V> {
+  let child = parent.get(key);
+  if (!child) {
+    child = new WeakMap();
+    parent.set(key, child);
   }
-  const next = create();
-  parent.set(key, next);
-  return next;
+  return child;
 }
 
 /** Applies already detected plugin auto-enable candidates to config. */
@@ -96,21 +94,9 @@ export function applyPluginAutoEnable(
   let discoveryCache: PluginAutoEnableDiscoveryCache | undefined;
   if (config && typeof config === "object" && params.manifestRegistry && params.discovery) {
     const env = params.env ?? process.env;
-    const envCache = getOrCreateWeakMap(
-      (sameTurnApplyCache ??= new WeakMap()),
-      config,
-      () => new WeakMap<object, PluginAutoEnableRegistryCache>(),
-    );
-    const registryCache = getOrCreateWeakMap(
-      envCache,
-      env,
-      () => new WeakMap<object, PluginAutoEnableDiscoveryCache>(),
-    );
-    discoveryCache = getOrCreateWeakMap(
-      registryCache,
-      params.manifestRegistry,
-      () => new WeakMap<object, PluginAutoEnableCacheEntry>(),
-    );
+    const envCache = getOrCreateWeakMap((sameTurnApplyCache ??= new WeakMap()), config);
+    const registryCache = getOrCreateWeakMap(envCache, env);
+    discoveryCache = getOrCreateWeakMap(registryCache, params.manifestRegistry);
     const cached = discoveryCache.get(params.discovery);
     if (
       cached &&

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { registerMediaCleanupDrain } from "./server-media-cleanup-lifecycle.js";
 import { createGatewayServerMutableState } from "./server-runtime-handles.js";
 
@@ -7,12 +8,8 @@ describe("createGatewayServerMutableState", () => {
 
   it("fences prior-generation media cleanup before maintenance installs", async () => {
     vi.useFakeTimers();
-    let resolveDrain = () => {};
-    registerMediaCleanupDrain(
-      new Promise<void>((resolve) => {
-        resolveDrain = resolve;
-      }),
-    );
+    const { promise: drain, resolve: resolveDrain } = createDeferred();
+    registerMediaCleanupDrain(drain);
     const state = createGatewayServerMutableState();
 
     const stopping = state.stopMediaCleanup();

@@ -17,13 +17,11 @@ export function createProvisionedSnapshotWriter(
   authority: WorktreeWorkerAuthority = {},
 ) {
   const context = captureWorktreeRunEndContext(env);
-  const predicates = structuredClone(authority.predicates);
-  const leaseSet = authority.leaseSet;
-  const assertCurrent = authority.assertCurrent;
+  const { predicates, leaseSet, assertCurrent } = authority;
   let uncertain: { error: unknown } | undefined;
   return async (
     effect: ProvisionedSnapshotEffect,
-    assertEffectCurrent?: () => void,
+    signal: AbortSignal | undefined = authority.signal,
   ): Promise<void> => {
     if (uncertain) {
       throw uncertain.error;
@@ -44,9 +42,10 @@ export function createProvisionedSnapshotWriter(
         {
           leaseSet,
           predicates,
+          signal,
           assertCurrent: () => {
             assertCurrent?.();
-            assertEffectCurrent?.();
+            signal?.throwIfAborted();
           },
         },
       );

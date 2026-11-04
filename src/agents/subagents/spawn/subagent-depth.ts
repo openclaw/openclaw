@@ -10,6 +10,7 @@ import {
 import {
   asSessionCapabilityLookup,
   createSubagentSessionStore,
+  withPreparedSessionCapabilityRead,
   type SessionCapabilityLookup,
   type SessionCapabilityStore,
 } from "./subagent-session-store.js";
@@ -105,4 +106,10 @@ export function getSubagentDepthFromSessionStore(
       agentId: opts?.agentId,
     }),
   );
+}
+
+export function getSubagentDepthFromSessionStoreInWorker(
+  ...args: Parameters<typeof getSubagentDepthFromSessionStore>
+): Promise<number> {
+  return withPreparedSessionCapabilityRead(() => getSubagentDepthFromSessionStore(...args));
 }

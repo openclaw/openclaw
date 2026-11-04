@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadGatewayModelCatalogSnapshot } from "../../gateway/server-model-catalog.js";
 import { findModelCatalogEntry } from "../model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../model-catalog-view.js";
-import type { ModelCatalogEntry } from "../model-catalog.js";
+import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { splitModelRef } from "../subagents/spawn/subagent-spawn-plan.js";
 import {
   resolveCandidateThinkingLevel,

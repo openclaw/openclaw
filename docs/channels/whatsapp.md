@@ -17,7 +17,7 @@ Status: production-ready via WhatsApp Web (Baileys). The gateway owns the linked
 openclaw plugins install @openclaw/whatsapp
 ```
 
-Use `npm:@openclaw/whatsapp` or `clawhub:@openclaw/whatsapp` to force a source; pin an exact version only for a reproducible install.
+The manual package install uses ClawHub by default. Use `npm:@openclaw/whatsapp` to install directly from npm; pin an exact version only for a reproducible install.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -132,7 +132,8 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 ## Runtime model
 
 - The gateway owns the WhatsApp socket and reconnect loop.
-- A watchdog tracks two signals independently: raw WhatsApp Web transport activity and application-message activity. A quiet-but-connected session is not restarted just because no message arrived recently; it forces reconnect only when transport frames stop arriving for a fixed internal window (not user-configurable) or application messages stay silent past 4x the normal message timeout. Right after a reconnect for a recently active session, that first window uses the shorter normal message timeout instead of the 4x window. OpenClaw can auto-reply to offline messages that Baileys delivers early in that reconnect, bounded by the inbound message-ID dedupe lifetime; initial startup keeps the short stale-history guard.
+- During reconnect or shutdown, pending last-route writes have up to 15 seconds to finish before connection teardown continues with a warning. The deadline does not cancel the writes.
+- A watchdog tracks two signals independently: raw WhatsApp Web transport activity and application-message activity. A quiet-but-connected session is not restarted just because no message arrived recently; it forces reconnect only when transport frames stop arriving for a fixed internal window (not user-configurable) or application messages stay silent past 4x the normal message timeout. Right after a reconnect for a recently active session, that first window uses the shorter normal message timeout instead of the 4x window. Established linked sessions can auto-reply to offline messages after startup or reconnect when they are at most 20 minutes old. The age cap also applies to later offline deliveries; completed message IDs are deduplicated across restarts, and normal DM/group access and mention rules still apply. Newly linked sessions keep the short stale-history guard until their next connection after the initial sync.
 - Outbound sends require an active WhatsApp listener for the target account; sends fail fast otherwise.
 - Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens (in text and media captions) when the token matches current participant metadata, including LID-backed groups.
 - Status and broadcast chats (`@status`, `@broadcast`) are ignored.
@@ -183,7 +184,7 @@ mkdir -p "$HOME/.local/bin"
 go build -o "$HOME/.local/bin/meowcaller" ./cmd/meowcaller
 ```
 
-    Ensure `$HOME/.local/bin` is on the gateway service's `PATH`; restart the Gateway if you changed its service environment. This revision has explicit `pair` and send-only `notify` commands; `notify` opens no microphone, speaker, video device, or diagnostic capture. Do not substitute the upstream example CLI's `play` command.
+    Add `$HOME/.local/bin` to the gateway service's `PATH`; restart the Gateway if you changed its service environment. This revision has explicit `pair` and send-only `notify` commands; `notify` opens no microphone, speaker, video device, or diagnostic capture. Do not substitute the upstream example CLI's `play` command.
 
   </Step>
 
@@ -235,9 +236,14 @@ WhatsApp can render exec and plugin approval prompts as `👍`/`👎` reactions,
 
 WhatsApp approval reactions require explicit approvers in `allowFrom` (or `"*"`). `defaultTo` sets ordinary default message targets, not an approver list. Manual `/approve` commands still pass the normal WhatsApp sender-authorization path before approval resolution.
 
-## Question reactions
+<a id="question-reactions" />
 
-For an `ask_user` prompt with one non-secret, single-select question and one to four options, WhatsApp shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw maps the number to the canonical option through the Gateway; stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only. Normal WhatsApp DM/group admission rules authorize the reacting sender.
+## Agent questions
+
+WhatsApp does not expose the [`ask_user`](/tools/ask-user) tool. When the agent
+needs your input, it asks in an ordinary message and you reply in plain text.
+Numbered reactions do not answer questions. Approval reactions described above
+are unchanged.
 
 ## Plugin hooks and privacy
 
@@ -356,7 +362,7 @@ WhatsApp supports persistent ACP bindings via top-level `bindings[]`:
 }
 ```
 
-Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowlists, sender policy, and mention/activation gating run before OpenClaw ensures the bound ACP session exists. A matched binding owns the route — broadcast groups do not fan that turn out to ordinary WhatsApp sessions.
+Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowlists, sender policy, and mention/activation gating run before OpenClaw creates the bound ACP session if needed. A matched binding owns the route — broadcast groups do not fan that turn out to ordinary WhatsApp sessions.
 
 ### Personal-number and self-chat behavior
 
@@ -433,6 +439,7 @@ A liveness check sent to your own number can therefore become agent input with `
 
   <Accordion title="Outbound media behavior">
     - supports image, video, audio (PTT voice-note), and document payloads
+    - a successful message-tool send to the current chat counts as the reply for both text and attachments, including contacts with a known LID-to-phone mapping; the agent can finish with `NO_REPLY` without a false failure notice
     - audio is sent as the Baileys `audio` payload with `ptt: true`, rendering as a push-to-talk voice note; `audioAsVoice` is preserved on reply payloads so TTS voice-note output stays on this path regardless of the provider's source format
     - native Ogg/Opus audio sends as `audio/ogg; codecs=opus`; anything else (including Microsoft Edge TTS MP3/WebM output) is transcoded with `ffmpeg` to 48 kHz mono Ogg/Opus before PTT delivery
     - `/tts latest` sends the latest assistant reply as one voice note and suppresses repeat sends for the same reply; `/tts chat on|off|default` controls auto-TTS for the current chat
@@ -522,6 +529,8 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
 
 Notes: `messages.ackReactionScope` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain acknowledgment reactions. WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the acknowledgment after the final done/error state.
 
+A message queued behind an active run keeps its acknowledgment until its follow-up delivers a visible reply. Successful execution alone does not produce a success reaction. If transport retains an unconfirmed delivery, the reaction is cleared without claiming success or failure; later durable retries do not update that cleared reaction. A settled turn without a visible reply, including a silent or `NO_REPLY` turn, shows an error reaction just like direct dispatch. Execution failures, terminal admission skips, Stop cancellations, and messages rejected or removed by the queue-cap policy show an error reaction immediately. Collected and summarized follow-ups retain each message's delivery correlation.
+
 ### Active-turn typing
 
 For admitted automatic turns where typing is allowed, WhatsApp sends a
@@ -551,9 +560,9 @@ opt-in status surface described above.
   <Accordion title="Credential paths and legacy compatibility">
     - current auth path: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (backup: `creds.json.bak`)
     - Doctor moves implicit legacy default auth from `~/.openclaw/credentials/` into the account directory after preserving exact private `.migrated` backups. Runtime account selection uses the account directory; run `openclaw doctor --fix` after replacing an older installation directly.
-    - Explicit `authDir` settings remain authoritative, including an account that deliberately uses the shared credentials root. Doctor leaves those directories in place. Differing canonical and legacy credentials stay intact with an actionable conflict warning; Doctor never mixes two credential sets.
+    - Explicit `authDir` settings remain authoritative, including an account that deliberately uses the shared credentials root. Doctor leaves those directories in place. Differing current and legacy credentials stay intact with an actionable conflict warning; Doctor never mixes two credential sets.
     - Doctor records a credential migration receipt before writing the account directory. If an interrupted import's complete destination is later missing or changed, Doctor preserves the remaining sources and backups and asks for explicit recovery. It does not recreate a logged-out account.
-    - Canonical account credentials still work on OpenClaw 2026.9.7. Shared-root repair needs a host with offline Doctor migration authority and source backups. If Doctor asks you to upgrade the host, update OpenClaw core before retrying; the plugin leaves the original credentials untouched.
+    - Account-directory credentials still work on OpenClaw 2026.9.7. Shared-root repair needs a host with offline Doctor migration authority and source backups. If Doctor asks you to upgrade the host, update OpenClaw core before retrying; the plugin leaves the original credentials untouched.
 
   </Accordion>
 
@@ -572,6 +581,8 @@ opt-in status surface described above.
 - Channel-initiated config writes are enabled by default; disable via `channels.whatsapp.configWrites: false`.
 
 ## Troubleshooting
+
+Policy and allowlist denials appear in normal Gateway logs as `Inbound message blocked (reason=...)`. Each account listener logs a given reason at most once per minute, without sender identifiers or message content.
 
 <AccordionGroup>
   <Accordion title="Not linked (QR required)">
@@ -637,7 +648,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    Node remains the primary and recommended Gateway runtime. Bun 1.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
+    Node remains the primary and recommended Gateway runtime. Bun 1.4.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
   </Accordion>
 </AccordionGroup>
 

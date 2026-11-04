@@ -1,41 +1,27 @@
-// sessions_yield tool tests cover cooperative turn yielding and unsupported
-// context errors.
 import { describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { createSessionsYieldTool } from "./sessions-yield-tool.js";
 
-type SessionsYieldDetails = {
-  status?: string;
-  acknowledgment?: string;
-  error?: string;
-  message?: string;
-};
+function setup(options: Parameters<typeof createSessionsYieldTool>[0] = {}) {
+  const onYield = vi.fn();
+  const tool = createSessionsYieldTool({ sessionId: "test-session", onYield, ...options });
+  return { onYield, tool, execute: (args = {}) => tool.execute("call-1", args) };
+}
 
 describe("sessions_yield tool", () => {
   it("defers without error or yielding when earlier async results are unobserved", async () => {
     const claimYield = vi.fn(() => true);
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({ sessionId: "test-session", claimYield, onYield });
+    const { onYield, tool } = setup({ claimYield });
     const result = await runWithAgentToolExecutionContext(
       {
-        assistantMessage: {
-          role: "assistant",
+        assistantMessage: makeAgentAssistantMessage({
           content: [],
           api: "test-api",
           provider: "test-provider",
-          model: "test-model",
           stopReason: "toolUse",
-          timestamp: 0,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-        },
+        }),
         toolCall: { type: "toolCall", id: "call-1", name: "sessions_yield", arguments: {} },
         hasUnobservedAsyncToolResults: true,
       },
@@ -48,57 +34,41 @@ describe("sessions_yield tool", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
-  it("returns error when no sessionId is provided", async () => {
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({ onYield });
-    const result = await tool.execute("call-1", {});
-    const details = result.details as SessionsYieldDetails;
-    expect(details.status).toBe("error");
-    expect(details.error).toBe("No session context");
+  it.each([
+    { name: "no session context", options: { sessionId: undefined }, error: "No session context" },
+    {
+      name: "no callback",
+      options: { onYield: undefined },
+      error: "Yield not supported in this context",
+    },
+    {
+      name: "a rejected claim",
+      options: { claimYield: () => ({ error: "Yield unsupported for this session kind" }) },
+      error: "Yield unsupported for this session kind",
+    },
+  ])("returns the specific error for $name without yielding", async ({ options, error }) => {
+    const { onYield, execute } = setup(options);
+    expect((await execute()).details).toMatchObject({ status: "error", error });
     expect(onYield).not.toHaveBeenCalled();
   });
 
-  it("invokes onYield callback with default message", async () => {
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({
-      sessionId: "test-session",
-      claimYield: () => true,
-      onYield,
+  it("keeps continuation context private with an acknowledgment", async () => {
+    const acknowledgment = "Research started; results will follow.";
+    const message = "SYNTHETIC_PRIVATE_CONTINUATION_MARKER";
+    const { onYield, execute } = setup({ claimYield: () => true });
+    const result = await execute({ message, acknowledgment });
+
+    expect(result.details).toEqual({
+      status: "yielded",
+      acknowledgment,
     });
-    const result = await tool.execute("call-1", {});
-    const details = result.details as SessionsYieldDetails;
-    expect(details.status).toBe("yielded");
-    expect(details).not.toHaveProperty("message");
-    expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, undefined);
+    expect(JSON.stringify(result)).not.toContain(message);
+    expect(onYield).toHaveBeenCalledExactlyOnceWith(message, acknowledgment, undefined);
   });
-
-  it.each([undefined, "Research started; results will follow."])(
-    "keeps continuation context private with acknowledgment %s",
-    async (acknowledgment) => {
-      const message = "SYNTHETIC_PRIVATE_CONTINUATION_MARKER";
-      const onYield = vi.fn();
-      const tool = createSessionsYieldTool({
-        sessionId: "test-session",
-        claimYield: () => true,
-        onYield,
-      });
-      const result = await tool.execute("call-1", { message, acknowledgment });
-
-      expect(result.details).toEqual({
-        status: "yielded",
-        ...(acknowledgment ? { acknowledgment } : {}),
-      });
-      expect(JSON.stringify(result)).not.toContain(message);
-      expect(onYield).toHaveBeenCalledOnce();
-      expect(onYield).toHaveBeenCalledWith(message, acknowledgment, undefined);
-    },
-  );
 
   it("claims completion ownership before aborting the requester run", async () => {
     const order: string[] = [];
-    const tool = createSessionsYieldTool({
-      sessionId: "test-session",
+    const { execute } = setup({
       claimYield: () => {
         order.push("claim");
         return true;
@@ -108,61 +78,44 @@ describe("sessions_yield tool", () => {
       },
     });
 
-    await tool.execute("call-1", {});
+    await execute();
 
     expect(order).toEqual(["claim", "abort"]);
   });
 
   it("does not abort the requester when yield intent cannot persist", async () => {
     const failure = new Error("sqlite unavailable");
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({
-      sessionId: "test-session",
+    const { onYield, execute } = setup({
       claimYield: () => {
         throw failure;
       },
-      onYield,
     });
 
-    await expect(tool.execute("call-1", {})).rejects.toThrow(failure);
+    await expect(execute()).rejects.toThrow(failure);
     expect(onYield).not.toHaveBeenCalled();
   });
 
   it.each([
-    { name: "the claim callback is unavailable" },
-    { name: "the turn owns no pending child completion", claimYield: () => false },
-  ])("keeps the turn active without a tool failure when $name", async ({ claimYield }) => {
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({
-      sessionId: "test-session",
-      ...(claimYield ? { claimYield } : {}),
-      onYield,
-    });
-
-    const result = await tool.execute("call-1", {});
-
-    expect(isToolResultError(result)).toBe(false);
-    expect(result.details).toMatchObject({
-      status: "nothing_pending",
-      message: expect.stringContaining("did not pause the turn or schedule a continuation"),
-    });
-    expect(onYield).not.toHaveBeenCalled();
-  });
-
-  it("does not ask an ineligible caller to repeat explicit message intent", async () => {
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({ sessionId: "root", claimYield: () => false, onYield });
-    const result = await tool.execute("explicit-wait", { waitFor: "message" });
-    expect(result.details).toMatchObject({
-      status: "nothing_pending",
-      message: expect.stringContaining("eligible active native task"),
-    });
-    expect(JSON.stringify(result)).not.toContain("set waitFor");
-    expect(onYield).not.toHaveBeenCalled();
-  });
+    [undefined, "test-session", "did not pause the turn or schedule a continuation"],
+    ["message", "root", "eligible active native task"],
+  ] as const)(
+    "keeps an ineligible turn active with intent %s",
+    async (waitFor, sessionId, message) => {
+      const { onYield, execute } = setup({ sessionId, claimYield: () => false });
+      const result = await execute({ waitFor });
+      expect(isToolResultError(result)).toBe(false);
+      expect(result.details).toMatchObject({
+        status: "nothing_pending",
+        message: expect.stringContaining(message),
+      });
+      if (waitFor) {
+        expect(JSON.stringify(result)).not.toContain("set waitFor");
+      }
+      expect(onYield).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports children an earlier turn already waits for instead of the generic error", async () => {
-    const onYield = vi.fn();
     const pendingChildren = [
       {
         runId: "run-child",
@@ -173,29 +126,21 @@ describe("sessions_yield tool", () => {
         wakeArmed: true,
       },
     ];
-    const tool = createSessionsYieldTool({
-      sessionId: "test-session",
-      claimYield: () => ({ pendingChildren }),
-      onYield,
-    });
-
-    const result = await tool.execute("call-1", {});
-    const details = result.details as SessionsYieldDetails & { pendingChildren?: unknown };
+    const { onYield, execute } = setup({ claimYield: () => ({ pendingChildren }) });
+    const result = await execute();
 
     expect(isToolResultError(result)).toBe(false);
-    expect(details.status).toBe("already_pending");
-    expect(details.pendingChildren).toEqual(pendingChildren);
-    expect(details.message).toBe(
-      "An earlier turn of this session already yielded for 1 child session whose completion is still pending: Work session (agent:main:dashboard:child), running, started 2026-09-21T02:50:52.000Z. Their completion will arrive in this session as a later turn; do not re-spawn, re-send, or poll to wake them. This turn owns no new claim, so no yield is needed: end this turn normally.",
-    );
-    expect(details.message).not.toContain("return its result normally");
+    expect(result.details).toMatchObject({
+      status: "already_pending",
+      message:
+        "An earlier turn of this session already yielded for 1 child session whose completion is still pending: Work session (agent:main:dashboard:child), running, started 2026-09-21T02:50:52.000Z. Their completion will arrive in this session as a later turn; do not re-spawn, re-send, or poll to wake them. This turn owns no new claim, so no yield is needed: end this turn normally.",
+    });
+    expect(result.details).toHaveProperty("pendingChildren", pendingChildren);
     expect(onYield).not.toHaveBeenCalled();
   });
 
   it("tells the model a paused child needs a continuation instead of promising completion", async () => {
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({
-      sessionId: "test-session",
+    const { onYield, execute } = setup({
       claimYield: () => ({
         pendingChildren: [
           {
@@ -207,24 +152,39 @@ describe("sessions_yield tool", () => {
           },
         ],
       }),
-      onYield,
     });
 
-    const result = await tool.execute("call-1", {});
-    const details = result.details as SessionsYieldDetails;
-
-    expect(details.status).toBe("already_pending");
-    expect(details.message).toBe(
-      "1 child session spawned by an earlier turn of this session is paused by its own sessions_yield and will not complete until an incoming continuation arrives: agent:main:subagent:worker, paused, started 2026-09-21T03:00:00.000Z. An authorized caller can send that continuation with sessions_send; owning a child does not grant that tool. Otherwise the work stays waiting. This turn owns no new claim, so no yield is needed: end this turn normally.",
-    );
-    expect(details.message).not.toContain("do not re-spawn, re-send");
+    const result = await execute();
+    expect(result.details).toMatchObject({
+      status: "already_pending",
+      message:
+        "1 child session spawned by an earlier turn of this session is paused by its own sessions_yield and will not complete until an incoming continuation arrives: agent:main:subagent:worker, paused, started 2026-09-21T03:00:00.000Z. An authorized caller can send that continuation with sessions_send; owning a child does not grant that tool. Otherwise the work stays waiting. This turn owns no new claim, so no yield is needed: end this turn normally.",
+    });
     expect(onYield).not.toHaveBeenCalled();
+  });
+
+  it("reports when waitFor was not applied because the turn yielded for its own children", async () => {
+    const { tool } = setup({ sessionId: "runner-session", claimYield: () => true });
+    const childWait = await tool.execute("child-wait", { waitFor: "message" });
+    expect(childWait.details).toEqual({
+      status: "yielded",
+      note: 'waitFor: "message" was not applied: this turn yielded for its own pending child completions, which resume this session. Omit waitFor when yielding for children.',
+    });
+    expect((await tool.execute("plain", {})).details).toEqual({ status: "yielded" });
+
+    const paused = setup({
+      sessionId: "runner-session",
+      claimYield: () => ({ messageWaitRegistered: true }),
+    });
+    expect((await paused.tool.execute("message-wait", { waitFor: "message" })).details).toEqual({
+      status: "yielded",
+    });
+    expect(paused.onYield).toHaveBeenCalledWith("Turn yielded.", undefined, true);
   });
 
   it("passes explicit message intent to its owner without treating private text as intent", async () => {
     const claimYield = vi.fn(() => true);
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({ sessionId: "child-session", claimYield, onYield });
+    const { onYield, tool } = setup({ sessionId: "child-session", claimYield });
     await tool.execute("private-text", { message: 'waitFor: "message"' });
     expect(claimYield).toHaveBeenLastCalledWith(undefined);
     await tool.execute("explicit-message", { waitFor: "message" });
@@ -233,30 +193,5 @@ describe("sessions_yield tool", () => {
     expect(invalid.details).toMatchObject({ status: "error" });
     expect(claimYield).toHaveBeenCalledTimes(2);
     expect(onYield).toHaveBeenCalledTimes(2);
-  });
-
-  it("surfaces a claim rejection reason instead of the generic error", async () => {
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({
-      sessionId: "test-session",
-      claimYield: () => ({ error: "Yield unsupported for this session kind" }),
-      onYield,
-    });
-
-    const result = await tool.execute("call-1", {});
-
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "Yield unsupported for this session kind",
-    });
-    expect(onYield).not.toHaveBeenCalled();
-  });
-
-  it("returns error without onYield callback", async () => {
-    const tool = createSessionsYieldTool({ sessionId: "test-session" });
-    const result = await tool.execute("call-1", {});
-    const details = result.details as SessionsYieldDetails;
-    expect(details.status).toBe("error");
-    expect(details.error).toBe("Yield not supported in this context");
   });
 });

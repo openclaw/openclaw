@@ -78,7 +78,7 @@ struct ChatSwarmProgressTests {
         #expect(groups.single?.phases.single?.dots.map(\.status) == [.queued, .running, .done, .failed])
     }
 
-    @Test func `child pager repeats from zero when rows move across offsets`() async throws {
+    @Test func `child pager deduplicates pages and reports a moving list incomplete`() async throws {
         let groupID = "swarm:agent:main:parent:paged"
         let pages = [
             [
@@ -87,14 +87,6 @@ struct ChatSwarmProgressTests {
             ],
             [
                 session(key: "one", status: "running", groupID: groupID),
-                session(key: "two", status: "running", groupID: groupID),
-            ],
-            [
-                session(key: "zero", status: "running", groupID: groupID),
-                session(key: "one", status: "done", groupID: groupID),
-            ],
-            [
-                session(key: "three", status: "running", groupID: groupID),
                 session(key: "two", status: "running", groupID: groupID),
             ],
         ]
@@ -114,10 +106,9 @@ struct ChatSwarmProgressTests {
                 sessions: page)
         }
 
-        #expect(Set(result.rows.map(\.key)) == ["zero", "one", "two", "three"])
-        #expect(result.rows.first { $0.key == "one" }?.status == "done")
-        #expect(result.isComplete)
-        #expect(call == 4)
+        #expect(Set(result.rows.map(\.key)) == ["zero", "one", "two"])
+        #expect(!result.isComplete)
+        #expect(call == 2)
     }
 
     @Test(arguments: [Int.max, nil] as [Int?])
@@ -150,7 +141,6 @@ struct ChatSwarmProgressTests {
         let pages = [
             #"{"totalCount":3,"hasMore":true,"nextOffset":2,"sessions":[{"key":"zero"},{"key":"one"}]}"#,
             "{\"hasMore\":false\(laterTotal),\"sessions\":[{\"key\":\"one\"}]}",
-            #"{"totalCount":3,"hasMore":false,"sessions":[{"key":"zero"},{"key":"one"},{"key":"two"}]}"#,
         ]
         var call = 0
         let result = try await OpenClawChatChildSessionPager.collect { _ in
@@ -159,23 +149,22 @@ struct ChatSwarmProgressTests {
             return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
         }
 
-        #expect(Set(result.rows.map(\.key)) == ["zero", "one", "two"])
-        #expect(result.isComplete)
-        #expect(call == 3)
+        #expect(Set(result.rows.map(\.key)) == ["zero", "one"])
+        #expect(!result.isComplete)
+        #expect(call == 2)
     }
 
-    @Test(arguments: [false, true])
-    func `child pager reports incomplete after no progress or four moving passes`(moving: Bool) async throws {
+    @Test func `child pager reports a complete stable multipage list`() async throws {
         var call = 0
         let result = try await OpenClawChatChildSessionPager.collect { _ in
             call += 1
             return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(
-                #"{"totalCount":5,"hasMore":false,"sessions":[{"key":"child-\#(moving ? call : 1)"}]}"#.utf8))
+                #"{"totalCount":2,"hasMore":\#(call == 1),"sessions":[{"key":"child-\#(call)"}]}"#.utf8))
         }
 
-        #expect(!result.isComplete)
-        #expect(result.rows.count == (moving ? 4 : 1))
-        #expect(call == (moving ? 4 : 2))
+        #expect(result.isComplete)
+        #expect(Set(result.rows.map(\.key)) == ["child-1", "child-2"])
+        #expect(call == 2)
     }
 
     @Test(arguments: [false, true])

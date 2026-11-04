@@ -90,6 +90,8 @@ export type MessageReceipt = {
   deleteToken?: string;
   sentAt: number;
   raw?: readonly MessageReceiptSourceResult[];
+  /** Normalized physical send evidence, retained even when a source has no platform ID. */
+  sourceResults?: readonly MessageReceiptSourceResult[];
 };
 
 export type RenderedMessageBatchPlanKind =
@@ -162,6 +164,8 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   cfg: TConfig;
   to: string;
   text: string;
+  /** Host-resolved session that produced this send, distinct from the destination session. */
+  sessionKey?: string;
   accountId?: string | null;
   deps?: OutboundSendDeps;
   replyToId?: string | null;
@@ -334,6 +338,8 @@ export type ChannelMessageDurableFinalAdapter = {
   capabilities?: DurableFinalDeliveryRequirementMap;
   /** Opt into provider reconciliation for ordinary single-payload queued sends. */
   automaticUnknownSendReconciliation?: boolean;
+  /** Recognize inert channel metadata without admitting controls or side effects. */
+  isTextOnlyChannelData?: (channelData: NonNullable<ReplyPayload["channelData"]>) => boolean;
   /**
    * Synchronous provider admission before a durable intent is created or replayed.
    * Providers must not perform I/O from this hook.
