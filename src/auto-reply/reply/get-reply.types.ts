@@ -77,6 +77,8 @@ type InternalReplySessionOptions = {
   internalEventExecution?: SessionEventExecution;
   /** Continuation (karmaterminal): the returns a wake hands this event turn, with their runs. */
   continuationInputDeliveries?: UserTurnInput["inputDeliveries"];
+  /** Continuation (karmaterminal): admission refused this work wake; it neither ran nor queued. */
+  onWorkWakeRefused?: () => void;
   /** Host-only fallback eligibility; false preserves a caller without a profile grant. */
   sessionPrincipalTurn?: boolean;
   /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
