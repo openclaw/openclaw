@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
+import { createMemo } from "solid-js";
 import panelStyles from "../../styles/panel-loading-skeleton.css?inline";
 
 export type PanelLoadingSkeletonVariant =
@@ -116,16 +116,12 @@ const layouts: Readonly<
   ],
 };
 
-function SkeletonNodes(props: { nodes: readonly SkeletonNode[] }) {
-  return (
-    <For each={props.nodes}>
-      {(node) => (
-        <div class={node[0]} style={node[2]}>
-          {node[1] && <SkeletonNodes nodes={node[1]} />}
-        </div>
-      )}
-    </For>
-  );
+function renderSkeletonNodes(nodes: readonly SkeletonNode[]): JSX.Element {
+  return nodes.map(([className, children, style]) => (
+    <div class={className} style={style}>
+      {children && renderSkeletonNodes(children)}
+    </div>
+  ));
 }
 
 export function PanelLoadingSkeleton(props: {
@@ -145,7 +141,7 @@ export function PanelLoadingSkeleton(props: {
         </div>
       );
     }
-    return <SkeletonNodes nodes={layouts[current] ?? layouts.files} />;
+    return renderSkeletonNodes(layouts[current] ?? layouts.files);
   };
 
   return (
