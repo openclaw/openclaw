@@ -11,6 +11,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isMap, isScalar, isSeq, type Document, type Node, type Pair } from "yaml";
 import type { AstBlock, AstItem, MdAst } from "./ast.js";
 import { walkMdFrontmatter } from "./find-md-frontmatter.js";
+import type { OnMatch, Slot, SlotSub, WalkContext } from "./find-types.js";
 import type { JsoncValue } from "./jsonc/ast.js";
 import { resolveJsoncPositionalSegment } from "./jsonc/resolve-value.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
@@ -44,20 +45,6 @@ import { derefYamlNode, resolveYamlPositionalSegment } from "./yaml/resolve.js";
 interface OcPathMatch {
   readonly path: OcPath;
   readonly match: OcMatch;
-}
-
-type Slot = "section" | "item" | "field";
-export interface SlotSub {
-  readonly slot: Slot;
-  readonly value: string;
-}
-
-type OnMatch = (subs: readonly SlotSub[]) => void;
-
-export interface WalkContext {
-  onMatch: OnMatch;
-  visited: WeakMap<object, Set<string>>;
-  kind: OcAst["kind"];
 }
 
 export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[] {

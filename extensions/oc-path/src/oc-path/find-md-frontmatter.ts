@@ -1,6 +1,6 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { MdAst } from "./ast.js";
-import type { SlotSub, WalkContext } from "./find.js";
+import type { SlotSub, WalkContext } from "./find-types.js";
 import {
   WILDCARD_RECURSIVE,
   WILDCARD_SINGLE,
