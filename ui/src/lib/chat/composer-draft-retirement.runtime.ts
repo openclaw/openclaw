@@ -63,6 +63,10 @@ export async function retireDeletedComposerDrafts(
       throw new Error("Draft storage cleanup failed");
     }
   } catch {
-    showToast({ message: t("sessionsView.draftCleanupFailed") });
+    showToast({
+      placement: "top-right",
+      severity: "warning",
+      message: t("sessionsView.draftCleanupFailed"),
+    });
   }
 }

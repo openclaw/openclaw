@@ -414,7 +414,7 @@ it.each([
   { options: { failure: true }, message: "Couldn't load the context breakdown", retry: true },
   {
     options: { restricted: true },
-    message: "You don't have permission to view the context breakdown",
+    message: "Couldn’t view the context breakdown. Ask an admin to grant read access.",
     retry: false,
   },
 ])("shows only the standard empty state for $message", async ({ options, message, retry }) => {

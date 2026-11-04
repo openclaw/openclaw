@@ -38,6 +38,7 @@ import {
   proveLastFileDirectoryRetention,
 } from "./local-workspace-directory-retention.test-support.js";
 import {
+  expectMissing,
   observeAcknowledgedUpdate,
   prepareLocalWorkspaceArchiveFixture,
   prepareSandboxCheckpointFixture,
@@ -49,6 +50,7 @@ import {
   proveSharedSandboxCheckpoints,
   proveStagedInputCheckpointOwnership,
   proveWorkerOwnedIncrementalWorkspace,
+  proveWorkerOwnedArchive,
 } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import {
@@ -87,13 +89,12 @@ const writeText = (directory: string, relative: string, data: string) =>
 async function expectText(directory: string, relative: string, expected: string) {
   expect(await readText(directory, relative)).toBe(expected);
 }
-async function expectMissing(directory: string, ...parts: string[]) {
-  await expect(fs.stat(path.join(directory, ...parts))).rejects.toMatchObject({ code: "ENOENT" });
-}
 
 const archiveFixture = (provisionedPaths: string[] = []) =>
   prepareLocalWorkspaceArchiveFixture(owner, provisionedPaths);
 const treePaths = (tree: string) => git(repo, "ls-tree", "-r", "--name-only", tree);
+
+it("keeps archive preparation worker-owned and lossless", () => proveWorkerOwnedArchive(owner));
 
 const suiteDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {

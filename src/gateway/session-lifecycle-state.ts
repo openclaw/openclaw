@@ -11,6 +11,7 @@ import {
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { readAgentRunProviderReview } from "../sessions/provider-review-terminal.js";
 import {
   AgentDeletionPendingError,
@@ -51,6 +52,7 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
   if (!phase) {
     return async () => {};
   }
+  const gatewayShutdown = getGatewayRestartDrainSignal().aborted ? true : undefined;
   const prepared = loadGatewaySessionEntryReadOnlyInWorker({
     cfg: getRuntimeConfig(),
     key: params.sessionKey,
@@ -62,7 +64,12 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
   return async () => {
     const sessionEntry = await prepared;
     try {
-      await persistPreparedGatewaySessionLifecycleEvent(params, phase, sessionEntry);
+      await persistPreparedGatewaySessionLifecycleEvent(
+        params,
+        phase,
+        sessionEntry,
+        gatewayShutdown,
+      );
     } catch (error) {
       // Drain settlement transfers the outcome to deletion, not to a successful write.
       if (
@@ -81,6 +88,7 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
                 { ...params, assertCommitAllowed },
                 phase,
                 sessionEntry,
+                gatewayShutdown,
               ),
           },
         )
@@ -95,6 +103,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
   params: GatewaySessionLifecycleEventParams,
   phase: LifecyclePhase,
   sessionEntry: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
+  gatewayShutdown?: true,
 ): Promise<void> {
   if (!sessionEntry.entry) {
     return;
@@ -163,6 +172,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
         canonicalKey: sessionEntry.canonicalKey,
         lifecycleRevision,
         exactCronRun: parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined,
+        gatewayShutdown,
         expectedWriter: params.expectedWriter,
         providerReview: providerReview
           ? {

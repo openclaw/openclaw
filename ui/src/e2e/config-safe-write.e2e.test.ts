@@ -527,7 +527,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBe(configGetsBeforePatch);
-      await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
+      await expect.poll(() => codeModeSwitch.isChecked()).toBe(true);
       await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
       await capture(page, "00-labs-canonical-refresh.png", codeModeSwitch);
 
