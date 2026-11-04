@@ -9,10 +9,7 @@ import {
 } from "../../plugins/plugin-cache.js";
 import { pinConfigDir } from "../../utils.js";
 import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
-import {
-  resolvePluginSkillRoots,
-  resolvePluginSkillRootsFromContributions,
-} from "../loading/plugin-skills.js";
+import { resolvePluginSkillRootsFromContributions } from "../loading/plugin-skill-publication.js";
 import {
   appendLowerPrecedenceSkillRecords,
   mergeSkillRecords,
@@ -21,11 +18,11 @@ import type { SkillSourceReadBatch } from "../loading/skill-root-loader.js";
 import { buildSkillSnapshotProjection } from "../loading/skill-snapshot-projection.js";
 import { tryRealpath } from "../loading/symlink-targets.js";
 import { resolveWorkspaceSkillDirectories } from "../loading/workspace-skill-roots.js";
-import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import {
-  resolveWorkspaceSkillSourcePlan,
+  composeWorkspaceSkillSourcePlan,
   splitSkillSourcePlan,
-} from "../loading/workspace-skill-sources.js";
+} from "../loading/workspace-skill-source-plan.js";
+import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import type {
   SkillsDiscoveryInput,
   SkillsDiscoveryOutput,
@@ -38,8 +35,11 @@ function applyEnvironment(environment: SkillsDiscoveryEnvironment) {
   pinConfigDir();
 }
 
-function resolveInputPlan(input: SkillsSourcePlanInput, cache: PluginCache = createPluginCache()) {
-  return withPluginCache(cache, () => {
+async function resolveInputPlan(
+  input: SkillsSourcePlanInput,
+  cache: PluginCache = createPluginCache(),
+) {
+  return withPluginCache(cache, async () => {
     const options = input.options;
     const pluginSkillRoots = options?.workspaceOnly
       ? []
@@ -48,27 +48,35 @@ function resolveInputPlan(input: SkillsSourcePlanInput, cache: PluginCache = cre
             contributions: input.pluginContributions,
             pluginSkillsDir: options?.pluginSkillsDir,
           })
-        : resolvePluginSkillRoots({
+        : (await import("../loading/plugin-skills.js")).resolvePluginSkillRoots({
             workspaceDir: input.workspaceDir,
             config: options?.config,
             pluginSkillsDir: options?.pluginSkillsDir,
             acpRuntimeAvailable: input.acpRuntimeAvailable,
           });
-    return resolveWorkspaceSkillSourcePlan(input.workspaceDir, {
+    const agentSkillsDirs =
+      options?.workspaceOnly || !options?.config || !options.agentId
+        ? []
+        : (input.agentSkillsDirs ??
+          (await import("../loading/plugin-skills.js")).resolvePluginAgentSkillsDirs({
+            workspaceDir: input.workspaceDir,
+            config: options.config,
+          }));
+    return composeWorkspaceSkillSourcePlan(input.workspaceDir, {
       ...options,
       pluginSkillRoots,
-      ...(input.agentSkillsDirs ? { agentSkillsDirs: input.agentSkillsDirs } : {}),
+      agentSkillsDirs,
     });
   });
 }
 
-serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
+serveWorkerTasks<SkillsDiscoveryOutput>(async (input, channel) => {
   // SAFETY: This private worker only receives the discovery owner's typed requests.
   const request = input as SkillsDiscoveryInput;
   channel?.consumeInput();
   if (request.kind === "plan") {
     applyEnvironment(request.input.environment);
-    return { kind: "plan", plan: resolveInputPlan(request.input) };
+    return { kind: "plan", plan: await resolveInputPlan(request.input) };
   }
   if (request.kind === "project") {
     applyEnvironment(request.environment);
@@ -103,64 +111,63 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
     plans.set(key, plan);
     return plan;
   };
-  return {
-    kind: "scan",
-    results: request.requests.map(({ key, environment, selection }) => {
-      applyEnvironment(environment);
-      const resolvedPlan =
-        selection.kind === "planned"
-          ? selectPlan(selection.plan.input)
-          : selection.plan
-            ? selectPlan(selection.plan.input)
-            : selection.request.sourcePlan;
-      const sourceRequest = {
-        ...selection.request,
-        sourcePlan:
-          selection.kind === "selected" && selection.plan?.scope === "gateway"
-            ? splitSkillSourcePlan(resolvedPlan).gatewayPlan
-            : resolvedPlan,
-      };
-      const environmentKey = JSON.stringify(environment);
-      let batch = sourceReads.get(environmentKey);
-      if (!batch) {
-        batch = new Map();
-        sourceReads.set(environmentKey, batch);
+  const results = [];
+  for (const { key, environment, selection } of request.requests) {
+    applyEnvironment(environment);
+    const resolvedPlan =
+      selection.kind === "planned"
+        ? await selectPlan(selection.plan.input)
+        : selection.plan
+          ? await selectPlan(selection.plan.input)
+          : selection.request.sourcePlan;
+    const sourceRequest = {
+      ...selection.request,
+      sourcePlan:
+        selection.kind === "selected" && selection.plan?.scope === "gateway"
+          ? splitSkillSourcePlan(resolvedPlan).gatewayPlan
+          : resolvedPlan,
+    };
+    const environmentKey = JSON.stringify(environment);
+    let batch = sourceReads.get(environmentKey);
+    if (!batch) {
+      batch = new Map();
+      sourceReads.set(environmentKey, batch);
+    }
+    const sources = readWorkspaceSkillSources(sourceRequest, batch);
+    // Fingerprints need precedence winners, not collision diagnostics.
+    const entries = mergeSkillRecords(sources.entries, key, false);
+    appendLowerPrecedenceSkillRecords(
+      entries,
+      mergeSkillRecords(sources.executionEntries, key, false),
+      () => {},
+    );
+    // Generated plugin links are shared outputs; watch their canonical sources instead.
+    const watchDirectories = new Set([
+      ...sourceRequest.sourcePlan.roots.map((root) => root.dir),
+      ...(sourceRequest.executionWorkspaceDir
+        ? resolveWorkspaceSkillDirectories(sourceRequest.executionWorkspaceDir).map(
+            (root) => root.dir,
+          )
+        : []),
+    ]);
+    const physicalRoots = [...watchDirectories].map((directory) => tryRealpath(directory));
+    // Workspace entries retain configured paths; watch their admitted physical targets.
+    for (const { skill } of [...sources.entries, ...sources.executionEntries]) {
+      const target = tryRealpath(skill.baseDir);
+      if (
+        target &&
+        !physicalRoots.some((directory) => directory && isPathInside(directory, target))
+      ) {
+        watchDirectories.add(target);
       }
-      const sources = readWorkspaceSkillSources(sourceRequest, batch);
-      // Fingerprints need precedence winners, not collision diagnostics.
-      const entries = mergeSkillRecords(sources.entries, key, false);
-      appendLowerPrecedenceSkillRecords(
-        entries,
-        mergeSkillRecords(sources.executionEntries, key, false),
-        () => {},
-      );
-      // Generated plugin links are shared outputs; watch their canonical sources instead.
-      const watchDirectories = new Set([
-        ...sourceRequest.sourcePlan.roots.map((root) => root.dir),
-        ...(sourceRequest.executionWorkspaceDir
-          ? resolveWorkspaceSkillDirectories(sourceRequest.executionWorkspaceDir).map(
-              (root) => root.dir,
-            )
-          : []),
-      ]);
-      const physicalRoots = [...watchDirectories].map((directory) => tryRealpath(directory));
-      // Workspace entries retain configured paths; watch their admitted physical targets.
-      for (const { skill } of [...sources.entries, ...sources.executionEntries]) {
-        const target = tryRealpath(skill.baseDir);
-        if (
-          target &&
-          !physicalRoots.some((directory) => directory && isPathInside(directory, target))
-        ) {
-          watchDirectories.add(target);
-        }
-      }
-      return {
-        key,
-        sources,
-        watchDirectories: [...watchDirectories],
-        plan: selection.plan ? resolvedPlan : undefined,
-        fingerprint: sha256Hex(JSON.stringify([entries, sources.runtime])),
-      };
-    }),
-  };
+    }
+    results.push({
+      key,
+      sources,
+      watchDirectories: [...watchDirectories],
+      plan: selection.plan ? resolvedPlan : undefined,
+      fingerprint: sha256Hex(JSON.stringify([entries, sources.runtime])),
+    });
+  }
+  return { kind: "scan", results };
 });

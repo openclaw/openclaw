@@ -33,10 +33,10 @@ import {
 import { normalizeWorkspaceSkillRoots } from "./workspace-skill-roots.js";
 import {
   resolveCustodianSkillAgentId,
-  resolveWorkspaceSkillSourcePlan,
   splitSkillSourcePlan,
   type WorkspaceSkillSources,
-} from "./workspace-skill-sources.js";
+} from "./workspace-skill-source-plan.js";
+import { resolveWorkspaceSkillSourcePlan } from "./workspace-skill-sources.js";
 
 const MAX_SKILL_ENTRY_CACHE_SIZE = 64;
 type LocalSkillTiers = {
