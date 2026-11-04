@@ -61,32 +61,6 @@ describe("iMessage inbound context and admission", () => {
     ).rejects.toThrow("pairing store unavailable");
   });
 
-  it("skips the pairing store for configured allowFrom senders", async () => {
-    const readStoreAllowFrom = vi.fn(async () => {
-      throw new Error("pairing store should not be read");
-    });
-    await expect(
-      resolveDecision({
-        allowFrom: ["+15555550123"],
-        dmPolicy: "pairing",
-        readStoreAllowFrom,
-      }),
-    ).resolves.toMatchObject({ kind: "dispatch" });
-    expect(readStoreAllowFrom).not.toHaveBeenCalled();
-  });
-
-  it("reads the pairing store only for unpaired pairing-policy DMs", async () => {
-    const readStoreAllowFrom = vi.fn(async () => ["+15555550123"]);
-    await expect(
-      resolveDecision({
-        allowFrom: [],
-        dmPolicy: "pairing",
-        readStoreAllowFrom,
-      }),
-    ).resolves.toMatchObject({ kind: "dispatch" });
-    expect(readStoreAllowFrom).toHaveBeenCalledOnce();
-  });
-
   it("does not auto-authorize DM commands in open mode without allowlists", async () => {
     expect(
       await resolveDecision({

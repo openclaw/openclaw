@@ -2,23 +2,20 @@
 import { normalizeChannelDmPolicy } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelIngressContextBinding,
+  ChannelIngressIdentityDescriptor,
   ChannelIngressResolver,
+  CreateChannelIngressResolverParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 
+type GroupPolicy = "allowlist" | "disabled" | "open";
+
 export async function resolveIMessageIngressWithFailClosedStore(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  identity: unknown;
-  createResolver: (base: {
-    channelId: "imessage";
-    accountId: string;
-    // Identity is owned by inbound-processing; keep structural here.
-    identity: unknown;
-    cfg: OpenClawConfig;
-    readStoreAllowFrom: () => Promise<string[]>;
-  }) => ChannelIngressResolver;
+  identity: ChannelIngressIdentityDescriptor;
+  createResolver: (base: CreateChannelIngressResolverParams) => ChannelIngressResolver;
   sender: string;
   chatId?: number | string | null;
   chatGuid?: string;
@@ -39,6 +36,10 @@ export async function resolveIMessageIngressWithFailClosedStore(params: {
   const readStoreAllowFrom =
     params.readStoreAllowFrom ??
     (() => readChannelAllowFromStore("imessage", process.env, params.accountId));
+  const groupPolicy: GroupPolicy =
+    params.groupPolicy === "open" || params.groupPolicy === "disabled"
+      ? params.groupPolicy
+      : "allowlist";
   const buildMessage = (contextBinding?: ChannelIngressContextBinding) => ({
     subject: {
       stableId: params.sender,
@@ -54,10 +55,7 @@ export async function resolveIMessageIngressWithFailClosedStore(params: {
     },
     contextBinding,
     dmPolicy: normalizeChannelDmPolicy(params.dmPolicy) ?? "pairing",
-    groupPolicy:
-      params.groupPolicy === "open" || params.groupPolicy === "disabled"
-        ? params.groupPolicy
-        : "allowlist",
+    groupPolicy,
     policy: { groupAllowFromFallbackToAllowFrom: false },
     allowFrom: params.allowFrom,
     groupAllowFrom: params.groupAllowFrom,

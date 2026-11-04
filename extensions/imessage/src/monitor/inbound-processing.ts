@@ -1,4 +1,3 @@
-import { normalizeChannelDmPolicy } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildChannelInboundEventContext,
   buildMentionRegexes,
