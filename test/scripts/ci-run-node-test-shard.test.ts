@@ -182,7 +182,18 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   ])(
     "keeps runtime membership with the observation pilot ($event/$runId)",
     async ({ event, runId, observed }) => {
-      const { code, calls } = await recordPlans(
+      const runChild = vi.fn<NonNullable<RunOptions["runChild"]>>().mockImplementation(async (_args, env) => {
+        if (env.OPENCLAW_VITEST_OBSERVATION_DIR) {
+          const launch = readList(path.join(env.OPENCLAW_VITEST_OBSERVATION_DIR, "launch.json"));
+          expect(launch).toMatchObject({
+            mode: "shadow",
+            selection: { runtime: env.OPENCLAW_VITEST_RUNTIME },
+            fallbackReasons: expect.arrayContaining(["no-prior-snapshot"]),
+          });
+        }
+        return 1;
+      });
+      const code = await runPlans(
         groupPlans([
           {
             configs: [bunConfig],
@@ -192,6 +203,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         ]),
         {
           concurrency: 1,
+          runChild,
           env: {
             CI: "true",
             GITHUB_ACTIONS: "true",
@@ -201,8 +213,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
             OPENCLAW_CI_TEST_OBSERVATIONS_DIR: makeScratchDir(),
           },
         },
-        1,
       );
+      const calls = runChild.mock.calls;
       expect(code).toBe(1);
       expect(calls.map(([, env]) => env.OPENCLAW_VITEST_RUNTIME)).toEqual(["node", "bun", "bun"]);
       expect(calls[2]?.[0]).toEqual(["--native-bun", `./${nativeBunTarget}`]);

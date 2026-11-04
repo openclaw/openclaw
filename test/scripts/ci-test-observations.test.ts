@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { writeCiTestLaunchInputs } from "../../scripts/lib/ci-test-launch-inputs.mts";
 import { createCiTestObservationCapture } from "../../scripts/lib/ci-test-observation-capture.mts";
 import { collectTestObservations } from "../../scripts/lib/ci-test-observations.mjs";
 
@@ -58,6 +60,50 @@ const dependencies = {
 };
 
 describe("CI observation export", () => {
+  it("freezes checkout and rename/deletion inputs without trusting the workflow SHA", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ci-launch-inputs-"));
+    const root = path.join(directory, "repo");
+    mkdirSync(root);
+    const git = (...args: string[]) => {
+      const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    const commit = () => {
+      git("add", ".");
+      git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture");
+    };
+    try {
+      git("init", "-q");
+      writeFileSync(path.join(root, "before.ts"), "export const value = 1;");
+      writeFileSync(path.join(root, "deleted.ts"), "export {};");
+      commit();
+      const base = git("rev-parse", "HEAD");
+      renameSync(path.join(root, "before.ts"), path.join(root, "after\tname.ts"));
+      rmSync(path.join(root, "deleted.ts"));
+      commit();
+      const options = { directory, repositoryRoot: root, runtime: "node", args: ["config.ts"], env: { CHECKOUT_BASE_SHA: base, GITHUB_SHA: "f".repeat(40) } };
+      const read = () => JSON.parse(readFileSync(path.join(directory, "launch.json"), "utf8"));
+      writeCiTestLaunchInputs(options);
+      expect(read()).toMatchObject({
+        source: { revision: git("rev-parse", "HEAD"), tree: git("rev-parse", "HEAD^{tree}"), clean: true },
+        comparison: { revision: base, changes: [
+          { status: "R100", path: "after\tname.ts", previousPath: "before.ts" },
+          { status: "D", path: "deleted.ts" },
+        ] },
+        fallbackReasons: ["no-prior-snapshot"],
+      });
+      writeFileSync(path.join(root, "untracked.ts"), "export {};");
+      writeCiTestLaunchInputs(options);
+      expect(read()).toMatchObject({ source: { clean: false }, fallbackReasons: ["no-prior-snapshot", "dirty-checkout"] });
+      writeCiTestLaunchInputs({ ...options, env: {} });
+      expect(read()).toMatchObject({ comparison: null, fallbackReasons: expect.arrayContaining(["comparison-unavailable"]) });
+      expect(readFileSync(path.join(directory, "launch.json"), "utf8")).not.toContain(directory);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it.each([false, true])(
     "captures native outcomes and dependencies without log contents (failed=%s)",
     (failed) => {
@@ -71,6 +117,8 @@ describe("CI observation export", () => {
         const configuration = { pool: "forks", isolate: false };
         writeFileSync(configFile, "export default {};");
         writeFileSync(includeFile, file.file);
+        writeCiTestLaunchInputs({ directory, repositoryRoot: process.cwd(), runtime: "bun", args: [], env: {} });
+        const launchHash = createHash("sha256").update(readFileSync(path.join(directory, "launch.json"))).digest("hex");
         const capture = createCiTestObservationCapture({
           repositoryRoot: process.cwd(),
           cacheDirectory,
@@ -94,6 +142,7 @@ describe("CI observation export", () => {
           { complete: false, files: [{ outcome: "unknown", cases: null, dependencies: null }] },
         ]);
         expect(initial.preExecution.observations).toEqual(initial.observations);
+        expect(initial.preExecution.launchInputs).toEqual({ sha256: launchHash });
         expect(initial.preExecution.graphInputs).toMatchObject({
           version: 1,
           profile: "unit-fast",
@@ -102,6 +151,7 @@ describe("CI observation export", () => {
         writeFileSync(configFile, "export default { changed: true };");
         writeFileSync(includeFile, "src/changed.test.ts");
         configuration.pool = "threads";
+        writeFileSync(path.join(directory, "launch.json"), "changed after capture");
         for (const line of outcomes) {
           const match = /\[vitest:(\w+)\] (.*)/u.exec(line)!;
           capture!.record(match[1]!, JSON.parse(match[2]!));
