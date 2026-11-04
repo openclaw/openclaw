@@ -247,3 +247,113 @@ describe("canonical object-row metadata is static and unambiguous", () => {
     }
   });
 });
+
+describe("tuple policy metadata shares the strict boundary", () => {
+  const tuple = (policy?: string, since = "<=2026.9") =>
+    '["new.method","f","a",' +
+    JSON.stringify(since) +
+    (policy === undefined ? "" : "," + policy) +
+    "]";
+  const parsePolicy = (policy?: string, prefix = "", since = "<=2026.9") =>
+    scan({
+      [root]:
+        'const runtimeOverrides:Record<string,unknown>={compatibilityRestored:false};const key="compatibilityRestored";const dynamic=true;const compatibilityRestored=true;' +
+        prefix +
+        table(tuple(policy, since)),
+    });
+  it("rejects the reviewed true-then-spread false override", () => {
+    expect(() => parsePolicy("{compatibilityRestored:true,...runtimeOverrides}")).toThrow();
+  });
+  it.each([true, false])("rejects metadata spread before/after a literal (%s)", (first) => {
+    expect(() =>
+      parsePolicy(
+        first
+          ? "{...runtimeOverrides,compatibilityRestored:true}"
+          : "{compatibilityRestored:true,...runtimeOverrides}",
+      ),
+    ).toThrow();
+  });
+  it.each(['["compatibilityRestored"]', "[key]"])("rejects computed tuple metadata %s", (key) => {
+    expect(() => parsePolicy("{compatibilityRestored:true," + key + ":false}")).toThrow();
+  });
+  it.each([
+    'compatibilityRestored:true,"compatibilityRestored":false',
+    '"compatibilityRestored":false,compatibilityRestored:true',
+  ])("rejects duplicate tuple metadata aliases %s", (fields) => {
+    expect(() => parsePolicy("{" + fields + "}")).toThrow();
+  });
+  it.each([
+    "compatibilityRestored:dynamic",
+    "compatibilityRestored",
+    "compatibilityRestored:undefined",
+    "compatibilityRestored:null",
+    "compatibilityRestored:0",
+    'compatibilityRestored:"true"',
+    "get compatibilityRestored(){return true;}",
+    "set compatibilityRestored(value){}",
+    "compatibilityRestored(){return true;}",
+  ])("rejects unresolved/nonliteral/method tuple metadata %s", (field) => {
+    expect(() => parsePolicy("{" + field + "}")).toThrow();
+  });
+  it.each(["unknownPolicy", "choosePolicy()", "dynamic?{}:{}", "undefined", "null", "42"])(
+    "rejects unsupported present policy expression %s",
+    (expression) => {
+      expect(() => parsePolicy(expression)).toThrow();
+    },
+  );
+  it("preserves absent, empty, and literal boolean tuple policy metadata", () => {
+    expect(parsePolicy()[0]?.compatibilityRestored).toBe(false);
+    expect(parsePolicy("{}")[0]?.compatibilityRestored).toBe(false);
+    expect(parsePolicy("{compatibilityRestored:false}")[0]?.compatibilityRestored).toBe(false);
+    expect(
+      classifyMethodSpecs(parsePolicy("{compatibilityRestored:true}"), [], "2026.10").violations,
+    ).toEqual([]);
+    expect(
+      classifyMethodSpecs(parsePolicy("{compatibilityRestored:false}"), [], "2026.10").violations,
+    ).toHaveLength(1);
+  });
+  it("resolves a local static const policy instead of erasing present metadata", () => {
+    expect(
+      parsePolicy("POLICY", "const POLICY={compatibilityRestored:true} as const;")[0]
+        ?.compatibilityRestored,
+    ).toBe(true);
+  });
+  it("preserves canonical non-metadata policy composition only when absence is statically proven", () => {
+    expect(
+      parsePolicy(
+        "{...BASE,shareKey:handler}",
+        "const BASE={profileDependent:true};const handler=()=>null;",
+        "2026.10",
+      )[0]?.compatibilityRestored,
+    ).toBe(false);
+    expect(() => parsePolicy("{...BASE}", "const BASE={compatibilityRestored:true};")).toThrow();
+  });
+  it.each([{ kind: "index" } as const, { kind: "tree", ref: "base" } as const])(
+    "resolves policy imports from the same selected %j snapshot",
+    (snapshot) => {
+      const files: Record<string, string> = {
+        [root]: 'import {POLICY as selected} from "./policy.js";' + table(tuple("selected")),
+        "src/policy.ts": "export const POLICY={compatibilityRestored:true} as const;",
+      };
+      const reads: string[][] = [];
+      const read = snapshotReader(
+        snapshot,
+        () => {
+          throw new Error("worktree read");
+        },
+        (args) => {
+          reads.push(args);
+          const file = args[1]!.slice(args[1]!.indexOf(":") + 1);
+          if (!(file in files)) {
+            throw new Error("missing selected snapshot");
+          }
+          return files[file]!;
+        },
+      );
+      expect(collectSnapshotMethodSpecs(root, read)[0]?.compatibilityRestored).toBe(true);
+      expect(reads).toHaveLength(2);
+      delete files["src/policy.ts"];
+      expect(() => collectSnapshotMethodSpecs(root, read)).toThrow("missing selected snapshot");
+    },
+  );
+});
