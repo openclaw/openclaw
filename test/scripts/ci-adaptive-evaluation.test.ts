@@ -67,9 +67,12 @@ function capture() {
         },
         ranking: {
           version: 1,
-          rows: [...files]
-            .reverse()
-            .map((file, index) => ({ ...file, score: index ? 0.75 : 0.25 })),
+          rows: files.toReversed().map(({ file, project, pool }, index) => ({
+            file,
+            project,
+            pool,
+            score: index ? 0.75 : 0.25,
+          })),
         },
       },
     },
