@@ -354,7 +354,7 @@ describe("selected automation runtime refresh", () => {
 });
 
 it("keeps newer action feedback while a permission message is loading", async () => {
-  const formatting = createDeferred<void>();
+  const formatting = createDeferred();
   const message = createDeferred<string>();
   const format = vi
     .spyOn(gatewayErrors, "formatMissingOperatorReadScopeMessage")
@@ -372,7 +372,7 @@ it("keeps newer action feedback while a permission message is loading", async ()
     },
   });
   const state = createStateWithRequest(vi.fn().mockRejectedValue(denial));
-  const status = { enabled: true, jobs: 2 };
+  const status = { enabled: true, triggersEnabled: true, jobs: 2 };
   state.cronStatus = status;
   try {
     const read = loadCronStatus(state);

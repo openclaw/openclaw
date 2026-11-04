@@ -118,6 +118,8 @@ const sourceFiles = [
   "en-native-link-menu.ts",
   "en-worker-capacity.ts",
   "en.ts",
+  "en-local-errors.ts",
+  "en-permission-errors.ts",
   "en-route-subtitles.ts",
   "en-agents.ts",
   "en-about.ts",
