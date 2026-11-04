@@ -357,6 +357,14 @@ type EnglishCatalog = TranslationMap & {
 };
 
 const startupEnglish = {
+  runtimeErrors: {
+    socketInsecure:
+      "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
+    socketRefused:
+      "Browser refused the Gateway WebSocket for security reasons. Check the Gateway WebSocket URL and browser security policy.",
+    socketCreateFailed: "Could not create the Gateway WebSocket: {message}",
+    socketTimeout: "gateway websocket opening timed out after {milliseconds}ms",
+  },
   pluginUi: {
     retryView: "Retry plugin view",
     inlineLoading: "Loading plugin view…",

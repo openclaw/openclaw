@@ -64,7 +64,10 @@ function terminalChunk(metadata: Partial<Parameters<typeof buildAssistantMessage
 const readEvents = async (stream: ReturnType<ReturnType<typeof createOllamaStreamFn>>) =>
   Array.fromAsync(await stream);
 
-const realContext = { messages: [{ role: "user" as const, content: "test", timestamp: 0 }] };
+const userContext = (content = "test") => ({
+  messages: [{ role: "user" as const, content, timestamp: 0 }],
+});
+const realContext = userContext();
 const toolContext = (name: string, parameters: Record<string, unknown> = { type: "object" }) => ({
   ...realContext,
   tools: [{ name, description: name, parameters }],
@@ -419,56 +422,37 @@ describe("createOllamaStreamFn thinking events", () => {
     );
   });
 
-  it("keeps a real slow native Ollama response alive while NDJSON chunks advance", async () => {
-    const chunkCount = 24;
-    const chunkDelayMs = 250;
-    const requestTimeoutMs = 5_000;
-    await withNativeServer(
-      (_request, response) => {
-        response.writeHead(200, { "content-type": "application/x-ndjson" });
-
-        let chunkIndex = 0;
-        let nextChunk: ReturnType<typeof setTimeout> | undefined;
-        const sendChunk = () => {
-          if (chunkIndex === chunkCount) {
-            response.end(`${JSON.stringify(makeOllamaResponse({ content: "" }))}\n`);
-            return;
+  // Real HTTP idle-deadline integration: fake timers cannot advance native socket delivery.
+  it.each([true, false])(
+    "enforces the real native idle deadline with progress=%s",
+    async (progress) => {
+      await withNativeServer(
+        (_request, response) => {
+          response.writeHead(200, { "content-type": "application/x-ndjson" });
+          let chunkIndex = 0;
+          response.write(makeNdjsonBody([chunk({ content: "partial" })]));
+          if (progress) {
+            const timer = setInterval(() => {
+              if (++chunkIndex === 24) {
+                response.end(makeNdjsonBody([makeOllamaResponse({ content: "" })]));
+              } else {
+                response.write(makeNdjsonBody([chunk({ content: String(chunkIndex) })]));
+              }
+            }, 250);
+            response.once("close", () => clearInterval(timer));
           }
-          response.write(`${JSON.stringify(chunk({ content: String(chunkIndex) }))}\n`);
-          chunkIndex += 1;
-          nextChunk = setTimeout(sendChunk, chunkDelayMs);
-        };
-
-        response.once("close", () => {
-          if (nextChunk) {
-            clearTimeout(nextChunk);
-          }
-        });
-        sendChunk();
-      },
-      async (streamFn) => {
-        const events = await requestEvents(streamFn, { requestTimeoutMs } as never);
-
-        expect(events.some((event) => event.type === "error")).toBe(false);
-        expect(events.some((event) => event.type === "done")).toBe(true);
-      },
-    );
-  }, 20_000);
-
-  it("still times out a real native Ollama stream that stops making progress", async () => {
-    await withNativeServer(
-      (_request, response) => {
-        response.writeHead(200, { "content-type": "application/x-ndjson" });
-        response.write(`${JSON.stringify(chunk({ content: "partial" }))}\n`);
-      },
-      async (streamFn) => {
-        const events = await requestEvents(streamFn, { requestTimeoutMs: 120 } as never);
-
-        expect(events.some((event) => event.type === "error")).toBe(true);
-        expect(events.some((event) => event.type === "done")).toBe(false);
-      },
-    );
-  });
+        },
+        async (streamFn) => {
+          const events = await requestEvents(streamFn, {
+            requestTimeoutMs: progress ? 5_000 : 120,
+          } as never);
+          expect(events.some((event) => event.type === "error")).toBe(!progress);
+          expect(events.some((event) => event.type === "done")).toBe(progress);
+        },
+      );
+    },
+    20_000,
+  );
 
   it("reports caller aborts during dense native stream processing as aborted", async () => {
     const controller = new AbortController();
@@ -485,6 +469,19 @@ describe("createOllamaStreamFn thinking events", () => {
       reason: "aborted",
       error: { stopReason: "aborted" },
     });
+  });
+
+  it("aborts before dispatch while the payload hook is pending", async () => {
+    const controller = new AbortController();
+    const stream = startMockStream([], {
+      signal: controller.signal,
+      onPayload: () => {
+        queueMicrotask(() => controller.abort());
+        return Promise.withResolvers<undefined>().promise;
+      },
+    });
+    expect((await readEvents(stream)).at(-1)).toMatchObject({ type: "error", reason: "aborted" });
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -516,7 +513,7 @@ describe("createOllamaStreamFn thinking events", () => {
           }),
         ],
         {},
-        { messages: [{ role: "user", content: "这是一个测试用的句子呢", timestamp: 0 }] },
+        userContext("这是一个测试用的句子呢"),
       );
 
       const usage = doneEvent(events)?.message.usage;
@@ -541,11 +538,7 @@ describe("createOllamaStreamFn thinking events", () => {
     const events = await streamOllamaEvents(
       [chunk({ content: "Hello world" }), terminalChunk()],
       {},
-      {
-        messages: [
-          { role: "user", content: "The quick brown fox jumps over the lazy dog", timestamp: 0 },
-        ],
-      },
+      userContext("The quick brown fox jumps over the lazy dog"),
     );
 
     expect(doneEvent(events)?.message.usage).toMatchObject({ input: 11, output: 3 });
@@ -562,7 +555,7 @@ const hiddenReasoning = {
 type ThinkLevel = "off" | "high" | "max";
 type ThinkValue = string | boolean | undefined;
 
-describe("native Ollama direct completion reasoning", () => {
+describe("native Ollama reasoning", () => {
   it.each([
     ["explicit off", {}, "off", false],
     ["omitted reasoning", {}, undefined, undefined],
@@ -628,6 +621,24 @@ describe("native Ollama direct completion reasoning", () => {
       }
     }
   });
+  it.each<[Partial<ProviderRuntimeModel>, ThinkLevel | undefined, ThinkValue]>([
+    [{}, "off", "low"],
+    [{ id: "glm-5.3-flash" }, "off", "low"],
+    [{ ...local, id: "glm-5.3:cloud" }, "off", "low"],
+    [{ params: { think: false } }, "off", "low"],
+    [{ ...local, id: "qwen3:32b", params: { thinking: "medium" } }, "off", "medium"],
+    [{ params: { think: false }, reasoning: false }, "high", "low"],
+    [{ ...hiddenReasoning, thinkingLevelMap: { off: "true", high: "true" } }, "high", true],
+    [{}, "high", "high"],
+    [{ id: "glm-5.2" }, "off", false],
+    [{ ...local, id: "glm-5.3:q4_K_M" }, "off", false],
+    [{ params: { think: false } }, undefined, "low"],
+    [{ ...hiddenReasoning, thinkingLevelMap: { off: "true" } }, undefined, true],
+    [{ id: "glm-5.2", params: { think: false } }, undefined, false],
+    [{}, undefined, undefined],
+  ])("completion %j at %s sends %s", async (model, level, think) => {
+    expect((await sentThinking(model, level)).think).toBe(think);
+  });
 });
 
 async function sentThinking(
@@ -666,32 +677,6 @@ async function sentThinking(
   expect(body.options).not.toHaveProperty("think");
   return { url: fetchWithSsrFGuardMock.mock.calls[0]?.[0].url, think: body.think };
 }
-
-describe("Ollama mandatory thinking", () => {
-  it.each<[Partial<ProviderRuntimeModel>, ThinkLevel, ThinkValue]>([
-    [{}, "off", "low"],
-    [{ id: "glm-5.3-flash" }, "off", "low"],
-    [{ ...local, id: "glm-5.3:cloud" }, "off", "low"],
-    [{ params: { think: false } }, "off", "low"],
-    [{ ...local, id: "qwen3:32b", params: { thinking: "medium" } }, "off", "medium"],
-    [{ params: { think: false }, reasoning: false }, "high", "low"],
-    [{ ...hiddenReasoning, thinkingLevelMap: { off: "true", high: "true" } }, "high", true],
-    [{}, "high", "high"],
-    [{ id: "glm-5.2" }, "off", false],
-    [{ ...local, id: "glm-5.3:q4_K_M" }, "off", false],
-  ])("agent turn %j at %s sends %s", async (model, level, think) => {
-    expect((await sentThinking(model, level)).think).toBe(think);
-  });
-
-  it.each<[Partial<ProviderRuntimeModel>, ThinkValue]>([
-    [{ params: { think: false } }, "low"],
-    [{ ...hiddenReasoning, thinkingLevelMap: { off: "true" } }, true],
-    [{ id: "glm-5.2", params: { think: false } }, false],
-    [{}, undefined],
-  ])("direct completion %j sends %s", async (model, think) => {
-    expect((await sentThinking(model)).think).toBe(think);
-  });
-});
 
 describe.each(["runtime", "configured"] as const)("%s maximum thinking", (source) => {
   const cloud = "https://ollama.com";

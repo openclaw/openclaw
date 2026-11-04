@@ -225,6 +225,10 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 
 `--model` must be `<provider/model>`.
 
+For audio transcription and video description on POSIX systems, `--file` follows
+directory symlinks before resolving `..`, matching filesystem path resolution.
+Final-file symlinks remain subject to the existing media-directory checks.
+
 For CLI-backed transcription, the result's `provider` identifies the tool family
 and `model` reports the executed command. Auto-detected tools report their resolved
 executable path; explicit CLI entries retain their authored command value. This
