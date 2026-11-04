@@ -1,4 +1,3 @@
-// Doctor detection and cleanup for stale global plugin-runtime symlinks.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -75,7 +74,6 @@ export async function collectStalePluginRuntimeSymlinkHealthFindings(
   );
 }
 
-/** Emit a doctor note describing stale plugin-runtime symlinks, if any exist. */
 export async function noteStalePluginRuntimeSymlinks(
   packageRoot: string | null | undefined,
 ): Promise<void> {
@@ -99,7 +97,6 @@ export async function noteStalePluginRuntimeSymlinks(
   note(lines.join("\n"), "Plugin-runtime symlinks");
 }
 
-/** Remove stale plugin-runtime symlinks and report changes/warnings. */
 export async function removeStalePluginRuntimeSymlinks(
   packageRoot?: string | null,
 ): Promise<{ changes: string[]; warnings: string[] }> {

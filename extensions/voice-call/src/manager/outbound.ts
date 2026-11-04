@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { CallBriefSchema } from "../call-brief.js";
 import {
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKeyForCall,
@@ -84,15 +83,7 @@ export async function initiateCall(
   const dtmfSequence = opts.dtmfSequence;
   const requesterSessionKey = opts.requesterSessionKey?.trim();
   const agentId = normalizeAgentId(opts.agentId ?? ctx.config.agentId);
-  const parsedBrief = CallBriefSchema.optional().safeParse(opts.brief);
-  if (!parsedBrief.success) {
-    return {
-      callId: "",
-      success: false,
-      error: `Invalid call brief: ${parsedBrief.error.message}`,
-    };
-  }
-  const brief = parsedBrief.data;
+  const brief = opts.brief;
   if (dtmfSequence) {
     const validationError = validateDtmfDigits(dtmfSequence);
     if (validationError) {

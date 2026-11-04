@@ -15,7 +15,6 @@ import type {
   PlacedSessionsSendArguments,
 } from "../../agents/tools/sessions-placement-tool-contract.js";
 import { jsonResult } from "../../agents/tools/tool-results.js";
-import { redactSensitiveText } from "../../logging/redact.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 
 export type WorkerSessionToolRequest = {
@@ -55,14 +54,14 @@ export async function executeWorkerSessionToolWithReplay<T>(
 }
 
 export function workerSessionToolErrorResult(error: unknown) {
-  const message = redactSensitiveText(
-    error instanceof Error ? error.message : "Worker session operation failed",
-    { mode: "tools" },
-  );
-  return jsonResult({
-    status: "error",
-    error: truncateUtf16Safe(message, 1_024),
-  });
+  const message = error instanceof Error ? error.message : "Worker session operation failed";
+  return {
+    ...jsonResult({
+      status: "error",
+      error: truncateUtf16Safe(message, 1_024),
+    }),
+    isError: true,
+  };
 }
 
 export function serializeWorkerSessionToolError(error: unknown): string {

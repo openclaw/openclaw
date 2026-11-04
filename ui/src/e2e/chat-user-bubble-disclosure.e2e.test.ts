@@ -347,63 +347,64 @@ suite.define(() => {
     }
   });
 
-  it.each(["paragraphs", "escaped HTML", "native summary"])(
-    "measures visible lines when authored details with %s close and reopen",
-    async (body) => {
-      const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 844 } });
-      const page = await context.newPage();
-      try {
-        await installMockGateway(page, {
-          historyMessages: [
-            {
-              role: "user",
-              content:
-                (body === "native summary"
-                  ? "<details>\n\n"
-                  : "<details><summary>Hidden reference</summary>\n\n") +
-                (body === "escaped HTML"
-                  ? `<div>${"Hidden row with reference text. ".repeat(20)}</div>\n`
-                  : "Hidden row with reference text.\n".repeat(20)) +
-                "\n</details>\n\n" +
-                "Visible project notes continue here and explain the next useful step. ".repeat(28),
-              timestamp: 1,
-            },
-          ],
-        });
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const content = page.locator(".chat-message-disclosure__content");
+  it("measures visible lines when authored paragraph, escaped HTML, and native-summary details close and reopen", async () => {
+    const bodies = ["paragraphs", "escaped HTML", "native summary"] as const;
+    const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 844 } });
+    const page = await context.newPage();
+    try {
+      await installMockGateway(page, {
+        historyMessages: bodies.map((body, index) => ({
+          id: `authored-details-${index}`,
+          role: "user",
+          content:
+            (body === "native summary"
+              ? "<details>\n\n"
+              : "<details><summary>Hidden reference</summary>\n\n") +
+            (body === "escaped HTML"
+              ? `<div>${"Hidden row with reference text. ".repeat(20)}</div>\n`
+              : "Hidden row with reference text.\n".repeat(20)) +
+            "\n</details>\n\n" +
+            "Visible project notes continue here and explain the next useful step. ".repeat(28),
+          timestamp: index + 1,
+        })),
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.evaluate(() => document.fonts.ready);
+      const expectFourthProseLineCut = async (paragraph: Locator) => {
+        const fraction = () =>
+          paragraph.evaluate((element) => {
+            const range = document.createRange();
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            const lines: DOMRect[] = [];
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              if (!node.textContent?.trim() || node.parentElement?.closest("summary")) {
+                continue;
+              }
+              range.selectNodeContents(node);
+              for (const rect of range.getClientRects()) {
+                if (rect.width > 0 && !lines.some((line) => line.top === rect.top)) {
+                  lines.push(rect);
+                }
+              }
+            }
+            const fourthLine = lines[3]!;
+            const lineHeight = Number.parseFloat(getComputedStyle(element).lineHeight);
+            const lineTop = fourthLine.top - Math.floor((lineHeight - fourthLine.height) / 2);
+            const bottom = element
+              .closest(".chat-message-disclosure__content")!
+              .getBoundingClientRect().bottom;
+            return (bottom - lineTop) / lineHeight;
+          });
+        // The visible summary owns the first preview line; prose supplies the next four.
+        await expect.poll(fraction).toSatisfy((value: number) => value >= 0.66 && value <= 0.75);
+      };
+      for (const [index, body] of bodies.entries()) {
+        const bubble = page.locator(".chat-group.user .chat-bubble").nth(index);
+        await bubble.scrollIntoViewIfNeeded();
+        const content = bubble.locator(".chat-message-disclosure__content");
         const details = content.locator("details");
         const summary = details.locator("summary");
         await details.waitFor();
-        await page.evaluate(() => document.fonts.ready);
-        const expectFourthProseLineCut = async (paragraph: Locator) => {
-          const fraction = () =>
-            paragraph.evaluate((element) => {
-              const range = document.createRange();
-              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-              const lines: DOMRect[] = [];
-              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-                if (!node.textContent?.trim() || node.parentElement?.closest("summary")) {
-                  continue;
-                }
-                range.selectNodeContents(node);
-                for (const rect of range.getClientRects()) {
-                  if (rect.width > 0 && !lines.some((line) => line.top === rect.top)) {
-                    lines.push(rect);
-                  }
-                }
-              }
-              const fourthLine = lines[3]!;
-              const lineHeight = Number.parseFloat(getComputedStyle(element).lineHeight);
-              const lineTop = fourthLine.top - Math.floor((lineHeight - fourthLine.height) / 2);
-              const bottom = element
-                .closest(".chat-message-disclosure__content")!
-                .getBoundingClientRect().bottom;
-              return (bottom - lineTop) / lineHeight;
-            });
-          // The visible summary owns the first preview line; prose supplies the next four.
-          await expect.poll(fraction).toSatisfy((value: number) => value >= 0.66 && value <= 0.75);
-        };
         const outside = content.locator(".chat-text > p");
         const toggleDetails = () =>
           body === "native summary"
@@ -414,11 +415,11 @@ suite.define(() => {
         await expectFourthProseLineCut(details);
         await toggleDetails();
         await expectFourthProseLineCut(outside);
-      } finally {
-        await suite.closeBrowserContext(context);
       }
-    },
-  );
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
 
   it("keeps densely spaced block art within five preview rows", async () => {
     const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 844 } });
@@ -475,6 +476,7 @@ suite.define(() => {
         ),
         "Final prompt tail: the complete request remains available.",
       ];
+      const message = [...paragraphs, "```\n" + paragraphs[0] + "\n```"].join("\n\n");
       const context = await suite.newBrowserContext({
         locale: "en-US",
         colorScheme: "light",
@@ -484,7 +486,7 @@ suite.define(() => {
       const page = await context.newPage();
       await installMockGateway(page, {
         historyMessages: [
-          { role: "user", content: paragraphs.join("\n\n"), timestamp: 1 },
+          { role: "user", content: message, timestamp: 1 },
           { role: "user", content: "Short follow-up request.", timestamp: 2 },
           { role: "assistant", content: "The sample review is complete.", timestamp: 3 },
         ],
@@ -575,6 +577,11 @@ suite.define(() => {
         const tail = markdown.locator("p").last();
         await tail.scrollIntoViewIfNeeded();
         expect(await tail.textContent()).toBe(paragraphs.at(-1));
+        const code = markdown.locator("pre").last();
+        await page.keyboard.press("Shift+Tab");
+        expect(await code.evaluate((element) => element === document.activeElement)).toBe(true);
+        await page.keyboard.press("ArrowRight");
+        await expect.poll(() => code.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
         if (captureUiProofEnabled) {
           await page.screenshot({
             path: path.join(
@@ -586,9 +593,14 @@ suite.define(() => {
         }
         await collapse.click();
         expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+        await waitForLayoutSettled(page, ".chat-message-disclosure__content");
         expect(await content.evaluate((element) => element.clientHeight)).toBe(
           initialCollapsedHeight,
         );
+        const scrollTop = await content.evaluate((element) => element.scrollTop);
+        await page.keyboard.press("Shift+Tab");
+        expect(await code.evaluate((element) => element === document.activeElement)).toBe(false);
+        expect(await content.evaluate((element) => element.scrollTop)).toBe(scrollTop);
         const siblings = page.locator(".chat-group .chat-bubble");
         expect(await siblings.nth(1).textContent()).toContain("Short follow-up request.");
         expect(await siblings.nth(2).textContent()).toContain("The sample review is complete.");

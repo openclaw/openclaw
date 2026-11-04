@@ -359,41 +359,6 @@ async function issueSetupPayload(params: {
   };
 }
 
-async function sendQrPngToSupportedChannel(params: {
-  api: OpenClawPluginApi;
-  ctx: QrCommandContext;
-  target: string;
-  caption: string;
-  qrFilePath: string;
-}): Promise<boolean> {
-  const mediaLocalRoots = [path.dirname(params.qrFilePath)];
-  const accountId = normalizeOptionalString(params.ctx.accountId) || undefined;
-  const adapter = await params.api.runtime.channel.outbound.loadAdapter(params.ctx.channel);
-  const send = adapter?.sendMedia;
-  if (!send) {
-    return false;
-  }
-  await send({
-    cfg: params.api.config,
-    to: params.target,
-    text: params.caption,
-    ...(params.ctx.channel === "whatsapp" ? { verbose: false } : {}),
-    mediaUrl: params.qrFilePath,
-    mediaLocalRoots,
-    ...(params.ctx.messageThreadId != null &&
-    (params.ctx.channel === "telegram" || params.ctx.channel === "slack")
-      ? {
-          threadId:
-            params.ctx.channel === "slack"
-              ? String(params.ctx.messageThreadId)
-              : params.ctx.messageThreadId,
-        }
-      : {}),
-    ...(accountId ? { accountId } : {}),
-  });
-  return true;
-}
-
 export default definePluginEntry({
   id: "device-pair",
   name: "Device Pair",
@@ -516,6 +481,11 @@ export default definePluginEntry({
           return { text: `Error: ${urlResult.error ?? "Gateway URL unavailable."}` };
         }
         const authLabel = authLabelResult.label ?? "auth";
+        const setupRequest = {
+          url: urlResult.url,
+          allowFullAccess: authState.canIssueFullAccessSetup,
+          assertCurrent: assertOwnerCurrent,
+        };
 
         if (action === "qr") {
           const channel = ctx.channel;
@@ -536,11 +506,7 @@ export default definePluginEntry({
             }
           }
 
-          let payload = await issueSetupPayload({
-            url: urlResult.url,
-            allowFullAccess: authState.canIssueFullAccessSetup,
-            assertCurrent: assertOwnerCurrent,
-          });
+          let payload = await issueSetupPayload(setupRequest);
           let setupCode = encodeSetupCode(payload);
 
           const infoLines = buildQrInfoLines({
@@ -561,16 +527,31 @@ export default definePluginEntry({
                   fileName: "pair-qr.png",
                 })
               ).filePath;
-              const sent = await sendQrPngToSupportedChannel({
-                api,
-                ctx,
-                target,
-                caption: ["Scan this QR code with the OpenClaw iOS app:", "", ...infoLines].join(
-                  "\n",
-                ),
-                qrFilePath,
-              });
-              if (sent) {
+              const mediaLocalRoots = [path.dirname(qrFilePath)];
+              const accountId = normalizeOptionalString(ctx.accountId) || undefined;
+              const adapter = await api.runtime.channel.outbound.loadAdapter(ctx.channel);
+              const send = adapter?.sendMedia;
+              if (send) {
+                await send({
+                  cfg: api.config,
+                  to: target,
+                  text: ["Scan this QR code with the OpenClaw iOS app:", "", ...infoLines].join(
+                    "\n",
+                  ),
+                  ...(ctx.channel === "whatsapp" ? { verbose: false } : {}),
+                  mediaUrl: qrFilePath,
+                  mediaLocalRoots,
+                  ...(ctx.messageThreadId != null &&
+                  (ctx.channel === "telegram" || ctx.channel === "slack")
+                    ? {
+                        threadId:
+                          ctx.channel === "slack"
+                            ? String(ctx.messageThreadId)
+                            : ctx.messageThreadId,
+                      }
+                    : {}),
+                  ...(accountId ? { accountId } : {}),
+                });
                 return {
                   text:
                     `QR code sent above.\n` +
@@ -584,11 +565,7 @@ export default definePluginEntry({
                 `device-pair: QR image send failed channel=${channel}, falling back (${(err as Error)?.message ?? err})`,
               );
               await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
-              payload = await issueSetupPayload({
-                url: urlResult.url,
-                allowFullAccess: authState.canIssueFullAccessSetup,
-                assertCurrent: assertOwnerCurrent,
-              });
+              payload = await issueSetupPayload(setupRequest);
               setupCode = encodeSetupCode(payload);
             } finally {
               if (qrFilePath) {
@@ -601,26 +578,6 @@ export default definePluginEntry({
 
           api.logger.info?.(`device-pair: QR fallback channel=${channel} target=${target}`);
           if (channel === "webchat") {
-            try {
-              const { renderQrPngDataUrl } = await loadDevicePairApiModule();
-              await renderQrPngDataUrl(setupCode);
-            } catch (err) {
-              const { revokeDeviceBootstrapToken } = await loadDevicePairApiModule();
-              api.logger.warn?.(
-                `device-pair: webchat QR render failed, falling back (${(err as Error)?.message ?? err})`,
-              );
-              await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
-              payload = await issueSetupPayload({
-                url: urlResult.url,
-                allowFullAccess: authState.canIssueFullAccessSetup,
-                assertCurrent: assertOwnerCurrent,
-              });
-              return {
-                text:
-                  "QR image delivery is not available on this channel right now, so I generated a pasteable setup code instead.\n\n" +
-                  formatSetupReply(payload, authLabel),
-              };
-            }
             return {
               text: [
                 "Scan this QR code with the OpenClaw iOS app:",
@@ -651,16 +608,12 @@ export default definePluginEntry({
           normalizeOptionalString(ctx.from) ||
           normalizeOptionalString(ctx.to) ||
           "";
-        const payload = await issueSetupPayload({
-          url: urlResult.url,
-          allowFullAccess: authState.canIssueFullAccessSetup,
-          assertCurrent: assertOwnerCurrent,
-        });
+        const payload = await issueSetupPayload(setupRequest);
 
         if (channel === "telegram" && target) {
           try {
-            const runtimeKeys = Object.keys(api.runtime ?? {});
-            const channelKeys = Object.keys(api.runtime?.channel ?? {});
+            const runtimeKeys = Object.keys(api.runtime);
+            const channelKeys = Object.keys(api.runtime.channel);
             api.logger.debug?.(
               `device-pair: runtime keys=${runtimeKeys.join(",") || "none"} channel keys=${
                 channelKeys.join(",") || "none"

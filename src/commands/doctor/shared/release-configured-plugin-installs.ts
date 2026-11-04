@@ -75,11 +75,7 @@ function hasMaterialPluginEntry(entry: unknown): boolean {
 }
 
 function collectMaterialPluginEntryIds(cfg: OpenClawConfig): string[] {
-  const entries = asNullableRecord(cfg.plugins?.entries);
-  if (!entries) {
-    return [];
-  }
-  return Object.entries(entries)
+  return Object.entries(asNullableRecord(cfg.plugins?.entries) ?? {})
     .filter(
       ([pluginId, entry]) =>
         !isNativeSessionCatalogOptOutOnly(pluginId, entry) && hasMaterialPluginEntry(entry),
@@ -166,7 +162,6 @@ function collectReleaseConfiguredPluginIds(params: {
 }): ReleaseConfiguredPluginIds {
   const env = params.env ?? process.env;
   const pluginIds = new Set<string>();
-  const channelIds = new Set<string>();
   if (params.cfg.plugins?.enabled === false) {
     return { pluginIds: [], channelIds: [] };
   }
@@ -193,19 +188,16 @@ function collectReleaseConfiguredPluginIds(params: {
   ]) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
-  for (const channelId of collectConfiguredChannelIds(params.cfg, env)) {
-    if (
+  const channelIds = collectConfiguredChannelIds(params.cfg, env).filter(
+    (channelId) =>
       !isChannelDisabled(params.cfg, channelId) &&
       !isDenied(params.cfg, channelId) &&
-      !isPluginEntryDisabled(params.cfg, channelId)
-    ) {
-      channelIds.add(channelId);
-    }
-  }
+      !isPluginEntryDisabled(params.cfg, channelId),
+  );
 
   return {
     pluginIds: [...pluginIds].toSorted((left, right) => left.localeCompare(right)),
-    channelIds: [...channelIds].toSorted((left, right) => left.localeCompare(right)),
+    channelIds,
   };
 }
 

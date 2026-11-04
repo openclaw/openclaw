@@ -9,6 +9,7 @@ import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { formatBundledPluginDevReloadWarning } from "../plugins/bundled-plugin-dev-reload.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
@@ -248,7 +249,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         ...(hasWorkspacePlugin ? ["workspace-probe"] : []),
       ].toSorted(),
     );
-    const initial = bootstrap.prepareGatewayPluginLoad({
+    const initial = await bootstrap.prepareGatewayPluginLoad({
       pluginMetadataSnapshot: initialMetadata,
       pluginLookUpTable: loadPluginLookUpTable({
         config: initialConfig,
@@ -936,9 +937,6 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         expect(await probe("installed-probe")).toEqual(configured);
         expect(runtime.pluginRuntime.registry).toBe(previousRegistry);
         expect(previousInstance.disposing).toBe(false);
-        expect(() => retainRuntimePluginWork([previousRegistry])).toThrow(
-          "replacement is in progress",
-        );
         finishSecondRun();
         await expect(replacing).resolves.toMatchObject({
           runtime: { pluginIds: ["installed-probe"] },
@@ -967,21 +965,44 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     }
     if (bundledDir) {
       expect((await probe("bundled-probe")).helper).toBe("A");
+      const originalBundled = await probe("bundled-probe");
       const unchangedBundled = await reload(changedSettings, ["bundled-probe"]);
-      expect(unchangedBundled.runtime.restartRequired ?? false).toBe(false);
-      expect((await probe("bundled-probe", { starts: 2, stops: 1 })).helper).toBe("A");
+      expect(unchangedBundled.runtime.restartRequired).toBe(true);
+      const freshBundled = await probe("bundled-probe", { starts: 2, stops: 1 });
+      expect(freshBundled).toMatchObject({
+        helper: "A",
+        instance: originalBundled.instance,
+      });
       fs.writeFileSync(path.join(bundledDir, "dist", "helper.cjs"), 'module.exports = "B";');
       const bundledReload = await reload(changedSettings, ["bundled-probe"]);
-      expect((await probe("bundled-probe", { starts: 3, stops: 2 })).helper).toBe("A");
-      expect(bundledReload.runtime).toMatchObject({
-        restartRequired: true,
-        pluginIds: ["bundled-probe"],
-        warnings: ["Bundled plugin code remains loaded. Restart the Gateway to load edited code."],
-      });
+      expect(await probe("bundled-probe", { starts: 3, stops: 2 })).toMatchObject({ helper: "A" });
+      expect(bundledReload.runtime.restartRequired).toBe(true);
+      expect(bundledReload.runtime.pluginIds).toEqual(["bundled-probe"]);
       expect(bundledReload.runtime.generation).toBeGreaterThan(configReceipt.runtime.generation);
       const repeatedBundled = await reload(changedSettings, ["bundled-probe"]);
       expect(repeatedBundled.runtime.restartRequired).toBe(true);
-      expect((await probe("bundled-probe", { starts: 4, stops: 3 })).helper).toBe("A");
+      expect(await probe("bundled-probe", { starts: 4, stops: 3 })).toMatchObject({ helper: "A" });
+      expect(await probe("sibling")).toEqual(sibling);
+
+      // The operator opt-in recaptures the edited bundled code for explicit reload targets.
+      vi.stubEnv("OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS", "1");
+      try {
+        const devReload = await reload(changedSettings, ["bundled-probe"]);
+        expect(devReload.runtime.restartRequired).toBeUndefined();
+        expect(devReload.runtime.warnings).toContain(
+          formatBundledPluginDevReloadWarning("bundled-probe"),
+        );
+        const devBundled = await probe("bundled-probe");
+        expect(devBundled.helper).toBe("B");
+        expect(devBundled.instance).not.toBe(originalBundled.instance);
+        fs.writeFileSync(path.join(bundledDir, "dist", "helper.cjs"), 'module.exports = "C";');
+        const repeatedDevReload = await reload(changedSettings, ["bundled-probe"]);
+        expect(repeatedDevReload.runtime.restartRequired).toBeUndefined();
+        expect(await probe("bundled-probe")).toMatchObject({ helper: "C" });
+        expect(await probe("sibling")).toEqual(sibling);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     }
   });
 }

@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-/** Normalizes provider auth input metadata collected from plugin setup flows. */
 import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
@@ -83,13 +82,6 @@ export function formatApiKeyPreview(
   return `${sliceUtf16Safe(trimmed, 0, head)}…${sliceUtf16Safe(trimmed, -tail)}`;
 }
 
-/** Normalizes a token-provider selector from CLI/options input. */
-export function normalizeTokenProviderInput(
-  tokenProvider: string | null | undefined,
-): string | undefined {
-  return normalizeOptionalLowercaseString(tokenProvider);
-}
-
 /** Resolves an API key from CLI options first, then environment or prompt fallback. */
 export async function ensureApiKeyFromOptionEnvOrPrompt(
   params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0] & {
@@ -100,12 +92,12 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(
     noteTitle?: string;
   },
 ): Promise<string> {
-  const tokenProvider = normalizeTokenProviderInput(params.tokenProvider);
+  const tokenProvider = normalizeOptionalLowercaseString(params.tokenProvider);
   if (
     params.token &&
     tokenProvider &&
     params.expectedProviders.some(
-      (provider) => normalizeTokenProviderInput(provider) === tokenProvider,
+      (provider) => normalizeOptionalLowercaseString(provider) === tokenProvider,
     )
   ) {
     const apiKey = params.normalize(params.token);

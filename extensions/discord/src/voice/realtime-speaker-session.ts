@@ -14,16 +14,13 @@ import {
   type RealtimeVoiceSelectionInfo,
   type RealtimeVoiceTranscriptEntry,
   type RealtimeVoiceSessionHarness,
+  type ResolvedRealtimeVoiceProvider,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { DiscordVoiceIngressContext } from "./ingress.js";
-import {
-  formatVoiceLogPreview,
-  formatRealtimeInfoLog,
-  shouldLogRealtimeVerboseEvent,
-} from "./log-preview.js";
+import { formatRealtimeInfoLog } from "./log-preview.js";
 import { DiscordRealtimeConsults, type AgentProxyConsultState } from "./realtime-consults.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
 import type { DiscordRealtimePlayer } from "./realtime-player.js";
@@ -33,14 +30,12 @@ import {
 } from "./realtime-recording.js";
 import { resolveDiscordRealtimeSpeakerConfig } from "./realtime-speaker-config.js";
 import { DiscordRealtimeTurns } from "./realtime-turns.js";
-import {
-  logVoiceVerbose,
-  type DiscordVoiceMode,
-  type VoiceRealtimeAgentTurnParams,
-  type VoiceRealtimeSession,
-  type VoiceRealtimeSpeakerContext,
-  type VoiceRealtimeSpeakerTurn,
-  type VoiceSessionEntry,
+import type {
+  DiscordVoiceMode,
+  VoiceRealtimeAgentTurnParams,
+  VoiceRealtimeSpeakerContext,
+  VoiceRealtimeSpeakerTurn,
+  VoiceSessionEntry,
 } from "./session.js";
 
 const logger = createSubsystemLogger("discord/voice");
@@ -62,7 +57,7 @@ export type DiscordRealtimeSessionParams = {
   resolveSpeakerContext: (userId: string) => Promise<DiscordVoiceIngressContext | null>;
 };
 
-export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
+export class DiscordRealtimeSpeakerSession {
   private bridge: RealtimeVoiceBridgeSession | null = null;
   private readonly harness: RealtimeVoiceSessionHarness<AgentProxyConsultState>;
   private readonly playback: DiscordRealtimePlayback<AgentProxyConsultState>;
@@ -71,8 +66,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   private readonly recording: DiscordRealtimeRecording;
   private lifecycle: {
     status: "inactive" | "starting" | "active" | "closing" | "stopped";
-    generation: number;
-  } = { status: "inactive", generation: 0 };
+  } = { status: "inactive" };
   private policy: Omit<
     ReturnType<typeof resolveDiscordRealtimeSpeakerConfig>["sessionPolicy"],
     "autoRespondToAudio"
@@ -103,17 +97,15 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     private readonly params: DiscordRealtimeSessionParams & {
       player: DiscordRealtimePlayer;
       sessionId: string;
-      voiceOverride?: string;
+      preparedProvider: ResolvedRealtimeVoiceProvider;
       standby?: boolean;
       conversationHistory?: readonly RealtimeVoiceTranscriptEntry[];
     },
   ) {
     this.outputEnabled = !params.standby;
-    const recordingEpoch = this.providerContinuityEpoch;
     this.recording = new DiscordRealtimeRecording({
       entry: this.params.entry,
-      isCurrent: () =>
-        this.lifecycle.status !== "stopped" && this.providerContinuityEpoch === recordingEpoch,
+      isCurrent: () => this.lifecycle.status !== "stopped",
       warn: (message) => logger.warn(message),
     });
     this.harness = createRealtimeVoiceSessionHarness<AgentProxyConsultState>({
@@ -187,7 +179,6 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       consultToolsAllow: () => this.policy.consultToolsAllow,
       debounceMs: () => this.realtimeConfig?.debounceMs,
       isAgentProxy: () => this.params.mode === "agent-proxy" && !this.policy.handlesAgentConsult,
-      isWakeNameRequired: () => this.isWakeNameRequired(),
       playback: this.playback,
       runAgentTurn: (turn) => this.trackOperation(() => this.params.runAgentTurn(turn)),
       turns: this.turns,
@@ -197,11 +188,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   }
 
   async connect(): Promise<void> {
-    const lifecycleGeneration = this.lifecycle.generation + 1;
-    this.lifecycle = {
-      status: "starting",
-      generation: lifecycleGeneration,
-    };
+    this.lifecycle.status = "starting";
     const {
       resolved,
       selection,
@@ -219,7 +206,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       realtimeConfig: this.realtimeConfig,
       isAgentProxy: this.params.mode === "agent-proxy",
       bootstrapContextInstructions: this.params.bootstrapContextInstructions,
-      voiceOverride: this.params.voiceOverride,
+      preparedProvider: this.params.preparedProvider,
       conversationHistory: this.params.conversationHistory,
     });
     this.realtimeProviderId = resolved.provider.id;
@@ -230,8 +217,8 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     const usesRealtimeAgentHandoff = this.params.mode === "bidi" || toolPolicy !== "none";
     const onReady = () => {
       this.markProviderGenerationObserved();
-      if (this.markLifecycleReady(lifecycleGeneration)) {
-        this.playback.drainQueuedExactSpeechMessages("provider-ready");
+      if (this.markLifecycleReady()) {
+        this.playback.drainQueuedExactSpeechMessages();
       }
     };
     this.bridge = this.harness.createBridge({
@@ -290,11 +277,6 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
           return;
         }
         this.markProviderGenerationObserved();
-        if (isFinal && text.trim()) {
-          logger.info(
-            `discord voice: realtime ${role} transcript (${text.length} chars): ${formatVoiceLogPreview(text)}`,
-          );
-        }
         if (isFinal && role === "assistant") {
           this.playback.suppressDuplicateControlSpeech(text);
         }
@@ -371,12 +353,12 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     );
     this.attachOutputAudioPort();
     await this.bridge.connect();
-    if (!this.markLifecycleReady(lifecycleGeneration)) {
+    if (!this.markLifecycleReady()) {
       await this.close();
       return;
     }
     this.markProviderGenerationObserved();
-    this.playback.drainQueuedExactSpeechMessages("provider-connected");
+    this.playback.drainQueuedExactSpeechMessages();
     logger.info(
       `discord voice: realtime bridge ready mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"}`,
     );
@@ -545,7 +527,6 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   }
 
   activateOutput(): void {
-    this.readVoiceSelection();
     this.outputEnabled = true;
     this.playback.activateOutputAudioPort();
   }
@@ -613,11 +594,8 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     return this.lifecycle.status === "active";
   }
 
-  private markLifecycleReady(generation: number): boolean {
-    if (
-      (this.lifecycle.status !== "starting" && this.lifecycle.status !== "active") ||
-      this.lifecycle.generation !== generation
-    ) {
+  private markLifecycleReady(): boolean {
+    if (this.isStopped()) {
       return false;
     }
     this.lifecycle.status = "active";
@@ -640,7 +618,6 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     ) {
       this.markProviderGenerationObserved();
     }
-    const detail = event.detail ? ` ${event.detail}` : "";
     if (event.direction === "client" && event.type === "session.continuity.reset") {
       this.resetProviderContinuity(event.type);
     }
@@ -649,9 +626,6 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     }
     if (event.direction === "server" && event.type === "input_audio_buffer.speech_started") {
       this.turns.resetPartialWakeNameTracking();
-    }
-    if (shouldLogRealtimeVerboseEvent(event)) {
-      logVoiceVerbose(`realtime ${event.direction}:${event.type}${detail}`);
     }
     const info = formatRealtimeInfoLog(event);
     if (info) {

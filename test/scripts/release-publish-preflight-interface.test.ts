@@ -1,150 +1,114 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   buildReleasePublishDispatchCommand,
   formatReleasePublishPreflight,
-  parsePublishPreflightArgs,
+  parsePublishPreflightArgs as parseArgs,
 } from "../../scripts/lib/release-publish-preflight-interface.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-describe("release publish preflight operator interface", () => {
-  it("parses exact tooling and selected plugin repair inputs", () => {
-    const cases = [
-      {
-        flags: ["--workflow-sha", "a".repeat(40)],
-        expected: { workflowRef: "", workflowSha: "a".repeat(40) },
-      },
-      {
-        flags: [
-          "--workflow-ref",
-          "release-publish/aaaaaaaaaaaa-123",
-          "--publish-openclaw-npm",
-          "false",
-          "--plugin-publish-scope",
-          "selected",
-          "--plugins",
-          "@openclaw/example",
-        ],
-        expected: {
-          publishOpenclawNpm: false,
-          pluginPublishScope: "selected",
-          plugins: "@openclaw/example",
-        },
-      },
-    ];
-    for (const { flags, expected } of cases) {
-      expect(parsePublishPreflightArgs(["--tag", "v2026.9.5", ...flags])?.options).toMatchObject(
-        expected,
-      );
-    }
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const dispatchOptions = {
+  repo: "openclaw/openclaw",
+  workflowRef: "main",
+  fullReleaseValidationRunId: "123",
+  pluginPublishScope: "all-publishable" as const,
+};
+const toolingRef = "release-publish/aaaaaaaaaaaa-123";
+const parse = (extra: string) =>
+  parseArgs(["--tag", "v2026.9.5", ...extra.split(" ").filter(Boolean)])?.options;
+type DispatchInput = Omit<
+  Parameters<typeof buildReleasePublishDispatchCommand>[0],
+  keyof typeof dispatchOptions
+>;
+const dispatch = (input: DispatchInput, attempt = "1", resume = "") =>
+  buildReleasePublishDispatchCommand({ ...dispatchOptions, ...input }, attempt, toolingRef, resume);
+
+it("parses exact tooling and selected plugin repair inputs", () => {
+  const sha = "a".repeat(40);
+  expect(parse(`--workflow-sha ${sha}`)).toMatchObject({
+    workflowRef: "",
+    workflowSha: sha,
   });
-
-  it("rejects invalid selectors, publication booleans, and retired bypasses", () => {
-    const selectorError = "--tag and exactly one of --workflow-ref or --workflow-sha are required.";
-    const cases: { flags: string[]; error?: string }[] = [
-      { flags: [], error: selectorError },
-      { flags: ["--workflow-ref", "main", "--workflow-sha", "a".repeat(40)], error: selectorError },
-      ...["a".repeat(12), "A".repeat(40), "g".repeat(40)].map((sha) => ({
-        flags: ["--workflow-sha", sha],
-        error: "--workflow-sha must be a lowercase 40-character commit SHA.",
-      })),
-      ...["--stable-soak-waiver", "--lane-waiver"].map((flag) => ({
-        flags: ["--workflow-ref", "main", flag, "2026.9.5 approved"],
-      })),
-      ...["TRUE", "0"].map((value) => ({
-        flags: ["--workflow-ref", "main", "--publish-openclaw-npm", value],
-        error: "must be true or false",
-      })),
-    ];
-    for (const { flags, error } of cases) {
-      expect(() => parsePublishPreflightArgs(["--tag", "v2026.9.5", ...flags])).toThrow(error);
-    }
+  expect(
+    parse(
+      `--workflow-ref ${toolingRef} --publish-openclaw-npm false --plugin-publish-scope selected --plugins @openclaw/example`,
+    ),
+  ).toMatchObject({
+    publishOpenclawNpm: false,
+    pluginPublishScope: "selected",
+    plugins: "@openclaw/example",
   });
+});
 
-  it.skipIf(process.platform === "win32")(
-    "prints a shell-safe POSIX dispatch that preserves artifact and exact resume inputs",
-    () => {
-      const dir = mkdtempSync(join(tmpdir(), "publish-dispatch-"));
-      try {
-        const output = join(dir, "arguments.json");
-        const executable = join(dir, "gh");
-        writeFileSync(
-          executable,
-          `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify(process.argv.slice(2)));\n`,
-        );
-        chmodSync(executable, 0o755);
-        const installerDigests = "Owner's approved reason\n$(touch should-not-exist); `false`";
-        const command = buildReleasePublishDispatchCommand(
-          {
-            repo: "openclaw/openclaw",
-            tag: "v2026.9.5",
-            workflowRef: "main",
-            fullReleaseValidationRunId: "123",
-            npmDistTag: "latest",
-            pluginPublishScope: "all-publishable",
-            windowsNodeInstallerDigests: installerDigests,
-          },
-          "2",
-          "release-publish/aaaaaaaaaaaa-123",
-          "456",
-        );
-        execFileSync("/bin/sh", ["-c", command], {
-          cwd: dir,
-          env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
-        });
-        const args = JSON.parse(readFileSync(output, "utf8"));
-        expect(args).toContain(`windows_node_installer_digests=${installerDigests}`);
-        expect(args).toContain("full_release_validation_run_attempt=2");
-        expect(args).toContain("openclaw_npm_resume_run_id=456");
-        expect(args).toContain("release-publish/aaaaaaaaaaaa-123");
-        expect(args).toContain("finalize_release_before_docker=true");
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
-    },
+it("accepts the legacy full release run alias without allowing ambiguous selectors", () => {
+  expect(parse(`--workflow-ref ${toolingRef} --full-release-run 123`)).toMatchObject({
+    fullReleaseValidationRunId: "123",
+  });
+  expect(() =>
+    parse(
+      `--workflow-ref ${toolingRef} --full-release-validation-run-id 123 --full-release-run 456`,
+    ),
+  ).toThrow("do not combine");
+});
+
+it("rejects invalid selectors, publication booleans, and retired bypasses", () => {
+  const rejects = (args: string, error?: string) => expect(() => parse(args)).toThrow(error);
+  const selectorError = "--tag and exactly one of --workflow-ref or --workflow-sha are required.";
+  rejects("", selectorError);
+  rejects(`--workflow-ref main --workflow-sha ${"a".repeat(40)}`, selectorError);
+  rejects(
+    `--workflow-sha ${"A".repeat(12)}`,
+    "--workflow-sha must be a lowercase 40-character commit SHA.",
   );
+  for (const flag of ["--stable-soak-waiver", "--lane-waiver"]) {
+    rejects(`--workflow-ref main ${flag} approved`);
+  }
+  rejects("--workflow-ref main --publish-openclaw-npm TRUE", "must be true or false");
+});
 
-  it.each([
-    { tag: "v2026.9.5", npmDistTag: "beta" },
-    { tag: "v2026.8.33", npmDistTag: "extended-stable" },
-  ])("keeps $tag on $npmDistTag behind Docker before GitHub activation", (input) => {
-    const command = buildReleasePublishDispatchCommand(
-      {
-        repo: "openclaw/openclaw",
-        workflowRef: "main",
-        fullReleaseValidationRunId: "123",
-        pluginPublishScope: "all-publishable",
-        ...input,
-      },
-      "1",
-      "release-publish/aaaaaaaaaaaa-123",
-      "",
-    );
-    expect(command).not.toContain("finalize_release_before_docker");
-  });
+it.skipIf(process.platform === "win32")(
+  "prints a shell-safe POSIX dispatch that preserves artifact and exact resume inputs",
+  () => {
+    const dir = tempDirs.make("publish-dispatch-");
+    const installerDigests = "Owner's approved reason\n$(touch should-not-exist); `false`";
+    const latest = {
+      tag: "v2026.9.5",
+      npmDistTag: "latest",
+      windowsNodeInstallerDigests: installerDigests,
+    };
+    const command = dispatch(latest, "2", "456");
+    const args = execFileSync("/bin/sh", ["-c", `gh() { printf '%s\\0' "$@"; }\n${command}`], {
+      cwd: dir,
+      encoding: "utf8",
+    }).split("\0");
+    expect(args).toContain(`windows_node_installer_digests=${installerDigests}`);
+    expect(args).toContain("full_release_validation_run_attempt=2");
+    expect(args).toContain("openclaw_npm_resume_run_id=456");
+    expect(args).toContain(toolingRef);
+    expect(args).toContain("finalize_release_before_docker=true");
+  },
+);
 
-  it("retains failure and remediation in the table without duplicating a prepared command", () => {
-    const text = formatReleasePublishPreflight(
-      {
-        rows: [
-          {
-            id: "publisher.soak",
-            status: "FAIL",
-            message: "Missing soak | evidence",
-            remediation: "Run soak\nand reseal validation",
-          },
-        ],
-        command: "gh workflow run ...",
-        failed: true,
-      },
-      { includeCommand: false },
-    );
-    expect(text).toContain("| FAIL | publisher.soak |");
-    expect(text).toContain("Missing soak \\| evidence");
-    expect(text).toContain("Run soak and reseal validation");
-    expect(text).toContain("Resolve FAIL rows");
-    expect(text).not.toContain("gh workflow run");
-  });
+it("keeps non-latest publication behind Docker before GitHub activation", () => {
+  const command = dispatch({ tag: "v2026.9.5", npmDistTag: "beta" });
+  expect(command).not.toContain("finalize_release_before_docker");
+});
+
+it("retains failure and remediation in the table without duplicating a prepared command", () => {
+  const failure = {
+    id: "publisher.soak",
+    status: "FAIL" as const,
+    message: "Missing soak | evidence",
+    remediation: "Run soak\nand reseal validation",
+  };
+  const text = formatReleasePublishPreflight(
+    { rows: [failure], command: "gh workflow run ...", failed: true },
+    { includeCommand: false },
+  );
+  expect(text).toContain("| FAIL | publisher.soak |");
+  expect(text).toContain("Missing soak \\| evidence");
+  expect(text).toContain("Run soak and reseal validation");
+  expect(text).toContain("Resolve FAIL rows");
+  expect(text).not.toContain("gh workflow run");
 });

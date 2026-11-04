@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHookToolRequesterContext } from "../../plugins/hook-types.js";
+import type { PluginJsonValue as JsonValue } from "../../plugins/host-hook-json.js";
 import type {
   BeforeToolCallFailureDisposition,
   DeferredPluginToolApproval,
@@ -20,13 +21,7 @@ type NativeHookRelayApprovalContext = Pick<
   | "turnSourceTo"
 >;
 
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+export type { JsonValue };
 
 export const NATIVE_HOOK_RELAY_EVENTS = [
   "pre_tool_use",
@@ -82,6 +77,9 @@ export type NativeHookRelayRegistration = {
   requester?: PluginHookToolRequesterContext;
   approvalContext?: NativeHookRelayApprovalContext;
   allowedEvents: readonly NativeHookRelayEvent[];
+  /** Keep host policy active for every native tool even without plugin hooks. */
+  requirePreToolUse?: boolean;
+  /** Wall-clock epoch expiry shared through the cross-process bridge record. */
   expiresAtMs: number;
   signal?: AbortSignal;
   /** Exact host policy capability for authority-bearing native callbacks. */
@@ -90,6 +88,8 @@ export type NativeHookRelayRegistration = {
   approvalHost?: Pick<AgentHarnessHostCapabilities, "requestApproval" | "waitForApproval">;
   /** Revalidates the exact admitted owner after authority-bearing awaits. */
   assertActive?: AgentHarnessHostCapabilities["assertActive"];
+  /** Reads worker-owned execution policy before returning permission to the native runtime. */
+  assertActiveAsync?: () => Promise<void>;
   onPreToolUseFailure?: (failure: {
     toolName: string;
     toolCallId: string;
@@ -128,11 +128,14 @@ export type RegisterNativeHookRelayParams = {
   allowedEvents?: readonly NativeHookRelayEvent[];
   /** Whether this relay should run OpenClaw loop detection from native PreToolUse hooks. */
   preToolUseLoopDetection?: boolean;
+  /** Never prune the all-tool PreToolUse policy relay. Requires runBeforeToolCall. */
+  requirePreToolUse?: boolean;
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
   runBeforeToolCall?: NativeHookRelayRegistration["runBeforeToolCall"];
   assertActive?: NativeHookRelayRegistration["assertActive"];
+  assertActiveAsync?: NativeHookRelayRegistration["assertActiveAsync"];
   onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
 };
 
@@ -158,6 +161,7 @@ export type InvokeNativeHookRelayParams = {
 };
 
 export type InvokeNativeHookRelayBridgeParams = InvokeNativeHookRelayParams & {
+  signal?: AbortSignal;
   registrationTimeoutMs?: number;
   stateDbPath?: string;
   timeoutMs?: number;
@@ -198,6 +202,8 @@ export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistratio
 };
 
 export type OwnedNativeHookRelayRegistrationHandle = ActiveNativeHookRelayRegistrationHandle & {
+  /** Bind native foreground callbacks to the accepted turn of this run. */
+  bindForegroundTurn: (threadId: string, turnId: string) => void;
   /** Explicitly expose only this registration through the token-scoped HTTP callback. */
   enableRemoteCallback: () => { token: string };
   /** Strict policy preparation and direct publication result. */
@@ -300,9 +306,17 @@ export type NativeHookRelayExecutionAdmission = Readonly<{
 }>;
 
 export type NativeHookRelayOwnerOptions = {
+  requireForegroundTurn?: boolean;
   retention?: NativeHookRelayRetention;
   approvalHost?: NativeHookRelayRegistration["approvalHost"];
   executionAdmission?: NativeHookRelayExecutionAdmission;
+  postToolUse?: Readonly<{
+    toolNames: readonly string[];
+    observe: (
+      invocation: Readonly<NativeHookRelayInvocation>,
+      assertCurrent: () => void,
+    ) => void | Promise<void>;
+  }>;
 };
 
 export type OwnedNativeHookRelayParams = RegisterNativeHookRelayParams &
@@ -310,11 +324,16 @@ export type OwnedNativeHookRelayParams = RegisterNativeHookRelayParams &
 
 export type RelayLifetime = {
   foregroundOpen: boolean;
-  foregroundToken: symbol;
+  /** Null requires turn acceptance; undefined preserves public registration semantics. */
+  foregroundTurn?: { threadId: string; turnId: string } | null;
   policyReady: Promise<void>;
+  /** Process-local monotonic expiry used only by the in-process rearm timer. */
+  expiresAtMonotonicMs?: number;
   retained?: ReturnType<typeof retainBeforeToolCallForNativeHookRelay>;
   retention?: NativeHookRelayRetention;
   executionAdmission?: NativeHookRelayExecutionAdmission;
+  postToolUse?: NativeHookRelayOwnerOptions["postToolUse"];
+  postToolUseWork: Set<Promise<void>>;
   removeAbortListener?: () => void;
   expiryTimer?: ReturnType<typeof setTimeout>;
 };

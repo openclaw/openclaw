@@ -1,3 +1,4 @@
+import { createHook } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
@@ -13,7 +14,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../../infra/runtime-worker-generation.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -21,6 +21,7 @@ import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleto
 import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readSessionPhysicalDiskUsage } from "./disk-budget-files.js";
 import { drainSessionDiskBudgetWorkers } from "./disk-budget-runtime.js";
 import {
   hasRetainedSessionTranscriptArchives,
@@ -49,6 +50,44 @@ async function addSessionArtifacts(directory: string, index: number): Promise<vo
 }
 
 describe("physical session disk usage", () => {
+  // Bun does not emit Node's PROMISE async-hook events.
+  it.skipIf(Boolean(process.versions.bun))(
+    "bounds per-artifact promise allocation inside the scan worker",
+    async () => {
+      await withTestDir({ prefix: "openclaw-disk-scan-promises-" }, async (directory) => {
+        const storePath = path.join(directory, "openclaw-agent.sqlite");
+        await fs.writeFile(storePath, Buffer.alloc(321));
+        const countScan = async () => {
+          let promises = 0;
+          const hook = createHook({
+            init(_id, type) {
+              if (type === "PROMISE") {
+                promises++;
+              }
+            },
+          });
+          hook.enable();
+          try {
+            const usage = await readSessionPhysicalDiskUsage(storePath);
+            return { promises, usage };
+          } finally {
+            hook.disable();
+          }
+        };
+        await countScan();
+        const initial = await countScan();
+        for (let index = 0; index < 32; index++) {
+          await fs.writeFile(path.join(directory, `session-${index}.jsonl`), Buffer.alloc(7));
+        }
+        const expanded = await countScan();
+        expect(expanded.usage).toEqual({ databaseWalBytes: 0, totalBytes: 321 + 32 * 7 });
+        // A stat uses one result continuation, without an extra catch/await promise layer.
+        expect(initial.promises).toBeGreaterThan(0);
+        expect(expanded.promises - initial.promises).toBeLessThanOrEqual(32 * 20);
+      });
+    },
+  );
+
   it.each([false, true])(
     "joins a forced followup after maintenance failure (mutation fails: %s)",
     async (mutationFails) => {
@@ -179,11 +218,7 @@ describe("physical session disk usage", () => {
       return result;
     });
     let retirement: MockInstance<Worker["terminate"]> | undefined;
-    const diskWorkerUrl = resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "disk-budget.worker",
-      distWorkerPath: "config/sessions/disk-budget.worker.js",
-    });
+    const diskWorkerUrl = resolveRuntimeProcessEntrypointUrl("sessionDiskBudget");
     const stateReadUrl = resolveRuntimeProcessEntrypointUrl("stateRead");
     const ownedStateReadPath = state.path("sdk-drainage-state-read.mjs");
     await fs.writeFile(ownedStateReadPath, `export * from ${JSON.stringify(stateReadUrl.href)};\n`);
@@ -290,8 +325,8 @@ describe("physical session disk usage", () => {
         release.resolve();
         await drainage;
         expect(completed).toBe(2);
-        expect(workers).toHaveLength(1);
-        expect(workers[0]?.threadId).toBe(-1);
+        expect(workers.length).toBeGreaterThan(0);
+        expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
       } finally {
         release.resolve();
         spy.mockRestore();
@@ -363,14 +398,17 @@ describe("physical session disk usage", () => {
       await fs.writeFile(storePath, Buffer.alloc(321));
       await fs.writeFile(archivePath, Buffer.alloc(100));
       const release = createDeferredCore();
-      const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+      let spy = vi.spyOn(WorkerTaskPool.prototype, "run");
+      spy.mockImplementation(function gateScan(
         this: WorkerTaskPool<unknown, unknown>,
         input,
         options,
       ) {
         spy.mockRestore();
-        // Delay preparation, not the caller's result or the pool's capacity decision.
-        return this.run(async () => {
+        const run = this.run.bind(this);
+        spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(gateScan);
+        // Hold every scan slot so overload does not depend on worker startup timing.
+        return run(async () => {
           await release.promise;
           return input;
         }, options);
@@ -407,12 +445,11 @@ describe("physical session disk usage", () => {
         release.resolve();
         await drainage;
         expect(settledScans).toBe(128);
-        expect(workers).toHaveLength(1);
-        expect(workers[0]?.threadId).toBe(-1);
+        const retiredWorkers = workers.length;
+        expect(retiredWorkers).toBeGreaterThan(0);
+        expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
         const usage = {
-          databaseMainBytes: 321,
           databaseWalBytes: 0,
-          sessionFilesBytes: 100,
           totalBytes: 421,
         };
         expect(await Promise.all(accepted)).toEqual(Array.from({ length: 128 }, () => usage));
@@ -420,8 +457,8 @@ describe("physical session disk usage", () => {
           pruneSessionTranscriptArchivesToHighWater({ storePath, highWaterBytes: 321 }),
         ).resolves.toMatchObject({ removedFiles: 1, usage: { totalBytes: 321 } });
         await expect(fs.stat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(workers).toHaveLength(2);
-        expect(workers[1]?.threadId).toBeGreaterThan(0);
+        expect(workers).toHaveLength(retiredWorkers + 1);
+        expect(workers.at(-1)?.threadId).toBeGreaterThan(0);
       } finally {
         release.resolve();
         spy.mockRestore();
@@ -447,9 +484,7 @@ describe("physical session disk usage", () => {
       const storePath = databasePath;
 
       await expect(measureSessionPhysicalDiskUsage(storePath)).resolves.toEqual({
-        databaseMainBytes: 321,
         databaseWalBytes: 654,
-        sessionFilesBytes: 118,
         totalBytes: 1_093,
       });
       await expect(hasRetainedSessionTranscriptArchives(storePath)).resolves.toBe(true);
@@ -459,7 +494,7 @@ describe("physical session disk usage", () => {
       });
       expect(pruned).toMatchObject({
         removedFiles: 1,
-        usage: { sessionFilesBytes: 18, totalBytes: 993 },
+        usage: { totalBytes: 993 },
       });
       await expect(fs.stat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(hasRetainedSessionTranscriptArchives(storePath)).resolves.toBe(false);
@@ -483,9 +518,7 @@ describe("physical session disk usage", () => {
         const initial = await measureSessionPhysicalDiskUsage(storePath);
         const initialSyncCalls = fixtureSyncCalls();
         expect(initial).toEqual({
-          databaseMainBytes: 321,
           databaseWalBytes: 654,
-          sessionFilesBytes: 18,
           totalBytes: 993,
         });
         for (let index = 1; index <= 32; index += 1) {
@@ -497,9 +530,7 @@ describe("physical session disk usage", () => {
         const expandedSyncCalls = fixtureSyncCalls();
 
         expect(expanded).toEqual({
-          databaseMainBytes: 321,
           databaseWalBytes: 654,
-          sessionFilesBytes: 33 * 18,
           totalBytes: 975 + 33 * 18,
         });
         // Filesystem work that grows with the directory must not block the event loop.

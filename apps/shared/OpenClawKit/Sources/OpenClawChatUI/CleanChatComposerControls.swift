@@ -63,7 +63,7 @@ struct CompactChatAttachmentLabel: View {
 
     var body: some View {
         Image(systemName: "plus")
-            .font(OpenClawChatTypography.display(size: 20, weight: .semibold, relativeTo: .body))
+            .font(.system(size: OpenClawChatTypography.scaled(20), weight: .semibold))
             .foregroundStyle(.secondary)
             .frame(
                 width: self.controlSize,
@@ -345,7 +345,7 @@ struct OpenClawChatMicButton: View {
     private var label: some View {
         let showsStop = self.isDictationPending || self.dictationControl?.isActive == true
         return Image(systemName: showsStop ? "stop.fill" : "mic")
-            .font(OpenClawChatTypography.display(size: 17, weight: .medium, relativeTo: .body))
+            .font(.system(size: OpenClawChatTypography.scaled(17), weight: .medium))
             .foregroundStyle(showsStop ? OpenClawChatTheme.accent : .secondary)
             .frame(width: self.controlSize, height: self.controlSize)
             .contentShape(Rectangle())

@@ -18,7 +18,7 @@ approvals reviewer, and service tier to app-server. Switching from
 continue with the newly selected model.
 
 Supervised bindings are the exception. The OpenClaw model picker stays locked,
-and resumes omit model and provider overrides so Codex restores the canonical
+and resumes omit model and provider overrides so Codex restores the saved
 thread's persisted model and provider. A separate native Codex control can
 change that persisted pair, and the initial snapshot can produce Codex's normal
 model-difference warning; the outer OpenClaw model and fallback chain never
@@ -41,20 +41,20 @@ Chat turn installs the real approval handlers and uses an ephemeral native fork
 to pin the snapshot without a model or provider override. Codex App Server uses
 its current native configuration and returns the selected pair; it emits its
 normal warning if that model differs from the source's last recorded model.
-OpenClaw confirms the fork's subscription is released before starting the canonical
+OpenClaw confirms the fork's subscription is released before starting the primary
 `appServer`-source Codex harness thread under its cwd and runtime policy with
 exactly the returned model and provider for that initial start. It then injects the
 bounded visible history and commits the binding on the same supervision connection.
 The check is never persisted or archived. The source is never
-resumed. The canonical thread has the full OpenClaw harness tool surface;
+resumed. The primary thread has the full OpenClaw harness tool surface;
 reasoning, tool calls, and tool results from the source are not cloned into it.
 The private connection scope survives pending and committed binding states, so
 every later turn remains on that connection with native auth and provider
-configuration. Disabled supervision or binding/connection drift fails closed
+configuration. Disabled supervision or binding/connection drift blocks execution
 rather than switching to the ordinary agent-home harness.
 
 The original CLI, VS Code, Atlas, or ChatGPT source remains eligible for both
-catalogs. The canonical branch is a native Codex thread, but its source kind is
+catalogs. The primary branch is a native Codex thread, but its source kind is
 `appServer`; native clients may filter that source kind, so its appearance in
 Codex Desktop is not guaranteed.
 
@@ -67,7 +67,7 @@ an exclusive cross-process runner or approval-owner lease, so that read cannot
 prove that another process is not using the thread. OpenClaw blocks a known
 active binding owner for the exact target or any non-archived spawned descendant
 returned by Codex's paginated descendant query. Enumeration errors, cycles, and
-safety-limit exhaustion fail closed. Native archive can still race a new turn
+safety-limit exhaustion block the operation. Native archive can still race a new turn
 in another process, so confirmation covers unknown clients and the gap between
 status read and archive. A supervised model-locked Chat cannot be deleted while
 it protects the native binding.

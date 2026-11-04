@@ -1,5 +1,6 @@
 import { hashFileMutationSnapshotSync, type FileMutationMetadata } from "./file-descriptor.js";
 import type { UpdateCandidatePluginFileReply } from "./update-candidate-plugin-file.js";
+import { createUpdateCandidatePluginPool } from "./update-candidate-plugin-tasks.js";
 import { resolveUpdateHashWorkerCount } from "./worker-pool-sizing.js";
 import type { WorkerTaskPool } from "./worker-task-pool.js";
 
@@ -38,20 +39,10 @@ export async function withUpdateCandidatePluginFileHashing<T>(
       if (workers === 0) {
         return hashFileMutationSnapshotSync(filePath, expected);
       }
-      pool ??= (async () => {
-        const [{ WorkerTaskPool }, { resolveRuntimeProcessEntrypointUrl }] = await Promise.all([
-          import("./worker-task-pool.js"),
-          import("./runtime-process-url.js"),
-        ]);
-        return new WorkerTaskPool<UpdateCandidatePluginHashRequest, UpdateCandidatePluginHashReply>(
-          {
-            workerUrl: resolveRuntimeProcessEntrypointUrl("updateCandidateState"),
-            maxWorkers: workers,
-            maxPendingTasks: 4,
-            restartOnError: false,
-          },
-        );
-      })();
+      pool ??= createUpdateCandidatePluginPool<
+        UpdateCandidatePluginHashRequest,
+        UpdateCandidatePluginHashReply
+      >(workers);
       // Transfer only lossless fingerprint fields, not a platform Stats instance.
       const reply = await (
         await pool

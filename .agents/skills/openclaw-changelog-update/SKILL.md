@@ -8,8 +8,10 @@ description: Regenerate OpenClaw release changelog sections from git history bef
 Use this for changelog rewrites and GitHub release-note source text. For regular
 beta/stable, prepare complete notes before final-source qualification when
 possible; Code SHA may then also be Release SHA. Editorial work may overlap
-Code validation. If notes change afterward, a genuine CHANGELOG-only descendant
-may use the existing product-evidence reuse policy. For
+Code validation. Do not rerun it per validation-recovery backport; when backports
+replace the Code SHA, rerun it once after the final Code SHA is green, as a
+genuine CHANGELOG-only descendant under the existing product-evidence reuse
+policy ([timing](../release-openclaw-maintainer/references/preparation.md#changelog-and-release-notes)). For
 extended-stable, run it before final exact-head validation and tagging. Do not
 rerun it for tooling retries, resumed publication, or promotion.
 Use it with `release-openclaw-maintainer`; this skill owns changelog content,
@@ -20,7 +22,7 @@ ordering, grouping, and attribution discipline.
 Rebuild the target `CHANGELOG/<version>.md` release section from a complete, generated
 history manifest, not stale draft notes. Produce grouped user-facing release
 notes sorted by user interest while preserving every relevant issue/PR ref and
-every human `Thanks @...` attribution.
+every verified human `Thanks @...` attribution.
 
 `CHANGELOG.md` is the generated release index. The shared owner
 `scripts/lib/release-changelog.mjs` resolves release sections and contribution
@@ -92,6 +94,7 @@ of this skill; initial generation must never overwrite them.
    node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
      --base <base-tag> \
      --target <target-ref> \
+     --release-branch <canonical-release-branch> \
      --main-ref origin/main \
      --version <YYYY.M.PATCH> \
      --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
@@ -113,7 +116,7 @@ of this skill; initial generation must never overwrite them.
    exact base/target SHA snapshot under the worktree's git metadata. Iterative
    rewrites at the same target avoid repeated network discovery. Use
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
-<path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
+   <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
    audit. GitHub release bodies are always read live.
    Explicit `CI #`, `CI run #`, `Actions run #`, and `workflow run #` references
    in active source are classified separately only when issue/PR resolution
@@ -200,7 +203,17 @@ of this skill; initial generation must never overwrite them.
    - `### Complete contribution record`: generated PR-first record after the
      grouped prose; it is the exhaustive accounting surface, not a second
      release summary
-6. Preserve attribution:
+6. Preserve verified attribution:
+   - PR authorship comes from the canonical GitHub PR, never the release commit
+     author, committer, or backport operator. Resolve coauthors from that PR's
+     original merge commit; release-carrier trailers and contextual mentions
+     do not establish credit on another PR
+   - rebuild generated thanks from PR, original coauthor, and linked-reporter
+     evidence. Seeds retain membership and references, not unverified old
+     thanks. Regeneration replaces stale generated credit in records and grouped
+     prose; verification rejects both missing and unsupported credit
+   - when a vanished PR meets the existing exact-SHA recovery contract, retain
+     its recorded thanks as historical credit without inventing a PR author
    - keep `#issue`, `(#PR)`, `Fixes #...`, and `Thanks @...`
    - every human-authored merged PR represented by a user-facing entry needs
      its PR ref and `Thanks @author`, even when the PR had no linked issue
@@ -249,10 +262,9 @@ of this skill; initial generation must never overwrite them.
      that establishes a user-visible outcome
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
-   - initial release generation keeps its existing credit policy: never thank
-     bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`.
-     The separately approved post-docs GitHub body uses its complete verified
-     human roster, including `@steipete` when credited
+   - credit verified human authors, including maintainers such as `@steipete`.
+     Never thank bots, known automation accounts such as `@steipete-oai`,
+     `@claude`, `@codex`, `@openclaw`, or `@clawsweeper`
    - do not use GitHub's release contributor count as the source of truth; the
      changelog must carry the complete human credit set itself
 7. Sorting preference:
@@ -289,7 +301,8 @@ of this skill; initial generation must never overwrite them.
   as shipped, when a source PR is absent from the contribution record, when
   direct commits are rendered as a public record dump, when non-editorial
   PRs appear in grouped prose, or when an eligible PR author or known
-  co-author is missing from that PR's `Thanks @...` credit. It also fails
+  co-author is missing from that PR's `Thanks @...` credit, or unsupported
+  credit appears in its record or represented editorial bullet. It also fails
   before history collection when `--base` is not an ancestor of `--target`
   (except beta release tags normalized to merge-base plus shipped-record subtraction),
   when `### Highlights` violates the selected stable (5-8) or beta (0-8)
@@ -314,6 +327,9 @@ of this skill; initial generation must never overwrite them.
   ```
 - verify each beta page with its exact beta version, captured base and target;
   verify stable and extended-stable with their own source section and range.
+  Extended-stable verification also requires
+  `--regular-stable-version <current-regular-stable-version>` so the canonical
+  release notice is checked against its immutable regular-stable context.
   Never compare multiple beta pages against one cumulative stable section.
   A `### Release verification` tail is permitted; other body drift fails.
 - `scripts/render-github-release-notes.mts` is the canonical release-body

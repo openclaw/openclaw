@@ -22,12 +22,19 @@ export type NativeHookRelayCommandPlan = Pick<
 export function buildNativeHookRelayCommandPlan(
   params: Pick<
     RegisterNativeHookRelayParams,
-    "provider" | "agentId" | "sessionKey" | "config" | "preToolUseLoopDetection" | "command"
+    | "provider"
+    | "agentId"
+    | "sessionKey"
+    | "config"
+    | "preToolUseLoopDetection"
+    | "requirePreToolUse"
+    | "command"
   > & {
     relayId: string;
     generation: string;
     /** Canonical tool names requiring bundled execution custody. */
     executionAdmissionToolNames?: readonly string[];
+    postToolUseToolNames?: readonly string[];
   },
 ): NativeHookRelayCommandPlan {
   const stateDbPath = resolveOpenClawStateSqlitePath();

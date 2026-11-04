@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -37,7 +38,7 @@ export function runNodesCommand(label: string, action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     const message = formatErrorMessage(err);
     const { error, warn } = getNodesTheme();
-    defaultRuntime.error(error(`nodes ${label} failed: ${message}`));
+    defaultRuntime.error(error(sanitizeTerminalText(`nodes ${label} failed: ${message}`)));
     const normalized = normalizeLowercaseStringOrEmpty(message);
     if (
       normalized.includes("unauthorizedclient") ||

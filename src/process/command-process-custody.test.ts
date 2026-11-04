@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as identity from "../shared/pid-alive.js";
 import * as groups from "./child-process-tree.js";
 import { settleCommandProcessGroups } from "./command-process-custody.js";
+import { COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS } from "./exec-spawn.js";
 import * as termination from "./kill-tree.js";
 
 afterEach(() => {
@@ -36,8 +37,29 @@ it.skipIf(process.platform === "win32")(
     vi.spyOn(groups, "isChildProcessTreeAlive").mockReturnValue(true);
     vi.spyOn(identity, "getProcessInstanceStartTime").mockReturnValue(1);
     const result = settleCommandProcessGroups([{ pid: 4242, startedAt: 1 }]);
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
     expect(await result).toMatchObject({ settled: false, pids: [4242] });
+    expect(kill).toHaveBeenCalledExactlyOnceWith(4242, { detached: true, force: true });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "confirms a killed group that outlives the cooperative grace",
+  async () => {
+    vi.useFakeTimers();
+    let disappearsAt = Number.POSITIVE_INFINITY;
+    const kill = vi.spyOn(termination, "killProcessTree").mockImplementation(() => {
+      disappearsAt = Date.now() + 1_000;
+    });
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("synthetic group probe"), {
+        code: Date.now() < disappearsAt ? "EPERM" : "ESRCH",
+      });
+    });
+    vi.spyOn(identity, "getProcessInstanceStartTime").mockReturnValue(1);
+    const result = settleCommandProcessGroups([{ pid: 4242, startedAt: 1 }]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await result).toEqual({ settled: true, pids: [] });
     expect(kill).toHaveBeenCalledExactlyOnceWith(4242, { detached: true, force: true });
   },
 );

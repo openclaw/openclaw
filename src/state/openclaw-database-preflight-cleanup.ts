@@ -1,7 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
+import {
+  deferSqliteSnapshotCleanupAfterRead,
+  SqliteSnapshotCleanupError,
+} from "../infra/sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 
 /** Failed retirement keeps its existing snapshot owner and cannot admit more schemas. */
@@ -34,7 +37,14 @@ export async function cleanupOpenClawStatePreflight(options: {
       );
     }
   } catch (error) {
-    cleanupErrors.push(error);
+    // Every inspection or close failure reaches these lists, so empty lists mean a successful read.
+    if (
+      options.inspectionErrors.length > 0 ||
+      cleanupErrors.length > 0 ||
+      !deferSqliteSnapshotCleanupAfterRead(error, options.snapshot?.cleanupRoot)
+    ) {
+      cleanupErrors.push(error);
+    }
   }
   if (cleanupErrors.length > 0) {
     // Preserve an earlier inspection/cancellation as the cause and first error.

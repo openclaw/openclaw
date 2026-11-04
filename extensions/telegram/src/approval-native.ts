@@ -1,8 +1,8 @@
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import {
-  createChannelApproverDmTargetResolver,
-  createChannelNativeOriginTargetResolver,
+  createChannelApproverDmTargetResolverAsync,
+  createChannelNativeOriginTargetResolverAsync,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
@@ -52,7 +52,7 @@ function resolveTurnSourceTelegramOriginTarget(
   };
 }
 
-const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolver({
+const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolverAsync({
   channel: "telegram",
   shouldHandleRequest: shouldHandleTelegramExecApprovalRequest,
   resolveTurnSourceTarget: resolveTurnSourceTelegramOriginTarget,
@@ -62,7 +62,7 @@ const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolver({
   }),
 });
 
-const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolver({
+const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolverAsync({
   shouldHandleRequest: shouldHandleTelegramExecApprovalRequest,
   resolveApprovers: getTelegramExecApprovalApprovers,
   mapApprover: (approver) => ({ to: approver }),
@@ -80,36 +80,35 @@ function describeTelegramApprovalSetup(
   return `Approve it from the ${surface} for now. Telegram supports native ${approvalKind} approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
 }
 
-const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalCapability({
-  channel: "telegram",
-  channelLabel: "Telegram",
-  describeExecApprovalSetup: (params) => describeTelegramApprovalSetup(params, "exec"),
-  describePluginApprovalSetup: (params) => describeTelegramApprovalSetup(params, "plugin"),
-  listAccountIds: listTelegramAccountIds,
-  hasApprovers: ({ cfg, accountId }) =>
-    getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,
-  isExecAuthorizedSender: isTelegramExecApprovalAuthorizedSender,
-  isPluginAuthorizedSender: isTelegramExecApprovalApprover,
-  isNativeDeliveryEnabled: isTelegramExecApprovalClientEnabled,
-  resolveNativeDeliveryMode: resolveTelegramExecApprovalTarget,
-  requireMatchingTurnSourceChannel: true,
-  resolveSuppressionAccountId: ({ target, request }) =>
-    normalizeOptionalString(target.accountId) ??
-    normalizeOptionalString(request.request.turnSourceAccountId),
-  resolveOriginTarget: resolveTelegramOriginTarget,
-  resolveApproverDmTargets: resolveTelegramApproverDmTargets,
-  notifyOriginWhenDmOnly: true,
-  nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
-    capabilityBoundary: true,
-    eventKinds: ["exec", "plugin", "system-agent"],
-    isConfigured: isTelegramExecApprovalClientEnabled,
-    shouldHandle: shouldHandleTelegramExecApprovalRequest,
-    load: async () => (await import("./approval-handler.runtime.js")).telegramApprovalNativeRuntime,
-  }),
-});
-
 export const telegramApprovalCapability: ChannelApprovalCapability = {
-  ...telegramNativeApprovalCapability,
+  ...createApproverRestrictedNativeApprovalCapability({
+    channel: "telegram",
+    channelLabel: "Telegram",
+    describeExecApprovalSetup: (params) => describeTelegramApprovalSetup(params, "exec"),
+    describePluginApprovalSetup: (params) => describeTelegramApprovalSetup(params, "plugin"),
+    listAccountIds: listTelegramAccountIds,
+    hasApprovers: ({ cfg, accountId }) =>
+      getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,
+    isExecAuthorizedSender: isTelegramExecApprovalAuthorizedSender,
+    isPluginAuthorizedSender: isTelegramExecApprovalApprover,
+    isNativeDeliveryEnabled: isTelegramExecApprovalClientEnabled,
+    resolveNativeDeliveryMode: resolveTelegramExecApprovalTarget,
+    requireMatchingTurnSourceChannel: true,
+    resolveSuppressionAccountId: ({ target, request }) =>
+      normalizeOptionalString(target.accountId) ??
+      normalizeOptionalString(request.request.turnSourceAccountId),
+    resolveOriginTarget: resolveTelegramOriginTarget,
+    resolveApproverDmTargets: resolveTelegramApproverDmTargets,
+    notifyOriginWhenDmOnly: true,
+    nativeRuntimeAsync: createLazyChannelApprovalNativeRuntimeAdapterAsync({
+      capabilityBoundary: true,
+      eventKinds: ["exec", "plugin", "system-agent"],
+      isConfigured: isTelegramExecApprovalClientEnabled,
+      shouldHandle: shouldHandleTelegramExecApprovalRequest,
+      load: async () =>
+        (await import("./approval-handler.runtime.js")).telegramApprovalNativeRuntime,
+    }),
+  }),
   resolveApproveCommandBehavior: (params) => {
     if (
       params.approvalKind !== "exec" ||

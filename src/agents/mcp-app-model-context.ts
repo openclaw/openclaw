@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { ContentBlockSchema, type ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import type { ContentBlock } from "@modelcontextprotocol/client";
+import { ContentBlockSchema } from "@modelcontextprotocol/core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ImageContent } from "../llm/types.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -156,7 +157,7 @@ function modelContent(block: ContentBlock): ContentBlock {
   const { _meta: _presentation, ...content } = block;
   if (content.type === "resource") {
     const { _meta: _resourcePresentation, ...resource } = content.resource;
-    return { ...content, resource };
+    content.resource = resource;
   }
   return content;
 }
@@ -237,12 +238,10 @@ export function leaseMcpAppModelContextForTurn(params: {
       ? { structuredContent: snapshot.structuredContent }
       : {}),
   }));
-  const input = projectMcpAppModelContextInput(modelContext);
   let committed = false;
   return {
     // Harness adapters consume these as conversation input, including native image blocks.
     modelContext,
-    ...input,
     assertCurrent: () => {
       params.runtime.assertOwnerCurrent?.();
       if (

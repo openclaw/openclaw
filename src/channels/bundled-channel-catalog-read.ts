@@ -71,18 +71,8 @@ function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
   return bundledExternalEntries;
 }
 
-function isChannelCatalogEntryLike(
-  entry: ChannelCatalogEntryLike | PluginPackageChannel,
-): entry is ChannelCatalogEntryLike {
-  return "openclaw" in entry;
-}
-
-function toBundledChannelEntry(
-  entry: ChannelCatalogEntryLike | PluginPackageChannel,
-): BundledChannelCatalogEntry | null {
-  const channel: PluginPackageChannel | undefined = isChannelCatalogEntryLike(entry)
-    ? entry.openclaw?.channel
-    : entry;
+function toBundledChannelEntry(entry: ChannelCatalogEntryLike): BundledChannelCatalogEntry | null {
+  const channel = entry.openclaw?.channel;
   const id = normalizeOptionalLowercaseString(channel?.id);
   if (!id || !channel) {
     return null;

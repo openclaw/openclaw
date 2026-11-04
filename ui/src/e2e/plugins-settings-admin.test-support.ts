@@ -3,6 +3,7 @@ import type {
   PluginListResult,
   PluginsInspectResult,
 } from "../lib/plugins/index.ts";
+import { createPluginDeclaredSurface } from "../test-helpers/plugins-e2e-fixtures.test-support.ts";
 
 export const workboard = {
   id: "workboard",
@@ -61,18 +62,7 @@ export const inspection = {
     enabled: true,
   },
   source: { kind: "npm", packageName: workboard.packageName },
-  declared: {
-    channels: [],
-    providers: [],
-    tools: ["workboard_list"],
-    contracts: [],
-    hooks: [],
-    mcpServers: [],
-    cliCommands: [],
-    cliBackends: [],
-    skills: [],
-    dangerousConfigFlags: [],
-  },
+  declared: { ...createPluginDeclaredSurface(), tools: ["workboard_list"] },
   components: {
     mapped: ["skills", "mcpServers"],
     skills: ["Weekly planning"],

@@ -138,7 +138,7 @@ it("preserves the accepted successor and both hook lifetimes when an identity ob
     if (!patch) {
       throw new Error("Expected a successor identity patch");
     }
-    options.assertCommitAllowed?.();
+    options.workerGuard?.source?.();
     row = { ...row, ...patch };
     try {
       options.onCommitted?.(structuredClone(row));
@@ -171,7 +171,7 @@ it("preserves the accepted successor and both hook lifetimes when an identity ob
     hookSignals.push(getAsyncWorkSignal());
     await startGate.promise;
   });
-  noteActiveSessionForShutdown({ ...target, cfg: {} });
+  noteActiveSessionForShutdown(target);
   try {
     const accepted = await caller.track(() =>
       acceptCompactionSuccessor({

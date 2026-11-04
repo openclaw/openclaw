@@ -1,6 +1,7 @@
 /** Verifies provider runtime discovery includes synthetic-auth provider hooks. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareSyntheticLocalProviderAuth } from "../agents/model-auth-runtime.js";
+import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
 
@@ -180,6 +181,78 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
     expect(resolveSyntheticAuth).toHaveBeenCalledOnce();
   });
 
+  it("limits direct auth lookup to non-secret synthetic markers", async () => {
+    const marker = {
+      apiKey: "custom-local",
+      source: "configured headers",
+      mode: "api-key" as const,
+    };
+    for (const result of [
+      marker,
+      { ...marker, apiKey: "fixture-real-key" },
+      { ...marker, apiKey: "secretref-env:FIXTURE_KEY" },
+      { ...marker, mode: "oauth" as const },
+      { ...marker, nativeAuth: { runtime: "fixture", mode: "api-key" as const } },
+    ]) {
+      const provider: ProviderPlugin = {
+        id: "config-auth",
+        label: "Config auth",
+        auth: [],
+        resolveSyntheticAuth: () => result,
+      };
+      await resolveProviderRuntimePlugin.withImplementation(
+        () => provider,
+        async () =>
+          await resolvePluginDiscoveryProvidersRuntime.withImplementation(
+            () => [],
+            async () => {
+              expect(
+                await prepareSyntheticLocalProviderAuth({
+                  cfg: {},
+                  provider: provider.id,
+                  allowPluginSyntheticAuth: false,
+                }),
+              ).toEqual(result === marker ? marker : null);
+              if (result === marker) {
+                expect(
+                  await prepareSyntheticLocalProviderAuth({
+                    cfg: configForProviders({
+                      [provider.id]: {
+                        apiKey: { source: "env", provider: "default", id: "MISSING_KEY" },
+                        baseUrl: "https://fixture.example/v1",
+                        models: [],
+                      },
+                    }),
+                    provider: provider.id,
+                    allowPluginSyntheticAuth: false,
+                  }),
+                ).toBeNull();
+              }
+            },
+          ),
+      );
+    }
+  });
+
+  it("reuses a prepared non-secret marker without starting external auth", async () => {
+    const params = nativeParams();
+    const marker = { apiKey: "custom-local", source: "prepared headers", mode: "api-key" as const };
+    nativeProvider.prepareSyntheticAuth.mockResolvedValue(marker);
+    const directParams = {
+      cfg: params.config,
+      provider: params.provider,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+      allowPluginSyntheticAuth: false,
+    };
+    expect(await prepareSyntheticLocalProviderAuth(directParams)).toBeNull();
+    expect(nativeProvider.prepareSyntheticAuth).not.toHaveBeenCalled();
+
+    await prepareProviderSyntheticAuthWithPlugin(params);
+    expect(await prepareSyntheticLocalProviderAuth(directParams)).toEqual(marker);
+    expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledOnce();
+  });
+
   it.each(["config", "env", "workspace", "provider generation"])(
     "does not reuse native facts across a changed %s",
     async (changed) => {
@@ -334,13 +407,9 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
   );
 
   it("captures the canonical pure result when it precedes an async alias fallback", async () => {
-    const config = {
-      models: {
-        providers: {
-          "custom-native": { api: "ollama" as const, baseUrl: "http://localhost", models: [] },
-        },
-      },
-    };
+    const config = configForProviders({
+      "custom-native": { api: "ollama" as const, baseUrl: "http://localhost", models: [] },
+    });
     const resolveSyntheticAuth = vi.fn(() => nativeAuth);
     resolveProviderRuntimePlugin
       .mockReturnValueOnce({

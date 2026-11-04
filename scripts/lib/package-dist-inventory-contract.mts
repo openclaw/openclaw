@@ -48,7 +48,8 @@ export function createPackageDistContentInventoryEntry(
   return {
     path: relativePath.replace(/\\/g, "/"),
     sha256: hash.digest,
-    mode: mode & 0o777,
+    // Preserve special bits for the extra-execute safety check.
+    mode: mode & 0o7777,
     size: hash.bytes,
   };
 }
@@ -57,13 +58,13 @@ export function parsePackageDistContentInventory(
   value: unknown,
 ): PackageDistContentInventoryEntry[] {
   if (!Array.isArray(value)) {
-    throw new Error("Invalid package dist content inventory");
+    throw new Error("Invalid package dist content inventory: malformed metadata");
   }
   const seen = new Set<string>();
   return value
     .map((entry: unknown) => {
       if (!entry || typeof entry !== "object") {
-        throw new Error("Invalid package dist content inventory entry");
+        throw new Error("Invalid package dist content inventory entry: malformed metadata");
       }
       const item = entry as PackageDistContentInventoryEntry;
       if (
@@ -83,7 +84,7 @@ export function parsePackageDistContentInventory(
         item.mode > 0o777 ||
         seen.has(item.path)
       ) {
-        throw new Error("Invalid package dist content inventory entry");
+        throw new Error("Invalid package dist content inventory entry: malformed metadata");
       }
       seen.add(item.path);
       return { path: item.path, sha256: item.sha256, size: item.size, mode: item.mode };
@@ -94,13 +95,41 @@ export function parsePackageDistContentInventory(
 export function comparePackageDistContentInventory(
   expected: PackageDistContentInventoryEntry[],
   actual: PackageDistContentInventoryEntry[],
+  warnings?: string[],
 ): string[] {
   const format = (entry: PackageDistContentInventoryEntry) =>
-    `${entry.path}:${entry.sha256}:${entry.size}:${process.platform === "win32" ? "" : Boolean(entry.mode & 0o111)}`;
-  return JSON.stringify(expected.map(format).toSorted()) ===
+    `${entry.path}:${entry.sha256}:${entry.size}`;
+  const actualByPath = new Map(actual.map((entry) => [entry.path, entry]));
+  if (
+    JSON.stringify(expected.map(format).toSorted()) !==
     JSON.stringify(actual.map(format).toSorted())
-    ? []
-    : [
-        `Invalid package dist content inventory at ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}: expected packaged file hashes and executable bits to match current dist files.`,
-      ];
+  ) {
+    return [
+      `Invalid package dist content inventory: content mismatch at ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}: expected packaged file hashes and sizes to match current dist files.`,
+    ];
+  }
+  if (
+    process.platform !== "win32" &&
+    expected.some((entry) => {
+      const mode = actualByPath.get(entry.path)!.mode;
+      return entry.mode & 0o111 ? !(mode & 0o111) : Boolean(mode & 0o111) && Boolean(mode & 0o7022);
+    })
+  ) {
+    return [
+      `Invalid package dist content inventory: executable permission mismatch at ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}: expected packaged executable permissions to match current dist files.`,
+    ];
+  }
+  // ACL-backed filesystems can add execute bits without changing packaged content.
+  const extraExecutableFiles =
+    process.platform === "win32"
+      ? 0
+      : expected.filter(
+          (entry) => !(entry.mode & 0o111) && actualByPath.get(entry.path)!.mode & 0o111,
+        ).length;
+  if (extraExecutableFiles) {
+    warnings?.push(
+      `${extraExecutableFiles} packaged dist file(s) have extra execute bits; hashes and sizes match ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}. Continuing without changing file permissions.`,
+    );
+  }
+  return [];
 }

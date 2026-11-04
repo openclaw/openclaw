@@ -52,6 +52,14 @@ export function readLiveTerminalRunId(message: unknown): string | null {
   return readLiveTerminalIdentity(message)?.runId ?? null;
 }
 
+/** A presentation clone carries the same outcome without publishing a new one. */
+export function copyLiveTerminalIdentity(source: unknown, target: object): void {
+  const identity = readLiveTerminalIdentity(source);
+  if (identity) {
+    liveTerminalIdentities.set(target, identity);
+  }
+}
+
 export function readLiveTerminalDisposition(
   message: unknown,
 ): LiveTerminalIdentity["disposition"] | null {
@@ -98,17 +106,16 @@ export function reconcileAuthoritativeTerminalHistory<T>(options: {
   visibleMessages: T[];
 }): T[] {
   const terminal = authoritativeTerminals.get(options.host);
-  const historyContainsTerminal = Boolean(
-    terminal &&
-    areUiSessionKeysEquivalent(terminal.sessionKey, options.sessionKey) &&
-    options.visibleMessages.some((message) => {
+  if (
+    !terminal ||
+    !areUiSessionKeysEquivalent(terminal.sessionKey, options.sessionKey) ||
+    !options.visibleMessages.some((message) => {
       const identity = readSessionMessageIdentity(message);
       return (
         identity?.role === "assistant" && !identity.isImported && identity.id === terminal.messageId
       );
-    }),
-  );
-  if (!terminal || !historyContainsTerminal) {
+    })
+  ) {
     return options.previousMessages;
   }
   authoritativeTerminals.set(options.host, { ...terminal, historyApplied: true });

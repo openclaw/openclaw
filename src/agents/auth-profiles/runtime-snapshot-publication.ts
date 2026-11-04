@@ -1,10 +1,16 @@
+import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
+import { authProfilesLog } from "./constants.js";
 import { mergeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
 import {
   preserveResolvedSecretBackedCredentials,
   runtimeAuthProfileSnapshotSharesOwner,
   type OwnedRuntimeAuthProfileStoreSnapshotEntry,
 } from "./runtime-snapshot-owner.js";
-import { setRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshotAtDatabasePath,
+  setRuntimeAuthProfileStoreSnapshotAtDatabasePath,
+} from "./runtime-snapshots.js";
+import type { AuthProfileDatabase } from "./sqlite.js";
 import type { AuthProfileStore, AuthProfileStoreOwner } from "./types.js";
 
 /** Publish canonical facts while retaining the current host's same-owner overlays. */
@@ -44,4 +50,40 @@ export function publishPreparedRuntimeAuthProfileStoreSnapshot(
     owner,
     candidates,
   );
+}
+
+export type RuntimeSnapshotPublication = {
+  agentDir?: string;
+  databasePath: string;
+  publish: () => boolean;
+};
+
+export function publishRuntimeSnapshotsAfterCommit(
+  publication: RuntimeSnapshotPublication,
+): boolean {
+  // A committed write can no longer roll back, so publication failure must
+  // evict only the exact derived owner that could now be stale.
+  try {
+    return publication.publish();
+  } catch (err) {
+    clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+      publication.databasePath,
+      publication.agentDir,
+    );
+    authProfilesLog.warn("auth profile store committed but runtime snapshot publication failed", {
+      err,
+    });
+    return false;
+  }
+}
+
+export function deferRuntimeSnapshotsAfterCommit(
+  database: AuthProfileDatabase,
+  publication: RuntimeSnapshotPublication,
+  publishWithoutTransaction = false,
+): void {
+  const publish = () => publishRuntimeSnapshotsAfterCommit(publication);
+  if (!deferSqlitePostCommitPublication(database.db, publish) && publishWithoutTransaction) {
+    publish();
+  }
 }

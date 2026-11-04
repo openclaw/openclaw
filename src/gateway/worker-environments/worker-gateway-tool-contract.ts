@@ -12,6 +12,7 @@ export type WorkerGatewayToolSink = { send(frame: WorkerGatewayToolUpdateFrame):
 
 export type WorkerGatewayToolRuntime = {
   applyPromptToolsAllow(toolsAllow?: string[]): string[];
+  getAdditionalInheritedToolNames(): readonly string[];
   getSurface(identity: WorkerConnectionIdentity): Promise<WorkerToolSurface>;
   getPromptProjection(identity: WorkerConnectionIdentity): Promise<{
     tools: NonNullable<WorkerInferenceContext["tools"]>;

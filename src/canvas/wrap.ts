@@ -3,6 +3,14 @@ import { escapeHtml } from "../shared/html-escape.js";
 import { WIDGET_MEDIA_SOURCES } from "../shared/widget-media.js";
 import { WIDGET_THEME_MESSAGE_TYPE, WIDGET_THEME_TOKENS } from "../shared/widget-theme.js";
 
+const WIDGET_BODY_HEIGHT =
+  "Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,b.getBoundingClientRect().height))";
+// The existing post-render chat-host message confirms geometry in saved documents, too.
+export const WIDGET_SIZE_CONFIRMATION_HTML =
+  "<script>(()=>{const parent=window.parent;const post=parent.postMessage.bind(parent);" +
+  'addEventListener("message",event=>{if(event.source!==parent||event.data?.type!=="openclaw:widget-chat-host"||event.data.measure!==true)return;' +
+  `const b=document.body;if(b){const height=${WIDGET_BODY_HEIGHT};if(height)post({type:"openclaw:widget-size",height},"*");}});})();</script>`;
+
 // Baked palettes mirror the host claw theme (ui/src/styles/base.css) so
 // fallback renders match Control UI renders, where the theme bridge pushes the
 // same host values. Contrast tradeoffs in these pairings are owned by the host
@@ -31,7 +39,7 @@ const WIDGET_BASE_STYLES = `:root{color-scheme:light dark;
 --accent:#ff5c5c;--accent-fill:#d13c3c;--accent-fg:#ffffff;
 --ok:#22c55e;--warn:#f59e0b;--danger:#ef4444;--info:#3b82f6}}
 *{box-sizing:border-box}@supports not selector(::-webkit-scrollbar-thumb){*{scrollbar-color:var(--scrollbar-thumb) transparent;scrollbar-width:thin}}html,body{margin:0}::-webkit-scrollbar{width:var(--scrollbar-size);height:var(--scrollbar-size);background:var(--surface)}::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}::-webkit-scrollbar-button{display:none}::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);background-clip:content-box;border:var(--scrollbar-thumb-inset) solid transparent;border-radius:var(--radius-full)}::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-thumb-hover);background-clip:content-box}.openclaw-chat-host,.openclaw-chat-host body{scrollbar-width:none}.openclaw-chat-host::-webkit-scrollbar,.openclaw-chat-host body::-webkit-scrollbar{display:none}
-body{font:14px/1.5 var(--font-body);color:var(--text)}
+body{display:flow-root;font:14px/1.5 var(--font-body);color:var(--text)}
 h1,h2,h3{margin:0 0 8px;color:var(--text-strong);font-weight:600}
 h1{font-size:18px}h2{font-size:16px}h3{font-size:14px}
 p{margin:0 0 8px}
@@ -82,7 +90,7 @@ export function buildWidgetDocument(
     // documentElement.scrollHeight reports the viewport for short content, so
     // measure the body box, which tracks the actual widget height.
     "let last=0;const report=()=>{const b=document.body;if(!b)return;" +
-    "const h=Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,b.getBoundingClientRect().height));" +
+    `const h=${WIDGET_BODY_HEIGHT};` +
     'if(h&&h!==last){last=h;post({type:"openclaw:widget-size",height:h},"*");}};' +
     "listen('load',report);new ResizeObserver(report).observe(document.body);" +
     "setTimeout(report,50);setTimeout(report,500);})();</script>";

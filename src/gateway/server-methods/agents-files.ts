@@ -5,13 +5,15 @@ import {
   type AgentsFilesGetParams,
   type AgentsFilesGetResult,
   ErrorCodes,
-  errorShape,
   validateAgentsFilesGetParams,
   validateAgentsFilesListParams,
   validateAgentsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { buildIdentityMarkdownForWrite } from "../../agents/identity-file.js";
+import {
+  buildIdentityMarkdownForWrite,
+  loadAgentIdentityFromWorkspaceAsync,
+} from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import {
@@ -26,6 +28,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { resolveConfiguredAgentIdOrRespondError } from "./agent-id-shared.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { enqueueWorkspaceFileUpdate } from "./workspace-fs.js";
@@ -63,7 +66,7 @@ function resolveAgentWorkspaceFileOrRespondError(
   }
   const name = params.name.trim();
   if (!ALLOWED_FILE_NAMES.has(name)) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`));
+    respondError(respond, ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`);
     return null;
   }
   return { agentId, workspaceDir: resolveAgentWorkspaceDir(cfg, agentId), name };
@@ -91,11 +94,7 @@ async function statWorkspaceFileSafely(
 }
 
 function respondWorkspaceFileUnsafe(respond: RespondFn, name: string): void {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, `unsafe workspace file "${name}"`),
-  );
+  respondError(respond, ErrorCodes.INVALID_REQUEST, `unsafe workspace file "${name}"`);
 }
 
 export async function writeWorkspaceFileOrRespond(params: {
@@ -207,16 +206,17 @@ function respondWorkspaceFileConflict(
   name: string,
   currentHash: string | undefined,
 ) {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, `agent file "${name}" changed since it was read`, {
+  respondError(
+    respond,
+    ErrorCodes.INVALID_REQUEST,
+    `agent file "${name}" changed since it was read`,
+    {
       details: {
         type: "agent_file_conflict",
         name,
         ...(currentHash ? { currentHash } : {}),
       },
-    }),
+    },
   );
 }
 
@@ -367,15 +367,25 @@ export const agentFileHandlers: Pick<
       return;
     }
     const { agentId, workspaceDir, name } = resolved;
+    // Admit against the draft's target; the entire write below stays on this captured workspace.
+    if (params.expectedWorkspace !== undefined && params.expectedWorkspace !== workspaceDir) {
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `Agent workspace changed since "${name}" was read. Your draft is preserved. Reload to use the current workspace file, or Overwrite to save this draft there.`,
+        { details: { type: "agent_file_conflict", name } },
+      );
+      return;
+    }
     const access = getAgentWorkspaceAccess(workspaceDir);
     const filePath = path.join(workspaceDir, name);
     const content = params.content;
     let workspaceRoot: WorkspaceRoot | null = null;
     let conflict: { currentHash: string | undefined } | undefined;
+    if (Buffer.byteLength(params.content) > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+      throw new Error("Workspace document exceeds its write bound");
+    }
     if (access) {
-      if (Buffer.byteLength(params.content) > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
-        throw new Error("Workspace document exceeds its write bound");
-      }
       const assertCurrent = () => {
         if (getAgentWorkspaceAccess(workspaceDir) !== access) {
           throw new Error("Workspace access changed while saving an Agent document");
@@ -383,13 +393,10 @@ export const agentFileHandlers: Pick<
       };
       const createFileExclusive = access.bridge.createFileExclusive;
       if (params.expectedMissing && !createFileExclusive) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "This workspace host cannot safely create a missing Agent document. Update its workspace provider, or create the file on that host and reload it before saving.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "This workspace host cannot safely create a missing Agent document. Update its workspace provider, or create the file on that host and reload it before saving.",
         );
         return;
       }
@@ -472,6 +479,11 @@ export const agentFileHandlers: Pick<
     const meta: Partial<FileMeta> | null = access
       ? { size: Buffer.byteLength(content) }
       : await statWorkspaceFileSafely(workspaceRoot, name);
+    if (name === DEFAULT_IDENTITY_FILENAME) {
+      // Drain reads admitted before the write before clients start their replacement read.
+      await loadAgentIdentityFromWorkspaceAsync(workspaceDir);
+      context.broadcast("agent.identity.changed", { agentId });
+    }
     respond(
       true,
       {

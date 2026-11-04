@@ -61,9 +61,7 @@ export function createSlackNativeProgressTransport(params: {
       const delivered = markDelivered(streamThreadTs);
       return update.chunks?.length ? delivered : true;
     } finally {
-      if (delivery.nativeProgressStreamStartPromise === startPromise) {
-        delivery.nativeProgressStreamStartPromise = null;
-      }
+      delivery.nativeProgressStreamStartPromise = null;
     }
   };
 

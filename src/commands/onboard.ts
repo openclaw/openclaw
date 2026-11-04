@@ -5,11 +5,13 @@
  * routes to interactive or non-interactive onboarding.
  */
 import path from "node:path";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
-import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import { resolveGatewayPort } from "../config/config.js";
+import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isValidEnvSecretRefId } from "../config/types.secrets.js";
+import { hasConfiguredSecretInput, isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
@@ -17,7 +19,6 @@ import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import { normalizeTokenProviderInput } from "../plugins/provider-auth-input.js";
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -157,6 +158,7 @@ async function validateResetAuthChoice(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  discoveryConfig: OpenClawConfig;
   workspaceDir: string;
   resetScope: ResetScope;
 }): Promise<boolean> {
@@ -199,29 +201,25 @@ async function validateResetAuthChoice(params: {
       `Auth choice "${authChoice}" was not matched to a provider setup flow. Run ${formatCliCommand("openclaw onboard")} to choose interactively.`,
     );
   }
+  const providerLookup = {
+    config: params.baseConfig,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+    includeUntrustedWorkspacePlugins: false,
+  };
   const providerAuthChoices: Array<ProviderAuthChoiceMetadata & { providerAliases?: string[] }> = [
-    ...resolveManifestProviderAuthChoices({
-      config: params.baseConfig,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      includeUntrustedWorkspacePlugins: false,
-    }),
-    ...resolveProviderInstallCatalogEntries({
-      config: params.baseConfig,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      includeUntrustedWorkspacePlugins: false,
-    }),
+    ...resolveManifestProviderAuthChoices(providerLookup),
+    ...resolveProviderInstallCatalogEntries(providerLookup),
   ];
   const isGenericProviderChoice = GENERIC_PROVIDER_AUTH_CHOICES.includes(authChoice);
-  const normalizedTokenProvider = normalizeTokenProviderInput(params.opts.tokenProvider);
+  const normalizedTokenProvider = normalizeOptionalLowercaseString(params.opts.tokenProvider);
   const inferredOptionKey = inferredAuthChoice?.matches[0]?.optionKey;
   const providerAuthChoice = isGenericProviderChoice
     ? providerAuthChoices.find((choice) => {
         const providerMatches = normalizedTokenProvider
-          ? normalizeTokenProviderInput(choice.providerId) === normalizedTokenProvider ||
+          ? normalizeOptionalLowercaseString(choice.providerId) === normalizedTokenProvider ||
             choice.providerAliases?.some(
-              (alias) => normalizeTokenProviderInput(alias) === normalizedTokenProvider,
+              (alias) => normalizeOptionalLowercaseString(alias) === normalizedTokenProvider,
             )
           : inferredOptionKey !== undefined && choice.optionKey === inferredOptionKey;
         const methodId = choice.methodId.toLowerCase();
@@ -281,47 +279,87 @@ async function validateResetAuthChoice(params: {
       CustomApiError,
       parseNonInteractiveCustomApiFlags,
       resolveCustomProviderId,
+      resolveCustomProviderNoAuth,
+      resolveNonInteractiveCustomApiModelIds,
     } = await import("./onboard-custom-config.js");
     try {
       const custom = parseNonInteractiveCustomApiFlags({
         baseUrl: params.opts.customBaseUrl,
         modelId: params.opts.customModelId,
         compatibility: params.opts.customCompatibility,
-        apiKey: undefined,
+        apiKey: params.opts.customApiKey,
+        noAuth: params.opts.customNoAuth,
         providerId: params.opts.customProviderId,
         supportsImageInput: params.opts.customImageInput,
       });
       const customProviderId = resolveCustomProviderId({
-        config: params.baseConfig,
+        config: params.discoveryConfig,
         baseUrl: custom.baseUrl,
         providerId: custom.providerId,
       }).providerId;
-      const customCredential = await resolveNonInteractiveCredential({
-        provider: customProviderId,
-        cfg: params.baseConfig,
-        flagValue: params.opts.customApiKey,
-        flagName: "--custom-api-key",
-        envVar: "CUSTOM_API_KEY",
-        runtime: params.runtime,
-        agentDir: target.agentDir,
-        workspaceDir: params.workspaceDir,
-        allowProfile: params.resetScope === "config",
-        required: false,
-        secretInputMode: params.opts.secretInputMode,
-        json: params.opts.json,
+      const configuredKey = params.discoveryConfig.models?.providers?.[customProviderId]?.apiKey;
+      const noAuth = resolveCustomProviderNoAuth({
+        ...custom,
+        config: params.discoveryConfig,
+        providerId: customProviderId,
+        apiKey: custom.apiKey ?? process.env.CUSTOM_API_KEY?.trim(),
       });
+      const customCredential = noAuth
+        ? undefined
+        : await resolveNonInteractiveCredential({
+            provider: customProviderId,
+            cfg: params.baseConfig,
+            flagValue: params.opts.customApiKey,
+            flagName: "--custom-api-key",
+            envVar: "CUSTOM_API_KEY",
+            runtime: params.runtime,
+            agentDir: target.agentDir,
+            workspaceDir: params.workspaceDir,
+            allowProfile:
+              params.resetScope === "config" && !hasConfiguredSecretInput(configuredKey),
+            required: false,
+            secretInputMode: params.opts.secretInputMode,
+            json: params.opts.json,
+          });
       if (params.opts.customApiKey?.trim() && !customCredential) {
         return false;
       }
+      if (
+        !custom.modelId &&
+        !noAuth &&
+        !customCredential &&
+        hasConfiguredSecretInput(configuredKey)
+      ) {
+        return reject(
+          "Reset would remove the configured discovery credential. Pass --custom-api-key or rerun without --reset.",
+        );
+      }
+      const modelIds = await resolveNonInteractiveCustomApiModelIds({
+        ...custom,
+        config: params.discoveryConfig,
+        noAuth,
+        apiKey: customCredential?.key,
+        agentDir: target.agentDir,
+      });
       applyCustomApiConfig({
         ...custom,
+        modelId: modelIds[0] ?? "",
         config: params.baseConfig,
-        apiKey: undefined,
+        noAuth,
+        apiKey: customCredential?.key,
       });
+      if (noAuth) {
+        params.opts.customNoAuth = true;
+      }
+      params.opts.customModelIds = modelIds;
+      params.opts.customProviderId = customProviderId;
     } catch (error) {
       const message =
         error instanceof CustomApiError &&
-        (error.code === "missing_required" || error.code === "invalid_compatibility")
+        (error.code === "missing_required" ||
+          error.code === "invalid_compatibility" ||
+          error.code === "no_auth_conflict" ||
+          error.code === "no_auth_unsupported")
           ? error.message
           : `Invalid custom provider config: ${formatErrorMessage(error)}`;
       return reject(message);
@@ -417,7 +455,6 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   );
 }
 
-/** Runs the onboard command after normalizing legacy flags and setup mode. */
 export async function setupWizardCommand(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -549,30 +586,37 @@ export async function setupWizardCommand(
 
   const runSetupAfterOptionalReset = async () => {
     if (normalizedOpts.reset) {
-      const snapshot = await readConfigFileSnapshot();
-      const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
+      const [{ readConfigSnapshotBeforeEngineSelection }, { resolveDatabaseFamilyEngines }] =
+        await Promise.all([
+          import("./config-preflight-snapshot.js"),
+          import("../infra/database-engine/registry.js"),
+        ]);
+      const snapshot = await readConfigSnapshotBeforeEngineSelection(process.env, {
+        isolateEnv: false,
+      });
       const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";
+      if (
+        isConfigReadFailure(snapshot) ||
+        snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+      ) {
+        reject(
+          "Cannot determine the source database from an unreadable config. Repair the config before using onboard --reset. For a file-only reset without onboarding, use openclaw reset --scope config.",
+        );
+        return;
+      }
+      if (Object.values(resolveDatabaseFamilyEngines(snapshot.config)).includes("postgres")) {
+        reject(
+          "Onboarding reset retains database state and cannot discard its PostgreSQL routing. Rerun without --reset, or use openclaw database port --to sqlite before resetting.",
+        );
+        return;
+      }
+      const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
       // Every reset scope removes the config file. Validate setup against the
       // empty config and requested/default workspace that dispatch will see.
       const setupBaseConfig: OpenClawConfig = {};
       const setupWorkspaceDir = resolveUserPath(normalizedOpts.workspace ?? DEFAULT_WORKSPACE);
       const configuredWorkspace: unknown =
         normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace;
-      if (
-        resetScope === "full" &&
-        normalizedOpts.workspace === undefined &&
-        snapshot.exists &&
-        !snapshot.valid &&
-        // A snapshot always carries a sourceConfig object (empty on failure), so
-        // only readError distinguishes "config could not be read" from "config
-        // parsed but configures no workspace", where the default is correct.
-        snapshot.readError !== undefined
-      ) {
-        reject(
-          "Cannot determine the configured workspace from an unreadable config. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
-        );
-        return;
-      }
       if (
         resetScope === "full" &&
         configuredWorkspace !== undefined &&
@@ -595,6 +639,7 @@ export async function setupWizardCommand(
           opts: normalizedOpts,
           runtime,
           baseConfig: setupBaseConfig,
+          discoveryConfig: baseConfig,
           workspaceDir: setupWorkspaceDir,
           resetScope,
         }))
@@ -627,6 +672,9 @@ export async function setupWizardCommand(
       // Reset is deliberately the final pre-dispatch step: no rejectable option
       // checks may run after user state has moved to Trash.
       await handleReset(resetScope, workspaceDir, runtime);
+      // Reset retains SQLite state; select it from the fresh config before setup resumes.
+      const { prepareCliDatabaseEngine } = await import("../cli/database-engine-selection.js");
+      await prepareCliDatabaseEngine(["node", "openclaw", "onboard"]);
     }
 
     await runSetup(normalizedOpts, runtime);

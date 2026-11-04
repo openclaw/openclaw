@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import type { SessionAncestorRef } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
@@ -10,10 +9,13 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "../config/sessions/session-accessor.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import { createActiveRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import {
   emitSessionsChanged,
   flushPendingSessionsChangedEvents,
@@ -25,6 +27,8 @@ import {
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
+import { createInertGatewayTestSocket } from "./server/inert-socket.test-support.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -42,7 +46,7 @@ afterEach(() => vi.restoreAllMocks());
 it.each(["sessions.list", "sessions.subscribe"])(
   "%s restores ordinary ancestor delivery across reads and recap-only events",
   async (method) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
       const root = "agent:main:root";
       const child = "agent:main:child";
@@ -68,28 +72,8 @@ it.each(["sessions.list", "sessions.subscribe"])(
         const client = {
           connId,
           usesSharedGatewayAuth: false,
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            client: {
-              id: "openclaw-control-ui",
-              version: "test",
-              platform: "test",
-              mode: "webchat",
-            },
-            role: "operator",
-            scopes: ["operator.admin"],
-          },
-          socket: {
-            readyState: WebSocket.OPEN,
-            bufferedAmount: 0,
-            send,
-            close: vi.fn(),
-            terminate: vi.fn(),
-            on: vi.fn(),
-            off: vi.fn(),
-            once: vi.fn(),
-          },
+          connect: gatewayConnect(["operator.admin"]),
+          socket: createInertGatewayTestSocket(send),
         } satisfies GatewayWsClient;
         connection.clients.add(client);
         connection.sessionEventSubscribers.subscribe(connId);
@@ -109,8 +93,19 @@ it.each(["sessions.list", "sessions.subscribe"])(
       try {
         publish("activity-summary");
         expect(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
+        expect(payloadFor(peers[1]!)).toEqual(payloadFor(peers[0]!));
         publish();
         expect.soft(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
+        publish();
+        expect(payloadFor(peers[0]!).ancestorSessionRefs).toHaveLength(1);
+        // Non-opted-in sockets preserve their existing reference behavior after a drop.
+        peers[0]!.client.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+        connection.broadcast(
+          "sessions.changed",
+          { sessionKey: child, agentId: "main", reason: "send" },
+          { dropIfSlow: true },
+        );
+        peers[0]!.client.socket.bufferedAmount = 0;
         publish();
         expect(payloadFor(peers[0]!).ancestorSessionRefs).toHaveLength(1);
         const ensure = projection.ensureMaterialized;
@@ -143,19 +138,24 @@ it.each(["sessions.list", "sessions.subscribe"])(
         expect(payloadFor(peers[0]!).ancestorSessionRefs).toHaveLength(1);
 
         // Runtime-only content can change and return without invalidating stored row facts.
-        connection.chatAbortControllers.set("ancestor-run", {
-          controller: new AbortController(),
-          agentId: "main",
-          sessionKey: root,
-          sessionId: root,
-          startedAtMs: 1,
-          expiresAtMs: 2,
-        });
+        rpcSourceTesting.set(
+          "ancestor-run",
+          await createActiveRpcSourceForTest(
+            {},
+            {
+              agentId: "main",
+              sessionKey: root,
+              sessionId: root,
+              storeScope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+            },
+          ),
+        );
         publish("activity-summary");
         expect(payloadFor(peers[0]!).ancestorSessions).toEqual([
           expect.objectContaining({ key: root, hasActiveRun: true }),
         ]);
-        connection.chatAbortControllers.delete("ancestor-run");
+        rpcSourceTesting.get("ancestor-run")?.input.claim?.operation?.complete();
+        rpcSourceTesting.delete("ancestor-run");
         publish();
         expect(payloadFor(peers[0]!).ancestorSessions).toEqual([
           expect.objectContaining({ key: root, hasActiveRun: false }),
@@ -172,7 +172,7 @@ it.each(["sessions.list", "sessions.subscribe"])(
 );
 
 it("publishes fresh ancestor rows through private intermediates with list visibility and no duplicates", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const profiles = [
@@ -212,8 +212,9 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
       cfg,
     });
     const context = requestContext(cfg);
-    context.chatAbortControllers = connection.chatAbortControllers;
     context.broadcastToConnIds = connection.broadcastToConnIds;
+    context.getSessionEventSubscriberConnIds = connection.sessionEventSubscribers.getAll;
+    await initializeSessionReadContext(context);
     const createPeer = (profile: (typeof profiles)[number], connId: string) => {
       const { client, send } = createSessionRowEventPeer(profile, connId, now);
       connection.clients.add(client);
@@ -222,8 +223,6 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
       return { client, send, ancestors: new Map<string, GatewaySessionRow>() };
     };
     const peers = profiles.map((profile, index) => createPeer(profile, `tree-events-${index}`));
-    context.getSessionEventSubscriberConnIds = connection.sessionEventSubscribers.getAll;
-    await initializeSessionReadContext(context);
     const projection = getSessionRowProjection(context)!;
     const detach = connection.attachSessionRowProjection(projection);
     const payloadFor = (peer: (typeof peers)[number]): TreeEventPayload =>
@@ -409,7 +408,8 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
       } finally {
         serialization.mockRestore();
       }
-      expect(normalizations).toBe(3);
+      // A new connection gets full rows without reencoding unchanged immutable presentations.
+      expect(normalizations).toBe(0);
       expectFull(newcomer, [parent, root]);
       expect(payloadFor(peers[0]!).ancestorSessions).toEqual([]);
       await assertListParity(newcomer);

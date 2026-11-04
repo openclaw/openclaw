@@ -1,5 +1,4 @@
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -97,7 +96,6 @@ export function resolveQaRunProfileExecutionSelection(params: {
   channelDriver: QaScorecardChannelDriver;
   channel?: string | null;
   defaultChannel?: string;
-  claudeCliAuthMode?: QaCliBackendAuthMode;
   executionKind?: QaSeedScenarioWithSource["execution"]["kind"];
   supportsChannel?: (channel: string) => boolean;
   resolveModuleFlowSupport?: (channel?: string) => boolean;
@@ -131,7 +129,6 @@ export function resolveQaRunProfileExecutionSelection(params: {
         primaryModel: params.primaryModel,
         channelDriver: params.channelDriver,
         channel: effectiveChannel,
-        claudeCliAuthMode: params.claudeCliAuthMode,
         supportsModuleFlows: params.resolveModuleFlowSupport?.(effectiveChannel),
       }),
     );

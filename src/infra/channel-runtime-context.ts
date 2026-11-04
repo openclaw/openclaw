@@ -69,16 +69,6 @@ export function createTaskScopedChannelRuntime<T extends ChannelRuntimeSurface>(
     };
   }
   const runtimeContexts = baseRuntime.runtimeContexts;
-  if (
-    !runtimeContexts ||
-    typeof runtimeContexts.register !== "function" ||
-    typeof runtimeContexts.get !== "function" ||
-    typeof runtimeContexts.watch !== "function"
-  ) {
-    throw new Error(
-      "channelRuntime must provide runtimeContexts.register/get/watch; pass createPluginRuntime().channel or omit channelRuntime.",
-    );
-  }
 
   const trackedLeases = new Set<{ dispose: () => void }>();
   const scopedRuntime = {

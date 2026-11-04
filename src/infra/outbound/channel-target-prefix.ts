@@ -16,7 +16,7 @@ const TARGET_KIND_PATTERN = new RegExp(`^(${TARGET_KIND_PREFIXES.join("|")}):`, 
 /** Removes a selected channel/provider prefix from an outbound target string. */
 export function stripTargetProviderPrefix(raw: string, ...providers: string[]): string {
   const trimmed = raw.trim();
-  const lower = normalizeOptionalLowercaseString(trimmed) ?? "";
+  const lower = trimmed.toLowerCase();
   for (const provider of providers) {
     const normalizedProvider = normalizeOptionalLowercaseString(provider);
     if (normalizedProvider && lower.startsWith(`${normalizedProvider}:`)) {
@@ -48,10 +48,7 @@ export function stripTargetTopicSuffix(
 ): string {
   const trimmed = raw.trim();
   const numericTopicMatch = options.allowNumericShorthand ? /^(-?\d+):(\d+)$/.exec(trimmed) : null;
-  if (numericTopicMatch?.[1]) {
-    return numericTopicMatch[1];
-  }
-  return trimmed.replace(/:topic:.*$/i, "").trim();
+  return numericTopicMatch?.[1] ?? trimmed.replace(/:topic:.*$/i, "").trim();
 }
 
 function resolveChannelTargetProviderPrefix(
@@ -85,8 +82,7 @@ export function validateTargetProviderPrefix(params: {
   channel: string;
   to?: string | null;
 }): Error | undefined {
-  const selectedChannel =
-    normalizeMessageChannel(params.channel) ?? normalizeOptionalLowercaseString(params.channel);
+  const selectedChannel = normalizeMessageChannel(params.channel);
   if (!selectedChannel || selectedChannel === "last") {
     return undefined;
   }

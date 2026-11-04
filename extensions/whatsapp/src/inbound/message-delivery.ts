@@ -1,4 +1,10 @@
-import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage, WASocket } from "baileys";
+import {
+  WAMessageStubType,
+  type AnyMessageContent,
+  type MiscMessageGenerationOptions,
+  type WAMessage,
+  type WASocket,
+} from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
@@ -6,15 +12,14 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { defaultRuntime, createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
+import { logWhatsAppVerbose } from "../auto-reply/loggers.js";
 import { resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
-import { maybeResolveWhatsAppQuestionReaction } from "../question-reactions.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { formatError } from "../session.js";
-import { requireWhatsAppInboundAdmission } from "./admission.js";
 import {
   createWhatsAppDurableInboundQueue,
   createWhatsAppDurableInboundMessageId,
@@ -29,10 +34,7 @@ import {
   createWhatsAppInboundMessageDebouncer,
   type WhatsAppQueuedInboundMessage,
 } from "./message-debounce.js";
-import {
-  enrichWhatsAppInboundMessage,
-  type WhatsAppEnrichedInboundMessage,
-} from "./message-enrichment.js";
+import { enrichWhatsAppInboundMessage } from "./message-enrichment.js";
 import {
   createWhatsAppInboundMessageNormalizer,
   type WhatsAppNormalizedInboundMessage,
@@ -44,6 +46,7 @@ import type { WebInboundCallbackMessage } from "./types.js";
 
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
 const WHATSAPP_INGRESS_DRAIN_INTERVAL_MS = 1_000;
+export const WHATSAPP_APPEND_REPLY_MAX_AGE_MS = 20 * 60_000;
 
 function parseWhatsAppTimestampSeconds(value: unknown): number | undefined {
   if (value == null) {
@@ -56,13 +59,6 @@ function parseWhatsAppTimestampSeconds(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
-  if (!enabled) {
-    return;
-  }
-  defaultRuntime.log(message);
-}
-
 function recordAcceptedInboundActivity(accountId: string): void {
   recordChannelActivity({
     channel: "whatsapp",
@@ -70,12 +66,6 @@ function recordAcceptedInboundActivity(accountId: string): void {
     direction: "inbound",
   });
 }
-
-type WhatsAppAppendReplyWindow = {
-  afterMs: number;
-  untilMs: number;
-  maxAgeMs: number;
-};
 
 type WhatsAppMessageDeliveryOptions = {
   cfg: OpenClawConfig;
@@ -91,9 +81,8 @@ type WhatsAppMessageDeliveryOptions = {
   sendReadReceipts?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
-  /** Bounded reconnect window for offline append auto-replies. */
-  appendReplyWindow?: WhatsAppAppendReplyWindow;
-  /** Optional debounce gating predicate. */
+  /** Maximum offline append age for established sessions. */
+  appendReplyMaxAgeMs?: number;
   shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
   durableInboundQueue?: WhatsAppDurableInboundQueue;
@@ -137,7 +126,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     socketSession,
     groupMetadata,
     parseTimestampSeconds: parseWhatsAppTimestampSeconds,
-    logVerbose: (message) => logWhatsAppVerbose(options.verbose, message),
   });
   const normalizeInboundMessage = messageNormalizer.normalize;
   const shouldSkipRecentOutboundEcho = messageNormalizer.shouldSkipRecentOutboundEcho;
@@ -200,6 +188,9 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     },
   });
 
+  const appendReplyMaxAgeMs = socketSession.hasSyncedHistory
+    ? (options.appendReplyMaxAgeMs ?? WHATSAPP_APPEND_REPLY_MAX_AGE_MS)
+    : undefined;
   const shouldSkipStaleAppend = (msg: WAMessage, upsertType: string | undefined): boolean => {
     if (upsertType !== "append") {
       return false;
@@ -207,12 +198,9 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     const APPEND_RECENT_GRACE_MS = 60_000;
     const msgTsSeconds = parseWhatsAppTimestampSeconds(msg.messageTimestamp);
     const msgTsMs = msgTsSeconds !== undefined ? msgTsSeconds * 1000 : 0;
-    // Reconnect catch-up is temporary; after it expires, preserve steady-state
-    // handling for fresh appends instead of rejecting every later append.
-    const nowMs = Date.now();
     const appendAfterMs =
-      options.appendReplyWindow && nowMs <= options.appendReplyWindow.untilMs
-        ? Math.max(options.appendReplyWindow.afterMs, nowMs - options.appendReplyWindow.maxAgeMs)
+      appendReplyMaxAgeMs !== undefined
+        ? Date.now() - appendReplyMaxAgeMs
         : connectedAtMs - APPEND_RECENT_GRACE_MS;
     return msgTsMs < appendAfterMs;
   };
@@ -222,16 +210,66 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
   type PreparedInbound = NonNullable<Awaited<ReturnType<typeof normalizeInboundMessage>>>;
   const preparedInboundByDurableId = new Map<string, Promise<PreparedInbound | null | undefined>>();
 
-  const enqueueInboundMessage = async (
-    msg: WAMessage,
-    inbound: WhatsAppNormalizedInboundMessage,
-    enriched: WhatsAppEnrichedInboundMessage,
-    durable: {
-      readReceipt?: WhatsAppReadReceiptTarget;
-      receiveOrder?: number;
-      turnAdoptionLifecycle?: WhatsAppIngressLifecycle;
-    },
-  ) => {
+  const resolveApprovalReaction = (msg: WAMessage) =>
+    maybeResolveWhatsAppApprovalReaction({
+      cfg: options.loadConfig?.() ?? options.cfg,
+      accountId: options.accountId,
+      msg,
+      selfJid: self.jid,
+      selfLid: self.lid,
+      resolveInboundJid,
+      resolveReactionTargetJids,
+      logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
+    });
+
+  const processDurableInboundMessage = async (
+    admission: WhatsAppIngressAdmission,
+    lifecycle: WhatsAppIngressLifecycle,
+  ): Promise<"completed" | "deferred"> => {
+    const { message: msg, ...context } = admission;
+    rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
+    const remoteJid = msg.key?.remoteJid;
+    const id = msg.key?.id;
+    const durableId =
+      remoteJid && id ? createWhatsAppDurableInboundMessageId({ remoteJid, id }) : undefined;
+    const preparation = durableId ? preparedInboundByDurableId.get(durableId) : undefined;
+    if (durableId) {
+      preparedInboundByDurableId.delete(durableId);
+    }
+    if (context.skipRecentOutboundEcho === true) {
+      return "completed";
+    }
+    // Reactions do not normalize into chat messages. Resolve them while the drain
+    // owns the claim so transient failures remain replayable.
+    if (await resolveApprovalReaction(msg)) {
+      return "completed";
+    }
+    const prepared = await preparation;
+    if (prepared === null) {
+      return "completed";
+    }
+    const inbound = prepared ?? (await normalizeInboundMessage(msg));
+    if (!inbound) {
+      return "completed";
+    }
+    const readReceipt = buildReadReceiptTarget(inbound);
+    const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
+    if (context.skipStaleAppend === true) {
+      await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
+      return "completed";
+    }
+
+    const enriched = await enrichWhatsAppInboundMessage({
+      msg,
+      sock,
+      mediaMaxMb: options.mediaMaxMb,
+    });
+    if (!enriched) {
+      await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
+      return "completed";
+    }
+
+    recordAcceptedInboundActivity(options.accountId);
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
       const currentSock = getCurrentSock();
@@ -274,10 +312,9 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       {
         from: inbound.from,
         to: self.e164 ?? "me",
-        body: enriched.body,
-        mediaPath: enriched.mediaPath,
+        messageId: inbound.id,
+        textLength: enriched.body.length,
         mediaType: enriched.mediaType,
-        mediaFileName: enriched.mediaFileName,
         timestamp,
       },
       "inbound message",
@@ -358,20 +395,20 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
           }
         : undefined,
       group,
-      turnAdoptionLifecycle: durable.turnAdoptionLifecycle,
-      readReceipt: durable.readReceipt,
-      receiveOrder: durable.receiveOrder,
+      turnAdoptionLifecycle: lifecycle,
+      readReceipt: deliveryReadReceipt,
+      receiveOrder: context.receiveOrder ?? context.receivedAt,
     };
     if (inboundMessage.event.id) {
-      const admission = requireWhatsAppInboundAdmission(inboundMessage);
+      const messageAdmission = inboundMessage.admission;
       cacheInboundMessageMeta(
-        admission.accountId,
+        messageAdmission.accountId,
         inboundMessage.platform.chatJid,
         inboundMessage.event.id,
         {
           participant: inboundMessage.platform.senderJid,
           participantE164:
-            admission.conversation.kind === "direct"
+            messageAdmission.conversation.kind === "direct"
               ? inboundMessage.platform.senderE164
               : undefined,
           body: inboundMessage.payload.body,
@@ -381,86 +418,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       );
     }
     await messageDebouncer.enqueue(inboundMessage);
-  };
-
-  const resolveApprovalReaction = (msg: WAMessage) =>
-    maybeResolveWhatsAppApprovalReaction({
-      cfg: options.loadConfig?.() ?? options.cfg,
-      accountId: options.accountId,
-      msg,
-      selfJid: self.jid,
-      selfLid: self.lid,
-      resolveInboundJid,
-      resolveReactionTargetJids,
-      logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
-    });
-
-  const processDurableInboundMessage = async (
-    admission: WhatsAppIngressAdmission,
-    lifecycle: WhatsAppIngressLifecycle,
-  ): Promise<"completed" | "deferred"> => {
-    const { message: msg, ...context } = admission;
-    rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
-    const remoteJid = msg.key?.remoteJid;
-    const id = msg.key?.id;
-    const durableId =
-      remoteJid && id ? createWhatsAppDurableInboundMessageId({ remoteJid, id }) : undefined;
-    const preparation = durableId ? preparedInboundByDurableId.get(durableId) : undefined;
-    if (durableId) {
-      preparedInboundByDurableId.delete(durableId);
-    }
-    if (context.skipRecentOutboundEcho === true) {
-      return "completed";
-    }
-    // Reactions do not normalize into chat messages. Resolve them while the drain
-    // owns the claim so transient failures remain replayable.
-    if (await resolveApprovalReaction(msg)) {
-      return "completed";
-    }
-    const prepared = await preparation;
-    if (prepared === null) {
-      return "completed";
-    }
-    const inbound = prepared ?? (await normalizeInboundMessage(msg));
-    if (!inbound) {
-      return "completed";
-    }
-    if (
-      await maybeResolveWhatsAppQuestionReaction({
-        cfg: options.loadConfig?.() ?? options.cfg,
-        accountId: options.accountId,
-        msg,
-        senderId: inbound.senderE164 ?? inbound.from,
-        resolveReactionTargetJids,
-        logDebug: (message) => logWhatsAppVerbose(options.verbose, message),
-      })
-    ) {
-      return "completed";
-    }
-    const readReceipt = buildReadReceiptTarget(inbound);
-    const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
-    if (context.skipStaleAppend === true) {
-      await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
-      return "completed";
-    }
-
-    const enriched = await enrichWhatsAppInboundMessage({
-      msg,
-      sock,
-      mediaMaxMb: options.mediaMaxMb,
-      logVerbose: (message) => logWhatsAppVerbose(options.verbose, message),
-    });
-    if (!enriched) {
-      await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
-      return "completed";
-    }
-
-    recordAcceptedInboundActivity(options.accountId);
-    await enqueueInboundMessage(msg, inbound, enriched, {
-      readReceipt: deliveryReadReceipt,
-      receiveOrder: context.receiveOrder ?? context.receivedAt,
-      turnAdoptionLifecycle: lifecycle,
-    });
     return "deferred";
   };
 
@@ -484,6 +441,11 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       return;
     }
     for (const msg of upsert.messages ?? []) {
+      if (!msg.message && msg.messageStubType === WAMessageStubType.CIPHERTEXT) {
+        // Baileys re-emits the decrypted copy under the same key after a
+        // placeholder resend; admitting the stub would complete that key first.
+        continue;
+      }
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
 
       const receiveOrder = nextReceiveOrder++;

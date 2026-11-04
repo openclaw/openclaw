@@ -8,11 +8,10 @@ import { resolveCliContainerTarget } from "./container-target.js";
 import { isGatewayRunInvocationArgv } from "./gateway-run-argv.js";
 
 /** Load `.env` files for normal CLI commands without overriding existing process env. */
-export function loadCliDotEnv(opts?: { loadGlobalEnv?: boolean; quiet?: boolean }) {
-  const quiet = opts?.quiet ?? true;
+export function loadCliDotEnv(opts?: { loadGlobalEnv?: boolean }) {
   const cwd = tryProcessCwd();
   if (cwd) {
-    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet });
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"));
   }
 
   if (opts?.loadGlobalEnv === false) {
@@ -22,7 +21,6 @@ export function loadCliDotEnv(opts?: { loadGlobalEnv?: boolean; quiet?: boolean 
   // were already set or loaded from CWD. This includes the Ubuntu fresh-install
   // gateway.env compatibility path.
   loadGlobalRuntimeDotEnvFiles({
-    quiet,
     stateEnvPath: path.join(resolveStateDir(process.env), ".env"),
   });
 }
@@ -41,11 +39,10 @@ export async function loadCliDotEnvForEarlyDiagnostic(
   }
   if (invocation.primary === "agent" && !argv.includes("--local")) {
     const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
-    await loadGatewayDispatchCliDotEnv({ quiet: true });
+    await loadGatewayDispatchCliDotEnv();
     return;
   }
   loadCliDotEnv({
     loadGlobalEnv: invocation.hasHelpOrVersion || !isGatewayRunInvocationArgv(argv),
-    quiet: true,
   });
 }

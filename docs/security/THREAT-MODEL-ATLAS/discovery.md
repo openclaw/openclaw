@@ -24,12 +24,12 @@ The trust boundaries and data flows these threats cross are defined in the [thre
 
 ## T-DISC-002: Session data extraction
 
-| Attribute               | Value                                                   |
-| ----------------------- | ------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access               |
-| **Description**         | Attacker extracts sensitive data from session context   |
-| **Attack vector**       | "What did we discuss?" queries, context checking        |
-| **Affected components** | Session transcripts, context window                     |
-| **Current mitigations** | Session isolation per sender (`agent:channel:peer` key) |
-| **Residual risk**       | Medium - within-session data is accessible by design    |
-| **Recommendations**     | Sensitive-data redaction in context                     |
+| Attribute               | Value                                                     |
+| ----------------------- | --------------------------------------------------------- |
+| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                 |
+| **Description**         | Attacker extracts sensitive data from session context     |
+| **Attack vector**       | "What did we discuss?" queries, context checking          |
+| **Affected components** | Session transcripts, context window                       |
+| **Current mitigations** | Session isolation per sender (`agent:channel:peer` key)   |
+| **Residual risk**       | Medium - within-session data is accessible by design      |
+| **Recommendations**     | Restrict transcript access; review content before sharing |

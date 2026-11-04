@@ -1,117 +1,95 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test } from "vitest";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-} from "../agents/admitted-run-context.js";
+import * as admittedRuns from "../agents/admitted-run-context.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../infra/agent-run-registry.js";
+import * as runs from "../infra/agent-run-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import {
-  mintAgentRuntimeIdentityToken,
-  verifyAgentRuntimeIdentityToken,
-} from "./agent-runtime-identity-token.js";
+import * as runtimeIdentity from "./agent-runtime-identity-token.js";
+import { createSessionMutationTestClient } from "./server-methods/sessions-mutations.owner.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import { writeSessionStore } from "./test-helpers.js";
-import {
-  directSessionReq,
-  getGatewayConfigModule,
-  sessionStoreEntry,
-  setupGatewaySessionsHandlerTestHarness,
-} from "./test/server-sessions.test-helpers.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
+import { prepareGatewayReplyRuntimeForTest, writeSessionStore } from "./test-helpers.js";
+import * as sessions from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-const metadataSnapshot = createPluginMetadataSnapshotFixture({
-  plugins: [
-    {
-      id: "model-identity-fixture",
-      providers: ["custom"],
-      modelIdNormalization: { providers: { custom: { aliases: { middle: "final" } } } },
-    },
-  ],
-});
+const { createSessionStoreDir } = sessions.setupGatewaySessionsHandlerTestHarness();
+const createModelMetadata = () =>
+  createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "model-identity-fixture",
+        providers: ["custom"],
+        modelIdNormalization: { providers: { custom: { aliases: { middle: "final" } } } },
+      },
+    ],
+  });
+
+const makeModel = (id: string) => modelDefinition(id, { reasoning: false, maxTokens: 1024 });
+async function modelConfig(
+  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
+  providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>,
+): Promise<OpenClawConfig> {
+  const base = (await sessions.getGatewayConfigModule()).getRuntimeConfig();
+  return {
+    ...base,
+    agents: { ...base.agents, defaults: { ...base.agents?.defaults, ...defaults } },
+    models: { providers },
+  };
+}
+const operatorAuthority = (
+  cfg: OpenClawConfig,
+  profileId: string,
+  policy: Parameters<typeof prepareOperatorModelPolicy>[0]["policy"],
+) =>
+  admittedRuns.createAdmittedRunOperatorAuthority({
+    profileId,
+    scopes: ["operator.write"],
+    rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
+    assertCurrent: () => {},
+    modelPolicy: prepareOperatorModelPolicy({ cfg, policy }),
+  });
 
 test("new unpinned sessions bind the account for the permitted operator default", async () => {
   const { storePath } = await createSessionStoreDir();
   const owner = ensureProfileForEmail("role-default-account@example.test");
-  const accounts = new Map(
-    ["primary", "permitted"].map((provider) => [
-      provider,
+  const accounts = ["primary", "permitted"].map(
+    (provider) =>
       connectUserModelAccount({
         ownerProfileId: owner.id,
         credential: { type: "token", provider, token: `synthetic-${provider}-account` },
         assertCurrent() {},
       }).authProfileId,
-    ]),
   );
-  const base = (await getGatewayConfigModule()).getRuntimeConfig();
-  const model: ModelDefinitionConfig = {
-    id: "model",
-    name: "Model",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    maxTokens: 1024,
-  };
-  const cfg: OpenClawConfig = {
-    ...base,
-    agents: {
-      ...base.agents,
-      defaults: {
-        ...base.agents?.defaults,
-        model: { primary: "primary/model", fallbacks: ["permitted/model"] },
-      },
-    },
-    models: {
-      providers: Object.fromEntries(
-        ["primary", "permitted"].map((provider) => [
-          provider,
-          {
-            api: "openai-completions" as const,
-            baseUrl: `https://${provider}.invalid/v1`,
-            agentRuntime: { id: "openclaw" },
-            models: [model],
-          },
-        ]),
-      ),
-    },
-  };
+  const cfg = await modelConfig(
+    { model: { primary: "primary/model", fallbacks: ["permitted/model"] } },
+    Object.fromEntries(
+      ["primary", "permitted"].map((provider) => [
+        provider,
+        {
+          api: "openai-completions" as const,
+          baseUrl: `https://${provider}.invalid/v1`,
+          agentRuntime: { id: "openclaw" },
+          models: [makeModel("model")],
+        },
+      ]),
+    ),
+  );
   const client: GatewayClient = {
+    ...createSessionMutationTestClient(),
     connId: "role-default-account",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.write"],
-    },
-    authenticatedUserProfile: {
-      profileId: owner.id,
-      displayName: owner.displayName,
-      hasAvatar: false,
-      updatedAt: owner.updatedAt,
-    },
+    authenticatedUserProfile: gatewayProfile(owner.id, owner.displayName, owner.updatedAt),
     internal: {
-      operatorRunAuthority: createAdmittedRunOperatorAuthority({
-        profileId: owner.id,
-        scopes: ["operator.write"],
-        assertCurrent: () => {},
-        modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { deny: ["primary/model"] } }),
-      }),
+      operatorRunAuthority: operatorAuthority(cfg, owner.id, { deny: ["primary/model"] }),
     },
   };
   const key = "agent:main:dashboard:role-default-account";
-  const created = await directSessionReq(
+  const created = await sessions.directSessionReq(
     "sessions.create",
     { key, agentId: "main" },
     {
@@ -127,13 +105,14 @@ test("new unpinned sessions bind the account for the permitted operator default"
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
   expect(entry).toMatchObject({
-    authProfileOverride: expectDefined(accounts.get("permitted"), "permitted account"),
+    authProfileOverride: expectDefined(accounts[1], "permitted account"),
     authProfileOverrideSource: "user-link",
   });
   expect(entry?.modelOverride).toBeUndefined();
 });
 
 test.each([
+  { mode: "public", model: "default", expected: "default" },
   { mode: "public", model: "middle", expected: "final" },
   { mode: "in-process", model: "middle", expected: "middle" },
   { mode: "signed", model: "middle", expected: "middle" },
@@ -145,46 +124,38 @@ test.each([
   { mode: "role-allowed", model: "middle", expected: "middle" },
 ])("sessions.create consumes $mode model $model", async ({ mode, model, expected }) => {
   const { storePath } = await createSessionStoreDir();
-  const baseConfig = (await getGatewayConfigModule()).getRuntimeConfig();
-  const models = ["default", "middle", "final", "custom/model"].map(
-    (id) =>
-      ({
-        id,
-        name: id,
-        provider: "custom",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        maxTokens: 1024,
-      }) satisfies ModelDefinitionConfig & { provider: string },
+  const models = ["default", "middle", "final"].map((id) =>
+    Object.assign(makeModel(id), { provider: "custom" }),
   );
-  const cfg: OpenClawConfig = {
-    ...baseConfig,
-    agents: {
-      ...baseConfig.agents,
-      defaults: {
-        ...baseConfig.agents?.defaults,
-        model: "custom/default",
-        ...(mode === "disallowed" ? { modelPolicy: { allow: ["custom/final"] } } : {}),
+  const cfg = await modelConfig(
+    {
+      model: "custom/default",
+      ...(mode === "disallowed" ? { modelPolicy: { allow: ["custom/final"] } } : {}),
+    },
+    {
+      custom: {
+        api: "openai-responses",
+        apiKey: "synthetic-custom-key",
+        baseUrl: "https://custom.example/v1",
+        models,
       },
     },
-    models: {
-      providers: {
-        custom: { api: "openai-responses", baseUrl: "https://custom.example/v1", models },
-      },
-    },
-  };
+  );
   const parentSessionKey = "agent:main:main";
   const childSessionKey = `agent:main:dashboard:resolved-${mode}-${model.replaceAll("/", "-")}`;
+  const readEntry = () =>
+    loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath });
   await writeSessionStore({
     entries: {
-      [parentSessionKey]: sessionStoreEntry("model-parent", {
+      [parentSessionKey]: sessions.sessionStoreEntry("model-parent", {
         lifecycleRevision: "parent-generation",
       }),
     },
   });
-  const operationalRunInstance = createOperationalRunInstanceRef(`model-parent-${mode}`);
-  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  const operationalRunInstance = admittedRuns.createOperationalRunInstanceRef(
+    `model-parent-${mode}`,
+  );
+  const delegatedAuthority = runs.claimAgentRunDelegatedAuthority(operationalRunInstance);
   const resolvedModel = { provider: "custom", model };
   const spawnContext = {
     requesterSenderIsOwner: mode === "in-process",
@@ -192,19 +163,18 @@ test.each([
     resolvedModel,
     spawnModelAutoSelection: { model: `custom/${model}`, hasFallbackOrigin: true },
   };
-  const creation = {
-    via: "spawn" as const,
-    actor: { type: "agent" as const, id: "main" },
-    requesterSessionKey: parentSessionKey,
-    ...spawnContext,
-  };
   let requesterActive = true;
   const client = createSyntheticPluginRuntimeClient({
     scopes: ["operator.write"],
     operatorRoleActor: { kind: "system" },
     ...(mode !== "public" && mode !== "public-spoof" && mode !== "signed"
       ? {
-          sessionCreation: creation,
+          sessionCreation: {
+            via: "spawn",
+            actor: { type: "agent", id: "main" },
+            requesterSessionKey: parentSessionKey,
+            ...spawnContext,
+          },
           agentToolCaller: {
             agentId: "main",
             sessionKey: parentSessionKey,
@@ -220,33 +190,31 @@ test.each([
   if (mode === "role-denied" || mode === "role-allowed") {
     client.internal = {
       ...client.internal,
-      operatorRunAuthority: createAdmittedRunOperatorAuthority({
-        profileId: "limited-operator",
-        scopes: ["operator.write"],
-        assertCurrent: () => {},
-        modelPolicy: prepareOperatorModelPolicy({
-          cfg,
-          policy: { allow: [mode === "role-allowed" ? "custom/middle" : "custom/default"] },
-        }),
+      operatorRunAuthority: operatorAuthority(cfg, "limited-operator", {
+        allow: [mode === "role-allowed" ? "custom/middle" : "custom/default"],
       }),
     };
   }
   try {
     if (mode === "signed") {
-      const token = await mintAgentRuntimeIdentityToken({
+      const token = await runtimeIdentity.mintAgentRuntimeIdentityToken({
         agentId: "main",
         sessionKey: parentSessionKey,
         operationalRunInstance,
         sessionSpawnContext: spawnContext,
       });
       const identity = expectDefined(
-        await verifyAgentRuntimeIdentityToken(token),
+        await runtimeIdentity.verifyAgentRuntimeIdentityToken(token),
         "verified spawn identity",
       );
       client.internal = { ...client.internal, agentRuntimeIdentity: identity };
     }
+    if (mode === "public" && model === "default") {
+      await prepareGatewayReplyRuntimeForTest({ force: true, config: cfg });
+    }
+    const metadataSnapshot = createModelMetadata();
     const request = withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
-      directSessionReq(
+      sessions.directSessionReq(
         "sessions.create",
         {
           key: childSessionKey,
@@ -254,6 +222,7 @@ test.each([
           parentSessionKey,
           spawnDepth: 1,
           model: mode === "mismatched" ? "custom/final" : `custom/${model}`,
+          ...(mode === "public" && model === "default" ? { agentRuntime: "openclaw" } : {}),
           ...(mode === "public-spoof" ? { resolvedModel } : {}),
         },
         {
@@ -277,30 +246,31 @@ test.each([
           ? "spawn requester is no longer active"
           : "Resolved spawn model does not match the requested model",
       );
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
-      ).toBeUndefined();
+      expect(readEntry()).toBeUndefined();
       return;
     }
     const result = await request;
-    const entry = loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath });
+    const entry = readEntry();
     if (expected === undefined) {
-      expect(result).toMatchObject(
-        mode === "public-spoof"
-          ? { ok: false, error: { code: "INVALID_REQUEST" } }
-          : mode === "role-denied"
-            ? {
-                ok: false,
-                error: {
-                  code: "FORBIDDEN",
-                  message: expect.stringContaining("operator role cannot use this model"),
-                },
-              }
-            : { ok: false, error: { message: expect.stringContaining("model not allowed") } },
-      );
+      expect(result.ok).toBe(false);
+      if (mode === "public-spoof" || mode === "role-denied") {
+        expect(result.error?.code).toBe(mode === "public-spoof" ? "INVALID_REQUEST" : "FORBIDDEN");
+      }
+      if (mode !== "public-spoof") {
+        expect(result.error?.message).toContain(
+          mode === "role-denied" ? "operator role cannot use this model" : "model not allowed",
+        );
+      }
       expect(entry).toBeUndefined();
     } else {
       expect(result.ok, JSON.stringify(result.error)).toBe(true);
+      if (mode === "public" && model === "default") {
+        expect(entry?.providerOverride).toBeUndefined();
+        expect(entry?.modelOverride).toBeUndefined();
+        expect(entry?.modelOverrideSource).toBe("default");
+        expect(entry?.agentRuntimeOverride).toBe("openclaw");
+        return;
+      }
       expect(entry).toMatchObject({
         providerOverride: "custom",
         modelOverride: expected,
@@ -320,6 +290,67 @@ test.each([
       });
     }
   } finally {
-    releaseAgentRunDelegatedAuthority(delegatedAuthority);
+    runs.releaseAgentRunDelegatedAuthority(delegatedAuthority);
   }
+});
+
+test("Access-only requests require explicit grants despite wildcard model access", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const cfg = await modelConfig(
+    { model: "openai/fixture", models: { "openai/fixture": {} } },
+    {
+      openai: {
+        api: "openai-responses",
+        baseUrl: "https://fixture.invalid/v1",
+        models: [makeModel("fixture")],
+      },
+    },
+  );
+  const client = createSessionMutationTestClient();
+  client.internal = {
+    operatorRunAuthority: operatorAuthority(cfg, "limited-operator", {
+      allow: ["openai/*"],
+    }),
+  };
+  const context = { getRuntimeConfig: () => cfg, getCommittedRuntimeConfig: () => cfg };
+  const key = "agent:main:dashboard:access-role";
+  const request = (method: string, params: Record<string, unknown>) =>
+    sessions.directSessionReq(method, { key, ...params }, { client, context });
+  expect(
+    await request("sessions.create", { agentId: "main", cyberAccessProgram: "daybreak_red" }),
+  ).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+  await writeSessionStore({
+    entries: {
+      [key]: sessions.sessionStoreEntry("access-role", { cyberAccessProgram: "daybreak_blue" }),
+    },
+  });
+  expect(await request("sessions.patch", { cyberAccessProgram: "daybreak_red" })).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN" },
+  });
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.cyberAccessProgram,
+  ).toBe("daybreak_blue");
+  await writeSessionStore({
+    entries: {
+      [key]: sessions.sessionStoreEntry("access-role", { cyberAccessProgram: "daybreak_red" }),
+    },
+  });
+  expect(await request("sessions.reset", { reason: "new" })).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN" },
+  });
+  await writeSessionStore({ entries: {} });
+  expect(
+    await request("sessions.create", { agentId: "main", cyberAccessProgram: "standard" }),
+  ).toMatchObject({ ok: true });
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.cyberAccessProgram,
+  ).toBe("standard");
+  expect(await request("sessions.patch", { cyberAccessProgram: null })).toMatchObject({ ok: true });
+  expect(await request("sessions.reset", { reason: "new" })).toMatchObject({ ok: true });
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.cyberAccessProgram,
+  ).toBeUndefined();
 });

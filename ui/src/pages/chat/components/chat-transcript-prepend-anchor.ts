@@ -11,6 +11,11 @@ export class TranscriptPrependAnchor {
   private firstMessageKey: string | undefined;
   private pending: (ChatTranscriptPrependAnchor & { measured: boolean }) | null = null;
 
+  constructor(
+    private readonly messageElements: ReadonlyMap<string, HTMLElement>,
+    private readonly onLayoutCorrection: (before: number, after: number) => void,
+  ) {}
+
   /** Stable message identity used to resolve its row in the committed projection. */
   get messageKey(): string | null {
     return this.pending?.messageKey ?? null;
@@ -45,13 +50,17 @@ export class TranscriptPrependAnchor {
     commanded: boolean,
     readingProjectionChanged = false,
   ): void {
+    if (commanded) {
+      this.pending = null;
+    }
     // A second projection may commit before measurement settles. Keep the
     // original reader target rather than recapturing an already shifted bubble.
     const retained =
       this.pending && this.messageKeys.has(this.pending.messageKey) ? this.pending : null;
     const anchor =
       !commanded && (this.hasPrepend || readingProjectionChanged)
-        ? (retained ?? captureTranscriptPrependAnchor(element, this.messageKeys))
+        ? (retained ??
+          captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values()))
         : null;
     if (anchor) {
       this.pending = { ...anchor, measured: false };
@@ -70,7 +79,13 @@ export class TranscriptPrependAnchor {
       return false;
     }
     const changed = measureRows();
-    const moved = restoreTranscriptPrependAnchor(anchor, element, virtualizer);
+    const moved = restoreTranscriptPrependAnchor(
+      anchor,
+      element,
+      virtualizer,
+      this.messageElements.values(),
+      this.onLayoutCorrection,
+    );
     if (anchor.measured && !changed && !moved) {
       this.pending = null;
     }
@@ -103,6 +118,7 @@ export class TranscriptPrependAnchor {
 function captureTranscriptPrependAnchor(
   scrollElement: HTMLDivElement | null,
   next: TranscriptMessageKeys,
+  messageElements: Iterable<HTMLElement>,
 ): ChatTranscriptPrependAnchor | null {
   if (!scrollElement) {
     return null;
@@ -110,9 +126,17 @@ function captureTranscriptPrependAnchor(
   const viewport = scrollElement.getBoundingClientRect();
   // Only rendered, retained bubbles can anchor the reader; overscan above the
   // viewport and messages removed by the new projection are not candidates.
-  for (const bubble of scrollElement.querySelectorAll<HTMLElement>(
-    ".chat-bubble[data-message-id]",
-  )) {
+  // Prepended refs register after retained ones; choose by DOM order, not insertion order.
+  const bubbles = [...messageElements]
+    .filter((bubble) => scrollElement.contains(bubble))
+    .toSorted((left, right) => {
+      const position = left.compareDocumentPosition(right);
+      if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+        return -1;
+      }
+      return position & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+    });
+  for (const bubble of bubbles) {
     const messageKey = bubble.dataset.messageId;
     const rect = bubble.getBoundingClientRect();
     if (
@@ -136,15 +160,17 @@ function restoreTranscriptPrependAnchor(
   anchor: ChatTranscriptPrependAnchor,
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  messageElements: Iterable<HTMLElement>,
+  onLayoutCorrection: (before: number, after: number) => void,
 ): boolean {
   if (!scrollElement) {
     return false;
   }
   // Group renderers may replace the bubble at an array index during prepend;
   // resolve its stable render key in the committed DOM, not an old element.
-  const bubble = [
-    ...scrollElement.querySelectorAll<HTMLElement>(".chat-bubble[data-message-id]"),
-  ].find((element) => element.dataset.messageId === anchor.messageKey);
+  const bubble = [...messageElements].find(
+    (element) => scrollElement.contains(element) && element.dataset.messageId === anchor.messageKey,
+  );
   if (!bubble) {
     return false;
   }
@@ -153,14 +179,16 @@ function restoreTranscriptPrependAnchor(
     return false;
   }
   const maxOffset = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
-  const offset = Math.max(0, Math.min(maxOffset, scrollElement.scrollTop + delta));
+  const before = scrollElement.scrollTop;
+  const offset = Math.max(0, Math.min(maxOffset, before + delta));
   // A retained message can become unreachable at an edge when provisional rows retire.
   // Reissuing that clamped correction would keep the measurement loop alive forever.
-  if (Math.abs(offset - scrollElement.scrollTop) <= 1) {
+  if (Math.abs(offset - before) <= 1) {
     return false;
   }
-  // Commit one measured message target through the scroll owner. This also
-  // retires deferred row corrections already represented by the measured DOM.
+  // The scroll owner retires deferred row corrections represented by the DOM.
+  // An ignored native write must not keep the measurement loop alive.
   virtualizer.scrollToOffset(offset, { behavior: "instant" });
-  return true;
+  onLayoutCorrection(before, scrollElement.scrollTop);
+  return scrollElement.scrollTop !== before;
 }

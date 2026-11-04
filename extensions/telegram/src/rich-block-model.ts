@@ -61,32 +61,6 @@ export type InputRichBlockParagraph = {
   text: RichText;
 };
 
-type InputRichBlockHeading = {
-  type: "heading";
-  text: RichText;
-  size: 1 | 2 | 3 | 4 | 5 | 6;
-};
-
-type InputRichBlockPre = {
-  type: "pre";
-  text: string;
-  language?: string;
-};
-
-type InputRichBlockBlockquote = {
-  type: "blockquote";
-  blocks: InputRichBlock[];
-  credit?: RichText;
-};
-
-type InputRichBlockTable = {
-  type: "table";
-  cells: RichBlockTableCell[][];
-  is_bordered?: true;
-  is_striped?: true;
-  caption?: RichText;
-};
-
 export type RichBlockCaption = {
   text: RichText;
   credit?: RichText;
@@ -104,10 +78,28 @@ type InputMediaUrl<K extends string> = { type: K; media: string };
 
 export type InputRichBlock =
   | InputRichBlockParagraph
-  | InputRichBlockHeading
-  | InputRichBlockPre
-  | InputRichBlockBlockquote
-  | InputRichBlockTable
+  | {
+      type: "heading";
+      text: RichText;
+      size: 1 | 2 | 3 | 4 | 5 | 6;
+    }
+  | {
+      type: "pre";
+      text: string;
+      language?: string;
+    }
+  | {
+      type: "blockquote";
+      blocks: InputRichBlock[];
+      credit?: RichText;
+    }
+  | {
+      type: "table";
+      cells: RichBlockTableCell[][];
+      is_bordered?: true;
+      is_striped?: true;
+      caption?: RichText;
+    }
   | { type: "divider" }
   | { type: "anchor"; name: string }
   | { type: "footer"; text: RichText }
@@ -228,10 +220,8 @@ export function measureInputRichBlocks(blocks: readonly InputRichBlock[]) {
         case "paragraph":
         case "heading":
         case "footer":
-          measureRichBlockText(block.text, size, depth);
-          break;
         case "pre":
-          size.chars += block.text.length;
+          measureRichBlockText(block.text, size, depth);
           break;
         case "mathematical_expression":
           size.chars += block.expression.length;
@@ -366,10 +356,8 @@ export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): s
       case "paragraph":
       case "heading":
       case "footer":
-        push(richTextToPlainString(block.text));
-        break;
       case "pre":
-        push(block.text);
+        push(richTextToPlainString(block.text));
         break;
       case "mathematical_expression":
         push(block.expression);

@@ -19,7 +19,7 @@ function migrateVoiceCallPluginConfig(config: OpenClawConfig): {
   if (migration.changes.length === 0) {
     return null;
   }
-  const plugins = structuredClone(config.plugins ?? {});
+  const plugins = { ...config.plugins };
   plugins.entries = {
     ...plugins.entries,
     "voice-call": { ...plugins.entries?.["voice-call"], config: migration.config },
