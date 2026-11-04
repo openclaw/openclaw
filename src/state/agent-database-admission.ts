@@ -147,7 +147,7 @@ export function createAgentDatabaseInspectionRefusal(params: {
         : serializationFailure
           ? "A worker request could not be serialized. Update OpenClaw and restart the Gateway; repeating database migration will not repair this request."
           : publicationFailure
-            ? "Sessions remain unavailable because this agent's secrets or model runtime could not be prepared. Fix the reported problem, then restart the Gateway to retry admission. This failure does not require database repair."
+            ? "Sessions remain unavailable because newer config or plugin changes kept replacing this agent's runtime preparation. Restart the Gateway to retry admission. This failure does not require database repair."
             : params.pending
               ? "Startup preparation is in progress or waiting for capacity. Retry the request after startup preparation finishes. Pending startup does not indicate a database failure."
               : `Sessions remain unavailable. ${formatAgentDatabaseCorruptionRepairHint(params.agentId, params.cause) ?? 'Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.'}`,

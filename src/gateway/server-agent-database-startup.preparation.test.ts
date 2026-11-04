@@ -699,7 +699,7 @@ it.for(["initial", "successor"] as const)(
       expect(readAgentDatabaseAdmissionRefusal("main", fleet)).toMatchObject({
         code: "agent-database-inspection-failed",
         reason: error.message,
-        repairHint: expect.stringContaining("does not require database repair"),
+        repairHint: expect.stringContaining("openclaw doctor --fix"),
       });
       expect(mocks.refreshModels).toHaveBeenCalledTimes(1);
       expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());

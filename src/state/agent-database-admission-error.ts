@@ -28,7 +28,7 @@ export const AgentDatabaseSchemaAdmissionInvalidError = resolveGlobalSingleton(
     },
 );
 
-/** Secrets or model publication failed after retries; the agent database itself stays intact. */
+/** Runtime publications kept replacing this one past its retries; the database stayed intact. */
 export const AgentDatabaseStartupPublicationError = resolveGlobalSingleton(
   Symbol.for("openclaw.agentDatabaseStartupPublicationError"),
   () =>

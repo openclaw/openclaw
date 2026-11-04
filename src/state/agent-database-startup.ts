@@ -481,13 +481,12 @@ class AgentDatabaseStartupAdmission {
                         await activation.publishAgent(input);
                         break;
                       } catch (error) {
-                        this.signal.throwIfAborted();
                         const retryable =
                           error instanceof AgentDatabaseStartupSupersededError ||
                           error instanceof AgentDatabaseSchemaAdmissionChangedError;
                         if (!retryable || attempt >= STARTUP_PUBLICATION_ATTEMPTS) {
-                          // Runtime preparation leaves the database intact; Doctor cannot repair it.
-                          throw new AgentDatabaseStartupPublicationError(error);
+                          // Only runtime churn outlasts the retries; Doctor cannot repair that.
+                          throw retryable ? new AgentDatabaseStartupPublicationError(error) : error;
                         }
                         log.warn("agent database startup preparation was superseded; retrying", {
                           agentId,
