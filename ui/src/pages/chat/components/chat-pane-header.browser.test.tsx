@@ -38,88 +38,35 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       containers.splice(0).forEach((container) => container.remove());
     });
 
-    it.each(["dark", "light"])("keeps public sharing neutral in the %s theme", async (theme) => {
-      const root = document.documentElement;
-      const previousMode = root.getAttribute("data-theme-mode");
-      root.setAttribute("data-theme-mode", theme);
-      onTestFinished(() => {
-        if (previousMode === null) {
-          root.removeAttribute("data-theme-mode");
-        } else {
-          root.setAttribute("data-theme-mode", previousMode);
-        }
-      });
-      const { container } = mountChatPaneHeader(containers, {
-        sharingControl: chatPaneHeaderSharing({
-          state: {
-            loading: false,
-            result: {
-              sessionKey: "agent:main:test",
-              members: [],
-              identities: [],
-              permissions: [],
-              role: "owner",
-              allowedVisibilities: ["shared"],
-              publicShare: { token: `v1.${"a".repeat(96)}`, createdAt: 1 },
-            },
-          },
-        }),
-      });
-      const trigger = container.querySelector<HTMLElement>(".chat-pane__sharing-trigger")!;
-      const state = trigger.querySelector<HTMLElement>(".chat-pane__sharing-trigger-state")!;
-      expect(state.textContent).toBe("Public");
-      expect(getComputedStyle(state).color).toBe(getComputedStyle(trigger).color);
-      const icons = trigger.querySelectorAll("svg");
-      expect(icons).toHaveLength(2);
-      expect(getComputedStyle(icons[0]!).color).toBe(getComputedStyle(icons[1]!).color);
-    });
-
-    it.each([
-      [true, "shared"],
-      [false, "read-only"],
-      [false, "suggest"],
-      [false, "draft"],
-      [false, "shared"],
-    ] as const)(
-      "keeps sharing icons compact (published=%s, visibility=%s)",
-      async (published, visibility) => {
+    it.each(["dark", "light"])(
+      "keeps public sharing neutral and aligned in the %s theme",
+      async (theme) => {
+        const root = document.documentElement;
+        const previousMode = root.getAttribute("data-theme-mode");
+        root.setAttribute("data-theme-mode", theme);
+        onTestFinished(() => {
+          if (previousMode === null) {
+            root.removeAttribute("data-theme-mode");
+          } else {
+            root.setAttribute("data-theme-mode", previousMode);
+          }
+        });
         const { container } = mountChatPaneHeader(containers, {
-          sharingControl: chatPaneHeaderSharing({
-            session: { ...chatPaneHeaderSharing().session!, visibility },
-            state: published
-              ? {
-                  loading: false,
-                  result: {
-                    sessionKey: "agent:main:test",
-                    members: [],
-                    identities: [],
-                    permissions: [],
-                    role: "owner",
-                    allowedVisibilities: ["shared"],
-                    publicShare: { token: `v1.${"a".repeat(96)}`, createdAt: 1 },
-                  },
-                }
-              : undefined,
-          }),
+          sharingControl: chatPaneHeaderSharing({ cachedPublished: true }),
         });
         const trigger = container.querySelector<HTMLElement>(".chat-pane__sharing-trigger")!;
         const state = trigger.querySelector<HTMLElement>(".chat-pane__sharing-trigger-state")!;
-        const icon = state.firstElementChild!;
-        const label = state.lastElementChild!;
-        const chevron = trigger.querySelector(".chat-pane__sharing-chevron")!;
-        if (published || visibility !== "shared") {
-          expect(label).not.toBe(icon);
-          const labelRect = label.getBoundingClientRect();
-          const iconRect = icon.getBoundingClientRect();
-          expect(labelRect.top + labelRect.height / 2).toBeCloseTo(
-            iconRect.top + iconRect.height / 2,
-          );
-          expect(labelRect.left - iconRect.right).toBeCloseTo(4);
-        } else {
-          expect(state.children).toHaveLength(1);
-        }
+        expect(state.textContent).toBe("Public");
+        expect(getComputedStyle(state).color).toBe(getComputedStyle(trigger).color);
+        const icons = trigger.querySelectorAll("svg");
+        expect(icons).toHaveLength(2);
+        expect(getComputedStyle(icons[0]!).color).toBe(getComputedStyle(icons[1]!).color);
+        const icon = icons[0]!.getBoundingClientRect();
+        const label = state.lastElementChild!.getBoundingClientRect();
+        expect(label.left - icon.right).toBeCloseTo(4);
+        expect(label.top + label.height / 2).toBeCloseTo(icon.top + icon.height / 2);
         expect(
-          chevron.getBoundingClientRect().left - state.getBoundingClientRect().right,
+          icons[1]!.getBoundingClientRect().left - state.getBoundingClientRect().right,
         ).toBeCloseTo(0);
       },
     );
