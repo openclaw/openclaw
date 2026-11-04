@@ -189,7 +189,7 @@ describe("update status localization", () => {
     });
     expect(resolveUpdateStatusBanner({ status: "error", reason: "build-failed" })).toMatchObject({
       tone: "danger",
-      text: expect.stringContaining("Couldn’t update: build-failed"),
+      text: expect.stringContaining("Update error: build-failed"),
     });
   });
 
@@ -320,7 +320,7 @@ describe("update status localization", () => {
 
       expect(resolveUpdateStatusBanner({ status: "error", reason })).toEqual({
         tone: "danger",
-        text: `Couldn’t update: ${reason}. See the gateway logs for the exact failure and retry once the cause is fixed.`,
+        text: `Update error: ${reason}. See the gateway logs for the exact failure and retry once the cause is fixed.`,
       });
       expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
     },

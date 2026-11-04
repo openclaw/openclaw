@@ -140,7 +140,7 @@ it("refuses a native update without a live authority check", async () => {
   expect(postMessage).not.toHaveBeenCalled();
   expect(startGatewayUpdate).not.toHaveBeenCalled();
   expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-    "Administrator access is required",
+    "You need admin access to change update settings or start an update.",
   );
   findButton("Cancel").click();
   await settled;
@@ -710,9 +710,7 @@ it.each([
       findButton("Check status").click();
       await statusOperation;
       flush();
-      expect(modal.textContent).toContain(
-        "Couldn’t check for updates: Status refresh unavailable",
-      );
+      expect(modal.textContent).toContain("Couldn’t check for updates: Status refresh unavailable");
       expect(modal.textContent).not.toContain("Status refreshed.");
       await waitForSolid(() => expect(findButton("Check status").disabled).toBe(false));
       expect(modal.querySelector(".update-run-view")).toBe(view);
@@ -723,9 +721,7 @@ it.each([
       await flushMicrotasks();
       expect(findButton("Checking status…")).toBe(check);
       expect(check.disabled).toBe(true);
-      expect(modal.textContent).toContain(
-        "Couldn’t check for updates: Status refresh unavailable",
-      );
+      expect(modal.textContent).toContain("Couldn’t check for updates: Status refresh unavailable");
       expect(modal.textContent).not.toContain("Status refreshed.");
       expect(modal.querySelector(".update-run-view")).toBe(view);
       check.click();

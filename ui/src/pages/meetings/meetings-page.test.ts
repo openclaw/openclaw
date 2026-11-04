@@ -386,7 +386,9 @@ describe("meeting transcript library", () => {
     await waitForSolid(() => expect(page.textContent).toContain("Preparing download"));
     expect(page.querySelector<HTMLInputElement>('input[name="find"]')!.value).toBe("draft search");
     download.reject(new Error("Export unavailable"));
-    await waitForSolid(() => expect(page.textContent).toContain("Download failed"));
+    await waitForSolid(() =>
+      expect(page.textContent).toContain("Couldn’t download the transcript."),
+    );
     page
       .querySelector(".transcripts-search")!
       .dispatchEvent(new Event("submit", { cancelable: true }));
@@ -590,7 +592,9 @@ describe("meeting transcript library", () => {
     snapshot.phase = "reconnecting";
     notify();
     pending.resolve(meetingPage);
-    await waitForSolid(() => expect(page.textContent).toContain("Connect to the Gateway"));
+    await waitForSolid(() =>
+      expect(page.textContent).toContain("Reconnect to read meeting transcripts."),
+    );
     expect(page.textContent).not.toContain("Keep the reader quiet");
   });
 
