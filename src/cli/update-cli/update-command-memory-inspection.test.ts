@@ -47,7 +47,16 @@ vi.mock("./update-command-post-core.js", async (original) => ({
   ...(await original<typeof import("./update-command-post-core.js")>()),
   continuePostCoreUpdateInFreshProcess: async () => ({
     resumed: true,
-    pluginUpdate: createPostCorePluginUpdateResult({}),
+    pluginUpdate: createPostCorePluginUpdateResult({ status: "ok" }),
+  }),
+}));
+vi.mock("../../daemon/service.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/service.js")>()),
+  readGatewayServiceState: async () => ({
+    installed: true,
+    loadState: { status: "loaded" },
+    env: process.env,
+    command: { programArguments: [process.execPath, "/fixture/dist/index.js", "gateway"] },
   }),
 }));
 vi.mock("./update-command-service.js", async (original) => ({
@@ -156,7 +165,8 @@ it("finishes a migrated package update with an unavailable inspection warning wh
     prepareSqliteReadOnlyCopyInProcess(file, stage),
   );
   registerMemoryCoreDoctorChecks({
-    registerHealthCheck,
+    registerHealthCheck: (check) =>
+      registerHealthCheck(Object.assign(check, { updateReadiness: "post-plugin" })),
     getHealthCheck,
     memoryCoreActive: true,
     inspectEmbeddingProviderSetup: async () => null,
@@ -179,7 +189,8 @@ it("finishes a migrated package update with an unavailable inspection warning wh
       capture.mockRestore();
     }
   });
-  mocks.restart.mockReset().mockImplementation(async ({ result, onVerified }) => {
+  mocks.restart.mockReset().mockImplementation(async ({ result, onVerified, shouldRestart }) => {
+    expect(shouldRestart).toBe(true);
     expect(result.postUpdate?.plugins).toMatchObject({ status: "warning" });
     onVerified?.(Date.now());
     return "ok";
@@ -194,7 +205,11 @@ it("finishes a migrated package update with an unavailable inspection warning wh
       opts: { json: true },
       preManagedServiceStop: { stopped: true, running: true },
     }),
-  );
+  ).catch((error: unknown) => ({ error }));
+  expect(space).toHaveBeenCalled();
+  expect(fs.readdirSync(stage)).toEqual([]);
+  expect(fs.readFileSync(dbPath)).toEqual(migratedBytes);
+  expect(fs.readFileSync(snapshot.path, "utf8")).toBe(snapshot.raw);
   expect(final).toMatchObject({
     status: "ok",
     postUpdate: {
@@ -207,10 +222,6 @@ it("finishes a migrated package update with an unavailable inspection warning wh
     },
   });
   expect(mocks.restart).toHaveBeenCalledOnce();
-  expect(space).toHaveBeenCalled();
-  expect(fs.readdirSync(stage)).toEqual([]);
-  expect(fs.readFileSync(dbPath)).toEqual(migratedBytes);
-  expect(fs.readFileSync(snapshot.path, "utf8")).toBe(snapshot.raw);
   using db = new DatabaseSync(dbPath, { readOnly: true });
   expect(db.prepare("SELECT value,migrated FROM history").get()).toEqual({
     value: "retained conversation",
