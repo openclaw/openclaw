@@ -13,6 +13,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import java.util.TimeZone
 
@@ -253,16 +255,16 @@ class CalendarHandler internal constructor(
 
   private fun parseAddRequest(paramsJson: String?): CalendarAddRequest? {
     val params = parseJsonParamsObject(paramsJson) ?: return null
-    var start =
-      parseISO((params["startISO"] as? JsonPrimitive)?.content)
-        ?: return null
-    var end =
-      parseISO((params["endISO"] as? JsonPrimitive)?.content)
-        ?: return null
+    val startAt = parseOffsetDateTime((params["startISO"] as? JsonPrimitive)?.content) ?: return null
+    val endAt = parseOffsetDateTime((params["endISO"] as? JsonPrimitive)?.content) ?: return null
+    var start = startAt.toInstant()
+    var end = endAt.toInstant()
     val isAllDay = (params["isAllDay"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false
     if (isAllDay && end > start) {
-      start = start.truncatedTo(ChronoUnit.DAYS)
-      end = maxOf(end.truncatedTo(ChronoUnit.DAYS), start.plus(1, ChronoUnit.DAYS))
+      // Android stores all-day events as UTC midnights. Keep the calendar date the caller wrote,
+      // so "2026-07-05T00:00:00+10:00" stays July 5 instead of falling back to July 4 in UTC.
+      start = startAt.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant()
+      end = maxOf(endAt.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant(), start.plus(1, ChronoUnit.DAYS))
     }
     return CalendarAddRequest(
       title = parseJsonString(params, "title")?.trim().orEmpty(),
@@ -277,12 +279,14 @@ class CalendarHandler internal constructor(
     )
   }
 
-  private fun parseISO(raw: String?): Instant? {
+  private fun parseISO(raw: String?): Instant? = parseOffsetDateTime(raw)?.toInstant()
+
+  private fun parseOffsetDateTime(raw: String?): OffsetDateTime? {
     val value = raw?.trim().orEmpty()
     if (value.isEmpty()) return null
-    // Gateway calendar payloads use UTC ISO-8601 instants for unambiguous Android storage.
+    // Accepts "Z" and numeric offsets such as "+10:00", on every supported Android version.
     return try {
-      Instant.parse(value)
+      OffsetDateTime.parse(value)
     } catch (_: Throwable) {
       null
     }
