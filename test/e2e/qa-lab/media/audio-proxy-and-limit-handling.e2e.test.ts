@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { openaiMediaUnderstandingProvider } from "../../../../extensions/openai/api.js";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import { applyMediaUnderstanding } from "../../../../src/media-understanding/apply.js";
@@ -87,7 +87,9 @@ describe("media.audio-proxy-and-limit-handling", () => {
     const providerRequests: RequestObservation[] = [];
     const proxyUpstreamPorts = new Set<number>();
     const provider = await startProviderServer(providerRequests);
+    onTestFinished(() => provider.stop());
     const proxy = await startForwardProxy(proxyRequests, proxyUpstreamPorts);
+    onTestFinished(() => proxy.stop());
     const dir = await fs.realpath(tempDirs.make("openclaw-audio-qa-"));
     const filePath = path.join(dir, "accepted.wav");
     await fs.writeFile(filePath, Buffer.alloc(2048, 0x52));
@@ -104,39 +106,34 @@ describe("media.audio-proxy-and-limit-handling", () => {
       {},
     );
 
-    try {
-      await withEnvAsync(
-        {
-          HTTPS_PROXY: proxy.url,
-          HTTP_PROXY: proxy.url,
-          ALL_PROXY: "",
-          https_proxy: proxy.url,
-          http_proxy: proxy.url,
-          all_proxy: "",
-          NO_PROXY: "",
-          no_proxy: "",
-        },
-        async () => {
-          await applyMediaUnderstanding({
-            ctx,
-            cfg,
-            workspaceDir: dir,
-            providers: { openai: openaiMediaUnderstandingProvider },
-          });
+    await withEnvAsync(
+      {
+        HTTPS_PROXY: proxy.url,
+        HTTP_PROXY: proxy.url,
+        ALL_PROXY: "",
+        https_proxy: proxy.url,
+        http_proxy: proxy.url,
+        all_proxy: "",
+        NO_PROXY: "",
+        no_proxy: "",
+      },
+      async () => {
+        await applyMediaUnderstanding({
+          ctx,
+          cfg,
+          workspaceDir: dir,
+          providers: { openai: openaiMediaUnderstandingProvider },
+        });
 
-          expect(ctx.Transcript).toBe("proxied audio transcript");
-          expect(proxyRequests).toMatchObject([
-            { method: "CONNECT", url: new URL(provider.url).host },
-          ]);
-          expect(providerRequests).toMatchObject([
-            { method: "POST", url: "/v1/audio/transcriptions" },
-          ]);
-          expect(proxyUpstreamPorts.has(providerRequests[0]?.remotePort ?? -1)).toBe(true);
-        },
-      );
-    } finally {
-      await proxy.stop();
-      await provider.stop();
-    }
+        expect(ctx.Transcript).toBe("proxied audio transcript");
+        expect(proxyRequests).toMatchObject([
+          { method: "CONNECT", url: new URL(provider.url).host },
+        ]);
+        expect(providerRequests).toMatchObject([
+          { method: "POST", url: "/v1/audio/transcriptions" },
+        ]);
+        expect(proxyUpstreamPorts.has(providerRequests[0]?.remotePort ?? -1)).toBe(true);
+      },
+    );
   });
 });
