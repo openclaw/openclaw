@@ -77,6 +77,11 @@ export function secretRefKey(ref: SecretRef): string {
   return `${ref.source}:${ref.provider}:${ref.id}`;
 }
 
+export function normalizeSecretRefId(source: SecretRefSource, id: string): string {
+  // JSON Pointer whitespace belongs to the selected file key.
+  return source === "file" ? id : id.trim();
+}
+
 export function resolveDefaultSecretProviderAlias(
   config: SecretRefDefaultsCarrier,
   source: SecretRefSource,
@@ -215,7 +220,7 @@ export function normalizeAndGroupSecretRefs(refs: SecretRef[]): ProviderRefGroup
   }
   const uniqueRefs = new Map<string, SecretRef>();
   for (const ref of refs) {
-    const id = ref.id.trim();
+    const id = normalizeSecretRefId(ref.source, ref.id);
     if (!id) {
       throw new Error("Secret reference id is empty.");
     }

@@ -66,6 +66,7 @@ Other aliases and all `file`/`exec` refs require a registered `secrets.providers
     - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
     - `id` must be an absolute JSON pointer (`/...`), or the literal `value` for `singleValue` providers
     - RFC 6901 escaping in segments: `~` becomes `~0`, `/` becomes `~1`
+    - Whitespace in pointer segments is literal: `/token ` selects the key `"token "`, not `"token"`
 
   </Tab>
   <Tab title="exec">

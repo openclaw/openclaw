@@ -237,6 +237,28 @@ describe("secret ref resolver", () => {
     },
   );
 
+  itPosix(
+    "keeps file pointer whitespace distinct through resolution and missing-ref matching",
+    async () => {
+      const filePath = path.join(await createCaseDir("file-pointer-space"), "secrets.json");
+      await writeSecureFile(filePath, JSON.stringify({ token: "neighbor", "token ": "selected" }));
+      const ref = { source: "file", provider: "filemain", id: "/token " } as const;
+      const neighbor = { ...ref, id: "/token" };
+      const options = providerOptions("filemain", { source: "file", path: filePath, mode: "json" });
+      await expect(resolveSecretRefValue(ref, options)).resolves.toBe("selected");
+      expect(await resolveSecretRefValues([ref, neighbor], options)).toEqual(
+        new Map([
+          ["file:filemain:/token ", "selected"],
+          ["file:filemain:/token", "neighbor"],
+        ]),
+      );
+      await writeSecureFile(filePath, JSON.stringify({ token: "neighbor" }));
+      const error = await captureError(resolveSecretRefValue(ref, options));
+      expect(isMissingSecretRefResolutionError({ ref, error })).toBe(true);
+      expect(isMissingSecretRefResolutionError({ ref: neighbor, error })).toBe(false);
+    },
+  );
+
   itPosix("classifies an out-of-bounds file pointer as a missing ref", async () => {
     const root = await createCaseDir("file-missing-index");
     const filePath = path.join(root, "secrets.json");

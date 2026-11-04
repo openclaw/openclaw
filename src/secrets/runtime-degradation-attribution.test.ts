@@ -121,6 +121,28 @@ function attachAuthOwner(params: {
 }
 
 describe("secrets runtime degraded-owner attribution", () => {
+  it.skipIf(process.platform === "win32")(
+    "attributes a missing literal file pointer to its exact owner",
+    async () => {
+      const filePath = path.join(tempDirs.make("openclaw-pointer-owner-"), "secrets.json");
+      await writeSharedSecret(filePath, "healthy");
+      const error = await captureFailure(
+        asConfig({
+          secrets: sharedSecrets(filePath),
+          models: models(fileRef("shared", "/shared ")),
+          tts: tts(fileRef("shared", "/shared")),
+        }),
+      );
+      expect(error).toBeInstanceOf(Error);
+      expectOnlyOwner(error, {
+        ownerKind: "provider",
+        ownerId: "example",
+        reason: "secret reference was not found",
+        failureMatched: true,
+      });
+    },
+  );
+
   it("fails closed for missing TTS SecretRefs outside cold-start isolation", async () => {
     const error = await captureFailure(
       asConfig({

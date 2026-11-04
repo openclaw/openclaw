@@ -5,7 +5,7 @@ import type { SecretRef } from "../config/types.secrets.js";
 import { toErrorObject } from "../infra/errors.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
-import { secretRefKey } from "./ref-contract.js";
+import { normalizeSecretRefId, secretRefKey } from "./ref-contract.js";
 import {
   describeSecretResolutionError,
   isProviderScopedSecretResolutionError,
@@ -382,7 +382,10 @@ function assignmentMatchesResolutionFailure(assignment: SecretAssignment, error:
   if (assignment.ref.source !== error.source || assignment.ref.provider !== error.provider) {
     return false;
   }
-  return isProviderScopedSecretResolutionError(error) || assignment.ref.id.trim() === error.refId;
+  return (
+    isProviderScopedSecretResolutionError(error) ||
+    normalizeSecretRefId(assignment.ref.source, assignment.ref.id) === error.refId
+  );
 }
 
 function assertOwnerCanBeIsolated(

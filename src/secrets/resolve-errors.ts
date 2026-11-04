@@ -1,5 +1,6 @@
 /** Typed errors for SecretRef provider and ref-level resolution failures. */
 import type { SecretRef, SecretRefSource } from "../config/types.secrets.js";
+import { normalizeSecretRefId } from "./ref-contract.js";
 
 const SECRET_REF_FAILURE_REASONS = {
   SECRET_REF_NOT_FOUND: "secret reference was not found",
@@ -150,7 +151,7 @@ export function isMissingSecretRefResolutionError(params: {
   ref: SecretRef;
   error: unknown;
 }): boolean {
-  const refId = params.ref.id.trim();
+  const refId = normalizeSecretRefId(params.ref.source, params.ref.id);
   // Canonical refs already own their provider identity. Config defaults only fill an omitted
   // provider during coercion; resolution never rewrites an explicit provider such as "default".
   return (
