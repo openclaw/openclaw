@@ -90,6 +90,7 @@ export const GATEWAY_CLIENT_CAPS = {
   CHAT_ONLY_ASSISTANT_TEXT: "chat-only-assistant-text",
   CHAT_QUEUE_STATUS: "chat-queue-status",
   EXEC_APPROVALS: "exec-approvals",
+  GITHUB_PUBLICATION_UNCHANGED: "github-publication-unchanged",
   HEALTH_SUMMARY: "health-summary",
   HELLO_HEALTH_ON_DEMAND: "hello-health-on-demand",
   HELLO_PRESENCE_SELF: "hello-presence-self",

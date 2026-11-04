@@ -27,7 +27,10 @@ function formatGitHubPublicationResult(result: SessionGitHubPublicationResult): 
   const acting = publisher ? ` Using @${publisher.login} (${source}).` : "";
   switch (result.status) {
     case "published":
-      return `Published ${result.repository} branch ${result.branch}: ${result.url}${acting}`;
+      if (result.unchanged) {
+        return `Reused the existing pull request for ${result.repository} branch ${result.branch}: ${result.url}. No new commit was pushed or CI run triggered by this request.${acting}`;
+      }
+      return `Pull request for ${result.repository} branch ${result.branch}: ${result.url}${acting}`;
     case "failed":
       return `${result.message} ${result.nextAction}${acting}`;
     case "publishing":

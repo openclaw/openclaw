@@ -11,7 +11,10 @@ import {
   validateSessionGitHubStatusParams,
   validateSessionGitHubConfirmParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { SessionGitHubOptionsResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import type {
+  SessionGitHubOptionsResult,
+  SessionGitHubStatusResult,
+} from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { GitHubIdentityError } from "../../agents/github-read-identity.js";
 import { canRefreshGitHubPublicationBase } from "../../agents/sandbox/github-publication.js";
@@ -30,6 +33,7 @@ import {
   prepareGitHubPublicationSession,
 } from "../github-publication-availability.js";
 import { refreshManagedWorkspaceBase } from "../github-publication-base-refresh.js";
+import { presentGitHubPublicationReceipt } from "../github-publication-client.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { performSessionGitHubInspection } from "../github-publication-inspect.js";
 import { readGitHubPublicationReadiness } from "../github-publication-readiness.js";
@@ -67,6 +71,14 @@ const sessionGitHubFailureMessages = {
   "sessions.github.status": "GitHub publication status is unavailable.",
   "sessions.github.confirm": "GitHub publication confirmation failed.",
 };
+
+function presentPublicationStatus(
+  client: GatewayRequestHandlerOptions["client"],
+  status: SessionGitHubStatusResult,
+): SessionGitHubStatusResult {
+  const result = presentGitHubPublicationReceipt(client, status.result);
+  return result === status.result ? status : { ...status, result };
+}
 
 function publicationStateUnavailableError() {
   return errorShape(
@@ -301,7 +313,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
 
         const result = await coordinator.requestPersonalForSessionV2(params, admitted.action);
         admitted.action.assertCurrent();
-        respond(true, result);
+        respond(true, presentGitHubPublicationReceipt(options.client, result));
 
         return;
       }
@@ -392,7 +404,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           : {}),
       });
       sessionMutationAuthorization?.assertCurrent();
-      respond(true, result);
+      respond(true, presentGitHubPublicationReceipt(options.client, result));
     },
   ),
   "sessions.github.readiness": defineSessionGitHubMethod(
@@ -502,8 +514,9 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             ...(Object.keys(avatarUrls).length ? { avatarUrls } : {}),
             ...(identity?.stale || personal?.stale ? { stale: true } : {}),
             ...(sharedUnavailableReason ? { sharedUnavailableReason } : {}),
-            pendingPersonal,
-            latestShared,
+            pendingPersonal:
+              pendingPersonal && presentPublicationStatus(options.client, pendingPersonal),
+            latestShared: latestShared && presentPublicationStatus(options.client, latestShared),
           });
         },
         GITHUB_OPTIONS_TIMEOUT_MS,
@@ -538,7 +551,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       const shared = await service.sharedStatus(session, options.params.requestId);
       if (shared) {
         read.assertSessionUnchanged(session);
-        options.respond(true, shared);
+        options.respond(true, presentPublicationStatus(options.client, shared));
         return;
       }
       if (read.personal.kind !== "eligible") {
@@ -551,7 +564,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         prepared,
       );
       read.assertSessionUnchanged(session);
-      options.respond(true, result);
+      options.respond(true, presentPublicationStatus(options.client, result));
     },
   ),
   "sessions.github.confirm": defineSessionGitHubMethod(
@@ -567,7 +580,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
 
       const result = await service.confirmPersonalV2(options.params, admitted.action);
       admitted.action.assertCurrent();
-      options.respond(true, result);
+      options.respond(true, presentGitHubPublicationReceipt(options.client, result));
     },
   ),
 };
