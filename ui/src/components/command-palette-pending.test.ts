@@ -254,7 +254,7 @@ describe("CommandPalette pending searches", () => {
     ["partial", {}, "Transcript search unavailable"],
     ["model failure", {}, "Model search unavailable"],
     ["indexing", { indexing: true }, "Results may be incomplete — search again shortly."],
-    ["archived", { archivedTranscriptsExcluded: 2 }, "archived"],
+    ["archived", { archivedTranscriptsExcluded: 2 }, "Archived sessions"],
   ] as const)(
     "does not announce empty success for %s transcript results",
     async (name, result, notice) => {
@@ -397,6 +397,37 @@ describe("CommandPalette session search", () => {
 });
 
 describe("CommandPalette metadata publications", () => {
+  it("refreshes model-only publications without reloading command sources", async () => {
+    let modelName = "Needle old model";
+    const request = vi.fn(async (method: string) => {
+      if (method === "models.list") {
+        return { models: [{ provider: "fixture", id: "needle", name: modelName }] };
+      }
+      if (method === "skills.status") {
+        return { skills: [{ skillKey: "needle", name: "Needle skill", description: "Weather" }] };
+      }
+      return { plugins: [], results: [], sessions: [] };
+    });
+    const { palette, emit } = await mountSearch({
+      methods: ["skills.status", "models.list", "plugins.list"],
+      request,
+    });
+    await searchPalette(palette, "needle");
+    expect(findPaletteOption(palette, "Needle old model")).toBeDefined();
+    modelName = "Needle new model";
+    emit("chat.metadata.changed", {
+      modelCatalogChanged: true,
+      commandsChanged: false,
+      authChanged: false,
+    });
+    await settlePalette(palette, 0);
+    expect(findPaletteOption(palette, "Needle old model")).toBeUndefined();
+    expect(findPaletteOption(palette, "Needle new model")).toBeDefined();
+    expect(findPaletteOption(palette, "Needle skill")).toBeDefined();
+    expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(1);
+  });
+
   it("loads catalog rows and refreshes skills without reloading unchanged models", async () => {
     let skillName = "Needle old skill";
     const request = vi.fn(async (method: string) => {
