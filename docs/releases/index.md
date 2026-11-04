@@ -11,6 +11,14 @@ who contributed, with links to the source changes.
 
 <!-- Keep releases newest first, with a short summary on every card. -->
 
+### November 2026
+
+<CardGroup cols={2}>
+  <Card title="v2026.11.1" href="/releases/2026.11.1">
+    Patch fixes for managed Gateway service start messages and Telegram and Discord conversations
+  </Card>
+</CardGroup>
+
 ### October 2026
 
 <CardGroup cols={2}>
