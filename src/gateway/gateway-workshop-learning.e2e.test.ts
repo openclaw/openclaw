@@ -2,17 +2,20 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runSkillExperienceReview } from "../skills/workshop/experience-review.js";
-import { createExperienceReviewCandidate } from "../skills/workshop/experience-review.test-support.js";
-import { listWorkshopChanges } from "../skills/workshop/library.js";
-import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveAgentSkillsRoot } from "../skills/loading/skill-paths.js";
+import { shareCoreWithWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
+import { createExperienceReviewCandidate } from "../skills/test-support/workshop-review-candidate.test-support.js";
+import { listWorkshopChanges } from "../skills/workshop-changes/changes.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -42,6 +45,51 @@ async function withResponsesProvider(
   }
 }
 
+const GATEWAY_ENV = {
+  OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+  OPENCLAW_SKIP_CHANNELS: "1",
+  OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+  OPENCLAW_SKIP_CRON: "1",
+  OPENCLAW_SKIP_CANVAS_HOST: "1",
+  OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+  OPENCLAW_SKIP_PROVIDERS: "1",
+  // The skill-workshop plugin is bundled; plugins.allow keeps every other one off.
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+};
+
+/** Runs one review through the skill-workshop plugin the Gateway loaded, in its own call scope. */
+async function runLoadedWorkshopReview(candidate: {
+  config: OpenClawConfig;
+  ctx: { runId: string };
+  source: { agentId: string; sessionKey: string; sessionId: string; entryId: string };
+}): Promise<void> {
+  const registry = getActivePluginRegistry();
+  const record = registry?.plugins.find((plugin) => plugin.id === "skill-workshop");
+  const instance = record ? getPluginInstance(record) : undefined;
+  if (!registry || !instance) {
+    throw new Error("The Gateway did not load the skill-workshop plugin.");
+  }
+  // The plugin's public `api` artifact, loaded like core loads bundled public surfaces.
+  const { runSkillExperienceReview } = loadBundledPluginPublicArtifactModuleSync<{
+    runSkillExperienceReview: (params: {
+      ctx: { runId: string };
+      config: OpenClawConfig;
+      source: { agentId: string; sessionKey: string; sessionId: string; entryId: string };
+    }) => Promise<void>;
+  }>({ dirName: "skill-workshop", artifactBasename: "api.js" });
+  const { agentId, sessionKey, sessionId, entryId } = candidate.source;
+  await instance.runInRegistry(registry, () =>
+    runSkillExperienceReview({
+      ctx: { runId: candidate.ctx.runId },
+      config: candidate.config,
+      source: { agentId, sessionKey, sessionId, entryId },
+    }),
+  );
+}
+
+// The Gateway loads the bundled skill-workshop plugin; it must share this test's core.
+beforeAll(shareCoreWithWorkshopPluginForTest);
+
 describe("Gateway automatic Workshop learning", () => {
   it(
     "sends one bounded review request and stops on a provider TPM rate limit",
@@ -49,7 +97,9 @@ describe("Gateway automatic Workshop learning", () => {
     async () => {
       const state = await createOpenClawTestState({
         prefix: "openclaw-workshop-review-rate-limit-",
+        env: GATEWAY_ENV,
       });
+      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       const requests: string[] = [];
       const oldHistory = "OLD_HISTORY_NOT_NEEDED_FOR_REVIEW ".repeat(20_000);
       const workspaceInstructions = "WORKSPACE_INSTRUCTIONS_NOT_NEEDED_FOR_REVIEW";
@@ -93,10 +143,25 @@ describe("Gateway automatic Workshop learning", () => {
               transport: "sse",
               openaiWsWarmup: false,
             };
+            const token = "isolated-workshop-rate-limit-token";
+            candidate.config.gateway = { auth: { mode: "token", token } };
+            candidate.config.plugins = {
+              ...candidate.config.plugins,
+              enabled: true,
+              allow: [...(candidate.config.plugins?.allow ?? []), "skill-workshop"],
+              slots: { memory: "none" },
+            };
+            candidate.config.meta = { migrations: { skillWorkshopPlugin: true } };
             setRuntimeConfigSnapshot(candidate.config);
             await state.writeConfig(candidate.config);
+            gateway = await startGatewayWithClient({
+              cfg: candidate.config,
+              configPath: state.configPath,
+              token,
+              scopes: ["operator.admin", "operator.read", "operator.write"],
+            });
 
-            await expect(runSkillExperienceReview(candidate)).rejects.toThrow(/rate limit/i);
+            await expect(runLoadedWorkshopReview(candidate)).rejects.toThrow(/rate limit/i);
 
             expect(providerErrors).toEqual([]);
             expect(requests).toHaveLength(1);
@@ -112,6 +177,10 @@ describe("Gateway automatic Workshop learning", () => {
           },
         );
       } finally {
+        if (gateway) {
+          await disconnectGatewayClient(gateway.client);
+          await gateway.server.close({ reason: "Workshop rate-limit proof cleanup" });
+        }
         await state.cleanup();
       }
     },
@@ -123,16 +192,7 @@ describe("Gateway automatic Workshop learning", () => {
     async () => {
       const state = await createOpenClawTestState({
         prefix: "openclaw-gateway-workshop-learning-",
-        env: {
-          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
+        env: GATEWAY_ENV,
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       const reviewRequests: ProviderRequest[] = [];
@@ -225,6 +285,8 @@ Retain the distinct rollback procedure after verifying the previous public gener
               gateway: { auth: { mode: "token", token } },
               models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
               plugins: {
+                enabled: true,
+                allow: ["skill-workshop"],
                 slots: { memory: "none" },
                 entries: { "skill-workshop": { config: { autonomous: { mode: "auto" } } } },
               },
@@ -232,7 +294,11 @@ Retain the distinct rollback procedure after verifying the previous public gener
               tools: { profile: "coding" },
               skills: { load: { watch: false } },
             } satisfies OpenClawConfig;
-            const workshop = resolveWorkshopSkillsDir(config, "main");
+            const workshop = resolveAgentSkillsRoot({
+              config,
+              agentId: "main",
+              dirName: "workshop-skills",
+            });
             const skillFile = path.join(workshop, "map-publication", "SKILL.md");
             const supportFile = path.join(path.dirname(skillFile), "references/activation.md");
             await fs.mkdir(path.dirname(supportFile), { recursive: true });

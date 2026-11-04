@@ -140,7 +140,7 @@ The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
 without a saved choice starts with **My sessions**, except guests: a role that can
 only view other people's sessions and has no general read access (the role
-[Visitor Access](/gateway/team-server#invite-guests) requires) starts with **Involving me**.
+[Visitor Access](/start/multiplayer#invite-guests) requires) starts with **Involving me**.
 A saved choice always wins. Before a profile is identified,
 or when the connection has no durable profile, the list shows **All owners**.
 Identifying the profile restores its saved choice or the default for that role.
@@ -340,44 +340,44 @@ reordering and steering retain their normal behavior.
 
 ## Systems workspace
 
-Open **Pages → Systems**, or visit `/systems`, to inspect the Gateway, worker
-environments, and paired devices available to your connection. Use the pin button
+Open **Pages → Systems**, or visit `/systems`, to inspect this computer, cloud
+devices, and paired devices available to your connection. Use the pin button
 beside Systems in Pages, or drag it into the rail, to keep a personal shortcut.
 
 While Systems is open, select **Sessions** in the rail to show its contextual
-machine list in place of conversations. Pages and Users remain separate views.
+device list in place of conversations. Pages and Users remain separate views.
 The middle list scrolls independently of the rail; the sidebar header and the
 rail’s bottom controls stay fixed. Returning to conversations restores their
-sidebar scroll position. Navigation changes this context; background machine or
+sidebar scroll position. Navigation changes this context; background device or
 session activity does not switch your workspace.
 
-Use **Filter & sort machines** beside the search field to sort each group
+Use **Filter & sort devices** beside the search field to sort each group
 alphabetically, online first (the default), or offline first. Choose **All**,
 **Online**, or **Offline** to filter by reported status; search narrows that
 selection further. Starting, stopping, and error states remain visible under
-**All**. Filtering does not change the machine open in the workspace. These
+**All**. Filtering does not change the device open in the workspace. These
 choices stay in place when you leave Systems and return on the same connection.
 
-The machine list excludes cloud workers whose teardown is complete, including
+The device list excludes cloud workers whose teardown is complete, including
 retained records from archived sessions and failed starts with no allocated
-machine. Workers awaiting cleanup remain visible. Archiving stops running cloud
+device. Workers awaiting cleanup remain visible. Archiving stops running cloud
 workers through the normal workspace-reconciliation flow; failed placements keep
 their existing cleanup retries and recovery history.
 
 Select a desktop-capable system to open the existing Desktop viewer in the main
 workspace. It uses the same connection, control, sizing, and fullscreen behavior
 as the Desktop panel. Headless and offline entries remain inspectable instead
-of opening an empty desktop. Pairing, desktop enablement, and operator permissions
+of opening an empty desktop. Pairing, desktop enablement, and access permissions
 still apply; opening Systems does not grant additional access.
 
 System details use reported facts. A connected device is not necessarily the
-machine running a session, and unavailable measurements are not shown as zero.
+device running a session, and unavailable measurements are not shown as zero.
 The telemetry and backup overview reserves its space while those readings load,
 so the desktop and Backups stay in place. It summarizes the three volumes with
-the highest used percentage and reserves unused rows for machines with fewer
+the highest used percentage and reserves unused rows for devices with fewer
 volumes. **+N more volumes in Details** opens every volume and its history.
 **Backup details** opens the complete backup outcomes, schedules, and storage
-locations, even when no machine is selected. The overview does not scroll;
+locations, even when no device is selected. The overview does not scroll;
 turning off statistics keeps a compact backup area.
 See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for worker desktop
 enablement and sizing.
@@ -879,7 +879,7 @@ For device and cloud sessions, the submitted prompt also starts background namin
 
 For a remote target, the Control UI creates the repository or managed-worktree session with an empty initial message and no `execNode`, dispatches it by exact `deviceId`, `autoDevice: true`, or `profileId` (plus an optional cloud machine class), waits for active placement, and then sends the first message and attachments with the same request key used by recovery to prevent duplicate sends. Explicit and automatic device dispatch require `operator.write`; cloud profile dispatch requires `operator.admin`. The composer footer chooses the new session's model and reasoning level.
 
-Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Speed controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the open picker and accessible label. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. The Effort control shows the effective level. Its menu marks the default level with a **Default** badge, and while the chat inherits that level the control's accessible name reads, for example, "Effort: Default (High)". Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast or Ultrafast speed is active. In chat, **Speed** stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
+Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Speed controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the open picker and accessible label. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. The Effort control and its menu show the effective level without a default badge. While the chat inherits that level, the control's accessible name reads, for example, "Effort: Default (High)". Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast or Ultrafast speed is active. In chat, **Speed** stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
 
 The model picker initially opens with the selected model’s provider section expanded and other provider sections collapsed. Closing and reopening the same picker preserves your provider expansion choices and clears the search. Reloading the page initializes provider sections from the selected model again. Search the model picker by model name, model ID, provider, or provider/model reference. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
 

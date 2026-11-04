@@ -1,9 +1,10 @@
 import type { TranslationMap } from "../lib/types.ts";
 import { registerChatCommandsEnglish } from "./en-chat-commands.ts";
 import { registerChatWelcomeEnglish } from "./en-chat-welcome.ts";
+import { registerSessionOrganizationSharedEnglish } from "./en-session-organization-shared.ts";
 import { en } from "./en.ts";
 
-// Discovery copy loads with the palette or transcript search, not the shell.
+// Discovery copy loads with the palette, not the shell or Sessions page.
 const enCommandPalette = {
   commandPalette: {
     newSessionSettings: "New session settings",
@@ -25,6 +26,7 @@ const enCommandPalette = {
     attachmentPrompt: en.palette.attachmentPrompt,
     searchingSessions: "Searching sessions…",
     searchingCommands: "Searching commands…",
+    archivedSessionsExcluded: "Archived sessions are not included in message search.",
     clearSearch: "Clear search",
     escapeKey: "esc",
     filterLabel: "Filter search results",
@@ -61,23 +63,9 @@ const enCommandPalette = {
     },
   },
   sessionsView: {
-    transcriptSearchTitle: "Search transcripts",
-    transcriptSearchDescription:
-      "Find exact words or phrases in user and assistant messages across the default agent's sessions.",
-    transcriptSearchInputLabel: "Search session transcripts",
-    transcriptSearchPlaceholder: "Search exact words or phrases…",
-    transcriptSearchAction: "Search",
-    transcriptSearchClear: "Clear",
-    transcriptSearchRetry: "Retry",
-    transcriptSearchSearching: "Searching transcripts…",
-    transcriptSearchUnavailable: "Connect to the Gateway to search transcripts.",
-    transcriptSearchError: "Transcript search failed",
-    transcriptSearchIndexing: "Results may be incomplete — search again shortly.",
     transcriptSearchArchivedExcluded:
-      "{count} archived transcripts excluded; open a session to restore its searchable history.",
-    transcriptSearchEmpty: "No transcript messages match that search.",
-    transcriptSearchMatches: "Transcript matches: {count}",
-    transcriptSearchTruncated: "Showing the first 25 matches.",
+      registerSessionOrganizationSharedEnglish.catalog.sessionsView
+        .transcriptSearchArchivedExcluded,
   },
 
   shortcutsOverlay: {

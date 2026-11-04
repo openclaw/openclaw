@@ -382,7 +382,7 @@ suite.define(() => {
         code: "INVALID_REQUEST",
         message: `Session ${key} ${changedMessage}`,
       });
-      const error = page.locator("[data-sidebar-session-error]");
+      const error = page.locator("openclaw-toast-host");
       await ui.expectText(error, changedMessage);
       expect(await error.textContent()).not.toContain("GatewayRequestError");
       await ui.visible(row);

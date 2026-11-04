@@ -2,7 +2,7 @@
 
 import { getByRole } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
-import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { showToast } from "./toast.ts";
 import "./toast-host.tsx";
 
@@ -30,7 +30,6 @@ it("can retry a failed toast import and dismiss the recovered notice", async () 
   await waitForSolid(() => expect(host.textContent).toContain("Synthetic saved notice"));
   expect(host.querySelector('[role="alert"]')).toBeNull();
   getByRole(host, "button", { name: "Dismiss" }).click();
-  flush();
-  expect(host.toast).toBeNull();
-  expect(dismissed).toHaveBeenCalledExactlyOnceWith("dismiss");
+  await waitForSolid(() => expect(dismissed).toHaveBeenCalledExactlyOnceWith("dismiss"));
+  expect(host.toasts).toEqual([]);
 });

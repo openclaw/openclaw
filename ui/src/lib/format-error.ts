@@ -1,3 +1,4 @@
+import { readMissingScopeError } from "@openclaw/gateway-client/browser";
 import {
   collectErrorGraphCandidates,
   formatErrorMessage,
@@ -7,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { redactToolDetail } from "./browser-redact.ts";
+import { formatMissingScopeMessage } from "./gateway-errors.ts";
 
 /** The message is complete UI text; the cause remains available to diagnostics. */
 export class UserFacingError extends Error {}
@@ -51,6 +53,12 @@ function reportProgrammingError(error: object): void {
 export function formatUiError(error: unknown, fallback = ""): string {
   if (error instanceof UserFacingError) {
     return redactToolDetail(error.message) || fallback;
+  }
+  const missingScope = readMissingScopeError(error);
+  if (missingScope) {
+    return redactToolDetail(
+      formatMissingScopeMessage(missingScope.missingScope, "complete this request"),
+    );
   }
   const programmingErrors = collectErrorGraphCandidates(error, readErrorCauses).filter(
     isProgrammingError,

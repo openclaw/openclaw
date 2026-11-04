@@ -21,7 +21,8 @@ import type { QueuedChatSendOptions } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { flushChatQueueForEvent } from "./chat-outbox-resume.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
-import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
+import { parkedChatQueueRows, setChatQueuePaused } from "./chat-queue-pause.ts";
+import { readQueuedMessageById, removeQueuedMessage, updateQueuedMessage } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { canSendVolatileQueueItem, reconnectSafeQueuedSendState } from "./chat-send-eligibility.ts";
@@ -101,6 +102,26 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string): Promis
  * partially reshuffled queue.
  */
 type ChatQueueMoveResult = "moved" | "rejected" | "noop";
+
+/** Resume after Stop: the head row sends now, or after a run the user started meanwhile. */
+export function resumeChatQueue(host: ChatHost): void {
+  setChatQueuePaused(host, false);
+  void flushChatQueueForEvent(host);
+}
+
+/** Discards the rows Stop parked; an open row edit keeps its source and draft. */
+export function clearChatQueue(host: ChatHost): void {
+  const parked = parkedChatQueueRows(host);
+  for (const item of host.chatQueue) {
+    if (
+      parked?.has(item.id) &&
+      !isQueuedMessageBeingEdited(host, item.id) &&
+      removeQueuedMessage(host, item.id, { discard: true }) === "rejected"
+    ) {
+      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    }
+  }
+}
 
 export function moveQueuedChatMessage(
   host: ChatHost,
