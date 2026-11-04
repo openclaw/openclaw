@@ -260,7 +260,9 @@ it("separates captured inspection replies from inherited or forwarded CLI bytes"
     // Keep the real stdout records intact. The pure oracle's candidate facts
     // place its terminal window after the captured reply, before parent output.
     const candidatePid = startup.pid + 1_000_000;
-    for (const row of f.rows.filter((row) => row.event !== "startup" && row.event !== "stdout")) {
+    for (const row of f.rows.filter(
+      (event) => event.event !== "startup" && event.event !== "stdout",
+    )) {
       row.pid = startup.pid;
       row.child = candidatePid;
       if (typeof row.time === "string") {
