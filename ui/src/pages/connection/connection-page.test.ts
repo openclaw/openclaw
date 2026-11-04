@@ -166,7 +166,7 @@ function pageState(page: HTMLElement) {
     busy: host?.getAttribute("aria-busy"),
     placeholders: host?.querySelectorAll('.skeleton[aria-hidden="true"]').length,
     activity: text(page, ".connection-activity"),
-    activityFailed: text(page, ".connection-activity")?.includes("Activity refresh failed."),
+    activityFailed: text(page, ".connection-activity")?.includes("Couldn’t refresh activity."),
     cpuDegraded: page.querySelector(".gateway-vital--cpu")?.hasAttribute("data-degraded"),
     hostSkeleton: page.querySelector(".config-host__name .skeleton"),
     hostElement: page.querySelector(".config-host__name"),
@@ -581,7 +581,7 @@ it.each([
       type: "password",
       placeholder: "Paste the token or type the password",
     });
-    expect(page.textContent).toContain(`This Gateway expects its ${authMode}.`);
+    expect(page.textContent).toContain(`Enter the Gateway ${authMode}.`);
     expect(page.querySelector('[role="radiogroup"]')).toBeNull();
     control(page, ".connection-actions button").click();
     expect(connect).toHaveBeenLastCalledWith();

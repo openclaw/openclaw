@@ -97,18 +97,17 @@ suite.define(() => {
     return gateway;
   }
 
-  it("wraps an unnamed user's long email in both hero fields on narrow screens", async () => {
+  it("wraps a long display name and email in both hero fields on narrow screens", async () => {
+    const longName = "Primaryuser".repeat(8);
     const longEmail = "primaryuserprimaryuserprimaryuserprimaryuserprimaryuser@example.test";
     await suite.withPage({ viewport: { width: 360, height: 800 } }, async ({ page }) => {
-      await openProfilePage(
-        page,
-        { "users.self": { profile: { ...testProfile, displayName: null, emails: [longEmail] } } },
-        testPresenceUsers.map((user) => ({ ...user, name: undefined, email: longEmail })),
-      );
+      await openProfilePage(page, {
+        "users.self": { profile: { ...testProfile, displayName: longName, emails: [longEmail] } },
+      });
 
       const title = page.locator(".profile-hero__name");
       const handle = page.locator(".profile-hero__handle");
-      await expect(title).toHaveText(longEmail);
+      await expect(title).toHaveText(longName);
       await expect(handle).toContainText(longEmail);
       for (const field of [title, handle]) {
         await expect(field).toBeInViewport({ ratio: 1 });

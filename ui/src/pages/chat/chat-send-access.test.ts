@@ -167,7 +167,7 @@ it.each(["initial-turn", "recovery-scope", "send-access"])(
     }
     if (hold === "recovery-scope") {
       expect(retained[0]?.sendError).toBe(
-        "Chat settings update was interrupted. Review and retry when ready.",
+        "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.",
       );
       expect(host.chatQueue).toEqual([]);
       readiness.mockReturnValue(true);
