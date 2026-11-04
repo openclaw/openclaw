@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { crc32, inflateRawSync } from "node:zlib";
+import { isTransientNetworkError } from "./transient-network-error.mjs";
 
 const ACTIONS_ARTIFACT_API_VERSION = "2026-03-10";
 const DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES = 256 * 1024 * 1024;
@@ -20,17 +21,6 @@ const DEFAULT_MAX_ACTIONS_ARTIFACT_EXPANDED_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_JSON_BYTES = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_TRANSFER_TIMEOUT_MS = 4 * 60_000;
-const TRANSIENT_NETWORK_CODES = new Set([
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "EAI_AGAIN",
-  "ENETUNREACH",
-  "ETIMEDOUT",
-  "UND_ERR_BODY_TIMEOUT",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_SOCKET",
-]);
 const ARTIFACT_DIGEST_RE = /^sha256:[0-9a-f]{64}$/u;
 const ARTIFACT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/u;
 const COMMIT_SHA_RE = /^[0-9a-f]{40}$/u;
@@ -967,12 +957,7 @@ async function runBoundedRetry(label, operation, params) {
       remainingTransferMs(params.deadlineMs, label);
       return result;
     } catch (error) {
-      const networkFailure =
-        error?.name === "TimeoutError" ||
-        error?.name === "AbortError" ||
-        TRANSIENT_NETWORK_CODES.has(error?.code) ||
-        TRANSIENT_NETWORK_CODES.has(error?.cause?.code);
-      if (!(error instanceof RetryableArtifactTransferError) && !networkFailure) {
+      if (!(error instanceof RetryableArtifactTransferError) && !isTransientNetworkError(error)) {
         throw error;
       }
       lastError = error;
