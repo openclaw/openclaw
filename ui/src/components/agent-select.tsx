@@ -198,6 +198,7 @@ defineSolidBridge<AgentSelectProps>(
               return props.disabled || props.options.length === 0;
             },
             searchable: true,
+            phoneSheet: true,
             // Agent menus have a fixed width; no offscreen sizing rows are needed.
             windowed: () => "",
             showOptionTooltips: false,

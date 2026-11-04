@@ -234,7 +234,7 @@ suite.define(() => {
       has: wilfredDevices.page.getByText("This browser", { exact: true }),
     });
     await deviceEntry.waitFor();
-    await deviceEntry.locator("summary").click();
+    await deviceEntry.locator(":scope > summary").click();
     const revokeButton = deviceEntry.getByRole("button", { name: "Revoke", exact: true });
     await revokeButton.waitFor({ state: "visible" });
     await revokeButton.scrollIntoViewIfNeeded();
@@ -242,7 +242,7 @@ suite.define(() => {
     await revokeButton.click();
     // Webviews without a native dialog bridge still need in-page confirmation.
     const revokeConfirm = wilfredDevices.page.locator("openclaw-modal-dialog");
-    await revokeConfirm.getByText("Revoke the operator token?").waitFor();
+    await revokeConfirm.getByText("Revoke this token?").waitFor();
     await revokeConfirm.getByText(`Device ID: ${deviceId}`).waitFor();
     await revokeConfirm.getByRole("button", { name: "Revoke", exact: true }).click();
     const revoke = await wilfredDevices.gateway.waitForRequest("device.token.revoke");
@@ -262,7 +262,7 @@ suite.define(() => {
     await wilfredDevices.page.bringToFront();
     await deviceEntry.getByRole("button", { name: "Rotate", exact: true }).click();
     const rotateReveal = wilfredDevices.page.locator("openclaw-modal-dialog");
-    await rotateReveal.getByText("New operator token").waitFor();
+    await rotateReveal.getByText("New token").waitFor();
     await rotateReveal.getByText(WILFRED_ROTATED_TOKEN).waitFor();
     await captureProof(wilfredDevices.page, "wilfred-rotated-token.png");
     await wilfredDevices.page.keyboard.press("Escape");

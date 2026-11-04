@@ -11,6 +11,7 @@ import fs from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -20,6 +21,7 @@ const { values } = parseArgs({
     policy: { type: "string", default: "candidate" },
     "owner-module": { type: "string" },
     allocations: { type: "boolean" },
+    "registration-delay-ms": { type: "string" },
     "workspace-files": { type: "string", default: "62000" },
     "state-dir": { type: "string" },
     packs: { type: "string", default: "32" },
@@ -61,6 +63,12 @@ and unique added blob, then runs full fsck. The checkout has 62000 tracked 18KiB
 The workspace adds one pack to the requested fragmented pack count.
 Optional --owner-module <path> selects a frozen owner module for baseline proof;
 its imports must resolve to the original dependencies. Use a fresh fixture for each arm.
+Add --registration-delay-ms 5000 to delay the first real verify-pack command and
+start six concurrent addManagedWorktree calls once verification starts. These use
+deferred checkout to measure registration independently of copying 62000 files.
+The report includes each call's wall time and verifies its branch, HEAD and tree.
+Repeat fresh fixtures with the same owner for A/A controls, then alternate frozen
+baseline/candidate owners for A/B pairs; --allocations remains a separate run.
 Dependency-free native Git MIDX probe (Linux/GNU time or macOS/BSD time):
   node scripts/perf/managed-git-maintenance-measure.ts --mode prepare-midx --packs 32 --blobs-per-pack 65536 --state-dir <new-directory>
   node scripts/perf/managed-git-maintenance-measure.ts --mode measure-midx --state-dir <prepared-directory>
@@ -105,6 +113,13 @@ const packCount = Number(values.packs);
 const promisorPackCount = Number(values["promisor-packs"]);
 const passCount = Number(values.passes);
 const blobsPerPack = Number(values["blobs-per-pack"]);
+const registrationDelayMs = Number(values["registration-delay-ms"] ?? 0);
+assert(
+  Number.isSafeInteger(registrationDelayMs) &&
+    registrationDelayMs >= 0 &&
+    registrationDelayMs <= 60_000,
+  "--registration-delay-ms must be an integer between 0 and 60000",
+);
 const blobBytes = nativeMidx || backlog ? 16 : 32 * 1024;
 const payloadBytes = (backlog ? blobsPerPack + packCount : packCount * blobsPerPack) * blobBytes;
 assert(Number.isSafeInteger(packCount) && packCount >= 16, "--packs must be an integer >=16");
@@ -484,6 +499,9 @@ if (values.mode === "prepare-backlog") {
     const { closeOpenClawStateDatabaseAsync } =
       await import("../../src/state/openclaw-state-db.js");
     process.env.GIT_TRACE2_EVENT = trace;
+    if (registrationDelayMs) {
+      await import("../../src/agents/worktrees/checkout.js");
+    }
     const inspector = values.allocations ? new Session() : undefined;
     if (inspector) {
       inspector.connect();
@@ -503,7 +521,10 @@ if (values.mode === "prepare-backlog") {
         const promisorPacksBefore = await promisorPacks();
         const progress = new WorktreeGcProgress();
         const passStarted = performance.now();
-        await createWorktreeGitMaintenance(process.env)({ progress });
+        const maintenance = createWorktreeGitMaintenance(process.env);
+        const registrations = registrationDelayMs
+          ? await measureRegistrations(pass, (signal) => maintenance({ progress, signal }))
+          : await maintenance({ progress });
         const elapsedMs = performance.now() - passStarted;
         assert.equal(progress.result.issueCount, 0, JSON.stringify(progress.result.issues));
         assert.equal(progress.result.gitMaintenance?.stage, "completed");
@@ -519,6 +540,7 @@ if (values.mode === "prepare-backlog") {
           packsAfter,
           promisorPacksBefore,
           promisorPacksAfter,
+          registrations,
         });
         await fs.writeFile(
           summary,
@@ -561,6 +583,7 @@ if (values.mode === "prepare-backlog") {
       "--mode",
       backlog ? "owner-backlog" : "owner",
       ...(values.allocations ? ["--allocations"] : []),
+      ...(registrationDelayMs ? ["--registration-delay-ms", String(registrationDelayMs)] : []),
       ...(values["owner-module"] ? ["--owner-module", path.resolve(values["owner-module"])] : []),
       "--state-dir",
       root,
@@ -634,6 +657,115 @@ if (values.mode === "prepare-backlog") {
         2,
       ),
     );
+  }
+}
+
+async function measureRegistrations(
+  pass: number,
+  maintain: (signal: AbortSignal) => Promise<void>,
+) {
+  const { addManagedWorktree } = await import("../../src/agents/worktrees/checkout.js");
+  const realGit = await run("/bin/sh", ["-c", "command -v git"]);
+  assert(path.isAbsolute(realGit), "Git must resolve to an absolute executable path");
+  const head = await git(["rev-parse", "HEAD"]);
+  const tree = await git(["rev-parse", "HEAD^{tree}"]);
+  const shim = await fs.mkdtemp(path.join(root, "registration-shim-"));
+  const verifying = path.join(shim, "verifying");
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const originalPath = process.env.PATH;
+  const controller = new AbortController();
+  const requests: Array<Promise<{ branch: string; destination: string; elapsedMs: number }>> = [];
+  let maintenance: Promise<{ error?: unknown }> = Promise.resolve({});
+  try {
+    // Only the benchmark executable delays Git; the production owner and its queue are unchanged.
+    await fs.writeFile(
+      path.join(shim, "git"),
+      `#!/bin/sh\ncase " $* " in\n*" verify-pack "*)\n  if mkdir ${quote(verifying)} 2>/dev/null; then sleep ${registrationDelayMs / 1000}; fi\n  ;;\nesac\nexec ${quote(realGit)} "$@"\n`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${shim}${path.delimiter}${originalPath ?? ""}`;
+    let settled = false;
+    maintenance = maintain(controller.signal).then(
+      () => {
+        settled = true;
+        return {};
+      },
+      (error: unknown) => {
+        settled = true;
+        return { error };
+      },
+    );
+    const deadline = performance.now() + 60_000;
+    while (
+      !(await fs.stat(verifying).then(
+        () => true,
+        () => false,
+      ))
+    ) {
+      assert(!settled, "Maintenance finished without reaching verify-pack");
+      assert(performance.now() < deadline, "Maintenance did not reach verify-pack within 60s");
+      await sleep(10);
+    }
+    for (let index = 0; index < 6; index++) {
+      const branch = `registration-${pass}-${index}`;
+      const destination = path.join(root, branch);
+      const started = performance.now();
+      requests.push(
+        addManagedWorktree({
+          repoRoot: repo,
+          commonDir: path.join(repo, ".git"),
+          worktreeRoot: root,
+          destination,
+          branch,
+          base: head,
+          env: process.env,
+          now: Date.now,
+          enabled: false,
+          deferGitCheckout: true,
+          signal: controller.signal,
+          commitGuard: () => controller.signal.throwIfAborted(),
+          requireSpace: async () => {},
+        }).then((result) => {
+          assert.equal(result.code, 0, result.stderr);
+          return { branch, destination, elapsedMs: performance.now() - started };
+        }),
+      );
+    }
+    const results = await Promise.allSettled(requests);
+    const outcome = await maintenance;
+    if (outcome.error) {
+      throw new Error("Maintenance failed during registration proof", { cause: outcome.error });
+    }
+    const registrations = [];
+    for (const result of results) {
+      if (result.status === "rejected") {
+        throw new Error("Managed registration failed", { cause: result.reason });
+      }
+      const { branch, destination } = result.value;
+      assert.equal(await git(["rev-parse", `refs/heads/${branch}`]), head);
+      assert.equal(await run("git", ["-C", destination, "rev-parse", "HEAD^{tree}"]), tree);
+      assert.equal(
+        await run("git", ["-C", destination, "symbolic-ref", "HEAD"]),
+        `refs/heads/${branch}`,
+      );
+      assert.deepEqual(await fs.readdir(destination), [".git"]);
+      registrations.push(result.value);
+    }
+    return {
+      delayMs: registrationDelayMs,
+      path: "addManagedWorktree/deferGitCheckout",
+      registrations,
+    };
+  } finally {
+    controller.abort();
+    await Promise.allSettled(requests);
+    await maintenance;
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+    await fs.rm(shim, { recursive: true, force: true });
   }
 }
 

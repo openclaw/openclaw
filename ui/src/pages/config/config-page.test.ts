@@ -244,7 +244,7 @@ it("renders Web Push registration publications and dispatches Unsubscribe withou
   });
   const { container } = mountConfigPage(context, { pageId: "notifications" });
   expect(container.textContent).toContain("Checking");
-  expect(container.textContent).toContain("Not requested");
+  expect(buttonNamed(container, "Enable notifications").disabled).toBe(false);
 
   snapshot.loading = true;
   publishConfigSource(webPush);
@@ -270,7 +270,7 @@ it("renders Web Push registration publications and dispatches Unsubscribe withou
   snapshot.loading = false;
   snapshot.preferences = { durableIdentity: true, user, device, effective: { ...user, ...device } };
   publishConfigSource(webPush);
-  expect(container.textContent).toContain("Granted");
+  expect(buttonNamed(container, "Send test").disabled).toBe(false);
   expect(container.textContent).toContain("Subscribed");
   expect(container.textContent).not.toContain("Checking");
   expect(
