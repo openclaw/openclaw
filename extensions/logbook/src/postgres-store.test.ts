@@ -581,8 +581,11 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
       expect.objectContaining({ keyframeId: undefined, title: "Coding" }),
     ]);
     saveStandup("After pruning", day);
+    expect(() => backend.assertSettled!()).not.toThrow();
     await backend.close();
+    expect(() => backend.assertSettled!()).toThrow("Logbook database is closed");
     backend = open();
+    expect(() => backend.assertSettled!()).not.toThrow();
     expect(execute({ type: "getStandup", input: { day } })).toMatchObject({
       text: "After pruning",
     });

@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
+  assertTransactionUsable,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -668,6 +669,17 @@ export function createSqliteWorkerBackend(
     return operations[command.type](command.input);
   }
   return {
+    assertSettled() {
+      const db = store.connection;
+      // A lost PostgreSQL client must retire this worker before the next command.
+      assertTransactionUsable(db);
+      if (!db.isOpen) {
+        throw new Error("Logbook database is closed");
+      }
+      if (db.isTransaction) {
+        throw new Error("Logbook database left an unsettled transaction");
+      }
+    },
     execute(command) {
       const execute = () => dispatch(command);
       // Pruning owns its SQL transaction so filesystem work does not hold the writer lock.
