@@ -124,7 +124,7 @@ function prepareSut(
   writeFileSync(
     join(bin, "curl"),
     `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const root = ${JSON.stringify(root)}, options = ${JSON.stringify(options)};
 const args = process.argv.slice(2);
 fs.appendFileSync(root + "/curl-calls", JSON.stringify({args, env:process.env}) + "\\n");

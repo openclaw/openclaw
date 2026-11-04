@@ -468,7 +468,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 @media (pointer: coarse) {
   .settings-sidebar__loading-agent {
-    height: 44px;
+    height: var(--settings-touch-control-height);
   }
 }
 

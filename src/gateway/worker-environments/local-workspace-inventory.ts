@@ -4,7 +4,11 @@ import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { splitNullBuffer } from "../../agents/worktrees/git-path-inventory.js";
 import { requireGitBuffer } from "../../agents/worktrees/git.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
-import type { LocalWorkspaceProjection } from "./local-workspace-store.types.js";
+import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
+import type {
+  LocalWorkspaceManifestValue,
+  LocalWorkspaceProjection,
+} from "./local-workspace-store.types.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
@@ -131,14 +135,16 @@ export async function prepareLocalWorkspaceBuildInputs(params: {
   };
 }
 
-/** Git archives omit accepted ignored leaves and empty directories; retain that overlay separately. */
-export async function captureLocalWorkspaceArchiveBaseline(params: {
+type ArchiveBaselineInput = {
   root: string;
   snapshotCommit: string;
   manifest: WorkerWorkspaceManifest;
-  signal: AbortSignal;
+  signal?: AbortSignal;
   assertCurrent: () => void;
-}) {
+};
+
+/** Git archives omit accepted ignored leaves and empty directories; retain that overlay separately. */
+async function selectArchiveManifest(params: ArchiveBaselineInput) {
   const { signal, assertCurrent } = params;
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.snapshotCommit)) {
     throw new Error("Invalid archive snapshot commit");
@@ -163,11 +169,59 @@ export async function captureLocalWorkspaceArchiveBaseline(params: {
       directories.add(parent);
     }
   }
-  const base = serializeWorkerWorkspaceManifest({
+  if (
+    entries.length === params.manifest.entries.length &&
+    directories.size === (params.manifest.directories?.length ?? 0) &&
+    params.manifest.directories?.every((directory) => directories.has(directory)) !== false
+  ) {
+    return params.manifest;
+  }
+  return {
     ...params.manifest,
     entries,
     directories: [...directories].toSorted(),
-  });
-  const baseRef = "sha256:" + createHash("sha256").update(base).digest("hex");
-  return { rawManifest: base, manifestRef: baseRef };
+  };
+}
+
+function archiveDocument(manifest: WorkerWorkspaceManifest) {
+  const rawManifest = serializeWorkerWorkspaceManifest(manifest);
+  return {
+    rawManifest,
+    manifestRef: "sha256:" + createHash("sha256").update(rawManifest).digest("hex"),
+  };
+}
+
+export async function captureLocalWorkspaceArchiveBaseline(params: ArchiveBaselineInput) {
+  return archiveDocument(await selectArchiveManifest(params));
+}
+
+/** The worker consumes admitted nodes; full receipt bytes are needed only for an overlay. */
+export async function prepareLocalWorkspaceArchive(params: {
+  root: string;
+  snapshotCommit: string;
+  records: ReadonlyMap<string, LocalWorkspaceManifestRecord>;
+  baseCommit: string;
+  buildCacheInputs: string[];
+}): Promise<Extract<LocalWorkspaceManifestValue, { kind: "archive" }>> {
+  const manifest: WorkerWorkspaceManifest = {
+    version: 1,
+    baseCommit: params.baseCommit,
+    buildCacheInputs: params.buildCacheInputs,
+    entries: [],
+    directories: [],
+  };
+  for (const { node } of params.records.values()) {
+    if (node.type !== "directory") {
+      manifest.entries.push(node);
+    } else if (node.path !== "") {
+      manifest.directories!.push(node.path);
+    }
+  }
+  const base = await selectArchiveManifest({ ...params, manifest, assertCurrent: () => undefined });
+  return base === manifest
+    ? { kind: "archive" }
+    : {
+        kind: "archive",
+        overlay: { base: archiveDocument(base), accepted: archiveDocument(manifest) },
+      };
 }

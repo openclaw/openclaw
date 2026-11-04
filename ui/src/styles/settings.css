@@ -842,7 +842,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
   justify-content: flex-start;
 }
 
-@media (min-width: 769px) {
+@media not all and (max-width: 640px) {
   .settings-row--stacked-on-narrow,
   .settings-row--stacked-on-narrow .settings-row__control {
     width: auto;
@@ -1424,7 +1424,7 @@ textarea.settings-input {
 /* Narrow screens stack the Recovery row, so its actions get the full width.
    Whole buttons wrap and grow to fill each line; the primary retry leads on
    its own line. Wide screens keep the single right-aligned row. */
-@media (max-width: 768px) {
+@media (max-width: 640px) {
   .updates-recovery-actions {
     display: flex;
     flex-wrap: wrap;
@@ -1638,14 +1638,14 @@ textarea.settings-input {
     /* The shell topbar keeps one size on every route; resizing it here shifts
        the page when navigation enters or leaves Settings. */
     :is(button, .btn, summary, .settings-toggle):where(
-      :not([role="tab"], .topbar *, .settings-segmented__btn)
+      :not([role="tab"], .topbar *, .settings-segmented__btn, .oc-menu-item)
     ) {
       min-width: var(--settings-touch-control-height);
       min-height: var(--settings-touch-control-height);
     }
 
     .settings-segmented > .settings-segmented__btn {
-      min-width: 44px;
+      min-width: var(--settings-touch-control-height);
     }
 
     :is(input, select, textarea),
@@ -1658,7 +1658,7 @@ textarea.settings-input {
     }
 
     .settings-secret > :is(input, textarea) {
-      padding-right: calc(44px + var(--space-2));
+      padding-right: calc(var(--settings-touch-control-height) + var(--space-2));
     }
 
     .settings-section__help-button > span {
@@ -2227,7 +2227,7 @@ openclaw-approvals-page .data-table-pagination__info {
 
 @media (pointer: coarse) {
   .settings-sidebar__agent .agent-select__trigger {
-    min-height: 44px;
+    min-height: var(--settings-touch-control-height);
   }
 }
 

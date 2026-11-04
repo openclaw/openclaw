@@ -627,6 +627,7 @@ describe("widget-card", () => {
     expect(pinButton(root.container)).toBe(button);
     expect(document.activeElement).toBe(button);
     expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      severity: "error",
       message: "Could not pin to dashboard. Try again.",
     });
 

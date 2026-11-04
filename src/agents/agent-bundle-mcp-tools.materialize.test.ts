@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import type { McpCatalogTool, McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
   catalogTool,
@@ -18,12 +19,7 @@ import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
-import type {
-  BundleMcpToolRuntime,
-  McpCatalogTool,
-  McpToolCatalog,
-  SessionMcpRuntime,
-} from "./agent-bundle-mcp-types.js";
+import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
