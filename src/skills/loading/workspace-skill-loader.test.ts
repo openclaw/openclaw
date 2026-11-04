@@ -85,7 +85,10 @@ describe("prompt asynchronous binary preparation", () => {
         metadata: JSON.stringify({ openclaw: skill.metadata }),
       });
     }
-    const config: OpenClawConfig = { plugins: { enabled: false }, browser: { enabled: false } };
+    const config: OpenClawConfig = {
+      plugins: { allow: ["skill-workshop"] },
+      browser: { enabled: false },
+    };
     const eligibility: SkillEligibilityContext = {};
     const options = {
       ...selection,
@@ -236,6 +239,24 @@ function createWorkspacePluginRegistry(workspaceDir: string): PluginManifestRegi
       configSchema: manifest.configSchema,
     });
   }
+  // The bundled plugin that declares each agent's learned skill folder.
+  const workshopRoot = path.join(extensionsRoot, "skill-workshop");
+  plugins.push({
+    id: "skill-workshop",
+    origin: "bundled",
+    enabledByDefault: true,
+    agentSkillsDir: "workshop-skills",
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    legacyPluginIds: [],
+    kind: [],
+    skills: [],
+    hooks: [],
+    rootDir: workshopRoot,
+    source: workshopRoot,
+    manifestPath: path.join(workshopRoot, "openclaw.plugin.json"),
+  });
   return { plugins, diagnostics: [] };
 }
 
@@ -401,7 +422,7 @@ describe("loadWorkspaceSkills", () => {
       ]);
     }
     const options = {
-      config: { plugins: { enabled: false } },
+      config: { plugins: { allow: ["skill-workshop"] } },
       managedSkillsDir: path.join(workspaceDir, ".managed"),
       bundledSkillsDir: "",
       pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),

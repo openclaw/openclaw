@@ -42,16 +42,13 @@ import { readNodePermissionError } from "./node-permission-error.js";
 import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { ToolInputError } from "./tool-input-error.js";
 import { readToolOperatorHint } from "./tool-operator-hint.js";
 import { createRuntimeToolMatcher } from "./tool-policy-match.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
-import {
-  jsonResult,
-  payloadTextResult,
-  ToolInputError,
-  type AnyAgentTool as HarnessAgentTool,
-} from "./tools/common.js";
+import type { AnyAgentTool as HarnessAgentTool } from "./tools/common.js";
+import { jsonResult, payloadTextResult } from "./tools/tool-results.js";
 
 function captureSourceInvocationGuard(tool: AnyAgentTool, signal?: AbortSignal): () => void {
   const assertCurrent = captureAgentToolSourceExecutionGuard(signal);

@@ -131,6 +131,10 @@ describe("gateway crash-loop breaker", () => {
         const first = await lifecycle.begin(4_000);
         const firstId = first.id;
         expect(firstId).toBeDefined();
+        expect(first.restartResumeWindow).toEqual({
+          startedAt: 1_000 + priorCrashes - 1,
+          endedAt: 4_000,
+        });
         expectDecision(first.decision, priorCrashes, {
           shouldWriteStabilityBundle: priorCrashes === 3,
         });
@@ -139,6 +143,7 @@ describe("gateway crash-loop breaker", () => {
         const nextId = next.id;
         expect(nextId).toBeDefined();
         expect(nextId).not.toBe(firstId);
+        expect(next.restartResumeWindow).toBeUndefined();
         expectDecision(next.decision, priorCrashes, {
           shouldWriteStabilityBundle: false,
         });
@@ -153,6 +158,43 @@ describe("gateway crash-loop breaker", () => {
       ).toEqual([priorCrashes === 3 ? BREAKER : null, null]);
     },
   );
+
+  it("offers no crash-resume window without a predecessor or after a settled predecessor", async () => {
+    const lifecycle = createLifecycleDb();
+    let now = 1_000;
+    let boot = await lifecycle.begin(now);
+    expect(boot.restartResumeWindow).toBeUndefined();
+    for (const outcome of [
+      "planned_restart",
+      "clean_stop",
+      "safe_mode_stable",
+      "startup_failure_repaired",
+      "startup_failed",
+      "forced_stop",
+    ] as const) {
+      await lifecycle.complete(boot.id, outcome, now + 1);
+      const next = await lifecycle.begin(now + 2);
+      expect(next.restartResumeWindow).toBeUndefined();
+      now += 2;
+      boot = next;
+    }
+  });
+
+  it("keeps a safe-mode split in its original incarnation without grouping real restarts by PID", async () => {
+    const lifecycle = createLifecycleDb();
+    insertBootRows(lifecycle, [bootRow("a", 1), bootRow("b", 2), bootRow("c", 3)]);
+    const safe = await lifecycle.begin(4_000);
+    const recoveredAt = 4_000 + GATEWAY_BOOT_LOOP_WINDOW_MS + 1;
+    const recovered = await recordGatewayCrashLoopRecovery(safe.id, lifecycle.env, recoveredAt);
+    expect(recovered).toBeDefined();
+    const restarted = await lifecycle.begin(recoveredAt + 1);
+    expect(restarted.restartResumeWindow).toEqual({ startedAt: 4_000, endedAt: recoveredAt + 1 });
+    // This new incarnation shares process.pid, but is not another safe-mode split.
+    expect((await lifecycle.begin(recoveredAt + 2)).restartResumeWindow).toEqual({
+      startedAt: recoveredAt + 1,
+      endedAt: recoveredAt + 2,
+    });
+  });
 
   it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
     "retains the crash-loop decision and rolls back pruning when recording the boot fails",
@@ -173,15 +215,15 @@ describe("gateway crash-loop breaker", () => {
           : constants.SQLITE_OK,
       );
       try {
-        expect(
-          gatewayBootOperations["gatewayBoot.begin"](nowMs, {
-            open: () => state,
-            stateOptions: () => ({ path: state.path, env: lifecycle.env }),
-          }),
-        ).toMatchObject({
+        const failed = gatewayBootOperations["gatewayBoot.begin"](nowMs, {
+          open: () => state,
+          stateOptions: () => ({ path: state.path, env: lifecycle.env }),
+        });
+        expect(failed).toMatchObject({
           id: undefined,
           decision: { tripped: true, uncleanBoots: 3, shouldWriteStabilityBundle: true },
         });
+        expect(failed).not.toHaveProperty("restartResumeWindow");
       } finally {
         database.setAuthorizer(null);
       }
@@ -408,23 +450,29 @@ describe("gateway crash-loop breaker", () => {
     ]);
   });
 
-  it("prunes boot rows older than retention when recording a new boot", async () => {
-    const db = createLifecycleDb();
-    const nowMs = 2 * GATEWAY_BOOT_LIFECYCLE_RETENTION_MS;
+  it.each([false, true])(
+    "captures the latest boot before pruning (recent boot: %s)",
+    async (recent) => {
+      const db = createLifecycleDb();
+      const nowMs = 2 * GATEWAY_BOOT_LIFECYCLE_RETENTION_MS;
 
-    insertBootRows(db, [
-      bootRow("old", nowMs - GATEWAY_BOOT_LIFECYCLE_RETENTION_MS - 1),
-      bootRow("kept", nowMs - GATEWAY_BOOT_LIFECYCLE_RETENTION_MS),
-    ]);
+      insertBootRows(db, [
+        bootRow("old", nowMs - GATEWAY_BOOT_LIFECYCLE_RETENTION_MS - 1),
+        ...(recent ? [bootRow("kept", nowMs - GATEWAY_BOOT_LIFECYCLE_RETENTION_MS)] : []),
+      ]);
 
-    await db.begin(nowMs);
+      expect((await db.begin(nowMs)).restartResumeWindow).toEqual({
+        startedAt: nowMs - GATEWAY_BOOT_LIFECYCLE_RETENTION_MS - (recent ? 0 : 1),
+        endedAt: nowMs,
+      });
 
-    const rows = readBootRows(db).map((row) => row.boot_id);
+      const rows = readBootRows(db).map((row) => row.boot_id);
 
-    expect(rows).toHaveLength(2);
-    expect(rows).toContain("kept");
-    expect(rows).not.toContain("old");
-  });
+      expect(rows).toHaveLength(recent ? 2 : 1);
+      expect(rows.includes("kept")).toBe(recent);
+      expect(rows).not.toContain("old");
+    },
+  );
 });
 
 describe("formatGatewayCrashLoopManualChannelStartHint", () => {

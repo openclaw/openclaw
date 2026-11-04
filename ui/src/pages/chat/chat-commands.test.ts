@@ -27,6 +27,7 @@ const commandResult = (name: string) => ({ commands: [remoteCommand(name, name)]
 
 function catalogFixture() {
   const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
+  vi.spyOn(client, "hello", "get").mockReturnValue(gatewayHelloForMethods(["commands.list"]));
   const request = vi.spyOn(client, "request");
   onTestFinished(async () => {
     request.mockRestore();
@@ -142,12 +143,14 @@ describe("refreshSlashCommands", () => {
     beginChatMetadataPublication(client, { agentId: "main", sessionKey }).publish(
       commandResult("agent_only"),
     );
+    // An existing session owns its project, so a stray projectId never selects a catalog.
+    const projectId = "project-alpha";
     // Sessions without an execution root keep the startup metadata catalog.
-    await refreshSlashCommands({ client, agentId: "main", sessionKey });
+    await refreshSlashCommands({ client, agentId: "main", sessionKey, projectId });
     expect(commandByName("agent_only")).toBeDefined();
     expect(request).not.toHaveBeenCalled();
     const refreshScoped = (sessionSkillScope: string) =>
-      refreshSlashCommands({ client, agentId: "main", sessionKey, sessionSkillScope });
+      refreshSlashCommands({ client, agentId: "main", sessionKey, projectId, sessionSkillScope });
     await refreshScoped('[null,"/alpha"]');
     expect(commandByName("alpha_session_skill")).toBeDefined();
     expect(commandByName("agent_only")).toBeUndefined();
@@ -161,23 +164,6 @@ describe("refreshSlashCommands", () => {
     await refreshScoped('["wt",null]');
     expect(commandByName("rebound_session_skill")).toBeDefined();
     expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("never sends a project with an existing session's catalog request", async () => {
-    const { client, request } = catalogFixture();
-    request.mockResolvedValue(commandResult("session_skill"));
-    await refreshSlashCommands({
-      client,
-      agentId: "main",
-      sessionKey: "agent:main:existing",
-      projectId: "project-alpha",
-    });
-    expect(request).toHaveBeenCalledWith("commands.list", {
-      agentId: "main",
-      sessionKey: "agent:main:existing",
-      includeArgs: true,
-      scope: "text",
-    });
   });
 
   it("resolves localized UI command metadata", () => {

@@ -118,10 +118,9 @@ export function listSqliteSessionEntriesFromDatabase(
     const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;
     const captured = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
       runSqliteReadSnapshotSync(database.db, () => {
-        let entries: SessionEntrySummary[];
+        const keys: string[] = [];
         if (scope.cronRetention) {
           const page = scope.cronRetention;
-          const keys: string[] = [];
           for (const row of iterateSqliteQuerySync(
             database.db,
             getNodeSqliteKysely<DB>(database.db)
@@ -138,15 +137,27 @@ export function listSqliteSessionEntriesFromDatabase(
             }
           }
           options.captureCronRunSessionKey?.(keys.length === page.limit ? keys.at(-1)! : null);
-          entries = readSelectedSessionEntriesInDatabase(database, keys);
         } else {
-          const snapshot = readSessionEntryCache(database, {
-            cache: false,
-            projection: "list",
-            deferParticipants: true,
-          });
-          entries = Array.from(iterateSessionEntriesForListing(snapshot));
+          // Even unexpired cron rows need JSON identity validation before scheduling their
+          // next expiry. Discover only this logical owner's keys without hydrating the store.
+          for (const row of iterateSqliteQuerySync(
+            database.db,
+            getNodeSqliteKysely<DB>(database.db)
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .orderBy("session_key"),
+          )) {
+            if (
+              !isCronRunSessionKey(row.session_key) ||
+              normalizeAgentId(parseAgentSessionKey(row.session_key)!.agentId) !== requestedOwner
+            ) {
+              continue;
+            }
+            keys.push(row.session_key);
+          }
         }
+        // Even an empty selection must validate unrelated pending delivery aliases.
+        const entries = readSelectedSessionEntriesInDatabase(database, keys);
         let oldestUpdatedAt: number | null = null;
         let selected = entries.filter(({ sessionKey, entry }) => {
           if (
@@ -206,9 +217,9 @@ export function listSqliteSessionEntriesFromDatabase(
     projection,
     deferParticipants,
   });
-  return Array.from(
-    iterateSessionEntriesForListing(snapshot, projection === "list" && scope.clone !== false),
-  );
+  // Deferred participant views are never cached and already own their decoded metadata.
+  const cloneEntries = projection === "list" && scope.clone !== false && !deferParticipants;
+  return Array.from(iterateSessionEntriesForListing(snapshot, cloneEntries));
 }
 
 /** Applies the listing visibility and canonical-key contract to an owned snapshot. */

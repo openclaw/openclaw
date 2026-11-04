@@ -18,6 +18,14 @@ When an agent schema needs an upgrade, Doctor defers legacy session-entry
 inspection until its stopped-writer schema repair finishes. This applies to
 PostgreSQL as well as SQLite.
 
+Before rewriting stored auth profiles, Doctor saves a verified backup of the
+owning database. SQLite stores keep a single-file backup; PostgreSQL stores keep
+an exact export directory with its matching anchor and original credential rows.
+Doctor checks the captured credentials and rotation state against its migration
+plan before rewriting either store. Keep the reported backup for recovery.
+This repair runs in the candidate Doctor during an update; the installed updater
+needs no change.
+
 Legacy text imports require valid UTF-8. If a source contains malformed bytes,
 Doctor warns and skips that source instead of storing replacement characters.
 Independent migrations continue. The original bytes remain in the source or its

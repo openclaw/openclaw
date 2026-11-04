@@ -7,7 +7,9 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const configuredBun = process.env.OPENCLAW_BUN_PATH?.trim();
 const bunCommand = configuredBun || "bun";
-const hasBun = spawnSync(bunCommand, ["--version"], { timeout: 10_000 }).status === 0;
+// Explicit compilers are exercised by the fixtures; probing cannot change admission.
+const hasBun =
+  Boolean(configuredBun) || spawnSync(bunCommand, ["--version"], { timeout: 10_000 }).status === 0;
 
 function runBundleFixture(
   prefix: string,
@@ -26,7 +28,7 @@ function runBundleFixture(
   expect(result.stdout.trim()).toBe(expectedOutput);
 }
 
-it.skipIf(!configuredBun && !hasBun)(
+it.skipIf(!hasBun)(
   "excludes orphan dynamic chunks while rejecting reachable unrendered module URLs",
   () => {
     runBundleFixture(
@@ -88,7 +90,7 @@ console.log("orphan removed; reachable and declared markers rejected");
 );
 
 // Node-only CI does not provision Bun; an explicit compiler override must work.
-it.skipIf(!configuredBun && !hasBun)(
+it.skipIf(!hasBun)(
   "removes dead exports inside live chunks without removing namespace or declared exports",
   () => {
     runBundleFixture(
@@ -142,7 +144,7 @@ console.log("dead shared export removed; live namespace and declared exports pre
   },
 );
 
-it.skipIf(!configuredBun && !hasBun)(
+it.skipIf(!hasBun)(
   "rebases file-loader URLs when shared code moves into nested entry roots",
   () => {
     runBundleFixture(
@@ -189,7 +191,7 @@ console.log("both nested roots read their assets after shared chunks move");
   },
 );
 
-it.skipIf(!configuredBun && !hasBun).each([
+it.skipIf(!hasBun).each([
   { sourceAot: false, mode: "emitted JS" },
   { sourceAot: true, mode: "source AOT" },
 ])(

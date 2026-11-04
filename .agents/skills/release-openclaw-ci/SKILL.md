@@ -59,9 +59,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Land tooling-only fixes on `main` with the `release-fast-lane` label added
   before the push (see [Release tooling fast lane](#release-tooling-fast-lane)): `openclaw/ci-gate`
   then runs lint, types, guards, dependencies, docs, and the changed Node rows
-  only. Land through the native `scripts/pr` path with its completed ClawSweeper
-  review; findings are advisory for that label, so record any P1 the release
-  owner declines to fix in the PR with its follow-up before landing.
+  only. Land through the [native maintainer workflow](../openclaw-pr-maintainer/references/landing.md).
+  That workflow owns review and landing requirements, including the advisory
+  ClawSweeper policy; the label changes only CI selection.
 - `OPENCLAW_RELEASE_RUNNER_GROUP` optionally routes validation parents and workers
   and the Release Publish parent plus its publish children to reserved capacity
   with unchanged labels; credentialed publish and approval jobs stay on default
@@ -235,10 +235,8 @@ step summary. A declined label (out-of-scope path, global Node input, fork,
 push, dispatch, docs-only) logs a warning and leaves ordinary selection
 untouched. The gate stays complete: every selected lane must pass, and hourly
 full main CI covers the merged result. The label narrows only the CI gate: fork
-heads are declined, and the native `scripts/pr` landing path with its completed
-ClawSweeper review is unchanged. ClawSweeper findings are advisory for labelled
-PRs: a P1 that the release owner decides not to fix in the PR is recorded there
-with its follow-up before landing.
+heads are declined, and the [native maintainer workflow](../openclaw-pr-maintainer/references/landing.md)
+still owns review and landing requirements.
 
 ## Run identity and retry budget
 
@@ -290,9 +288,16 @@ until their dependent enforcement changes land.
   dispatch `rerun_group=all`.
 - Rerun a failed or timed out test job only after the lead records its
   real-blocker-or-flake decision (see the maintainer skill's shared release
-  boundaries). A flake gets at most two recorded reruns on the same Release SHA
-  plus a fix-in-parallel issue or PR on `main`; never a re-cut, tooling change,
-  or new FRV. New dispatches reject `known_flaky_jobs_json`.
+  boundaries). Call it a flake only when the same job or failure signature has
+  passed on the same Release SHA. Before rerunning, read the failure's own
+  diagnostics, inspect same-SHA attempts, and compare the failing paths against
+  the candidate delta and recent `main` history; a fix on `main` is not present
+  on the frozen candidate until ancestry or patch equivalence proves it. An
+  identical signature repeated on the same or another candidate is deterministic
+  until a named mechanism and fix prove otherwise. A flake gets at most two
+  recorded reruns on the same Release SHA plus a fix-in-parallel issue or PR on
+  `main`; never a re-cut, tooling change, or new FRV. New dispatches reject
+  `known_flaky_jobs_json`.
 - For a supported parent, `pnpm frv rerun --run <parent-run-id> --job
   "<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
   Actions job ID. Get the child key and exact name from `frv status --json`.
@@ -333,8 +338,10 @@ until their dependent enforcement changes land.
   ```
 
 - Parents whose immutable plan predates attempt-aware evidence cannot be
-  continued. Start a fresh all-group Full Release Validation; never reconstruct
-  old state or dispatch a replacement parent.
+  continued. This legacy-plan refusal requires a fresh all-group Full Release
+  Validation parent, subject to the owned-tree settlement rules above. Preserve
+  the old receipts; never reconstruct the old state. Attempt-aware plans retain
+  their existing parent and the targeted recovery rules above.
 
 - Controller retries are `ci`, `plugin-prerelease`, `install-smoke`,
   `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`, `npm-telegram`,
@@ -794,8 +801,13 @@ error bodies are retried on the next poll, never reported as job results.
 State lives in `$TMPDIR/openclaw-frv/<repo>-<parent>-watch.json` (`--state`
 overrides), so a restart after a harness or Monitor timeout does not re-report.
 `--once` takes one snapshot, `--interval <seconds>` sets polling (default 60),
-and `--json` prints NDJSON. It exits once the parent and every dispatched child
-are terminal; restart it after a later rerun. Do not hand-roll bash or `gh`
+and `--json` prints NDJSON. It exits with code 1 on a newly observed current
+parent/artifact-producer blocker or a policy-blocking carried child failure,
+after saving the notification. Resume with the same command and state to keep
+following diagnostics without repeating that blocker. Otherwise, it exits once
+the parent and every dispatched child are terminal; restart it after a later
+rerun. Use `status` for structured blockers and preview recovery with
+`continue --failed --dry-run`. Do not hand-roll bash or `gh`
 watchers.
 
 Watch candidate events derive the frozen SHA and context ref from the sealed
@@ -872,9 +884,17 @@ run-ID-cached bytes first.
    them in a clean-home CLI probe, never as a substitute for a required
    Anthropic API-key lane.
 5. For live-cache failures, inspect whether it is missing/invalid key, empty text, provider refusal, timeout, or baseline miss. Do not weaken release gates without clear provider evidence.
-6. Decide blocker or flake for each failed test before editing. Track a fix for
-   flakes on `main`; every selected job must still pass before publication.
-   Classify blockers further:
+6. Decide blocker or flake for each failed test before editing. A flake requires
+   a passing occurrence of the same job or signature on this exact Release SHA.
+   First preserve the failing diagnostics, inspect every same-SHA attempt, and
+   run `git log <previous-release-tag>..<release-sha> -- <failing paths>` for
+   the candidate delta and `git log <release-sha>..origin/main -- <failing paths>`
+   for main-only changes. If `main` contains a repair absent from the frozen
+   candidate, treat the failure as a blocker and backport or supersede; do not
+   rerun it as inherited success. A signature repeated on another candidate is
+   deterministic until a named mechanism and fix prove otherwise. Track a fix
+   for genuine flakes on `main`; every selected job must still pass before
+   publication. Classify blockers further:
    - confirmed product/code failure: fix the release branch, freeze a new Code
      SHA, and invalidate product evidence
    - qualification harness/contract defect: repair the candidate closure and

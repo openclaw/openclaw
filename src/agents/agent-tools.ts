@@ -301,6 +301,7 @@ function* assembleOpenClawCodingTools(
             }),
             messageProvider: options?.messageProvider,
             currentChannelId: options?.currentChannelId,
+            currentMessagingTarget: options?.currentMessagingTarget,
             currentThreadTs: options?.currentThreadTs,
             channelContext: options?.channelContext,
             accountId: options?.agentAccountId,
@@ -380,6 +381,10 @@ function* assembleOpenClawCodingTools(
     sandboxed: Boolean(sandbox),
     pluginToolAllowlist,
     pluginToolDenylist,
+    // Only the grant's owner reaches tool construction; the grant itself stays in the allowlist.
+    ...(runtimePluginToolGrant
+      ? { runtimePluginToolOwnerId: runtimePluginToolGrant.pluginId }
+      : {}),
     disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
     requesterAgentIdOverride: executionAgentId,
   };

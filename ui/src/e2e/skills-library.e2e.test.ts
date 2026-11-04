@@ -57,6 +57,16 @@ async function openSkillSettings(page: Page) {
   await page.waitForURL(`${suite.server.baseUrl}settings/skills?agent=main`);
 }
 
+// Phone widths keep the library's page actions in a menu.
+async function openLibraryAction(page: Page, name: "Create skill" | "Import skill") {
+  if ((page.viewportSize()?.width ?? 0) <= 640) {
+    await page.getByRole("button", { name: "More actions", exact: true }).click();
+    await page.getByRole("menuitem", { name, exact: true }).click();
+    return;
+  }
+  await page.getByRole("button", { name, exact: true }).click();
+}
+
 async function expectLibraryDialogOpen(page: Page) {
   const dialog = page.locator("openclaw-modal-dialog dialog");
   await dialog.evaluate(async (element) => {
@@ -102,7 +112,7 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 375, height: 844 } }, async ({ page }) => {
       const gateway = await libraryGateway(page, { "skills.library.read": own });
       await openSkillSettings(page);
-      await page.getByRole("button", { name: "Create skill", exact: true }).click();
+      await openLibraryAction(page, "Create skill");
       await expectSkillNameValidation(page);
       await page.getByLabel("Skill name", { exact: true }).fill("a".repeat(64));
       expect(await page.getByLabel("Skill name", { exact: true }).inputValue()).toBe(
@@ -171,16 +181,18 @@ suite.define(() => {
       });
       await page.getByRole("alert").filter({ hasText: "Your draft is preserved" }).waitFor();
       expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe(draft);
-      const form = page.locator("form.skill-reader-dialog");
-      expect(await form.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
-        true,
-      );
+      const form = page.locator("form.skill-library-dialog");
+      expect(
+        await form.evaluate(
+          (element) => element.clientWidth > 0 && element.scrollWidth <= element.clientWidth + 1,
+        ),
+      ).toBe(true);
       page.once("dialog", (dialog) => {
         expect(dialog.message()).toBe("Discard your unsaved skill changes?");
         void dialog.accept();
       });
       await page.getByRole("button", { name: "Close", exact: true }).click();
-      await page.getByRole("button", { name: "Import skill", exact: true }).click();
+      await openLibraryAction(page, "Import skill");
       const importer = page.locator("openclaw-modal-dialog");
       await importer.getByLabel("Skill name", { exact: true }).waitFor();
       expect(await importer.getByLabel("Skill name", { exact: true }).inputValue()).toBe("");
@@ -188,8 +200,10 @@ suite.define(() => {
       expect(await importer.getByRole("status").allTextContents()).toEqual([]);
       expect(
         await importer
-          .locator(".skill-reader-dialog__body")
-          .evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+          .locator(".oc-dialog__body")
+          .evaluate(
+            (element) => element.clientWidth > 0 && element.scrollWidth <= element.clientWidth + 1,
+          ),
       ).toBe(true);
       await importer.getByLabel("Skill name", { exact: true }).fill("abandoned-import");
       await importer.locator('input[name="library-import-files"]').setInputFiles({
@@ -200,7 +214,7 @@ suite.define(() => {
       await importer.getByRole("button", { name: "Import skill", exact: true }).click();
       await importer.getByRole("alert").waitFor();
       await importer.getByRole("button", { name: "Close", exact: true }).click();
-      await page.getByRole("button", { name: "Import skill", exact: true }).click();
+      await openLibraryAction(page, "Import skill");
       await importer.getByLabel("Skill name", { exact: true }).waitFor();
       expect(await importer.getByLabel("Skill name", { exact: true }).inputValue()).toBe("");
       expect(await importer.getByRole("alert").count()).toBe(0);
@@ -208,7 +222,7 @@ suite.define(() => {
         await importer.getByRole("button", { name: "Import skill", exact: true }).isDisabled(),
       ).toBe(true);
       await importer.getByRole("button", { name: "Close", exact: true }).click();
-      await page.getByRole("button", { name: "Create skill", exact: true }).click();
+      await openLibraryAction(page, "Create skill");
       expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe("");
       expect(await page.locator("openclaw-modal-dialog").getByRole("alert").count()).toBe(0);
       await page.getByRole("button", { name: "Close", exact: true }).click();
@@ -231,7 +245,7 @@ suite.define(() => {
       await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
         const gateway = await libraryGateway(page);
         await openSkillSettings(page);
-        await page.getByRole("button", { name: "Create skill", exact: true }).click();
+        await openLibraryAction(page, "Create skill");
         await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
         const skill = page.getByLabel("SKILL.md", { exact: true });
         await skill.fill(own.content);
@@ -292,7 +306,7 @@ suite.define(() => {
         },
       });
       await openSkillSettings(page);
-      await page.getByRole("button", { name: "Import skill", exact: true }).click();
+      await openLibraryAction(page, "Import skill");
       await expectSkillNameValidation(page);
       await page.getByLabel("Skill name", { exact: true }).fill("a".repeat(64));
       expect(
@@ -388,7 +402,7 @@ suite.define(() => {
         },
       });
       await openSkillSettings(page);
-      await page.getByRole("button", { name: "Import skill", exact: true }).click();
+      await openLibraryAction(page, "Import skill");
       await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
       await page
         .locator('input[name="library-import-files"]')

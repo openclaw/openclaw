@@ -432,7 +432,11 @@ export async function maybeRepairGatewayServiceConfig(
 
   const serviceRewriteBlock = installationDrift
     ? undefined
-    : await resolveSystemdServiceRewriteBlock(command, audit.issues);
+    : await resolveSystemdServiceRewriteBlock(command, audit.issues, {
+        entrypointPath: runtimeLayout?.entrypointReal,
+        plannedNodePath: repairPlan.programArguments[0],
+        pinnedRuntimePath: pinSnapshot.pin?.path,
+      });
   if (serviceRewriteBlock) {
     note(serviceRewriteBlock, "Gateway service config");
   }
@@ -537,6 +541,7 @@ export async function maybeRepairGatewayServiceConfig(
       missingSystemNode: needsNodeRuntime && !systemNodePath && !runtimeRepair,
       runtimeIssues: audit.issues,
       definitionDrift: audit.definitionDrift,
+      pinnedRuntimePath: pinSnapshot.pin?.path,
     });
   note(preview, "Gateway service repair preview");
   const repair = await prompter.confirmRuntimeRepair({

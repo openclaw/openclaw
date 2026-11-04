@@ -225,7 +225,7 @@ describe("PostgreSQL conformance selection", () => {
     [["scripts/test-database-conformance.mjs"], true],
     [[".github/actions/postgres-conformance/action.yml"], true],
     [["scripts/test-database-conformance-preload.mjs"], true],
-    [["scripts/lib/weighted-test-shards.mts"], true],
+    [["scripts/lib/postgres-conformance-shards.mts"], true],
     [["config/postgres-conformance-timings.json"], true],
     [["src/infra/unrelated.ts"], false],
     [["docs/help/testing/suites.md"], false],
@@ -308,6 +308,7 @@ function renderCiGateEnvironment(
       evaluateWorkflow(rendered, {
         eventName: "workflow_dispatch",
         failureReportResult: results["pr-failure-report"] ?? "success",
+        jobResults: results,
         ...context,
         additionalNeeds: {
           "build-artifacts": {
@@ -3040,6 +3041,8 @@ describe("ci workflow guards", () => {
         repository: "openclaw/openclaw",
         runAttempt: 1,
         runnerBackend: "hybrid" as const,
+        // Reserve the reporter for unsuccessful checks when counting peak admission.
+        jobResults: { "checks-baseline-ratchets": "failure" },
         additionalNeeds: {
           "check-plan": { outputs },
           "build-artifacts": {
@@ -6116,6 +6119,51 @@ describe("ci workflow guards", () => {
     expect(source).toContain("blacksmith-16vcpu-windows-2025");
   });
 
+  it.each(["restore-main", "save-main", "publish-run", "restore-run"])(
+    "computes the %s SDK identity only in its authoritative operation",
+    (mode) => {
+      const action = readWorkflow(".github/actions/sdk-declarations/action.yml");
+      const root = tempDirs.make("sdk-action-identity-");
+      const bin = path.join(root, "bin");
+      mkdirSync(bin);
+      mkdirSync(path.join(root, "scripts"));
+      writeFileSync(path.join(root, "scripts/ci-sdk-declarations.mts"), "");
+      const calls = path.join(root, "node.calls");
+      writeExecutable(path.join(bin, "node"), [
+        "#!/bin/sh",
+        'printf "%s\\n" "$*" >> "$SDK_NODE_CALLS"',
+        'printf "cache-key=fixture-sdk\\n" >> "$GITHUB_OUTPUT"',
+      ]);
+      const steps = { identity: { outputs: {} }, pack: { outputs: {} }, restore: { outputs: {} } };
+      const run = (id: keyof typeof steps) => {
+        const step = action.runs.steps.find((candidate: WorkflowStep) => candidate.id === id);
+        const output = path.join(root, `${id}.outputs`);
+        const result = runWorkflowShellScript(step.run, {
+          cwd: root,
+          env: {
+            ...process.env,
+            PATH: bin + path.delimiter + process.env.PATH,
+            SDK_OPERATION: mode,
+            SDK_NODE_CALLS: calls,
+            GITHUB_OUTPUT: output,
+          },
+        });
+        expect(result.status, result.stderr).toBe(0);
+        steps[id].outputs = readWorkflowOutputs(output);
+      };
+      run("identity");
+      expect(steps.identity.outputs).toMatchObject({ enabled: "true" });
+      if (mode === "publish-run" || mode === "restore-run") {
+        expect(existsSync(calls)).toBe(false);
+        run(mode === "publish-run" ? "pack" : "restore");
+      }
+      expect(readFileSync(calls, "utf8").trim()).toBe(
+        `scripts/ci-sdk-declarations.mts ${mode === "publish-run" ? "pack" : mode === "restore-run" ? "restore --required" : "key"}`,
+      );
+      expect(evaluateWorkflow(action.outputs["cache-key"].value, { steps })).toBe("fixture-sdk");
+    },
+  );
+
   it("moves the existing boundary row into the SDK producer without widening the PR job graph", () => {
     const common = {
       bundledPlanner: true,
@@ -6247,7 +6295,7 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("keeps the extension boundary sticky disk on one protected key", () => {
+  it("preserves extension boundary artifact cache ownership", () => {
     const workflow = readCiWorkflow();
     const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
     const additionalJob = workflow.jobs["check-additional-shard"];
@@ -6263,17 +6311,6 @@ describe("ci workflow guards", () => {
     const runStep = requiredWorkflowStep(additionalJob.steps, "Run additional check shard");
     expect(runStep.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY).toBe(16);
 
-    // O(1) disks: Blacksmith caps sticky disks per installation, and the old
-    // per-PR/per-config keys minted new disks until every mount 429-failed
-    // fleet-wide. Snapshot validity lives in the in-job marker, not the key.
-    const boundaryMount = requiredWorkflowStep(
-      additionalJob.steps,
-      "Mount extension boundary sticky disk",
-    );
-    const lintMount = requiredWorkflowStep(
-      checkShardJob.steps,
-      "Mount extension boundary sticky disk",
-    );
     const boundaryCache = requiredWorkflowStep(
       additionalJob.steps,
       "Cache extension package boundary artifacts",
@@ -6286,11 +6323,6 @@ describe("ci workflow guards", () => {
       hostedCoreJob.steps,
       "Cache extension package boundary artifacts for hosted core lint",
     );
-    expect(boundaryMount.with.key).toBe("${{ github.repository }}-ext-boundary-v2");
-    expect(lintMount.with.key).toBe(boundaryMount.with.key);
-    for (const gate of [boundaryMount, lintMount]) {
-      expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
-    }
     expect(hostedLintCache.if).toBe(
       "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && steps.extension-boundary-inputs.outputs.enabled == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid')",
     );
@@ -6307,7 +6339,6 @@ describe("ci workflow guards", () => {
         "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
       });
     }
-    const fingerprintReference = "${{ steps.extension-boundary-inputs.outputs.fingerprint }}";
     expect(boundaryCache.with.key).toBe(
       "${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-extension-package-boundary-compiled-v1-${{ steps.extension-boundary-inputs.outputs.fingerprint }}",
     );
@@ -6498,45 +6529,6 @@ describe("ci workflow guards", () => {
       },
     ]) {
       expect(evaluateWorkflowExpression(compiledSave.if, { ...writer, ...rejected })).toBe(false);
-    }
-    // Single semantic writer: protected pushes commit explicitly (not
-    // on-change/if-missing, whose allocated-byte heuristic can strand a stale
-    // marker); PR clones and the lint consumer stay read-only.
-    expect(boundaryMount.with.commit).toBe(
-      "${{ github.event_name != 'pull_request' && 'true' || 'false' }}",
-    );
-    expect(lintMount.with.commit).toBe("false");
-
-    // Transport keys use the same commit; native owner records independently
-    // validate source content and output integrity after restoration.
-    const restoreStep = requiredWorkflowStep(
-      additionalJob.steps,
-      "Restore extension boundary artifacts from sticky disk",
-    );
-    const lintRestoreStep = requiredWorkflowStep(
-      checkShardJob.steps,
-      "Restore extension boundary artifacts from sticky disk",
-    );
-    const seedStep = requiredWorkflowStep(
-      additionalJob.steps,
-      "Seed extension boundary sticky disk",
-    );
-    for (const gate of [restoreStep, lintRestoreStep, seedStep]) {
-      expect(gate.run).toContain(fingerprintReference);
-      expect(gate.run).toContain(".source-fingerprint");
-      expect(gate.run).not.toContain("git rev-parse HEAD:");
-      expect(gate.run).not.toContain("BOUNDARY_CONFIG_HASH");
-      expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
-    }
-    // Seeding is writer-only work: PR mounts never commit, so seeding there
-    // would burn wall clock on a discarded clone.
-    expect(seedStep.if).toContain("github.event_name != 'pull_request'");
-    expect(seedStep.if).toContain("steps.boundary-sticky-restore.outputs.restored == 'false'");
-    expect(seedStep.run).toContain(
-      "rsync -aR --exclude='*.lock*' .artifacts/extension-package-boundary",
-    );
-    for (const step of [restoreStep, lintRestoreStep]) {
-      expect(step.run).toContain("for payload in packages .artifacts;");
     }
   });
 
@@ -12108,6 +12100,45 @@ describe("ci workflow guards", () => {
     ]);
   });
 
+  it("provisions pinned Bun for Node-hosted standalone code generation", () => {
+    const codegen = "test/scripts/bun-standalone-codegen.test.ts";
+    const unrelated = "test/scripts/ci-git-owner.test.ts";
+    const tooling = "test/vitest/vitest.tooling.config.ts";
+    const selections = [
+      { targets: [codegen] },
+      { includePatterns: [codegen] },
+      { includePatterns: ["test/scripts/bun-*.test.ts"] },
+      { groups: [{ configs: [tooling], includePatterns: [codegen] }] },
+      { configs: [tooling] },
+      { includePatterns: [unrelated] },
+      { groups: [{ configs: [tooling], includePatterns: [unrelated] }] },
+      { configs: ["test/vitest/vitest.tooling-isolated.config.ts"] },
+    ];
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      bunTestRuntime: false,
+      nodeTestShards: selections.map((selection, index) =>
+        Object.assign(
+          {
+            checkName: `codegen-${index}`,
+            configs: [tooling],
+            requiresDist: false,
+            runner: "ubuntu-24.04",
+            shardName: "core-tooling-1",
+          },
+          selection,
+        ),
+      ),
+    });
+    expect(result.status, result.output).toBe(0);
+    const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
+    expect(rows).toHaveLength(selections.length);
+    for (let index = 0; index < selections.length; index += 1) {
+      expect(Boolean(rows[index].requires_bun)).toBe(index < 5);
+      expect(rows[index].test_runtime_policy).toBe("node");
+    }
+  });
+
   it("provisions ripgrep for filesystem, SQLite ratchet, and native PR wrapper selections", () => {
     const contract = "src/agents/filesystem-tools-output-contract.test.ts";
     const nativeTools = "src/agents/sessions/tools/index.test.ts";
@@ -12402,9 +12433,9 @@ describe("ci workflow guards", () => {
         continue;
       }
       if (job === "pr-failure-report") {
-        // Reporting covers every PR; gate eligibility preserves the original allowance.
+        // Report unsuccessful PR checks; gate eligibility preserves the original allowance.
         expect(selection).toBe(
-          "github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true'",
+          "github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))",
         );
         continue;
       }
@@ -13356,6 +13387,7 @@ describe("shared test-source check execution", () => {
     ["src/shared.test-support.ts", "src/shared.test.ts"],
     ["packages/example/src/shared.test-support.ts"],
     ["ui/src/shared.test-support.ts"],
+    ["src/selection.test.ts", "config/test-lines-allocations/selection-proof.txt"],
   ])("keeps full guards and selects compiler consumers for %j", (...changedPaths) => {
     const graphs = ["core", "extensions-test"];
     const manifest = runManifest(changedPaths, graphs);
@@ -13396,6 +13428,8 @@ describe("shared test-source check execution", () => {
     ["src/shared.test-support.ts", "tsconfig.json"],
     ["src/shared.test-support.ts", "src/config/settings.json"],
     ["unknown/shared.test-support.ts"],
+    ["config/test-lines-allocations/ci-example.txt"],
+    ["src/shared.test.ts", "config/unknown.txt"],
   ])("retains full execution for %j", (...changedPaths) => {
     const manifest = runManifest(changedPaths);
     expect(manifest.status, manifest.output).toBe(0);

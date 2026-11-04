@@ -58,7 +58,7 @@ import {
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
 import { createGatewayCronAgentDeps } from "./server-cron-agent-run.js";
-import { finalizeCronCompletionAnnouncement, pickDefined } from "./server-cron-completion.js";
+import { finalizeCronCompletionAnnouncement } from "./server-cron-completion.js";
 import type { GatewayCronState } from "./server-cron-contract.js";
 import {
   bindCronStreamRemoval,
@@ -83,7 +83,7 @@ import {
   sendGatewayCronFailureAlert,
   createGatewayCronFailureRepair,
 } from "./server-cron-notifications.js";
-import { toPluginCronChangedEvent } from "./server-cron-plugin-job.js";
+import { toCronBroadcastEvent, toPluginCronChangedEvent } from "./server-cron-plugin-job.js";
 import { createGatewayCronPublisher } from "./server-cron-publication.js";
 import { createGatewayCronTargetResolver } from "./server-cron-targets.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -380,7 +380,7 @@ export function buildGatewayCronService(params: {
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => enqueueCronSystemEvent(text, opts, resolveCronTarget(opts)),
-    runSessionEvent: (request) => runGatewayCronSessionEvent(request, resolveCronTarget),
+    runSessionEvent: (request) => runGatewayCronSessionEvent(request, resolveCronTarget, storePath),
     resolveOriginDeliveryContext: (opts) =>
       resolveGatewayCronOriginDeliveryContext(opts, resolveCronTarget),
     runSchedulerOwned,
@@ -568,36 +568,7 @@ export function buildGatewayCronService(params: {
         jobSnapshot?.sessionKey ??
         evt.sessionKey;
       const scopedAgentId = jobSnapshot?.owner?.agentId ?? jobSnapshot?.agentId;
-      // Views fetch definitions and run details on demand; the sidebar needs
-      // bounded status and freshness. Keep the full event for hooks and notifications below.
-      const {
-        job: eventJob,
-        summary: _summary,
-        diagnostics: _diagnostics,
-        delivery: _delivery,
-        ...event
-      } = evt;
-      const payload = {
-        ...event,
-        ...(eventJob
-          ? {
-              job: {
-                ...pickDefined(eventJob, ["id", "name", "agentId", "enabled", "updatedAtMs"]),
-                state: pickDefined(eventJob.state, [
-                  "nextRunAtMs",
-                  "lastRunAtMs",
-                  "lastDurationMs",
-                  "lastTriggerEvalAtMs",
-                  "lastMeaningfulResult",
-                  "lastRunStatus",
-                  "lastStatus",
-                  "runningAtMs",
-                  "autoDisabled",
-                ]),
-              },
-            }
-          : {}),
-      };
+      const payload = toCronBroadcastEvent(evt);
       params.broadcast("cron", payload, {
         dropIfSlow: true,
         ...(scopedSessionKey

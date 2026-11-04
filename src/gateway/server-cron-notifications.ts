@@ -118,6 +118,8 @@ async function runGatewayCronFailureRepair(
         expectedTarget: target,
         // Only the agent's authored reply reaches the chat; the next alert owns escalation.
         suppressErrorDelivery: true,
+        // The scheduler's repair brief permits silence; public provenance does not grant it.
+        replyExpectation: "optional",
       });
       const accepted = await receipt.accepted;
       if (!accepted.ok) {
@@ -154,6 +156,13 @@ function redactWebhookUrl(url: string): string {
 function redactOptionalWebhookUrl(url: unknown): string | undefined {
   const normalized = normalizeOptionalString(url);
   return normalized ? redactWebhookUrl(normalized) : undefined;
+}
+
+function stripCronJobDiagnostics(job: NonNullable<CronEvent["job"]>) {
+  const state = { ...job.state };
+  delete state.lastDiagnostics;
+  delete state.lastDiagnosticSummary;
+  return { ...job, state };
 }
 
 function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob): CronEvent {
@@ -200,13 +209,7 @@ function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob
     }
   }
   if (stripEmbeddedJobDiagnostics && evt.job) {
-    const state = { ...evt.job.state };
-    delete state.lastDiagnostics;
-    delete state.lastDiagnosticSummary;
-    redacted.job = {
-      ...evt.job,
-      state,
-    };
+    redacted.job = stripCronJobDiagnostics(evt.job);
   }
   return redacted;
 }
@@ -244,15 +247,9 @@ function buildCronFinishedWebhookPayload(evt: CronEvent) {
   }
   const { summary: _summary, diagnostics: _diagnostics, ...payload } = evt;
   if (evt.job) {
-    const state = { ...evt.job.state };
-    delete state.lastDiagnostics;
-    delete state.lastDiagnosticSummary;
     return {
       ...payload,
-      job: {
-        ...evt.job,
-        state,
-      },
+      job: stripCronJobDiagnostics(evt.job),
     };
   }
   return payload;

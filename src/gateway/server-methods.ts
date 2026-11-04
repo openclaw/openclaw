@@ -19,7 +19,10 @@ import {
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
-import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import {
+  withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "../state/artifact-preserving-state-reads.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import {
   consumeControlPlaneWriteBudget,
@@ -614,19 +617,20 @@ export async function handleGatewayRequest(
       }
     }
   };
+  const dispatchLive = (retainRoot?: () => void) => withLiveStateReads(() => dispatch(retainRoot));
   const dispatchObserved = workboardDiagnostics
     ? (retainRoot?: () => void) =>
         withDiagnosticsTimelineObserver(workboardDiagnostics.observeSpan, () =>
-          dispatch(retainRoot),
+          dispatchLive(retainRoot),
         )
-    : dispatch;
+    : dispatchLive;
   if (!observation) {
     return await dispatchObserved();
   }
   await runWithGatewayObservationScope(
     req.method,
     req.method === "sessions.github.readiness"
-      ? (retainRoot) => withArtifactPreservingStateReads(() => dispatch(retainRoot))
+      ? (retainRoot) => withArtifactPreservingStateReads(() => dispatchObserved(retainRoot))
       : dispatchObserved,
     [signal, client?.connectionSignal],
     (error) => {

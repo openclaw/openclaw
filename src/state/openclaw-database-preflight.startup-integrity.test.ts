@@ -21,6 +21,7 @@ import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { VERSION } from "../version.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
+import { withLiveStateReads } from "./artifact-preserving-state-reads.js";
 import {
   supportedVersions,
   closeDatabases,
@@ -40,7 +41,10 @@ import {
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
+import {
+  expectLiveReadSourceManifest,
+  snapshotPreflightSourceManifest,
+} from "./openclaw-database-preflight.test-support.js";
 import { sqliteDatabaseSealSchemaFor } from "./openclaw-database-seal-schema.js";
 import {
   closeOpenClawStateDatabase,
@@ -80,6 +84,37 @@ it("cold-loads a compatible storage seal without validation SQL or snapshots", a
   expect(validate).not.toHaveBeenCalled();
   expect(fs.readFileSync(agentPath)).toEqual(before);
   expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
+});
+
+it("checks an unsealed closed WAL agent at live startup without a private copy", async () => {
+  const fixture = databaseFixture(tempDirs.make("openclaw-live-closed-wal-"));
+  const { path: agentPath } = fixture.agent();
+  closeDatabases();
+  const mutation = openRawDatabase(agentPath);
+  mutation.exec(`
+    CREATE TABLE integrity_probe_parent(id INTEGER PRIMARY KEY);
+    CREATE TABLE integrity_probe_child(parent_id INTEGER REFERENCES integrity_probe_parent(id));
+  `);
+  mutation.close();
+  retireSqliteDatabaseAdmissionForPath(agentPath);
+  expect(readSqliteDatabaseCleanClose(agentPath)).toBe(false);
+  expectFiles([`${agentPath}-wal`, `${agentPath}-shm`], false);
+  const snapshot = rejectSnapshot(agentPath, "No space for a full agent database snapshot");
+  const onAgentInspection = vi.fn();
+  await expect(
+    withLiveStateReads(() => fixture.ready(undefined, "gateway-startup", { onAgentInspection })),
+  ).resolves.toBeUndefined();
+  expect(onAgentInspection).toHaveBeenLastCalledWith(
+    expect.objectContaining({ schemaSnapshotCount: 0 }),
+  );
+  const corrupt = openRawDatabase(agentPath);
+  corrupt.exec("PRAGMA foreign_keys = OFF; INSERT INTO integrity_probe_child VALUES (42);");
+  corrupt.close();
+  await expect(withLiveStateReads(() => fixture.ready())).rejects.toMatchObject({
+    name: "SqliteIntegrityError",
+    message: expect.stringContaining(`foreign_key_check failed for ${agentPath}`),
+  });
+  expect(snapshot.mock.calls.filter(([pathname]) => pathname === agentPath)).toEqual([]);
 });
 
 it.each(["legacy", "malformed", "unknown-policy"])(
@@ -274,7 +309,7 @@ it("reads a replacement database's committed WAL after loading the old clean sea
 });
 
 it.each(["DELETE", "WAL", "closed WAL"])(
-  "freshly checks startup integrity off the main thread and preserves %s source artifacts",
+  "freshly checks startup integrity off the main thread and preserves %s agent source artifacts",
   async (mode) => {
     const stateDir = tempDirs.make("openclaw-startup-integrity-");
     const fixture = databaseFixture(stateDir);
@@ -294,10 +329,10 @@ it.each(["DELETE", "WAL", "closed WAL"])(
       return prepare(pathname, options);
     });
     const check = integrity.assertSqliteIntegrity;
-    const mainThreadAgentChecks: string[] = [];
+    const mainThreadChecks: string[] = [];
     vi.spyOn(integrity, "assertSqliteIntegrity").mockImplementation((database, label) => {
-      if (label === agentPath) {
-        mainThreadAgentChecks.push(label);
+      if (label === agentPath || label === fixture.statePath) {
+        mainThreadChecks.push(label);
       }
       return check(database, label);
     });
@@ -337,10 +372,13 @@ it.each(["DELETE", "WAL", "closed WAL"])(
         } else {
           await expect(readiness).resolves.toBeUndefined();
         }
-        expect(mainThreadAgentChecks).toEqual([]);
-        expect(
-          snapshotPreflightSourceManifest(stateDir, mode === "WAL" ? agentPath : undefined),
-        ).toEqual(before);
+        expect(mainThreadChecks).toEqual([]);
+        expectLiveReadSourceManifest(
+          stateDir,
+          before,
+          fixture.statePath,
+          mode === "WAL" ? agentPath : undefined,
+        );
       }
     } finally {
       writer?.close();

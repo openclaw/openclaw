@@ -1,6 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import * as processes from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
@@ -53,6 +56,37 @@ import { listProjectedSessions } from "./session-utils-list.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("reads background processes once per presentation and refreshes counts after exit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const keys = ["agent:main:process-a", "agent:main:process-b"];
+    keys.forEach((key, i) => seedRow(key, { sessionId: `process-${i}`, updatedAt: 1 }));
+    const process = createProcessSessionFixture({ id: "running", backgrounded: true });
+    process.scopeKey = "process-0";
+    process.agentId = "main";
+    processes.addSession(process);
+    try {
+      using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+      await projection.ensureMaterialized();
+      using reads = vi.spyOn(processes, "listRunningSessions");
+      const read = () => {
+        reads.mockClear();
+        const presenter = prepareSessionRowPublication(projection, Date.now())().getPresentation();
+        const counts = keys.map(
+          (key) => presenter.snapshot({ key, agentId: "main" }).row?.backgroundProcessCount,
+        );
+        expect(reads.mock.calls.length).toBeLessThanOrEqual(1);
+        return counts;
+      };
+      expect(read()).toEqual([1, undefined]);
+      expect(read()).toEqual([1, undefined]);
+      processes.markExited(process, 0, null, "completed");
+      expect(read()).toEqual([undefined, undefined]);
+    } finally {
+      resetProcessRegistryForTests();
+    }
+  });
+});
 
 function profileClient(profileId: string) {
   const client = sharingPolicyClient({ user: profileId });
@@ -145,6 +179,7 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
           expect(summaryEligibility).not.toHaveBeenCalled();
           expect(row.activitySummary).toBeUndefined();
           expect(row.sendDisabledReason).toBeUndefined();
+          expect(row.workspaceReadDisabledReason).toBeUndefined();
         } else {
           expect(diagnostics).toHaveBeenCalled();
           expect(summaryEligibility).toHaveBeenCalled();
@@ -284,13 +319,14 @@ it("projects send policy and recipient restrictions, clearing them when the curr
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const clients = profiles.map((profile) => profileClient(profile.id));
     const creatorId = clients[0]!.authenticatedUserProfile!.profileId;
-    const keys = ["host", "sandbox", "entry-blocked", "policy-blocked"];
+    const keys = ["host", "sandbox", "remote", "entry-blocked", "policy-blocked"];
     for (const key of keys) {
       seedRow(`agent:main:${key}`, {
         sessionId: key,
         updatedAt: 1,
         createdActor: { type: "human", source: "profile", id: creatorId },
-        ...(key === "host" ? {} : { sandbox: "required" as const }),
+        ...(key === "host" || key === "remote" ? {} : { sandbox: "required" as const }),
+        ...(key === "remote" ? { execNode: "synthetic-node" } : {}),
         ...(key === "entry-blocked" ? { sendPolicy: "deny" as const } : {}),
       });
     }
@@ -319,9 +355,21 @@ it("projects send policy and recipient restrictions, clearing them when the curr
     ] as const) {
       expect(reasonFor(index, key)).toBe(reason);
     }
+    const workspaceReasonFor = (key: string) =>
+      prepareProjectedSessionPresentation(projection, clients[0]!).snapshot({
+        agentId: "main",
+        key: `agent:main:${key}`,
+      }).row?.workspaceReadDisabledReason;
+    expect(workspaceReasonFor("host")).toBe(
+      "Your operator role requires a sandboxed session. You cannot read this session's host workspace files. Ask the owner to download and share the file, then attach it to your own session.",
+    );
+    for (const key of ["sandbox", "remote", "entry-blocked", "policy-blocked"]) {
+      expect(workspaceReasonFor(key)).toBeNull();
+    }
     setUserProfileRole(creatorId, "view");
     prepareGatewayRecipientProfile(clients[0]!);
     expect(reasonFor(0, "host")).toBeNull();
+    expect(workspaceReasonFor("host")).toBeNull();
   });
 });
 
