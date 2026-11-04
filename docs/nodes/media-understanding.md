@@ -11,6 +11,8 @@ OpenClaw can summarize inbound media (image/audio/video) before the reply pipeli
 
 Vendor plugins register capability metadata (which provider supports which media type, default model, priority). OpenClaw core owns the shared `tools.media` config, fallback order, and reply-pipeline integration.
 
+Registered provider IDs retain their own handlers, model routing, and credentials. Historical media aliases apply only when no separately registered provider owns that name.
+
 ## How it works
 
 <Steps>
