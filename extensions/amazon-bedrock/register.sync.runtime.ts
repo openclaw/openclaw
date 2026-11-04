@@ -20,6 +20,7 @@ import {
 import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { splitSystemPromptCacheBoundary } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { awsSdkAuthMethod } from "./aws-sdk-auth.js";
 import {
   resolveBedrockPromptCachePolicy,
   resolveBedrockCachePoint,
@@ -294,7 +295,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     hookAliases: ["bedrock-converse-stream"],
     label: "Amazon Bedrock",
     docsPath: "/providers/models",
-    auth: [],
+    // Non-interactive setup reads auth methods from the runtime registration, so
+    // the AWS SDK choice has to be declared here too, not only in setup-api.
+    auth: [awsSdkAuthMethod],
     catalog: {
       order: "simple",
       run: (ctx) =>
