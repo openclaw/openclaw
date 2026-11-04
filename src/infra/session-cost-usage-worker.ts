@@ -27,7 +27,6 @@ import {
   resolveUsageCostTranscriptSourcePath,
 } from "./session-cost-usage-collection.js";
 import {
-  decodeUsageCostPartition,
   partitionUsageCostRollup,
   type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
@@ -44,15 +43,17 @@ import {
 } from "./session-cost-usage-refresh-inputs.worker.js";
 import {
   canUseUsageCostRollupForPartial,
-  decodeUsageCostRollup,
   decodeUsageCostRollupEnvelope,
+  type UsageCostRollupEnvelope,
   isUsageCostRollupFresh,
   USAGE_COST_ROLLUP_VERSION,
   type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import { projectUsageCostQuartersInWorker } from "./session-cost-usage-worker-overview.js";
 import {
+  carryUsageCostRollupToFile,
   createSupersededArchiveKeyResolver,
+  loadUsageCostRollupEntry,
   createUsageCostRollupPruner,
 } from "./session-cost-usage-worker-prune.js";
 import {
@@ -234,6 +235,18 @@ export async function executeUsageCostWorker(
     }
     return body;
   };
+  const loadRollupEntry = (row: SessionCostUsageRollupRow, envelope: UsageCostRollupEnvelope) =>
+    loadUsageCostRollupEntry(row, envelope, {
+      pricingFingerprint: operation.pricingFingerprint,
+      readPartitionedBody,
+      readBody: (key) =>
+        control.runNativeSection(() =>
+          readDatabase(cacheDatabase, () =>
+            readCache((db) => readSessionCostUsageRollupBodyInDatabase(db, key), undefined),
+          ),
+        ),
+    });
+
   const resolveCosts = createUsageCostWorkerPriceResolver((pairs) => host("pricing", pairs));
   const readGeneration = async (marker: SqliteSessionFileMarker) => readFacts(marker)?.generation;
   const readRows = async (
@@ -434,6 +447,8 @@ export async function executeUsageCostWorker(
   }
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
   const unreadable = new Map<string, unknown>();
+  // Undecodable archives with no usage to carry keep their superseded rows.
+  const retainedArchiveKeys = new Set<string>();
   const stale = [];
   for (const file of filesByPath.values()) {
     const old = minMtimeMs !== undefined && file.mtimeMs < minMtimeMs;
@@ -544,36 +559,11 @@ export async function executeUsageCostWorker(
       envelope &&
       canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file })
     ) {
-      let body: { blob: Uint8Array | null } | undefined;
-      if (envelope.projection) {
-        const snapshot = await readPartitionedBody(row);
-        body = snapshot;
-        priorPartitions = snapshot?.partitions ?? [];
-        priorQuarterDates = snapshot?.quarterDates ?? priorQuarterDates;
-      } else {
-        body = await control.runNativeSection(() =>
-          readDatabase(cacheDatabase, () =>
-            readCache((db) => readSessionCostUsageRollupBodyInDatabase(db, row.key), undefined),
-          ),
-        );
-      }
-      previous = body
-        ? decodeUsageCostRollup(row.valueJson, operation.pricingFingerprint, body.blob)
-        : undefined;
-    }
-    if (previous && envelope?.projection) {
-      if (priorPartitions.length !== envelope.projection.dates.length) {
-        previous = undefined;
-      } else {
-        for (const partition of priorPartitions) {
-          const day = decodeUsageCostPartition(partition.valueJson, partition.blob);
-          if (!day) {
-            previous = undefined;
-            break;
-          }
-          Object.assign(previous.rollup.buckets, day.buckets);
-        }
-      }
+      ({
+        entry: previous,
+        priorPartitions,
+        priorQuarterDates,
+      } = await loadRollupEntry(row, envelope));
     }
     let entry: UsageCostRollupEntry;
     try {
@@ -597,8 +587,21 @@ export async function executeUsageCostWorker(
         throw error;
       }
       unreadable.set(file.sourcePath, error);
-      completedFiles++;
-      continue;
+      // Reports read only the current identity, so carry the last committed usage
+      // to it; the checkpoint matches this file, so the archive is not rescanned
+      // until its bytes change again.
+      const kept =
+        row ?? supersededArchiveRows.find(({ current }) => current === file.filePath)?.row;
+      const keptEnvelope =
+        kept && decodeUsageCostRollupEnvelope(kept.valueJson, operation.pricingFingerprint);
+      const carried = kept && keptEnvelope && (await loadRollupEntry(kept, keptEnvelope)).entry;
+      const carriedEntry = carried && carryUsageCostRollupToFile(carried, file);
+      if (!carriedEntry) {
+        retainedArchiveKeys.add(file.filePath);
+        completedFiles++;
+        continue;
+      }
+      entry = carriedEntry;
     }
     const { valueJson, blob, partitions } = partitionUsageCostRollup(entry);
     const replacePartitions = previous === undefined || !envelope?.projection;
@@ -670,13 +673,8 @@ export async function executeUsageCostWorker(
   // Refresh completion (including a yielded batch) promises committed totals.
   await flush();
   const unscanned = new Set(stale.slice(completedFiles).map(({ file }) => file.filePath));
-  const undecodable = new Set(
-    [...unreadable.keys()].flatMap((sourcePath) =>
-      files.filter((file) => file.sourcePath === sourcePath).map((file) => file.filePath),
-    ),
-  );
   for (const { row, current } of supersededArchiveRows) {
-    if (!undecodable.has(current) && !unscanned.has(current)) {
+    if (!retainedArchiveKeys.has(current) && !unscanned.has(current)) {
       await pruner.prune(row);
       changed = true;
     }

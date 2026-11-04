@@ -69,6 +69,11 @@ async function readJsonlAnchorHash(filePath: string, offset: number): Promise<st
   }
 }
 
+// A compressed archive can expand far past its stored size, so a record above this
+// bound is skipped rather than buffered. Plain transcripts are bounded by their
+// bytes on disk and keep whole-record parsing.
+const USAGE_COST_MAX_ARCHIVE_RECORD_BYTES = 32 * 1024 * 1024;
+
 function parseJsonlRecord(line: Buffer): Record<string, unknown> | undefined {
   return safeParseJsonRecord(line.toString("utf8").trim());
 }
@@ -95,6 +100,33 @@ async function scanJsonlRange(params: {
   // would repeatedly copy and rescan large transcript records.
   const lineChunks: Buffer[] = [];
   let lineBytes = 0;
+  let oversized = false;
+  const append = (fragment: Buffer) => {
+    if (oversized) {
+      return;
+    }
+    if (params.archive && lineBytes + fragment.length > USAGE_COST_MAX_ARCHIVE_RECORD_BYTES) {
+      oversized = true;
+      lineChunks.length = 0;
+      lineBytes = 0;
+      return;
+    }
+    lineChunks.push(fragment);
+    lineBytes += fragment.length;
+  };
+  const takeRecord = () => {
+    const record = oversized
+      ? undefined
+      : lineBytes > 0
+        ? parseJsonlRecord(
+            lineChunks.length === 1 ? lineChunks[0]! : Buffer.concat(lineChunks, lineBytes),
+          )
+        : undefined;
+    lineChunks.length = 0;
+    lineBytes = 0;
+    oversized = false;
+    return record;
+  };
   let chunkStart = params.startOffset;
   let processedOffset = params.startOffset;
   try {
@@ -103,15 +135,8 @@ async function scanJsonlRange(params: {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       let lineStart = 0;
       for (let newline = bytes.indexOf(10); newline >= 0; newline = bytes.indexOf(10, lineStart)) {
-        const fragment = bytes.subarray(lineStart, newline);
-        let line = fragment;
-        if (lineChunks.length > 0) {
-          lineChunks.push(fragment);
-          line = Buffer.concat(lineChunks, lineBytes + fragment.length);
-          lineChunks.length = 0;
-          lineBytes = 0;
-        }
-        const record = parseJsonlRecord(line);
+        append(bytes.subarray(lineStart, newline));
+        const record = takeRecord();
         if (record) {
           const pending = params.onRecord(record);
           if (pending) {
@@ -122,17 +147,12 @@ async function scanJsonlRange(params: {
         lineStart = newline + 1;
       }
       if (lineStart < bytes.length) {
-        const fragment = bytes.subarray(lineStart);
-        lineChunks.push(fragment);
-        lineBytes += fragment.length;
+        append(bytes.subarray(lineStart));
       }
       chunkStart += bytes.length;
     }
-    const firstChunk = lineChunks[0];
-    if (firstChunk) {
-      const record = parseJsonlRecord(
-        lineChunks.length === 1 ? firstChunk : Buffer.concat(lineChunks, lineBytes),
-      );
+    if (lineBytes > 0) {
+      const record = takeRecord();
       if (record) {
         const pending = params.onRecord(record);
         if (pending) {

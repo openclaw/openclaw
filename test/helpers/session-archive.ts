@@ -25,7 +25,7 @@ function skewedPick<T>(items: readonly T[], next: () => number): T {
 const vocabularyRandom = xorshift(0x5eed);
 const words = Array.from({ length: 600 }, () =>
   Array.from({ length: 2 + Math.floor(vocabularyRandom() * 9) }, () =>
-    skewedPick([..."etaoinshrdlucmfwypvbgkjqxz"], vocabularyRandom),
+    skewedPick("etaoinshrdlucmfwypvbgkjqxz".split(""), vocabularyRandom),
   ).join(""),
 );
 const sentences = Array.from({ length: 400 }, () =>

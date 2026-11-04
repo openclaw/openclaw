@@ -605,8 +605,12 @@ describe("usage archive identity", () => {
     expect(await discoverAllSessions({ agentId: "main" })).toMatchObject([
       { sessionId: manager.getSessionId(), sessionFile },
     ]);
-    // The rest of the batch commits; this archive keeps its last usage.
+    // The rest of the batch commits; this archive's last usage moves to its new identity.
     await expect(refreshCostUsageCacheForAgent(main)).resolves.toBe("refreshed");
-    expect(readRollups("main")).toEqual(rows);
+    const carried = readRollups("main");
+    expect(carried.map((row) => row.key)).toEqual([
+      (await resolveTranscript(sessionFile))?.filePath,
+    ]);
+    expect(carried[0]!.updatedAt).toBe(rows[0]!.updatedAt);
   });
 });

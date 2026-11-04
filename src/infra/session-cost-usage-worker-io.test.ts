@@ -382,10 +382,33 @@ it("filters refresh work before reading historical transcripts", async () => {
 it("refreshes archives from their source and keeps the last usage of one that cannot be decoded", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionsDir = await sessionsDirectory(state.stateDir);
+    const header = (id: string) => ({ type: "session", version: 1, id });
+    // An archive record past the scanner's bound is skipped without buffering it;
+    // the branch through it still counts the usage recorded before it.
+    const oversized = {
+      type: "message",
+      id: "big",
+      parentId: "a",
+      message: { role: "user", content: "x".repeat(33 * 1024 * 1024) },
+    };
+    const transcripts = {
+      healthy: [
+        header("healthy"),
+        { ...assistantEntry(5, { cost: 1 }), id: "a", parentId: null },
+        oversized,
+        {
+          type: "message",
+          id: "leaf",
+          parentId: "big",
+          message: { role: "user", content: "next" },
+        },
+      ],
+      undecodable: [header("undecodable"), assistantEntry(6, { cost: 1 })],
+    };
     const archives = await Promise.all(
-      ["healthy-archive", "undecodable-archive"].map(async (sessionId, index) => {
+      Object.entries(transcripts).map(async ([sessionId, records]) => {
         const encoded = encodeSessionArchiveContent(
-          transcriptText(sessionId, assistantEntry(5 + index, { cost: 1 })),
+          `${records.map((r) => JSON.stringify(r)).join("\n")}\n`,
         );
         const archive = path.join(
           sessionsDir,
@@ -397,19 +420,27 @@ it("refreshes archives from their source and keeps the last usage of one that ca
     );
     setRuntimeConfigSnapshot({});
     const [live] = await writeSessions(sessionsDir, ["live"], () => assistantEntry(3, { cost: 1 }));
-    const healthy = archives[0]!;
-    const undecodable = archives[1]!;
+    const [healthy, undecodable] = archives as [string, string];
     const keyOf = async (archive: string) =>
       resolveSessionArchiveReadPath(archive, await fs.stat(archive));
+    const totalOf = async (sessionFile: string) =>
+      (await loadCached({ agentId: "main", sessions: [{ sessionFile }], requestRefresh: false }))
+        .summaries[0]?.totalTokens;
     expect(await refreshUsage({ agentId: "main" })).toBe("refreshed");
     const healthyKey = await keyOf(healthy);
-    const healthyRow = storedRollup(healthyKey);
-    const undecodableKey = await keyOf(undecodable);
-    const undecodableRow = storedRollup(undecodableKey);
+    expect([await totalOf(healthy), await totalOf(undecodable)]).toEqual([5, 6]);
     // Usage decodes archives as a stream; it never writes plaintext copies.
-    expect(existsSync(healthyKey) || existsSync(undecodableKey)).toBe(false);
+    expect(existsSync(healthyKey) || existsSync(await keyOf(undecodable))).toBe(false);
 
-    // A damaged archive gets a new identity; its previous usage survives the failed rescan.
+    // Upgrade: rows checkpointed against a decompressed copy rescan once from the source.
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const legacy = JSON.parse(storedRollup(healthyKey).valueJson);
+    legacy.checkpoint = { ...legacy.checkpoint, observedSize: 34 * 1024 * 1024, inode: 1 };
+    database.db
+      .prepare("UPDATE cache_entries SET value_json = ? WHERE key = ?")
+      .run(JSON.stringify(legacy), healthyKey);
+
+    // A damaged archive gets a new identity; its previous usage moves to it.
     const bytes = await fs.readFile(undecodable);
     bytes.write("oops", 0);
     await fs.writeFile(undecodable, bytes);
@@ -420,12 +451,15 @@ it("refreshes archives from their source and keeps the last usage of one that ca
     expect(
       await refreshUsage({ agentId: "main", sessionFiles: [undecodable, live!.sessionFile] }),
     ).toBe("refreshed");
-    expect(storedRollup(undecodableKey)).toEqual(undecodableRow);
-    expect(readRows("main").map((row) => row.key)).not.toContain(await keyOf(undecodable));
-    expect(storedRollup(healthyKey)).toEqual(healthyRow);
-    expect(
-      await loadCached({ agentId: "main", sessions: [live!], requestRefresh: false }),
-    ).toMatchObject({ summaries: [{ totalTokens: 7 }] });
+    expect(JSON.parse(storedRollup(healthyKey).valueJson).checkpoint).toMatchObject({
+      observedSize: (await fs.stat(healthy)).size,
+    });
+    expect([
+      await totalOf(healthy),
+      await totalOf(undecodable),
+      await totalOf(live!.sessionFile),
+    ]).toEqual([5, 6, 7]);
+    expect(readRows("main")).toHaveLength(3);
   });
 });
 

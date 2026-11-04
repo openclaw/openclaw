@@ -59,7 +59,7 @@ function limitDecodedBytes(filePath: string): Transform {
       decoded += chunk.length;
       if (decoded > MATERIALIZED_ARCHIVE_MAX_BYTES) {
         const error = new RangeError(
-          `Session archive ${filePath} expands past the ${MATERIALIZED_ARCHIVE_MAX_BYTES}-byte read cache budget; the archive is unchanged.`,
+          `Session archive ${filePath} expands past the ${MATERIALIZED_ARCHIVE_MAX_BYTES}-byte read budget; the archive is unchanged. Move it out of the sessions directory to stop reading it, or decompress it elsewhere with zstd to inspect it.`,
         );
         callback(Object.assign(error, { code: "ERR_BUFFER_TOO_LARGE" }));
         return;
