@@ -9,7 +9,7 @@ const MINIFIED_BLOCKS_HTML =
   "<!doctype html><html><head><title>Results</title></head><body><article>" +
   "<h1>Heading</h1>" +
   "<p>Para 0. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p>" +
-  "<p>Para 1. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p>" +
+  "<p>Para 1. Use <code>[report](draft)</code> and <code>![alt](image.png)</code> literally. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p>" +
   "<ul><li>alpha</li><li>beta</li></ul>" +
   "<p>Para 2. Quarterly results were published today with figures for each region and the year over year change, and the summary below explains what moved and why it matters for the next planning cycle.</p>" +
   "</article></body></html>";
@@ -46,7 +46,10 @@ describe("web readability extractor", () => {
     ['<base href="/docs/guide/" />', "/docs/next"],
     ['<base href="https://example.com/manual.html" />', "/next"],
   ])("resolves article links against the first href base %s", async (base, next) => {
-    const result = await extractArticle(SAMPLE_HTML.replace("</head>", `${base}</head>`), "markdown");
+    const result = await extractArticle(
+      SAMPLE_HTML.replace("</head>", `${base}</head>`),
+      "markdown",
+    );
     expect(result.text).toContain(`[Continue reading](https://example.com${next})`);
   });
 
@@ -60,7 +63,9 @@ describe("web readability extractor", () => {
   it("keeps block boundaries in text mode for minified HTML", async () => {
     const extracted = await extractArticle(MINIFIED_BLOCKS_HTML, "text");
     expect(extracted.text).toContain("Heading\nPara 0.");
-    expect(extracted.text).toContain("\nPara 1.");
+    expect(extracted.text).toContain(
+      "\nPara 1. Use [report](draft) and ![alt](image.png) literally.",
+    );
     expect(extracted.text).toContain("\nalpha\nbeta\n");
     expect(extracted.title).toBe("Results");
   });

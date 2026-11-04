@@ -11,8 +11,10 @@ const rawTextCases: [string, string][] = [
   ],
   ["<script></scr<!-- -->ipt><p>Secret data</p></script><p>Visible sibling</p>", "Visible sibling"],
 ];
-const definitionList = "<dl><dt>Region</dt><dd>EMEA</dd><dt>Units</dt><dd>120</dd></dl>";
-const definitionText = "Region\nEMEA\nUnits\n120";
+const definitionList =
+  "<dl><dt>Region</dt><dd>EMEA</dd><dt>Units</dt><dd>120</dd><dt>Examples</dt><dd>Use <code>[report](draft)</code> and <code>![alt](image.png)</code>.</dd><dd>Type `value` exactly.</dd><dd># Ticket 42</dd><dd>1. Version</dd></dl>";
+const definitionText =
+  "Region\nEMEA\nUnits\n120\nExamples\nUse [report](draft) and ![alt](image.png).\nType `value` exactly.\n# Ticket 42\n1. Version";
 
 describe("web-fetch-utils", () => {
   it("removes complete balanced link destinations without leaking URL suffixes", async () => {
@@ -146,16 +148,21 @@ describe("web-fetch-utils", () => {
     expect(htmlToMarkdown(html)).toEqual({ text, title });
   });
 
-  it("separates HTML table cells and preserves preformatted code whitespace", () => {
-    const html =
-      "<article><table><thead><tr><th>Region</th><th>Units</th><th>Change</th></tr></thead><tbody><tr><td>EMEA</td><td>120</td><td>15</td></tr><tr><td>APAC</td><td>98</td><td>7</td></tr></tbody></table><pre><code>def f(x):\n    if x:\n        return 1\n    return 0</code></pre><p>Done after the example code.</p></article>";
+  it("preserves table cells, linked preformatted text and longer fences in both modes", async () => {
+    const code =
+      'curl https://example.com\n  /path\n  --header X\ndef f(x):\n    marker = "```"\n    if x:\n        return 1\n    return 0';
+    const html = `<article><table><thead><tr><th>Region</th><th>Units</th><th>Change</th></tr></thead><tbody><tr><td>EMEA</td><td>120</td><td>15</td></tr><tr><td>APAC</td><td>98</td><td>7</td></tr></tbody></table><pre><code>${code.replace("https://example.com\n  /path", '<a href="https://example.com">https://example.com\n  /path</a>')}</code></pre><p>Done after the example code.</p></article>`;
     const rendered = htmlToMarkdown(html).text;
-
+    const fence = "````";
     expect(rendered).toContain("Region | Units | Change");
     expect(rendered).toContain("EMEA | 120 | 15");
     expect(rendered).toContain("APAC | 98 | 7");
-    expect(rendered).toContain("```\ndef f(x):\n    if x:\n        return 1\n    return 0\n```");
-    expect(rendered).toMatch(/```\n\nDone after the example code\./);
+    expect(rendered).toContain(`${fence}\n${code}\n${fence}`);
+    expect(rendered).toMatch(/````\n\nDone after the example code\./);
+    expect(htmlToMarkdown("<pre>x</pre>").text).toBe("```\nx\n```");
+    await expect(extractText(html)).resolves.toBe(
+      `Region | Units | Change\nEMEA | 120 | 15\nAPAC | 98 | 7\n\n${code}\n\nDone after the example code.`,
+    );
   });
 
   it.each([
@@ -169,18 +176,6 @@ describe("web-fetch-utils", () => {
     renderedText(html).toBe(expected);
   });
 
-  it("keeps links inside preformatted blocks literal in basic extraction", async () => {
-    const html =
-      '<pre>curl <a href="https://example.com">https://example.com\n  /path</a>\n  --header X</pre>';
-
-    expect(htmlToMarkdown(html).text).toBe(
-      "```\ncurl https://example.com\n  /path\n  --header X\n```",
-    );
-    await expect(extractText(html)).resolves.toBe(
-      "curl https://example.com\n  /path\n  --header X",
-    );
-  });
-
   it.each([
     ["&lt;p>Keep&#0;openclaw-pre-bad&#0; tail&lt;/p>", "Keep\u0000openclaw-pre-bad\u0000 tail"],
     ["&lt;p>Keep&#0;openclaw-pre-0&#0; tail&lt;/p>", "Keep\u0000openclaw-pre-0\u0000 tail"],
@@ -192,18 +187,6 @@ describe("web-fetch-utils", () => {
     const rendered = htmlToMarkdown(`${html}<pre>x</pre>`).text;
     expect(rendered).toContain(marker);
     expect(rendered).toContain("```\nx\n```");
-  });
-
-  it("round-trips longer fences through basic HTML text extraction", async () => {
-    const marker = "`".repeat(3);
-    const code = `def summarize():
-    marker = "${marker}"
-    return marker`;
-    const html = `<article><table><thead><tr><th>Region</th><th>Units</th><th>Change</th></tr></thead><tbody><tr><td>EMEA</td><td>120</td><td>15</td></tr></tbody></table><pre><code>${code}</code></pre><p>Done after the example code.</p></article>`;
-
-    await expect(extractText(html)).resolves.toBe(
-      `Region | Units | Change\nEMEA | 120 | 15\n\ndef summarize():\n    marker = "${marker}"\n    return marker\n\nDone after the example code.`,
-    );
   });
 
   it("resyncs raw-text openers from repeated unterminated quoted tags", () => {
