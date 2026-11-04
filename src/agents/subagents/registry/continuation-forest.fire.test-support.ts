@@ -89,6 +89,19 @@ export async function reportElection(
   if (!result.handled) {
     throw new Error(`${election.name}'s return was not routed`);
   }
+  if (forest.childrenSettleOnReport) {
+    await settleRun(runId);
+  }
+}
+
+/** The child's run goes home: its completion is delivered, as the announce flow records it. */
+export async function settleRun(runId: string): Promise<void> {
+  await mutateSubagentRuns([runId], (rows) => {
+    const draft = structuredClone(rows.get(runId)!);
+    delete draft.pauseReason;
+    draft.delivery = { status: "delivered", announcedAt: Date.now() };
+    return { value: undefined, postimages: new Map([[runId, draft]]) };
+  });
 }
 
 /** The registry's completion-time selection of an `all` return (subagent-registry-announce-flow). */

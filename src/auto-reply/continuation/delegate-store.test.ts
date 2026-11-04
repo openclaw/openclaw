@@ -73,7 +73,7 @@ import {
   resetDelegateStoreForTests,
 } from "./delegate-store.js";
 import { cancelSessionContinuations } from "./session-reset.js";
-import { hasLiveContinuationCustody } from "./work-store.js";
+import { hasLiveContinuationCustody, listLiveContinuationCustodyOwners } from "./work-store.js";
 
 const VALID_TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const custody = useContinuationCustodyTestState();
@@ -189,6 +189,7 @@ describe("delegate store — continuation custody", () => {
 
     expect(await listPendingDelegateSessionKeysForRecovery()).toEqual([]);
     expect(await hasLiveContinuationCustody(sessionKey)).toBe(false);
+    expect(await listLiveContinuationCustodyOwners()).toEqual([]);
     expect(await consumePendingDelegates(sessionKey)).toEqual([]);
     const fenced = await readRecord(queued.recordId);
     expect(fenced.status).toBe("queued");
@@ -226,6 +227,8 @@ describe("delegate store — continuation custody", () => {
     expect(await hasLiveContinuationCustody(postCompactionSession)).toBe(false);
     await claimStagedPostCompactionDelegates(postCompactionSession);
     expect(await hasLiveContinuationCustody(postCompactionSession)).toBe(false);
+    // Session maintenance keeps the same owners, read in one pass.
+    expect(await listLiveContinuationCustodyOwners()).toEqual([regularSession]);
   });
 
   it("fails queued and running post-compaction delegates for completed child cleanup", async () => {

@@ -53,6 +53,7 @@ import {
   admitRunner,
   checkAttic,
   reportElection,
+  settleRun,
 } from "./continuation-forest.fire.test-support.js";
 import {
   AGENT_ID,
@@ -141,6 +142,11 @@ export class ContinuationForest {
   t0 = 0;
   /** Gateway process generation: a restart begins the next one. */
   generation = 0;
+  /**
+   * Off: every clone stays paused after yield, its completion never delivered. On: a child's run
+   * goes home once its report is routed, as the announce flow records it.
+   */
+  childrenSettleOnReport = false;
   /** The world's event order, for adoptions, reports and handovers that share a clock time. */
   seq = 0;
   readonly nodes = new Map<string, AnnexNode>();
@@ -231,6 +237,8 @@ export class ContinuationForest {
     trouble.crashMidWake(this, attic, after);
   cancel = (owner: AnnexNode, electionIds: string[]) =>
     trouble.cancelElections(this, owner, electionIds);
+  /** The clone ends its turn instead of yielding: its own run goes home, its wing still out. */
+  endsItsTurn = (node: AnnexNode) => settleRun(node.runId!);
 
   /** Every way the forest broke, told as the story. Empty when everything held. */
   async stories(): Promise<string[]> {
