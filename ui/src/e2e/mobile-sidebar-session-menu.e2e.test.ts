@@ -93,6 +93,9 @@ async function expectTwoLineTitleSpace(
     { ...pageOptions(1280, 800, pointer === "touch"), reducedMotion: "reduce" },
     async ({ page }) => {
       const key = "agent:main:two-line";
+      const rootKey = `${key}-parent`;
+      const childKey = `${key}-child`;
+      const leafKey = `${key}-leaf`;
       await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
       await page.addInitScript(
         ({ storage, gateway }) => {
@@ -110,7 +113,12 @@ async function expectTwoLineTitleSpace(
       );
       const preview = { unread: true, lastMessagePreview: "Ready for review" };
       await installMockGateway(page, {
-        sessions: [sessionRow(key, "Two-line session", 1, preview)],
+        sessions: [
+          sessionRow(key, "Two-line session", 1, preview),
+          sessionRow(rootKey, "Parent", 1, { ...preview, childSessions: [childKey] }),
+          sessionRow(childKey, "Child", 1, { spawnedBy: rootKey, childSessions: [leafKey] }),
+          sessionRow(leafKey, "Leaf", 1, { spawnedBy: childKey }),
+        ],
       });
       await page.goto(controlUiSessionUrl(browserSuite.server.baseUrl, "agent:main:main"));
       await waitForSessionRosterHydration(page);
@@ -156,6 +164,24 @@ async function expectTwoLineTitleSpace(
           expect(Math.abs(target.y + target.height / 2 - center)).toBeLessThanOrEqual(1);
         }
       }
+      for (const parentKey of [rootKey, childKey]) {
+        const parent = page.locator(`[data-session-key="${parentKey}"]`);
+        const child = page.locator(
+          `[data-session-key="${parentKey === rootKey ? childKey : leafKey}"]`,
+        );
+        const toggle = parent.locator("[data-child-session-toggle]");
+        await toggle.focus();
+        if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+          await page.keyboard.press("Enter");
+        }
+        await parent.hover();
+        const actions = await box(parent.locator(".session-row-actions"));
+        expect(actions.x + actions.width).toBeLessThanOrEqual((await box(toggle)).x);
+        await toggle.click();
+        expect(await child.count()).toBe(0);
+        await page.keyboard.press("Enter");
+        await child.waitFor();
+      }
       await page.evaluate(() =>
         document.documentElement.style.setProperty("--control-ui-text-scale", "1.4"),
       );
@@ -182,14 +208,14 @@ const hybridSuite = createControlUiE2eSuite({
   },
 });
 hybridSuite.define(() => {
-  it("keeps built sidebar titles beside touch actions during hover and focus", async () => {
+  it("keeps built two-line titles and nested disclosure controls clear during hover and focus", async () => {
     await expectTwoLineTitleSpace(hybridSuite, "hybrid");
   });
 });
 
 suite.define(() => {
   it.each(["fine", "touch"] as const)(
-    "keeps two-line sidebar titles beside their actions during hover and focus (%s)",
+    "keeps two-line titles and nested disclosure controls clear during hover and focus (%s)",
     async (pointer) => {
       await expectTwoLineTitleSpace(suite, pointer);
     },
