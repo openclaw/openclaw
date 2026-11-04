@@ -187,21 +187,19 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [192526](https://github.com/openclaw/openclaw/pull/192526): Give the compaction warning spy scope-bound restoration. All25 declarations/37 cases, inputs and assertions remain; one fewer test line. Identical early-return controls fail the original logger-identity check and pass with the repair before hook cleanup. Baseline, restored and final-head37 pass; scoped checks and fresh review pass. Exact-head CI29 success/29 intentional skips and security pass. Native squash receipt and both checkout closeouts complete. No native Codex or provider execution is claimed.
 
+- [192551](https://github.com/openclaw/openclaw/pull/192551): Replace two singleton context-projection tables with ordinary cases. All25 declarations/29 expanded cases and every exercised assertion remain; ten fewer test lines. Baseline/candidate full result JSON matches for both fixtures, with identical case inventories after the intended history rename. Baseline/candidate/restored/published29, scoped checks and fresh review pass. Exact-head CI29 success/29 intentional skips and security pass. Native squash receipt and both checkout closeouts complete; production unchanged.
+
 ## Current qualification
 
-Pinned main `8b9e240149fb`: replace two singleton tables in
-`extensions/codex/src/app-server/context-engine-projection.test.ts` with ordinary
-cases. Preserve the actual history-enabled sender fixture and its assertions;
-remove its unreachable history-disabled branch. Preserve the complete user-text
-fixture and all continuity-window assertions. All25 declarations/29 expanded
-cases remain; ten fewer test lines, with no production or helper change.
+Pinned main `b6585ef8714e`: give the conversation receipt mock an independent
+structured clone in `test/conversation-tools.codex.integration.test.ts`. Preserve
+all seven receipt vectors and every Gateway, schema, response and delivery
+telemetry assertion. The equality oracle must detect in-place result changes
+instead of sharing its expected object with the hosted-tool result.
 
-Native baseline and candidate runs each pass all29 cases and produce identical
-full result JSON for both changed fixtures. Expanded case inventories match after
-the intended history-case rename; the user-text case keeps its expanded name.
-The exact restored candidate also passes29. All original assertions remain.
-This is fixture simplification, not a change to Codex projection behavior; no
-native Codex, provider, or Gateway execution is claimed.
+Actual hosted-tool-to-Codex-bridge fault proof, scoped checks and fresh review
+remain pending through the native proof checkout. No production defect, native
+Codex process, live Gateway or external delivery is claimed.
 
 ## Completed source review
 
