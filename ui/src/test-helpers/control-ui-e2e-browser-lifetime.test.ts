@@ -149,9 +149,7 @@ export default defineConfig({
             config,
             "--configLoader",
             "runner",
-            // One-shot projects have no reusable cache. Vitest's server cache reader
-            // supplies a Buffer where Vite's source-map reader requires text.
-            "--no-fsModuleCache",
+            "--fsModuleCache",
           ],
           cwd: repoRoot,
           signal: context.signal,
