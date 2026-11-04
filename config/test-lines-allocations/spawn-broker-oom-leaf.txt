@@ -1,0 +1,2 @@
+# Prove real broker startup, child output, and closure without Gateway recovery or logging imports.
+43
