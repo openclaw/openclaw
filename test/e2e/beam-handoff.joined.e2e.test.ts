@@ -186,7 +186,7 @@ it("continues one released Beam conversation through real client, Gateway, resta
       await instance.state.writeConfig(cfg);
       const root = instance.state.path("source-client");
       await mkdir(root);
-      const client = path.resolve("test/fixtures/beam-live-handoff-client/beam");
+      const client = path.resolve("test/fixtures/beam-live-handoff-client/beam.mjs");
       const cli = path.resolve("openclaw.mjs");
       const endpoint = `${urls[0]}api/v1/beam/sessions`;
       const profiles: string[] = [];
