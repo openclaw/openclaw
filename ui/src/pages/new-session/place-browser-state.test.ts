@@ -135,9 +135,15 @@ describe("PlaceBrowserState", () => {
   });
 
   it.each([
-    ["operator.admin", "You need admin access to browse outside agent workspaces."],
-    ["operator.write", "You need write access to browse folders on this device."],
-    ["operator.read", "You need read access to browse folders."],
+    [
+      "operator.admin",
+      "You need admin access to browse outside agent workspaces. Ask an admin for access.",
+    ],
+    [
+      "operator.write",
+      "You need write access to browse folders on this device. Ask an admin for access.",
+    ],
+    ["operator.read", "You need read access to browse folders. Ask an admin for access."],
   ])("explains %s access without changing the requested path", async (scope, message) => {
     listDirectory.mockRejectedValueOnce({
       details: {

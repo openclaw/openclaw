@@ -112,11 +112,11 @@ describe("session deletion generation ownership", () => {
       h.setRows([h.sibling]);
       let stale: Promise<SessionsListResult | null>;
       if (source === "bootstrap") {
-        h.request.mockImplementationOnce(async () => ({
-          subscribed: true,
-          list: await older.promise,
-        }));
+        h.setListResponse(older.promise);
         h.publish(true);
+        await vi.waitFor(() =>
+          expect(h.request).toHaveBeenCalledWith("sessions.list", expect.anything()),
+        );
         stale = vi
           .waitFor(() => expect(h.sessions.state.result).not.toBeNull())
           .then(() => h.sessions.state.result);

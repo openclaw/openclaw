@@ -109,9 +109,9 @@ async function expectDefaults(page: Page) {
       settingsRow(page, "Color mode").getByRole("radiogroup").locator("input:checked").inputValue(),
     )
     .toBe("system");
-  await expectPressed(
-    page.locator("#settings-appearance-text-size .settings-text-scale__btn", { hasText: "100%" }),
-  );
+  await expect
+    .poll(() => page.locator("#settings-appearance-text-size input:checked").inputValue())
+    .toBe("100");
 }
 
 async function expectAccent(page: Page, accent: string, foreground: string) {
@@ -186,9 +186,7 @@ suite.define(() => {
       await expect.poll(() => pickerValue(languageSelect)).toBe("en");
       await expectPressed(themeCard(page, "knot"));
       await expect.poll(() => colorModeGroup.locator("input:checked").inputValue()).toBe("dark");
-      await expectPressed(
-        textSizeSection.locator(".settings-text-scale__btn", { hasText: "110%" }),
-      );
+      await expect.poll(() => textSizeSection.locator("input:checked").inputValue()).toBe("110");
       await expectAttribute(page.locator("html"), "data-theme-mode", "dark");
 
       const resets = [
@@ -215,7 +213,7 @@ suite.define(() => {
         });
       }
 
-      await textSizeSection.locator(".settings-text-scale__btn", { hasText: "100%" }).click();
+      await textSizeSection.getByRole("radio", { name: "100%", exact: true }).click();
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
       await expectDefaults(page);
       await page.reload();

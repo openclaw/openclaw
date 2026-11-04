@@ -25,7 +25,7 @@ const gitRepository = {
   repositoryStatus: "git",
 };
 const clientCwd = "/home/peter/client-work";
-const dialogSelector = `openclaw-modal-dialog[label='New session defaults for "Client work"']`;
+const dialogSelector = `openclaw-modal-dialog[label='New session defaults for “Client work”']`;
 const groupSelector = '[data-session-section="category:Client work"]';
 const defaultsSelector = '.sidebar-session-group-menu [data-value="group-defaults"]';
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
@@ -367,7 +367,7 @@ suite.define(() => {
         const { dialog, environment, save } = await openDefaults(page);
         await expectAttribute(environment, "data-session-group-environment", "restricted");
         await expect.poll(() => save.isDisabled()).toBe(true);
-        await expectText(environment, "requires operator.admin");
+        await expectText(environment, "You need admin access");
         await expect.poll(() => environment.textContent()).not.toContain("Couldn’t verify Git");
         expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
 
@@ -486,7 +486,8 @@ suite.define(() => {
           message: "rejected group defaults",
         });
 
-        const alert = dialog.getByRole("alert");
+        await dialog.locator("openclaw-toast-host").getByRole("alert").waitFor();
+        const alert = dialog.locator('.exec-approval-error[role="alert"]');
         await alert.waitFor({ state: "visible" });
         await expectText(alert, "rejected group defaults");
         await expectAttribute(modeTrigger, "data-value", "local");

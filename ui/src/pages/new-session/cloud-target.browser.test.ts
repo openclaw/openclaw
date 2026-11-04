@@ -45,7 +45,7 @@ it.each([
     const choice = page.getByRole("button", { name: "production Linux · Standard", exact: true });
     await expect
       .element(choice)
-      .toHaveAccessibleDescription(/Operating system.*Linux.*Windows.*Machine.*Standard/);
+      .toHaveAccessibleDescription(/Operating system.*Linux.*Windows.*Device size.*Standard/);
     await choice.click();
     await expectChoice("production Linux · Standard", /Cloud provider: Azure/);
   }

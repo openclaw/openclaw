@@ -65,9 +65,12 @@ const enNewSessionSetup = {
     browse: "Browse folders",
     worktree: "Worktree",
     checkingGit: "Checking Git availability…",
-    folderRequiresScope: "You need admin access to check Git for this folder. Ask an admin for access.",
-    folderRequiresWrite: "You need write access to check Git for this folder. Ask an admin for access.",
-    folderRequiresRead: "You need read access to check Git for this folder. Ask an admin for access.",
+    folderRequiresScope:
+      "You need admin access to check Git for this folder. Ask an admin for access.",
+    folderRequiresWrite:
+      "You need write access to check Git for this folder. Ask an admin for access.",
+    folderRequiresRead:
+      "You need read access to check Git for this folder. Ask an admin for access.",
     gitCheckAccessDenied:
       "You don’t have permission to check Git for this folder. Ask an admin for access.",
     gitCheckUnavailable: "Couldn’t verify Git for this folder. Try again.",
@@ -120,9 +123,11 @@ const enNewSessionSetup = {
     machineMemory: "{memory} GB",
     machineDefault: "Default",
     browseRequiresRead: "You need read access to browse folders. Ask an admin for access.",
-    browseRequiresWrite: "You need write access to browse folders on this device. Ask an admin for access.",
+    browseRequiresWrite:
+      "You need write access to browse folders on this device. Ask an admin for access.",
     browseAccessDenied: "You don’t have permission to browse this folder. Ask an admin for access.",
-    browseRequiresAdmin: "You need admin access to browse outside agent workspaces. Ask an admin for access.",
+    browseRequiresAdmin:
+      "You need admin access to browse outside agent workspaces. Ask an admin for access.",
     connectMachine: "Connect a device",
     browserUp: "Parent folder",
     browserUse: "Use this folder",

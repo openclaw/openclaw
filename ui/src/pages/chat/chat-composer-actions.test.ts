@@ -61,6 +61,21 @@ async function renderQueue(queue: QueuedMessage[], overrides: Partial<ChatCompos
 }
 
 describe("renderChatComposer controls", () => {
+  it.each(["Win32", "Linux x86_64", "MacIntel"])(
+    "uses compact non-Mac alternate-send hints on %s",
+    (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const { container } = renderComposer({
+        ...activeRun(),
+        draft: "Follow up",
+        followUpMode: "steer",
+        sendShortcut: "enter",
+      });
+      const hints = Array.from(container.querySelectorAll("kbd"), (key) => key.textContent);
+      expect(hints).toContain(platform === "MacIntel" ? "⌘/Ctrl+Enter" : "CtrlEnter");
+    },
+  );
+
   it.each([
     { name: "without send permission", draft: "local draft", canCompose: true, canSend: false },
     { name: "offline text", draft: "queue this", connected: false, allowed: true },

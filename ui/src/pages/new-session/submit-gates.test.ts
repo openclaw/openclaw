@@ -482,7 +482,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       expect(flow.submitBlock()).toEqual({
         gate: "worktree-unavailable",
         reason: missingScope
-          ? `You need ${missingScope.slice("operator.".length)} access to check Git for this folder.`
+          ? `You need ${missingScope.slice("operator.".length)} access to check Git for this folder. Ask an admin for access.`
           : result === "forbidden"
             ? "You don’t have permission to check Git for this folder. Ask an admin for access."
             : "Couldn’t verify Git for this folder. Try again.",
@@ -560,7 +560,7 @@ describe("DraftSubmissionFlow submit gates", () => {
         fixture.flow,
         "worktree-unavailable",
         result === "forbidden"
-          ? "You need admin access to check Git for this folder."
+          ? "You need admin access to check Git for this folder. Ask an admin for access."
           : "This folder cannot provide a Git checkout. Select New workspace to start empty, or choose a repository.",
       );
       await fixture.flow.submit();

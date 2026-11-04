@@ -37,7 +37,7 @@ export function ChatBoardResetConfirmation(props: ChatBoardResetConfirmationProp
             {t("common.cancel")}
           </button>
           <button class="btn primary" type="button" onClick={() => props.onResolve(true)}>
-            {t("common.confirm")}
+            {t("common.reset")}
           </button>
         </openclaw-modal-actions>
       </div>

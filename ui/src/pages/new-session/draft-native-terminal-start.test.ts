@@ -297,7 +297,7 @@ describe("DraftSubmissionFlow native terminal", () => {
     });
     await flow.submit();
     expect(flow.blockedSubmitNotice()).toBe(
-      "This Gateway doesn’t list devices and hosted workspaces. Update the Gateway to choose a device.",
+      "Couldn’t use this device or workspace. Refresh and try again.",
     );
     expect(context.sessions.createResult).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
@@ -337,7 +337,7 @@ describe("DraftSubmissionFlow native terminal", () => {
       if (failure === "mentions") {
         expect(flow.mentions).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
         expect(flow.blockedSubmitNotice()).toBe(
-          "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
+          "Human mentions are not available in this mode. Remove the selected mentions or send from a normal session.",
         );
       }
       if (failure === "overrides") {

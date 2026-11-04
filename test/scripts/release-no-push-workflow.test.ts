@@ -1770,11 +1770,27 @@ describe("release validation no-push transport", () => {
       if: "inputs.shared_image_policy == 'no-push-artifact'",
       with: { "if-no-files-found": "error" },
     });
-    expect(step(liveProducer, "Build shared live-test image").with).toMatchObject({
-      load: true,
-      provenance: false,
-      push: false,
-      sbom: false,
+    expect(step(liveProducer, "Setup Docker builder")).toEqual({
+      name: "Setup Docker builder",
+      if: "inputs.shared_image_policy == 'no-push-artifact'",
+      uses: "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+      with: { version: "v0.23.0" },
+    });
+    expect(step(liveProducer, "Build shared live-test image")).toMatchObject({
+      if: "inputs.shared_image_policy == 'no-push-artifact'",
+      uses: "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+      with: {
+        context: ".",
+        file: "./Dockerfile",
+        target: "build",
+        "build-args": "OPENCLAW_EXTENSIONS=${{ steps.image.outputs.live_image_extensions }}\n",
+        platforms: "linux/amd64",
+        tags: "${{ steps.image.outputs.live_image }}",
+        load: true,
+        provenance: false,
+        push: false,
+        sbom: false,
+      },
     });
     const dockerLoginCondition = step(dockerProducer, "Log in to GHCR").if;
     expect(dockerLoginCondition).toContain("shared_image_policy == 'existing-only'");

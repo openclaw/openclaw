@@ -260,6 +260,7 @@ describe("DraftSubmissionFlow", () => {
       expect(takePreparedTitle).not.toHaveBeenCalled();
       if (oversized) {
         expect(showToast).toHaveBeenCalledExactlyOnceWith({
+          severity: "error",
           message: "Too large to send: second.txt",
         });
       } else {

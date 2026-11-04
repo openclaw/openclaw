@@ -15,8 +15,8 @@ const catalog = {
         clearSearch: "Clear search",
         noMatches: "No skills match your search.",
         reset: "Reset",
-        sessionChange: "{count} change in this chat",
-        sessionChanges: "{count} changes in this chat",
+        sessionChange: "{count} change in this session",
+        sessionChanges: "{count} changes in this session",
         libraryOwner: "{owner}'s library",
         readSkill: "Read skill",
         updateSkill: "Update to latest",
@@ -33,9 +33,9 @@ const catalog = {
         connectors: "Plugins",
         webSearch: "Web search",
         webSearchGloballyDisabled:
-          "Web search is off in Gateway config (tools.web.search.enabled). It can’t be turned on for a single chat.",
+          "Web search is off in Gateway config (tools.web.search.enabled). It can’t be turned on for a single session.",
         webSearchClearStaleEnable:
-          "Web search is off in Gateway config. Click to remove this chat’s override.",
+          "Web search is off in Gateway config. Click to remove this session’s override.",
         managePlugins: "Manage plugins",
         manageSkills: "Manage skills",
         addMcpServer: "Add MCP server",
@@ -44,8 +44,8 @@ const catalog = {
         scopeLabel: "Availability",
         scopeSession: "This session",
         scopeEverywhere: "Everywhere",
-        scopeSessionHint: "Saved for all chats, but on only in this one.",
-        scopeEverywhereHint: "Saved and on in every chat.",
+        scopeSessionHint: "Saved for all sessions, but on only in this one.",
+        scopeEverywhereHint: "Saved and on in every session.",
         toolAccess: {
           label: "Tool access",
           loading: "Loading tools…",
