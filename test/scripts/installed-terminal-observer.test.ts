@@ -11,6 +11,7 @@ import {
   readInstalledTerminalMetadata,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-contracts.mjs";
 import {
+  assertInstalledTerminalOutput,
   captureInstalledTerminalProcessAbsence,
   installedTerminalDescendants,
   type InstalledTerminalProcessAbsence,
@@ -19,6 +20,7 @@ import {
   readInstalledTerminalEvents,
   readInstalledTerminalHasher,
   readInstalledTerminalHeartbeat,
+  restoreInstalledTerminalLauncher,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-observer.mjs";
 import { readWorkerCellPackageIdentity } from "../../scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -28,6 +30,310 @@ import { readJsonLines, runProcess, writeJson } from "./upgrade-survivor-shard.t
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const node = resolveTestNodeExecPath();
 const observer = path.resolve("scripts/e2e/lib/upgrade-survivor/installed-terminal-observer.mjs");
+
+function terminalOutputFixture() {
+  const root = "/fixture/npm/lib/node_modules/openclaw";
+  const candidateResult = {
+    status: "ok",
+    mode: "npm",
+    root,
+    runId: "terminal-run",
+    before: { version: "2026.10.9" },
+    after: { version: "2026.10.10-first-hop.1" },
+  };
+  const candidateStdout = `${JSON.stringify(candidateResult)}\n`;
+  const detail =
+    "Update backup cleanup failed: Selected package launcher identity changed.. Inspect /fixture/backup/previous before manual cleanup.";
+  const output = {
+    ...candidateResult,
+    status: "error",
+    reason: "update-recovery-pending",
+    recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+    steps: [
+      {
+        name: "package-backup-retention",
+        command: "openclaw update",
+        cwd: root,
+        exitCode: 1,
+        stderrTail: detail,
+      },
+    ],
+  };
+  const parentOutput = { event: "stdout", pid: 10, thread: 0, time: "50", bytes: "" };
+  const fault = { event: "launcher-replaced", pid: 10, thread: 0, time: "40" };
+  const rows: Record<string, unknown>[] = [
+    { event: "startup", pid: 10, ppid: 1 },
+    { event: "spawn", pid: 10, child: 11 },
+    { event: "handoff", pid: 10, child: 11, time: "10" },
+    { event: "worker-closed", pid: 10, child: 11, time: "20", stdout: candidateStdout },
+    {
+      event: "candidate-success",
+      pid: 10,
+      child: 11,
+      time: "30",
+      response: { terminalRunId: candidateResult.runId },
+    },
+    fault,
+    parentOutput,
+  ];
+  const result = { pid: 10, code: 1, stdout: "", stderr: `${detail}\n` };
+  const publish = (text = `${JSON.stringify(output)}\n`) => {
+    result.stdout = text;
+    parentOutput.bytes = Buffer.from(text).toString("base64");
+  };
+  publish();
+  return {
+    rows,
+    output,
+    result,
+    fault,
+    parentOutput,
+    candidateStdout,
+    publish,
+    spec: { root, fault: true, historical: false },
+  };
+}
+
+it("validates terminal output as one settled parent error without replaying candidate success", () => {
+  const f = terminalOutputFixture();
+  assertInstalledTerminalOutput(f.rows, f.spec, f.result);
+  const bytes = Buffer.from(f.result.stdout);
+  f.parentOutput.bytes = bytes.subarray(0, 37).toString("base64");
+  f.rows.push({ ...f.parentOutput, time: "51", bytes: bytes.subarray(37).toString("base64") });
+  assertInstalledTerminalOutput(f.rows, f.spec, f.result);
+
+  const invalid: [string, (value: ReturnType<typeof terminalOutputFixture>) => void][] = [
+    [
+      "success envelope",
+      (value) => {
+        value.output.status = "ok";
+      },
+    ],
+    [
+      "wrong reason",
+      (value) => {
+        value.output.reason = "unrelated-failure";
+      },
+    ],
+    [
+      "foreign root",
+      (value) => {
+        value.output.root = "/other/install";
+      },
+    ],
+    [
+      "foreign run",
+      (value) => {
+        value.output.runId = "other-run";
+      },
+    ],
+    [
+      "changed candidate version",
+      (value) => {
+        value.output.after = { version: "other" };
+      },
+    ],
+    [
+      "history projection",
+      (value) => {
+        Object.assign(value.output, { run: {} });
+      },
+    ],
+    [
+      "restart permitted",
+      (value) => {
+        value.output.recovery.serviceRestartSafe = true;
+      },
+    ],
+    [
+      "unrelated step",
+      (value) => {
+        value.output.steps[0].name = "database-cleanup";
+      },
+    ],
+    [
+      "foreign step root",
+      (value) => {
+        value.output.steps[0].cwd = "/other/install";
+      },
+    ],
+    [
+      "successful step",
+      (value) => {
+        value.output.steps[0].exitCode = 0;
+      },
+    ],
+    [
+      "multiple failures",
+      (value) => {
+        value.output.steps.push({ ...value.output.steps[0] });
+      },
+    ],
+    [
+      "wrong refusal",
+      (value) => {
+        value.output.steps[0].stderrTail = "Disk full";
+      },
+    ],
+    [
+      "missing exact stderr",
+      (value) => {
+        value.result.stderr = "Selected package launcher identity changed";
+      },
+    ],
+    [
+      "exit success",
+      (value) => {
+        value.result.code = 0;
+      },
+    ],
+    [
+      "early output",
+      (value) => {
+        value.parentOutput.time = "35";
+      },
+    ],
+    [
+      "foreign output",
+      (value) => {
+        value.parentOutput.pid = 11;
+      },
+    ],
+    [
+      "worker output",
+      (value) => {
+        value.parentOutput.thread = 1;
+      },
+    ],
+    [
+      "foreign fault",
+      (value) => {
+        value.fault.pid = 11;
+      },
+    ],
+    [
+      "fault before success",
+      (value) => {
+        value.fault.time = "25";
+      },
+    ],
+  ];
+  for (const [name, change] of invalid) {
+    const bad = terminalOutputFixture();
+    change(bad);
+    bad.publish();
+    expect(() => assertInstalledTerminalOutput(bad.rows, bad.spec, bad.result), name).toThrow();
+  }
+  for (const extra of ["progress\n", f.candidateStdout, `${JSON.stringify(f.output)}\n`]) {
+    const bad = terminalOutputFixture();
+    bad.publish(extra + bad.result.stdout);
+    expect(() => assertInstalledTerminalOutput(bad.rows, bad.spec, bad.result)).toThrow();
+  }
+  const missing = terminalOutputFixture();
+  missing.parentOutput.bytes = "";
+  expect(() => assertInstalledTerminalOutput(missing.rows, missing.spec, missing.result)).toThrow(
+    "Parent stdout capture mismatch",
+  );
+});
+
+it("keeps healthy terminal output and the historical premature-success control distinct", () => {
+  const f = terminalOutputFixture();
+  f.spec.fault = false;
+  f.result.code = 0;
+  f.publish(f.candidateStdout);
+  assertInstalledTerminalOutput(f.rows, f.spec, f.result);
+  f.result.code = 1;
+  expect(() => assertInstalledTerminalOutput(f.rows, f.spec, f.result)).toThrow();
+  f.spec.fault = true;
+  f.spec.historical = true;
+  f.parentOutput.time = "35";
+  assertInstalledTerminalOutput(f.rows, f.spec, f.result);
+  const stderr = f.result.stderr;
+  f.result.stderr = "Selected package launcher identity changed during admission";
+  expect(() => assertInstalledTerminalOutput(f.rows, f.spec, f.result)).toThrow(
+    "Missing exact package backup cleanup refusal",
+  );
+  f.result.stderr = stderr;
+  f.spec.historical = false;
+  expect(() => assertInstalledTerminalOutput(f.rows, f.spec, f.result)).toThrow(
+    "Parent republished candidate success",
+  );
+  f.spec.historical = true;
+  f.publish();
+  expect(() => assertInstalledTerminalOutput(f.rows, f.spec, f.result)).toThrow(
+    "Historical driver did not expose",
+  );
+  f.parentOutput.bytes = Buffer.from(f.candidateStdout).toString("base64");
+  expect(() => assertInstalledTerminalOutput(f.rows, f.spec, f.result)).toThrow(
+    "Historical success did not reach CLI stdout",
+  );
+});
+
+it("distinguishes real empty Worker drains from early terminal output bytes", () => {
+  const observed = fixture();
+  const script = path.join(observed.root, "empty-output.mjs");
+  const worker = path.join(observed.root, "empty-output-worker.cjs");
+  fs.writeFileSync(worker, "process.stdout.write('', () => {});");
+  // Node's classic eval Worker skips --import; a file entry runs the preload.
+  fs.writeFileSync(
+    script,
+    `import assert from 'node:assert/strict';
+     import { once } from 'node:events';
+     import { Worker } from 'node:worker_threads';
+     const worker = new Worker(${JSON.stringify(worker)});
+     const [code] = await once(worker, 'exit');
+     assert.equal(code, 0);`,
+  );
+  const result = runProcess(node, [script], observed.env, 10_000);
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toBe("");
+  const drain = readInstalledTerminalEvents(observed.spec.directory).find(
+    (row) => row.event === "stdout" && row.thread !== 0,
+  );
+  assert(drain && typeof drain.pid === "number" && typeof drain.time === "string");
+  expect(drain.bytes).toBe("");
+
+  const f = terminalOutputFixture();
+  // Place the pure oracle's synthetic handoff after the real recorded drain.
+  // The native record itself, including its Worker identity/time, stays intact.
+  for (const row of f.rows) {
+    if (row.pid === f.result.pid) {
+      row.pid = drain.pid;
+    }
+    if (typeof row.time === "string") {
+      row.time = (BigInt(drain.time) + BigInt(row.time)).toString();
+    }
+  }
+  f.result.pid = drain.pid;
+  f.rows.push(drain);
+  assertInstalledTerminalOutput(f.rows, f.spec, f.result);
+  f.rows[f.rows.length - 1] = { ...drain, bytes: Buffer.from(" ").toString("base64") };
+  f.result.stdout += " ";
+  expect(() => assertInstalledTerminalOutput(f.rows, f.spec, f.result)).toThrow(
+    "Parent publication preceded the settlement fault",
+  );
+});
+
+it("reports a final failure for driver and shell preflight rejection without starting Docker", () => {
+  const driver = runProcess(
+    node,
+    [path.resolve("scripts/e2e/lib/upgrade-survivor/installed-terminal.mjs")],
+    process.env,
+    10_000,
+  );
+  expect(driver.status).toBe(1);
+  expect(driver.stderr.trimEnd().split("\n").at(-1)).toBe("[installed-terminal] FAILED (exit 1)");
+  expect(driver.stderr).toContain("[installed-terminal] terminal-error");
+  const shell = runProcess(
+    "/bin/bash",
+    [path.resolve("scripts/e2e/installed-terminal-docker.sh")],
+    { ...process.env, CELL_DEADLINE_EPOCH_SECONDS: "invalid" },
+    10_000,
+  );
+  expect(shell.status).toBe(2);
+  expect(shell.stderr.trimEnd().split("\n").at(-1)).toBe("[installed-terminal] FAILED (exit 2)");
+  expect(shell.stdout).toBe("");
+});
 
 function fixture() {
   const root = fs.realpathSync(dirs.make("installed-terminal-observer-"));
@@ -3066,6 +3372,214 @@ it.each(["installed", "published"] as const)(
     }
   },
 );
+
+it.each([true, false])(
+  "changes only the launcher after a drained successful worker: %s",
+  (successful) => {
+    const f = fixture();
+    const worker = path.join(f.root, "update-migrated-finalize.worker.mjs");
+    const parent = path.join(f.root, "parent.cjs");
+    fs.writeFileSync(
+      worker,
+      `
+    import fs from 'node:fs';
+    if (process.argv[2]) { process.stdin.resume(); } else {
+    let input = ''; for await (const chunk of process.stdin) input += chunk;
+    const request = JSON.parse(input);
+    const response = { result: { root: request.params.result.root, runId: 'run', status: ${JSON.stringify(successful ? "ok" : "error")} }, terminalRunId: 'run', exitCode: ${successful ? 0 : 1} };
+    fs.writeFileSync(request.resultPath, JSON.stringify(response));
+    process.stdout.write(JSON.stringify(response.result));
+    }
+  `,
+    );
+    fs.writeFileSync(
+      parent,
+      `
+    const assert = require('node:assert/strict');
+    const fs = require('node:fs'); const fsp = require('node:fs/promises');
+    const { DatabaseSync } = require('node:sqlite');
+    const { spawn } = require('node:child_process'); const { once } = require('node:events');
+    const spec = ${JSON.stringify(f.spec)};
+    fs.mkdirSync(require('node:path').dirname(spec.bin)); fs.symlinkSync('../entry.mjs', spec.bin);
+    const identity = file => { const s = fs.lstatSync(file, { bigint: true }); return s.dev + ':' + s.ino; };
+    const original = identity(spec.bin);
+    const state = new DatabaseSync(spec.stateDatabase);
+    state.exec("CREATE TABLE update_runs(run_id TEXT, status TEXT, phase TEXT); INSERT INTO update_runs VALUES('run','succeeded','finished')"); state.close();
+    const agent = new DatabaseSync(spec.agentDatabase);
+    agent.exec("PRAGMA user_version=39; CREATE TABLE schema_meta(meta_key TEXT,schema_version INTEGER); INSERT INTO schema_meta VALUES('primary',39); CREATE TABLE cache_entries(scope TEXT,key TEXT,value_json TEXT)");
+    agent.prepare('INSERT INTO cache_entries VALUES(?,?,?)').run('installed-terminal','retained','"preserve-me"'); agent.close();
+    const journal = new DatabaseSync(spec.journal);
+    journal.exec('CREATE TABLE package_activation(slot INTEGER,phase TEXT,descriptor_json TEXT,publications_json TEXT)');
+    journal.prepare('INSERT INTO package_activation VALUES(1,?,?,?)').run('publication-complete', JSON.stringify({authority:{installKey:spec.root},binDir:require('node:path').dirname(spec.bin)}), JSON.stringify([{name:'openclaw',identity:original}])); journal.close();
+    (async () => {
+      for (const mode of ['--check','--doctor','--post-core','--settle-plugin-cohort','--commit-plugin-cohort']) {
+        const probe = spawn(process.execPath, [${JSON.stringify(worker)}, mode], { stdio: ['pipe','ignore','ignore'] });
+        const exited = once(probe, 'close'); probe.stdin.end('{}'); assert.equal((await exited)[0], 0);
+      }
+      const resultPath = spec.root + '/result.json';
+      const child = spawn(process.execPath, [${JSON.stringify(worker)}], { stdio: ['pipe','pipe','pipe'] });
+      child.stdout.resume(); child.stderr.resume();
+      const closed = once(child, 'close');
+      const request = JSON.stringify({ resultPath, params: { opts:{run:{runId:'run'}},rollbackBlockedReason:'state-migrated-no-rollback',schemaVersions:[{path:spec.stateDatabase,userVersion:39},{path:spec.agentDatabase,userVersion:25,contentVersion:25}],result:{root:spec.root} } });
+      child.stdin.write(request.slice(0, 10)); child.stdin.end(request.slice(10));
+      assert.equal((await closed)[0], 0);
+      ${successful ? "await fsp.readFile(resultPath, 'utf8'); assert.notEqual(identity(spec.bin), original); assert.equal(identity(spec.escrow), original); assert.equal(fs.readlinkSync(spec.bin), fs.readlinkSync(spec.escrow));" : "assert.equal(JSON.parse(await fsp.readFile(resultPath, 'utf8')).result.status, 'error'); assert.equal(identity(spec.bin), original); assert(!fs.existsSync(spec.escrow));"}
+      ${
+        successful
+          ? `
+      // More unrelated completed pairs than the recorder event budget must not
+      // crowd out the canonical-store proof or change the actual native calls.
+      for (let i=0;i<4200;i++) { const db=new DatabaseSync(spec.journal); db.close(); }
+      const alias=spec.root+'/agent-alias.sqlite'; fs.linkSync(spec.agentDatabase,alias);
+      const deferred=new DatabaseSync(require('node:url').pathToFileURL(alias),{open:false}); deferred.open(); deferred.close();
+      const nested=new DatabaseSync(spec.journal,{get open(){process.stdout.write('nested-event'); return true;}}); nested.close();
+      const changed=spec.root+'/changed.sqlite'; fs.writeFileSync(changed,'');
+      const raced=new DatabaseSync(changed,{get open(){fs.unlinkSync(changed); fs.linkSync(spec.agentDatabase,changed); return true;}}); raced.close();
+      `
+          : ""
+      }
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `,
+    );
+    const result = runProcess(node, [parent], f.env, 10_000);
+    expect(result.status, result.stderr).toBe(0);
+    const rows = f.records();
+    const closed = rows.findIndex((row) => row.event === "worker-closed");
+    expect(closed).toBeGreaterThanOrEqual(0);
+    if (successful) {
+      const passed = rows.findIndex((row) => row.event === "candidate-success");
+      const intent = rows.findIndex((row) => row.event === "launcher-intent");
+      const replaced = rows.findIndex((row) => row.event === "launcher-replaced");
+      expect(passed).toBeGreaterThan(closed);
+      expect(intent).toBeGreaterThan(passed);
+      expect(replaced).toBeGreaterThan(intent);
+      const handoff = rows.find((row) => row.event === "handoff")!;
+      const lateJournal = rows.filter(
+        (row) =>
+          row.event === "sqlite-construct" &&
+          row.location === f.spec.journal &&
+          BigInt(String(row.time)) > BigInt(String(handoff.time)),
+      );
+      expect(lateJournal).toHaveLength(1); // Reentrant stdout keeps its ordinary pair.
+      expect(
+        rows.find(
+          (row) =>
+            row.event === "sqlite-open" && row.location === path.join(f.root, "agent-alias.sqlite"),
+        ),
+      ).toMatchObject({ opened: true });
+      expect(
+        rows.find(
+          (row) =>
+            row.event === "sqlite-construct" &&
+            row.location === path.join(f.root, "changed.sqlite"),
+        ),
+      ).toMatchObject({ opened: true });
+      expect(() => readInstalledTerminalEvents(f.spec.directory)).not.toThrow();
+      // Event corruption cannot erase an independently acknowledged fault.
+      const parentLog = fs.readdirSync(f.spec.directory).find((name) => name.endsWith("-0.jsonl"));
+      expect(parentLog).toBeDefined();
+      fs.appendFileSync(path.join(f.spec.directory, parentLog!), "{truncated");
+      expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow("truncated");
+      expect(restoreInstalledTerminalLauncher(f.spec).status).toBe("restored");
+      expect(fs.existsSync(f.spec.escrow)).toBe(false);
+    } else {
+      expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow(
+        "coverage is unqualified",
+      );
+      expect(
+        rows.some((row) => row.event === "candidate-success" || row.event === "launcher-intent"),
+      ).toBe(false);
+    }
+  },
+);
+
+it.each([false, true])(
+  "requires matched native operations when a worker is terminated: %s",
+  (inflight) => {
+    const f = fixture();
+    const script = path.join(f.root, "terminate.cjs");
+    const workerPath = path.join(f.root, "terminate-worker.cjs");
+    const source = `
+    const {parentPort} = require('node:worker_threads');
+    ${inflight ? "new (require('node:sqlite').DatabaseSync)(':memory:', {get open(){parentPort.postMessage('ready'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0); return true;}});" : "const db = new (require('node:sqlite').DatabaseSync)(':memory:'); db.close(); parentPort.postMessage('ready');"}
+    setInterval(()=>{}, 1000);
+  `;
+    // Packaged native workers use a file entry. Classic CJS eval bypasses
+    // Node's ESM --import preload and cannot exercise this observer boundary.
+    fs.writeFileSync(workerPath, source);
+    fs.writeFileSync(
+      script,
+      `
+    const {Worker} = require('node:worker_threads');
+    const worker = new Worker(${JSON.stringify(workerPath)}, {execArgv:[]});
+    worker.once('message', () => worker.terminate());
+  `,
+    );
+    const result = runProcess(node, [script], f.env, 10_000);
+    expect(result.status, result.stderr).toBe(0);
+    const rows = f.records();
+    const threads = rows.filter((row) => row.event === "thread");
+    expect(threads).toHaveLength(1);
+    const thread = threads[0];
+    assert(thread, "Missing Worker creation event");
+    expect(rows.filter((row) => row.event === "startup")).toHaveLength(2);
+    expect(
+      rows.find(
+        (row) =>
+          row.event === "startup" && row.pid === thread.pid && row.thread === thread.childThread,
+      ),
+    ).toMatchObject({ entry: workerPath });
+    if (inflight) {
+      expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow(
+        "observation interrupted",
+      );
+    } else {
+      expect(() => readInstalledTerminalEvents(f.spec.directory)).not.toThrow();
+      // Native termination can omit a process exit record. Its joined thread
+      // must still fail proof if only the per-isolate failure receipt survived.
+      expect(fs.existsSync(path.join(f.spec.directory, "observer-failed.json"))).toBe(false);
+      assert(typeof thread.pid === "number");
+      assert(typeof thread.childThread === "number");
+      writeJson(path.join(f.spec.directory, `${thread.pid}-${thread.childThread}.failure.json`), {
+        status: "unqualified",
+        pid: thread.pid,
+        thread: thread.childThread,
+        error: "Observer sink failed before the shared marker was written",
+      });
+      expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow(
+        "coverage is unqualified",
+      );
+    }
+  },
+);
+
+it("holds an unknown replacement and restores only a recorded or absent replacement", () => {
+  const f = fixture();
+  fs.mkdirSync(path.dirname(f.spec.bin));
+  fs.symlinkSync("../entry.mjs", f.spec.bin);
+  const identity = (file: string) => {
+    const stat = fs.lstatSync(file, { bigint: true });
+    return `${stat.dev}:${stat.ino}`;
+  };
+  const intent = {
+    bin: f.spec.bin,
+    escrow: f.spec.escrow,
+    identity: identity(f.spec.bin),
+    link: "../entry.mjs",
+    row: {},
+  };
+  writeJson(path.join(f.spec.directory, "launcher-intent.json"), intent);
+  fs.renameSync(f.spec.bin, f.spec.escrow);
+  fs.symlinkSync(intent.link, f.spec.bin);
+  expect(() => restoreInstalledTerminalLauncher(f.spec)).toThrow(
+    "Unacknowledged replacement retained",
+  );
+  expect(identity(f.spec.escrow)).toBe(intent.identity);
+  // Simulate the acknowledged boundary immediately after rename, before symlink.
+  fs.unlinkSync(f.spec.bin);
+  expect(restoreInstalledTerminalLauncher(f.spec).status).toBe("restored");
+  expect(identity(f.spec.bin)).toBe(intent.identity);
+});
 
 it("admits only the bound builtin hasher with a joined native thread", () => {
   const f = fixture();
