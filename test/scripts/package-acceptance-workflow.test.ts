@@ -9237,9 +9237,8 @@ test "$package_manager" = "pnpm@12.1.0"
       // GitHub rejects a dispatch carrying any input the child does not declare.
       const declared =
         readWorkflow(FULL_RELEASE_ARTIFACTS_WORKFLOW).on?.workflow_dispatch?.inputs ?? {};
-      expect(fields.map((field) => field.split("=", 1)[0]).filter((key) => !declared[key])).toEqual(
-        [],
-      );
+      const names = fields.map((field) => field.slice(0, field.indexOf("=")));
+      expect(names.filter((key) => !declared[key])).toEqual([]);
       expect(workflowJob(FULL_RELEASE_ARTIFACTS_WORKFLOW, "npm").with).toMatchObject({
         use_github_hosted_runners: "${{ inputs.npm_preflight_use_github_hosted_runners }}",
       });
