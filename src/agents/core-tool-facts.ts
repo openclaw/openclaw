@@ -145,7 +145,8 @@ export const CORE_TOOL_DEFINITIONS = [
     ["update_goal"],
     ["progress_card"],
     ["ask_user", { profiles: ["coding", "messaging"] }],
-    ["skill_workshop", { executionLocation: "gateway" }],
+    // Owned by the skill-workshop plugin; listed for profile and group membership.
+    ["skill_workshop", { executionLocation: "gateway", factoryFamily: undefined }],
     ["skill_library", { executionLocation: "gateway", runGranted: true }],
     ["skills_search", { factoryFamily: undefined, replay: "blind" }],
     ["skills_read", { factoryFamily: undefined, replay: "blind" }],

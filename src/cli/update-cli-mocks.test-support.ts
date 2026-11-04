@@ -291,41 +291,10 @@ vi.mock("../config/io.js", async (importOriginal) => {
 });
 
 vi.mock("../infra/update-check.js", async (importOriginal) => ({
-  formatGitInstallLabel: (await importOriginal<typeof import("../infra/update-check.js")>())
-    .formatGitInstallLabel,
+  ...(await importOriginal<typeof import("../infra/update-check.js")>()),
   checkUpdateStatus: vi.fn(),
   resolveUpdateInstallKind: vi.fn(),
   resolveUpdateInstallIdentity: vi.fn(),
-  compareSemverStrings: vi.fn((left: string | null, right: string | null) => {
-    const parse = (value: string | null) => {
-      if (!value) {
-        return null;
-      }
-      const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
-      if (!match) {
-        return null;
-      }
-      return [
-        Number.parseInt(match[1] ?? "0", 10),
-        Number.parseInt(match[2] ?? "0", 10),
-        Number.parseInt(match[3] ?? "0", 10),
-      ] as const;
-    };
-    const a = parse(left);
-    const b = parse(right);
-    if (!a || !b) {
-      return null;
-    }
-    for (let index = 0; index < a.length; index += 1) {
-      const diff =
-        expectDefined(a[index], "a[index] test invariant") -
-        expectDefined(b[index], "b[index] test invariant");
-      if (diff !== 0) {
-        return diff;
-      }
-    }
-    return 0;
-  }),
   fetchNpmTagVersion: vi.fn(),
   resolveExtendedStablePackage: vi.fn(),
   resolveNpmChannelTag: vi.fn(),

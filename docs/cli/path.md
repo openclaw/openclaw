@@ -45,7 +45,7 @@ grep, regex, or parser per file kind. The same `oc://` path can be validated,
 resolved, searched, dry-run, and written from the terminal, which keeps narrow
 automation reviewable and replayable. It preserves the rest of the file, so
 writing one leaf does not disturb its comments, line endings, or nearby
-formatting.
+formatting. YAML edits also retain an existing UTF-8 byte order mark (BOM).
 
 Use it when the thing you want has a logical address, but the file shape
 varies:

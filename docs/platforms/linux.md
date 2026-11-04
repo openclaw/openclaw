@@ -33,7 +33,7 @@ Windows Gateway. On Linux, it:
   Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
 - opens custodian onboarding after automatic local setup to prepare AI access
-  and explain the selection; manual setup retains the explicit Model Setup picker
+  and explain the selection; manual setup retains the explicit Models picker
 - continues into guided onboarding after connecting a new model; onboarding can
   import detected Claude Code, Codex, or Hermes memories into the agent workspace
   (the same import stays available later under Settings → Import Memory)
@@ -248,7 +248,7 @@ With no saved OpenClaw configuration or Gateway profiles, the app starts local
 setup automatically and opens custodian onboarding in the Control UI. The
 custodian prepares available AI access and explains the selection and alternatives.
 **Use a different Gateway** opens Manage Gateways, **Review permissions** opens
-this computer's permissions, and **Open AI setup** opens Model Setup.
+this computer's permissions, and **Open AI setup** opens Models.
 The card labels the local Gateway **This computer** and saved remote Gateways
 by name; its native actions retain the selected Gateway's base path.
 
@@ -283,7 +283,7 @@ shared-store references must be resolved on their owning Gateway host.
 SSH uses your existing OpenSSH authentication and host-key verification. See
 [Remote access](/gateway/remote) for secure Gateway configuration.
 
-After a manual connection succeeds, Model Setup discovers AI access available to the
+After a manual connection succeeds, Models discovers AI access available to the
 selected Gateway and shows it as a choice. Discovery does not import or copy an
 account. On a fresh visit, the companion does not select, test, install, or save
 a provider until you choose its action. Provider sign-in or API-key entry is
@@ -297,7 +297,7 @@ An uncertain error keeps replacement setup blocked because settings may already
 have been saved. Confirmed cancellation and requests rejected before setup
 started can be retried immediately.
 
-Model Setup can resume an activation across a Gateway restart or app reopen
+Models can resume an activation across a Gateway restart or app reopen
 while its temporary recovery record is valid. Recovery stays bound to the same
 Gateway, agent, and authentication. When the known activation target still
 matches the selected model, OpenClaw verifies that exact model before continuing
