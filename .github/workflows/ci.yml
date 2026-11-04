@@ -1804,6 +1804,21 @@ jobs:
           run_check protocol-additions node --import ./scripts/tsx.mjs scripts/check-protocol-since.mts
           finish_checks
 
+      - name: Check release fast lane test-line budget
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && steps.diff_base.outcome == 'success' && github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'release-fast-lane') }}
+        env:
+          BASE_SHA: *diff_base
+        run: |
+          set -euo pipefail
+          # The lane deliberately skips the baseline-ratchet bundle, so this is the
+          # retained guard that still bounds test-line growth before landing. It reuses
+          # the dependency-free checker against the merge's verified first parent.
+          if [[ ! "${BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+            echo "::error title=release fast lane base unavailable::Refusing to admit test-line growth without the merge's verified first parent."
+            exit 1
+          fi
+          node scripts/check-test-lines-ratchet.mts --base "$BASE_SHA" --no-merge-base
+
   build-artifacts:
     permissions:
       contents: read
