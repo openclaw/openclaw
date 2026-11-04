@@ -138,29 +138,47 @@ export function registerManagedUpdateHandoffTriageTests(
     },
   );
 
-  itUnix.each(["dirty", "already-current", "managed-service-handoff-cancelled"] as const)(
-    "classifies a zero-exit skipped updater result before triage: %s",
-    async (reason) => {
-      const failed = reason === "dirty";
-      const { state, sentinel } = await runManagedServiceManagerBoundary("systemd", {
-        updaterExitCode: 0,
-        helperExitCode: failed ? 1 : 0,
-        updaterNotification: "published",
-        updaterResult: {
-          status: "skipped",
-          mode: "npm",
-          reason,
-          recovery: { serviceRestartSafe: true, version: "1.0.0", service: "healthy" },
-        },
-      });
-      expect(state.triageCalls).toBe(failed ? 1 : undefined);
-      expect(state.guardedRestart).toBeUndefined();
-      expect(state.healthProbed).toBeUndefined();
-      expect(sentinel).toMatchObject({
-        payload: { status: "skipped", stats: { reason } },
-      });
-    },
-  );
+  itUnix.each([
+    "dirty",
+    "already-current",
+    "managed-service-handoff-cancelled",
+    "restart-health-pending",
+  ] as const)("classifies a zero-exit skipped updater result before triage: %s", async (reason) => {
+    const failed = reason === "dirty";
+    const { state, sentinel } = await runManagedServiceManagerBoundary("systemd", {
+      updaterExitCode: 0,
+      helperExitCode: failed ? 1 : 0,
+      updaterNotification: "published",
+      updaterResult: {
+        status: "skipped",
+        mode: "npm",
+        reason,
+        recovery: { serviceRestartSafe: true, version: "1.0.0", service: "healthy" },
+      },
+    });
+    expect(state.triageCalls).toBe(failed ? 1 : undefined);
+    expect(state.guardedRestart).toBeUndefined();
+    expect(state.healthProbed).toBeUndefined();
+    expect(sentinel).toMatchObject({
+      payload: { status: "skipped", stats: { reason } },
+    });
+  });
+
+  itUnix("does not coerce a raw skipped reason into a known no-op", async () => {
+    const { state } = await runManagedServiceManagerBoundary("systemd", {
+      updaterExitCode: 0,
+      helperExitCode: 1,
+      updaterResult: {
+        status: "skipped",
+        mode: "npm",
+        reason: ["already-current"],
+        recovery: { serviceRestartSafe: true, version: "1.0.0", service: "healthy" },
+      },
+    });
+    expect(state.triageCalls).toBe(1);
+    expect(state.guardedRestart).toBeUndefined();
+    expect(state.healthProbed).toBeUndefined();
+  });
 
   itUnix.each([
     { recoverySentinel: "retained", recoveryExitCode: 0 },

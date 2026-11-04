@@ -113,11 +113,6 @@ async function finishManagedUpdateRun() {
   runOutcome = undefined;
 }
 
-function isFailedUpdateOutcome(status, reason) {
-  return status === "error" || (status === "skipped" &&
-    !params.nonFailureSkippedReasons.includes(reason));
-}
-
 async function captureManagedUpdateResult() {
   if (fs.existsSync(params.triageContextPath)) {
     triageFailure = { ...triageFailure, reason: closedUpdateResult?.reason ?? "managed-service-handoff-failed" };

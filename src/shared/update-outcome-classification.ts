@@ -20,7 +20,7 @@ export const SKIPPED_UPDATE_OUTCOMES: Readonly<Record<string, "pending" | "noop"
 /** A skipped update can be a handoff, an intentional no-op, or a failed attempt. */
 export function classifyUpdateOutcome(outcome: {
   status?: string;
-  reason?: string;
+  reason?: unknown;
 }): "succeeded" | "pending" | "noop" | "failed" | undefined {
   if (outcome.status === "ok") {
     return "succeeded";
@@ -31,7 +31,9 @@ export function classifyUpdateOutcome(outcome: {
   if (outcome.status !== "skipped") {
     return undefined;
   }
-  return outcome.reason !== undefined && Object.hasOwn(SKIPPED_UPDATE_OUTCOMES, outcome.reason)
+  // Raw child JSON must not coerce arrays or objects into recognized skip reasons.
+  return typeof outcome.reason === "string" &&
+    Object.hasOwn(SKIPPED_UPDATE_OUTCOMES, outcome.reason)
     ? SKIPPED_UPDATE_OUTCOMES[outcome.reason]
     : "failed";
 }

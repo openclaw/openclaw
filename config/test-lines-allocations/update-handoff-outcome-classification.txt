@@ -1,0 +1,2 @@
+# Preserve pending and strict raw-JSON classification at the generated helper boundary.
+18
