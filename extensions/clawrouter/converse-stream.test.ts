@@ -204,7 +204,7 @@ it.each(["native", "manifest"] as const)(
       headers: { Authorization: "Bearer synthetic-wrong-key" },
     });
     const result = await stream.result();
-    expect(result.stopReason).toBe("toolUse");
+    expect(result.stopReason, result.errorMessage).toBe("toolUse");
     expect(result.model).toBe(ID);
     expect(result.content).toEqual(
       expect.arrayContaining([
