@@ -425,8 +425,6 @@ export async function archiveConfirmedSessionsWithUndo(
         : t("sessionsView.sessionsArchived", { count: String(archived.length) }),
     actionLabel: t("common.undo"),
     onAction: archiveUndoAction(outcomeHost, archived, scope, undoPins),
-    // Keep a partial-failure notice readable before presenting successful-only Undo.
-    fifo: true,
   });
   return failure ?? "completed";
 }
@@ -536,7 +534,7 @@ function sessionUndoHost(
         if (host.sessionData.isSessionMutationScopeCurrent(candidate)) {
           host.sessionData.publishSessionMutationError(candidate, error);
         } else if (isCurrent()) {
-          showToast({ message: formatUiError(error) });
+          showToast({ severity: "error", message: formatUiError(error) });
         }
       },
     },

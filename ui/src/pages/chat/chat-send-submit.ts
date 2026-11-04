@@ -252,7 +252,7 @@ export async function handleSendChat(
     if (error === undefined) {
       return false;
     }
-    showToast({ message: error });
+    showToast({ severity: "error", message: error });
     return true;
   };
 
