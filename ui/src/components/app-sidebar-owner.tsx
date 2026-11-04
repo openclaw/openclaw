@@ -301,6 +301,16 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     super.connectedCallback();
   }
 
+  override updated() {
+    super.updated();
+    this.sessionOrganizer.revealActiveSections(
+      isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : null,
+      this.context?.gateway.snapshot.client ?? null,
+      this.zonedVisibleSections(this.selectedAgentSessionRows(this.getSessionNavigationState()))
+        .sections,
+    );
+  }
+
   toggleSessionPin(session: SidebarRecentSession): void {
     this.sessionOrganizer.setPersonalSessionPin(
       session.key,

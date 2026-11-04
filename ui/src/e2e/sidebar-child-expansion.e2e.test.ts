@@ -32,7 +32,10 @@ suite.define(() => {
           spawnedBy: parent,
         } satisfies GatewaySessionRow;
       };
-      const root = row("agent:main:dashboard:release", "Prepare the documentation release");
+      const root = {
+        ...row("agent:main:dashboard:release", "Prepare the documentation release"),
+        category: "Documentation",
+      };
       const middle = row("agent:main:dashboard:platform", "Check platform documentation", root.key);
       const parent = {
         ...row("agent:main:dashboard:integration", "Review integration examples", middle.key),
@@ -52,7 +55,10 @@ suite.define(() => {
         activeRunIds: ["verification-run"],
         startedAt: now - 30_000,
       };
-      const unrelated = row("agent:main:dashboard:website", "Refresh the project website");
+      const unrelated = {
+        ...row("agent:main:dashboard:website", "Refresh the project website"),
+        category: "Website",
+      };
       const unrelatedChild = row(
         "agent:main:dashboard:website-links",
         "Check website links",
@@ -65,7 +71,7 @@ suite.define(() => {
           .map(({ key }) => key);
       }
       await seedChatSettings(page, suite.server.baseUrl, {
-        sessionsGrouping: "flat",
+        sessionsGrouping: "category",
         navWidth: 380,
       });
       const gateway = await installMockGateway(page, {
@@ -85,6 +91,10 @@ suite.define(() => {
       const sidebarRow = (key: string) =>
         page.locator(`.sidebar-recent-session[data-session-key="${key}"]`).first();
       const toggle = (key: string) => sidebarRow(key).locator("[data-child-session-toggle]");
+      const sectionToggle = (id: string) =>
+        page.locator('[data-session-section="' + id + '"] .sidebar-session-group-toggle').first();
+      const documentation = sectionToggle("category:Documentation");
+      const website = sectionToggle("category:Website");
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
       await page.locator(".chat-subagent-wait a").getByText(leaf.label!, { exact: true }).waitFor();
       for (const key of [unrelated.key, parent.key, middle.key, root.key]) {
@@ -95,6 +105,12 @@ suite.define(() => {
         await toggle(key).focus();
         await page.keyboard.press("Enter");
         await expectAttribute(toggle(key), "aria-expanded", "false");
+      }
+      for (const section of [documentation, website]) {
+        await expectAttribute(section, "aria-expanded", "true");
+        await section.focus();
+        await page.keyboard.press("Enter");
+        await expectAttribute(section, "aria-expanded", "false");
       }
       await gateway.setMethodResponse("chat.history", {
         messages: [
@@ -148,10 +164,21 @@ suite.define(() => {
       for (const key of [root.key, middle.key, parent.key]) {
         await expectAttribute(toggle(key), "aria-expanded", "true");
       }
+      await expectAttribute(website, "aria-expanded", "false");
+      await website.focus();
+      await page.keyboard.press("Enter");
       await expectAttribute(toggle(unrelated.key), "aria-expanded", "false");
+      await website.focus();
+      await page.keyboard.press("Enter");
+      await expectAttribute(documentation, "aria-expanded", "true");
+      await expectAttribute(website, "aria-expanded", "false");
       // A refresh must not reopen an intentional collapse on the same route.
       await toggle(root.key).focus();
       await page.keyboard.press("Enter");
+      await expectAttribute(toggle(root.key), "aria-expanded", "false");
+      await documentation.focus();
+      await page.keyboard.press("Enter");
+      await expectAttribute(documentation, "aria-expanded", "false");
       await gateway.setSessionsListResponse({
         sessions,
         count: sessions.length,
@@ -167,17 +194,39 @@ suite.define(() => {
         reason: "updated",
         sessionKey: leaf.key,
       });
-      await expectAttribute(toggle(root.key), "aria-expanded", "false");
+      expect(await sidebarRow(root.key).count()).toBe(0);
+      await expectAttribute(documentation, "aria-expanded", "false");
       await page.goBack();
-      await sidebarRow(parent.key).waitFor();
-      await toggle(root.key).focus();
+      await expect.poll(() => page.url()).toContain("dashboard/integration");
+      await sidebarRow(parent.key).locator("a[aria-current='page']").waitFor();
+      await expectAttribute(documentation, "aria-expanded", "true");
+      for (const key of [parent.key, middle.key, root.key]) {
+        if ((await toggle(key).getAttribute("aria-expanded")) === "true") {
+          await toggle(key).focus();
+          await page.keyboard.press("Enter");
+        }
+        await expectAttribute(toggle(key), "aria-expanded", "false");
+      }
+      await documentation.focus();
       await page.keyboard.press("Enter");
+      await expectAttribute(documentation, "aria-expanded", "false");
+      expect(await sidebarRow(leaf.key).count()).toBe(0);
       await page.goForward();
-      await sidebarRow(leaf.key).waitFor();
-      await expectAttribute(toggle(root.key), "aria-expanded", "true");
+      await expect.poll(() => page.url()).toContain("dashboard/verification");
+      await sidebarRow(leaf.key).locator("a[aria-current='page']").waitFor();
+      for (const key of [root.key, middle.key, parent.key]) {
+        await expectAttribute(toggle(key), "aria-expanded", "true");
+      }
+      await expectAttribute(documentation, "aria-expanded", "true");
+      await expectAttribute(website, "aria-expanded", "false");
       // A cold direct URL starts with only lineage, before the child lists settle.
+      await documentation.focus();
+      await page.keyboard.press("Enter");
+      await expectAttribute(documentation, "aria-expanded", "false");
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, leaf.key));
       await sidebarRow(leaf.key).waitFor();
+      await expectAttribute(documentation, "aria-expanded", "true");
+      await expectAttribute(website, "aria-expanded", "false");
       for (const key of [root.key, middle.key, parent.key]) {
         await expectAttribute(toggle(key), "aria-expanded", "true");
       }
