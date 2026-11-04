@@ -776,7 +776,7 @@ describe("ModelProvidersPage agent scope", () => {
     await toast.updateComplete;
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
-      expect(toast.querySelector('[role="status"]')?.textContent).toContain(
+      expect(toast.querySelector('[role="alert"]')?.textContent).toContain(
         "Priority could not be saved",
       ),
     );
@@ -784,7 +784,7 @@ describe("ModelProvidersPage agent scope", () => {
 
     expect(page.querySelector('[role="alert"]')).toBeNull();
     expect(page.view.props.messages.openai).toBeUndefined();
-    expect(toast.querySelector(".app-toast-lane--top-center .app-toast__icon")).not.toBeNull();
+    expect(toast.querySelector(".app-toast--error .app-toast__icon")).not.toBeNull();
     expect(
       [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
         (row) => row.dataset.profileId,

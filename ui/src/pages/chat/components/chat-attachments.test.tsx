@@ -242,9 +242,7 @@ describe("chat attachment read failures", () => {
     await vi.dynamicImportSettled();
     await waitForSolid(() => {
       expect(toastHost.querySelectorAll(".app-toast")).toHaveLength(1);
-      expect(toastHost.querySelector(".app-toast__message")).toMatchObject({
-        textContent: message,
-      });
+      expect(toastHost.querySelector(".app-toast__body")?.textContent).toBe(message);
     });
   }
 
@@ -484,13 +482,8 @@ describe("chat attachment read failures", () => {
         attachments: [],
         onAttachmentsChange,
       });
-      await toastHost.updateComplete;
-      await vi.waitFor(() =>
-        expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
-          name === "empty.png"
-            ? "Could not attach file. Try again."
-            : "File too large. Try a smaller file.",
-        ),
+      await expectAttachmentToast(
+        name === "empty.png" ? "Could not attach file. Try again." : undefined,
       );
       if (accepted) {
         await vi.waitFor(() => expect(onAttachmentsChange).toHaveBeenCalled());

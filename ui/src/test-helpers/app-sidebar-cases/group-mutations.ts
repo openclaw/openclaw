@@ -310,7 +310,7 @@ describe("AppSidebar group mutation collapsed state", () => {
           result: { sessions: [{}, { category: "Alpha" }] },
         });
         await waitForFast(() =>
-          expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
+          expect(toast.querySelector(".app-toast__body")?.textContent).toBe(
             'Gateway connection replaced before "Alpha" was deleted. Try again.',
           ),
         );
