@@ -14,20 +14,16 @@ type ComposerReplyLineProps = Omit<
 };
 
 /** Names the composer's reply target through the transcript's own author projection. */
-export function resolveChatComposerReplyLine(props: ComposerReplyLineProps): ReplyLine | null {
+function resolveChatComposerReplyLine(props: ComposerReplyLineProps): ReplyLine | null {
   const target = props.replyTarget;
   if (!target) {
     return null;
   }
   const id = target.sourceMessageId;
-  let source: unknown;
   // Replies usually target recent rows; search from the newest.
-  for (let index = props.messages.length - 1; id && index >= 0; index -= 1) {
-    if (persistedMessageEntryId(props.messages[index]) === id) {
-      source = props.messages[index];
-      break;
-    }
-  }
+  const source = id
+    ? props.messages.findLast((message) => persistedMessageEntryId(message) === id)
+    : undefined;
   const lookup = createReplyPreviewResolver(new Map(), {
     ...props,
     replyMessageAccess: { read: (messageId) => (messageId === id ? source : undefined) },
@@ -35,9 +31,10 @@ export function resolveChatComposerReplyLine(props: ComposerReplyLineProps): Rep
   return resolveComposerReplyLine(target, lookup, props.userId);
 }
 
-export function createChatComposerReplyLine(props: ChatProps) {
-  return createMemo(() =>
-    props.replyTarget
+export function createChatComposerReplyLine(input: { props: ChatProps }) {
+  return createMemo(() => {
+    const props = input.props;
+    return props.replyTarget
       ? resolveChatComposerReplyLine({
           replyTarget: props.replyTarget,
           messages: props.messages,
@@ -50,6 +47,6 @@ export function createChatComposerReplyLine(props: ChatProps) {
           userName: props.userName,
           senderAgentAvatars: props.senderAgentAvatars,
         })
-      : null,
-  );
+      : null;
+  });
 }

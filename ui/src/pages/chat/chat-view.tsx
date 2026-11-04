@@ -222,7 +222,7 @@ function ChatFooterContent(
 
 function ChatComposerView(input: ChatViewInput) {
   const activities = createChatComposerActivities(input);
-  const replyLine = createChatComposerReplyLine(input.props);
+  const replyLine = createChatComposerReplyLine(input);
   return (
     <ChatComposer
       {...input.props}

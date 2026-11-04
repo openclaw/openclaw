@@ -1,5 +1,8 @@
+import { createRoot } from "solid-js";
 import { expect, it } from "vitest";
-import { resolveChatComposerReplyLine } from "./chat-composer-reply-line.ts";
+import type { ChatReplyTarget } from "../../lib/chat/chat-types.ts";
+import { createChatComposerReplyLine } from "./chat-composer-reply-line.ts";
+import type { ChatProps } from "./chat-view-frame.ts";
 
 function userMessage(id: string, senderId: string, senderName: string) {
   return {
@@ -27,6 +30,16 @@ const base = {
   userId: "alice",
   userName: "Alice Chen",
 };
+function resolveChatComposerReplyLine(
+  props: typeof base & { replyTarget: ChatReplyTarget | null },
+) {
+  return createRoot((dispose) => {
+    // SAFETY: The memo reads only the reply and author presentation fields supplied here.
+    const line = createChatComposerReplyLine({ props: props as unknown as ChatProps })();
+    dispose();
+    return line;
+  });
+}
 const target = (sourceMessageId: string | null, senderLabel = "Stale label") => ({
   messageId: `render-${sourceMessageId}`,
   text: "Quoted text",
