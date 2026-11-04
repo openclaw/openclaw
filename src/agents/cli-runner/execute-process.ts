@@ -38,6 +38,7 @@ import { attachCliReplyBackend } from "./execution-target.js";
 import {
   createCliExitFailoverError,
   createCliFailoverError,
+  createCliStreamRefusalError,
   resolveCliResumeAtError,
 } from "./exit-error.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
@@ -334,7 +335,11 @@ export async function executeCliProcess(params: {
           consumeStdout(chunk);
           const errorText = streamingParser?.getErrorText();
           if (errorText) {
-            throw createCliFailoverError(errorText, "format", failoverContext);
+            throw createCliStreamRefusalError(
+              errorText,
+              failoverContext,
+              streamingParser?.getOutput(),
+            );
           }
         },
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
@@ -351,9 +356,14 @@ export async function executeCliProcess(params: {
           streamingParser?.finish();
           const partialOutput = streamingParser?.getOutput();
           if (partialOutput?.partialOutputRejected && partialOutput.errorText) {
-            throw createCliFailoverError(partialOutput.errorText, "format", failoverContext, {
-              code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
-            });
+            throw createCliStreamRefusalError(
+              partialOutput.errorText,
+              failoverContext,
+              partialOutput,
+              {
+                code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
+              },
+            );
           }
           if (
             !partialOutput?.text.trim() ||
@@ -482,7 +492,11 @@ export async function executeCliProcess(params: {
   streamingParser?.finish();
   const streamingParserErrorText = streamingParser?.getErrorText();
   if (streamingParserErrorText) {
-    throw createCliFailoverError(streamingParserErrorText, "format", failoverContext);
+    throw createCliStreamRefusalError(
+      streamingParserErrorText,
+      failoverContext,
+      streamingParser?.getOutput(),
+    );
   }
   // The node re-injects the terminal result after truncation. If even that is
   // missing, the turn outcome is unknowable and cannot pass as a clean exit.

@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { CliSessionBinding } from "../../config/sessions.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { CLI_STREAM_JSON_OUTPUT_LIMITS } from "../cli-output-stream-limits.js";
+import { runPreparedCliAgent as runPreparedCliAgentImpl } from "../cli-runner.js";
+import * as cliTranscript from "../command/attempt-execution.helpers.js";
 import { buildContext } from "./execute-events.tool-result-args.test-support.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
@@ -17,6 +20,7 @@ import {
 import type { PreparedCliRunContext } from "./types.js";
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
+const runPreparedCliAgent = wrapPreparedCliRunWithTestAdmission(runPreparedCliAgentImpl);
 
 // mock-isolation: The supervisor fixture owns execution; never spawn host CLI processes.
 vi.mock("../../process/supervisor/adapters/child.js", () => ({
@@ -105,6 +109,35 @@ describe("CLI stream-json output limit", () => {
       }
     },
   );
+
+  it("keeps a refused first turn's native session for the retry to resume", async () => {
+    const context = buildClaudeStreamJsonRunContext("run-limit-first-turn");
+    const padding = {
+      type: "system",
+      subtype: "fixture_padding",
+      padding: "x".repeat(1024 * 1024),
+    };
+    const persist = vi.fn(async (_binding: CliSessionBinding) => {});
+    context.params.persistStoppedFirstCliSession = persist;
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockResolvedValue(true);
+    context.preparedBackend.backend.command = process.execPath;
+    context.executionTarget = {
+      kind: "plugin",
+      async *execute() {
+        yield { type: "system", subtype: "init", session_id: "native-first-turn" };
+        while (true) {
+          yield padding;
+        }
+      },
+    };
+
+    await expect(runPreparedCliAgent(context)).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "format",
+    });
+    expect(persist).toHaveBeenCalledOnce();
+    expect(persist.mock.calls[0]?.[0]).toMatchObject({ sessionId: "native-first-turn" });
+  });
 
   it("ends a plugin-owned turn with the output limit error once the budget is spent", async () => {
     const context = buildClaudeStreamJsonRunContext("run-limit-plugin");

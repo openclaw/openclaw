@@ -1,6 +1,7 @@
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
+import type { CliOutput } from "../cli-output-contracts.js";
 import { extractCliErrorMessage } from "../cli-output.js";
 import {
   coerceToFailoverError,
@@ -37,6 +38,27 @@ export function createCliFailoverError(
     status: resolveFailoverStatus(reason),
     ...options,
   });
+}
+
+// A refused stream may already have started a native session; the runner decides whether to keep it.
+const refusedStreamOutputs = new WeakMap<FailoverError, CliOutput>();
+
+/** Refuses unparseable CLI output while retaining the stream's partial facts for the runner. */
+export function createCliStreamRefusalError(
+  message: string,
+  context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">,
+  output: CliOutput | null | undefined,
+  options?: Pick<FailoverError, "code">,
+): FailoverError {
+  const error = createCliFailoverError(message, "format", context, options);
+  if (output) {
+    refusedStreamOutputs.set(error, output);
+  }
+  return error;
+}
+
+export function readCliStreamRefusalOutput(error: unknown): CliOutput | undefined {
+  return error instanceof FailoverError ? refusedStreamOutputs.get(error) : undefined;
 }
 
 export function resolveCliResumeAtError(
