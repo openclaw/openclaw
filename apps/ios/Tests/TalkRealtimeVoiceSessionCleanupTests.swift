@@ -1,10 +1,52 @@
 import Foundation
-import OpenClawKit
 import XCTest
 @testable import OpenClaw
+@testable import OpenClawKit
 
 @MainActor
 final class TalkRealtimeVoiceSessionCleanupTests: XCTestCase {
+    func testEndTalkDetachesRelayOnlyWhenTheOwningGatewaySupportsIt() async throws {
+        for supportsDetach in [false, true] {
+            let gateway = GatewayNodeSession()
+            let manager = TalkModeManager(allowSimulatorCapture: true)
+            let requests = VoiceCleanupRequests()
+            let socket = Self.socket(
+                recording: requests,
+                method: "talk.session.close",
+                capabilities: supportsDetach ? ["talk-session-close-disposition"] : [])
+            do {
+                let route = try await connectTalkCleanupTestGateway(gateway, socket: socket)
+                manager.attachGateway(gateway)
+                let relay = RealtimeTalkRelaySession(
+                    transport: .ios(gateway: gateway, route: route),
+                    options: .init(sessionKey: "main", provider: nil, model: nil, voice: nil),
+                    audioCapture: IOSRealtimeTalkAudioCapture(voiceProcessing: false),
+                    pcmPlayer: RealtimePCMStreamingAudioPlayer(),
+                    onStatus: { _ in },
+                    onSpeakingChanged: { _ in })
+                relay._test_setRelaySessionId("relay-1")
+                manager._test_prepareEnabledRealtimeSessionForClose(relay: relay)
+
+                manager.setEnabled(false)
+                try await relay.stopAndWait()
+
+                let closes = await requests.snapshot()
+                var expected = ["sessionId": "relay-1"]
+                if supportsDetach { expected["disposition"] = "detach" }
+                XCTAssertEqual(closes, [expected])
+                XCTAssertFalse(manager.isEnabled)
+                XCTAssertFalse(manager.isListening)
+                XCTAssertFalse(manager.isSpeaking)
+                XCTAssertNil(relay.voiceSessionId)
+                await gateway.disconnect()
+            } catch {
+                manager.stop()
+                await gateway.disconnect()
+                throw error
+            }
+        }
+    }
+
     func testLogicalCloseDrainsThenUsesItsOriginalRoute() async throws {
         try await self.checkCleanup(orphan: false, replacement: nil)
     }
@@ -121,9 +163,13 @@ final class TalkRealtimeVoiceSessionCleanupTests: XCTestCase {
         }
     }
 
-    private static func socket(recording requests: VoiceCleanupRequests) -> GatewayTestWebSocketTask {
+    private static func socket(
+        recording requests: VoiceCleanupRequests,
+        method: String = "talk.client.close",
+        capabilities: [String] = []) -> GatewayTestWebSocketTask
+    {
         GatewayTestWebSocketTask(sendHook: { socket, message, _ in
-            guard GatewayWebSocketTestSupport.requestMethod(from: message) == "talk.client.close" else { return }
+            guard GatewayWebSocketTestSupport.requestMethod(from: message) == method else { return }
             let data: Data
             switch message {
             case let .data(value): data = value
@@ -134,6 +180,10 @@ final class TalkRealtimeVoiceSessionCleanupTests: XCTestCase {
             try await requests.append(XCTUnwrap(frame["params"] as? [String: String]))
             let id = try XCTUnwrap(frame["id"] as? String)
             socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        }, receiveHook: { socket, index in
+            if index == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: socket.snapshotConnectRequestID() ?? "connect", capabilities: capabilities))
         })
     }
 }
