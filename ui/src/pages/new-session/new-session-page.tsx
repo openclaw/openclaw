@@ -29,6 +29,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -171,7 +172,7 @@ function DraftBlock(props: {
     onConnectMachine: () => props.page().openConnectMachine(),
     onNavigate: (route, routeOptions) => props.page().context?.navigate(route, routeOptions),
     onFocusComposer: () =>
-      submission().composerTextarea.getTextarea()?.focus({ preventScroll: true }),
+      focusComposerInput(submission().composerTextarea.getTextarea(), { preventScroll: true }),
     onChange: () => props.page().changed(),
   }));
   const permissionControl = (

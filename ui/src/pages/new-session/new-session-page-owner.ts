@@ -9,6 +9,7 @@ import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -216,7 +217,7 @@ export class NewSessionPageOwner {
         (document.activeElement === previousFocus || document.activeElement === document.body) &&
         !document.openClawModalLayers?.size
       ) {
-        this.submission.composerTextarea.getTextarea()?.focus({ preventScroll: true });
+        focusComposerInput(this.submission.composerTextarea.getTextarea(), { preventScroll: true });
       }
     });
   }

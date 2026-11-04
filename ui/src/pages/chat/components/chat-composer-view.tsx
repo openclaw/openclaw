@@ -34,8 +34,6 @@ import { createComposerMobileInteraction } from "./chat-composer-mobile-interact
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
-import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
-import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { renderComposerTextarea, type ComposerTextareaProps } from "./chat-composer-textarea.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -476,14 +474,6 @@ export function renderChatComposerView(
                   <GoalComposerMode composer={context().goalComposer} />
                 </ChatLazyBoundary>
               </Show>
-              <SelectedHumanMentions
-                text={context().visibleDraft}
-                mentions={props.mentions}
-                onRemove={() => {
-                  commitComposerDraft(props, props.getDraft?.() ?? props.draft, []);
-                }}
-                avatarUrls={context().state.mentionMenu.selectedAvatarUrls}
-              />
               {props.replyTarget ? (
                 <div class="chat-reply-preview composer-context-strip">
                   <span class="chat-reply-preview__label composer-context-strip__label">

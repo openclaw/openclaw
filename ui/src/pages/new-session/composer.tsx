@@ -25,15 +25,18 @@ import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/brows
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { syncComposerInput } from "../../lib/composer-input.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../lib/ime.ts";
+import { createComposerEditorBinding } from "../../lib/reactive/composer-editor.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
+import { detectTextDirection } from "../../lib/text-direction.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import { createChatAttachmentInputHandle } from "../chat/components/chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";
@@ -54,7 +57,6 @@ import type { HumanMentionMenuHost } from "../chat/components/chat-composer-ment
 import { HumanMentionMenuView } from "../chat/components/chat-composer-mention-menu.tsx";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
 import type { ChatComposerCapabilityMenuSource } from "../chat/components/chat-composer-plus-menu.types.ts";
-import { SelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.tsx";
 import type { SkillMenuHost } from "../chat/components/chat-composer-skill-menu-state.ts";
 import { SkillMenu } from "../chat/components/chat-composer-skill-menu.tsx";
 import type { SlashMenuHost } from "../chat/components/chat-composer-slash-menu-state.ts";
@@ -393,7 +395,10 @@ export function NewSessionComposer(props: {
     },
   );
   const visibleMessage = createMemo(() => frame().visibleMessage);
-  const messageValue = createLiveValue(visibleMessage);
+  const messageValue = createLiveValue(visibleMessage, (input: HTMLTextAreaElement) =>
+    syncComposerInput(input),
+  );
+  const editorRef = createComposerEditorBinding();
   let input: HTMLTextAreaElement | undefined;
   let composer: HTMLDivElement | undefined;
   let footer: HTMLDivElement | undefined;
@@ -495,12 +500,6 @@ export function NewSessionComposer(props: {
         <Show when={!options().nativeTerminal}>
           <ChatAttachmentInputs {...frame().attachmentProps} inputHandle={inputHandle} />
         </Show>
-        <SelectedHumanMentions
-          text={options().message}
-          mentions={options().mentions}
-          onRemove={() => options().onInput(options().message, [])}
-          avatarUrls={textarea.mentionMenu.selectedAvatarUrls}
-        />
         <AttachmentPreview {...frame().attachmentProps} readRevision={frame()} />
         <AttachmentReadStatus pendingReads={options().attachmentDraft.reads.pendingReads} />
         <div class="agent-chat__composer-lede">{options().dictationStatus}</div>
@@ -517,10 +516,15 @@ export function NewSessionComposer(props: {
               <SkillMenu menu={textarea.skillMenu} host={frame().skillMenuHost} />
             </Show>
             <textarea
-              ref={(element) => {
-                input = element;
-                messageValue(element);
-              }}
+              data-composer-mentions={JSON.stringify(options().mentions ?? [])}
+              dir={detectTextDirection(frame().visibleMessage)}
+              ref={[
+                (element) => {
+                  input = element;
+                  messageValue(element);
+                },
+                editorRef,
+              ]}
               class="new-session-page__message"
               rows="1"
               autofocus={globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
@@ -585,12 +589,14 @@ export function NewSessionComposer(props: {
                 }
               }}
               onBlur={(event) => {
+                event.currentTarget.removeAttribute("data-composing");
                 handleTextareaOverflowInteraction(event);
                 clearCompositionEnd(event);
                 textarea.composing = false;
                 textarea.emojiMenu.close();
               }}
               onCompositionEnd={(event) => {
+                event.currentTarget.removeAttribute("data-composing");
                 recordCompositionEnd(event);
                 textarea.composing = false;
                 frame().updateMenus(event.currentTarget);
@@ -600,6 +606,7 @@ export function NewSessionComposer(props: {
                 frame().handleComposerKeydown(event);
               }}
               onCompositionStart={(event) => {
+                event.currentTarget.dataset.composing = "true";
                 handleTextareaOverflowInteraction(event);
                 textarea.composing = true;
                 textarea.emojiMenu.close();

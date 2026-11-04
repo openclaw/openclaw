@@ -3,6 +3,7 @@ import {
   type InlineSlashCompletion,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 
 type InlineSlashHost = {
@@ -28,9 +29,8 @@ function commitDraftWithCaret(host: InlineSlashHost, next: string, caret: number
     if (!textarea) {
       return;
     }
-    textarea.focus({ preventScroll: true });
-    textarea.selectionStart = caret;
-    textarea.selectionEnd = caret;
+    focusComposerInput(textarea, { preventScroll: true });
+    selectComposerInput(textarea, caret, caret);
   });
 }
 
