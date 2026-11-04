@@ -284,8 +284,11 @@ export function readShellView(host: ShellViewHost) {
       : 0,
     onRetry: callbacks.retryGateway,
   };
+  // The floating refresh notice takes the badge's place below the phone header.
   const mobileGatewayStatus = () =>
-    mobileNavLayout && !navDrawerOpen() && !nativeEmbed ? gatewayStatus : null;
+    mobileNavLayout && !navDrawerOpen() && !nativeEmbed && !controlUiRefreshRequired
+      ? gatewayStatus
+      : null;
   const floatingUpdateCard = {
     get navigationSurfaceHidden() {
       return navigationSurfaceHidden();

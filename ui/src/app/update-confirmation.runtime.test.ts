@@ -150,7 +150,7 @@ it.each([false, true])("routes a confirmed Mac update with bridge removed: %s", 
   const postMessage = installNativeBridge();
   const { settled, startGatewayUpdate } = startUpdate({ viaNativeApp: true });
   const { dialog } = await getRenderedModalDialog(document.body);
-  expect(dialog.getAttribute("aria-label")).toBe("Update Mac app + Gateway");
+  expect(dialog.getAttribute("aria-label")).toBe("Update Mac app and restart?");
   if (removed) {
     Reflect.deleteProperty(window, "webkit");
   }
@@ -370,7 +370,7 @@ it.each([
   await stream.push({ busy: true, connected: false });
   expect(modal.textContent).toContain("The Gateway disconnected during the update");
   expect(modal.textContent).toContain("openclaw triage");
-  expect(modal.textContent).toContain("on the Gateway host");
+  expect(modal.textContent).toContain("on the computer running OpenClaw");
   expect(modal.textContent).toContain("local coding agent");
   expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
@@ -379,10 +379,10 @@ it.each([
   if (action === "Review update") {
     await stream.push({
       failure,
-      readError: "Couldn’t check for updates: timeout",
+      readError: "Couldn’t check for updates. timeout",
     });
     expect(modal.textContent).toContain(failure);
-    expect(modal.textContent).toContain("Couldn’t check for updates: timeout");
+    expect(modal.textContent).toContain("Couldn’t check for updates. timeout");
   }
   expect(onReviewUpdate).not.toHaveBeenCalled();
   findButton(action).click();
@@ -710,7 +710,7 @@ it.each([
       findButton("Check status").click();
       await statusOperation;
       flush();
-      expect(modal.textContent).toContain("Couldn’t check for updates: Status refresh unavailable");
+      expect(modal.textContent).toContain("Couldn’t check for updates. Status refresh unavailable");
       expect(modal.textContent).not.toContain("Status refreshed.");
       await waitForSolid(() => expect(findButton("Check status").disabled).toBe(false));
       expect(modal.querySelector(".update-run-view")).toBe(view);
@@ -721,7 +721,7 @@ it.each([
       await flushMicrotasks();
       expect(findButton("Checking status…")).toBe(check);
       expect(check.disabled).toBe(true);
-      expect(modal.textContent).toContain("Couldn’t check for updates: Status refresh unavailable");
+      expect(modal.textContent).toContain("Couldn’t check for updates. Status refresh unavailable");
       expect(modal.textContent).not.toContain("Status refreshed.");
       expect(modal.querySelector(".update-run-view")).toBe(view);
       check.click();

@@ -1,10 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { writeCiTestLaunchInputs } from "../../scripts/lib/ci-test-launch-inputs.mts";
 import { createCiTestObservationCapture } from "../../scripts/lib/ci-test-observation-capture.mts";
-import { collectTestObservations } from "../../scripts/lib/ci-test-observations.mjs";
+import {
+  collectTestObservations,
+  compactTestObservations,
+  decodeTestObservations,
+} from "../../scripts/lib/ci-test-observations.mjs";
 
 const context = {
   repository: "example/project",
@@ -58,6 +64,79 @@ const dependencies = {
 };
 
 describe("CI observation export", () => {
+  it("freezes checkout and rename/deletion inputs without trusting the workflow SHA", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ci-launch-inputs-"));
+    const root = path.join(directory, "repo");
+    mkdirSync(root);
+    const git = (...args: string[]) => {
+      const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    const commit = () => {
+      git("add", ".");
+      git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "fixture",
+      );
+    };
+    try {
+      git("init", "-q");
+      writeFileSync(path.join(root, "before.ts"), "export const value = 1;");
+      writeFileSync(path.join(root, "deleted.ts"), "export {};");
+      commit();
+      const base = git("rev-parse", "HEAD");
+      renameSync(path.join(root, "before.ts"), path.join(root, "after\tname.ts"));
+      rmSync(path.join(root, "deleted.ts"));
+      commit();
+      const options = {
+        directory,
+        repositoryRoot: root,
+        runtime: "node",
+        args: ["config.ts"],
+        env: { CHECKOUT_BASE_SHA: base, GITHUB_SHA: "f".repeat(40) },
+      };
+      const read = () => JSON.parse(readFileSync(path.join(directory, "launch.json"), "utf8"));
+      writeCiTestLaunchInputs(options);
+      expect(read()).toMatchObject({
+        source: {
+          revision: git("rev-parse", "HEAD"),
+          tree: git("rev-parse", "HEAD^{tree}"),
+          clean: true,
+        },
+        comparison: {
+          revision: base,
+          changes: [
+            { status: "R100", path: "after\tname.ts", previousPath: "before.ts" },
+            { status: "D", path: "deleted.ts" },
+          ],
+        },
+        fallbackReasons: ["no-prior-snapshot"],
+      });
+      writeFileSync(path.join(root, "untracked.ts"), "export {};");
+      writeCiTestLaunchInputs(options);
+      expect(read()).toMatchObject({
+        source: { clean: false },
+        fallbackReasons: ["no-prior-snapshot", "dirty-checkout"],
+      });
+      writeCiTestLaunchInputs({ ...options, env: {} });
+      expect(read()).toMatchObject({
+        comparison: null,
+        fallbackReasons: expect.arrayContaining(["comparison-unavailable"]),
+      });
+      expect(readFileSync(path.join(directory, "launch.json"), "utf8")).not.toContain(directory);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it.each([false, true])(
     "captures native outcomes and dependencies without log contents (failed=%s)",
     (failed) => {
@@ -71,6 +150,16 @@ describe("CI observation export", () => {
         const configuration = { pool: "forks", isolate: false };
         writeFileSync(configFile, "export default {};");
         writeFileSync(includeFile, file.file);
+        writeCiTestLaunchInputs({
+          directory,
+          repositoryRoot: process.cwd(),
+          runtime: "bun",
+          args: [],
+          env: {},
+        });
+        const launchHash = createHash("sha256")
+          .update(readFileSync(path.join(directory, "launch.json")))
+          .digest("hex");
         const capture = createCiTestObservationCapture({
           repositoryRoot: process.cwd(),
           cacheDirectory,
@@ -94,6 +183,7 @@ describe("CI observation export", () => {
           { complete: false, files: [{ outcome: "unknown", cases: null, dependencies: null }] },
         ]);
         expect(initial.preExecution.observations).toEqual(initial.observations);
+        expect(initial.preExecution.launchInputs).toEqual({ sha256: launchHash });
         expect(initial.preExecution.graphInputs).toMatchObject({
           version: 1,
           profile: "unit-fast",
@@ -102,6 +192,7 @@ describe("CI observation export", () => {
         writeFileSync(configFile, "export default { changed: true };");
         writeFileSync(includeFile, "src/changed.test.ts");
         configuration.pool = "threads";
+        writeFileSync(path.join(directory, "launch.json"), "changed after capture");
         for (const line of outcomes) {
           const match = /\[vitest:(\w+)\] (.*)/u.exec(line)!;
           capture!.record(match[1]!, JSON.parse(match[2]!));
@@ -245,17 +336,16 @@ describe("CI observation export", () => {
     }
   });
 
-  it("retains terminal outcomes when native dependency indexes expand beyond the export limit", () => {
+  it("preserves large shared dependency graphs and terminal outcomes within the export limit", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "ci-observation-capture-"));
     try {
-      const files = Array.from({ length: 80 }, (_, index) => ({
+      const files = Array.from({ length: 789 }, (_, index) => ({
         ...file,
         file: `src/example-${index}.test.ts`,
       }));
       const modules = Array.from(
-        { length: 300 },
-        (_, index) =>
-          `src/${"a".repeat(140)}/${"b".repeat(140)}/${"c".repeat(140)}/module-${index}.ts`,
+        { length: 1077 },
+        (_, index) => `src/shared/${"a".repeat(8)}/module-${index}.ts`,
       );
       writeFileSync(
         path.join(directory, "dependencies.json"),
@@ -264,7 +354,9 @@ describe("CI observation export", () => {
           projects: {
             unit: {
               modules,
-              files: Object.fromEntries(files.map((row) => [row.file, modules.map((_, i) => i)])),
+              files: Object.fromEntries(
+                files.slice(0, -1).map((row) => [row.file, modules.map((_, i) => i)]),
+              ),
             },
           },
         }),
@@ -302,17 +394,42 @@ describe("CI observation export", () => {
       const result = JSON.parse(text);
       expect(Buffer.byteLength(text)).toBeLessThanOrEqual(8 * 1024 * 1024);
       expect(result.preExecution).toEqual(initial.preExecution);
-      const invocation = result.observations.invocations[0];
+      expect(result.observations.version).toBe(2);
+      const decoded = decodeTestObservations(result.observations);
+      expect(Buffer.byteLength(JSON.stringify(decoded))).toBeGreaterThan(8 * 1024 * 1024);
+      const invocation = decoded.invocations[0]!;
       expect(invocation.elapsedMs).toBe(100);
       expect(invocation.files.map((row: { outcome: string }) => row.outcome)).toEqual(
         files.map((_, index) => (index === 1 ? "failed" : index === 2 ? "unknown" : "passed")),
       );
-      expect(
-        invocation.files.every((row: { dependencies: null }) => row.dependencies === null),
-      ).toBe(true);
+      for (const row of invocation.files.slice(0, -1)) {
+        expect(row.dependencies).toEqual(
+          [row.file, ...modules].toSorted((a, b) => a.localeCompare(b)),
+        );
+      }
+      expect(invocation.files.at(-1)?.dependencies).toBeNull();
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it("rejects malformed compact graphs without erasing unknown dependencies", () => {
+    const original = collectTestObservations(receipts().join("\n"), context, dependencies);
+    const compact = compactTestObservations(original);
+    expect(decodeTestObservations(compact)).toEqual(original);
+    expect(decodeTestObservations(original)).toBe(original);
+    expect(
+      decodeTestObservations(
+        compactTestObservations(collectTestObservations(receipts().join("\n"), context)),
+      ).invocations[0]?.files[0]?.dependencies,
+    ).toBeNull();
+    for (const invalid of [-1, 0.5, compact.dependencyPaths.length, "0", null]) {
+      const changed = structuredClone(compact);
+      Object.assign(changed.invocations[0]!.files[0]!, { dependencies: [invalid] });
+      expect(() => decodeTestObservations(changed)).toThrow("Invalid dependency path index");
+    }
+    compact.dependencyPaths[0] = "../outside.ts";
+    expect(() => decodeTestObservations(compact)).toThrow("Invalid dependency path table");
   });
 
   it("preserves the incomplete snapshot when terminal receipts cannot be exported", () => {

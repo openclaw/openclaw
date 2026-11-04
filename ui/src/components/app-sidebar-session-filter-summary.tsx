@@ -128,19 +128,19 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
     </SidebarPanelHeader>
   );
 }
-export function renderSessionMutationError(host: Pick<SessionListHost, "sessionData">) {
-  return host.sessionData.sessionMutationError ? (
+export function renderSessionListError(host: Pick<SessionListHost, "sessionData">) {
+  return host.sessionData.sessionListError ? (
     <div
       class="sidebar-session-error callout danger callout--dismissible"
       role="alert"
       data-sidebar-session-error=""
     >
-      <span class="callout__content">{host.sessionData.sessionMutationError}</span>
+      <span class="callout__content">{host.sessionData.sessionListError}</span>
       <openclaw-tooltip prop:content={t("chat.actions.dismissError")}>
         <button
           class="callout__dismiss"
           type="button"
-          onClick={() => host.sessionData.dismissSessionMutationError()}
+          onClick={() => host.sessionData.dismissSessionListError()}
           aria-label={t("chat.actions.dismissError")}
         >
           <Icon name="x" />

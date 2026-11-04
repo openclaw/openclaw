@@ -284,7 +284,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.querySelector(".model-providers__profiles")).toBeNull();
     expect(page.renderRoot.textContent).not.toContain("owner@example.com");
     expect(page.querySelector(".model-providers__credentials")?.textContent).toContain(
-      "OAuth profiles: 1",
+      "Signed-in accounts: 1",
     );
   });
 
@@ -495,7 +495,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.view.props.keyEditorProvider).toBeNull();
     expect(page.view.props.messages.openai).toEqual({
       kind: "success",
-      text: "Secret saved.",
+      text: "API key saved.",
       warning: "Authentication refresh failed. Provider refresh failed.",
     });
     await page.updateComplete;
@@ -563,12 +563,12 @@ describe("ModelProvidersPage agent scope", () => {
     const form = page.querySelector("[data-models-key-dialog]");
     expect(
       [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
-    ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
+    ).toEqual(["Added anthropic", "config.get failed after provider add"]);
   });
 
   it.each([
     ["another provider fails", "ready", undefined],
-    ["the added provider fails", "unavailable", "More models could not be discovered."],
+    ["the added provider fails", "unavailable", "Couldn’t load more models. Try again."],
   ] as const)("provider-add feedback warns only when %s", async (_case, ownStatus, warning) => {
     const { context, runtimeConfig, request } = createHarness("main");
     const originalRequest = request.getMockImplementation()!;
@@ -595,7 +595,7 @@ describe("ModelProvidersPage agent scope", () => {
 
     expect(page.view.props.messages.add).toEqual({
       kind: "success",
-      text: "Provider anthropic added.",
+      text: "Added anthropic",
       ...(warning ? { warning } : {}),
     });
   });
@@ -770,11 +770,15 @@ describe("ModelProvidersPage agent scope", () => {
         agentId: "main",
       }),
     );
-    await vi.waitFor(() => expect(toast.toast?.message).toBe("Priority could not be saved"));
+    await vi.waitFor(() =>
+      expect(toast.toasts[0]?.options.message).toBe(
+        "Couldn’t complete the request. Try again. Priority could not be saved",
+      ),
+    );
     await toast.updateComplete;
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
-      expect(toast.querySelector('[role="status"]')?.textContent).toContain(
+      expect(toast.querySelector('[role="alert"]')?.textContent).toContain(
         "Priority could not be saved",
       ),
     );
@@ -782,7 +786,7 @@ describe("ModelProvidersPage agent scope", () => {
 
     expect(page.querySelector('[role="alert"]')).toBeNull();
     expect(page.view.props.messages.openai).toBeUndefined();
-    expect(toast.querySelector(".app-toast--bottom .app-toast__icon")).not.toBeNull();
+    expect(toast.querySelector(".app-toast-lane--top-center .app-toast__icon")).not.toBeNull();
     expect(
       [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
         (row) => row.dataset.profileId,

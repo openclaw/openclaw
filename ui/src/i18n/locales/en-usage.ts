@@ -119,6 +119,8 @@ const enUsage = {
       perDay: "/ day",
     },
     overview: {
+      messageCounts: "{user} user · {assistant} assistant",
+      uniqueToolsCount: "{count} tools used",
       unpriced: "Unpriced",
       messages: "Messages",
       messagesHint: "Total user and assistant messages in range.",
@@ -198,7 +200,7 @@ const enUsage = {
       filtered: "(filtered)",
       close: "Close session details",
       noTimeline: "No timeline data",
-      loadFailed: "Couldn’t load {detail}: {error}",
+      loadFailed: "Couldn’t load {detail}. Try again. {error}",
       noDataInRange: "No data in range",
       usageOverTime: "Usage Over Time",
       rangeStart: "Range start",
