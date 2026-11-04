@@ -48,9 +48,10 @@ function pendingContext() {
   return { ...fixture, pending };
 }
 describe("gateway-backed session route resolution", () => {
-  it("revalidates a warm Home after restricted authentication arrives", async () => {
+  it("does not mount cached Home while current authority is unknown", async () => {
     const { context, request, publishGateway } = contextFor({ ok: false });
     context.gateway.snapshot.phase = "connecting";
+    context.gateway.snapshot.hello = null;
     Object.defineProperty(context, "offlineSessionDefaults", {
       value: { mainKey: "main", scope: "per-sender" },
     });
@@ -59,85 +60,76 @@ describe("gateway-backed session route resolution", () => {
     context.router = router;
     vi.spyOn(router.getRoute("chat")!, "component").mockResolvedValue({ renderSolid: () => null });
     const location = locationFor("/chat/roboclaw");
-    await startApplicationRouter(
+    const started = startApplicationRouter(
       router,
       { location: () => location, push: () => {}, replace: () => {}, listen: () => () => {} },
       "",
       context,
     );
-    expect(router.getState().matches[0]?.data).toMatchObject({
-      kind: "session",
-      sessionKey: "agent:roboclaw:main",
-    });
-    expect(request).not.toHaveBeenCalled();
-
-    const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.write"]);
-    hello.auth!.sessionCap = "none";
-    publishGateway({ phase: "connected", hello });
     await vi.dynamicImportSettled();
+    expect(router.getState().matches[0]?.data).toBeUndefined();
+    const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.read"]);
+    hello.auth!.sessionCap = "view";
+    publishGateway({ phase: "connected", hello });
+    await started;
     expect(router.getState().matches[0]?.data).toMatchObject({
       kind: "unavailable-home",
       agentId: "roboclaw",
     });
-    expect(request.mock.calls.filter(([method]) => method === "sessions.resolve")).toEqual([
-      ["sessions.resolve", { key: "agent:roboclaw:main", agentId: "roboclaw", allowMissing: true }],
-    ]);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.resolve")).toEqual([]);
   });
 
-  it.each(["main", "research"])(
-    "recovers an inaccessible %s Home without mounting chat",
-    async (agentId) => {
-      const { context, request } = contextFor(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "No session found",
-        }),
-      );
-      const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.write"]);
-      hello.auth!.sessionCap = "none";
-      context.gateway.snapshot.hello = hello;
-      await expect(loadRoute(context, "/chat/" + agentId)).resolves.toMatchObject({
-        kind: "unavailable-home",
-        agentId,
-        face: "chat",
-      });
-      expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
-        key: "agent:" + agentId + ":main",
-        agentId,
-        allowMissing: true,
-      });
-    },
-  );
-
-  it.each([false, true])(
-    "preserves Gateway-confirmed Home access (visible: %s)",
-    async (visible) => {
-      const { context } = contextFor(
-        visible
-          ? { ok: true, key: "agent:research:workspace", agentId: "research" }
-          : { ok: false },
-        [],
-        { mainKey: "workspace" },
-      );
-      const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.write"]);
-      hello.auth!.sessionCap = "none";
-      context.gateway.snapshot.hello = hello;
-      await expect(loadRoute(context, "/chat/research")).resolves.toMatchObject(
-        visible
-          ? { kind: "session", sessionKey: "agent:research:workspace" }
-          : { kind: "unavailable-home", agentId: "research" },
-      );
-    },
-  );
-
-  it("does not turn a transient Home lookup failure into authoritative absence", async () => {
-    const error = new GatewayRequestError({ code: "UNAVAILABLE", message: "Gateway warming" });
-    const { context } = contextFor(error);
-    const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.write"]);
-    hello.auth!.sessionCap = "none";
+  it.each([
+    ["/chat/research", "workspace"],
+    ["/chat/research/~key/workspace", "workspace"],
+    ["/chat/research/main", "workspace"],
+    ["/chat/research/~key/main", "main"],
+  ])("blocks a guest's cached literal/Home entry %s", async (pathname, mainKey) => {
+    const homeKey = "agent:research:" + mainKey;
+    const { context, request } = contextFor(
+      { ok: true, key: homeKey, agentId: "research" },
+      [row({ key: homeKey })],
+      { mainKey },
+    );
+    const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.read"]);
+    hello.auth!.sessionCap = "view";
     context.gateway.snapshot.hello = hello;
-    await expect(loadRoute(context, "/chat/research")).rejects.toBe(error);
+    await expect(loadRoute(context, pathname)).resolves.toMatchObject({
+      kind: "unavailable-home",
+      agentId: "research",
+      face: "chat",
+    });
+    expect(request).not.toHaveBeenCalled();
   });
+
+  it("blocks the canonical global Home for a restricted guest", async () => {
+    const { context } = contextFor({ ok: true, key: "global", agentId: "research" });
+    const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.read"]);
+    hello.auth!.sessionCap = "view";
+    context.gateway.snapshot.hello = hello;
+    context.agents.state.agentsList = {
+      defaultId: "research",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "research" }],
+    };
+    await expect(loadRoute(context, "/chat/research")).resolves.toMatchObject({
+      kind: "unavailable-home",
+      agentId: "research",
+    });
+  });
+
+  it("preserves explicit full-read operator Home access", async () => {
+    const { context } = contextFor({ ok: false }, [], { mainKey: "workspace" });
+    const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.read"]);
+    hello.auth!.sessionCap = "view";
+    context.gateway.snapshot.hello = hello;
+    await expect(loadRoute(context, "/chat/research")).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "agent:research:workspace",
+    });
+  });
+
   it("resolves a non-default agent's canonical global face from its scoped row", async () => {
     const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
     const { context, list, request } = contextFor({ ok: true, ...globalRow, agentId: "research" });

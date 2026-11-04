@@ -23,7 +23,7 @@ import { applyHttpOperatorRoleScopeCeiling, resolveHttpProfile } from "./http-au
 import type { AuthorizedControlUiReadRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { createProfileSessionEntryFilter } from "./session-sharing.js";
+import { createProfileSessionEntryFilter } from "./session-sharing-read.js";
 import type { GatewaySessionEntryRead } from "./session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
@@ -273,6 +273,8 @@ function resolvePreparedAssistantMediaPolicy(
           !createProfileSessionEntryFilter({
             profileId,
             sessionCap: auth.operatorRolePolicy?.sessions.others,
+            mainKey: config.session?.mainKey,
+            operatorScopes: auth.operatorScopes,
           })(loaded.canonicalKey, entry)
         ) {
           return undefined;

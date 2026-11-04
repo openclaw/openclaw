@@ -4,7 +4,7 @@ import type { GatewayClient, GatewayRequestContext } from "./server-methods/type
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { hiddenSessionNotFound } from "./session-sharing-policy.js";
+import { hiddenSessionNotFound, isRestrictedHomeSession } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing-read.js";
 import { resolveDirectSessionTargets } from "./session-sharing-target-input.js";
 
@@ -34,8 +34,14 @@ export function authorizeSessionDescribe(params: {
     if (
       row &&
       identity &&
-      (sharing.sessionCap === "none" || sharing.sessionCap === "invited") &&
-      sharing.entryFilter?.(row.key, row.entry, row.membership.has(identity.id)) === false
+      (isRestrictedHomeSession(
+        row.key,
+        sharing.sessionCap,
+        policyConfig.session?.mainKey,
+        params.client?.connect?.scopes,
+      ) ||
+        ((sharing.sessionCap === "none" || sharing.sessionCap === "invited") &&
+          sharing.entryFilter?.(row.key, row.entry, row.membership.has(identity.id)) === false))
     ) {
       return hiddenSessionNotFound(target.sessionKey);
     }

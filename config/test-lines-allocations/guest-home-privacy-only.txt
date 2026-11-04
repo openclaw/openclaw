@@ -1,0 +1,2 @@
+# Home privacy boundary: shared/owned Home, canonical aliases, absent-target mutation, and UI pre-hydration/retry contracts.
+132

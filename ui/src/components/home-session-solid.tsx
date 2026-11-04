@@ -6,8 +6,7 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { resolveHomeSession } from "../lib/sessions/home-session.ts";
-import { resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
+import { canAccessHomeSession } from "../lib/sessions/home-session.ts";
 import type { ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import { HomeSessionUnavailable } from "./home-session-unavailable.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -37,16 +36,7 @@ export function HomeSession(input: Partial<Props>) {
     },
     { equals: (a, b) => a.client === b.client && a.hello === b.hello },
   );
-  const available = createMemo(() => {
-    const snapshot = connection();
-    return snapshot.hello?.auth?.sessionCap === "none"
-      ? resolveHomeSession(snapshot, {
-          sessionKey: sessionKey(),
-          agentId: agentId(),
-          mainKey: resolveUiConfiguredMainKey({ hello: snapshot.hello }),
-        })
-      : true;
-  });
+  const available = createMemo(() => canAccessHomeSession(connection()));
   const [includeContext, setIncludeContext] = createSignal(true);
   const [selectionAvailable, setSelectionAvailable] = createSignal(false);
   const scope = createMemo(() =>

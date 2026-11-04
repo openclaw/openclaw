@@ -34,9 +34,9 @@ import type { GatewayClient } from "./server-methods/types.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import type { SessionSharingTarget } from "./session-sharing-policy.js";
+import { createProfileSessionEntryFilter } from "./session-sharing-read.js";
 import { prepareSessionSharingRead } from "./session-sharing-target-read.js";
 import {
-  createProfileSessionEntryFilter,
   isSessionVisibilityAllowed,
   prepareSessionSharing,
   resolveSessionVisibility,
@@ -149,11 +149,17 @@ export function createHumanMentionPolicy(params: {
     const admin =
       client.connect.scopes?.includes(ADMIN_SCOPE) &&
       (!policy || policy.scopes.includes(ADMIN_SCOPE));
+    const fullRead =
+      operatorScopeSatisfied(READ_SCOPE, client.connect.scopes ?? []) &&
+      (!policy || operatorScopeSatisfied(READ_SCOPE, policy.scopes));
     // The reader lives for one synchronous projection, never across an await.
     const { entryFilter } = prepareSessionSharing({
       cfg,
       client: {
-        connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [SESSION_READ_SCOPE] },
+        connect: {
+          ...client.connect,
+          scopes: admin ? [ADMIN_SCOPE] : fullRead ? [READ_SCOPE] : [SESSION_READ_SCOPE],
+        },
         internal: { operatorRoleActor: { kind: "operator", profileId: profile.profileId } },
       },
     });
@@ -184,6 +190,8 @@ export function createHumanMentionPolicy(params: {
     const entryFilter = createProfileSessionEntryFilter({
       profileId: profile.profileId,
       sessionCap: policy?.sessions.others,
+      mainKey: cfg.session?.mainKey,
+      operatorScopes: scopes,
     });
     return entryFilter(target.sessionKey, target.entry) ? profile : undefined;
   }
@@ -370,7 +378,12 @@ export function createHumanMentionPolicy(params: {
         throw new Error("The mention directory has not been prepared.");
       }
       // Keystrokes reuse one bounded eligible roster; identity/session/role changes replace it.
-      const key = JSON.stringify([profileVersion, target, cfg.gateway?.roles]);
+      const key = JSON.stringify([
+        profileVersion,
+        target,
+        cfg.gateway?.roles,
+        cfg.session?.mainKey,
+      ]);
       if (eligibleDirectory?.key !== key) {
         const users = directory.profiles.flatMap(({ id, logins }) => {
           const candidate = recipientProfile(id, target, cfg);

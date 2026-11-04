@@ -7,6 +7,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createApplicationRouter } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { loadRoute, routeLocation as locationFor } from "./route-loading.test-support.ts";
@@ -38,7 +39,12 @@ const resolvedRow = (key = sessionKey): SessionsResolveResult => ({
 });
 
 function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey = "main") {
-  return createSessionRouteContext(resolution, [], { agentId: "main", mainKey });
+  const fixture = createSessionRouteContext(resolution, [], { agentId: "main", mainKey });
+  fixture.context.gateway.snapshot.hello = gatewayHelloForMethods(
+    ["sessions.resolve"],
+    ["operator.read"],
+  );
+  return fixture;
 }
 
 function coldContext() {
@@ -67,7 +73,7 @@ function coldContext() {
       gateway.snapshot = {
         phase: "connected",
         client: {},
-        hello: { snapshot: { sessionDefaults: { mainKey } } },
+        hello: { auth: { scopes: ["operator.read"] }, snapshot: { sessionDefaults: { mainKey } } },
       } as unknown as ApplicationContext["gateway"]["snapshot"];
       if (!listener) {
         throw new Error("expected gateway readiness subscription");
@@ -306,15 +312,17 @@ describe("loadChatRoute", () => {
     "canonicalizes literal %s after cold defaults arrive",
     async (path, mainKey, expected) => {
       const { context, connect } = coldContext();
-      const loaded = await loadRoute(context, `/chat/research/${path}`);
-      expect(loaded).toMatchObject(sessionData(`agent:research:${path.replaceAll("/", ":")}`));
-      if (!("kind" in loaded) || loaded.kind !== "session" || !loaded.canonicalLocationReady) {
-        throw new Error("expected deferred main-session canonicalization");
-      }
-
+      const pending = loadRoute(context, `/chat/research/${path}`);
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
       connect(mainKey);
-
-      await expect(loaded.canonicalLocationReady).resolves.toEqual(expected);
+      const loaded = await pending;
+      expect(loaded).toMatchObject(sessionData(`agent:research:${path.replaceAll("/", ":")}`));
+      expect("canonicalLocation" in loaded ? loaded.canonicalLocation : null).toEqual(expected);
     },
   );
 

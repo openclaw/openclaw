@@ -10,6 +10,7 @@ import {
   getRpcSourceIdentity,
 } from "../sessions/session-controller.rpc-sources.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { operatorSessionCap } from "./operator-role-policy.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
@@ -145,10 +146,15 @@ export function resolveProtectedSessionTargets(params: {
     directTargets.length > 0 &&
     Boolean(gatewayClientSessionCreator(params.client)) &&
     ["none", "invited"].includes(params.sessionCap() ?? "");
-  const protectedTargets = hidesForeignSessions
-    ? directTargets
-    : (params.talkTargets?.filter((target) => isIncognitoSessionKey(target.sessionKey)) ??
-      resolveDirectIncognitoTargets(params.method, params.requestParams));
+  const protectedTargets =
+    hidesForeignSessions ||
+    (!params.adminBypass &&
+      Boolean(gatewayClientSessionCreator(params.client)) &&
+      !operatorScopeSatisfied("operator.read", params.client?.connect?.scopes ?? []) &&
+      params.sessionCap() !== "write")
+      ? directTargets
+      : (params.talkTargets?.filter((target) => isIncognitoSessionKey(target.sessionKey)) ??
+        resolveDirectIncognitoTargets(params.method, params.requestParams));
   return { hidesForeignSessions, protectedTargets };
 }
 

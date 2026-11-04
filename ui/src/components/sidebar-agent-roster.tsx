@@ -1,5 +1,5 @@
 import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
-import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForAgentPanel, pathForRoute } from "../app-route-paths.ts";
 import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
@@ -11,6 +11,7 @@ import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
+import { canAccessHomeSession } from "../lib/sessions/home-session.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
@@ -75,6 +76,10 @@ export function SidebarAgentRoster(props: {
     return store.snapshot;
   }, presented);
   const cached = createMemo(() => cachedRosterCards(host()));
+  const homeHref = (card: { id: string; target: { href: string } }) =>
+    canAccessHomeSession(host().sessionDataContext?.gateway.snapshot ?? context.gateway.snapshot)
+      ? card.target.href
+      : `${pathForRoute("new-session", context.basePath)}?agent=${encodeURIComponent(card.id)}`;
   const cards = createParkedProjection(() => {
     if (cached()) {
       return cached()!;
@@ -336,7 +341,7 @@ export function SidebarAgentRoster(props: {
                           ref={linkRef}
                           class="sidebar-pinned-agent__link"
                           data-agent-id={card().id}
-                          href={card().target.href}
+                          href={homeHref(card())}
                           aria-label={card().name}
                           aria-current={active() ? "page" : undefined}
                           onClick={(event: MouseEvent) =>
@@ -443,7 +448,7 @@ export function SidebarAgentRoster(props: {
                         ref={linkRef}
                         class="sidebar-agent-roster__row"
                         data-agent-id={card().id}
-                        href={card().target.href}
+                        href={homeHref(card())}
                         aria-current={active() ? "page" : undefined}
                         onClick={(event: MouseEvent) =>
                           handleNavigationClick(event, () => host().openMainSession(card().id))

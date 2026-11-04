@@ -11,6 +11,7 @@ import {
   collectKnownSessionGroups,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
+import { canAccessHomeSession } from "../lib/sessions/home-session.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
 import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import {
@@ -739,11 +740,16 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   /** Header metadata follows session filters; Home navigation and child hydration do not. */
   visibleHomeSession(agentId: string): SidebarRecentSession | null {
-    return projectSidebarVisibleMainSession(this, agentId);
+    return canAccessHomeSession(this.context.gateway.snapshot)
+      ? projectSidebarVisibleMainSession(this, agentId)
+      : null;
   }
 
   /** Gateway row backing the identity card (unread/running state), if loaded. */
   mainSessionRow(agentId?: string): GatewaySessionRow | null {
+    if (!canAccessHomeSession(this.context.gateway.snapshot)) {
+      return null;
+    }
     const normalized = normalizeAgentId(agentId ?? this.expandedAgentId());
     const mainKey = this.selectedAgentMainSessionKey(normalized);
     return this.sessionProjection.mainSessionRow(
@@ -757,6 +763,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   readonly openMainSession = (agentId: string) => {
     if (!this.connected) {
       this.onNavigate?.("appearance");
+      return;
+    }
+    if (!canAccessHomeSession(this.context.gateway.snapshot)) {
+      this.onNavigate?.("new-session", { search: `?agent=${encodeURIComponent(agentId)}` });
       return;
     }
     this.clearSessionSelection();

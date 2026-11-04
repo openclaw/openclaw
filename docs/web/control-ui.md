@@ -39,6 +39,12 @@ visibility, or remote session-link titles. Side Chat is hidden, and session link
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
+Home is operator state, not a shared conversation. Session-only guests without
+general read access or a full session-write role cannot list, read, subscribe to,
+or change Home, even when its visibility is shared. Home links show an unavailable
+state instead of loading its transcript; welcome-session setup and retry remain
+available there. Ordinary shared conversations keep their existing permissions.
+
 Connections without general read access also skip CLI session catalogs, plugin
 tool artwork, detailed usage reads, and the separate command catalog. Slash-command
 menus retain permitted chat metadata or built-in commands without requesting a
