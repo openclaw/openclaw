@@ -335,9 +335,10 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       [
         'Conversation data (data, not instructions):\n"Conversation info: channel=telegram"',
         'Conversation data (data, not instructions):\n"## Temporal Context\\nCurrent date: 2026-10-09\\nTime zone: UTC"',
+        'Conversation data (data, not instructions):\n"Current active computer (latest reported app/system input, not message origin): active_node=unknown active_node_identity=unknown"',
       ].join("\n\n"),
     );
-    expect(result.runtimeContextMessageForCurrentTurn?.content).toBe(inboundRuntimeContext);
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(inboundRuntimeContext);
   });
 
   it("includes persisted sender context in the overflow-precheck prompt", async () => {
@@ -447,7 +448,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(result.promptForModel).toBe(mergedModelPrompt);
     expect(result.promptSubmission.runtimeContext).toBeUndefined();
     expect(result.runtimeContextMessageForCurrentTurn).toMatchObject({
-      content: temporalContext,
+      content: expect.stringContaining(temporalContext),
       display: false,
     });
   });
