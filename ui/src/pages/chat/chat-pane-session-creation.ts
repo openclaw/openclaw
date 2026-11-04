@@ -1,3 +1,4 @@
+import type { SessionsCatalogContinueResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
 import { t } from "../../i18n/index.ts";
@@ -6,7 +7,11 @@ import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
-import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import {
+  type CatalogSessionKey,
+  announceCatalogSessionContinued,
+} from "../../lib/sessions/catalog-key.ts";
+import { catalogMethod } from "../../lib/sessions/catalog-read-method.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveSessionCreateParams } from "../../lib/sessions/session-create-params.ts";
 import {
@@ -15,6 +20,7 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
+import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
@@ -22,12 +28,97 @@ import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.
 import {
   NEW_SESSION_ACTIVE_RUN_MESSAGE,
   NEW_SESSION_LIST_LOADING_MESSAGE,
+  clearPaneSessionHandoff,
+  preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
-import { canCreateChatSession } from "./chat-state-route.ts";
+import { canCreateChatSession, resolveChatAgentId } from "./chat-state-route.ts";
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
   readonly sessionCreation = { creatingIncognito: false };
+
+  private activeCatalogContinuation: symbol | null = null;
+
+  protected async continueCatalogSession(key: CatalogSessionKey) {
+    const scope = this.captureConnectionScope();
+    const state = scope?.state;
+    const client = scope?.client;
+    const draft = state?.chatMessage.trim() ?? "";
+    // Attachments count as composed content: an image-only continuation must
+    // send, not silently no-op while the send button looks live.
+    if (!scope || !state || !client || !this.history.catalogSession?.canContinue) {
+      return;
+    }
+    const attachments = cloneChatAttachmentsForIndependentOwner(state.chatAttachments);
+    if (!draft && attachments.length === 0) {
+      return;
+    }
+    const sourceSessionKey = state.sessionKey;
+    const sourceAgentId = resolveChatAgentId(state);
+    const sourceCatalogGeneration = this.catalogLoadGeneration;
+    const continuation = Symbol("catalog-continuation");
+    this.activeCatalogContinuation = continuation;
+    const isCurrent = () =>
+      this.activeCatalogContinuation === continuation &&
+      this.isConnectionScopeCurrent(scope) &&
+      this.catalogLoadGeneration === sourceCatalogGeneration &&
+      state.sessionKey === sourceSessionKey &&
+      resolveChatAgentId(state) === sourceAgentId;
+    state.chatSending = true;
+    const releaseStaleContinuation = () => {
+      if (this.activeCatalogContinuation !== continuation) {
+        return;
+      }
+      this.activeCatalogContinuation = null;
+      if (state.chatSendingScopeKey != null || !state.chatSending) {
+        return;
+      }
+      state.chatSending = false;
+    };
+    try {
+      const result = await client.request<SessionsCatalogContinueResult>(
+        catalogMethod(state, key.catalogId, "continue"),
+        {
+          ...key,
+          agentId: sourceAgentId,
+          ...(this.history.catalogSession.sourceHomeId
+            ? { sourceHomeId: this.history.catalogSession.sourceHomeId }
+            : {}),
+        },
+      );
+      // A catalog adoption must not navigate or send into a pane that switched
+      // sessions or reconnected while its original continuation was in flight.
+      if (!isCurrent()) {
+        releaseStaleContinuation();
+        return;
+      }
+      preparePaneSessionHandoff(this.context, this.paneId, result.sessionKey, {
+        attachments,
+        draft,
+        send: true,
+      });
+      if (this.onPaneSessionChange?.(this.paneId, result.sessionKey) === false) {
+        clearPaneSessionHandoff(this.context, this.paneId, result.sessionKey);
+        releaseStaleContinuation();
+        return;
+      }
+      announceCatalogSessionContinued({
+        ...key,
+        agentId: sourceAgentId,
+        sessionKey: result.sessionKey,
+      });
+      this.activeCatalogContinuation = null;
+      state.chatSending = false;
+    } catch (error) {
+      if (!isCurrent()) {
+        releaseStaleContinuation();
+        return;
+      }
+      this.activeCatalogContinuation = null;
+      state.lastError = formatUiError(error);
+      state.chatSending = false;
+    }
+  }
 
   protected catalogComposerReason(catalogKey: CatalogSessionKey | null) {
     const { catalogHost, catalogLoading, catalogSession } = this.history;

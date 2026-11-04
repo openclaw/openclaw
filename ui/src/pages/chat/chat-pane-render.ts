@@ -14,6 +14,7 @@ import {
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { canComposeCatalogSession } from "../../lib/sessions/catalog-read-method.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
@@ -281,7 +282,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const composerPendingReason = state.connected ? null : pendingReason;
     const auth = gatewaySnapshot.hello?.auth ?? null;
     const hasWriteScope = hasOperatorWriteAccess(auth);
-    const composerAccess = hasWriteScope || (!catalog && mutationAccess.composeScope.allowed);
+    const composerAccess = catalogKey
+      ? canComposeCatalogSession(gatewaySnapshot, catalogKey.catalogId)
+      : hasWriteScope || mutationAccess.composeScope.allowed;
     const suggestionViewer =
       multiIdentity &&
       !selectedSessionArchived &&

@@ -455,6 +455,22 @@ describe("chat pane catalog", () => {
     },
   );
 
+  it("keeps the composed draft when catalog adoption fails", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("Synthetic adoption refused"));
+    const { key, pane, state } = createCatalogContinuationPane(request);
+    const draft = state.chatMessage;
+    const attachments = state.chatAttachments;
+
+    await pane.continueCatalogSession(key);
+
+    expect(state.chatMessage).toBe(draft);
+    expect(state.chatAttachments).toBe(attachments);
+    expect(state.chatSending).toBe(false);
+    expect(state.lastError).toContain("Synthetic adoption refused");
+    expect(pane.onPaneSessionChange).not.toHaveBeenCalled();
+    expect(state.handleSendChat).not.toHaveBeenCalled();
+  });
+
   it("still ignores a continuation with no draft and no attachments", async () => {
     const request = vi.fn();
     const { key, pane, state } = createCatalogContinuationPane(request);

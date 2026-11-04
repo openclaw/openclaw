@@ -587,6 +587,12 @@ export type GatewayRequestHandlerOptions = Omit<
 > & {
   params: Record<string, unknown>;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  /** Source-authorized plugin adoption; bound to this request's caller and lifetime. */
+  copySessionCatalogToGateway?: (source: {
+    provider: import("../../plugins/session-catalog.js").SessionCatalogProvider;
+    request: import("../../../packages/gateway-protocol/src/index.js").SessionsCatalogContinueParams;
+    assertCurrent: () => void;
+  }) => Promise<void>;
   sessionCreationOperation?: import("../../config/sessions/session-creation-operation.js").SessionCreationOperation;
   /** Synchronously consume current chat.send authority without starting a turn. */
   withSessionTurnAuthority?: <T>(

@@ -189,15 +189,6 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         if (!authorization) {
           return;
         }
-        const creationError = authorizeGatewaySessionCreation({
-          cfg: context.getRuntimeConfig(),
-          client,
-          agentId: authorization.agentId,
-        });
-        if (creationError) {
-          respond(false, undefined, creationError);
-          return;
-        }
         const { catalogId: _catalogId, ...providerRequest } = request;
         // Fail closed for unscoped callers: providers gate high-authority
         // continues (e.g. node-executing bindings) on these scopes.
@@ -218,6 +209,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             client,
             context,
             commitGuard: sessionMutationCommitGuard,
+            hasCurrentClientAuthority: options.hasCurrentClientAuthority,
             signal,
           });
           if (!copied.ok) {
@@ -225,6 +217,15 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           } else {
             respond(true, { sessionKey: copied.sessionKey });
           }
+          return;
+        }
+        const creationError = authorizeGatewaySessionCreation({
+          cfg: context.getRuntimeConfig(),
+          client,
+          agentId: authorization.agentId,
+        });
+        if (creationError) {
+          respond(false, undefined, creationError);
           return;
         }
         const continueSession = provider.continueSession;

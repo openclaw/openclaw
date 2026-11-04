@@ -1,18 +1,21 @@
 import { fileURLToPath } from "node:url";
 import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type {
   SessionsCatalogListResult,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
 import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
 import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
 import {
   BROWSER_ORIGIN,
   CONTROL_UI_CLIENT,
@@ -25,6 +28,7 @@ import {
   rpcReq,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
+import { agentCommandMock, agentDiscoveryMock, testState } from "./test-helpers.js";
 import { setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -141,6 +145,8 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       bob = await connect("bob"),
       staff = await connect("staff"),
       reader = await connect("reader");
+    const profileCatalog = await prepareUserProfileCatalog();
+    onTestFinished(profileCatalog.release);
     const ids = ["a".repeat(32), "b".repeat(32), "c".repeat(32), "d".repeat(32)];
     // A retained pre-ownership snapshot is not claimable through matching uploader attribution.
     await createPluginStateKeyedStoreV2ForTests(
@@ -229,7 +235,7 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       });
       expect(own.ok, JSON.stringify(own.error)).toBe(true);
       expect(own.payload?.catalogs[0]?.hosts[0]?.sessions).toMatchObject([
-        { threadId: ids[0], canContinue: false, canArchive: false },
+        { threadId: ids[0], canContinue: true, canArchive: false },
       ]);
       expect(JSON.stringify(own)).not.toContain("publisherProfileId");
       const request = { catalogId: "beam", hostId: "gateway", threadId: ids[0] };
@@ -248,6 +254,42 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       expect(replaced.ok).toBe(true);
       expect(replaced.payload?.items[0]?.text).toBe("Private synthetic staff");
       expect(replaced.payload?.items[0]?.sender).toBeUndefined();
+      const continued = await rpcReq<{ sessionKey: string }>(alice, "beam.owned.continue", {
+        ...request,
+        agentId: "main",
+      });
+      expect(continued.ok, JSON.stringify(continued.error)).toBe(true);
+      const sessionKey = continued.payload!.sessionKey;
+      const history = await rpcReq<{ messages: unknown[] }>(alice, "chat.history", { sessionKey });
+      expect(history.ok, JSON.stringify(history.error)).toBe(true);
+      expect(JSON.stringify(history.payload?.messages)).toContain("Private synthetic staff");
+      expect(JSON.stringify(history.payload)).not.toContain(
+        ensureProfileForEmail("staff@example.test").id,
+      );
+      expect(
+        (
+          await rpcReq(bob, "chat.send", {
+            sessionKey,
+            message: "Not my continuation",
+            idempotencyKey: "synthetic-non-owner-send",
+          })
+        ).ok,
+      ).toBe(false);
+      const sent = await rpcReq(alice, "chat.send", {
+        sessionKey,
+        message: "Continue my published conversation",
+        idempotencyKey: "synthetic-publisher-first-send",
+      });
+      expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
+      expect((await rpcReq(alice, "beam.owned.read", request)).payload).toEqual(replaced.payload);
+      expect(
+        (
+          await rpcReq(alice, "beam.owned.continue", {
+            ...request,
+            sourceHomeId: "not-a-home-grant",
+          })
+        ).ok,
+      ).toBe(false);
       for (const [ws, id] of [
         [bob, ids[0]],
         [alice, ids[1]],
@@ -261,6 +303,12 @@ test("HTTP Visitor publications are privately readable by their initial publishe
           expect(denied.error?.code).toBe("FORBIDDEN");
         }
         expect(JSON.stringify(denied)).not.toContain("Private");
+        const deniedContinue = await rpcReq(ws, "beam.owned.continue", {
+          ...request,
+          threadId: id,
+        });
+        expect(deniedContinue.ok).toBe(false);
+        expect(JSON.stringify(deniedContinue)).not.toContain("Private");
       }
       expect(
         (await rpcReq<SessionsCatalogListResult>(alice, "beam.owned.list", {})).payload?.catalogs[0]
@@ -285,6 +333,207 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       for (const ws of [alice, bob, staff, reader]) {
         ws.close();
       }
+    }
+  });
+});
+
+test("preserves named-role model admission for owned Beam adoption", async () => {
+  const modelA = "fixture/fixture-model-a";
+  const modelB = "fixture/fixture-model-b";
+  const models = ["a", "b"].map((id) => ({
+    id: "fixture-model-" + id,
+    name: "Fixture Model " + id,
+    api: "openai-completions" as const,
+    baseUrl: "http://127.0.0.1:1/v1",
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 1024,
+  }));
+  // Dependency catalog DATA only: the maintained availability and role owners still run.
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = models.map((model) => ({ provider: "fixture", ...model }));
+  testState.agentConfig = { model: { primary: modelB }, models: { [modelA]: {}, [modelB]: {} } };
+  const role = "beam-model-publisher";
+  await configureBrowserAuth(browserProxyAuth(), {
+    roles: {
+      default: role,
+      definitions: {
+        [role]: {
+          accessPolicyPlugin: "visitor-access",
+          sessions: { others: "view" },
+          agents: ["main"],
+          scopes: ["operator.sessions.write"],
+          modelPolicy: { allow: [modelA] },
+        },
+      },
+    },
+  });
+  await writeConfigFile({
+    ...loadConfig(),
+    models: {
+      providers: {
+        fixture: {
+          api: "openai-completions",
+          apiKey: "test-fixture-key",
+          baseUrl: "http://127.0.0.1:1/v1",
+          models,
+        },
+      },
+    },
+  });
+  const publisher = ensureProfileForEmail("model-publisher@example.test");
+  setUserProfileRole(publisher.id, role);
+  const grant = new AbortController();
+  const config = {
+    agents: { entries: { main: {} } },
+    plugins: { entries: { beam: { enabled: true } } },
+  };
+  const access = createTestPluginRegistry(createPluginRuntime());
+  registerTestPlugin({
+    config,
+    registry: access,
+    record: createPluginRecord({ id: "visitor-access", origin: "bundled" }),
+    register(api) {
+      api.registerGatewayAccessPolicy({
+        authorize({ requiredByRole, profile }) {
+          if (!requiredByRole) {
+            return undefined;
+          }
+          expect(profile.profileId).toBe(publisher.id);
+          grant.signal.throwIfAborted();
+          return {
+            grantId: "synthetic-model-publisher",
+            signal: grant.signal,
+            assertCurrent() {
+              grant.signal.throwIfAborted();
+            },
+          };
+        },
+      });
+    },
+  });
+  const registry = await loadOpenClawPluginsAsync({
+    config,
+    env: {
+      ...process.env,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../../extensions/", import.meta.url)),
+    },
+    onlyPluginIds: ["beam"],
+    preferBuiltPluginArtifacts: false,
+    activate: false,
+    cache: false,
+    throwOnLoadError: true,
+  });
+  for (const record of access.registry.plugins) {
+    registry.plugins.push(record);
+    projectPluginContributions(access.registry, record, registry);
+  }
+  setTestPluginRegistry(registry);
+  // Observe, without replacing, the real availability projection used by adoption.
+  const assessment = vi.spyOn(
+    await import("./server-methods/models-list-result.js"),
+    "buildModelsListResult",
+  );
+  onTestFinished(() => assessment.mockRestore());
+  await withGatewayServer(async ({ port }) => {
+    const origin = "http://127.0.0.1:" + port;
+    const realFetch = globalThis.fetch;
+    const fetchGuard = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const target = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+      );
+      if (target.origin !== origin) {
+        throw new Error("Provider requests are forbidden in this metadata-only proof");
+      }
+      return realFetch(input, init);
+    });
+    onTestFinished(() => fetchGuard.mockRestore());
+    const ws = await openWs(port, {
+      ...TRUSTED_BROWSER_HEADERS,
+      "x-forwarded-user": "model-publisher@example.test",
+    });
+    try {
+      expect(
+        (
+          await connectReq(ws, {
+            prePairDevice: true,
+            client: CONTROL_UI_CLIENT,
+            browserOrigin: BROWSER_ORIGIN,
+            skipDefaultAuth: true,
+            scopes: ["operator.sessions.write"],
+          })
+        ).ok,
+      ).toBe(true);
+      const profiles = await prepareUserProfileCatalog();
+      onTestFinished(profiles.release);
+      await publishConfiguredModelRuntimeSnapshots({ cfg: loadConfig() });
+      const ordinary = await rpcReq<{
+        key: string;
+        entry: { providerOverride?: string; modelOverride?: string };
+      }>(ws, "sessions.create", {
+        key: "agent:main:beam-role-allowed",
+        agentId: "main",
+        model: modelA,
+      });
+      expect(ordinary.ok, JSON.stringify(ordinary.error)).toBe(true);
+      expect(ordinary.payload?.entry).toMatchObject({
+        providerOverride: "fixture",
+        modelOverride: "fixture-model-a",
+      });
+      const denied = await rpcReq(ws, "sessions.create", {
+        key: "agent:main:beam-role-disallowed",
+        agentId: "main",
+        model: modelB,
+      });
+      expect(denied).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+      const beamId = "9".repeat(32);
+      const upload = await fetch(origin + "/api/v1/beam/sessions", {
+        method: "POST",
+        headers: {
+          ...TRUSTED_BROWSER_HEADERS,
+          "x-forwarded-user": "model-publisher@example.test",
+          "x-openclaw-scopes": "operator.sessions.write",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          version: 1,
+          beamId,
+          title: "Synthetic named-role metadata",
+          sourceModel: { provider: "fixture", model: "fixture-model-b" },
+          source: "fixture",
+          updatedAt: "2026-11-04T00:00:00Z",
+          completed: true,
+          items: [{ type: "userMessage", text: "Synthetic metadata-only context" }],
+        }),
+      });
+      expect(upload.status, await upload.clone().text()).toBe(200);
+      expect(await upload.json()).toMatchObject({
+        ok: true,
+        canView: true,
+        url: expect.stringContaining("/beam/"),
+      });
+      const continued = await rpcReq(ws, "beam.owned.continue", {
+        catalogId: "beam",
+        hostId: "gateway",
+        threadId: beamId,
+        agentId: "main",
+      });
+      const projected = await assessment.mock.results[0]?.value;
+      expect(projected?.models).toContainEqual(
+        expect.objectContaining({
+          provider: "fixture",
+          id: "fixture-model-b",
+          available: true,
+        }),
+      );
+      expect(continued).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+      expect(continued.error?.message).toMatch(/role.*model|model.*role/i);
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    } finally {
+      ws.close();
     }
   });
 });

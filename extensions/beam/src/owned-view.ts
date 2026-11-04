@@ -21,11 +21,13 @@ function limit(value: unknown): number | undefined {
   return value;
 }
 
-function parseRequest(params: Record<string, unknown>, operation: "list" | "read") {
+function parseRequest(params: Record<string, unknown>, operation: "list" | "read" | "continue") {
   const allowed =
     operation === "list"
       ? ["agentId", "catalogId", "search", "hostIds", "limitPerHost", "cursors"]
-      : ["agentId", "catalogId", "hostId", "threadId", "limit", "cursor"];
+      : operation === "read"
+        ? ["agentId", "catalogId", "hostId", "threadId", "limit", "cursor"]
+        : ["agentId", "catalogId", "hostId", "threadId"];
   if (
     Object.keys(params).some((key) => !allowed.includes(key)) ||
     (params.catalogId !== undefined && params.catalogId !== "beam") ||
@@ -33,7 +35,7 @@ function parseRequest(params: Record<string, unknown>, operation: "list" | "read
   ) {
     throw new Error("invalid target");
   }
-  if (operation === "read") {
+  if (operation !== "list") {
     if (
       params.hostId !== "gateway" ||
       typeof params.threadId !== "string" ||
@@ -42,6 +44,17 @@ function parseRequest(params: Record<string, unknown>, operation: "list" | "read
         (typeof params.cursor !== "string" || params.cursor.length > 256))
     ) {
       throw new Error("invalid read");
+    }
+    if (operation === "continue") {
+      return {
+        kind: "continue" as const,
+        request: {
+          catalogId: "beam",
+          hostId: "gateway",
+          threadId: params.threadId,
+          ...(typeof params.agentId === "string" ? { agentId: params.agentId } : {}),
+        },
+      };
     }
     return {
       kind: "read" as const,
@@ -86,23 +99,30 @@ function parseRequest(params: Record<string, unknown>, operation: "list" | "read
 }
 
 // Separate from the shared operator catalog: no operator.read grant or generic catalog admission.
-export function createBeamOwnedViewHandler(store: BeamStore, operation: "list" | "read") {
-  return async ({
-    params,
-    client,
-    respond,
-    signal,
-    hasCurrentClientAuthority,
-    sessionMutationAuthorization,
-  }: Pick<
-    GatewayRequestHandlerOptions,
-    | "params"
-    | "client"
-    | "respond"
-    | "signal"
-    | "hasCurrentClientAuthority"
-    | "sessionMutationAuthorization"
-  >) => {
+export function createBeamOwnedViewHandler(
+  store: BeamStore,
+  operation: "list" | "read" | "continue",
+) {
+  return async (
+    options: Pick<
+      GatewayRequestHandlerOptions,
+      | "params"
+      | "client"
+      | "respond"
+      | "signal"
+      | "hasCurrentClientAuthority"
+      | "sessionMutationAuthorization"
+      | "copySessionCatalogToGateway"
+    >,
+  ) => {
+    const {
+      params,
+      client,
+      respond,
+      signal,
+      hasCurrentClientAuthority,
+      sessionMutationAuthorization,
+    } = options;
     const authority = client?.internal?.operatorAccessAuthority;
     const profileId = client?.authenticatedUserProfile?.profileId;
     const assertCurrent = () => {
@@ -151,16 +171,28 @@ export function createBeamOwnedViewHandler(store: BeamStore, operation: "list" |
           if (!row || row.publisherProfileId !== profileId) {
             throw new BeamOwnedViewForbiddenError("Beam is not available to this publisher");
           }
-          return row;
+          // Attribution may name staff; neither owned viewing nor adoption grants profile visibility.
+          const { uploaderProfileId: _uploaderProfileId, ...ownedRow } = row;
+          return ownedRow;
         },
       });
+      if (parsed.kind === "continue") {
+        if (!options.copySessionCatalogToGateway) {
+          throw new Error("Gateway catalog adoption is unavailable");
+        }
+        await options.copySessionCatalogToGateway({
+          provider: catalog,
+          request: parsed.request,
+          assertCurrent,
+        });
+        return;
+      }
       let result: SessionsCatalogListResult | SessionsCatalogReadResult;
       if (parsed.kind === "list") {
         const hosts = await catalog.list(parsed.request);
         // Catalog rows are fresh request-owned projections, not the retained inventory.
         for (const host of hosts) {
           for (const row of host.sessions) {
-            row.canContinue = false;
             row.canArchive = false;
           }
         }
@@ -169,7 +201,7 @@ export function createBeamOwnedViewHandler(store: BeamStore, operation: "list" |
             {
               id: catalog.id,
               label: catalog.label,
-              capabilities: { continueSession: false, archive: false },
+              capabilities: { continueSession: true, archive: false },
               shareRoute: catalog.shareRoute,
               hosts,
             },
@@ -179,10 +211,6 @@ export function createBeamOwnedViewHandler(store: BeamStore, operation: "list" |
         result = await catalog.read(parsed.request);
       }
       assertCurrent();
-      // Uploader attribution may now name staff: do not expand profile visibility on this route.
-      if ("items" in result) {
-        result.items = result.items.map(({ sender: _sender, ...item }) => item);
-      }
       respond(true, result);
     } catch (error) {
       let failure = {
