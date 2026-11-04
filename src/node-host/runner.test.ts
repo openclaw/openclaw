@@ -219,8 +219,14 @@ describe("runNodeHost", () => {
         event: "node.invoke.cancel",
         payload: { invokeId: "invoke-1", nodeId: "node-1" },
       });
+      options?.onEvent?.({
+        type: "event",
+        event: "node.worker.localMcpPolicy",
+        payload: { allowed: false },
+      });
       options?.onClose?.(1000, "connection closed");
 
+      expect(mocks.activeRuntime.setLocalMcpAllowed).toHaveBeenCalledWith(false);
       expect(mocks.activeRuntime.handleInput).toHaveBeenCalledWith(
         "invoke-1",
         3,
