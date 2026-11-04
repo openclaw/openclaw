@@ -746,3 +746,64 @@ it.each(["job edit", "account replacement", "backup failure"] as const)(
     });
   },
 );
+
+const bedrockModelId = "anthropic.claude-sonnet-4-20250514-v1:0";
+const bedrockProvider: ModelProviderConfig = {
+  auth: "aws-sdk",
+  api: "bedrock-converse-stream",
+  baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
+  models: [createTestModelDefinition(bedrockModelId)],
+};
+const bedrockConfig = (state: OpenClawTestState, declared: boolean): OpenClawConfig => ({
+  agents: {
+    entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+    defaults: { model: `amazon-bedrock/${bedrockModelId}` },
+  },
+  models: { providers: { "amazon-bedrock": bedrockProvider } },
+  ...(declared
+    ? {
+        auth: {
+          profiles: {
+            "amazon-bedrock:aws-sdk": { provider: "amazon-bedrock", mode: "aws-sdk" as const },
+          },
+        },
+      }
+    : {}),
+});
+
+it.each([true, false])(
+  "migrates a legacy Bedrock automation onto a declared AWS SDK account: %s",
+  async (declared) => {
+    await withAccounts(async (state) => {
+      const cfg = await configure(state, bedrockConfig(state, declared));
+      const storePath = state.statePath("cron", "jobs.json");
+      const job: CronStoredJob = { ...makeAccountJob("bedrock-legacy"), enabled: true };
+      await saveJobs(storePath, job);
+      await doctor.withDoctorConfigMaintenance(async () => {
+        const result = await migrate(cfg);
+        const [migrated] = await readJobs(storePath);
+        if (!declared) {
+          // Without a declared account the route stays ambient, so nothing is recorded.
+          expect(result.changes).toEqual([]);
+          contains(result.warnings.join("\n"), "ambient credential");
+          expect(migrated).toEqual(job);
+          return;
+        }
+        contains(result.changes.join("\n"), "retain amazon-bedrock:aws-sdk");
+        expect(result.warnings).toEqual([]);
+        expect(migrated?.inferenceBinding).toEqual({
+          version: 1,
+          provider: "amazon-bedrock",
+          profileId: "amazon-bedrock:aws-sdk",
+          authorizationId: expect.stringMatching(/^[a-f0-9]{64}$/),
+          authRequirement: "api-key",
+          source: "auto",
+        });
+        // Re-running Doctor keeps the recorded account untouched.
+        await migrate(cfg);
+        expect(await readJobs(storePath)).toEqual([migrated]);
+      });
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+  },
+);

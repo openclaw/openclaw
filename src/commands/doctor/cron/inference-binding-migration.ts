@@ -8,8 +8,10 @@ import {
 import type { AuthProfileAuthorization } from "../../../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../../../agents/auth-profiles/authorization.js";
 import {
+  isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrderWithMetadata,
+  resolveConfiguredAwsSdkAuthProfileId,
 } from "../../../agents/auth-profiles/order.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../../agents/auth-profiles/store-runtime.js";
 import { resolveProviderModelAuthPolicy } from "../../../agents/model-auth-policy.js";
@@ -255,9 +257,19 @@ export async function maybeRepairCronInferenceBindings(params: {
           continue;
         }
         if (firstSource?.kind === "direct") {
-          throw new Error(
-            "The current route uses an ambient credential, not a durable stored account.",
-          );
+          // An AWS SDK route resolves credentials from the host's chain on every request.
+          // When config declares an account for that route, record the declaration; it is a
+          // durable name for the same route, not an ambient credential Doctor picked up.
+          const declaredProfileId =
+            firstSource.evidence === "aws-sdk"
+              ? resolveConfiguredAwsSdkAuthProfileId({ cfg, provider: selected.provider })
+              : undefined;
+          if (!declaredProfileId) {
+            throw new Error(
+              "The current route uses an ambient credential, not a durable stored account.",
+            );
+          }
+          explicitProfileId = declaredProfileId;
         }
         if (runtime === "codex" && firstSource?.kind !== "profile") {
           // Native/credentialless auth has no host account for Doctor to adopt.
@@ -308,13 +320,23 @@ export async function maybeRepairCronInferenceBindings(params: {
             });
             const [attempt] = prepared.attempts;
             const credential = store.profiles[profileId];
+            // A declared AWS SDK account stores no credential to read its mode from.
+            const mode =
+              credential?.type ??
+              (isConfiguredAwsSdkAuthProfileForProvider({
+                cfg,
+                provider: selected.provider,
+                profileId,
+              })
+                ? ("aws-sdk" as const)
+                : undefined);
             const authRequirement =
               attempt?.plan.modelRoute?.authRequirement ??
-              (credential &&
+              (mode &&
                 resolveProviderModelAuthPolicy({
                   provider: selected.provider,
-                  mode: credential.type,
-                  authFlow: credential.type === "oauth" ? credential.authFlow : undefined,
+                  mode,
+                  authFlow: credential?.type === "oauth" ? credential.authFlow : undefined,
                 }).authRequirement);
             if (attempt?.kind === "profile" && attempt.profileId === profileId && authRequirement) {
               candidates.push({ profileId, authRequirement });

@@ -56,6 +56,7 @@ import {
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
   resolveAuthProfileOrderWithMetadata,
+  resolveConfiguredAwsSdkAuthProfileId,
 } from "./order.js";
 import { markAuthProfileSuccess } from "./profiles.js";
 
@@ -150,6 +151,19 @@ describe("resolveAuthProfileOrder", () => {
     expect(resolveAuthProfileOrder({ cfg, store, provider: "amazon-bedrock" })).toEqual([
       "amazon-bedrock:default",
     ]);
+    // Schedulers record this declaration as the account for the AWS SDK route.
+    expect(resolveConfiguredAwsSdkAuthProfileId({ cfg, provider: "amazon-bedrock" })).toBe(
+      "amazon-bedrock:default",
+    );
+    expect(
+      resolveConfiguredAwsSdkAuthProfileId({ cfg, provider: "fixture-provider" }),
+    ).toBeUndefined();
+    expect(
+      resolveConfiguredAwsSdkAuthProfileId({
+        cfg: { auth: cfg.auth },
+        provider: "amazon-bedrock",
+      }),
+    ).toBeUndefined();
   });
 
   it("falls back to stored profiles when a stored order only has missing credentials", async () => {

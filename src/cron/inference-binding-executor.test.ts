@@ -104,20 +104,55 @@ const bedrockModel: FixtureModel = {
   baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 };
 
+const awsSdkProfileId = "amazon-bedrock:aws-sdk";
+
+function bedrockAwsSdkConfig(declared: boolean) {
+  const config = configFor(bedrockModel, { auth: "aws-sdk" });
+  return declared
+    ? {
+        ...config,
+        auth: {
+          profiles: { [awsSdkProfileId]: { provider: "amazon-bedrock", mode: "aws-sdk" as const } },
+        },
+      }
+    : config;
+}
+
 // Stored-profile refusal is exercised through provider HTTP in auth-continuity.integration.
-it("refuses legacy adoption from ambient AWS SDK credentials at the auth boundary", async () => {
+it.each([false, true])(
+  "refuses legacy adoption from ambient AWS SDK credentials at the auth boundary (declared account: %s)",
+  async (declared) => {
+    await withAuthState(async (state) => {
+      const materialize = vi.spyOn(modelRuntime, "resolveModelAsync");
+      const stores = modelRuntime.createEmptyAgentDiscoveryStores();
+      await expect(
+        prepareAuth(state, stores, { config: bedrockAwsSdkConfig(declared) }, bedrockModel),
+      ).rejects.toThrow("Automation has no recorded inference account");
+      expect(materialize).not.toHaveBeenCalled();
+    });
+  },
+);
+
+it("runs a scheduled job on its recorded AWS SDK account", async () => {
   await withAuthState(async (state) => {
-    const materialize = vi.spyOn(modelRuntime, "resolveModelAsync");
-    const stores = modelRuntime.createEmptyAgentDiscoveryStores();
-    await expect(
-      prepareAuth(
-        state,
-        stores,
-        { config: configFor(bedrockModel, { auth: "aws-sdk" }) },
-        bedrockModel,
-      ),
-    ).rejects.toThrow("Automation has no recorded inference account");
-    expect(materialize).not.toHaveBeenCalled();
+    const prepared = await prepareAuth(
+      state,
+      mockModel(bedrockModel),
+      {
+        config: bedrockAwsSdkConfig(true),
+        authProfileBinding: {
+          profileId: awsSdkProfileId,
+          authRequirement: "api-key",
+          assertCurrent() {},
+          revalidate: async () => {},
+        },
+      },
+      bedrockModel,
+    );
+    expect(prepared.preparedAuthAttempts).toMatchObject([
+      { kind: "profile", profileId: awsSdkProfileId },
+    ]);
+    expect(prepared.lockedProfileId).toBe(awsSdkProfileId);
   });
 });
 

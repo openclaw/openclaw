@@ -91,6 +91,23 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   );
 }
 
+/**
+ * Profile id config declares for a provider's AWS SDK route, if any.
+ *
+ * The route stores no credential, so this declaration is the only durable name a
+ * recorded account can use. Ids are scanned in sorted order; selecting among
+ * several declared accounts is a separate concern.
+ */
+export function resolveConfiguredAwsSdkAuthProfileId(params: {
+  cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
+  provider: string;
+}): string | undefined {
+  return Object.keys(params.cfg?.auth?.profiles ?? {})
+    .toSorted()
+    .find((profileId) => isConfiguredAwsSdkAuthProfileForProvider({ ...params, profileId }));
+}
+
 /** Resolves whether a profile can be used for a provider right now. */
 export function resolveAuthProfileEligibility(params: {
   cfg?: OpenClawConfig;
