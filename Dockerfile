@@ -8,6 +8,8 @@
 # build layer is not invalidated by unrelated source changes.
 #
 # Build stages use full trixie; the runtime image is always trixie-slim.
+ARG OPENCLAW_RUNTIME_ASSETS=runtime-assets
+ARG OPENCLAW_INSTALLED_RUNTIME_INPUT=installed-runtime-directory-input
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"
@@ -224,7 +226,34 @@ RUN node scripts/postinstall-bundled-plugins.mjs && \
     fi && \
     node --input-type=module -e 'await import("grammy")' && \
     node scripts/check-package-dist-imports.mjs /app && \
-    node scripts/docker/copy-bootstrap-scripts.mjs /app/.runtime-bootstrap
+    node scripts/docker/copy-bootstrap-scripts.mjs /app/.runtime-bootstrap && \
+    mkdir -p /app/.runtime-bootstrap/scripts/docker && \
+    cp scripts/docker/verify-fs-safe-native.mjs /app/.runtime-bootstrap/scripts/docker/ && \
+    cp scripts/lib/guard-inventory-utils.mjs /app/.runtime-bootstrap/scripts/lib/
+
+# Only installed assets and pinned helpers feed this route, never source builds.
+FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS installed-runtime-directory-input
+WORKDIR /app
+COPY --from=openclaw_installed_runtime /app/ /app/
+
+# Archive recipes admit the exact artifact here, after Docker snapshots the context.
+FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS installed-runtime-archive-input
+ARG OPENCLAW_INSTALLED_RUNTIME_SHA256
+WORKDIR /app
+COPY --from=openclaw_installed_runtime /installed-runtime.tgz /tmp/installed-runtime.tgz
+RUN --network=none test "${#OPENCLAW_INSTALLED_RUNTIME_SHA256}" -eq 64 && \
+    case "$OPENCLAW_INSTALLED_RUNTIME_SHA256" in *[!0-9a-f]*) exit 1;; esac && \
+    printf "%s  /tmp/installed-runtime.tgz\n" "$OPENCLAW_INSTALLED_RUNTIME_SHA256" | sha256sum -c - && \
+    tar -xzf /tmp/installed-runtime.tgz -C / && rm /tmp/installed-runtime.tgz
+
+FROM ${OPENCLAW_INSTALLED_RUNTIME_INPUT} AS installed-runtime-assets
+ARG OPENCLAW_EXTENSIONS
+COPY pnpm-lock.yaml docker-entrypoint.mjs /app/
+RUN --network=none cp -R .runtime-bootstrap/scripts/. scripts/ && \
+    mkdir -p qa && \
+    node .runtime-bootstrap/scripts/finalize-installed-runtime.mjs /app
+
+FROM ${OPENCLAW_RUNTIME_ASSETS} AS selected-runtime-assets
 
 # ── Runtime base image ──────────────────────────────────────────
 FROM ${OPENCLAW_NODE_TRIXIE_SLIM_IMAGE} AS base-runtime
@@ -233,7 +262,7 @@ LABEL org.opencontainers.image.base.name="docker.io/library/node:24.22.1-trixie-
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_TRIXIE_SLIM_DIGEST}"
 
 # ── Stage 3: Runtime ────────────────────────────────────────────
-FROM base-runtime
+FROM base-runtime AS openclaw-runtime
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
 # OCI base-image metadata for downstream image consumers.
@@ -279,35 +308,33 @@ RUN npm install --global npm@latest && \
 
 RUN chown node:node /app
 
-COPY --from=runtime-assets --chown=node:node /app/dist ./dist
-COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
-COPY --from=runtime-assets --chown=node:node /app/package.json .
-COPY --from=runtime-assets --chown=node:node /app/pnpm-lock.yaml .
-COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
-COPY --from=runtime-assets --chown=node:node /app/patches ./patches
-COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .
-COPY --from=runtime-assets --chown=node:node /app/node-sqlite.mjs .
-COPY --from=runtime-assets --chown=node:node /app/node-sqlite-capabilities.mjs .
-COPY --from=runtime-assets --chown=node:node /app/runtime-process-bootstrap.generated.mjs .
-COPY --from=runtime-assets --chown=node:node /app/runtime-process-scripts.generated.mjs .
-COPY --from=runtime-assets --chown=node:node /app/node-runtime-update.mjs .
-COPY --from=runtime-assets --chown=node:node /app/node-runtime-recovery.mjs .
-COPY --from=runtime-assets --chown=node:node /app/cli-parent-lifetime.mjs .
-COPY --from=runtime-assets --chown=node:node /app/node-runtime-env.mjs .
-COPY --from=runtime-assets --chown=node:node /app/cli-invocation.mjs .
-COPY --from=runtime-assets --chown=node:node /app/cli-root-options.mjs /app/gateway-run-argv.mjs /app/gateway-shutdown-budget.mjs ./
-COPY --from=runtime-assets --chown=node:node /app/node-host-launcher.mjs .
-COPY --from=runtime-assets --chown=node:node /app/node-compile-cache.mjs .
-COPY --from=runtime-assets --chown=node:node /app/docker-entrypoint.mjs .
-COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
-COPY --from=runtime-assets --chown=node:node /app/.runtime-bootstrap/scripts ./scripts
-COPY --from=runtime-assets --chown=node:node /app/scripts/lib/guard-inventory-utils.mjs ./scripts/lib/
-COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
-COPY --from=runtime-assets --chown=node:node /app/skills ./skills
-COPY --from=runtime-assets --chown=node:node /app/docs ./docs
-COPY --from=runtime-assets --chown=node:node /app/qa ./qa
-RUN --mount=from=dependency-inputs,source=/app/scripts/docker/verify-fs-safe-native.mjs,target=/tmp/verify-fs-safe-native.mjs \
-    node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require
+COPY --from=selected-runtime-assets --chown=node:node /app/dist ./dist
+COPY --from=selected-runtime-assets --chown=node:node /app/node_modules ./node_modules
+COPY --from=selected-runtime-assets --chown=node:node /app/package.json .
+COPY --from=selected-runtime-assets --chown=node:node /app/pnpm-lock.yaml .
+COPY --from=selected-runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
+COPY --from=selected-runtime-assets --chown=node:node /app/patches ./patches
+COPY --from=selected-runtime-assets --chown=node:node /app/node-version.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-sqlite.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-sqlite-capabilities.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/runtime-process-bootstrap.generated.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/runtime-process-scripts.generated.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-runtime-update.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-runtime-recovery.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/cli-parent-lifetime.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-runtime-env.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/cli-invocation.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/cli-root-options.mjs /app/gateway-run-argv.mjs /app/gateway-shutdown-budget.mjs ./
+COPY --from=selected-runtime-assets --chown=node:node /app/node-host-launcher.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-compile-cache.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/docker-entrypoint.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/openclaw.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/.runtime-bootstrap/scripts ./scripts
+COPY --from=selected-runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
+COPY --from=selected-runtime-assets --chown=node:node /app/skills ./skills
+COPY --from=selected-runtime-assets --chown=node:node /app/docs ./docs
+COPY --from=selected-runtime-assets --chown=node:node /app/qa ./qa
+RUN node /app/scripts/docker/verify-fs-safe-native.mjs --package-root /app --mode require
 
 # Validate the three version surfaces in every release-built runtime variant.
 ARG OPENCLAW_DOCKER_BUILD_VERSION

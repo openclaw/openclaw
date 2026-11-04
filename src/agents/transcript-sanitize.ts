@@ -7,6 +7,7 @@ import {
   sanitizeInlineImageDataUrlForStorage,
 } from "@openclaw/media-core/inline-image-data-url";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { cloneTranscriptEnvelope } from "../config/sessions/transcript-json.js";
 import type { AgentMessage } from "./runtime/index.js";
 
 const isImageMimeType = (value: unknown): value is string =>
@@ -38,7 +39,7 @@ function sanitizeTranscriptImageRecord(
   if (source.data === sanitized.base64 && hasCanonicalMimeTypes) {
     return source;
   }
-  const next: Record<string, unknown> = { ...source, data: sanitized.base64 };
+  const next = Object.assign(cloneTranscriptEnvelope(source), { data: sanitized.base64 });
   for (const field of mimeTypeFields) {
     next[field] = sanitized.mimeType;
   }
@@ -461,21 +462,18 @@ function sanitizeTranscriptStructuredValue(
     location === "root" && source.role === "assistant"
       ? resolveTranscriptAssistantRoute(source)
       : assistantRoute;
-  let next: Record<string, unknown> | null = null;
-  if (source !== value) {
-    next = { ...source };
-  }
+  let next: Record<string, unknown> | null = source !== value ? source : null;
   for (const [key, item] of Object.entries(source)) {
     if (location === "root" && source.role === "assistant" && key === "providerReplay") {
       const sanitizedReplay = sanitizeCompactionReplayState(item, currentAssistantRoute);
       if (sanitizedReplay !== undefined) {
         if (sanitizedReplay !== item) {
-          next ??= { ...source };
+          next ??= cloneTranscriptEnvelope(source);
           next[key] = sanitizedReplay;
         }
         continue;
       }
-      next ??= { ...source };
+      next ??= cloneTranscriptEnvelope(source);
       delete next[key];
       continue;
     }
@@ -523,7 +521,7 @@ function sanitizeTranscriptStructuredValue(
     }
     if (sanitizedField !== undefined) {
       if (sanitizedField !== item) {
-        next ??= { ...source };
+        next ??= cloneTranscriptEnvelope(source);
         next[key] = sanitizedField;
       }
       continue;
@@ -547,7 +545,7 @@ function sanitizeTranscriptStructuredValue(
     if (sanitized === item) {
       continue;
     }
-    next ??= { ...source };
+    next ??= cloneTranscriptEnvelope(source);
     next[key] = sanitized;
   }
   seen.delete(value);

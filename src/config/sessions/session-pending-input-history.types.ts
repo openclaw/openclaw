@@ -7,27 +7,15 @@ export type PendingInputHistoryQuery = {
   before?: number;
   id?: string;
   includeTotal?: false;
-  sessionSendRecovery?: true;
+  /** Exact custody captured in a committed graceful-shutdown marker. */
+  queuedInputIds?: readonly string[];
+  liveInputIds?: readonly string[];
 };
 export type PendingInputHistorySnapshot = {
   rows: SessionPendingInputRow[];
   total: number | undefined;
   nextBefore?: number;
   currentSessionId?: string;
-};
-export type PendingInputCustodyCandidate = Pick<
-  SessionPendingInputRow,
-  "input_id" | "session_key" | "session_id" | "lifecycle_generation"
->;
-export type PendingInputHistoryGrant = {
-  kind: "pending-input-history-custody";
-  candidates: PendingInputCustodyCandidate[];
-  currentSessionId?: string;
-  protected?: SharedArrayBuffer;
-};
-export type PendingInputHistoryReceipt = {
-  kind: "pending-input-history-interrupted";
-  ids: string[];
 };
 export type PendingInputHistoryWorkerInput = {
   kind: "session-pending-input-history";
@@ -36,3 +24,13 @@ export type PendingInputHistoryWorkerInput = {
   query: PendingInputHistoryQuery;
   source: import("./session-entry-read-source.types.js").CapturedSessionEntryReadSource;
 };
+
+export type PendingInputOrphansWorkerInput = Omit<
+  PendingInputHistoryWorkerInput,
+  "kind" | "query"
+> & {
+  kind: "session-pending-input-orphans";
+  lifecycleGeneration: string;
+  queuedInputIds: readonly string[];
+};
+export type PendingInputOrphanTarget = { sessionKey: string; sessionId: string };

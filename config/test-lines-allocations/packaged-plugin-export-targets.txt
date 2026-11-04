@@ -1,0 +1,2 @@
+# Exercise packaged conditional export targets, declaration preservation, and source-manifest immutability in the existing artifact fixture.
+32

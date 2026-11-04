@@ -1,12 +1,12 @@
 import {
   getEmbeddingProvider,
+  type AcquireConfiguredProviderLocalService,
   type EmbeddingProvider,
   type EmbeddingProviderCreateOptions,
   type EmbeddingProviderCreateResult,
   type EmbeddingProviderIndexIdentity,
 } from "openclaw/plugin-sdk/embedding-providers";
 import { sanitizeAndNormalizeEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE,
@@ -15,10 +15,7 @@ import {
   resolveLlamaCppModelCacheDir,
 } from "./defaults.js";
 import { resolveManagedLlamaCppProviderConfig } from "./managed-provider-config.js";
-import {
-  inspectLlamaServerRuntime,
-  type LlamaServerRuntimeFacts,
-} from "./managed-server-inspection.js";
+import { inspectLlamaServerRuntime } from "./managed-server-inspection.js";
 import {
   ensureLlamaCppModel,
   prepareManagedLlamaServer,
@@ -26,11 +23,6 @@ import {
 } from "./managed-server.js";
 import { resolveLlamaCppMediaModels } from "./media-config.js";
 import { formatLlamaServerRuntimeError } from "./runtime-error.js";
-
-type AcquireLocalService = OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"];
-type LocalServiceAwareOptions = EmbeddingProviderCreateOptions & {
-  acquireLocalService?: AcquireLocalService;
-};
 
 const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
 
@@ -81,7 +73,7 @@ export async function createLlamaCppEmbeddingProvider(
   if (!genericAdapter) {
     throw new Error("OpenAI-compatible embedding transport is unavailable.");
   }
-  const acquireLocalService = (options as LocalServiceAwareOptions).acquireLocalService; // SAFETY: core runtime owns this injected option.
+  const acquireLocalService = options.acquireLocalService;
   const result = await genericAdapter.create({
     ...options,
     provider: LLAMA_CPP_PROVIDER_ID,
@@ -91,8 +83,9 @@ export async function createLlamaCppEmbeddingProvider(
     dimensions: undefined,
     ...(acquireLocalService
       ? {
-          acquireLocalService: (...[target, signal]: Parameters<AcquireLocalService>) =>
-            acquireLocalService({ ...target, reconcile: reconcileLocalService }, signal),
+          acquireLocalService: (
+            ...[target, signal]: Parameters<AcquireConfiguredProviderLocalService>
+          ) => acquireLocalService({ ...target, reconcile: reconcileLocalService }, signal),
         }
       : {}),
   });
@@ -121,7 +114,7 @@ export async function createLlamaCppEmbeddingProvider(
       dimensions === undefined ? vector : vector.slice(0, dimensions),
     );
   };
-  let runtimeFacts: LlamaServerRuntimeFacts | undefined;
+  let runtimeFacts: Awaited<ReturnType<typeof inspectLlamaServerRuntime>> | undefined;
   const refreshFacts = async (loadError?: string) => {
     runtimeFacts = await inspectLlamaServerRuntime({
       baseUrl,

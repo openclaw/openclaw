@@ -26,6 +26,7 @@ import {
   updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import { formatChatSelectionQuote } from "./components/chat-selection-attachment.ts";
 import type { ChatQueueAdmissionResult } from "./composer-queue-persistence.ts";
 import {
   admitChatSubmission,
@@ -108,7 +109,7 @@ function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected"
     : null;
 }
 
-// Hello permits RPCs before account recovery has claimed any retained first turn.
+// Sending waits for the authenticated outbox scope and locally owned session creation.
 // Renderers show loading only for these transient holds, never terminal expiry.
 export function chatSendPendingReason(
   host: Pick<ChatHost, "client" | "connected" | "hasPendingInitialTurn">,
@@ -319,6 +320,13 @@ export function surfaceChatDeliveryFailure(
         (session.agentId !== undefined && normalizeAgentId(session.agentId) === scopedAgentId)),
   );
   showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}` });
+}
+
+/** Model-facing text an annotation contributes ahead of the user's own message. */
+export function annotationMessageContext(attachment: ChatAttachment): string | undefined {
+  return attachment.selectionAnnotation
+    ? formatChatSelectionQuote(attachment.selectionAnnotation)
+    : attachment.browserAnnotation?.modelContext.trim();
 }
 
 export function prependReplyQuote(

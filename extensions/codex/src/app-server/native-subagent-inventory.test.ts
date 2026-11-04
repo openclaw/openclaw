@@ -485,7 +485,7 @@ describe("native pending assignment inventory through registered monitor admissi
       });
       f.deliver.mockImplementation(async ({ completionCustody }) => {
         assert(completionCustody?.isCurrent());
-        return { delivered: false, path: "direct", recoveryPending: true };
+        return { delivered: false, path: "direct" };
       });
       const history = threadRead({
         turnId: "child-turn",

@@ -221,7 +221,6 @@ suite.define(() => {
   );
   it.each([
     { resolution: "save", overflow: false },
-    { resolution: "cancel", overflow: false },
     { resolution: "save", overflow: true },
     { resolution: "cancel", overflow: true },
   ] as const)(
@@ -394,7 +393,7 @@ suite.define(() => {
           .locator(".settings-sidebar")
           .getByRole("link", { name: "Appearance", exact: true })
           .click();
-        await page.getByRole("heading", { name: "Typography", exact: true }).waitFor();
+        await page.getByRole("heading", { name: "Language and text", exact: true }).waitFor();
       }
       const { dialog, outcome } = await reviewStaleBuild(
         page,

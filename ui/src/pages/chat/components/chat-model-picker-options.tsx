@@ -3,8 +3,9 @@ import { providerDisplayLabel } from "../../../components/provider-icon-data.ts"
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import "../../../components/tooltip.ts";
+import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
 import {
   formatModelContextMeta,
   formatModelLabel,
@@ -23,7 +24,7 @@ function ModelShortcut(props: { rowKey: string }) {
     <kbd
       class="shortcut-kbd"
       aria-hidden="true"
-      hidden={number() === undefined}
+      hidden={number() === undefined || !keyboardHintsVisible()}
       data-chat-model-shortcut="true"
       data-shortcut={number()}
       data-chat-model-shortcut-number={number()}
