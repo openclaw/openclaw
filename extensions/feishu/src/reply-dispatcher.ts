@@ -261,6 +261,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let previewText = "";
   let previewBlockOffset = 0;
   let closedPreviewText = "";
+  let previewEpoch = 0;
   let reasoningText = "";
   let statusLine = "";
   let modelWaitLine = "";
@@ -294,6 +295,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   type PendingStreamingDelivery = {
     result: FeishuReplyDeliveryResult;
     infoKind?: string;
+    previewCovered?: { text: string; epoch: number };
     resolve: (result: FeishuReplyDeliveryResult) => void;
     reject: (error: unknown) => void;
   };
@@ -326,6 +328,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
+  // A closed card keeps its preview; the next card continues the same message.
+  const continuedPreview = (text: string) =>
+    text.slice(text.startsWith(closedPreviewText) ? closedPreviewText.length : 0).trimStart();
+
+  const setClosedPreview = (next: string, epoch = previewEpoch) => {
+    // A new assistant message restarts the preview; late settlements belong to the old one.
+    if (next === closedPreviewText || epoch !== previewEpoch) {
+      return;
+    }
+    closedPreviewText = next;
+    if (lastPartial && (streaming || streamingStartPromise)) {
+      streamText = `${snapshotBaseText}${continuedPreview(previewText)}`;
+      flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    }
+  };
+
   const queueStreamingUpdate = (nextText: string, mode: "snapshot" | "delta") => {
     if (!nextText) {
       return;
@@ -349,9 +367,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       streamText = `${streamText}${nextText}`;
     } else {
       previewText = nextText;
-      // A closed card keeps its preview; the next card continues the same message.
-      const shown = nextText.startsWith(closedPreviewText) ? closedPreviewText.length : 0;
-      streamText = `${snapshotBaseText}${nextText.slice(shown).trimStart()}`;
+      streamText = `${snapshotBaseText}${continuedPreview(nextText)}`;
     }
     lastPartial = nextText;
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
@@ -445,8 +461,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       disposition,
       content: finalizedAnswerText,
     };
+    const closingPreview = previewText;
+    const closingEpoch = previewEpoch;
+    const priorClosedPreview = closedPreviewText;
     if (disposition === "closed" && streamingToClose.isActive()) {
-      closedPreviewText = previewText;
+      // Provisional, so a card opened while this close is in flight continues after it.
+      // The settled result below confirms or corrects it.
+      closedPreviewText = closingPreview;
     }
     resetStreamingState();
     try {
@@ -478,6 +499,25 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (result.visibleReplySent) {
           visibleReplySent = true;
         }
+        if (disposition === "closed") {
+          // Only text the provider accepted is shown; a rejected suffix stays for the next card.
+          const accepted = finalizationError === undefined || result.content === text;
+          const answer =
+            (finalizedReasoningText
+              ? result.content?.split("\n\n---\n\n").pop()
+              : result.content) ?? "";
+          const body = closingPreview
+            .slice(closingPreview.startsWith(priorClosedPreview) ? priorClosedPreview.length : 0)
+            .trimStart();
+          setClosedPreview(
+            result.visibleReplySent && accepted
+              ? closingPreview
+              : result.visibleReplySent && answer && body.startsWith(answer)
+                ? closingPreview.slice(0, closingPreview.length - body.length + answer.length)
+                : priorClosedPreview,
+            closingEpoch,
+          );
+        }
         // Only a retained final can satisfy a duplicate text payload. Requested removal
         // and actual accepted content are separate facts when provider cleanup fails.
         if (
@@ -495,6 +535,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         ...(finalizationError === undefined ? {} : { error: finalizationError }),
       };
     } catch (error: unknown) {
+      if (disposition === "closed") {
+        setClosedPreview(priorClosedPreview, closingEpoch);
+      }
       return {
         ...outcome,
         result: noVisibleFeishuReplyDelivery,
@@ -524,11 +567,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const deferStreamingDelivery = (
     result: FeishuReplyDeliveryResult,
     infoKind?: string,
+    previewCovered?: { text: string; epoch: number },
   ): FeishuReplyDeliveryResultWithFinalization => {
     const { promise: finalization, resolve, reject } = createDeferred<FeishuReplyDeliveryResult>();
     pendingStreamingDeliveries.push({
       result,
       ...(infoKind ? { infoKind } : {}),
+      ...(previewCovered ? { previewCovered } : {}),
       resolve,
       reject,
     });
@@ -831,6 +876,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 completion.result.content,
                 completion.infoKind,
               );
+              // A static recovery delivered this block, so the preview it consumed is shown.
+              const covered = completion.previewCovered;
+              if (
+                providerFinalized !== closeOutcome.result &&
+                covered?.text.startsWith(closedPreviewText) &&
+                covered.text.length > closedPreviewText.length
+              ) {
+                setClosedPreview(covered.text, covered.epoch);
+              }
             } catch (fallbackError: unknown) {
               const fallbackPartial = isChannelPartialDeliveryError(fallbackError)
                 ? fallbackError.deliveryResult
@@ -1248,11 +1302,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
         const shouldStreamText = info?.kind === "block" || info?.kind === "final";
         if (shouldStreamText && (streaming?.isActive() || matchingClosingStream)) {
+          let previewCovered: { text: string; epoch: number } | undefined;
           if (!matchingClosingStream) {
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
+              const consumedBefore = previewBlockOffset;
               queueStreamingUpdate(text, "delta");
+              if (previewBlockOffset > consumedBefore) {
+                previewCovered = {
+                  text: previewText.slice(0, previewBlockOffset),
+                  epoch: previewEpoch,
+                };
+              }
             }
             if (info?.kind === "final") {
               // Final payloads can be cumulative snapshots or independent
@@ -1277,6 +1339,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           return deferStreamingDelivery(
             mergeFeishuReplyDeliveryResults(deliveredResults, text),
             info?.kind,
+            previewCovered,
           );
         }
 
@@ -1404,6 +1467,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             previewText = "";
             previewBlockOffset = 0;
             closedPreviewText = "";
+            previewEpoch += 1;
             modelWaitLine = "";
             return updateStreamingStatusLine("", false);
           }

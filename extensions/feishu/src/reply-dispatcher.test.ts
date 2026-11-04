@@ -1073,7 +1073,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     },
   );
 
-  // Strings are previews, [text] is a completed block and null is an idle close.
+  // Strings are previews, [text] is a completed block, null is an idle close and false is one
+  // whose card rejects its final write after showing only "A.", then recovers it statically.
   it.each([
     ["delta blocks", ["hello", ["lo world"]], ["hellolo world"]],
     ["covered tail", ["First.\n\nLast.", ["First."], ["\n\nLast."]], ["First.\n\nLast."]],
@@ -1083,6 +1084,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["corrected snapshots", ["Old draft answer.", "Corrected answer.", "Old draft"], ["Old draft"]],
     ["private reasoning", ["<thinking>private</thinking>\nvisible answer"], ["visible answer"]],
     ["idle-closed cards", ["One.", ["One."], null, "One.\n\nTwo.", ["\n\nTwo."]], ["One.", "Two."]],
+    ["rejected close", ["A.", ["A."], "A. X.", false, "A. X. E.", [" X. E."]], ["A. X.", "X. E."]],
   ] as const)("streams %s", async (_name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1090,10 +1092,18 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     for (const event of events) {
       if (event === null) {
         await options.onIdle?.();
+      } else if (event === false) {
+        // The block recovery resends "A."; "X." was never shown, so the next card must keep it.
+        const shown = { visibleReplySent: true, content: "A.", finalTextAccepted: false };
+        stream(0).closeWithResult.mockRejectedValueOnce(streamingFailure(new Error("no"), shown));
+        await expect(options.onIdle?.()).rejects.toThrow("no");
+        expectSend(sendStructuredCardFeishuMock, { text: "A." });
+        expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+        expect(streamingInstances).toHaveLength(1);
       } else if (typeof event === "string") {
         result.replyOptions.onPartialReply?.({ text: event });
       } else {
-        await options.block({ text: event[0] });
+        void (await options.block({ text: event[0] }))?.finalization?.catch(() => undefined);
       }
     }
     await options.onIdle?.();
@@ -1577,10 +1587,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     {
       name: "reasoning only",
       reasoning: ["deep thought"],
-      partial: undefined,
-      final: undefined,
       expected: "> deep thought",
-      duplicate: false,
     },
     {
       name: "empty reasoning",
@@ -1588,7 +1595,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       partial: "```ts\ncode\n```",
       final: "```ts\ncode\n```",
       expected: "",
-      duplicate: false,
     },
   ])(
     "renders $name in the reasoning-enabled stream",
@@ -1739,13 +1745,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
   it.each([
     { name: "newer silence", skippedIndex: 2, deliveryIndex: 1, rewritten: false, recover: false },
-    {
-      name: "unindexed failure",
-      skippedIndex: undefined,
-      deliveryIndex: undefined,
-      rewritten: false,
-      recover: true,
-    },
+    { name: "unindexed failure", rewritten: false, recover: true },
     {
       name: "rewritten later block",
       skippedIndex: 1,
