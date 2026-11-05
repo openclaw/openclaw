@@ -23,6 +23,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createChannelMentionProjector } from "../chat-display-projection.channel-mentions.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
@@ -43,7 +44,6 @@ import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.j
 import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
-import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
@@ -57,6 +57,7 @@ import { readChatHistoryPage } from "./chat-history-pages.js";
 import {
   resolveEmbeddedAgentRunRecoverySnapshot,
   respondChatHistoryUnavailable,
+  respondChatHistoryReadError,
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
@@ -134,13 +135,6 @@ export async function handleChatHistoryRequest({
   if (!selection) {
     return;
   }
-  const respondReadError = (error: unknown) => {
-    const message = resolveSessionHistoryUnavailableMessage(error);
-    if (message === undefined) {
-      throw error;
-    }
-    respondChatHistoryUnavailable(method, respond, message);
-  };
   try {
     const {
       selectedSession,
@@ -233,6 +227,7 @@ export async function handleChatHistoryRequest({
         ? [{ runId: receipt.runId, consumedByEventId: receipt.consumedByEventId }]
         : [],
     );
+    const projectMentions = createChannelMentionProjector(context, client, canonicalKey);
     let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
     // Internal adapters may inspect message objects before responding.
     const encodeResponse = acceptsSerializedJson && method === req.method;
@@ -269,6 +264,7 @@ export async function handleChatHistoryRequest({
                     ...(pageCursor ? { pageCursor } : {}),
                   },
                   signal,
+                  projectMentions,
                 ),
               {
                 config: cfg,
@@ -281,7 +277,7 @@ export async function handleChatHistoryRequest({
               },
             );
     } catch (error) {
-      respondReadError(error);
+      respondChatHistoryReadError(method, respond, error);
       return;
     }
     if (historyPage.encodedResponse && historyPage.encodedMessagesDeflate) {
@@ -548,9 +544,10 @@ export async function handleChatHistoryRequest({
                 incognito: entry?.incognito,
               },
               signal,
+              projectMentions,
             );
           } catch (error) {
-            respondReadError(error);
+            respondChatHistoryReadError(method, respond, error);
             return undefined;
           }
           return withReadySessionRows(rowProjection, queries, (publicationRead) => {

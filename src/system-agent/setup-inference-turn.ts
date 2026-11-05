@@ -34,6 +34,7 @@ import {
   type SystemAgentConfigSnapshot,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
+import { isLocalSystemAgentRoute } from "./route-locality.js";
 import {
   type BoundVerifySetupInferenceResult,
   describeSetupInferenceError,
@@ -42,6 +43,7 @@ import {
   redactSetupInferenceError,
   resolveSetupInferenceWinnerError,
   resolveToolFreeCliSetupError,
+  SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS,
   SETUP_INFERENCE_TEST_PROMPT,
   SETUP_INFERENCE_TEST_TIMEOUT_MS,
   SetupInferenceCancelledError,
@@ -86,7 +88,14 @@ export async function runSetupInferenceTurn(params: {
   // Probe ids stay under OpenAI's 64-char session cap and match the command-lane log filters.
   const runId = `probe-setup-inference-${randomUUID()}`;
   const sessionKey = `agent:${route.agentId}:setup-inference:incognito-${runId}`;
-  const timeoutMs = params.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
+  const timeoutMs =
+    params.timeoutMs ??
+    // Setup pins the built-in runtime as "openclaw"; only other harnesses keep the long budget.
+    (route.runner === "embedded" &&
+    (!route.agentHarnessRuntimeOverride || route.agentHarnessRuntimeOverride === "openclaw") &&
+    !isLocalSystemAgentRoute(route)
+      ? SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS
+      : SETUP_INFERENCE_TEST_TIMEOUT_MS);
   const started = Date.now();
   // A scratch workspace keeps the probe from reading the real workspace's bootstrap files.
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-"));
@@ -178,6 +187,9 @@ export async function runSetupInferenceTurn(params: {
         authProfileStateMode: "read-only",
         allowAuthProfileFallback: false,
         retryConnectionErrors: false,
+        // One-shot verification behind a blocking dialog: report the provider's answer
+        // instead of spending the chat turn's ~90 s backoff ladder on 5xx/429/overload.
+        retryTransientErrors: false,
         preparedModelRuntimeMode: "isolated-read-only",
         ...(harness === "codex" ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(harness ? { agentHarnessRuntimeOverride: harness } : {}),

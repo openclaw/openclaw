@@ -67,6 +67,7 @@ export function hydrateSessionActorState(
   target: SessionActorTarget,
   version: SessionActorVersion,
   writeToken: string,
+  previous?: SessionActorStoredState,
 ): SessionActorStoredState {
   const keys = collectSessionEntryLookupKeys(target.sessionKey);
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
@@ -450,7 +451,7 @@ export function hydrateSessionActorState(
   };
   retainSessionActorTranscriptWindow(state);
   seedSessionActorContextMetadata(state, storedNavigation);
-  initializeSessionActorContextStats(database, state);
+  initializeSessionActorContextStats(database, state, previous);
   state.hot = projectSessionActorHotState(state);
   return state;
 }
