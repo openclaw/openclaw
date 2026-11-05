@@ -231,6 +231,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     });
     expect(calls).toEqual(["prepare", "first", "second", "build", "authorized"]);
     expect(result.prompt).toBe("prepare\n\nfirst\n\nsecond\n\nauthorized\n\nhello");
+    expect(result).not.toHaveProperty("systemPromptReplaced");
     expect(messages[0]!.content[0]!.text).toBe("original");
   });
   it("classifies restrictive globs before building system instructions", async () => {
@@ -253,6 +254,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(build).toHaveBeenCalledWith({ toolsAllow, hasToolRestrictions: true });
     expect(result).toMatchObject({
       toolsAllow,
+      systemPromptReplaced: true,
       threadDeveloperInstructions: "hook replacement",
       turnDeveloperInstructions:
         "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",

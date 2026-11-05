@@ -41,7 +41,12 @@ observed unload does not reserve the conversation against a competing resume.
 Local and remote transports use the same conversation ID through unsubscribe and
 resume. Merely sending `developerInstructions` on `thread/resume` does not
 refresh the model-visible policy on stock Codex. Explicit `systemPrompt: ""` sends
-a withdrawal, not a fallback to older instructions.
+a withdrawal, not a fallback to older instructions. A `systemPrompt` replacement,
+including an empty one, replaces OpenClaw's base too: OpenClaw sends no base
+instructions and does not move its policy into the developer instructions, so a new
+thread keeps Codex's own model prompt or the authored native base. Codex keeps the
+base pinned when a thread was created, so a thread created before the replacement
+keeps OpenClaw's base until it starts a fresh thread.
 
 Ordinary incognito turns can reuse unchanged generic policy, but changed or emptied
 policy is rejected without sending another native turn or discarding the live

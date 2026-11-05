@@ -149,15 +149,23 @@ function hasAuthoredCodexBaseInstructions(
   );
 }
 
-/** OpenClaw's rendered base, whichever carrier holds it; ring-zero threads have none. */
+/**
+ * OpenClaw's rendered base, whichever carrier holds it. Ring-zero threads have none, and
+ * neither do threads whose before_prompt_build `systemPrompt` replaced OpenClaw's policy.
+ */
 export function resolveCodexOpenClawBaseInstructions(
   params: CodexThreadPromptContext,
   options: Pick<
     CodexThreadConfigurationOptions,
-    "dynamicTools" | "nativeCodeModeEnabled" | "nativeModelProvider" | "hostSystemAgentActive"
+    | "dynamicTools"
+    | "nativeCodeModeEnabled"
+    | "nativeModelProvider"
+    | "hostSystemAgentActive"
+    | "systemPromptReplaced"
   >,
 ): string | undefined {
-  return isCodexRingZeroThread(params, options.hostSystemAgentActive)
+  return options.systemPromptReplaced ||
+    isCodexRingZeroThread(params, options.hostSystemAgentActive)
     ? undefined
     : buildCodexBaseInstructions(params, options);
 }
@@ -166,7 +174,8 @@ export function resolveCodexOpenClawBaseInstructions(
  * A request base outranks `model_instructions_file` and `instructions`
  * (codex-rs/core/src/config/mod.rs), so with either authored OpenClaw omits the base and
  * carries its policy ahead of the developer instructions. Start and resume place it alike,
- * keeping warm reuse and fork snapshots consistent with the creation request.
+ * keeping warm reuse and fork snapshots consistent with the creation request. A replaced
+ * system prompt sends no base, so Codex keeps its own model prompt or the authored one.
  */
 export function placeCodexBaseInstructions(
   params: CodexThreadPromptContext,
@@ -174,9 +183,12 @@ export function placeCodexBaseInstructions(
   developerInstructions: string,
   ringZero: { baseInstructions?: string },
 ): { baseInstructions?: string; developerInstructions: string } {
+  if (isCodexRingZeroThread(params, options.hostSystemAgentActive)) {
+    return { ...ringZero, developerInstructions };
+  }
   const baseInstructions = resolveCodexOpenClawBaseInstructions(params, options);
   if (baseInstructions === undefined) {
-    return { ...ringZero, developerInstructions };
+    return { developerInstructions };
   }
   return hasAuthoredCodexBaseInstructions(options)
     ? { developerInstructions: joinPresentSections(baseInstructions, developerInstructions) }

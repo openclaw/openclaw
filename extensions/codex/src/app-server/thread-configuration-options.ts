@@ -16,6 +16,8 @@ export type CodexThreadConfigurationOptions = {
   nativeConfig?: CodexConfigReadResponse;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  /** A before_prompt_build `systemPrompt` replaced OpenClaw's policy; place no OpenClaw base. */
+  systemPromptReplaced?: boolean;
   /** Skills, persona, and memory carried with thread developer instructions, separate from generic policy. */
   refreshableInstructions?: string;
   config?: JsonObject;

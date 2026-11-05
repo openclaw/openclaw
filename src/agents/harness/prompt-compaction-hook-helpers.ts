@@ -20,6 +20,8 @@ const warnHookFailure = (hook: string) => (error: unknown) => {
 type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
+  /** A before_prompt_build `systemPrompt`, including "", replaced the harness's own policy. */
+  systemPromptReplaced?: true;
   /** Stable policy and per-turn context for harnesses with separate instruction carriers. */
   threadDeveloperInstructions?: string;
   turnDeveloperInstructions?: string;
@@ -110,10 +112,9 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
           })
           .catch(warnHookFailure("authorized before_prompt_build"))
       : undefined;
-  const systemPrompt =
-    typeof promptBuildResult?.systemPrompt === "string"
-      ? promptBuildResult.systemPrompt
-      : developerInstructions;
+  const replacementSystemPrompt = promptBuildResult?.systemPrompt;
+  const systemPromptReplaced = typeof replacementSystemPrompt === "string";
+  const systemPrompt = systemPromptReplaced ? replacementSystemPrompt : developerInstructions;
   const promptPrefix = joinPresentTextSegments([
     turnContext.prependContext,
     promptBuildResult?.prependContext,
@@ -149,6 +150,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     developerInstructions:
       joinPresentTextSegments([prependSystemContext, systemPrompt, appendSystemContext]) ??
       systemPrompt,
+    ...(systemPromptReplaced ? { systemPromptReplaced: true as const } : {}),
     ...(turnDeveloperInstructions
       ? { threadDeveloperInstructions: systemPrompt, turnDeveloperInstructions }
       : {}),
