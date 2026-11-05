@@ -32,5 +32,16 @@ export const classifyQwenFailoverReason: NonNullable<ProviderPlugin["classifyFai
   ) {
     return "rate_limit";
   }
-  return undefined;
+  // Bailian reuses 429/insufficient_quota for TPS/TPM throttles (#148236):
+  // genuine billing errors carry BillOverdue codes (handled above) or
+  // explicit exhausted-balance text. An unmarked quota message is a
+  // transient throttle — prefer model-scoped cooldown over disabling the
+  // auth profile for an ambiguous signal.
+  if (/billoverdue|\bbill\s+overdue\b/i.test(context.errorMessage)) {
+    return "billing";
+  }
+  if (/\binsufficient[_ ]balance\b/i.test(context.errorMessage)) {
+    return "billing";
+  }
+  return "rate_limit";
 };
