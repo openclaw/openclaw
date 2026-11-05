@@ -9,6 +9,7 @@ import {
   createSessionEntryWithTranscript,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import type { PluginHookBeforeAgentRunEvent } from "../../../plugins/hook-types.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -607,6 +608,31 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       expect(mockParams(hoisted.detectAndLoadPromptImagesMock).prompt).toBe("visible ask");
     },
   );
+
+  it("passes the final system prompt to before_agent_run", async () => {
+    const marker = "WORKSHOP_GOVERNANCE_CONTEXT_V1";
+    let hookSystemPrompt: string | undefined;
+    useHooks([
+      {
+        hookName: "before_prompt_build",
+        handler: async () => ({ prependSystemContext: marker }),
+      },
+      {
+        hookName: "before_agent_run",
+        handler: async (...args: unknown[]) => {
+          const event = args[0] as PluginHookBeforeAgentRunEvent;
+          hookSystemPrompt = event.systemPrompt;
+        },
+      },
+    ]);
+    const { seen, sessionPrompt } = capturePrompt();
+
+    await runAttempt({ sessionPrompt });
+
+    expect(hookSystemPrompt).toContain(marker);
+    expect(seen.systemPrompt).toContain(marker);
+    expect(hookSystemPrompt).toBe(seen.systemPrompt);
+  });
 
   it("keeps runtime-only context hidden when orphan repair merges an empty transcript", async () => {
     hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
