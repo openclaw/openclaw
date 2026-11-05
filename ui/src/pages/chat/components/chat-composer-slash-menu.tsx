@@ -624,11 +624,11 @@ function renderSlashMenuContents(
 
   return (
     <>
-      <For keyed={(item) => item} each={groups}>
+      <For keyed={false} each={groups}>
         {(menuItem) => (
           <div class="slash-menu-group">
             <div class="slash-menu-group__label">{getSlashCommandCategoryLabel(menuItem()[0])}</div>
-            <For keyed={(item) => item} each={menuItem()[1]}>
+            <For keyed={(entry) => entry.command.name} each={menuItem()[1]}>
               {(entry) => <>{renderCommandOption(entry().command, entry().index)}</>}
             </For>
           </div>
@@ -637,7 +637,7 @@ function renderSlashMenuContents(
       {skills.length > 0 ? (
         <div class="slash-menu-group slash-menu-group--skills">
           <div class="slash-menu-group__label">{t("chat.skills.label")}</div>
-          <For keyed={(item) => item} each={skills}>
+          <For keyed={(command) => command.name} each={skills}>
             {(command, index) => <>{renderCommandOption(command(), commands.length + index())}</>}
           </For>
         </div>
