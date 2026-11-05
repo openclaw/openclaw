@@ -382,6 +382,49 @@ tighter overall revision limit; the embedded runner allows at most three.
 Conversation access and prompt mutation have separate permission gates; see
 [Permissions and scope](/plugins/hooks#permissions-and-scope) before enabling these hooks.
 
+### Final model request policy
+
+`before_model_request` is an awaited, modifying policy hook on the embedded
+runner's provider transport. It runs once per provider request, including each
+model call inside a tool loop and each encode-only transport retry, after
+provider and config `onPayload` transforms. For transports that use host
+request encoding it runs at final encoding instead. The returned payload is
+what the transport hashes, records for context-retry admission, and sends.
+
+The event is `{ payload, provider, model, messages }`:
+
+- `payload` is the provider-specific request body. Return `{ payload }` to
+  replace it, or return nothing to send it unchanged. Handlers run in priority
+  order and each one sees the previous replacement.
+- A replacement may rewrite content but not the tool surface. If `tools`,
+  `tool_choice`, `toolConfig`, `functions`, or `function_call` (top level or
+  under `config`) differ from the original, the request fails. Tool and
+  provider-hosted tool authorization is settled before this hook, and hosted
+  tools have no later local gate.
+- `messages` is a detached copy of the model-facing history, including
+  host-owned metadata such as `__openclaw.senderIsOwner`. Editing it does not
+  change the request. Use that metadata, not text inside a message, to decide
+  sender trust.
+
+The hook context carries the usual agent fields (`agentId`, `sessionKey`,
+`sessionId`, `runId`, channel and sender fields when known) plus
+`modelProviderId` and `modelId`.
+
+A thrown error or a timeout (10 seconds by default) fails the model request;
+the original payload is never sent. A scanner that wants outage passthrough
+must catch its own failures and return nothing. If the turn is aborted while a
+handler runs, the request is not sent.
+
+The hook needs conversation access and prompt modification, like
+`before_prompt_build`. It still runs for incognito sessions, as other policy
+hooks do; `llm_input` and `llm_output` observations stay suppressed there. With
+no handler registered, messages are not copied and nothing is awaited.
+
+Scope: embedded agent attempts only. CLI-backed runtimes, external harnesses
+such as Codex, compaction summary calls, custom provider transports that bypass
+both `onPayload` and host encoding, and provider-hosted tool results that never
+return to the client are not intercepted.
+
 ### Session extensions and next-turn injections
 
 Workflow plugins can persist small JSON-compatible session state with

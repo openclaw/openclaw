@@ -414,3 +414,65 @@ describe("provider prompt state", () => {
     await result.result();
   });
 });
+
+describe("final model request gate", () => {
+  it.each([false, true])(
+    "awaits one gate after provider transforms (encoded=%s)",
+    async (encoded) => {
+      const order: string[] = [];
+      let sent: unknown;
+      const transformPayload = vi.fn(async (payload, _model, receivedContext) => {
+        expect(receivedContext).toBe(context);
+        order.push("gate");
+        expect(payload.input).toEqual(["provider addition"]);
+        return { ...payload, input: ["withheld"] };
+      });
+      const wrapped = wrapStreamFnWithProviderPromptState({
+        state,
+        effectiveContextTokenBudget: 128000,
+        transformPayload,
+        streamFn: async (_model, _context, options) => {
+          const encode = encoded ? prepareModelRequestBody(options) : undefined;
+          const prepared = await options?.onPayload?.({ input: ["raw"] }, model);
+          sent = encode
+            ? JSON.parse(new TextDecoder().decode((await encode(prepared)).body))
+            : prepared;
+          order.push("send");
+          return createResultStream("stop");
+        },
+      });
+      await wrapped(model, context, {
+        onPayload: async () => {
+          order.push("provider");
+          return { input: ["provider addition"] };
+        },
+      });
+      expect(order).toEqual(["provider", "gate", "send"]);
+      expect(transformPayload).toHaveBeenCalledTimes(1);
+      expect(sent).toEqual({ input: ["withheld"] });
+      expect(state.lastAttempt?.digest).toBe(
+        prepareProviderPrompt({ payload: sent, encode: encoded }).digest,
+      );
+    },
+  );
+
+  it("gates encode-only retries and stops an aborted request after the gate", async () => {
+    const controller = new AbortController();
+    const gate = vi.fn(async (payload) => payload);
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      state,
+      effectiveContextTokenBudget: 128000,
+      transformPayload: gate,
+      streamFn: async (_model, _context, options) => {
+        const encode = prepareModelRequestBody(options);
+        await encode({ input: ["first"] });
+        await encode({ input: ["retry"] });
+        controller.abort();
+        await encode({ input: ["aborted"] });
+        throw new Error("must not send");
+      },
+    });
+    await expect(wrapped(model, context, { signal: controller.signal })).rejects.toThrow();
+    expect(gate).toHaveBeenCalledTimes(3);
+  });
+});

@@ -15,11 +15,7 @@ import { finalizeGroupThreadToolReply } from "../auto-reply/group-thread-context
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
-import {
-  projectAgentEndEvent,
-  withAgentRunId,
-  withoutIncognitoLlmContent,
-} from "./hook-agent-observations.js";
+import { projectAgentEndEvent, withAgentRunId } from "./hook-agent-observations.js";
 import { createChannelIngressHookRunner } from "./hook-channel-ingress.js";
 import { readClaimingHookAdmission } from "./hook-claim-admission.js";
 import { isHookContextEligible } from "./hook-context-eligibility.js";
@@ -34,6 +30,7 @@ import {
   clonePromptHookEvent,
   HookIsolationError,
 } from "./hook-isolation.js";
+import { createModelHookBindings } from "./hook-model.js";
 import { createPluginSystemContextLimiter, mergeAgentTurnPrepare } from "./hook-prompt-context.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
@@ -174,6 +171,7 @@ export function createHookRunner(
   const failurePolicyByHook = {
     before_agent_run: "fail-closed",
     before_channel_ingress: "fail-closed",
+    before_model_request: "fail-closed",
     ...options.failurePolicyByHook,
   } satisfies Partial<Record<PluginHookName, HookFailurePolicy>>;
   const voidHookTimeoutMsByHook = {
@@ -1076,10 +1074,7 @@ export function createHookRunner(
           (ctx === undefined || isHookContextEligible(hook, ctx)),
       ),
     runBeforeAgentReply: bindClaimingHook("before_agent_reply"),
-    runModelCallStarted: bindVoidHook("model_call_started"),
-    runModelCallEnded: bindVoidHook("model_call_ended"),
-    runLlmInput: withoutIncognitoLlmContent(bindVoidHook("llm_input")),
-    runLlmOutput: withoutIncognitoLlmContent(bindVoidHook("llm_output")),
+    ...createModelHookBindings(bindModifyingHook, bindVoidHook),
     runBeforeAgentFinalize: async (
       event: HookEvent<"before_agent_finalize">,
       ctx: HookContext<"before_agent_finalize">,

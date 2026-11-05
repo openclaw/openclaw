@@ -78,6 +78,7 @@ const WORKSPACE_EFFECT_HOOKS = [
   "agent_turn_prepare",
   "before_prompt_build",
   "before_agent_run",
+  "before_model_request",
   "llm_input",
   "llm_output",
   "before_agent_finalize",
