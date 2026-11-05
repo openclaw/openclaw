@@ -290,8 +290,8 @@ export async function runReleasePublishPreflight(
   if (evidenceRequired) {
     const run = await check(
       "validation.run",
-      "Exact successful validation attempt selected.",
-      "Supply the successful Full Release Validation run and exact attempt; use pnpm frv status --run <id> to inspect.",
+      "Exact completed validation attempt selected.",
+      "Supply the completed Full Release Validation run and exact attempt; use pnpm frv status --run <id> to inspect.",
       () => {
         if (!POSITIVE_ID.test(options.fullReleaseValidationRunId)) {
           throw new Error("full_release_validation_run_id is required.");
@@ -302,10 +302,10 @@ export async function runReleasePublishPreflight(
         );
         if (
           selectedRun.status !== "completed" ||
-          selectedRun.conclusion !== "success" ||
+          !["success", "failure"].includes(String(selectedRun.conclusion)) ||
           !POSITIVE_ID.test(String(selectedRun.run_attempt))
         ) {
-          throw new Error("Validation run is not completed/success with an exact attempt.");
+          throw new Error("Validation run is not completed with an exact success/failure attempt.");
         }
         if (attempt && attempt !== String(selectedRun.run_attempt)) {
           throw new Error(

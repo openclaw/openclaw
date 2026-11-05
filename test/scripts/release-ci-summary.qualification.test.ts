@@ -12,7 +12,10 @@ import {
   composeReleaseAttemptJobs,
   validateReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { RELEASE_VALIDATION_WAIVERS } from "../../scripts/lib/release-validation-waivers.mjs";
+import {
+  RELEASE_VALIDATION_WAIVERS,
+  RELEASE_VALIDATION_RETROSPECTIVE_WAIVERS,
+} from "../../scripts/lib/release-validation-waivers.mjs";
 import {
   downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
@@ -28,9 +31,15 @@ import { fixture as admissionFixture } from "./release-qualification-admission.t
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sha256 = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const originalWaivers = [...RELEASE_VALIDATION_WAIVERS];
-afterEach(() =>
-  RELEASE_VALIDATION_WAIVERS.splice(0, RELEASE_VALIDATION_WAIVERS.length, ...originalWaivers),
-);
+const originalRetrospectiveWaivers = [...RELEASE_VALIDATION_RETROSPECTIVE_WAIVERS];
+afterEach(() => {
+  RELEASE_VALIDATION_WAIVERS.splice(0, RELEASE_VALIDATION_WAIVERS.length, ...originalWaivers);
+  RELEASE_VALIDATION_RETROSPECTIVE_WAIVERS.splice(
+    0,
+    RELEASE_VALIDATION_RETROSPECTIVE_WAIVERS.length,
+    ...originalRetrospectiveWaivers,
+  );
+});
 
 function consumers(
   f: ReturnType<typeof candidatePublicationFixture>,
@@ -94,6 +103,32 @@ describe("candidate-owned publish consumer chain", () => {
   it.each([
     { scenario: "matching grant", parentConclusion: "success" },
     { scenario: "failed parent", parentConclusion: "failure" },
+    { scenario: "retrospective grant", parentConclusion: "failure" },
+    {
+      scenario: "retrospective wrong attempt",
+      parentConclusion: "failure",
+      error: "parent run is not completed/success",
+    },
+    {
+      scenario: "retrospective wrong target",
+      parentConclusion: "failure",
+      error: "Failed FRV requires exact retrospective policy",
+    },
+    {
+      scenario: "retrospective package failure",
+      parentConclusion: "failure",
+      error: "Retrospective policy cannot waive parent failure",
+    },
+    {
+      scenario: "retrospective skipped candidate verification",
+      parentConclusion: "failure",
+      error: "Retrospective policy requires successful sealed candidate verification",
+    },
+    {
+      scenario: "retrospective Gateway E2E",
+      parentConclusion: "failure",
+      error: "Retrospective release waiver is not a supported provider leaf",
+    },
     { scenario: "cancelled parent", parentConclusion: "cancelled" },
     { scenario: "missing grant", parentConclusion: "success" },
     { scenario: "different version", parentConclusion: "success" },
@@ -102,7 +137,7 @@ describe("candidate-owned publish consumer chain", () => {
     { scenario: "tooling revoked after verification", parentConclusion: "success" },
   ])(
     "authenticates waived FRV at npm and Docker admission: $scenario",
-    async ({ scenario, parentConclusion }) => {
+    async ({ scenario, parentConclusion, error }) => {
       const f = candidatePublicationFixture();
       const role = "releaseChecksIndependent";
       const planned = f.plan.children.find((entry) => entry.key === role);
@@ -113,10 +148,20 @@ describe("candidate-owned publish consumer chain", () => {
         targetVersion,
         childRole: role,
         jobName:
-          "Run repo/live E2E validation / Native live suites (Native live gateway profiles OpenAI)",
+          scenario === "retrospective Gateway E2E"
+            ? "Run repo/live E2E validation / Gateway E2E"
+            : "Run repo/live E2E validation / Native live suites (Native live gateway profiles OpenAI)",
         reason: "Synthetic checked-in provider outage grant.",
       };
-      if (scenario !== "missing grant") {
+      const retrospective = scenario.startsWith("retrospective");
+      if (retrospective) {
+        RELEASE_VALIDATION_RETROSPECTIVE_WAIVERS.push({
+          ...grant,
+          parentRunId: f.runId,
+          parentRunAttempt: scenario === "retrospective wrong attempt" ? 2 : 1,
+          targetSha: scenario === "retrospective wrong target" ? "d".repeat(40) : f.q,
+        });
+      } else if (scenario !== "missing grant") {
         RELEASE_VALIDATION_WAIVERS.push({
           ...grant,
           ...(scenario === "different version" ? { targetVersion: "2026.8.29-beta.1" } : {}),
@@ -143,7 +188,10 @@ describe("candidate-owned publish consumer chain", () => {
         jobs: composite.jobs,
         compositeJobsSha256: composite.sha256,
       });
-      Object.assign(f.manifest, { waivers: [{ ...grant, runId: planned.runId, runAttempt: 1 }] });
+      Object.assign(f.manifest, {
+        waivers: retrospective ? [] : [{ ...grant, runId: planned.runId, runAttempt: 1 }],
+      });
+      const originalManifest = JSON.stringify(f.manifest);
       f.parent.conclusion = parentConclusion;
       const client = {
         ...f.client,
@@ -152,8 +200,45 @@ describe("candidate-owned publish consumer chain", () => {
           const run = await f.client.getRun(id);
           return id === planned.runId ? { ...run, conclusion: "failure" } : run;
         },
-        getRunAttemptJobs: async (id: string) =>
-          id === planned.runId ? jobs : f.client.getRunAttemptJobs(id),
+        getRunAttemptJobs: async (id: string) => {
+          if (id === planned.runId) {
+            return jobs;
+          }
+          const original = await f.client.getRunAttemptJobs(id);
+          return retrospective && id === f.runId
+            ? [
+                ...original,
+                { ...aggregate, name: "Diagnostic Drain", conclusion: "success", steps: [] },
+                {
+                  ...aggregate,
+                  name: "Release Decision",
+                  conclusion: "failure",
+                  steps: [{ name: "Enforce release decision", conclusion: "failure" }],
+                },
+                {
+                  ...aggregate,
+                  name: "Verify full validation",
+                  conclusion: "failure",
+                  steps: [
+                    {
+                      name: "Verify sealed release candidate",
+                      conclusion:
+                        scenario === "retrospective skipped candidate verification"
+                          ? "skipped"
+                          : "success",
+                    },
+                    {
+                      name:
+                        scenario === "retrospective package failure"
+                          ? "Require qualified publication artifacts"
+                          : "Verify exact release state artifacts",
+                      conclusion: "failure",
+                    },
+                  ],
+                },
+              ]
+            : original;
+        },
         getJobLog: (id: number) =>
           id === 90101
             ? Promise.resolve(
@@ -161,6 +246,43 @@ describe("candidate-owned publish consumer chain", () => {
               )
             : f.client.getJobLog(id),
       };
+      if (retrospective) {
+        if (scenario !== "retrospective grant") {
+          assert(error);
+          await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow(error);
+          return;
+        }
+        assert(f.source.publicationSelection);
+        const result = await authenticateFullReleaseValidationEvidence(
+          {
+            run: f.parent,
+            manifest: f.manifest,
+            expectedRepository: f.repository,
+            expectedRunId: f.runId,
+            expectedRunAttempt: 1,
+            expectedTargetSha: f.q,
+            expectedReleaseTag: "v2026.8.28-beta.1",
+            expectedTrustedWorkflowFullRef: f.publisherFullRef,
+            expectedTrustedWorkflowSha: f.p,
+            expectedPublicationSelection: f.source.publicationSelection,
+            verifierSourceSha: f.p,
+            verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
+          },
+          client,
+        );
+        expect(result.evidence.current.conclusion).toBe("failure");
+        expect(result.evidence.retrospectiveWaivers).toMatchObject({
+          policy: "retrospective-release-waivers-v1",
+          sourceRunId: f.runId,
+          sourceRunAttempt: 1,
+          targetSha: f.q,
+          toolingSha: f.p,
+        });
+        expect(result.evidence.waivers).toHaveLength(1);
+        expect(JSON.stringify(f.manifest)).toBe(originalManifest);
+        await expect(consumers(f, client).npm()).resolves.toEqual(f.npmQualified);
+        return;
+      }
       if (parentConclusion !== "success") {
         await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow(
           "parent run is not completed/success",
