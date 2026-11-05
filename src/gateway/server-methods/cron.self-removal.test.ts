@@ -30,13 +30,15 @@ const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-self-rem
 
 describe("cron self-removal", () => {
   it.each([
-    { payloadKind: "agentTurn", path: "manual", timeoutSeconds: 0 },
-    { payloadKind: "agentTurn", path: "timer", timeoutSeconds: 60 },
-    { payloadKind: "script", path: "manual", timeoutSeconds: 0 },
-    { payloadKind: "script", path: "timer", timeoutSeconds: 60 },
+    ["agentTurn", "manual", 0, "exact"],
+    ["agentTurn", "timer", 60, "exact"],
+    ["script", "manual", 0, "exact"],
+    ["script", "timer", 60, "exact"],
+    ["agentTurn", "manual", 0, "unbound"],
+    ["agentTurn", "manual", 0, "different instance"],
   ] as const)(
-    "$payloadKind finishes its $path run with timeoutSeconds=$timeoutSeconds",
-    async ({ payloadKind, path, timeoutSeconds }) => {
+    "%s preserves %s completion (timeoutSeconds=%i, owner=%s)",
+    async (payloadKind, path, timeoutSeconds, owner) => {
       const { storePath } = await makeStorePath();
       const clock = createGatewaySchedulerClock(Date.now());
       const scheduler = createTestGatewayScheduler(clock.clock);
@@ -61,7 +63,9 @@ describe("cron self-removal", () => {
         const creatorScope = createCronCreatorAuthorityRunScope(`run-${job.id}`, { kind: "local" });
         try {
           const admitted = await admission.admit("embedded");
-          await executionIdentity?.onPostAdmission?.(admitted);
+          if (owner !== "unbound") {
+            await executionIdentity?.onPostAdmission?.(admitted);
+          }
           const delegatedAuthority = expectDefined(
             getAdmittedRunDelegatedAuthority(admitted),
             "live scheduled admission",
@@ -73,7 +77,10 @@ describe("cron self-removal", () => {
                 kind: "agentRuntime",
                 agentId: "main",
                 sessionKey: `agent:main:cron:${job.id}`,
-                operationalRunInstance: admitted.operationalRunInstance,
+                operationalRunInstance:
+                  owner === "different instance"
+                    ? createOperationalRunInstanceRef(`run-${job.id}`)
+                    : admitted.operationalRunInstance,
                 delegatedAuthority: { kind: "local", ...delegatedAuthority },
                 cronCreatorAuthorityGrant: mintCronCreatorAuthorityGrant(
                   creatorScope,
@@ -103,7 +110,15 @@ describe("cron self-removal", () => {
             }),
             isWebchatConnect: () => false,
           });
-          expect(respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
+          if (owner === "exact") {
+            expect(respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
+          } else {
+            expect(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({ message: expect.stringContaining("job was not removed") }),
+            );
+          }
           abortedAfterRemoval = abortSignal?.aborted;
           activeAfterRemoval = hasActiveCronJobs();
           return {
@@ -177,7 +192,12 @@ describe("cron self-removal", () => {
         expect(abortedAfterRemoval).toBe(false);
         expect(activeAfterRemoval).toBe(true);
         expect(hasActiveCronJobs()).toBe(false);
-        expect(await cron.readJob(job.id)).toBeUndefined();
+        const remainingJob = await cron.readJob(job.id);
+        if (owner === "exact") {
+          expect(remainingJob).toBeUndefined();
+        } else {
+          expect(remainingJob).toMatchObject({ id: job.id });
+        }
       } finally {
         cron.stop();
         await scheduler.stop();

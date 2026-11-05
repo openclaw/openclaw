@@ -223,6 +223,16 @@ describe("cron message action authority", () => {
   );
 });
 
+it("refuses self-removal without an active run", () => {
+  const commitGuard = bindCronSelfRemovalCommitGuard(
+    "idle-job",
+    createOperationalRunInstanceRef("idle-run"),
+    vi.fn(),
+    vi.fn(),
+  );
+  expect(commitGuard).toThrow("Cron self-removal requires the exact live run");
+});
+
 describe.each(["same module", "reload before guard", "reload after guard"])(
   "active cron self-removal ownership: %s",
   (moduleBoundary) => {
@@ -267,7 +277,7 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
         });
         expect(assertMessageCurrent).not.toThrow();
         let callerActive = true;
-        const commitGuard = vi.fn();
+        let commitGuard: () => void = vi.fn();
         const bindingModule =
           moduleBoundary === "reload before guard"
             ? await importFreshModule<typeof import("./active-jobs.js")>(
@@ -275,7 +285,7 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
                 "./active-jobs.js?cron-self-removal-before-guard",
               )
             : { bindCronSelfRemovalCommitGuard };
-        bindingModule.bindCronSelfRemovalCommitGuard(
+        commitGuard = bindingModule.bindCronSelfRemovalCommitGuard(
           jobId,
           scenario === "different instance"
             ? createOperationalRunInstanceRef(context.operationalRunInstance.runId)
@@ -305,6 +315,13 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
         const cancel = vi.fn();
         currentMarker.cancellation = { kind: "bound", cancel };
 
+        if (scenario === "active owner" || scenario === "copied guard") {
+          expect(commitGuard).not.toThrow();
+        } else {
+          expect(commitGuard).toThrow();
+        }
+        expect(cancel).not.toHaveBeenCalled();
+        expect(currentMarker.jobRemoved).toBeUndefined();
         const removalGuard = scenario === "copied guard" ? () => commitGuard() : commitGuard;
         const removalModule =
           moduleBoundary === "same module"

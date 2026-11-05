@@ -507,7 +507,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         : undefined;
       let result: Awaited<ReturnType<typeof context.cron.remove>>;
       try {
-        const commitGuard = resolveCronMutationCommitGuard(
+        let commitGuard = resolveCronMutationCommitGuard(
           client,
           context,
           {
@@ -521,7 +521,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         const identity = client?.internal?.agentRuntimeIdentity;
         const validateAuthority = context.validateAgentRuntimeApprovalAuthority;
         if (identity && validateAuthority && commitGuard && callerScope?.currentJobId === jobId) {
-          bindCronSelfRemovalCommitGuard(
+          commitGuard = bindCronSelfRemovalCommitGuard(
             jobId,
             identity.operationalRunInstance,
             commitGuard,
