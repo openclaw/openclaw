@@ -718,6 +718,7 @@ src/config/schema.field-metadata.ts
 src/config/schema.shared.ts
 src/config/schema.walk.ts
 src/config/sensitive-paths.ts
+src/config/sessions/archive-cache-budget.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
 src/config/sessions/session-worker-execution-source.ts
