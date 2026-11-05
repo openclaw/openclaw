@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
@@ -13,26 +14,18 @@ import {
 
 const tempDirs = useTestTempDirs();
 
-// Storage runs in a worker; authority checks it makes mid-operation are answered
-// by the main thread. Revoking there must stop the write before it publishes.
-it("authority revoked during a worker operation fails the write and publishes nothing", async () => {
+async function startWithAuthority(assertInvocationCurrent: () => void) {
   const base = tempDirs.make("knowledge-worker-");
   const { root, config } = await createVault(base);
   const api = apiFor(base, config, { extra: { registerService: stopAtTestEnd } });
   const service = createKnowledgeService(api);
-  let checks = 0,
-    allowed = Infinity;
   const tool = toolContext(api);
   Object.assign(tool.tool, {
     sessionKey: "agent:main:test",
     sessionId: randomUUID(),
-    assertInvocationCurrent: () => {
-      if (++checks > allowed) {
-        throw new Error("invocation revoked");
-      }
-    },
+    assertInvocationCurrent,
   });
-  const save = (title: any) =>
+  const save = (title: string) =>
     service.save_page(
       {
         requestId: randomUUID(),
@@ -43,6 +36,19 @@ it("authority revoked during a worker operation fails the write and publishes no
       },
       tool,
     );
+  return { root, service, tool, save };
+}
+
+// Storage runs in a worker; authority checks it makes mid-operation are answered
+// by the main thread. Revoking there must stop the write before it publishes.
+it("authority revoked during a worker operation fails the write and publishes nothing", async () => {
+  let checks = 0,
+    allowed = Infinity;
+  const { root, service, tool, save } = await startWithAuthority(() => {
+    if (++checks > allowed) {
+      throw new Error("invocation revoked");
+    }
+  });
 
   await save("Warm up");
   const perSave = checks;
@@ -60,4 +66,26 @@ it("authority revoked during a worker operation fails the write and publishes no
   ).toBe(0);
   expect((await service.lookup({ query: "Revoked mid-write" }, tool)).total).toBe(0);
   expect((await service.lookup({ query: "Warm up" }, tool)).total).toBe(1);
+});
+
+// Host tool authority is scoped to each call's async context. The worker starts on
+// the first call and stays warm; later calls must not be checked as that first call.
+it("worker authority checks use each call's context, not the call that started the worker", async () => {
+  const turn = new AsyncLocalStorage<string>();
+  const retired = new Set<string>();
+  const { service, tool, save } = await startWithAuthority(() => {
+    const current = turn.getStore();
+    if (!current || retired.has(current)) {
+      throw new Error("tool invocation authority is no longer active");
+    }
+  });
+
+  await turn.run("turn-1", () => save("First turn"));
+  retired.add("turn-1");
+  await turn.run("turn-2", () => save("Second turn"));
+  const found = await turn.run("turn-2", () => service.lookup({ query: "Second turn" }, tool));
+  expect(found.total).toBe(1);
+  await expect(turn.run("turn-1", () => save("Late first turn"))).rejects.toThrow(
+    /no longer active/,
+  );
 });

@@ -34,6 +34,7 @@ import type { DoctorHealthCheckContext } from "./doctor-health-contribution-type
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
 import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
+import { sessionArchiveCacheCheck } from "./doctor-session-archive-cache-check.js";
 import { runtimeToolSchemaCheck } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import { securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
@@ -623,6 +624,7 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     gatewayAuthCheck,
     legacyStateCheck,
     removedWorkspacesStateCheck,
+    sessionArchiveCacheCheck,
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
     cronInferenceCheck,

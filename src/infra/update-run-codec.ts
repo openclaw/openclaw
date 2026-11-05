@@ -15,6 +15,8 @@ import type { UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_BYTES = 16 * 1024;
+/** Plugin rollback kept a later writer's value; users review it through Doctor. */
+export const PLUGIN_COHORT_KEPT_WARNING_STEP = "warning:plugin-cohort:later-changes-kept";
 const RETAINED_STEP_NAMES = [
   ...UPDATE_RUN_PHASES,
   "candidate-admission",
@@ -76,6 +78,7 @@ const RETAINED_STEP_NAMES = [
   "recovery-artifact-cleanup",
   "warning:recovery-artifact-cleanup",
   "diagnostic:recovery-artifact-cleanup",
+  PLUGIN_COHORT_KEPT_WARNING_STEP,
 ];
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
