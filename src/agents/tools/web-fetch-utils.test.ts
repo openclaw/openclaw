@@ -214,4 +214,12 @@ describe("web-fetch-utils", () => {
       "<p>Intro:</p><ul><li>one</li><li>two</li></ul><h2>Steps</h2><ol><li>first</li><li>second</li></ol>";
     expect(await extractText(html)).toBe("Intro:\n\none\ntwo\n\nSteps\n\nfirst\nsecond");
   });
+  it("resolves prose backslash escapes after structure stripping", () => {
+    expect(markdownToText("\\*terms\\* and \\[report\\](draft)")).toBe(
+      "*terms* and [report](draft)",
+    );
+    expect(markdownToText("\\# Ticket 42\n5 \\* 3")).toBe("# Ticket 42\n5 * 3");
+    expect(markdownToText("# Real Heading\n- real item")).toBe("Real Heading\nreal item");
+    expect(markdownToText("keep `\\*raw\\*` literal")).toBe("keep \\*raw\\* literal");
+  });
 });
