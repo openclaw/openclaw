@@ -207,7 +207,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.objectContaining({ text: "[account] reply" }),
     );
   });
-
   it("keeps card attribution on the selected-model prefix context", async () => {
     const { result, options } = createDispatcherHarness();
     expect(result.replyOptions.onReasoningStream).toBeUndefined();
@@ -1075,6 +1074,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["gap msg", ["A2.X.", ["A2."], ["X."], 3, 2, "X.", ["X."], 3, "X.Z."], ["A2.X.", "X.", "X.Z."]],
     ["fence", ["~~~a\nx", null, "~~~a\nxy", null, "~~~a\nxy\n~~~\nD"], ["~~~a\nx", "~~~a\ny", "D"]],
     ["fence cut", ["~~~\nx\n~~", null, "~~~\nx\n~~~\nD"], ["~~~\nx\n~~", "D"]],
+    ["fence info", ["```a", null, "```a`b\nc"], ["```a", "`b\nc"]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();

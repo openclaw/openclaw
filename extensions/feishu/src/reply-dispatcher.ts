@@ -358,7 +358,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const lineEnd = text.indexOf("\n", text.length - rest.length);
     // A continuation that starts with or completes the closing fence drops it instead of reopening.
     if (opener && !openFence(lineEnd < 0 ? text : text.slice(0, lineEnd))) {
-      return rest.replace(/^[^\n]*(?:\s*\n)?/u, "");
+      const lineStart = text.lastIndexOf("\n", text.length - rest.length - 1) + 1;
+      return openFence(text.slice(0, lineStart)) ? rest.replace(/^[^\n]*(?:\s*\n)?/u, "") : rest;
     }
     return opener ? `${opener}\n${rest}` : rest;
   };
