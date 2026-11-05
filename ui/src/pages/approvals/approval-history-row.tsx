@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import type { ApprovalPresentation } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
 import type {
   ApprovalAllowDecision,
@@ -82,12 +82,15 @@ function DetailRow(props: { label: string; value: string | undefined; mono?: boo
 }
 
 function ExecWarning(props: { presentation: ApprovalPresentation }) {
-  const warning = () => execWarningText(props.presentation);
-  return warning() ? (
-    <span class="approval-history-warning" role="note">
-      {t("approvalHistory.warningLabel")}: {warning()}
-    </span>
-  ) : null;
+  return (
+    <Show when={execWarningText(props.presentation)} fallback={null}>
+      {(warning) => (
+        <span class="approval-history-warning" role="note">
+          {t("approvalHistory.warningLabel")}: {warning()}
+        </span>
+      )}
+    </Show>
+  );
 }
 
 export function HistoryRow(props: {
