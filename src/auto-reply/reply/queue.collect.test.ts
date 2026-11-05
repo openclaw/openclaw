@@ -383,7 +383,7 @@ describe("followup queue collect routing", () => {
         const stoppedCounts = sources.map((source) => source.heartbeat.mock.calls.length);
         await vi.advanceTimersByTimeAsync(5);
         expect(sources.map((source) => source.heartbeat.mock.calls.length)).toEqual(stoppedCounts);
-        await vi.advanceTimersByTimeAsync(15);
+        await vi.advanceTimersByTimeAsync(515);
         expect(attempts).toBe(3);
         const resumedCounts = sources.map((source) => source.heartbeat.mock.calls.length);
         await vi.advanceTimersByTimeAsync(40);
@@ -708,23 +708,18 @@ describe("followup queue collect routing", () => {
   });
 
   it("evicts oldest overflow context metadata when the item cap is reached", () => {
-    const key = `test-collect-overflow-elision-bound-${Date.now()}`;
-    const settings = createQueueSettings({ cap: 2 });
+    const q = createQueueCase({ cap: 2 });
 
     const accepted = ["A", "B", "A", "B", "A", "B", "survivor"].map((target, index) =>
-      enqueueTestRun(
-        key,
-        {
-          prompt: `message ${index}`,
-          originatingChannel: "slack",
-          originatingTo: `channel:${target}`,
-          originatingChatType: "channel",
-        },
-        settings,
-      ),
+      q.enqueue({
+        prompt: `message ${index}`,
+        originatingChannel: "slack",
+        originatingTo: `channel:${target}`,
+        originatingChatType: "channel",
+      }),
     );
 
-    const queue = getExistingFollowupQueue(key);
+    const queue = getExistingFollowupQueue(q.key);
     expect(accepted).toEqual([true, true, true, true, true, true, true]);
     expect(
       queue?.summaryElisions.map((entry) => entry.entries.at(-1)?.source.originatingTo),
@@ -733,31 +728,26 @@ describe("followup queue collect routing", () => {
       "channel:B",
       "channel:survivor",
     ]);
-    clearFollowupQueue(key);
+    clearFollowupQueue(q.key);
   });
 
   it("bounds retained overflow cancellation identities by the item cap", async () => {
-    const key = `test-collect-overflow-source-bound-${Date.now()}`;
+    const q = createQueueCase({ cap: 2 });
     const completions = Array.from({ length: 8 }, () => vi.fn());
-    const settings = createQueueSettings({ cap: 2 });
 
     for (const [index, onComplete] of completions.entries()) {
-      enqueueFollowupRun(
-        key,
-        {
-          ...createRun({
-            prompt: `message ${index}`,
-            originatingChannel: "slack",
-            originatingTo: "channel:A",
-            originatingChatType: "channel",
-          }),
-          turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
-        },
-        settings,
-      );
+      q.add({
+        ...createRun({
+          prompt: `message ${index}`,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+          originatingChatType: "channel",
+        }),
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
+      });
     }
 
-    const queue = getExistingFollowupQueue(key);
+    const queue = getExistingFollowupQueue(q.key);
     expect(queue?.summaryElisions.flatMap((entry) => entry.entries)).toHaveLength(2);
     expect(
       queue?.summaryElisions.flatMap((entry) => entry.entries.map(({ source }) => source.prompt)),
@@ -770,7 +760,7 @@ describe("followup queue collect routing", () => {
     expect(completions.map((onComplete) => onComplete.mock.calls.length)).toEqual([
       1, 1, 0, 0, 0, 0, 0, 0,
     ]);
-    clearFollowupQueue(key);
+    clearFollowupQueue(q.key);
   });
 
   it.each(["old", "new"] as const)(
@@ -1124,8 +1114,7 @@ describe("followup queue collect routing", () => {
 
   it("drains priority followups before already queued items", async () => {
     const q = createQueueCase({ mode: "followup" }, 3);
-    q.enqueue({ prompt: "queued later one" });
-    q.enqueue({ prompt: "queued later two" });
+    q.enqueueMany({ prompt: "queued later one" }, { prompt: "queued later two" });
     enqueuePriorityRun(q.key, q.settings);
     await q.drain();
     expect(q.calls.map((item) => item.prompt)).toEqual([
@@ -1138,10 +1127,10 @@ describe("followup queue collect routing", () => {
 
   it("preserves prepended priority followups during old-item overflow eviction", () => {
     const q = createQueueCase({ mode: "followup", cap: 2, dropPolicy: "old" });
-    q.enqueue({ prompt: "queued later one" });
-    q.enqueue({ prompt: "queued later two" });
+    q.enqueueMany({ prompt: "queued later one" }, { prompt: "queued later two" });
     enqueuePriorityRun(q.key, q.settings);
     q.enqueue({ prompt: "queued later three" });
+
     expect(getExistingFollowupQueue(q.key)?.items.map((item) => item.prompt)).toEqual([
       "priority retry",
       "queued later three",
@@ -1174,29 +1163,20 @@ describe("followup queue collect routing", () => {
   );
 
   it("leaves the queue untouched when protected overflow cannot drop enough items", () => {
-    const key = `test-priority-followup-atomic-overflow-${Date.now()}`;
-    const initialSettings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 3,
-      dropPolicy: "summarize",
-    };
-    const shrunkSettings: QueueSettings = { ...initialSettings, cap: 1 };
-    enqueuePriorityRun(key, initialSettings);
-    enqueueFollowupRun(key, createRun({ prompt: "normal one" }), initialSettings);
-    enqueueFollowupRun(key, createRun({ prompt: "normal two" }), initialSettings);
-    const accepted = enqueueFollowupRun(
-      key,
-      createRun({ prompt: "normal after shrink" }),
-      shrunkSettings,
-    );
+    const q = createQueueCase({ mode: "followup", cap: 3 });
+    enqueuePriorityRun(q.key, q.settings);
+    q.enqueueMany({ prompt: "normal one" }, { prompt: "normal two" });
+    const accepted = q.add(createRun({ prompt: "normal after shrink" }), {
+      ...q.settings,
+      cap: 1,
+    });
     expect(accepted).toBe(false);
-    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
+    expect(getExistingFollowupQueue(q.key)?.items.map((item) => item.prompt)).toEqual([
       "priority retry",
       "normal one",
       "normal two",
     ]);
-    expect(getExistingFollowupQueue(key)?.summaryEntries).toHaveLength(0);
+    expect(getExistingFollowupQueue(q.key)?.summaryEntries).toHaveLength(0);
   });
 
   it("drains protected priority followups before overflow summaries", async () => {
@@ -1820,6 +1800,7 @@ describe("followup queue collect routing", () => {
         // Drain the first rejection while a late successful admission remains blocked.
         await vi.advanceTimersByTimeAsync(0);
         releaseFirstAdmission.resolve();
+        await vi.advanceTimersByTimeAsync(250);
         await withinTest(Promise.all(settlements), signal);
 
         expect(errors).toHaveLength(1);

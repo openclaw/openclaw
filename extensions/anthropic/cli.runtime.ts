@@ -28,6 +28,7 @@ const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
  */
 export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
   assertPrivateInputCurrent?: () => void;
+  prepareCredentialUse?: () => Promise<void>;
 };
 type ClaudeCliTurn = {
   context: ClaudeCliExecuteContext;
@@ -706,6 +707,7 @@ export async function* executeClaudeCli(
         }
         await transport.initialize();
       }
+      await context.prepareCredentialUse?.();
       context.assertCurrent?.();
       context.assertPrivateInputCurrent?.();
       if (session.closed || session.currentTurn !== turn) {

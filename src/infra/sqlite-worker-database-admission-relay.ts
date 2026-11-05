@@ -1,5 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { isPromise } from "node:util/types";
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
@@ -7,12 +5,19 @@ import {
   readSqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissions,
 } from "./sqlite-database-admission-record.js";
-import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import {
-  readSqliteWorkerMonotonicNs,
-  SqliteWorkerError,
-  wrapSqliteWorkerError,
-} from "./sqlite-worker-contract.js";
+  assertSqliteDatabaseAdmissionWaitActive,
+  hasSqliteDatabaseAdmissionWait,
+  readSqliteDatabaseAdmissionDeadline,
+} from "./sqlite-database-admission-wait.js";
+import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
+import { readSqliteWorkerMonotonicNs, SqliteWorkerError } from "./sqlite-worker-contract.js";
+
+export {
+  assertSqliteDatabaseAdmissionWaitActive,
+  readSqliteDatabaseAdmissionDeadline,
+  withSqliteDatabaseAdmissionWait,
+} from "./sqlite-database-admission-wait.js";
 
 const REQUESTED = 0;
 const GRANTED = 1;
@@ -21,65 +26,6 @@ const ABANDONED = 2;
 // from parking forever: it cannot notify, and close cannot run during Atomics.wait.
 const ADMISSION_PEER_SAFETY_TIMEOUT_MS = 10 * 60_000;
 export const SQLITE_COLD_ADMISSION_PENDING = 4;
-
-type AdmissionWait = { readonly deadlineAtMs?: number; assertActive?: () => void };
-type AdmissionWaitScope = { wait: AdmissionWait; parent?: AdmissionWaitScope; active: boolean };
-const admissionWait = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteDatabaseAdmissionWait"),
-  () => new AsyncLocalStorage<AdmissionWaitScope>(),
-);
-
-/** Callers own the deadline; worker transports carry its remaining absolute budget. */
-export function withSqliteDatabaseAdmissionWait<T>(wait: AdmissionWait, run: () => T): T {
-  const scope = { wait, parent: admissionWait.getStore(), active: true };
-  const close = () => {
-    scope.active = false;
-  };
-  let pending = false;
-  try {
-    const value = admissionWait.run(scope, run);
-    if (isPromise(value)) {
-      pending = true;
-      void value.then(close, close);
-    }
-    return value;
-  } finally {
-    if (!pending) {
-      close();
-    }
-  }
-}
-
-export function readSqliteDatabaseAdmissionDeadline(): number | undefined {
-  let deadline: number | undefined;
-  for (let scope = admissionWait.getStore(); scope; scope = scope.parent) {
-    // Retained worker callbacks keep async ancestry, but never a settled caller's budget.
-    if (!scope.active) {
-      continue;
-    }
-    const value = scope.wait.deadlineAtMs;
-    if (value !== undefined) {
-      deadline = Math.min(deadline ?? Infinity, value);
-    }
-  }
-  return deadline;
-}
-
-export function assertSqliteDatabaseAdmissionWaitActive(): void {
-  try {
-    for (let scope = admissionWait.getStore(); scope; scope = scope.parent) {
-      if (scope.active) {
-        scope.wait.assertActive?.();
-      }
-    }
-  } catch (error) {
-    throw wrapSqliteWorkerError(
-      "SQLite admission facts exchange cancelled by its caller",
-      "unavailable",
-      error,
-    );
-  }
-}
 
 const admissionUpstream = resolveGlobalSingleton<{
   connection?: { port: MessagePort; closed: boolean };
@@ -165,7 +111,7 @@ export function exchangeDatabaseAdmissions(
         decision,
         0,
         REQUESTED,
-        admissionWait.getStore() ? Math.min(100, remainingMs) : remainingMs,
+        hasSqliteDatabaseAdmissionWait() ? Math.min(100, remainingMs) : remainingMs,
       );
     }
     remaining();

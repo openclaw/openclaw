@@ -61,9 +61,10 @@ import {
   type MediaExecutionContext,
 } from "./provider-execution.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { resolveCliModelEntry, resolveEntryRunOptions } from "./resolve.js";
 import { isTranscriptArtifactText } from "./transcription-text.js";
-import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
+import type { AudioTranscriptionRequest } from "./types.js";
 
 function trimOutput(text: string, maxChars?: number): string {
   const trimmed = text.trim();
