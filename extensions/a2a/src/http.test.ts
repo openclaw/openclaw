@@ -262,6 +262,13 @@ describe("A2A message replay", () => {
 });
 
 describe("A2A HTTP agent discovery", () => {
+  it("answers an unknown JSON-RPC descendant with its own JSON 404", async () => {
+    const harness = await startHttpHarness();
+    const response = await harness.get("/a2a/v1/agent-card");
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Not found" });
+  });
+
   it("serves both public discovery paths with the canonical bounded v1.0 card", async () => {
     const hiddenDescription = "hidden-secret-description";
     const harness = await startHttpHarness({
