@@ -11,6 +11,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
@@ -319,9 +320,10 @@ export async function resolveSlackMedia(params: {
         } catch (error) {
           // Download errors can contain URLs and response bodies; redact before bounding
           // the text shared by diagnostics and model context, even with log redaction off.
-          reason = redactToolPayloadText(formatErrorMessage(error))
-            .replace(/\s+/g, " ")
-            .slice(0, 200);
+          reason = truncateUtf16Safe(
+            redactToolPayloadText(formatErrorMessage(error)).replace(/\s+/g, " "),
+            200,
+          );
         }
         assertCurrent?.();
         // Only a failed event URL gets the existing files.info retry. Record

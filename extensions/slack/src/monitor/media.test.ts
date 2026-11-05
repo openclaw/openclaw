@@ -749,6 +749,26 @@ describe("resolveSlackAttachmentContent", () => {
     expect(JSON.stringify(mediaWarnMock.mock.calls)).not.toContain(reason);
   });
 
+  it("keeps an emoji whole when a download failure hits the reason cap", async () => {
+    const file = {
+      id: "FEMOJI",
+      name: "missing.png",
+      url_private: "https://files.slack.com/stale.png",
+    };
+    const detail = `${"d".repeat(199)}😀ZZEND`;
+    mockFetch.mockRejectedValueOnce(new Error("stale URL"));
+    mockFetch.mockRejectedValueOnce(new Error(detail));
+    const result = await resolveAttachments({
+      attachments: [{ is_share: true, files: [file] }],
+      client: fileInfoClient({ url_private: "https://files.slack.com/fresh.png" }),
+      maxBytes: 1024,
+    });
+    const reason = result?.files?.[0]?.reason ?? "";
+    expect(reason).toBe("d".repeat(199));
+    expect(reason).not.toContain("ZZEND");
+    expect(reason).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+  });
+
   it("extracts text from forwarded shared attachments", async () => {
     const result = await resolveAttachments({
       attachments: [{ is_share: true, author_name: "Bob", text: "Please review this" }],
