@@ -25,7 +25,6 @@ async function placementTrigger(scope: Page | Locator) {
   await trigger.waitFor();
   return trigger;
 }
-
 async function openPlacement(scope: Page | Locator) {
   const trigger = await placementTrigger(scope);
   if ((await trigger.getAttribute("aria-expanded")) !== "true") {
@@ -665,7 +664,6 @@ suite.define(() => {
         );
       }
       await page.getByRole("button", { name: "Move session", exact: true }).click();
-
       await expectMove(gateway, {
         kind: "profile",
         profileId: "aws",
