@@ -99,6 +99,7 @@ it("omits SDK notices from plugin details while retaining actionable errors and 
         code: "deprecated-sdk-api",
         severity: "info",
         message: "Uses older OpenClaw APIs.",
+        migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
         apis: [],
       },
     ],
