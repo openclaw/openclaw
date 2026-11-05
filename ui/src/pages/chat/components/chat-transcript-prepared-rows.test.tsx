@@ -303,7 +303,7 @@ async function transcriptFixture(
 }
 
 it("warms medium row data while idle and paces preparation during fast scroll", async () => {
-  const view = await transcriptFixture(0, true, false, "data-only");
+  const view = await transcriptFixture(0, true, false, "data-only", 600, true);
   const initialRows = transcriptRows(view.container);
   for (let turn = 0; turn < 160; turn++) {
     await view.idle(10, 1);
@@ -318,7 +318,7 @@ it("warms medium row data while idle and paces preparation during fast scroll", 
   expect(view.container.querySelector("[data-preparing-row]")).not.toBeNull();
   const rows = transcriptRows(view.container);
   const active = rows.filter((row) => !row.hasAttribute("inert"));
-  expect(rows.length).toBeLessThanOrEqual(Math.max(12, active.length + 8));
+  expect(rows.length).toBeLessThanOrEqual(Math.max(6, active.length + 4));
 });
 
 it("bounds initial HTML warming and keeps distant rows out of the DOM", async () => {

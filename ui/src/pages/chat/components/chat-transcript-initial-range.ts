@@ -41,6 +41,15 @@ export class TranscriptInitialRange {
     return !this.pending && !this.viewportOnly;
   }
 
+  // Medium histories pair messages in each retained row; keep the same content budget.
+  private get preparedRowLimit(): number {
+    return this.hasRetainedRows && !this.hasIdleDomRows ? 6 : PREPARED_ROW_LIMIT;
+  }
+
+  private get scrollPrepareRowLimit(): number {
+    return this.hasRetainedRows && !this.hasIdleDomRows ? 4 : SCROLL_PREPARE_ROW_LIMIT;
+  }
+
   constructor(
     initialOffset: number | null,
     private readonly virtualizer: () => Virtualizer<HTMLDivElement, HTMLElement>,
@@ -107,7 +116,7 @@ export class TranscriptInitialRange {
         indexes.add(index);
       }
       const limit = this.hasForwardPreparation(range)
-        ? Math.max(PREPARED_ROW_LIMIT, indexes.size + SCROLL_PREPARE_ROW_LIMIT)
+        ? Math.max(this.preparedRowLimit, indexes.size + this.scrollPrepareRowLimit)
         : Infinity;
       // Keep the active and paced preparation windows; spend remaining slots on recent history.
       for (const key of [...this.preparedRowKeys].reverse()) {
@@ -387,7 +396,7 @@ export class TranscriptInitialRange {
     }
     // The recent viewport wins over speculative preparation; geometry stays in
     // virtual-core's size cache even after the bounded DOM cache evicts a row.
-    while (this.preparedRowKeys.size > PREPARED_ROW_LIMIT) {
+    while (this.preparedRowKeys.size > this.preparedRowLimit) {
       this.preparedRowKeys.delete(this.preparedRowKeys.keys().next().value!);
     }
   }
@@ -555,7 +564,7 @@ export class TranscriptInitialRange {
           : undefined;
       const domLookahead =
         velocity || warmOnly
-          ? SCROLL_PREPARE_ROW_LIMIT
+          ? this.scrollPrepareRowLimit
           : Math.max(
               // A full visible window still measures one temporary row so idle
               // geometry can finish and hand off to distant Markdown warming.
