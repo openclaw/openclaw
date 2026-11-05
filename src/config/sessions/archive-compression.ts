@@ -10,6 +10,7 @@ import zlib from "node:zlib";
 import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import { evictMaterializedArchiveCacheOverBudget } from "./archive-cache-budget.js";
 import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 export { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 
@@ -126,10 +127,19 @@ export async function materializeSessionArchiveForRead(filePath: string): Promis
   const cachePath = resolveSessionArchiveReadPath(filePath, sourceStat, cacheDir);
   sweepMaterializedArchiveCache(cacheDir);
   if (fs.existsSync(cachePath)) {
+    // Refresh mtime so both the age sweep and the budget treat this entry as
+    // in use; without it a hot archive still reads as the oldest copy.
+    try {
+      const now = new Date();
+      fs.utimesSync(cachePath, now, now);
+    } catch {
+      // A concurrent sweep may have removed it; the write below re-creates it.
+    }
     return cachePath;
   }
   removeMaterializedArchiveCacheEntries(cacheDir, pathKey, path.basename(cachePath));
   fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+  evictMaterializedArchiveCacheOverBudget(cacheDir);
   const tempPath = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await pipeline(

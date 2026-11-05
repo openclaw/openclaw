@@ -1,0 +1,2 @@
+84
+# Bound the plaintext session-archive read cache by bytes and entries (LRU eviction).
