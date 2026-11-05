@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
@@ -145,16 +142,29 @@ export function resolveWebFetchDefinition(
     return null;
   }
   const configuredProviderId = normalizeLowercaseStringOrEmpty(fetch?.provider);
-  // Explicit provider ids are matched case-insensitively, like config selection:
-  // plugin ids are lowercase.
+  // An explicitly supplied provider id (including a blank one) never falls
+  // through to configured, runtime, or automatic selection: the original
+  // explicit-selection contract resolves it against the provider list or
+  // returns no definition. Exact registered ids win before the
+  // case-insensitive match, like config selection.
+  const explicitProviderId =
+    typeof options?.providerId === "string" ? options.providerId.trim() : undefined;
+  const resolveExplicitProviderId = (): string | undefined =>
+    explicitProviderId === undefined
+      ? undefined
+      : (
+          providers.find((entry) => entry.id === explicitProviderId) ??
+          providers.find((entry) => entry.id.toLowerCase() === explicitProviderId.toLowerCase())
+        )?.id;
   const providerId =
-    normalizeOptionalLowercaseString(options?.providerId) ??
-    (configuredProviderId
-      ? providers.find((entry) => entry.id === configuredProviderId)?.id
-      : undefined) ??
-    runtimeWebFetch?.selectedProvider ??
-    resolveAutoWebFetchProviderId();
-  const provider = providers.find((entry) => entry.id === providerId);
+    explicitProviderId !== undefined
+      ? resolveExplicitProviderId()
+      : ((configuredProviderId
+          ? providers.find((entry) => entry.id === configuredProviderId)?.id
+          : undefined) ??
+        runtimeWebFetch?.selectedProvider ??
+        resolveAutoWebFetchProviderId());
+  const provider = providerId ? providers.find((entry) => entry.id === providerId) : undefined;
   if (!provider) {
     return null;
   }
