@@ -825,11 +825,9 @@ try {
     if (interrupted) {
       throw new Error("Proof interrupted");
     }
-    if (activeUiRoot === arm.build.uiRoot) {
-      return;
-    }
     // Configured custom roots deliberately do not retain asset bytes. Swap only
-    // this tool's copied root while browser pages are frozen; keep Gateway caches warm.
+    // this tool's copied root while browser pages are frozen. Prepare every sample
+    // equally, including A/A and consecutive reloads of the same arm.
     const stage = path.join(directory, "next-ui");
     await cp(arm.build.uiRoot, stage, { recursive: true });
     if (activeUiRoot) {
