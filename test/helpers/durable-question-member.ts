@@ -1,5 +1,5 @@
 import { X509Certificate } from "node:crypto";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
@@ -52,6 +52,15 @@ export async function runDurableQuestionMemberProof(
             throw new Error("Native member proof requires a valid isolated Gateway config");
           }
           const cfg = snapshot.config;
+          const instructions =
+            "# Durable question QA workspace\n\nUse this workspace for the original member task and its resumed answer.\n";
+          const instructionsPath = path.join(state.workspaceDir, "AGENTS.md");
+          await writeFile(instructionsPath, instructions);
+          // The fixture owns this workspace across both Gateway lifetimes and store routes.
+          cfg.agents = {
+            ...cfg.agents,
+            defaults: { ...cfg.agents?.defaults, workspace: state.workspaceDir },
+          };
           const memberEmail = "question-member@example.test";
           const ownerEmail = "question-owner@example.test";
           const member = ensureProfileForEmail(memberEmail);
@@ -337,6 +346,7 @@ export async function runDurableQuestionMemberProof(
                 );
                 expect(patched.ok).toBe(true);
                 expect(patched.restart).toBeUndefined();
+                expect(await readFile(instructionsPath, "utf8")).toBe(instructions);
                 stage = "configured-store membership read";
                 process.stderr.write(`[durable-question:member:${membership}] ${stage}\n`);
                 const configured = await admin.request<{
@@ -357,6 +367,7 @@ export async function runDurableQuestionMemberProof(
                 stage = "original authority validation before provider and tool effects";
                 fixture.releaseBusy();
                 let observedStatus: string | undefined;
+                let observedContinuation: QuestionGetResult["continuation"];
                 try {
                   await vi.waitFor(
                     async () => {
@@ -365,6 +376,7 @@ export async function runDurableQuestionMemberProof(
                         includeContinuation: true,
                       });
                       observedStatus = current.continuation?.status;
+                      observedContinuation = current.continuation;
                       expect(current.question.answers).toEqual(answers);
                       expect(current.continuation).toMatchObject({
                         status: membership === "revoked" ? "interrupted" : "settled",
@@ -384,6 +396,11 @@ export async function runDurableQuestionMemberProof(
                     `[durable-question:member-effect] ${JSON.stringify({
                       membership,
                       receipt: observedStatus,
+                      continuation: observedContinuation,
+                      agentResult: await admin!.request("agent.wait", {
+                        runId: continuationRunId,
+                        timeoutMs: 1,
+                      }),
                       providerRequests: fixture.continuationCount,
                       toolMarker,
                       finalSocketEvents: finalRunIds.filter((id) => id === continuationRunId)
