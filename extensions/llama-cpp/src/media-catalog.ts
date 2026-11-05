@@ -49,7 +49,7 @@ const GLM_OCR_REVISION = "65a42de1148dbed2297e922b5dbc7d9b70c36578";
 const SMOL_VLM2_REPOSITORY = "ggml-org/SmolVLM2-2.2B-Instruct-GGUF";
 const SMOL_VLM2_REVISION = "1bc3c9f74ceafd4c8d4411cc9cf188bba3798f91";
 
-// Pinned b10809 supports these GLM4V and Idefics3 projectors; every selected pair
+// The pinned build supports these GLM4V and Idefics3 projectors; every selected pair
 // still needs real inference verification on the Gateway before activation.
 // Memory includes both GGUFs, KV/compute buffers and bounded image encoding. The
 // router must load one model at a time; these budgets do not permit co-residency.

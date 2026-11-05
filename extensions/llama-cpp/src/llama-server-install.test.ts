@@ -278,14 +278,23 @@ async function archiveFixture(
 describe("managed installer archive admission", () => {
   it("materializes the pinned SONAME manifest as regular files", async () => {
     const aliases = selectLlamaServerAsset("linux", "x64").regularFileAliases;
-    const { install, command, installDir } = await archiveFixture({
+    const { install, command, installDir, root } = await archiveFixture({
       build: async (buildDir, asset) => {
-        for (const [source, names] of asset.regularFileAliases) {
+        for (const source of [
+          "libllama.so.0.8.0",
+          "libggml.so.0.28.0",
+          "libmtmd.so.0.8.0",
+          "libggml-base.so.0.28.0",
+          "libllama-common.so.0.8.0",
+        ]) {
           await fs.writeFile(path.join(buildDir, source), `contents:${source}`);
+        }
+        for (const [source, names] of asset.regularFileAliases) {
           for (const alias of names) {
             await fs.symlink(source, path.join(buildDir, alias));
           }
         }
+        await fs.symlink("../../../escape.txt", path.join(buildDir, "unexpected-link"));
       },
       aliases,
     });
@@ -296,16 +305,6 @@ describe("managed installer archive admission", () => {
         await expectFile(path.join(installDir, alias), `contents:${source}`);
       }
     }
-  });
-
-  it("ignores archive-provided symlink targets outside the pinned manifest", async () => {
-    const { root, installDir, install } = await archiveFixture({
-      build: async (buildDir) => {
-        await fs.symlink("../../../escape.txt", path.join(buildDir, "unexpected-link"));
-      },
-    });
-
-    await install();
     await expectMissing(path.join(installDir, "unexpected-link"));
     await expectMissing(path.join(root, "escape.txt"));
   });
