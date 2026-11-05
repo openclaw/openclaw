@@ -89,16 +89,17 @@ export function registerQueuedFollowupNoticeCases(): void {
   );
 
   it.each([
-    {
-      reason: "collaborative-steering-disabled",
-      notice:
-        "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
-      fallbackDelivered: undefined,
-    },
-    { reason: "queue-cap", notice: QUEUE_CAP_REJECTION_TEXT, fallbackDelivered: true },
+    [
+      "collaborative-steering-disabled",
+      undefined,
+      "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
+      undefined,
+    ],
+    ["queue-cap", undefined, QUEUE_CAP_REJECTION_TEXT, true],
+    ["queue-cap", "queue-cap-new", undefined, undefined],
   ] as const)(
-    "reports $reason without claiming queueing or cancellation",
-    async ({ reason, notice, fallbackDelivered }) => {
+    "reports %s/%s without claiming queueing or cancellation",
+    async (reason, queueDisposition, notice, fallbackDelivered) => {
       setNoAbort();
       diagnosticMocks.logMessageDispatchCompleted.mockClear();
       const sessionKey = `test:${reason}`;
@@ -118,13 +119,15 @@ export function registerQueuedFollowupNoticeCases(): void {
             throw new Error("expected reply operation state");
           }
           state.admission = { status: "skipped", reason };
+          state.followupQueueDisposition = queueDisposition;
           return undefined;
         },
       });
       dispatcher.markComplete();
       await dispatcher.waitForIdle();
-      expect(deliveredTexts).toEqual([notice]);
+      expect(deliveredTexts).toEqual(notice === undefined ? [] : [notice]);
       expect(result.noVisibleReplyFallbackDelivered).toBe(fallbackDelivered);
+      expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
       expect(result.deferredToActiveRun).toBeUndefined();
       if (reason === "collaborative-steering-disabled") {
         expect(result.collaborativeSteeringRefused).toBe(true);
@@ -142,7 +145,7 @@ export function registerQueuedFollowupNoticeCases(): void {
     { phase: "still queued", reason: "explicit-followup" },
     { phase: "evicted before finalization", reason: "explicit-followup" },
     { phase: "evicted during progress flush", reason: "steering-unavailable" },
-  ] as const)("reports a truthful $reason queue notice when $phase", async ({ phase, reason }) => {
+  ] as const)("keeps $reason queue feedback consistent when $phase", async ({ phase, reason }) => {
     setNoAbort();
     const sessionKey = `agent:agent:queue-notice:${reason}:${phase}`;
     const queued = createDeferred();
@@ -232,21 +235,14 @@ export function registerQueuedFollowupNoticeCases(): void {
       const result = await dispatch;
       expect(deliveredTexts).toEqual([
         ...(phase === "evicted during progress flush" ? ["💬 Preparing the queue notice"] : []),
-        ...(phase === "still queued"
-          ? reason === "explicit-followup"
-            ? [
-                "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
-              ]
-            : []
-          : [
-              "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.",
-            ]),
+        ...(phase === "still queued" && reason === "explicit-followup"
+          ? [
+              "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+            ]
+          : []),
       ]);
-      if (phase === "still queued") {
-        expect(disposition).not.toHaveBeenCalled();
-      } else {
-        expect(disposition).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
-      }
+      expect(disposition.mock.calls).toEqual(phase === "still queued" ? [] : [["queue-cap-old"]]);
+      expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
       // Later eviction must not erase the initial acceptance or emit the never-queued fallback.
       expect(result.deferredToActiveRun).toBe("followup");
       expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();

@@ -91,6 +91,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
   const explicitFollowupQueued =
     queueAdmission?.status === "accepted" && queueAdmission.reason === "explicit-followup";
+  const isPolicyDrop = () => {
+    const disposition = state.replyOperationRunState.followupQueueDisposition;
+    return disposition === "queue-cap-old" || disposition === "queue-cap-new";
+  };
   let queuedRequesterNotice: ReplyPayload | undefined;
   if (queueAdmission?.status === "accepted" && queueAdmission.mode === "followup") {
     queuedRequesterNotice = markReplyPayloadForSourceSuppressionDelivery({
@@ -148,16 +152,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Progress and earlier final deliveries can wait while a later input evicts this followup.
-      if (
-        reply === queuedRequesterNotice &&
-        state.replyOperationRunState.followupQueueDisposition === "queue-cap-old"
-      ) {
-        reply.text =
-          "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.";
-        setReplyPayloadMetadata(reply, { queueAdmissionNotice: true });
-      } else if (reply === queuedRequesterNotice && !explicitFollowupQueued) {
-        // Automatic fallback is an implementation detail. Only explicit commands
-        // acknowledge queueing; a real overflow still needs the actionable notice above.
+      if (reply === queuedRequesterNotice && (isPolicyDrop() || !explicitFollowupQueued)) {
         continue;
       }
       const laneSuppressed =
@@ -406,6 +401,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
 
   await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
   const replyCompletion = () => {
+    if (isPolicyDrop()) {
+      return resolveReplyCompletion("optional", "silent");
+    }
     const delivery = turnLedger.resolveTerminalDelivery();
     const owned = state.replyOperationRunState.replyCompletion;
     return resolveReplyCompletion(
