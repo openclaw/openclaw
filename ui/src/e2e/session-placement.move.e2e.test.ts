@@ -175,7 +175,6 @@ suite.define(() => {
       await page.getByText("Session hosting is disabled", { exact: false }).waitFor();
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
       await page.locator('[data-value="device:writer-runner"]').click();
-
       await page.getByRole("button", { name: "Move session", exact: true }).click();
       await expectMove(gateway, { kind: "device", deviceId: "writer-runner" });
       await (
@@ -665,7 +664,6 @@ suite.define(() => {
         );
       }
       await page.getByRole("button", { name: "Move session", exact: true }).click();
-
       await expectMove(gateway, {
         kind: "profile",
         profileId: "aws",
