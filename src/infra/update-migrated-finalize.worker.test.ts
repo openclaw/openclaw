@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
@@ -14,7 +15,6 @@ const fixture = vi.hoisted(() => ({
   terminal: vi.fn(),
   writeFile: vi.fn(),
   stopService: vi.fn(),
-  ownerLease: vi.fn(),
   recordStep: vi.fn(),
   fence: { assertCurrent: vi.fn() },
 }));
@@ -53,10 +53,6 @@ vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
   createWindowsTaskAutoStartGuard: vi.fn(),
   maybeStopManagedServiceBeforeMutableUpdate: fixture.stopService,
 }));
-vi.mock("../state/openclaw-state-db-doctor-schema.js", () => ({
-  openDoctorStateSchemaReadAdmission: vi.fn(),
-}));
-vi.mock("./gateway-owner-lease.js", () => ({ readGatewayOwnerLease: fixture.ownerLease }));
 vi.mock("../cli/update-cli/update-command-terminal.js", () => ({
   withUpdateCommandTerminalResult: async (run: (registerRun: () => void) => Promise<unknown>) =>
     run(vi.fn()),
@@ -96,6 +92,11 @@ const result = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  fixture.recordStep.mockImplementation((runId, step) => ({
+    runId,
+    status: "running",
+    steps: [step],
+  }));
   stdout.length = 0;
   stderr.length = 0;
   loggingState.forceConsoleToStderr = false;
@@ -589,22 +590,9 @@ it.each([
   },
 );
 
-it.each([
-  {
-    name: "stops a live supervised predecessor",
-    owner: { state: "live", mode: "supervised" },
-    stops: true,
-  },
-  {
-    name: "leaves a foreground owner to Doctor's own wait",
-    owner: { state: "live", mode: "foreground" },
-    stops: false,
-  },
-  { name: "does nothing without an owner", owner: undefined, stops: false },
-])("delegated Doctor $name before entering maintenance", async ({ owner, stops }) => {
+it("delegated Doctor stops a predecessor without a lease before entering maintenance", async () => {
   const doctor = vi.fn();
   vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
-  fixture.ownerLease.mockReturnValue(owner);
   const stoppedState = {
     stopped: true,
     stoppedAtMs: 7,
@@ -648,21 +636,72 @@ it.each([
     expect.anything(),
     expect.objectContaining({ databaseGenerations: { "/synthetic/agent.sqlite": null } }),
   );
-  if (stops) {
-    expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ root: "/synthetic", phase: "prepare", shouldRestart: true }),
-    );
-    // The receipt is a retained `finalize:` step whose key carries the identity,
-    // so published parents' detail compaction cannot erase it.
-    expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith("synthetic-run", {
-      step: "finalize:predecessor-stop:7:1000:631:f",
-      status: "completed",
-      endedAtMs: 7,
-    });
-    expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
-      doctor.mock.invocationCallOrder[0] ?? 0,
-    );
-  } else {
-    expect(fixture.stopService).not.toHaveBeenCalled();
-  }
+  expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ root: "/synthetic", phase: "prepare", shouldRestart: true }),
+  );
+  // The receipt is a retained `finalize:` step whose key carries the identity,
+  // so published parents' detail compaction cannot erase it.
+  expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith("synthetic-run", {
+    step: "finalize:predecessor-stop:7:1000:631:f",
+    status: "completed",
+    endedAtMs: 7,
+  });
+  expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
+    doctor.mock.invocationCallOrder[0] ?? 0,
+  );
+});
+
+it.each([
+  "write throws",
+  "missing step",
+  "incomplete step",
+  "wrong run",
+  "terminal run",
+  "uncertain cleanup",
+])("does not accept a predecessor stop with %s", async (scenario) => {
+  const failure =
+    scenario === "uncertain cleanup"
+      ? new CommandProcessCleanupError()
+      : new Error("receipt write failed");
+  fixture.recordStep.mockImplementation((runId, step) => {
+    if (scenario === "write throws") {
+      throw failure;
+    }
+    return {
+      runId: scenario === "wrong run" ? "other-run" : runId,
+      status: scenario === "terminal run" ? "succeeded" : "running",
+      steps:
+        scenario === "missing step"
+          ? []
+          : [
+              {
+                ...step,
+                status: scenario === "incomplete step" ? "in_progress" : "completed",
+              },
+            ],
+    };
+  });
+  fixture.stopService.mockImplementation(async (params: { onStopped?: (s: unknown) => void }) => {
+    params.onStopped?.({ stopped: true, stoppedAtMs: 7 });
+    if (scenario === "uncertain cleanup") {
+      throw new AggregateError([failure], "native cleanup failed");
+    }
+    return { stopped: true, stoppedAtMs: 7 };
+  });
+  const { stopSupervisedPredecessorGateway } =
+    await import("./update-candidate-predecessor-stop.js");
+  const warn = vi.fn();
+  await expect(
+    stopSupervisedPredecessorGateway(
+      { runId: "synthetic-run", repair: true },
+      { root: "/synthetic", assertCurrent() {}, warn },
+    ),
+  ).rejects.toThrow(
+    scenario === "write throws"
+      ? failure.message
+      : scenario === "uncertain cleanup"
+        ? "native cleanup failed"
+        : "receipt was not recorded",
+  );
+  expect(warn).not.toHaveBeenCalled();
 });
