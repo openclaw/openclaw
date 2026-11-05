@@ -71,7 +71,7 @@ async function resolveCodexGoalPlacement(params: {
   }
 }
 
-export function isGoalContinuationCurrent(
+function isGoalContinuationIdentityCurrent(
   continuation: GoalContinuation,
   entry: SessionEntry | undefined,
 ): boolean {
@@ -82,7 +82,17 @@ export function isGoalContinuationCurrent(
     entry.lifecycleRevision === continuation.lifecycleRevision &&
     goal?.id === continuation.goalId &&
     goal.status === "active" &&
-    !entry.abortedLastRun &&
+    !entry.abortedLastRun,
+  );
+}
+
+export function isGoalContinuationCurrent(
+  continuation: GoalContinuation,
+  entry: SessionEntry | undefined,
+): boolean {
+  return Boolean(
+    isGoalContinuationIdentityCurrent(continuation, entry) &&
+    entry &&
     (entry.agentHarnessId === undefined ||
       entry.agentHarnessId === "openclaw" ||
       (entry.agentHarnessId === "codex" &&
@@ -119,10 +129,13 @@ export async function isGoalContinuationPlacementCurrent(params: {
 
 function isGoalContinuationOutcome(result: EmbeddedAgentRunResult): boolean {
   const meta = result.meta;
+  // CLI runners report a normal finish through the shared completion contract.
+  const stopReason = meta.stopReason ?? meta.completion?.finishReason;
   return (
-    (meta.stopReason === "end_turn" || meta.stopReason === "stop") &&
+    (stopReason === "end_turn" || stopReason === "stop") &&
     !meta.aborted &&
     !meta.error &&
+    !meta.completion?.refusal &&
     !meta.timeoutPhase &&
     !meta.yielded &&
     !meta.continuationPending &&
@@ -277,7 +290,7 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   return enqueued;
 }
 
-/** The queue owner retains only the return from an admitted built-in chat Goal. */
+/** Retain the exact admitted chat return; enqueue revalidates the selected runtime placement. */
 export function createGoalContinuationReturn(
   params: Omit<GoalContinuationParams, "result" | "sourceRunId"> | undefined,
 ): <T>(run: () => T) => T {
@@ -295,7 +308,7 @@ export function createGoalContinuationReturn(
     initialGoalId: params.initialGoalId,
     operation: params.operation,
     context: (continuation, entry, existing) =>
-      isGoalContinuationCurrent(continuation, entry)
+      isGoalContinuationIdentityCurrent(continuation, entry)
         ? refreshActiveGoalContext(existing, entry)
         : undefined,
     async resume({ continuation, base, runId, result, isCurrent }) {

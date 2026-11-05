@@ -603,7 +603,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
     sessionKey,
     result,
     succeeded:
-      result.meta.agentMeta?.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID &&
       !hasResultError &&
       classifyAgentRunTerminalOutcome(outcome) === "success" &&
       (params.opts.deliver !== true || deliveryResult?.deliverySucceeded === true),

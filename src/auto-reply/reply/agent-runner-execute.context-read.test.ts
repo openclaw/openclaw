@@ -15,6 +15,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { executePreparedReplyAgentRun } from "./agent-runner-execute.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
+import { createGoalReturnEntryProbe } from "./goal-return-entry.test-support.js";
 import { createReplyActorFixture } from "./reply-actor.test-support.js";
 import { createReplyInputAdmission } from "./reply-input-admission.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -34,17 +35,19 @@ vi.mock("./agent-runner-result.js", () => ({ finalizeReplyAgentRun: async () => 
 // mock-isolation: Verify admission even when no plugin hook is registered.
 vi.mock("../../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => undefined }));
 
-it("keeps a cron context prefix readable while an inbound turn waits for actor admission", async () => {
+const goalEntryTest = it.each(["openclaw", "codex"]);
+goalEntryTest("retains %s Goal custody while admission waits", async (agentHarnessId) => {
   await withOpenClawTestState({ label: "cron-inbound-context-read" }, async (state) => {
     setRuntimeConfigSnapshot({});
     onTestFinished(() => clearRuntimeConfigSnapshot());
     const target = {
       agentId: "main",
       sessionId: "cron-session",
-      sessionKey: "agent:main:main",
+      sessionKey: `agent:main:goal-entry-${agentHarnessId}`,
       storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
-    let entry: InternalSessionEntry = { sessionId: target.sessionId, updatedAt: 1 };
+    const goal = createGoalReturnEntryProbe({ ...target, agentHarnessId });
+    let entry: InternalSessionEntry = goal.entry;
     const sourceTurnId = "channel-user:v1:synthetic-dm";
     await replaceSessionEntry(target, entry);
     const manager = await SessionManager.openAsync(target);
@@ -92,6 +95,7 @@ it("keeps a cron context prefix readable while an inbound turn waits for actor a
         { ...target, abortSignal: params.replyOperation?.abortSignal },
         async () => {
           inboundStarted();
+          goal.yieldFrom("inbound-runtime");
           await runBeforeAgentReplyForTurn({
             runId: "inbound-runtime",
             trigger: "user",
@@ -170,12 +174,14 @@ it("keeps a cron context prefix readable while an inbound turn waits for actor a
       expect(inboundStarted).toHaveBeenCalledOnce();
       expect(adopted).toHaveBeenCalledOnce();
       expect(recorder.hasPersisted()).toBe(true);
+      expect(goal.readContext()?.text).toContain("Active goal: Finish the delegated checklist");
       const messages = await SessionManager.readSessionContextAsync(target, (rows) => [...rows]);
       expect(messages.filter((message) => message.role === "user")).toHaveLength(2);
       expect(recorder.getPersistedMessage?.()?.idempotencyKey).toBe(sourceTurnId);
     } finally {
       releaseRead.resolve();
       await Promise.allSettled([cron, inbound]);
+      await goal.release();
     }
   });
 });

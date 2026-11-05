@@ -39,7 +39,7 @@ const CLAUDE_NO_SESSION_PERSISTENCE_ARG = "--no-session-persistence";
 const CLAUDE_MAX_TURNS_ARG = "--max-turns";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
-const CLAUDE_RESTRICTED_SETTINGS =
+export const CLAUDE_RESTRICTED_SETTINGS =
   '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 
 export function isClaudeCliProvider(providerId: string): boolean {
@@ -128,6 +128,16 @@ export function supportsClaudeDynamicSystemPromptSections(
     }
   }
   return true;
+}
+
+/** First native goal transcript protocol qualified by this adapter. */
+export function supportsClaudeNativeGoals(versionOutput: string | undefined): boolean {
+  const parsed = parseClaudeCodeVersion(versionOutput);
+  if (!parsed) {
+    return false;
+  }
+  const [major = 0, minor = 0, patch = 0] = parsed.split(".").map(Number);
+  return major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 318)));
 }
 
 function isOpenClawRequestedYolo(context: CliBackendResolveExecutionArgsContext): boolean {

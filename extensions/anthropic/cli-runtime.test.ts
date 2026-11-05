@@ -25,7 +25,8 @@ import {
   waitForProcessExit,
   withClaudeCliTestDeadline,
 } from "./cli-runtime.test-support.js";
-import { executeClaudeCli, type ClaudeCliExecuteContext } from "./cli.runtime.js";
+import type { ClaudeCliExecuteContext } from "./cli-runtime.types.js";
+import { executeClaudeCli } from "./cli.runtime.js";
 
 const harness = createCliTestHarness("openclaw-claude-protocol-");
 const createLiveSession = harness.liveSession.bind(harness);
